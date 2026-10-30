@@ -1,5 +1,5 @@
 """Tool implementations for the agent-runtime MCP server. Each tool resolves the runtime and runs
-the runtime's command itself. Mutations go through hc only; hc is never given --force."""
+the runtime's command itself. Terminal mutations go through hc; durable reports use the private store."""
 
 import json
 import os
@@ -9,6 +9,7 @@ import threading
 import time
 
 import agent_runtime as lib
+import dispatch_store as dispatch
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 COLLECT_LINES = 200
@@ -40,9 +41,16 @@ class Context:
             proc.kill()
 
 
-def result(payload, is_error=False):
+def dispatch_enabled(env):
+    return env.get("AGENT_RUNTIME_DISPATCH") == "1"
+
+
+def result(payload, is_error=False, structured=False):
     body = payload if isinstance(payload, str) else json.dumps(payload, separators=(",", ":"))
-    return {"content": [{"type": "text", "text": body}], "isError": is_error}
+    response = {"content": [{"type": "text", "text": body}], "isError": is_error}
+    if structured and isinstance(payload, dict):
+        response["structuredContent"] = payload
+    return response
 
 
 def gap(what, command):
@@ -136,6 +144,47 @@ def discard(name, env):
             pass
 
 
+def dispatch_identity(env):
+    """Scope plus CLI session generation; MCP process restarts retain the CLI ancestor.
+
+    Prefer the nearest CLI process PID/start time over possibly inherited session
+    markers. Hosts without visible CLI ancestry must supply a session ID.
+    """
+    scope = env.get("HC_SCOPE") or env.get("HC_TERMINAL_SOCKET") or "default"
+    generation = None
+    pid = os.getppid()
+    deadline = time.monotonic() + lib.ANCESTRY_BUDGET_SECONDS
+    for _ in range(lib.MAX_ANCESTOR_HOPS):
+        if pid <= 1 or time.monotonic() >= deadline:
+            break
+        entry = lib.ps_entry(pid)
+        if not entry:
+            break
+        parent, args = entry
+        if lib.cli_of_args(args):
+            try:
+                stamp = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                                       text=True, timeout=lib.PS_TIMEOUT_SECONDS)
+                if stamp.returncode == 0 and stamp.stdout.strip():
+                    generation = "%s:%s" % (pid, stamp.stdout.strip())
+            except (OSError, subprocess.SubprocessError):
+                pass
+            break
+        pid = parent
+    session = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
+    generation = "%s:%s" % (generation, session) if generation and session else generation or session
+    if not generation:
+        raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
+    return scope, generation
+
+
+def lead_store(env):
+    _, caller = require_hc(env)
+    scope, generation = dispatch_identity(env)
+    store = dispatch.Store(env)
+    return store, store.team(scope, caller, generation)
+
+
 def spawn(arguments, env, ctx):
     kind = arguments.get("kind")
     cli = arguments.get("cli") or "claude"
@@ -151,7 +200,12 @@ def spawn(arguments, env, ctx):
     _, caller = require_hc(env)
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
+    store = None
     message = "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
+    if dispatch_enabled(env):
+        store, team = lead_store(env)
+        identity = store.register(team, name)
+        message += " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
     if cli == "claude":
         program = ["claude", "--agent", "implementer", "--permission-mode", "auto", message]
     else:
@@ -160,10 +214,14 @@ def spawn(arguments, env, ctx):
     try:
         out = hc(["run", "--bg", "--name", name, "--cwd", cwd, "--parent", caller, "--json"] + program, env, ctx)
     except ToolError:
+        if store:
+            store.fail(identity["assignment_id"])
         if ctx.cancelled.is_set():
             discard(name, env)
         raise
     if ctx.cancelled.is_set():
+        if store:
+            store.fail(identity["assignment_id"])
         discard(name, env)
         raise ToolError("cancelled")
     try:
@@ -172,6 +230,8 @@ def spawn(arguments, env, ctx):
         started = {}
     sent = (started.get("first_message") or {}).get("sent") if isinstance(started, dict) else None
     if sent is False:
+        if store:
+            store.fail(identity["assignment_id"])
         raise ToolError("worker %s started but its task was not sent: hc read %s; no blind resend" % (name, name))
     info = {"name": name, "address": None, "parent": caller}
     try:
@@ -179,7 +239,15 @@ def spawn(arguments, env, ctx):
         info.update(address=raw.get("address"), parent=raw.get("parent") or caller)
     except (ToolError, ValueError, AttributeError):
         pass
-    return result(info)
+    if not store:
+        return result(info)
+    if info["address"]:
+        scope, _ = dispatch_identity(env)
+        store.bind(identity["assignment_id"], info["address"], scope)
+    else:
+        store.fail(identity["assignment_id"])
+        raise ToolError("worker started but address unavailable; assignment cannot accept reports")
+    return result(dict(info, **identity), structured=True)
 
 
 def require_child(name, env, ctx):
@@ -210,16 +278,16 @@ def resume(arguments, env, ctx):
     return result(out or "turn ended")
 
 
-def wait_seconds(arguments):
+def legacy_wait_seconds(arguments):
     value = arguments.get("timeout", WAIT_DEFAULT)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         raise ToolError("timeout must be a positive number of seconds")
     return int(min(value, WAIT_MAX))
 
 
-def wait(arguments, env, ctx):
+def legacy_wait(arguments, env, ctx):
     (target,) = need(arguments, "target")
-    seconds = wait_seconds(arguments)
+    seconds = legacy_wait_seconds(arguments)
     _, caller = require_hc(env)
     if target in ("any", "all"):
         argv = ["wait", "--children", target, "--timeout", str(seconds), "--json"]
@@ -241,6 +309,26 @@ def wait(arguments, env, ctx):
     else:
         workers = [lib.status("hc", target, env)]
     return result({"wait": news, "workers": workers})
+
+
+
+def wait_seconds(arguments):
+    value = arguments.get("timeout", WAIT_DEFAULT)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value < float("inf"):
+        raise ToolError("timeout must be a nonnegative finite number of seconds")
+    return min(value, WAIT_MAX)
+
+
+def wait(arguments, env, ctx):
+    if not dispatch_enabled(env):
+        return legacy_wait(arguments, env, ctx)
+    (target,) = need(arguments, "target")
+    wait_seconds(arguments)
+    store, team = lead_store(env)
+    if ctx.cancelled.is_set():
+        raise ToolError("cancelled")
+    # Immediate durable snapshot; blocking waits can reuse the same read transaction.
+    return result(store.read(team, env["HC_TERMINAL_ID"], target, arguments.get("receipt")), structured=True)
 
 
 def collect(arguments, env, ctx):
@@ -270,7 +358,7 @@ def stop(arguments, env, ctx):
     return result("stopped %s%s" % (name, note))
 
 
-def report(arguments, env, ctx):
+def legacy_report(arguments, env, ctx):
     (text,) = need(arguments, "text")
     info, _ = me(env)
     if info["runtime"] != "hc":
@@ -279,6 +367,29 @@ def report(arguments, env, ctx):
         raise ToolError("report is for hc workers; a lead reads results with collect")
     hc(["send", info["parent"], text], env, ctx)
     return result("reported to %s" % info["parent"])
+
+
+
+def report(arguments, env, ctx):
+    if not dispatch_enabled(env):
+        return legacy_report(arguments, env, ctx)
+    text, assignment = need(arguments, "text", "assignment_id")
+    info, caller = me(env)
+    if info["runtime"] != "hc":
+        raise gap("%s support for report" % info["runtime"], NATIVE_TOOLS[info["runtime"]])
+    if info["role"] != "worker" or not info.get("parent"):
+        raise ToolError("report is for hc workers with a registered assignment")
+    scope = env.get("HC_SCOPE") or env.get("HC_TERMINAL_SOCKET") or "default"
+    if ctx.cancelled.is_set():
+        raise ToolError("cancelled")
+    try:
+        raw = json.loads(hc(["get", caller, "--json"], env, ctx))
+    except ValueError:
+        raise ToolError("cannot verify report sender")
+    if not isinstance(raw, dict) or raw.get("parent") != info["parent"]:
+        raise ToolError("report sender changed during resolution")
+    return result(dispatch.Store(env).publish(scope, caller, info["parent"], assignment, text,
+                  arguments.get("kind"), arguments.get("message_id"), caller_name=raw.get("name")), structured=True)
 
 
 def status(arguments, env, ctx):
@@ -300,5 +411,5 @@ HANDLERS = {"spawn": spawn, "message": message, "resume": resume, "wait": wait, 
 def call(name, arguments, env, ctx):
     try:
         return HANDLERS[name](arguments, env, ctx)
-    except ToolError as error:
+    except (ToolError, dispatch.StoreError) as error:
         return result(str(error), True)

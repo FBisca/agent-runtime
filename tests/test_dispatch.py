@@ -1,0 +1,250 @@
+"""Durable dispatch over real MCP subprocesses, fake hc only."""
+import json
+import stat
+import sys
+from test_tools import ToolCase, raw
+from test_mcp_server import SERVER
+
+sys.path.insert(0, str(SERVER.parent))
+from dispatch_store import Store, StoreError
+
+
+class DispatchTests(ToolCase):
+    def lead(self, generation="lead-session"):
+        return self.start({"get:w1": {"out": raw("w1", "t0")}},
+                          {"CODEX_THREAD_ID": generation, "HC_SCOPE": "test", "AGENT_RUNTIME_DISPATCH": "1"})
+
+    def spawn(self, lead, cli="claude"):
+        result, text = self.call(lead, "spawn", {"kind": "worker", "cli": cli,
+                                "name": "w1", "task": "work", "cwd": "/tmp"})
+        self.assertFalse(result["isError"], text)
+        return json.loads(text)
+
+    def worker(self):
+        return self.start(env={"HC_TERMINAL_ID": "t9", "HC_SCOPE": "test",
+                              "CODEX_THREAD_ID": "worker-session", "AGENT_RUNTIME_DISPATCH": "1"},
+                          replies={"get:t9": {"out": raw("w1", "t0")}})
+
+    def publish(self, worker, assignment, **extra):
+        args = {"text": "done", "kind": "complete", "assignment_id": assignment["assignment_id"]}
+        args.update(extra)
+        return self.call(worker, "report", args)
+
+    def read(self, lead, **extra):
+        result, text = self.call(lead, "wait", dict(target="all", timeout=0, **extra))
+        self.assertFalse(result["isError"], text)
+        self.assertEqual(result["structuredContent"], json.loads(text))
+        return result["structuredContent"]
+
+    def test_S1_structured_reports_from_both_clis_without_hc_send(self):
+        for cli in ("claude", "codex"):
+            lead = self.lead(cli)
+            assignment = self.spawn(lead, cli)
+            result, text = self.publish(self.worker(), assignment)
+            self.assertFalse(result["isError"], text)
+            batch = self.read(lead)
+            message, = batch["messages"]
+            for key in ("team_id", "worker_id", "assignment_id"):
+                self.assertEqual(message[key], assignment[key])
+            self.assertTrue(message["message_id"])
+            self.assertEqual(message["sender"], assignment["worker_id"])
+            self.assertEqual(batch["reason"], "completed")
+        self.assertEqual(self.runs("send"), [])
+
+    def test_S2_restart_keeps_reports_and_receipts_private(self):
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        worker = self.worker()
+        self.publish(worker, assignment, message_id="restart")
+        first = self.read(lead)
+        worker.close()
+        lead.close()
+        result, text = self.publish(self.worker(), assignment, message_id="restart")
+        self.assertFalse(result["isError"], text)
+        restarted = self.lead()
+        self.assertEqual(self.read(restarted)["messages"], first["messages"])
+        self.assertEqual(self.read(restarted, receipt=first["receipt"])["messages"], [])
+        path = self.dir / "home" / ".local" / "state" / "agent-runtime" / "dispatch.sqlite3"
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+
+    def test_S1_fast_report_binds_pending_assignment_without_resetting_completion(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        identity = store.register(team, "w1")
+        with self.assertRaises(StoreError):
+            store.publish("test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="other")
+        store.publish("test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1")
+        store.bind(identity["assignment_id"], "t9", "test")
+        self.assertEqual(store.read(team, "t0", "all")["reason"], "completed")
+
+    def test_S1_failure_after_fast_complete_preserves_completion(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        identity = store.register(team, "w1")
+        store.publish("test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1")
+        store.fail(identity["assignment_id"])
+        batch = store.read(team, "t0", "all")
+        self.assertEqual(batch["reason"], "completed")
+        self.assertEqual(batch["unfinished"], [])
+
+    def test_S25_explicit_opt_in_uses_structured_path_and_validates_report(self):
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        worker = self.worker()
+        for missing in ("kind", "assignment_id"):
+            args = {"text": "done", "kind": "complete", "assignment_id": assignment["assignment_id"]}
+            del args[missing]
+            result, _ = self.call(worker, "report", args)
+            self.assertTrue(result["isError"])
+        self.publish(worker, assignment)
+        self.assertEqual(self.read(lead)["reason"], "completed")
+        self.assertEqual(self.runs("send"), [])
+        self.assertEqual(self.runs("wait"), [])
+
+    def test_S13_failed_launch_preserves_previous_assignment(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        old = store.register(team, "w1")
+        store.bind(old["assignment_id"], "t9", "test")
+        failed = store.register(team, "w1")
+        store.fail(failed["assignment_id"])
+        self.assertEqual(store.read(team, "t0", "all")["unfinished"], [old["assignment_id"]])
+
+    def test_S13_stale_pending_cannot_replace_newer_registration_or_binding(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        for bound in (False, True):
+            with self.subTest(newer_bound=bound):
+                name = "worker-%s" % bound
+                old = store.register(team, name)
+                current = store.register(team, name)
+                if bound:
+                    store.bind(current["assignment_id"], "t9", "test")
+                with self.assertRaises(StoreError):
+                    store.publish("test", "t9", "t0", old["assignment_id"], "late", "complete", caller_name=name)
+                with self.assertRaises(StoreError):
+                    store.bind(old["assignment_id"], "t9", "test")
+                store.publish("test", "t9", "t0", current["assignment_id"], "current", "complete", caller_name=name)
+                batch = store.read(team, "t0", name)
+                self.assertEqual([a["assignment_id"] for a in batch["assignments"]], [current["assignment_id"]])
+                self.assertEqual([m["text"] for m in batch["messages"]], ["current"])
+
+    def test_S13_stale_pending_cannot_steal_address_from_new_team_generation(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        old_team = store.team("test", "t0", "old-lead")
+        old = store.register(old_team, "old-name")
+        new_team = store.team("test", "t0", "new-lead")
+        current = store.register(new_team, "new-name")
+        store.bind(current["assignment_id"], "t9", "test")
+        # Even a registration made later by the superseded generation has no authority.
+        later_old = store.register(old_team, "another-old-name")
+        for candidate, name in ((old, "old-name"), (later_old, "another-old-name")):
+            with self.subTest(name=name):
+                with self.assertRaises(StoreError):
+                    store.publish("test", "t9", "t0", candidate["assignment_id"], "late", "complete", caller_name=name)
+                with self.assertRaises(StoreError):
+                    store.bind(candidate["assignment_id"], "t9", "test")
+        store.publish("test", "t9", "t0", current["assignment_id"], "current", "complete", caller_name="new-name")
+        self.assertEqual(store.read(old_team, "t0", "all")["messages"], [])
+        self.assertEqual(store.read(new_team, "t0", "all")["reason"], "completed")
+
+    def test_S3_replay_and_repeated_ack_are_idempotent(self):
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        self.publish(self.worker(), assignment)
+        first = self.read(lead)
+        self.assertEqual(self.read(lead)["messages"], first["messages"])
+        for _ in range(2):
+            self.assertEqual(self.read(lead, receipt=first["receipt"])["messages"], [])
+        result, _ = self.call(self.lead("other"), "wait", {"target": "all", "timeout": 0,
+                                                            "receipt": first["receipt"]})
+        self.assertTrue(result["isError"])
+
+    def test_S4_publication_deduplicates_and_conflicts(self):
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        worker = self.worker()
+        for _ in range(2):
+            result, text = self.publish(worker, assignment, message_id="retry")
+            self.assertFalse(result["isError"], text)
+        result, text = self.publish(worker, assignment, message_id="retry", text="changed")
+        self.assertTrue(result["isError"])
+        self.assertIn("conflict", text)
+        self.assertEqual(len(self.read(lead)["messages"]), 1)
+
+    def test_S13_old_assignment_and_reused_address_are_isolated(self):
+        lead = self.lead()
+        old = self.spawn(lead)
+        current = self.spawn(lead)
+        result, _ = self.publish(self.worker(), old)
+        self.assertTrue(result["isError"])
+        self.assertEqual(self.read(lead)["unfinished"], [current["assignment_id"]])
+        self.publish(self.worker(), current)
+        self.assertEqual(self.read(self.lead("new-generation"))["messages"], [])
+        foreign = self.lead("foreign")
+        self.spawn(foreign)
+        result, _ = self.publish(self.worker(), current, message_id="late")
+        self.assertTrue(result["isError"])
+        self.assertEqual(self.read(foreign)["messages"], [])
+
+    def test_S20_bounded_batches_and_large_payload_are_lossless(self):
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        worker = self.worker()
+        for i in range(35):
+            result, text = self.publish(worker, assignment, kind="progress", text=str(i), message_id=str(i))
+            self.assertFalse(result["isError"], text)
+        first = self.read(lead)
+        self.assertTrue(first["more"])
+        self.assertTrue(first["receipt"])
+        second = self.read(lead, receipt=first["receipt"])
+        self.assertEqual(len(first["messages"]) + len(second["messages"]), 35)
+        self.assertFalse(second["more"])
+        result, text = self.publish(worker, assignment, text="x" * 65537)
+        self.assertTrue(result["isError"])
+        self.assertIn("65536", text)
+        self.assertEqual(self.read(lead)["messages"], second["messages"])
+        self.read(lead, receipt=second["receipt"])
+        for i in range(3):
+            result, text = self.publish(worker, assignment, kind="progress", text="x" * 60000,
+                                        message_id="large-%s" % i)
+            self.assertFalse(result["isError"], text)
+        page = self.read(lead)
+        self.assertEqual(len(page["messages"]), 2)
+        self.assertLess(len(json.dumps(page["messages"]).encode()), 131072)
+        self.assertTrue(page["more"])
+        last = self.read(lead, receipt=page["receipt"])
+        self.assertEqual(len(last["messages"]), 1)
+        self.assertFalse(last["more"])
+
+
+class ActivationTests(ToolCase):
+    def test_S25_default_preserves_legacy_spawn_report_wait_resume_and_schema(self):
+        for flag in (None, "0"):
+            with self.subTest(flag=flag):
+                env = {} if flag is None else {"AGENT_RUNTIME_DISPATCH": flag}
+                lead = self.start({"get:w1": {"out": raw("w1", "t0")},
+                                   "wait": {"out": '{"reason":"idle"}'},
+                                   "ls": {"out": '{"terminals":[]}'}}, env)
+                result, text = self.call(lead, "spawn", {"kind": "worker", "name": "w1",
+                                                       "task": "work", "cwd": "/tmp"})
+                self.assertFalse(result["isError"], text)
+                self.assertEqual(json.loads(text), {"name": "w1", "address": "t9", "parent": "t0"})
+                self.assertNotIn("structuredContent", result)
+                self.assertNotIn("assignment_id", self.runs("run")[-1][-1])
+                tools = lead.send("tools/list")["result"]["tools"]
+                report_schema = next(t["inputSchema"] for t in tools if t["name"] == "report")
+                self.assertEqual(report_schema["required"], ["text"])
+                result, text = self.call(lead, "wait", {"target": "any", "timeout": 20})
+                self.assertFalse(result["isError"], text)
+                self.assertEqual(json.loads(text), {"wait": {"exit": 0, "news": {"reason": "idle"}}, "workers": []})
+                self.assertEqual(self.runs("wait")[-1], ["wait", "--children", "any", "--timeout", "20", "--json"])
+                self.call(lead, "resume", {"name": "w1", "task": "continue"})
+                self.assertEqual(self.runs("send")[-1], ["send", "--wait", "--timeout", "170", "w1", "continue"])
+                worker = self.start(env=dict(env, HC_TERMINAL_ID="t1"))
+                result, text = self.call(worker, "report", {"text": "done"})
+                self.assertFalse(result["isError"], text)
+                self.assertEqual(text, "reported to t0")
+                self.assertEqual(self.runs("send")[-1], ["send", "t0", "done"])
+                self.assertFalse((self.dir / "home/.local/state/agent-runtime").exists())

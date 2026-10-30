@@ -30,7 +30,7 @@ TOOLS = [
     ("spawn", "Start one agent on one task in one checkout; put the whole task in the call. "
               "kind=lookup: short read-only work, use the CLI's own subagent tool instead. "
               "kind=worker: implementation, long tasks, Codex, or anything watched. cli defaults to claude. "
-              "Returns its name and parent.",
+              "Returns name, parent and dispatch IDs.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
              "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory")}, ["kind", "name", "task", "cwd"])),
@@ -38,10 +38,10 @@ TOOLS = [
      schema({"to": text("worker name"), "text": text("message")}, ["to", "text"])),
     ("resume", "Give a finished, idle or interrupted worker another turn. A new spawn is not resumption.",
      schema({"name": text("worker name"), "task": text("what to do next")}, ["name", "task"])),
-    ("wait", "Block until the next child reports, none is working, or the named worker stops. Never poll. "
-             "Returns the status records of the workers it names.",
+    ("wait", "Wait for children. Dispatch opt-in returns durable reports and assignment states immediately.",
      schema({"target": text("any, all or a worker name"),
-             "timeout": {"type": "integer", "description": "seconds, default 170, max 590"}}, ["target"])),
+             "timeout": {"type": "integer", "description": "seconds, default 170, max 590; dispatch allows 0"},
+             "receipt": text("acknowledge previous batch")}, ["target"])),
     ("status", "State of one agent: {name, runtime, role, parent, state, turn, native, next[]}. "
                "state is working|idle|blocked|done|exited|unknown; blocked needs the user.",
      schema({"name": text("worker name or address")}, ["name"])),
@@ -51,7 +51,9 @@ TOOLS = [
     ("stop", "End a worker you started, after its work is accepted.",
      schema({"name": text("worker name")}, ["name"])),
     ("report", "Worker only: send your result or blocker to your parent when done or stuck.",
-     schema({"text": text("result or blocker")}, ["text"])),
+     schema({"text": text("result; max 65536 bytes"), "assignment_id": text("assigned ID"),
+             "kind": {"type": "string", "enum": ["progress", "complete", "blocked", "decision"]},
+             "message_id": text("optional retry ID")}, ["text"])),
 ]
 TOOL_NAMES = [name for name, _, _ in TOOLS]
 
