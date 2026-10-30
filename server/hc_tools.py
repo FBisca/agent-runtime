@@ -219,6 +219,15 @@ def lead_store(env, ctx=None):
     return store, team
 
 
+def linked_task(arguments, env):
+    task_id = arguments.get("task_id")
+    if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
+        raise ToolError("task_id must be a task ID")
+    if task_id is not None and not dispatch_enabled(env):
+        raise ToolError("task_id requires AGENT_RUNTIME_DISPATCH=1")
+    return task_id
+
+
 def owned_orphan(name, caller, env, store, team):
     """True only when a terminal we may have started exists under our parent and is not an earlier bound worker's."""
     try:
@@ -241,6 +250,7 @@ def spawn(arguments, env, ctx):
         raise gap("spawn cli=%s" % cli, "hc run --bg --name <name> %s" % cli)
     name, task, cwd = need(arguments, "name", "task", "cwd")
     worker_name(name)
+    task_id = linked_task(arguments, env)
     _, caller = require_hc(env)
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
@@ -255,7 +265,8 @@ def spawn(arguments, env, ctx):
     else:
         program = ["codex", "--no-daemon", "%s\n\n%s" % (codex_instructions(), message)]
     if store:
-        identity = store.register(team, name)
+        identity = store.register(team, name, task_id)
+        identity.pop("_prior", None)
         suffix = " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
         suffix += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         program[-1] += suffix
@@ -351,13 +362,15 @@ def message(arguments, env, ctx):
 
 def resume(arguments, env, ctx):
     name, task = need(arguments, "name", "task")
+    task_id = linked_task(arguments, env)
     if dispatch_enabled(env):
         worker_name(name)
         raw = require_child(name, env, ctx)
         if not raw.get("address"):
             raise ToolError("worker address unavailable")
         store, team = lead_store(env, ctx)
-        identity = store.register(team, name)
+        identity = store.register(team, name, task_id, transfer=True)
+        prior = identity.pop("_prior", None)
         prompt = "%s\n\nUse assignment_id=%s for report(kind=progress|complete|blocked|decision)." % (task, identity["assignment_id"])
         prompt += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         try:
@@ -373,7 +386,7 @@ def resume(arguments, env, ctx):
             store.bind(identity["assignment_id"], raw["address"], ctx.actor["scope"], ctx.ack, raw.get("turn"),
                        "ended" if row_state(raw) in ("done", "idle") else "working")
         except (ToolError, dispatch.StoreError):
-            store.fail(identity["assignment_id"])
+            store.fail(identity["assignment_id"], restore=prior)
             raise
         return result(dict(identity, name=name, address=raw["address"], parent=raw["parent"]), structured=True)
     out = send(["--wait", "--timeout", str(WAIT_DEFAULT)], name, task, env, ctx, WAIT_DEFAULT + 10)

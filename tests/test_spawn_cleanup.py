@@ -148,8 +148,8 @@ class SpawnCleanupTests(ToolCase):
         store = Store(env)
         real_register = Store.register
 
-        def register_with_task(self_, team, name):
-            identity = real_register(self_, team, name)
+        def register_with_task(self_, team, name, *rest, **more):
+            identity = real_register(self_, team, name, *rest, **more)
             with self_.transaction() as db:
                 db.execute("INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
                            (team, identity["worker_id"], identity["assignment_id"]))

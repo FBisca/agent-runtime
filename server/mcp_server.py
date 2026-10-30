@@ -33,12 +33,15 @@ TOOLS = [
               "kind=worker: implementation, long tasks, Codex. cli defaults to claude.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
              "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
-             "cwd": text("checkout directory")}, ["kind", "name", "task", "cwd"])),
+             "cwd": text("checkout directory"),
+             "task_id": text("optional ready task to link")}, ["kind", "name", "task", "cwd"])),
     ("message", "Send text to a teammate or lead. Peer messages arrive in tool results. Never forces input past a permission dialog.",
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
-    ("resume", "Give a finished, idle or interrupted worker another assignment; returns promptly. A new spawn is not resumption.",
-     schema({"name": text("worker name"), "task": text("what to do next")}, ["name", "task"])),
+    ("resume", "Give a finished, idle or interrupted worker another assignment; returns promptly. A new spawn is not resumption. "
+              "Pass task_id to keep the worker's task.",
+     schema({"name": text("worker name"), "task": text("what to do next"),
+             "task_id": text("optional task to move to this assignment")}, ["name", "task"])),
     ("wait", "Block until children report, need attention or time out (max 590s); use one wait(all) per work period. "
              "Returns reports, assignment states and a receipt: pass it on your next call. With no workers left, "
              "use target=inbox to block on peer messages.",

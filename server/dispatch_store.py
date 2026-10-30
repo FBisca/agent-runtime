@@ -143,7 +143,26 @@ class Store:
             return db.execute("SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
                               (scope, lead, generation)).fetchone()[0]
 
-    def register(self, team, name):
+    def _link_task(self, db, team, worker, assignment, task_id, transfer):
+        """D8/D11: link a ready task to the new assignment inside the registration transaction."""
+        if not isinstance(task_id, str) or not task_id:
+            raise StoreError("task_id must be a task ID")
+        row = db.execute("SELECT status,owner,assignment,deps FROM tasks WHERE id=? AND team=?", (task_id, team)).fetchone()
+        if not row:
+            raise StoreError("unknown task for this team")
+        done = {r[0] for r in db.execute(TASKS_DONE_SQL, (team,))}
+        if row["status"] == "pending":
+            if any(d not in done for d in json.loads(row["deps"])):
+                raise StoreError("unsatisfied dependencies")
+        elif not (transfer and row["status"] in ("in_progress", "blocked") and row["owner"] == worker):
+            raise StoreError("task is not pending (status %s)" % row["status"])
+        changed = db.execute("UPDATE tasks SET status='in_progress',owner=?,assignment=? WHERE id=? AND status=?",
+                             (worker, assignment, task_id, row["status"])).rowcount
+        if not changed:  # lost a concurrent claim
+            raise StoreError("task was claimed concurrently")
+        return {"task_id": task_id, "status": row["status"], "owner": row["owner"], "assignment": row["assignment"]}
+
+    def register(self, team, name, task_id=None, transfer=False):
         with self.transaction() as db:
             row = db.execute("SELECT id FROM workers WHERE team=? AND name=?", (team, name)).fetchone()
             worker = row[0] if row else uid()
@@ -154,7 +173,11 @@ class Store:
                 db.execute("INSERT INTO workers VALUES (?,?,?,NULL,1)", (worker, team, name))
             assignment = uid()
             db.execute("INSERT INTO assignments VALUES (?,?,?,'pending',0)", (assignment, team, worker))
-            return {"team_id": team, "worker_id": worker, "assignment_id": assignment}
+            identity = {"team_id": team, "worker_id": worker, "assignment_id": assignment}
+            if task_id is not None:
+                identity["_prior"] = self._link_task(db, team, worker, assignment, task_id, transfer)
+                identity["task_id"] = task_id
+            return identity
 
     def _bind(self, db, assignment, address, scope, turn=None, mode="fresh"):
         row = db.execute("SELECT a.worker,a.state,a.rowid AS sequence,t.rowid AS generation,t.scope,t.lead "
@@ -237,12 +260,20 @@ class Store:
         if wrote:
             dispatch_events.notify(self.directory)
 
-    def fail(self, assignment, inactive=False):
+    def fail(self, assignment, inactive=False, restore=None):
+        """restore: prior link of a task a failed resume moved; it goes back to a still-live earlier assignment."""
         with self.transaction() as db:
             changed = db.execute("UPDATE assignments SET state='failed' WHERE id=? AND state IN ('pending','working')",
                                  (assignment,)).rowcount
             if changed:  # a blocked/decision report that landed first keeps its task
-                self._release(db, assignment)
+                live = restore and restore["status"] != "pending" and restore["assignment"] and db.execute(
+                    "SELECT 1 FROM assignments WHERE id=? AND current=1 AND state NOT IN ('complete','failed')",
+                    (restore["assignment"],)).fetchone()
+                if live:
+                    db.execute("UPDATE tasks SET status=?,owner=?,assignment=? WHERE id=? AND assignment=?",
+                               (restore["status"], restore["owner"], restore["assignment"], restore["task_id"], assignment))
+                else:
+                    self._release(db, assignment)
             # A worker that never bound an address never started: it is not a teammate (D25).
             db.execute("UPDATE workers SET active=0 WHERE (address IS NULL OR ?) AND id=(SELECT worker FROM assignments WHERE id=?)",
                        (int(inactive), assignment))
