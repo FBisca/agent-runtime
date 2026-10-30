@@ -15,7 +15,7 @@ import hc_tools  # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
-SERVER_INFO = {"name": "agent-runtime", "version": "0.2.2"}
+SERVER_INFO = {"name": "agent-runtime", "version": "0.2.3"}
 
 
 def schema(properties=None, required=()):

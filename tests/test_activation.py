@@ -84,11 +84,29 @@ class ActivationWiringTest(unittest.TestCase):
     def test_plugin_version_is_bumped_and_consistent(self):
         """agent-runtime/R56"""
         version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
-        self.assertEqual(version, "0.2.2")
+        self.assertEqual(version, "0.2.3")
         self.assertEqual(mcp_server.SERVER_INFO["version"], version)
         market = json.loads((REPO / "agents/.claude-plugin/marketplace.json").read_text())
         for plugin in market["plugins"]:
             self.assertIn(plugin.get("version", version), (version,))
+
+    def test_S16_docs_list_all_ten_tools_and_state_no_stale_version(self):
+        tools = [name for name, _, _ in mcp_server.TOOLS]
+        self.assertEqual(len(tools), 10)
+        readme = (REPO / "README.md").read_text()
+        section = readme[readme.index("`agents/plugins/agent-runtime`"):readme.index("`agents/.stow-local-ignore`")]
+        spec = (REPO / "docs/specs/agent-runtime.md").read_text()
+        intro = spec.split("## Requirements")[0]
+        description = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["description"]
+        for label, text in (("README", section), ("plugin.json", description), ("spec intro", intro)):
+            for tool in tools:
+                self.assertRegex(text, r"\b%s\b" % tool, "%s lacks %s" % (label, tool))
+        for label, text in (("README", readme), ("spec", spec)):
+            for line in text.splitlines():
+                self.assertIsNone(re.search(r"\b0\.1\.\d|\b0\.2\.0\b", line), "%s states a stale version: %s" % (label, line))
+        for phrase in ("task_id", "receipt"):
+            self.assertIn(phrase, section)
+        self.assertIn("receipt", intro)
 
     def test_codex_pretooluse_matcher_covers_task(self):
         """agent-runtime/R56"""
