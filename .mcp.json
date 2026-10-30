@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "agent-runtime": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/mcp_server.py"],
+      "env": {
+        "HC_TERMINAL_ID": "${HC_TERMINAL_ID:-}",
+        "HC_SCOPE": "${HC_SCOPE:-}",
+        "HC_TERMINAL_SOCKET": "${HC_TERMINAL_SOCKET:-}",
+        "HERDR_PANE_ID": "${HERDR_PANE_ID:-}",
+        "HERDR_ENV": "${HERDR_ENV:-}",
+        "HERDR_SOCKET_PATH": "${HERDR_SOCKET_PATH:-}",
+        "HERDR_SESSION": "${HERDR_SESSION:-}"
+      }
+    }
+  }
+}

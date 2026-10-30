@@ -1,0 +1,9 @@
+❯ implement the status change
+
+⏺ Working on it.
+  ⎿  Interrupted · What should Claude do instead?
+
+────────────────────────
+❯ also add logging please
+────────────────────────
+  ? for shortcuts

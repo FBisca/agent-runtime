@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime contract helper for delegating to other agents. No model calls or agent spawns."""
+"""Agent runtime library and debug CLI (resolve, status, list). No model calls or agent spawns."""
 
 import argparse
 import json
@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 
 HC_TIMEOUT_SECONDS = 2
-SKILL_DIR = Path(__file__).resolve().parent.parent
 RUNTIMES = ("herdmates", "hc", "native")
 FIELDS = ("runtime", "role", "parent", "cli")
 
@@ -130,7 +129,7 @@ def format_line(info):
     return " ".join("%s=%s" % (key, info[key]) for key in FIELDS if key in info)
 
 
-CONTRACT_STATES = ("working", "idle", "blocked", "done", "exited", "unknown")
+CONTRACT_STATES = ("working", "idle", "interrupted", "blocked", "done", "exited", "unknown")
 READ_ERRORS = (OSError, RuntimeError, ValueError, subprocess.SubprocessError)
 
 
@@ -171,7 +170,7 @@ def hc_next(name, state):
         return [row("still running", "block until it reports", "wait")]
     if state == "blocked":
         return [row("a person is needed (permission or question)", "read the screen and ask the user", "collect"),
-                row("answer the dialog only with the user's say-so", "hc keys %s <keys>" % name)]
+                row("answering the dialog needs the user's say-so", "ask the user what to answer")]
     if state == "exited":
         return [row("process ended", "read the output", "collect"), row("clean up", "end it", "stop")]
     return [row("state not reported", "check again", "status"), row("see the screen", "read the output", "collect")]
@@ -181,19 +180,146 @@ HC_NATIVE_KEYS = ("address", "name", "state", "status", "turn", "exit_code", "re
 HERDR_NOTE = "read only; verify live agent identity before mapping a task to this pane"
 
 
+ARGV_MAX_LENGTH = 40
+MARKERS_PATH = Path(__file__).resolve().with_name("markers.json")
+READ_LINES = 200
+RESUME_TEXT = "continue the task where you stopped"
+
+
+def trim_argv(argv):
+    """Arguments with whitespace or over ARGV_MAX_LENGTH characters read <task>."""
+    if not isinstance(argv, list):
+        return argv
+    return ["<task>" if isinstance(a, str) and (len(a) > ARGV_MAX_LENGTH or any(c.isspace() for c in a)) else a
+            for a in argv]
+
+
 def hc_native(raw):
     native = {key: raw.get(key) for key in HC_NATIVE_KEYS}
     foreground = raw.get("foreground")
-    native["foreground"] = {"argv": foreground.get("argv")} if isinstance(foreground, dict) else None
+    native["foreground"] = {"argv": trim_argv(foreground.get("argv"))} if isinstance(foreground, dict) else None
     return native
+
+
+def hc_app(raw):
+    """claude-code or codex, from status.app, else the foreground argv[0]."""
+    status = raw.get("status")
+    app = status.get("app") if isinstance(status, dict) else None
+    if app in ("claude-code", "codex"):
+        return app
+    foreground = raw.get("foreground")
+    argv = foreground.get("argv") if isinstance(foreground, dict) else None
+    if isinstance(argv, list) and argv and isinstance(argv[0], str):
+        return {"claude": "claude-code", "codex": "codex"}.get(os.path.basename(argv[0]))
+    return None
+
+
+def load_spec(app_name):
+    return json.loads(MARKERS_PATH.read_text(encoding="utf-8")).get(app_name)
+
+
+def is_rule(line):
+    stripped = line.strip()
+    return bool(stripped) and set(stripped) <= {"─", "━", "-"} and len(stripped) >= 8
+
+
+def prompt_body(line, spec):
+    stripped = line.strip()
+    return stripped[len(spec["prompt"]):].strip() if stripped.startswith(spec["prompt"]) else None
+
+
+def history_lines(lines, app_name, spec):
+    """The lines before the input box: Claude's box is the prompt line between the two bottom rules,
+    Codex's is the last prompt line (composer, with placeholder or suggestion text)."""
+    if app_name == "codex":
+        for index in range(len(lines) - 1, -1, -1):
+            if prompt_body(lines[index], spec) is not None:
+                return lines[:index]
+        return lines
+    rules = [i for i, line in enumerate(lines) if is_rule(line)]
+    for upper, lower in zip(rules, rules[1:]):
+        inside = [l for l in lines[upper + 1:lower] if l.strip()]
+        if len(inside) == 1 and prompt_body(inside[0], spec) is not None and not any(
+                prompt_body(l, spec) is not None for l in lines[lower + 1:]):
+            return lines[:upper]
+    return lines
+
+
+def prompt_segments(text, app_name):
+    """[(prompt line, lines after it)] over the history, input box excluded; [] for an unknown app."""
+    spec = load_spec(app_name)
+    if not spec:
+        return []
+    segments = []
+    for line in history_lines(text.splitlines(), app_name, spec):
+        if prompt_body(line, spec):
+            segments.append((line.strip(), []))
+        elif segments:
+            segments[-1][1].append(line)
+        else:
+            segments.append((None, [line]))
+    return segments
+
+
+def last_prompt_block(screen_text, app_name):
+    """Lines after the last real task or message prompt, input box and its footer excluded."""
+    segments = [s for s in prompt_segments(screen_text, app_name) if s[0] is not None]
+    return list(segments[-1][1]) if segments else []
+
+
+def is_marker(line, spec):
+    stripped = line.strip()
+    return stripped.startswith(spec["anchor"]) and any(m in stripped for m in spec["interrupt"])
+
+
+def interruption_count(text, app_name):
+    """(interrupted after the last prompt, distinct interrupt events in the history). Redrawn history
+    repeats identical segments, so a segment equal to the one before it is one event."""
+    spec = load_spec(app_name)
+    segments = prompt_segments(text, app_name)
+    if not spec or not any(s[0] for s in segments):
+        return False, 0
+    tail = any(is_marker(l, spec) for l in segments[-1][1]) if segments[-1][0] else False
+    events, previous = 0, None
+    for prompt, lines in segments:
+        key = (prompt, tuple(l.strip() for l in lines if l.strip()))
+        if key != previous and any(is_marker(l, spec) for l in lines):
+            events += 1
+        previous = key
+    return tail, events
+
+
+def interrupted_rows(name, history):
+    if history >= 2:
+        return [row("interrupted again; history holds %d interrupts" % history,
+                    "ask the user whether to resume %s" % name)]
+    return [row("interrupted by a person or Esc", RESUME_TEXT, "resume")]
+
+
+def read_interruption(raw, state, name):
+    """(state, next rows) when the screen shows an interrupt; None when it does not or cannot be read."""
+    cli = hc_app(raw)
+    try:
+        spec = load_spec(cli)
+        if not spec or state not in spec["read_states"]:
+            return None
+        text = json.loads(run_command(["hc", "read", name, "--lines", str(READ_LINES), "--json"]))["text"]
+        tail, history = interruption_count(text, cli)
+    except Exception:
+        return None
+    return ("interrupted", interrupted_rows(name, history)) if tail else None
 
 
 def hc_record(name, raw):
     state = hc_state(raw)
     parent = raw.get("parent")
-    return record("hc", raw.get("name") or raw.get("address") or name, state,
-                  role="worker" if parent else "lead", parent=parent, turn=raw.get("turn"),
-                  native=hc_native(raw), next_rows=hc_next(raw.get("name") or raw.get("address") or name, state))
+    label = raw.get("name") or raw.get("address") or name
+    rows = hc_next(label, state)
+    found = read_interruption(raw, state, raw.get("address") or name)
+    if found:
+        state, rows = found
+    return record("hc", label, state, role="worker" if parent else "lead", parent=parent,
+                  turn=raw.get("turn"), native=hc_native(raw), next_rows=rows)
 
 
 def herdr_snapshot(pane, session, env):
@@ -282,38 +408,8 @@ def cmd_resolve(args):
     return 0
 
 
-def read_text(relative):
-    return (SKILL_DIR / relative).read_text(encoding="utf-8")
-
-
 def runtime_arg(args):
     return args.runtime or resolve(os.environ, args.cli)["runtime"]
-
-
-def gap_rule():
-    text = read_text("references/contract.md")
-    start = text.index("## Gap rule")
-    end = text.find("\n## ", start + 1)
-    return text[start:end if end != -1 else len(text)].strip()
-
-
-def cmd_contract(args):
-    runtime = runtime_arg(args)
-    print(read_text("references/contract.md").rstrip())
-    print()
-    print(read_text("adapters/%s.md" % runtime).rstrip())
-    return 0
-
-
-def cmd_help(args):
-    runtime = runtime_arg(args)
-    rows = json.loads(read_text("adapters/capabilities.json"))[runtime]
-    print("Capabilities of runtime %s:" % runtime)
-    for row in rows:
-        print("- %s | in-contract: %s | %s" % (row["capability"], row["in_contract"], row["how"]))
-    print()
-    print(gap_rule())
-    return 0
 
 
 def dump(value, args):
@@ -342,13 +438,6 @@ def build_parser():
                    help="default: detected from the environment, else claude")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_resolve)
-    for name, func, text in (("contract", cmd_contract, "print the verbs, gap rule and the resolved runtime's adapter"),
-                             ("help", cmd_help, "list the runtime's capabilities and whether each is in the contract")):
-        q = sub.add_parser(name, help=text)
-        q.add_argument("--cli", choices=("claude", "codex"), default=None,
-                   help="default: detected from the environment, else claude")
-        q.add_argument("--runtime", choices=RUNTIMES, help="override the resolved runtime")
-        q.set_defaults(func=func)
     p = sub.add_parser("status", help="one JSON record for one agent")
     p.add_argument("name", help="hc terminal name or address; Herdr pane ID under herdmates")
     p.add_argument("--session", help="exact Herdr session name (herdmates)")

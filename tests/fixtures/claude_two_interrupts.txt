@@ -1,0 +1,11 @@
+❯ implement the status change
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ continue the task where you stopped
+
+⏺ Editing again.
+  ⎿  Interrupted · What should Claude do instead?
+
+────────────────────────
+❯ 
+────────────────────────

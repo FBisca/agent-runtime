@@ -1,0 +1,9 @@
+› run the long build
+
+• Running npm run build in the background
+
+■ Conversation interrupted - use /feedback if something went wrong
+
+› Summarize recent commits
+
+  gpt-5   ~/dev/repo

@@ -1,0 +1,13 @@
+  ⏺ Read(server/agent_runtime.py)
+
+❯ implement the status change
+
+⏺ Reading the file.
+  ⎿  Read 396 lines
+
+  ⎿  Interrupted · What should Claude do instead?
+
+────────────────────────
+❯ 
+────────────────────────
+  ? for shortcuts

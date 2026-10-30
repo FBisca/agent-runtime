@@ -1,0 +1,10 @@
+› run the long build
+■ Conversation interrupted - use /feedback if something went wrong
+
+› continue the task where you stopped
+
+• Resumed. Build running.
+
+› Ask Codex to do anything
+
+  gpt-5   ~/dev/repo

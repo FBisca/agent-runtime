@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard: subagents may run only read-only hc subcommands; nobody may run teammux-launch."""
+"""PreToolUse guard: raw hc mutations are denied for every agent; subagents may not call the mutating
+agent-runtime tools. `--cli codex` selects the Codex payload (Bash only, no agent_id)."""
 
 import json
 import os
+import re
 import shlex
-import subprocess
 import sys
 
-HC_ALLOWED = {"get", "ls", "read", "wait", "templates", "events", "file", "exec", "schema"}
 HC_INFO_FLAGS = {"--help", "-h", "--version"}
+
 SEPARATORS = ";&|()\n"
 KEYWORDS = {"then", "do", "else", "elif", "if", "while", "until", "{", "!", "time", "builtin",
             "command", "exec", "nohup", "env", "sudo"}
@@ -17,10 +18,6 @@ VALUE_FLAGS = {"timeout": {"-s", "-k", "--signal", "--kill-after"}, "nice": {"-n
                "stdbuf": {"-i", "-o", "-e"}, "watch": {"-n", "--interval"},
                "xargs": {"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a"}, "env": {"-u", "-C"},
                "sudo": {"-u", "-g", "-C", "-h", "-p"}}
-HC_PARENT_SENSITIVE = {"keys", "interrupt", "kill"}
-HC_VALUE_OPTIONS = {"--if", "--timeout"}
-HC_KNOWN_FLAGS = {"--json", "--force", "--wait", "-h", "--help"}
-HC_TIMEOUT_SECONDS = 2
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 
 
@@ -70,8 +67,25 @@ def skip_options(words, i, name):
     return i
 
 
+def substitutions(command):
+    """Contents of backtick and $(...) substitutions, including those inside double quotes."""
+    found = re.findall(r"`([^`]*)`", command)
+    i = command.find("$(")
+    while i != -1:
+        depth, j = 1, i + 2
+        while j < len(command) and depth:
+            depth += {"(": 1, ")": -1}.get(command[j], 0)
+            j += 1
+        found.append(command[i + 2:j - 1 if depth == 0 else j])
+        i = command.find("$(", i + 2)
+    return found
+
+
 def invocations(command, depth=0):
-    """Yield (program basename, args) for each simple command, descending into sh -c."""
+    """Yield (program basename, args) for each simple command, descending into sh -c and substitutions."""
+    if depth < 3:
+        for inner in substitutions(command):
+            yield from invocations(inner, depth + 1)
     try:
         parsed = list(segments(command))
     except ValueError:
@@ -116,123 +130,58 @@ def file_read_only(args, sub):
     return bool(rest) and rest[0] in HC_INFO_FLAGS | {"read", "help"}
 
 
-def help_only(args, sub):
-    rest = args[args.index(sub) + 1:]
-    return bool(rest) and rest[0] in HC_INFO_FLAGS
-
-
-def sensitive_target(args):
-    """(target, tokens, uncertain) of a parent-sensitive hc call (keys/interrupt/kill/send --force).
-
-    None when the call is not sensitive. `target` is "" when none is named. `uncertain` is True
-    when an option hc does not document precedes the target, so the target may be an option value;
-    `tokens` are then all words after the subcommand."""
-    sub = hc_subcommand(args)
-    if sub is None:
-        return None
-    rest = args[args.index(sub) + 1:]
-    if sub == "send":
-        if "--force" not in rest:
-            return None
-    elif sub not in HC_PARENT_SENSITIVE:
-        return None
-    skip = False
-    uncertain = False
-    for arg in rest:
-        if skip:
-            skip = False
-        elif arg in HC_VALUE_OPTIONS:
-            skip = True
-        elif arg.startswith("-"):
-            if arg not in HC_KNOWN_FLAGS:
-                uncertain = True
-        elif not uncertain:
-            return arg, rest, False
-        else:
-            return arg, rest, True
-    return "", rest, uncertain
-
-
-def hc_get(terminal):
-    try:
-        result = subprocess.run(["hc", "get", terminal], capture_output=True, text=True,
-                                stdin=subprocess.DEVNULL, timeout=HC_TIMEOUT_SECONDS)
-        reply = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    return reply if isinstance(reply, dict) else None
-
-
-def is_worker():
-    own = os.environ.get("HC_TERMINAL_ID")
-    me = hc_get(own) if own else None
-    return bool(me) and isinstance(me.get("parent"), str) and bool(me["parent"])
-
-
-def targets_parent(target, tokens=(), uncertain=False):
-    """True when this hc worker's parent is the target (fails open when unresolvable).
-
-    When the target is uncertain, deny only if the parent's address or name appears in tokens."""
-    own = os.environ.get("HC_TERMINAL_ID")
-    if not own or not (target or uncertain):
-        return False
-    me = hc_get(own)
-    parent = me.get("parent") if me else None
-    if not isinstance(parent, str) or not parent:
-        return False
-    if uncertain:
-        parent_info = hc_get(parent) or {}
-        names = {parent, parent_info.get("name")} - {None}
-        return any(token in names for token in tokens)
-    if target == parent:
-        return True
-    reply = hc_get(target)
-    return bool(reply) and reply.get("address") == parent
+HC_DENIED = {"run", "send", "kill", "rm"}
+HC_ASKED = {"keys", "interrupt"}
+MUTATING_TOOLS = {"spawn", "message", "resume", "stop", "report"}
+TOOL_PREFIX = "mcp__plugin_agent-runtime_agent-runtime__"
 
 
 def verdict(command, is_subagent):
-    sensitive = []
+    """(decision, reason) or None."""
+    if not isinstance(command, str):
+        command = json.dumps(command)
+        if re.search(r"\bhc\b", command):
+            return "deny", "Cannot parse this command and it mentions hc: use the agent-runtime tools."
+        return None
+    try:
+        list(segments(command))
+    except ValueError:
+        if re.search(r"\bhc\b", command):
+            return "deny", "Cannot parse this command and it mentions hc: use the agent-runtime tools."
+    result = None
     for program, args in invocations(command):
-        if program == "herdmates" and args[:1] == ["teammux-launch"]:
-            return "herdmates teammux-launch is not allowed inside an agent session."
         if program != "hc":
             continue
-        if is_subagent:
-            sub = hc_subcommand(args)
-            if sub == "file" and not file_read_only(args, sub):
-                return ("Subagents may only run 'hc file read': file write and edit change the "
-                        "lead's files. Report through your return value or SendMessage.")
-            if sub is not None and sub not in HC_ALLOWED and not help_only(args, sub):
-                return ("Subagents must not run 'hc %s': it could act on the lead's terminal. "
-                        "Only read-only hc commands (%s) are allowed; report through your "
-                        "return value or SendMessage." % (sub, ", ".join(sorted(HC_ALLOWED))))
-        else:
-            call = sensitive_target(args)
-            if call is not None:
-                sensitive.append(call)
-    for target, tokens, uncertain in sensitive:
-        if is_worker() and any(c in target for c in "$`"):
-            return ("Workers must give hc keys, interrupt, kill and send --force a literal target: "
-                    "the target must be a literal address or name, not a shell expansion.")
-        if targets_parent(target, tokens, uncertain):
-            return ("Workers must not run keys, interrupt, kill or send --force at their parent: "
-                    "it can answer the parent's dialog. Use 'hc send <parent> <result>' to report.")
+        sub = hc_subcommand(args)
+        if sub in HC_ASKED and not is_subagent:
+            result = result or ("ask", "approve to press keys in a worker")
+        elif sub in HC_DENIED | HC_ASKED or (sub == "file" and not file_read_only(args, sub)):
+            return "deny", "Do not run 'hc %s' in Bash: use the agent-runtime tools." % sub
+    return result
+
+
+def tool_verdict(tool_name, is_subagent):
+    if is_subagent and tool_name.startswith(TOOL_PREFIX) and tool_name[len(TOOL_PREFIX):] in MUTATING_TOOLS:
+        return ("Subagents must not call the agent-runtime %s tool: report through your return value."
+                % tool_name[len(TOOL_PREFIX):])
     return None
 
 
 def main(argv=()):
-    """`--cli codex` selects the Codex payload: same tool_input.command and deny JSON as Claude,
-    but only the Bash tool is inspected and there is no agent_id marker for subagents."""
     try:
         data = json.load(sys.stdin)
-        if "codex" in argv and data.get("tool_name", "Bash") != "Bash":
+        name = data.get("tool_name", "Bash")
+        if name == "Bash":
+            result = verdict(data.get("tool_input", {}).get("command", ""), bool(data.get("agent_id")))
+        elif "codex" in argv:
             return 0
-        command = data.get("tool_input", {}).get("command", "")
-        reason = verdict(command, bool(data.get("agent_id")))
-        if reason:
+        else:
+            reason = tool_verdict(name, bool(data.get("agent_id")))
+            result = ("deny", reason) if reason else None
+        if result:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                                     "permissionDecision": "deny",
-                                                     "permissionDecisionReason": reason}}))
+                                                     "permissionDecision": result[0],
+                                                     "permissionDecisionReason": result[1]}}))
     except Exception:
         pass
     return 0

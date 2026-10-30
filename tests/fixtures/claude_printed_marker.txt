@@ -1,0 +1,9 @@
+❯ explain the marker text
+
+⏺ The CLI prints this line when you press Esc:
+  Interrupted · What should Claude do instead?
+  and the Codex line ■ Conversation interrupted - use /feedback is similar.
+
+────────────────────────
+❯ 
+────────────────────────

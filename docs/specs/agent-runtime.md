@@ -1,5 +1,5 @@
 # Agent runtime
-Paths: agents/.agents/skills/agent-runtime/, bin/bin/agent-runtime
+Paths: agents/.agents/skills/agent-runtime/, agents/plugins/agent-runtime/, bin/bin/agent-runtime
 
 The agent runtime contract gives skills one set of delegation verbs (spawn, message, resume, report, wait, collect, stop, status, list) that per-runtime adapters (hc, herdmates, native) implement. `agent-runtime resolve` picks the runtime deterministically: `HERDR_PANE_ID` (Claude to herdmates, Codex to native) beats `HC_TERMINAL_ID` (hc, role from `hc get`), which beats native.
 
