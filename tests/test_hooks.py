@@ -9,7 +9,8 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parent.parent
 HOOKS = SKILL / "hooks"
 REPO = SKILL.parents[2]  # .../agents
-SUFFIX = " · run agent-runtime contract before delegating"
+SUFFIX = " · run ~/bin/agent-runtime contract before delegating"
+REPORT = ' · report: hc send lead1 "<result>" when done or stuck'
 
 
 def run_hook(name, payload, args=(), env_extra=None, hc_reply='{"parent": null}'):
@@ -41,7 +42,11 @@ class SessionStartTests(unittest.TestCase):
                      {"HC_TERMINAL_ID": "w1"}, '{"parent": "lead1"}')
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(),
-                         "agent-runtime: runtime=hc role=worker parent=lead1" + SUFFIX)
+                         "agent-runtime: runtime=hc role=worker parent=lead1" + SUFFIX + REPORT)
+
+    def test_S16_hc_lead_gets_no_report_hint(self):
+        r = run_hook("session_start.py", {}, ["--cli", "claude"], {"HC_TERMINAL_ID": "l1"})
+        self.assertEqual(r.stdout.strip(), "agent-runtime: runtime=hc role=lead parent=-" + SUFFIX)
 
     def test_S16_parent_dash_when_none(self):
         r = run_hook("session_start.py", {}, ["--cli", "claude"])

@@ -17,7 +17,7 @@ Use `lookup` for short read-only work whose answer you need back in context. Use
 
 ## Gap rule
 
-When you need a capability the verbs lack, run `agent-runtime help`. If it is not in the contract, propose the change in chat in one line: `add <verb/option> → <runtime command>; needed for <why>`. Then ask before the raw command.
+When you need a capability the verbs lack, run `~/bin/agent-runtime help`. If it is not in the contract, propose the change in chat in one line: `add <verb/option> → <runtime command>; needed for <why>`. Then ask before the raw command.
 
 ## Messages and subagents
 

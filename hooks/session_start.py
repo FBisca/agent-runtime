@@ -18,8 +18,11 @@ def load_resolver():
 
 def pointer_line(cli):
     info = load_resolver().resolve(os.environ, cli)
-    return ("agent-runtime: runtime=%s role=%s parent=%s · run agent-runtime contract before delegating"
+    line = ("agent-runtime: runtime=%s role=%s parent=%s · run ~/bin/agent-runtime contract before delegating"
             % (info["runtime"], info["role"], info.get("parent", "-")))
+    if info["role"] == "worker" and info.get("parent"):
+        line += ' · report: hc send %s "<result>" when done or stuck' % info["parent"]
+    return line
 
 
 def main(argv):
