@@ -1,7 +1,8 @@
 """Versioned same-user dispatch store. No terminal text is a delivery mechanism.
 
-Limits: 32 registered workers per team, 32 messages / 128 KiB serialized messages per
-batch, 65536 bytes per report (UTF-8 and JSON-encoded text). Oversize publication
+Limits: 32 registered workers per team, 32 messages / 128 KiB per compact JSON
+message array (UTF-8, ensure_ascii=True, separators=(',', ':'), including brackets
+and commas), 65536 bytes per report (UTF-8 and JSON-encoded text). Oversize publication
 fails explicitly; reads never truncate or acknowledge implicitly. A receipt names
 exactly the returned IDs; passing it on the next read acknowledges that page.
 Connections/transactions are per operation, allowing separate MCP processes.
@@ -181,14 +182,15 @@ class Store:
             if target not in ("any", "all"):
                 query += " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
                 params.extend((team, target, target))
-            messages, size, more = [], 0, False
+            messages, size, more = [], 2, False  # Opening and closing array brackets.
             for row in db.execute(query + " ORDER BY seq", params):
                 body = row[0]
-                if len(messages) >= MAX_MESSAGES or size + len(body.encode("utf-8")) > MAX_BATCH_BYTES:
+                entry_size = len(body.encode("utf-8")) + (1 if messages else 0)
+                if len(messages) >= MAX_MESSAGES or size + entry_size > MAX_BATCH_BYTES:
                     more = True
                     break
                 messages.append(json.loads(body))
-                size += len(body.encode("utf-8"))
+                size += entry_size
             token = None
             if messages:
                 token = uid()

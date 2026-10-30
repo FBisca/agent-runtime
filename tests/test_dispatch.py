@@ -6,7 +6,7 @@ from test_tools import ToolCase, raw
 from test_mcp_server import SERVER
 
 sys.path.insert(0, str(SERVER.parent))
-from dispatch_store import Store, StoreError
+from dispatch_store import MAX_BATCH_BYTES, Store, StoreError
 
 
 class DispatchTests(ToolCase):
@@ -217,6 +217,39 @@ class DispatchTests(ToolCase):
         last = self.read(lead, receipt=page["receipt"])
         self.assertEqual(len(last["messages"]), 1)
         self.assertFalse(last["more"])
+
+    def test_S26_exact_compact_array_boundary_and_one_byte_overflow_are_lossless(self):
+        """agent-runtime-dispatch/S26"""
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        worker = self.worker()
+        encode = lambda value: json.dumps(value, separators=(",", ":")).encode("utf-8")
+        for overflow in (0, 1):
+            with self.subTest(overflow_bytes=overflow):
+                first_id, second_id = "boundary-%s-a" % overflow, "boundary-%s-b" % overflow
+                result, text = self.publish(worker, assignment, kind="progress", text="x" * 65530,
+                                            message_id=first_id)
+                self.assertFalse(result["isError"], text)
+                first = result["structuredContent"]
+                second = dict(first, message_id=second_id, text="y")
+                padding = MAX_BATCH_BYTES + overflow - len(encode([first, second]))
+                result, text = self.publish(worker, assignment, kind="progress", text="y" * (1 + padding),
+                                            message_id=second_id)
+                self.assertFalse(result["isError"], text)
+                second = result["structuredContent"]
+                self.assertEqual(len(encode([first, second])), MAX_BATCH_BYTES + overflow)
+                result, text = self.call(lead, "wait", {"target": "all", "timeout": 0})
+                self.assertFalse(result["isError"], text)
+                page = result["structuredContent"]
+                self.assertIn('"messages":' + encode(page["messages"]).decode(), text)
+                self.assertLessEqual(len(encode(page["messages"])), MAX_BATCH_BYTES)
+                self.assertEqual(page["messages"], [first] if overflow else [first, second])
+                self.assertEqual(page["more"], bool(overflow))
+                self.assertEqual(self.read(lead)["messages"], page["messages"])
+                continuation = self.read(lead, receipt=page["receipt"])
+                self.assertEqual(continuation["messages"], [second] if overflow else [])
+                self.assertFalse(continuation["more"])
+                self.assertEqual(self.read(lead, receipt=continuation["receipt"])["messages"], [])
 
 
 class ActivationTests(ToolCase):
