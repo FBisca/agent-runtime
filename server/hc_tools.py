@@ -228,14 +228,16 @@ def linked_task(arguments, env):
     return task_id
 
 
-def owned_orphan(name, caller, env, store, team):
-    """True only when a terminal we may have started exists under our parent and is not an earlier bound worker's."""
+def owned_orphan(name, caller, env, earlier, other):
+    """True only when a terminal we may have started exists under our parent and no other spawn of this name owns it.
+
+    earlier: the address bound before our spawn registered; other(address): another live assignment bound it."""
     try:
         raw = json.loads(hc(["get", name, "--json"], env, Context()))
     except (ToolError, ValueError):
         return False
     return bool(isinstance(raw, dict) and raw.get("parent") == caller and raw.get("address")
-                and raw.get("address") != store.worker_address(team, name))
+                and raw.get("address") != earlier and not other(raw["address"]))
 
 
 def spawn(arguments, env, ctx):
@@ -265,6 +267,7 @@ def spawn(arguments, env, ctx):
     else:
         program = ["codex", "--no-daemon", "%s\n\n%s" % (codex_instructions(), message)]
     if store:
+        earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)
         identity.pop("_prior", None)
         suffix = " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
@@ -278,9 +281,25 @@ def spawn(arguments, env, ctx):
     except ToolError as error:
         # Cancel/timeout may leave a terminal behind; a missing binary cannot.
         if store:
-            store.fail(identity["assignment_id"])
-            if not str(error).startswith("cannot run") and owned_orphan(name, caller, env, store, team):
-                discard(name, env)
+            mine = identity["assignment_id"]
+            try:
+                orphan = not str(error).startswith("cannot run") and owned_orphan(
+                    name, caller, env, earlier, lambda address: store.started_by_other(mine, address))
+            except (dispatch.StoreError, sqlite3.Error):
+                orphan = False  # keep the original error; fail below still runs
+            # Without an orphan the terminal is not removed (hc get failed, the worker exited, or another spawn owns
+            # it), so a report that landed first stands until a later wait observes the exit.
+            try:
+                store.fail(mine, inactive=orphan)
+            finally:
+                if orphan:
+                    discard(name, env)
+            try:
+                landed = store.assignment_state(mine) == "complete"
+            except (dispatch.StoreError, sqlite3.Error):
+                landed = False
+            if landed:
+                raise ToolError("%s; the worker's result had already landed" % error)
         elif ctx.cancelled.is_set():
             discard(name, env)
         raise
