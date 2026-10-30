@@ -352,3 +352,51 @@ os._exit(0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], 2)
             ids = json.loads(db.execute("SELECT ids FROM receipts WHERE id=?", (batch["receipt"],)).fetchone()[0])
         self.assertEqual(ids, [m["message_id"] for m in batch["messages"]])
+
+    def test_S27_queued_progress_and_replay_surface_exited_or_interrupted_worker(self):
+        """agent-runtime-dispatch/S27"""
+        self.prepare()
+        progress = self.publish(0, "progress")
+        for state in ("exited", "interrupted"):
+            self.rows[0]["status"] = state
+            self.replies["ls"]["out"] = json.dumps({"terminals": self.rows})
+            tmp = self.dir / "next-replies"
+            tmp.write_text(json.dumps(self.replies))
+            tmp.replace(self.dir / "replies")
+            for replay in range(2):
+                with self.subTest(state=state, replay=replay):
+                    before = len(self.runs("ls"))
+                    batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0 if replay else 1}))
+                    self.assertEqual(batch["reason"], "failed")
+                    self.assertEqual(batch["messages"], [progress])
+                    self.assertEqual(len(batch["unfinished"]), 2)
+                    self.assertEqual(batch["assignments"][0]["runtime_state"], state)
+                    self.assertEqual(len(self.runs("ls")), before + 1)
+        self.publish(0)
+        self.publish(1)
+        complete = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
+        self.assertEqual(complete["reason"], "completed")
+        self.assertEqual(complete["unfinished"], [])
+        self.assertEqual(complete["messages"][0], progress)
+
+    def test_S27_completion_committed_during_bounded_probe_overrides_observed_exit(self):
+        """agent-runtime-dispatch/S27"""
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("events", "t0", "lead")
+        assignment = store.register(team, "w1")["assignment_id"]
+        store.bind(assignment, "t1", "events")
+        progress = store.publish("events", "t1", "t0", assignment, "progress", "progress")
+        def complete_during_probe(members, timeout):
+            self.assertEqual([m["assignment_id"] for m in members], [assignment])
+            self.assertGreater(timeout, 0)
+            self.assertLessEqual(timeout, dispatch_wait.OBSERVE_TIMEOUT)
+            store.publish("events", "t1", "t0", assignment, "done", "complete")
+            return {assignment: "exited"}
+        observe = mock.Mock(side_effect=complete_during_probe)
+        batch = dispatch_wait.wait(store, team, "t0", "any", 1, None, hc_tools.Context(), observe)
+        self.assertEqual(batch["reason"], "completed")
+        self.assertEqual(batch["unfinished"], [])
+        self.assertEqual(batch["messages"][0], progress)
+        observe.assert_called_once()
+        with store.transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], 1)
