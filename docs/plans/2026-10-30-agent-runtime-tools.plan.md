@@ -1,6 +1,6 @@
 # Plan: agent runtime as tools
 
-Slug: `agent-runtime-tools`. Living spec: `docs/specs/agent-runtime.md`. Status: APPROVED 2026-10-30.
+Slug: `agent-runtime-tools`. Living spec: `docs/specs/agent-runtime.md`. Status: ARCHIVED 2026-10-30. The dispatch and hardening plans superseded its open tickets T7 and T8.
 
 ## Why now
 
@@ -112,5 +112,5 @@ Live
 | T4 | Hooks in the plugin: Bash raw-hc deny for all agents, subagent deny on mutating tools; remove SessionStart pointer and old hooks from settings.json | S16, S17, S18 | T1 | agents/plugins/agent-runtime/, agents/.claude/settings.json | agent | COMPLETE (converge PASS; review blocking fixed and re-checked) |
 | T5 | Codex: `[mcp_servers.agent-runtime]` with env_vars and approvals, Bash hook update; `codex()` wrapper in aliases.zsh | S19, S20 | T1 | agents/.codex/config.toml, zsh/.zsh/aliases.zsh, agents/plugins/agent-runtime/ | agent | COMPLETE (converge PASS; review blocking fixed and re-checked) |
 | T6 | Consumers: orchestrate and implementer point to the tools; delete the agent-runtime skill and the CLI's contract/help; README | S21 | T2, T3, T4 | agents/.agents/skills/orchestrate/, agents/.agents/skills/agent-runtime/, agents/plugins/agent-runtime/server/agent_runtime.py, agents/plugins/agent-runtime/tests/, agents/.claude/agents/implementer.md, agents/.codex/agents/implementer.toml, README.md | agent | COMPLETE (1160e2a; converge PASS; text and deletions spot-checked by the orchestrator) |
-| T7 | Merge the PR, pull the live checkout, install the plugin from the dotfiles marketplace, restart Claude and Codex, approve the Codex hook and MCP server | none | T2–T6 | none | Felippe | TO-DO |
-| T8 | Live run: S22–S24 with Claude and Codex workers through the tools; check Codex honours the hook's `ask` | S22, S23, S24 | T7 | agents/plugins/agent-runtime/ | agent | TO-DO |
+| T7 | Merge the PR, pull the live checkout, install the plugin from the dotfiles marketplace, restart Claude and Codex, approve the Codex hook and MCP server | none | T2–T6 | none | Felippe | SUPERSEDED (dispatch and hardening plans) |
+| T8 | Live run: S22–S24 with Claude and Codex workers through the tools; check Codex honours the hook's `ask` | S22, S23, S24 | T7 | agents/plugins/agent-runtime/ | agent | SUPERSEDED (dispatch and hardening plans) |

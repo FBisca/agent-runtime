@@ -84,7 +84,7 @@ class ActivationWiringTest(unittest.TestCase):
     def test_plugin_version_is_bumped_and_consistent(self):
         """agent-runtime/R56"""
         version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
-        self.assertEqual(version, "0.2.3")
+        self.assertEqual(version, "0.2.4")
         self.assertEqual(mcp_server.SERVER_INFO["version"], version)
         market = json.loads((REPO / "agents/.claude-plugin/marketplace.json").read_text())
         for plugin in market["plugins"]:
@@ -150,6 +150,13 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertRegex(section, r"(?i)record[- ]only")
         self.assertNotIn("marketplace update", block)
         self.assertNotIn("plugin update", block)
+
+    def test_S9_spec_intro_says_diagnostics_authorize_store_first_then_fall_back(self):
+        spec = (REPO / "docs/specs/agent-runtime.md").read_text()
+        intro = spec[:spec.index("## Requirements")]
+        self.assertRegex(intro, r"(?is)diagnostics authorize against the dispatch store first")
+        self.assertIn("hc-only state with `delivery_error`", intro)
+        self.assertRegex(intro, r"(?i)authorization failures? return no hc data")
 
 
 if __name__ == "__main__":
