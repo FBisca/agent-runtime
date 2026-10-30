@@ -229,3 +229,55 @@ class LiveAcceptance(unittest.TestCase):
                     if not batch.get("messages") and not batch.get("more"):
                         break
                 lead.close()
+
+    def test_S17_externally_killed_worker_stops_cleanly(self):
+        work = tempfile.mkdtemp(prefix="agent-runtime-live-kill-")
+        logfile = open(os.environ.get("AGENT_RUNTIME_LIVE_LOG") or os.path.join(work, "live.log"), "a")
+        self.addCleanup(logfile.close)
+
+        def log(event, **data):
+            logfile.write(json.dumps(dict(event=event, t=round(time.time(), 1), **data)) + "\n")
+            logfile.flush()
+
+        name = "live-kill-" + secrets.token_hex(3)
+        lead, receipt, started = Lead(log), None, False
+        try:
+            started = True
+            spawned = lead.tool("spawn", kind="worker", cli="claude", name=name, cwd=work,
+                                task="Live test: call the agent-runtime wait tool with target='inbox', timeout=300 and "
+                                     "your assignment_id. Do not edit files. Then stop.")
+            address = spawned.get("address")
+            if not address:  # the spawn result carries no address: read it from hc
+                address = json.loads(subprocess.run(["hc", "get", name, "--json"], capture_output=True, text=True,
+                                                    check=True).stdout)["address"]
+            # External kill: plain subprocesses, outside the runtime (the Bash hook only guards agent shells).
+            subprocess.run(["hc", "kill", address], capture_output=True, text=True)
+            subprocess.run(["hc", "rm", address], capture_output=True, text=True, check=True)
+            log("external_kill", name=name, address=address)
+            lead.tool("stop", name=name)  # raises on isError
+            batch = None
+            for _ in range(3):
+                batch = lead.tool("wait", target="all", timeout=5, **({"receipt": receipt} if receipt else {}))
+                receipt = batch.get("receipt") or receipt
+                log("wait_after_stop", reason=batch.get("reason"), unfinished=batch.get("unfinished"))
+                if batch.get("reason") == "empty":
+                    break  # a persisted failure message was acknowledged by the receipt on the next call
+            self.assertEqual(batch["reason"], "empty")
+            self.assertEqual(batch["unfinished"], [])
+            self.assertGreater(lead.lines, 0)  # every stdout line parsed as JSON (Lead.rpc raises otherwise)
+        finally:
+            try:
+                if started:
+                    try:
+                        lead.tool("stop", name=name, receipt=receipt)
+                    except Exception as error:  # already stopped by the test body
+                        log("stop_error", name=name, error=repr(error))
+                for _ in range(10):  # drain: each pass acknowledges the previous batch
+                    batch = lead.tool("wait", target="all", timeout=0, **({"receipt": receipt} if receipt else {}))
+                    receipt = batch.get("receipt")
+                    if not batch.get("messages") and not batch.get("more"):
+                        break
+            except Exception as error:
+                log("drain_error", error=repr(error))
+            finally:
+                lead.close()
