@@ -162,12 +162,15 @@ def hc_server(env):
     return os.path.realpath(socket) if socket else env.get("HC_SCOPE") or "default"
 
 
-def dispatch_identity(env):
+def dispatch_identity(env, ctx=None):
     """Scope plus CLI session generation; MCP process restarts retain the CLI ancestor.
 
     Prefer the nearest CLI process PID/start time over possibly inherited session
     markers. Hosts without visible CLI ancestry must supply a session ID.
     """
+    cached = getattr(ctx, "identity", None)
+    if cached:
+        return cached  # computed once per call
     scope = hc_server(env)
     generation = None
     pid = os.getppid()
@@ -200,12 +203,22 @@ def lead_store(env, ctx=None):
     if ctx is not None and getattr(ctx, "owned_team", None):
         return ctx.store, ctx.owned_team
     _, caller = require_hc(env)
-    scope, generation = dispatch_identity(env)
+    scope, generation = dispatch_identity(env, ctx)
     store = getattr(ctx, "store", None) or dispatch.Store(env)
     team = store.team(scope, caller, generation)
     if ctx is not None:
         ctx.owned_team = team
     return store, team
+
+
+def owned_orphan(name, caller, env, store, team):
+    """True only when a terminal we may have started exists under our parent and is not an earlier bound worker's."""
+    try:
+        raw = json.loads(hc(["get", name, "--json"], env, Context()))
+    except (ToolError, ValueError):
+        return False
+    return bool(isinstance(raw, dict) and raw.get("parent") == caller and raw.get("address")
+                and raw.get("address") != store.worker_address(team, name))
 
 
 def spawn(arguments, env, ctx):
@@ -226,37 +239,57 @@ def spawn(arguments, env, ctx):
     store = None
     message = "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
     if dispatch_enabled(env):
+        # D4: identity and inputs are resolved before hc run, so nothing is started on an invalid spawn.
+        scope, _ = dispatch_identity(env, ctx)
         store, team = lead_store(env, ctx)
-        identity = store.register(team, name)
-        message += " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
-        message += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
     if cli == "claude":
         program = ["claude", "--agent", "implementer", "--permission-mode", "auto", message]
     else:
         program = ["codex", "--no-daemon", "%s\n\n%s" % (codex_instructions(), message)]
-    # A cancel can land while hc run is starting the terminal; whatever it created is ended again.
+    if store:
+        identity = store.register(team, name)
+        suffix = " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
+        suffix += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
+        program[-1] += suffix
     try:
-        out = hc(["run", "--bg", "--name", name, "--cwd", cwd, "--parent", caller, "--json"] + program, env, ctx)
-    except ToolError:
+        code, out, err = run(["hc", "run", "--bg", "--name", name, "--cwd", cwd, "--parent", caller, "--json"] + program,
+                             env, ctx, SHORT_SECONDS)
+        if code != 0 and ctx.cancelled.is_set():  # cancel killed hc run mid-flight: not an hc refusal
+            raise ToolError("cancelled")
+    except ToolError as error:
+        # Cancel/timeout may leave a terminal behind; a missing binary cannot.
         if store:
             store.fail(identity["assignment_id"])
-        if ctx.cancelled.is_set():
+            if not str(error).startswith("cannot run") and owned_orphan(name, caller, env, store, team):
+                discard(name, env)
+        elif ctx.cancelled.is_set():
             discard(name, env)
         raise
-    if ctx.cancelled.is_set():
+    if code != 0:  # hc refused (name_taken, ...): nothing was started, so nothing is discarded
         if store:
             store.fail(identity["assignment_id"])
-        discard(name, env)
-        raise ToolError("cancelled")
+        raise ToolError(err.strip() or out.strip() or "hc run failed")
+    out = out.strip()
+
+    def undo(error):
+        """Every failure after a successful hc run ends the terminal, fails the assignment, leaves the worker inactive."""
+        try:
+            store.fail(identity["assignment_id"], inactive=True)
+        finally:
+            discard(name, env)
+        raise error
+
+    if store and ctx.cancelled.is_set():
+        undo(ToolError("cancelled"))
     try:
         started = json.loads(out)
     except ValueError:
         started = {}
     sent = (started.get("first_message") or {}).get("sent") if isinstance(started, dict) else None
     if sent is False:
-        if store:
-            store.fail(identity["assignment_id"])
-        raise ToolError("worker %s started but its task was not sent: hc read %s; no blind resend" % (name, name))
+        if not store:
+            raise ToolError("worker %s started but its task was not sent: hc read %s; no blind resend" % (name, name))
+        undo(ToolError("worker %s started but its task was not sent and was removed; spawn it again" % name))
     info = {"name": name, "address": None, "parent": caller}
     turn, mode = None, "fresh"
     try:
@@ -267,12 +300,14 @@ def spawn(arguments, env, ctx):
         pass
     if not store:
         return result(info)
-    if info["address"]:
-        scope, _ = dispatch_identity(env)
+    if ctx.cancelled.is_set():
+        undo(ToolError("cancelled"))
+    if not info["address"]:
+        undo(ToolError("worker started but address unavailable; assignment cannot accept reports"))
+    try:
         store.bind(identity["assignment_id"], info["address"], scope, getattr(ctx, "ack", None), turn, mode)
-    else:
-        store.fail(identity["assignment_id"])
-        raise ToolError("worker started but address unavailable; assignment cannot accept reports")
+    except (dispatch.StoreError, sqlite3.Error) as error:
+        undo(error)
     return result(dict(info, **identity), structured=True)
 
 
@@ -611,6 +646,7 @@ def call_dispatch(name, arguments, env, ctx):
     if info["role"] not in ("lead", "worker"):
         raise ToolError("cannot establish dispatch caller")
     scope, generation = dispatch_identity(env)
+    ctx.identity = (scope, generation)
     ctx.generation = generation
     ctx.store = dispatch.Store(env)
     raw_name = None

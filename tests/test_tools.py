@@ -19,6 +19,17 @@ with open(%(log)r, "a") as log:
 replies = json.load(open(%(replies)r))
 key = argv[0] + ":" + argv[1] if len(argv) > 1 and argv[0] + ":" + argv[1] in replies else argv[0]
 reply = replies.get(key, {"rc": 0, "out": ""})
+# Opt-in live-name model: replies["live"] lists terminal names; hc run refuses a live name like real hc.
+if "live" in replies and argv[0] in ("run", "rm"):
+    name = argv[argv.index("--name") + 1] if argv[0] == "run" else argv[1]
+    if argv[0] == "run" and name in replies["live"]:
+        sys.stderr.write(json.dumps({"error": {"kind": "name_taken", "message": "name " + repr(name) + " is taken"}}))
+        sys.exit(1)
+    if argv[0] == "run" and reply.get("rc", 0) == 0:
+        replies["live"].append(name)
+    if argv[0] == "rm" and name in replies["live"]:
+        replies["live"].remove(name)
+    json.dump(replies, open(%(replies)r, "w"))
 if reply.get("sleep"):
     time.sleep(reply["sleep"])
 sys.stdout.write(reply.get("out", ""))

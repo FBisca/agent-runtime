@@ -197,6 +197,11 @@ class Store:
         db.execute("UPDATE tasks SET status='pending',owner=NULL,assignment=NULL WHERE assignment=? AND status!='complete'",
                    (assignment,))
 
+    def worker_address(self, team, name):
+        with self.transaction() as db:
+            row = db.execute("SELECT address FROM workers WHERE team=? AND name=?", (team, name)).fetchone()
+            return row[0] if row else None
+
     def fail_observed(self, failures):
         """D2: persist observed exit/interrupt/replacement once: failed state, one lead message, task released.
 
@@ -228,15 +233,15 @@ class Store:
         if wrote:
             dispatch_events.notify(self.directory)
 
-    def fail(self, assignment):
+    def fail(self, assignment, inactive=False):
         with self.transaction() as db:
             changed = db.execute("UPDATE assignments SET state='failed' WHERE id=? AND state IN ('pending','working')",
                                  (assignment,)).rowcount
             if changed:  # a blocked/decision report that landed first keeps its task
                 self._release(db, assignment)
             # A worker that never bound an address never started: it is not a teammate (D25).
-            db.execute("UPDATE workers SET active=0 WHERE address IS NULL AND id=(SELECT worker FROM assignments WHERE id=?)",
-                       (assignment,))
+            db.execute("UPDATE workers SET active=0 WHERE (address IS NULL OR ?) AND id=(SELECT worker FROM assignments WHERE id=?)",
+                       (int(inactive), assignment))
 
     def publish(self, scope, address, parent, assignment, text, kind, message_id=None, caller_name=None, ack=None, generation=None):
         if kind not in REPORT_KINDS:

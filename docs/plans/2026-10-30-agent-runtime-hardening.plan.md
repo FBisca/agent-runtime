@@ -39,6 +39,7 @@ The user waived the PRD prerequisite for this follow-up on 2026-10-30; the archi
 | D12 | A failure persisted by D2 also returns its unfinished linked task to `pending` | Release only on stop/spawn failure | Every failure path releases tasks identically | User Q12 |
 | D13 | `stop` stays name-based, scoped to the caller's team in the store | Stop by `worker_id` | D1 already handles reused names; no new field needed | User Q13 |
 | D14 | README, `plugin.json` description and the spec intro list all ten tools and no hard-coded stale version; plugin version bumps once at the end so installed caches refresh | Bump per ticket | Docs drift found in review; caches copy the plugin | Gather; dispatch D15 practice |
+| D15 | status, list, collect and task list piggyback pending inbox messages only when the call carries a `receipt`; `wait` and mutating tools are unchanged | Deny subagent reads; hook-injected no-inbox flag | Subagents are already denied receipts (D5), so they never see the lead's inbox; leads still receive everything through `wait` and later receipt-bearing calls; same in both CLIs | T4 review finding; user, 2026-10-30 |
 
 ## Scenarios
 
@@ -59,6 +60,7 @@ The user waived the PRD prerequisite for this follow-up on 2026-10-30; the archi
 - **S15** WHEN a lead resumes a worker with `task_id` for its in_progress/blocked task, or a ready pending task, THEN the task moves to the fresh assignment and that assignment's complete report finishes it; resume without `task_id` leaves links unchanged.
 - **S16** WHEN users read README, `plugin.json` or the spec intro, THEN all ten tools including `task` are listed, no stale version is stated, and tool descriptions stay within 400 words.
 - **S17** WHEN the hardened plugin is installed and a lead kills a worker's terminal outside the runtime, THEN `stop` succeeds and the next `wait(all)` is `empty`, and the live mixed-CLI acceptance still passes.
+- **S18** WHEN status, list, collect or task list run without a `receipt`, THEN the result carries no inbox piggyback and acknowledges nothing; WHEN the same call carries a valid receipt, THEN pending inbox messages are returned as before.
 
 ## Out of scope
 
@@ -87,11 +89,12 @@ The user waived the PRD prerequisite for this follow-up on 2026-10-30; the archi
 
 | # | What it delivers | Satisfies | Blocked by | Paths | Owner | Status |
 |---|---|---|---|---|---|---|
-| T1 | Stop and observed failures never strand waits: stop of a missing or reassigned terminal, persisted observed failures with one failure message, and task release on stop/failure | S1–S4 | none | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | IN PROGRESS |
-| T2 | Spawn never orphans terminals: identity and input validation before `hc run`, terminal removal on every post-run failure, task release on failed spawn | S7, S8 | T1 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
+| T1 | Stop and observed failures never strand waits: stop of a missing or reassigned terminal, persisted observed failures with one failure message, and task release on stop/failure | S1–S4 | none | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR39 c946059; 223 tests, converge/review PASS; CI n/a) |
+| T2 | Spawn never orphans terminals: identity and input validation before `hc run`, terminal removal on every post-run failure, task release on failed spawn | S7, S8 | T1 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | IN PROGRESS |
 | T3 | Diagnostics survive store and identity failures: hc-first status/collect/list with `delivery_error`, authorization still enforced | S5, S6 | T2 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
-| T4 | Subagent guard and Claude permissions: hook denies subagent `wait` and `assignment_id` calls in both CLIs; tracked Claude settings enable and allow the runtime | S9, S10 | none | agents/plugins/agent-runtime/hooks/, agents/plugins/agent-runtime/tests/, agents/.claude/settings.json | agent | COMPLETE (PR37 770a88f; 216 tests, converge/review PASS; CI n/a) |
-| T5 | Indexed dispatch queries with an unchanged schema version and query-plan assertions | S11, S12 | none | agents/plugins/agent-runtime/server/dispatch_store.py, agents/plugins/agent-runtime/tests/ | agent | IN PROGRESS (PR38 open; converge/review PASS) |
+| T4 | Subagent guard and Claude permissions: hook denies subagent `wait` and `assignment_id` calls in both CLIs; tracked Claude settings enable and allow the runtime | S9, S10 | none | agents/plugins/agent-runtime/hooks/, agents/plugins/agent-runtime/tests/, agents/.claude/settings.json | agent | COMPLETE (PR37 770a88f; converge/review PASS; CI n/a) |
+| T5 | Indexed dispatch queries with an unchanged schema version and query-plan assertions | S11, S12 | none | agents/plugins/agent-runtime/server/dispatch_store.py, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR38 a2bf629; converge/review PASS; CI n/a) |
 | T6 | Task links on spawn and resume: optional `task_id`, atomic linking with dependency gating, transfer on resume, returned `task_id` | S13–S15 | T2, T5 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
-| T7 | Docs and version: ten-tool lists in README, `plugin.json` and spec intro, description budget kept, plugin version bump | S16 | T3, T4, T6 | README.md, agents/plugins/agent-runtime/, docs/specs/agent-runtime.md | agent | TO-DO |
+| T7 | Docs and version: ten-tool lists in README, `plugin.json` and spec intro, description budget kept, plugin version bump | S16 | T3, T4, T6, T9 | README.md, agents/plugins/agent-runtime/, docs/specs/agent-runtime.md | agent | TO-DO |
+| T9 | Receipt-gated inbox piggyback on the read tools subagents may call, so native subagents never read a lead's inbox | S18 | T3 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
 | T8 | Install the hardened plugin (main fast-forward with local settings three-way merge, plugin update, session restarts), then the agent runs the live acceptance including an external terminal kill | S17 | T7 | agents/plugins/agent-runtime/tests/ | Felippe | TO-DO |

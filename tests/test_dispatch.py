@@ -359,18 +359,21 @@ class DispatchTests(ToolCase):
         result, _ = self.call(lead, "wait", {"target": "all", "timeout": 2})
         self.assertEqual(result["structuredContent"]["reason"], "attention")
 
-    def test_unsent_spawn_can_be_recovered_by_resume(self):
+    def test_S7_unsent_spawn_is_removed_and_can_be_spawned_again(self):
         """agent-runtime/R64"""
-        lead = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})},
-                           "get:w1": {"out": raw("w1", "t0")}},
-                          {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                           "AGENT_RUNTIME_DISPATCH": "1"})
-        result, _ = self.call(lead, "spawn", {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"})
+        replies = {"run": {"out": json.dumps({"first_message": {"sent": False}})}, "get:w1": {"out": raw("w1", "t0")}}
+        lead = self.start(replies, {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
+                                    "AGENT_RUNTIME_DISPATCH": "1"})
+        args = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}
+        result, _ = self.call(lead, "spawn", args)
         self.assertTrue(result["isError"])
-        result, text = self.call(lead, "resume", {"name": "w1", "task": "go"})
+        self.assertEqual([c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]])
+        replies = json.loads((self.dir / "replies").read_text())
+        replies["run"] = {"out": ""}
+        (self.dir / "replies").write_text(json.dumps(replies))
+        result, text = self.call(lead, "spawn", args)
         self.assertFalse(result["isError"], text)
-        result, text = self.call(lead, "message", {"to": "w1", "text": "hi"})
-        self.assertFalse(result["isError"], text)
+        self.assertEqual([a["name"] for a in self.read(lead)["assignments"]], ["w1"])
 
     def test_old_shape_assignment_insert_still_works_after_init(self):
         """agent-runtime/R46"""
