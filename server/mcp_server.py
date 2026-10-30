@@ -57,10 +57,11 @@ TOOLS = [
              "message_id": text("optional retry ID")}, ["text"])),
     ("task", "Dispatch opt-in shared team tasks. Claim needs finished dependencies; complete/blocked reports update the claimed task.",
      schema({"action": {"type": "string", "enum": ["create", "list", "claim", "update"]},
-             "task_id": text("task ID"), "subject": text("create text"),
-             "depends_on": {"type": "array", "items": {"type": "string"}, "description": "prerequisite task IDs"},
+             "task_id": text("task ID"), "subject": text("create text"), "cursor": text("list continuation"),
+             "depends_on": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 64}, "description": "prerequisite task IDs"},
              "status": {"type": "string", "enum": ["pending", "in_progress", "complete", "blocked"]}}, ["action"])),
 ]
+HOST_RESULT_CHARS = 500000  # Claude per-tool text threshold; canonical payloads stay under 192 KiB (D22)
 for _, _, input_schema in TOOLS:
     input_schema["properties"].setdefault("receipt", text("acknowledge prior batch"))
     input_schema["properties"].setdefault("assignment_id", text("required on first worker call"))
@@ -119,7 +120,8 @@ def dispatch(method, request_id, params, env):
     elif method == "ping":
         result = {}
     elif method == "tools/list":
-        result = {"tools": [{"name": n, "description": d, "inputSchema": s} for n, d, s in TOOLS]}
+        result = {"tools": [{"name": n, "description": d, "inputSchema": s,
+                             "_meta": {"anthropic/maxResultSizeChars": HOST_RESULT_CHARS}} for n, d, s in TOOLS]}
     elif method == "tools/call":
         name = params.get("name")
         if name not in TOOL_NAMES:

@@ -26,7 +26,7 @@ class CodexConfigTest(unittest.TestCase):
         self.assertEqual(server["tool_timeout_sec"], 600)
         for tool in ["spawn", "message", "resume", "stop", "report"]:
             self.assertEqual(server["tools"][tool]["approval_mode"], "approve", tool)
-        self.assertNotIn("wait", server["tools"])
+        self.assertNotIn("approval_mode", server["tools"]["wait"])
 
     def test_S19_mcp_command_runs_the_symlink_through_a_shell(self):
         server = self.cfg["mcp_servers"]["agent-runtime"]

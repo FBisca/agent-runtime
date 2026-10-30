@@ -9,6 +9,7 @@ Connections/transactions are per operation, allowing separate MCP processes.
 """
 import json
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -18,6 +19,10 @@ import dispatch_events
 
 MAX_WORKERS = MAX_MESSAGES = 32
 MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
+# D22: the canonical compact-JSON result (every user-visible field, before the host's text +
+# structuredContent copies) stays under MAX_RESPONSE_BYTES. A base payload (tool result before an
+# inbox piggyback) stays under MAX_BASE_BYTES, so a legal 64 KiB report always fits beside it.
+MAX_RESPONSE_BYTES, MAX_BASE_BYTES, MAX_PAGE_BYTES = 196608, 98304, 65536
 REPORT_KINDS = ("progress", "complete", "blocked", "decision")
 
 
@@ -301,7 +306,7 @@ class Store:
                 "AND (? IN ('all','any') OR w.name=? OR a.id=?) ORDER BY a.rowid",
                 (team, target, target, target, target))]
 
-    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None):
+    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None, reserve=0):
         """Optional pure ready(batch) returns a final reason or None under this transaction.
 
         A pending snapshot creates no receipt; a final snapshot and its receipt
@@ -332,16 +337,25 @@ class Store:
             elif assignment_ids is None and not inbox and target not in ("any", "all"):
                 query += " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
                 params.extend((team, target, target))
+            unfinished = [a["assignment_id"] for a in assignments if a["state"] != "complete"]
+            # Worst-case fixed fields (receipt, longest reason, a runtime_state added by wait) are
+            # budgeted before selection so the receipt below names exactly what fits.
+            fixed = len(json.dumps({"reason": "x" * 9, "messages": [], "assignments": [
+                dict(a, runtime_state="interrupted") for a in assignments], "unfinished": unfinished,
+                "receipt": "0" * 32, "more": False}, separators=(",", ":")).encode())
+            if reserve > MAX_BASE_BYTES + len(',"inbox":'):
+                # A base above its cap could leave no room for even one legal message (infinite more=true retries).
+                raise StoreError("response base exceeds its budget; cannot piggyback inbox")
+            limit = min(MAX_BATCH_BYTES, MAX_RESPONSE_BYTES - reserve - (fixed - 2))
             messages, size, more = [], 2, False  # Opening and closing array brackets.
             for row in db.execute(query + " ORDER BY seq", params):
                 body = row[0]
                 entry_size = len(body.encode("utf-8")) + (1 if messages else 0)
-                if len(messages) >= MAX_MESSAGES or size + entry_size > MAX_BATCH_BYTES:
+                if len(messages) >= MAX_MESSAGES or size + entry_size > limit:
                     more = True
                     break
                 messages.append(json.loads(body))
                 size += entry_size
-            unfinished = [a["assignment_id"] for a in assignments if a["state"] != "complete"]
             reason = "timeout"
             if not assignments and not messages:
                 reason = "empty"
@@ -364,17 +378,27 @@ class Store:
 
     TASK_STATUSES = ("pending", "in_progress", "complete", "blocked")
 
-    def _tasks(self, db, team):
-        rows = [dict(r) for r in db.execute("SELECT * FROM tasks WHERE team=? ORDER BY rowid", (team,))]
-        done = {r["id"] for r in rows if r["status"] == "complete"}
-        return [{"task_id": r["id"], "subject": r["subject"], "status": r["status"], "owner": r["owner"],
-                 "assignment_id": r["assignment"], "depends_on": json.loads(r["deps"]),
-                 "ready": r["status"] == "pending" and all(d in done for d in json.loads(r["deps"]))}
-                for r in rows]
+    def _tasks(self, db, team, cursor=0, only=None):
+        """Team-scoped rows after rowid cursor, at most MAX_PAGE_BYTES of JSON; second item is the next cursor."""
+        done = {r[0] for r in db.execute("SELECT id FROM tasks WHERE team=? AND status='complete'", (team,))}
+        page, size, last = [], 2, None
+        for r in db.execute("SELECT rowid AS cursor,* FROM tasks WHERE team=? AND rowid>? ORDER BY rowid", (team, cursor)):
+            deps = json.loads(r["deps"])
+            item = {"task_id": r["id"], "subject": r["subject"], "status": r["status"], "owner": r["owner"],
+                    "assignment_id": r["assignment"], "depends_on": deps,
+                    "ready": r["status"] == "pending" and all(d in done for d in deps)}
+            if only is not None and r["id"] != only:
+                continue
+            entry = len(json.dumps(item, separators=(",", ":")).encode()) + 1
+            if page and size + entry > MAX_PAGE_BYTES:
+                return page, str(last)
+            page.append(item)
+            size, last = size + entry, r["cursor"]
+        return page, None
 
     def _deps(self, db, team, task, deps):
-        if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
-            raise StoreError("depends_on must be a list of task IDs")
+        if not isinstance(deps, list) or len(deps) > MAX_WORKERS or not all(isinstance(d, str) and len(d) <= 64 for d in deps):
+            raise StoreError("depends_on must be a list of at most 32 task IDs")
         known = {r[0]: json.loads(r[1]) for r in db.execute("SELECT id,deps FROM tasks WHERE team=?", (team,))}
         for dep in deps:
             if dep not in known:
@@ -433,7 +457,10 @@ class Store:
                         db.execute("UPDATE tasks SET status=? WHERE id=?", (status, task))
                     if deps is not None:
                         db.execute("UPDATE tasks SET deps=? WHERE id=?", (json.dumps(self._deps(db, team, task, deps)), task))
-            tasks = self._tasks(db, team)
-        if action == "list":
-            return {"tasks": tasks}
-        return next(t for t in tasks if t["task_id"] == task)
+            if action == "list":
+                cursor = arguments.get("cursor") or "0"
+                if not (isinstance(cursor, str) and re.fullmatch("[0-9]{1,18}", cursor)):
+                    raise StoreError("cursor must come from a previous task list")
+                tasks, following = self._tasks(db, team, int(cursor))
+                return dict({"tasks": tasks}, **({"next_cursor": following} if following else {}))
+            return self._tasks(db, team, only=task)[0][0]

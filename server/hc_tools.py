@@ -490,15 +490,32 @@ HANDLERS = {"spawn": spawn, "message": message, "resume": resume, "wait": wait, 
             "list": list_agents, "collect": collect, "stop": stop, "report": report, "task": task}
 
 
+def bounded(out):
+    """Dispatch mode: a text result whose JSON encoding exceeds half MAX_BASE_BYTES becomes an explicit
+    partial structured result keeping the tail, where collect's
+    result is (escaped size, not raw bytes, is what the canonical payload counts)."""
+    if out.get("isError") or out.get("structuredContent") is not None:
+        return out
+    body = out["content"][0]["text"]
+    if len(json.dumps(body)) <= dispatch.MAX_BASE_BYTES // 2:
+        return out
+    budget = dispatch.MAX_BASE_BYTES // 2 - 1024  # headroom for the partial/kept/original_bytes fields
+    keep = body[-budget:]  # escaped size is at least the char count; shrink from the head until it fits
+    while len(json.dumps(keep)) > budget:
+        keep = keep[max(1, (len(json.dumps(keep)) - budget) // 6):]
+    return result({"result": keep, "partial": True, "kept": "tail", "original_bytes": len(body.encode())}, structured=True)
+
+
 def diagnostic(name, arguments, env, ctx, error):
     """Storage is unavailable: return HC-only state/screen with an explicit delivery error.
 
     No store call happens, so nothing is acknowledged, pinned, adopted or completed.
     """
     out = HANDLERS[name](arguments, env, ctx)
+    out = bounded(out)
     body = out["content"][0]["text"]
     try:
-        payload = json.loads(body)
+        payload = out.get("structuredContent") or json.loads(body)
     except ValueError:
         payload = {"result": body}
     if not isinstance(payload, dict):
@@ -547,15 +564,19 @@ def call_dispatch(name, arguments, env, ctx):
     outcome = HANDLERS[name](arguments, env, ctx)
     if name == "wait":
         return outcome
+    outcome = bounded(outcome)
+    payload = outcome.get("structuredContent")
+    if payload is None:
+        try:
+            payload = json.loads(outcome["content"][0]["text"])
+        except ValueError:
+            payload = outcome["content"][0]["text"]
+    if not isinstance(payload, dict):
+        payload = {"result": payload}
+    # The inbox page budgets against the already-bounded base, then receipt/pin/ack commit together.
+    reserve = len(json.dumps(payload, separators=(",", ":")).encode()) + len(',"inbox":')
     inbox = ctx.store.read(ctx.actor["team_id"], ctx.actor["recipient"], "any", assignment_ids=[],
-                           inbox=True, ack=ctx.ack, pin=ctx.actor.get("pin"))
-    if inbox["messages"]:
-        payload = outcome.get("structuredContent")
-        if payload is None:
-            try:
-                payload = json.loads(outcome["content"][0]["text"])
-            except ValueError:
-                payload = outcome["content"][0]["text"]
-        payload = dict(payload, inbox=inbox) if isinstance(payload, dict) else {"result": payload, "inbox": inbox}
-        return result(payload, structured=True)
+                           inbox=True, ack=ctx.ack, pin=ctx.actor.get("pin"), reserve=reserve)
+    if inbox["messages"] or inbox["more"]:
+        return result(dict(payload, inbox=inbox), structured=True)
     return outcome
