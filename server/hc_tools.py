@@ -4,6 +4,7 @@ the runtime's command itself. Terminal mutations go through hc; durable reports 
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -489,44 +490,72 @@ HANDLERS = {"spawn": spawn, "message": message, "resume": resume, "wait": wait, 
             "list": list_agents, "collect": collect, "stop": stop, "report": report, "task": task}
 
 
+def diagnostic(name, arguments, env, ctx, error):
+    """Storage is unavailable: return HC-only state/screen with an explicit delivery error.
+
+    No store call happens, so nothing is acknowledged, pinned, adopted or completed.
+    """
+    out = HANDLERS[name](arguments, env, ctx)
+    body = out["content"][0]["text"]
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = {"result": body}
+    if not isinstance(payload, dict):
+        payload = {"result": payload}
+    payload["delivery_error"] = ("dispatch storage unavailable (%s); diagnostic only, not an accepted report; "
+                                 "any receipt was not processed" % error)
+    return result(payload, structured=True)
+
+
 def call(name, arguments, env, ctx):
     try:
-        if not dispatch_enabled(env):
-            return HANDLERS[name](arguments, env, ctx)
-        info, caller = require_hc(env)
-        if info["role"] not in ("lead", "worker"):
-            raise ToolError("cannot establish dispatch caller")
-        scope, generation = dispatch_identity(env)
-        ctx.generation = generation
-        ctx.store = dispatch.Store(env)
-        raw_name = None
-        if info["role"] == "worker" and name == "report":
-            raw_name = json.loads(hc(["get", caller, "--json"], env, ctx)).get("name")
-        ctx.actor = ctx.store.actor(scope, caller, info.get("parent"), generation,
-                                   arguments.get("assignment_id"), raw_name)
-        if not ctx.actor["worker_id"]:
-            ctx.owned_team = ctx.actor["team_id"]
-        ctx.ack = None
-        if arguments.get("receipt") is not None:
-            ctx.ack = ctx.store.receipt_owner(arguments["receipt"])
-            if ctx.ack[:2] != (ctx.actor["team_id"], ctx.actor["recipient"]):
-                _, own_team = lead_store(env, ctx)
-                if ctx.ack[:2] != (own_team, caller):
-                    raise ToolError("foreign receipt")
-        outcome = HANDLERS[name](arguments, env, ctx)
-        if name == "wait":
-            return outcome
-        inbox = ctx.store.read(ctx.actor["team_id"], ctx.actor["recipient"], "any", assignment_ids=[],
-                               inbox=True, ack=ctx.ack)
-        if inbox["messages"]:
-            payload = outcome.get("structuredContent")
-            if payload is None:
-                try:
-                    payload = json.loads(outcome["content"][0]["text"])
-                except ValueError:
-                    payload = outcome["content"][0]["text"]
-            payload = dict(payload, inbox=inbox) if isinstance(payload, dict) else {"result": payload, "inbox": inbox}
-            return result(payload, structured=True)
-        return outcome
+        try:
+            return call_dispatch(name, arguments, env, ctx)
+        except (sqlite3.Error, OSError) as error:
+            if name in ("status", "collect") and dispatch_enabled(env):
+                return diagnostic(name, arguments, env, ctx, error)
+            raise
     except (ToolError, dispatch.StoreError) as error:
         return result(str(error), True)
+
+
+def call_dispatch(name, arguments, env, ctx):
+    if not dispatch_enabled(env):
+        return HANDLERS[name](arguments, env, ctx)
+    info, caller = require_hc(env)
+    if info["role"] not in ("lead", "worker"):
+        raise ToolError("cannot establish dispatch caller")
+    scope, generation = dispatch_identity(env)
+    ctx.generation = generation
+    ctx.store = dispatch.Store(env)
+    raw_name = None
+    if info["role"] == "worker" and name == "report":
+        raw_name = json.loads(hc(["get", caller, "--json"], env, ctx)).get("name")
+    ctx.actor = ctx.store.actor(scope, caller, info.get("parent"), generation,
+                               arguments.get("assignment_id"), raw_name,
+                                defer_pin=name in ("status", "collect"))
+    if not ctx.actor["worker_id"]:
+        ctx.owned_team = ctx.actor["team_id"]
+    ctx.ack = None
+    if arguments.get("receipt") is not None:
+        ctx.ack = ctx.store.receipt_owner(arguments["receipt"])
+        if ctx.ack[:2] != (ctx.actor["team_id"], ctx.actor["recipient"]):
+            _, own_team = lead_store(env, ctx)
+            if ctx.ack[:2] != (own_team, caller):
+                raise ToolError("foreign receipt")
+    outcome = HANDLERS[name](arguments, env, ctx)
+    if name == "wait":
+        return outcome
+    inbox = ctx.store.read(ctx.actor["team_id"], ctx.actor["recipient"], "any", assignment_ids=[],
+                           inbox=True, ack=ctx.ack, pin=ctx.actor.get("pin"))
+    if inbox["messages"]:
+        payload = outcome.get("structuredContent")
+        if payload is None:
+            try:
+                payload = json.loads(outcome["content"][0]["text"])
+            except ValueError:
+                payload = outcome["content"][0]["text"]
+        payload = dict(payload, inbox=inbox) if isinstance(payload, dict) else {"result": payload, "inbox": inbox}
+        return result(payload, structured=True)
+    return outcome

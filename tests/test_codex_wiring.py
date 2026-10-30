@@ -37,9 +37,10 @@ class CodexConfigTest(unittest.TestCase):
         hooks = self.cfg["hooks"]
         self.assertNotIn("SessionStart", hooks)
         pre = hooks["PreToolUse"]
-        self.assertEqual(len(pre), 1)
-        self.assertEqual(pre[0]["matcher"], "^Bash$")
-        self.assertEqual(pre[0]["hooks"][0]["command"], '"$HOME/bin/agent-runtime-hook" --cli codex')
+        self.assertEqual([entry["matcher"] for entry in pre], ["^Bash$", "^mcp__agent-runtime__.*$"])
+        for entry in pre:
+            self.assertEqual(entry["hooks"][0]["command"], '"$HOME/bin/agent-runtime-hook" --cli codex')
+        self.assertRegex("mcp__agent-runtime__task", pre[1]["matcher"])
 
     def test_S19_symlinks_resolve_into_the_plugin(self):
         for name, target in [("agent-runtime-mcp", "server/mcp_server.py"),

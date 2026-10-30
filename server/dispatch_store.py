@@ -174,7 +174,7 @@ class Store:
         dispatch_events.notify(self.directory)
         return envelope
 
-    def actor(self, scope, address, parent, generation=None, assignment=None, name=None):
+    def actor(self, scope, address, parent, generation=None, assignment=None, name=None, defer_pin=False):
         team = self.team(scope, address, generation) if parent is None else None
         with self.transaction() as db:
             pending = False
@@ -200,7 +200,10 @@ class Store:
                 pending = row["state"] == "pending"
             self.authorize(db, actor, pending=pending)
             if actor["worker_id"] and not pending:
-                self._pin(db, scope, address, generation, actor["team_id"])
+                if defer_pin:  # finalized by read(pin=...) in the same transaction as the delivery read
+                    actor["pin"] = (scope, address, generation, actor["team_id"])
+                else:
+                    self._pin(db, scope, address, generation, actor["team_id"])
             # A pending fast report proves the session only when publication commits.
             return actor
 
@@ -298,7 +301,7 @@ class Store:
                 "AND (? IN ('all','any') OR w.name=? OR a.id=?) ORDER BY a.rowid",
                 (team, target, target, target, target))]
 
-    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None):
+    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None):
         """Optional pure ready(batch) returns a final reason or None under this transaction.
 
         A pending snapshot creates no receipt; a final snapshot and its receipt
@@ -306,6 +309,8 @@ class Store:
         """
         with self.transaction() as db:
             self.acknowledge(db, *(ack or (team, recipient, receipt)))
+            if pin:
+                self._pin(db, *pin)
             selection = "a.current=1"
             selected_params = []
             if assignment_ids is not None:

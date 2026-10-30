@@ -1,4 +1,5 @@
 """Shared durable task tool over fake-hc MCP (dispatch opt-in)."""
+import json
 import threading
 
 from test_event_wait import Session
@@ -131,3 +132,72 @@ class TaskTests(ToolCase):
         self.publish(0, kind="complete", text="no task")
         self.assertIn("unfinished", self.task(self.workers[0], 0, ok=False, action="claim", task_id=other["task_id"]))
         self.assertEqual(self.listed()[other["task_id"]]["status"], "pending")
+
+    def test_S15_forged_assignment_identity_cannot_change_task_state(self):
+        """agent-runtime-dispatch/S15"""
+        self.prepare()
+        item = self.task(self.lead, action="create", subject="guarded")
+        before = self.listed()
+        forged = self.task(self.workers[0], ok=False, action="claim", task_id=item["task_id"],
+                           assignment_id=self.assignments[1]["assignment_id"])
+        self.assertIn("assignment", forged)
+        self.assertEqual(self.listed(), before)
+        foreign = self.task(self.workers[0], 0, ok=False, action="claim", task_id=item["task_id"], receipt="forged")
+        self.assertIn("receipt", foreign)
+        self.assertEqual(self.listed(), before)
+
+    def test_S22_status_and_collect_report_diagnostics_when_storage_fails_but_auth_errors_stay_errors(self):
+        """agent-runtime-dispatch/S22"""
+        from dispatch_store import Store
+        self.prepare()
+        self.replies["read"] = {"out": "screen says finished"}
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+        (Store(self.env).path).write_bytes(b"not a database")
+        status = self.rpc.get(self.rpc.tool("status", {"name": "w1"}))["result"]
+        self.assertFalse(status["isError"], status)
+        self.assertIn("delivery_error", status["structuredContent"])
+        self.assertEqual(status["structuredContent"]["name"], "w1")
+        self.assertNotIn("inbox", status["structuredContent"])
+        collected = self.rpc.get(self.rpc.tool("collect", {"name": "w1"}))["result"]
+        self.assertFalse(collected["isError"], collected)
+        self.assertIn("screen says finished", collected["structuredContent"]["result"])
+        self.assertIn("not an accepted", collected["structuredContent"]["delivery_error"])
+        mutate = self.rpc.get(self.rpc.tool("task", {"action": "list"}))["result"]
+        self.assertTrue(mutate["isError"])  # no fallback for non-diagnostic tools
+
+    def test_S22_diagnostic_fallback_never_covers_authorization_failures(self):
+        """agent-runtime-dispatch/S22"""
+        self.prepare()
+        denied, _ = self.call(self.workers[0], "status", {"name": "w1"})  # no first-call assignment proof
+        self.assertTrue(denied["isError"])
+        done, _ = self.call(self.workers[0], "status", {"name": "w1", "assignment_id": self.assignments[0]["assignment_id"]})
+        self.assertFalse(done["isError"])
+        batch = self.rpc.get(self.rpc.tool("wait", {"target": "all", "timeout": 0}))["result"]["structuredContent"]
+        self.assertEqual(batch["unfinished"].__len__(), 2)  # diagnostics never completed an assignment
+
+    def test_S22_late_inbox_read_failure_leaves_no_first_contact_pin_and_keeps_reports(self):
+        """agent-runtime-dispatch/S22"""
+        import sqlite3
+        from dispatch_store import Store
+        self.prepare()
+        self.publish(1, kind="complete", text="accepted before failure")
+        with sqlite3.connect(Store(self.env).path) as db:  # later inbox query now fails; setup and indexes still exist
+            db.execute("ALTER TABLE messages RENAME COLUMN acked TO acked_broken")
+            pins = db.execute("SELECT COUNT(*) FROM callers").fetchone()[0]
+        reply, _ = self.call(self.workers[0], "status", {"name": "w1", "assignment_id": self.assignments[0]["assignment_id"]})
+        self.assertFalse(reply["isError"], reply)
+        payload = reply["structuredContent"]
+        self.assertIn("delivery_error", payload)
+        self.assertNotIn("inbox", payload)
+        with sqlite3.connect(Store(self.env).path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], pins)  # no new pin
+            states = dict(db.execute("SELECT id,state FROM assignments"))
+            self.assertEqual(states[self.assignments[0]["assignment_id"]], "working")
+            self.assertEqual(states[self.assignments[1]["assignment_id"]], "complete")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
+            db.execute("ALTER TABLE messages RENAME COLUMN acked_broken TO acked")
+        again, text = self.call(self.workers[0], "status", {"name": "w1", "assignment_id": self.assignments[0]["assignment_id"]})
+        self.assertFalse(again["isError"], text)
+        self.assertNotIn("delivery_error", text)
+        with sqlite3.connect(Store(self.env).path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], pins + 1)  # pinned on success

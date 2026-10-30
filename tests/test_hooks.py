@@ -51,6 +51,34 @@ class SubagentToolTests(unittest.TestCase):
         self.assertIn("return value", ctx)
 
 
+CODEX = "mcp__agent-runtime__"
+
+
+class NativeChildGuardTests(unittest.TestCase):
+    def test_S15_native_children_cannot_mutate_tasks_or_ack_receipts_on_either_client(self):
+        """agent-runtime-dispatch/S15"""
+        for prefix, extra in ((TOOL, ()), (CODEX, ("--cli", "codex"))):
+            def child(name, arguments=None):
+                return run(PRE, {"tool_name": prefix + name, "tool_input": arguments or {}, "agent_id": "sub-1",
+                                 "agent_type": "worker"}, *extra)
+            for action in ("create", "claim", "update"):
+                self.assertTrue(denied(child("task", {"action": action})), (prefix, action))
+            for name in ("spawn", "message", "resume", "stop", "report"):
+                self.assertTrue(denied(child(name)), (prefix, name))
+            self.assertTrue(denied(child("status", {"name": "w1", "receipt": "r1"})), prefix)
+            self.assertTrue(denied(child("wait", {"target": "all", "receipt": "r1"})), prefix)
+            self.assertIsNone(child("task", {"action": "list"}), prefix)
+            self.assertIsNone(child("status", {"name": "w1"}), prefix)
+            self.assertIsNone(run(PRE, {"tool_name": prefix + "task", "tool_input": {"action": "claim"}}, *extra), prefix)
+            self.assertIsNone(run(PRE, {"tool_name": prefix + "status", "tool_input": {"receipt": "r1"}}, *extra), prefix)
+
+    def test_S15_codex_bash_guard_remains_and_unrelated_mcp_servers_are_ignored(self):
+        """agent-runtime-dispatch/S15"""
+        self.assertTrue(denied(run(PRE, bash("hc kill w", agent_id="sub-1"), "--cli", "codex")))
+        other = {"tool_name": "mcp__other__task", "tool_input": {"action": "claim"}, "agent_id": "sub-1"}
+        self.assertIsNone(run(PRE, other, "--cli", "codex"))
+
+
 class RawHcTests(unittest.TestCase):
     def test_S17_mutating_hc_is_denied_for_every_caller(self):
         """agent-runtime-tools/S17"""

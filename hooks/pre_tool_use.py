@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse guard: raw hc mutations are denied for every agent; subagents may not call the mutating
-agent-runtime tools. `--cli codex` selects the Codex payload (Bash only, no agent_id)."""
+agent-runtime tools or acknowledge receipts. Claude (plugin) and Codex (`--cli codex`) both send
+agent_id for native subagents; MCP tool names differ only by prefix."""
 
 import json
 import os
@@ -132,8 +133,8 @@ def file_read_only(args, sub):
 
 HC_DENIED = {"run", "send", "kill", "rm"}
 HC_ASKED = {"keys", "interrupt"}
-MUTATING_TOOLS = {"spawn", "message", "resume", "stop", "report"}
-TOOL_PREFIX = "mcp__plugin_agent-runtime_agent-runtime__"
+MUTATING_TOOLS = {"spawn", "message", "resume", "stop", "report", "task"}
+TOOL_NAME = re.compile(r"^mcp__(?:plugin_agent-runtime_)?agent-runtime__(\w+)$")
 
 
 def verdict(command, is_subagent):
@@ -160,10 +161,17 @@ def verdict(command, is_subagent):
     return result
 
 
-def tool_verdict(tool_name, is_subagent):
-    if is_subagent and tool_name.startswith(TOOL_PREFIX) and tool_name[len(TOOL_PREFIX):] in MUTATING_TOOLS:
-        return ("Subagents must not call the agent-runtime %s tool: report through your return value."
-                % tool_name[len(TOOL_PREFIX):])
+def tool_verdict(tool_name, is_subagent, arguments=None):
+    match = TOOL_NAME.match(tool_name or "")
+    if not is_subagent or not match:
+        return None
+    tool, arguments = match.group(1), arguments if isinstance(arguments, dict) else {}
+    if tool == "task" and arguments.get("action") == "list" and arguments.get("receipt") is None:
+        return None  # read-only listing
+    if tool in MUTATING_TOOLS:
+        return "Subagents must not call the agent-runtime %s tool: report through your return value." % tool
+    if arguments.get("receipt") is not None:  # an explicit ack mutates the lead's or teammate's inbox
+        return "Subagents must not acknowledge agent-runtime receipts: report through your return value."
     return None
 
 
@@ -173,10 +181,8 @@ def main(argv=()):
         name = data.get("tool_name", "Bash")
         if name == "Bash":
             result = verdict(data.get("tool_input", {}).get("command", ""), bool(data.get("agent_id")))
-        elif "codex" in argv:
-            return 0
         else:
-            reason = tool_verdict(name, bool(data.get("agent_id")))
+            reason = tool_verdict(name, bool(data.get("agent_id")), data.get("tool_input"))
             result = ("deny", reason) if reason else None
         if result:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
