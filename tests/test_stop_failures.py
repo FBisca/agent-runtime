@@ -44,8 +44,8 @@ class StopFailureTests(ToolCase):
         self.assertFalse(result["isError"], result)
         return result
 
-    def test_S1_stop_of_a_vanished_terminal_succeeds_and_later_waits_exclude_it(self):
-        """agent-runtime-hardening/S1"""
+    def test_stop_of_a_vanished_terminal_succeeds_and_later_waits_exclude_it(self):
+        """agent-runtime/R66"""
         self.prepare()
         self.set_reply("get:w1", {"rc": 1, "err": NOT_FOUND})
         self.rpc_call("stop", {"name": "w1"})
@@ -54,8 +54,8 @@ class StopFailureTests(ToolCase):
         self.assertEqual([a["name"] for a in batch["assignments"]], ["w2"])
         self.assertNotEqual(batch["reason"], "failed")
 
-    def test_S1_other_hc_errors_leave_the_record_active(self):
-        """agent-runtime-hardening/S1"""
+    def test_other_hc_errors_leave_the_record_active(self):
+        """agent-runtime/R66"""
         self.prepare()
         for err in ("timeout talking to hc", "cannot run hc: [Errno 2] No such file or directory",
                     json.dumps({"error": {"kind": "io", "message": "no such socket"}})):
@@ -65,8 +65,8 @@ class StopFailureTests(ToolCase):
         self.assertEqual(self.runs("kill") + self.runs("rm"), [])
         self.assertEqual({a["name"] for a in self.wait()["assignments"]}, {"w1", "w2"})
 
-    def test_S2_stop_of_a_name_owned_by_another_lead_touches_only_our_record(self):
-        """agent-runtime-hardening/S2"""
+    def test_stop_of_a_name_owned_by_another_lead_touches_only_our_record(self):
+        """agent-runtime/R67"""
         self.prepare()
         other = dict(self.rows[0], parent="t7", address="t8")
         self.set_reply("get:w1", {"out": json.dumps(other)})
@@ -74,8 +74,8 @@ class StopFailureTests(ToolCase):
         self.assertEqual(self.runs("kill") + self.runs("rm"), [])
         self.assertEqual([a["name"] for a in self.wait()["assignments"]], ["w2"])
 
-    def test_S3_observed_exit_persists_one_failure_and_ack_clears_it(self):
-        """agent-runtime-hardening/S3"""
+    def test_observed_exit_persists_one_failure_and_ack_clears_it(self):
+        """agent-runtime/R68"""
         self.prepare()
         self.rows.remove(self.rows[0])  # w1's terminal disappeared from hc ls
         self.set_reply("ls", {"out": json.dumps({"terminals": self.rows})})
@@ -89,8 +89,8 @@ class StopFailureTests(ToolCase):
         self.assertEqual([a["name"] for a in later["assignments"]], ["w2"])
         self.assertEqual(later["messages"], [])
 
-    def test_S3_replaced_terminal_is_a_persisted_failure_too(self):
-        """agent-runtime-hardening/S3"""
+    def test_replaced_terminal_is_a_persisted_failure_too(self):
+        """agent-runtime/R68"""
         self.prepare()
         self.rows[0]["parent"] = "t7"  # the address now belongs to another lead's terminal
         self.set_reply("ls", {"out": json.dumps({"terminals": self.rows})})
@@ -100,8 +100,8 @@ class StopFailureTests(ToolCase):
         later = self.wait(0, receipt=first["receipt"])
         self.assertEqual([a["name"] for a in later["assignments"]], ["w2"])
 
-    def test_S4_observed_failure_returns_the_linked_task_to_pending(self):
-        """agent-runtime-hardening/S4"""
+    def test_observed_failure_returns_the_linked_task_to_pending(self):
+        """agent-runtime/R69"""
         self.prepare()
         store = Store(self.env)
         put_task(store, self.assignments[0]["assignment_id"], self.assignments[0]["worker_id"], self.assignments[0]["team_id"])
@@ -110,8 +110,8 @@ class StopFailureTests(ToolCase):
         self.assertEqual(self.wait(3)["reason"], "failed")
         self.assertEqual(task_row(store), {"status": "pending", "owner": None, "assignment": None})
 
-    def test_S3_resumed_worker_exit_persists_one_message_for_the_current_assignment(self):
-        """agent-runtime-hardening/S3"""
+    def test_resumed_worker_exit_persists_one_message_for_the_current_assignment(self):
+        """agent-runtime/R68"""
         self.prepare()
         old = self.assignments[0]
         self.assignments[0] = self.rpc_call("resume", {"name": "w1", "task": "again"})["structuredContent"]
@@ -136,27 +136,27 @@ class StoreTaskReleaseTests(unittest.TestCase):
         self.identity = self.store.register(self.team, "w1")
         put_task(self.store, self.identity["assignment_id"], self.identity["worker_id"], self.team)
 
-    def test_S4_stopped_worker_releases_its_unfinished_task(self):
-        """agent-runtime-hardening/S4"""
+    def test_stopped_worker_releases_its_unfinished_task(self):
+        """agent-runtime/R69"""
         self.store.bind(self.identity["assignment_id"], "t1", "test")
         self.store.stopped(self.team, "w1")
         self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
 
-    def test_S4_failed_spawn_releases_its_unfinished_task(self):
-        """agent-runtime-hardening/S4"""
+    def test_failed_spawn_releases_its_unfinished_task(self):
+        """agent-runtime/R69"""
         self.store.fail(self.identity["assignment_id"])
         self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
 
-    def test_S4_stopped_worker_releases_its_blocked_task(self):
-        """agent-runtime-hardening/S4"""
+    def test_stopped_worker_releases_its_blocked_task(self):
+        """agent-runtime/R69"""
         self.store.bind(self.identity["assignment_id"], "t1", "test")
         with self.store.transaction() as db:
             db.execute("UPDATE tasks SET status='blocked'")
         self.store.stopped(self.team, "w1")
         self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
 
-    def test_S4_failure_after_a_blocked_report_keeps_the_task_owned(self):
-        """agent-runtime-hardening/S4"""
+    def test_failure_after_a_blocked_report_keeps_the_task_owned(self):
+        """agent-runtime/R69"""
         self.store.bind(self.identity["assignment_id"], "t1", "test")
         self.store.publish("test", "t1", "t0", self.identity["assignment_id"], "stuck", "blocked", caller_name="w1")
         before = task_row(self.store)
@@ -165,8 +165,8 @@ class StoreTaskReleaseTests(unittest.TestCase):
         self.assertEqual(before["status"], "blocked")
         self.assertIsNotNone(before["owner"])
 
-    def test_S4_stop_keeps_a_completed_task(self):
-        """agent-runtime-hardening/S4"""
+    def test_stop_keeps_a_completed_task(self):
+        """agent-runtime/R69"""
         with self.store.transaction() as db:
             db.execute("UPDATE tasks SET status='complete'")
         self.store.stopped(self.team, "w1")

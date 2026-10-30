@@ -359,8 +359,9 @@ class DispatchTests(ToolCase):
         result, _ = self.call(lead, "wait", {"target": "all", "timeout": 2})
         self.assertEqual(result["structuredContent"]["reason"], "attention")
 
-    def test_S7_unsent_spawn_is_removed_and_can_be_spawned_again(self):
-        """agent-runtime/R64"""
+    def test_unsent_spawn_is_removed_and_can_be_spawned_again(self):
+        """agent-runtime/R72
+        agent-runtime/R64"""
         replies = {"run": {"out": json.dumps({"first_message": {"sent": False}})}, "get:w1": {"out": raw("w1", "t0")}}
         lead = self.start(replies, {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
                                     "AGENT_RUNTIME_DISPATCH": "1"})

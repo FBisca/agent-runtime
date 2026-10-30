@@ -73,8 +73,8 @@ class NativeChildGuardTests(unittest.TestCase):
             self.assertIsNone(run(PRE, {"tool_name": prefix + "task", "tool_input": {"action": "claim"}}, *extra), prefix)
             self.assertIsNone(run(PRE, {"tool_name": prefix + "status", "tool_input": {"receipt": "r1"}}, *extra), prefix)
 
-    def test_S9_native_children_cannot_wait_or_address_an_assignment(self):
-        """agent-runtime-hardening/S9"""
+    def test_native_children_cannot_wait_or_address_an_assignment(self):
+        """agent-runtime/R74"""
         for prefix, extra in ((TOOL, ()), (CODEX, ("--cli", "codex"))):
             def child(name, arguments=None):
                 return run(PRE, {"tool_name": prefix + name, "tool_input": arguments or {}, "agent_id": "sub-1",
@@ -88,8 +88,8 @@ class NativeChildGuardTests(unittest.TestCase):
             self.assertIsNone(run(PRE, {"tool_name": prefix + "wait", "tool_input": {"target": "all"}}, *extra), prefix)
             self.assertIsNone(run(PRE, {"tool_name": prefix + "status", "tool_input": {"assignment_id": "a1"}}, *extra), prefix)
 
-    def test_S9_string_tool_input_is_parsed_and_unparseable_input_is_denied_for_children(self):
-        """agent-runtime-hardening/S9"""
+    def test_string_tool_input_is_parsed_and_unparseable_input_is_denied_for_children(self):
+        """agent-runtime/R74"""
         for prefix, extra in ((CODEX, ("--cli", "codex")), (TOOL, ())):
             def child(raw):
                 return run(PRE, {"tool_name": prefix + "status", "tool_input": raw, "agent_id": "sub-1",
@@ -103,8 +103,8 @@ class NativeChildGuardTests(unittest.TestCase):
             main = {"tool_name": prefix + "status", "tool_input": "not json"}
             self.assertIsNone(run(PRE, main, *extra), prefix)
 
-    def test_S9_subagent_start_notice_names_allowed_reads(self):
-        """agent-runtime-hardening/S9"""
+    def test_subagent_start_notice_names_allowed_reads(self):
+        """agent-runtime/R74"""
         ctx = run(START, {})["hookSpecificOutput"]["additionalContext"]
         self.assertIn("wait", ctx)
         self.assertIn("assignment_id", ctx)

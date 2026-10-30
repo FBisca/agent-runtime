@@ -42,19 +42,19 @@ class DiagnosticTests(ToolCase):
             if name == "status":
                 self.assertEqual(payload["name"], "w1")
 
-    def test_S5_store_corruption_degrades_status_collect_and_list(self):
-        """agent-runtime/R55"""
+    def test_store_corruption_degrades_status_collect_and_list(self):
+        """agent-runtime/R70"""
         Store(self.env).path.write_bytes(b"not a database")
         self.all_three(self.lead_call)
 
-    def test_S5_store_schema_or_ownership_errors_degrade_status_collect_and_list(self):
-        """agent-runtime/R55"""
+    def test_store_schema_or_ownership_errors_degrade_status_collect_and_list(self):
+        """agent-runtime/R70"""
         with sqlite3.connect(Store(self.env).path) as db:
             db.execute("PRAGMA user_version=99")
         self.all_three(self.lead_call)
 
-    def test_S5_unresolvable_identity_degrades_status_collect_and_list(self):
-        """agent-runtime/R55"""
+    def test_unresolvable_identity_degrades_status_collect_and_list(self):
+        """agent-runtime/R70"""
         env = {k: v for k, v in self.env.items() if k not in ("CODEX_THREAD_ID", "CLAUDE_SESSION_ID")}
         env["PATH"] = str(self.dir / "bin")  # no ps: the CLI ancestry (and so the session generation) is invisible
         session = Session(env)
@@ -62,8 +62,8 @@ class DiagnosticTests(ToolCase):
         session.handshake()
         self.all_three(lambda name, arguments: self.call(session, name, arguments)[0])
 
-    def test_S5_hc_role_lookup_failure_degrades_status_collect_and_list(self):
-        """agent-runtime/R55"""
+    def test_hc_role_lookup_failure_degrades_status_collect_and_list(self):
+        """agent-runtime/R70"""
         self.replies["get:t0"] = {"rc": 1, "out": "", "err": "timed out"}
         self.save()
         session = Session(dict(self.env, CODEX_THREAD_ID="other"))
@@ -71,8 +71,8 @@ class DiagnosticTests(ToolCase):
         session.handshake()
         self.all_three(lambda name, arguments: self.call(session, name, arguments)[0])
 
-    def test_S6_forged_or_unproven_callers_get_authorization_errors_and_no_hc_data(self):
-        """agent-runtime/R55"""
+    def test_forged_or_unproven_callers_get_authorization_errors_and_no_hc_data(self):
+        """agent-runtime/R71"""
         other = self.assignments[1]["assignment_id"]
         for arguments in ({}, {"assignment_id": other}, {"assignment_id": "forged"}):
             for name, extra in (("status", {"name": "w1"}), ("collect", {"name": "w1"}), ("list", {})):
@@ -85,8 +85,8 @@ class DiagnosticTests(ToolCase):
         with sqlite3.connect(Store(self.env).path) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], 0)
 
-    def test_S6_degraded_diagnostics_never_reach_terminals_that_are_not_the_callers_children(self):
-        """agent-runtime/R55"""
+    def test_degraded_diagnostics_never_reach_terminals_that_are_not_the_callers_children(self):
+        """agent-runtime/R71"""
         with sqlite3.connect(Store(self.env).path) as db:
             db.execute("PRAGMA user_version=99")
         for name in ("status", "collect"):
@@ -121,7 +121,8 @@ class ReceiptGatedInboxTests(ToolCase):
                 db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], \
                 db.execute("SELECT COUNT(*) FROM callers").fetchone()[0]
 
-    def test_S18_receipt_free_reads_carry_no_inbox_and_acknowledge_nothing(self):
+    def test_receipt_free_reads_carry_no_inbox_and_acknowledge_nothing(self):
+        """agent-runtime/R83"""
         self.prepare()
         self.publish(0, kind="progress", text="pending for lead")
         before = self.unacked()
@@ -138,7 +139,8 @@ class ReceiptGatedInboxTests(ToolCase):
         self.assertEqual((messages, receipts), before[:2])
         self.assertEqual(pins, before[2] + 1)  # first contact still pins the worker's session (once)
 
-    def test_S18_first_contact_receipt_free_read_still_pins_the_worker(self):
+    def test_first_contact_receipt_free_read_still_pins_the_worker(self):
+        """agent-runtime/R83"""
         self.prepare()
         proof = {"assignment_id": self.assignments[1]["assignment_id"]}
         for name, arguments in (("task", {"action": "list"}), ("status", {"name": "w2"}),
@@ -154,7 +156,8 @@ class ReceiptGatedInboxTests(ToolCase):
             bare, text = self.call(session, "wait", {"target": "inbox", "timeout": 0})
             self.assertFalse(bare["isError"], text)
 
-    def test_S18_valid_receipt_returns_pending_inbox_as_before(self):
+    def test_valid_receipt_returns_pending_inbox_as_before(self):
+        """agent-runtime/R83"""
         self.prepare()
         self.publish(0, kind="progress", text="pending for lead")
         batch = self.rpc.get(self.rpc.tool("wait", {"target": "any", "timeout": 0}))["result"]["structuredContent"]

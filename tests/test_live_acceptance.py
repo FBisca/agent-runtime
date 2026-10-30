@@ -230,7 +230,8 @@ class LiveAcceptance(unittest.TestCase):
                         break
                 lead.close()
 
-    def test_S17_externally_killed_worker_stops_cleanly(self):
+    def test_externally_killed_worker_stops_cleanly(self):
+        """agent-runtime/R82"""
         work = tempfile.mkdtemp(prefix="agent-runtime-live-kill-")
         logfile = open(os.environ.get("AGENT_RUNTIME_LIVE_LOG") or os.path.join(work, "live.log"), "a")
         self.addCleanup(logfile.close)

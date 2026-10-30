@@ -28,8 +28,8 @@ class IndexTests(unittest.TestCase):
     def plan(self, db, sql, params):
         return [r[3] for r in db.execute("EXPLAIN QUERY PLAN " + sql, params)]
 
-    def test_S11_indexes_exist_user_version_unchanged_and_old_writes_work(self):
-        """agent-runtime-hardening/S11"""
+    def test_indexes_exist_user_version_unchanged_and_old_writes_work(self):
+        """agent-runtime/R76"""
         with self.store.transaction() as db:
             for table, wanted in EXPECTED.items():
                 have = []
@@ -42,8 +42,8 @@ class IndexTests(unittest.TestCase):
             db.execute("INSERT INTO messages (id,team,recipient,assignment,body,acked) VALUES ('m','t','r','a','{}',0)")
         Store({"HOME": self.tmp.name})  # re-init is idempotent
 
-    def test_S12_wait_snapshot_and_read_plans_use_indexes_without_scanning_messages(self):
-        """agent-runtime-hardening/S12"""
+    def test_wait_snapshot_and_read_plans_use_indexes_without_scanning_messages(self):
+        """agent-runtime/R77"""
         ds = dispatch_store
         members = ds.READ_MEMBERS_SQL
         queries = [

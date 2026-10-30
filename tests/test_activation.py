@@ -90,7 +90,8 @@ class ActivationWiringTest(unittest.TestCase):
         for plugin in market["plugins"]:
             self.assertIn(plugin.get("version", version), (version,))
 
-    def test_S16_docs_list_all_ten_tools_and_state_no_stale_version(self):
+    def test_docs_list_all_ten_tools_and_state_no_stale_version(self):
+        """agent-runtime/R81"""
         tools = [name for name, _, _ in mcp_server.TOOLS]
         self.assertEqual(len(tools), 10)
         readme = (REPO / "README.md").read_text()

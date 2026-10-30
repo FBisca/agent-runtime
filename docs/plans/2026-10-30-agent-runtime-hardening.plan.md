@@ -1,6 +1,6 @@
 # Plan: agent runtime dispatch hardening
 
-Slug: `agent-runtime-hardening`. Living spec: `docs/specs/agent-runtime.md`. Status: APPROVED 2026-10-30.
+Slug: `agent-runtime-hardening`. Living spec: `docs/specs/agent-runtime.md`. Status: ARCHIVED 2026-10-30.
 
 ## Why now
 

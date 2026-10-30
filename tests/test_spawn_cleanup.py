@@ -28,24 +28,24 @@ class SpawnCleanupTests(ToolCase):
         self.assertEqual(states, ["failed"])
         self.assertEqual(active, [0])
 
-    def test_S7_unsent_first_message_removes_the_terminal_and_fails_the_assignment(self):
-        """agent-runtime-hardening/S7"""
+    def test_unsent_first_message_removes_the_terminal_and_fails_the_assignment(self):
+        """agent-runtime/R72"""
         lead = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}}, ENV)
         result, _ = self.call(lead, "spawn", ARGS)
         self.assertTrue(result["isError"])
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
-    def test_S7_unreadable_address_removes_the_terminal(self):
-        """agent-runtime-hardening/S7"""
+    def test_unreadable_address_removes_the_terminal(self):
+        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"rc": 1, "err": "boom"}}, ENV)
         result, _ = self.call(lead, "spawn", ARGS)
         self.assertTrue(result["isError"])
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
-    def test_S7_cancel_during_address_read_removes_the_terminal(self):
-        """agent-runtime-hardening/S7"""
+    def test_cancel_during_address_read_removes_the_terminal(self):
+        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0"), "sleep": 30}}, ENV)
         write = lambda m: (lead.proc.stdin.write(json.dumps(m) + "\n"), lead.proc.stdin.flush())
         write({"jsonrpc": "2.0", "id": 70, "method": "tools/call", "params": {"name": "spawn", "arguments": ARGS}})
@@ -59,8 +59,8 @@ class SpawnCleanupTests(ToolCase):
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
-    def test_S7_duplicate_name_spawn_keeps_the_live_worker_active_and_reporting(self):
-        """agent-runtime-hardening/S7"""
+    def test_duplicate_name_spawn_keeps_the_live_worker_active_and_reporting(self):
+        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0")}, "live": []}, ENV)
         result, text = self.call(lead, "spawn", ARGS)
         self.assertFalse(result["isError"], text)
@@ -74,8 +74,8 @@ class SpawnCleanupTests(ToolCase):
             self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [1])
         store.publish("/hc/sock", "t9", "t0", first["assignment_id"], "still here", "progress", caller_name="w1")
 
-    def test_S7_interrupted_hc_run_discards_only_an_orphan_we_started(self):
-        """agent-runtime-hardening/S7"""
+    def test_interrupted_hc_run_discards_only_an_orphan_we_started(self):
+        """agent-runtime/R72"""
         self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
         env.update(ENV)
@@ -102,8 +102,8 @@ class SpawnCleanupTests(ToolCase):
             with store.transaction() as db:
                 self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [1])
 
-    def test_S7_bind_error_removes_the_terminal(self):
-        """agent-runtime-hardening/S7"""
+    def test_bind_error_removes_the_terminal(self):
+        """agent-runtime/R72"""
         self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
         env.update(ENV)
@@ -113,8 +113,8 @@ class SpawnCleanupTests(ToolCase):
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
-    def test_S7_failed_respawn_of_an_existing_worker_leaves_it_inactive(self):
-        """agent-runtime-hardening/S7"""
+    def test_failed_respawn_of_an_existing_worker_leaves_it_inactive(self):
+        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0")}, "live": []}, ENV)
         result, text = self.call(lead, "spawn", ARGS)
         self.assertFalse(result["isError"], text)
@@ -128,8 +128,8 @@ class SpawnCleanupTests(ToolCase):
         with store.transaction() as db:
             self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
 
-    def test_S7_a_failed_unsent_spawn_can_be_spawned_again_with_the_same_name(self):
-        """agent-runtime-hardening/S7"""
+    def test_a_failed_unsent_spawn_can_be_spawned_again_with_the_same_name(self):
+        """agent-runtime/R72"""
         lead = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})},
                            "get:w1": {"out": raw("w1", "t0")}}, ENV)
         result, _ = self.call(lead, "spawn", ARGS)
@@ -140,8 +140,8 @@ class SpawnCleanupTests(ToolCase):
         result, text = self.call(lead, "spawn", ARGS)
         self.assertFalse(result["isError"], text)
 
-    def test_S7_failed_spawn_releases_its_linked_task(self):
-        """agent-runtime-hardening/S7; agent-runtime-hardening/S4"""
+    def test_failed_spawn_releases_its_linked_task(self):
+        """agent-runtime/R72; agent-runtime/R69"""
         self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}}, ENV)
         env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
         env.update(ENV)
@@ -161,8 +161,8 @@ class SpawnCleanupTests(ToolCase):
         with store.transaction() as db:
             self.assertEqual(tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()), ("pending", None, None))
 
-    def test_S8_unresolvable_identity_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime-hardening/S8"""
+    def test_unresolvable_identity_starts_no_terminal_and_registers_nothing(self):
+        """agent-runtime/R73"""
         self.start({}, ENV)
         env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
         env.update(ENV)
@@ -173,8 +173,8 @@ class SpawnCleanupTests(ToolCase):
         with Store(env).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
-    def test_S8_codex_without_instructions_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime-hardening/S8"""
+    def test_codex_without_instructions_starts_no_terminal_and_registers_nothing(self):
+        """agent-runtime/R73"""
         (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()
         lead = self.start({}, ENV)
         result, _ = self.call(lead, "spawn", dict(ARGS, cli="codex"))
