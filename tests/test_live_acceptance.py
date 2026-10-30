@@ -4,11 +4,13 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from test_mcp_server import SERVER
 
@@ -83,6 +85,29 @@ class HarnessTests(unittest.TestCase):
             lead.tool(tool, name="live-codex-ab12", task="x")
         self.assertEqual([p["name"] for p in seen], ["spawn", "resume", "stop", "status"])
         self.assertTrue(all(p["arguments"]["name"] == "live-codex-ab12" for p in seen))
+
+
+@unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE") == "1" and shutil.which("claude"),
+                     "set AGENT_RUNTIME_LIVE=1 with claude on PATH")
+class LiveMarketplaceRegistration(unittest.TestCase):
+    def test_S5_marketplace_registers_at_expanded_home_path(self):
+        agents = Path(__file__).resolve().parents[3]
+        tracked = json.loads((agents / ".claude" / "settings.json").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir()
+            (home / "developer" / "dotfiles").mkdir(parents=True)
+            (home / "developer" / "dotfiles" / "agents").symlink_to(agents)
+            (home / ".claude" / "settings.json").write_text(json.dumps(
+                {"extraKnownMarketplaces": {"dotfiles": tracked["extraKnownMarketplaces"]["dotfiles"]},
+                 "enabledPlugins": {"agent-runtime@dotfiles": tracked["enabledPlugins"]["agent-runtime@dotfiles"]}}))
+            run = subprocess.run(["claude", "-p", "reply ok", "--max-turns", "1"], cwd=tmp, timeout=90,
+                           env=dict(os.environ, HOME=tmp), capture_output=True, text=True)
+            tail = f"claude rc={run.returncode} stdout={run.stdout[-500:]!r} stderr={run.stderr[-500:]!r}"
+            path = home / ".claude" / "plugins" / "known_marketplaces.json"
+            self.assertTrue(path.exists(), f"known_marketplaces.json missing; {tail}")
+            known = json.loads(path.read_text())
+            self.assertEqual(known.get("dotfiles", {}).get("installLocation"), f"{tmp}/developer/dotfiles/agents", tail)
 
 
 @unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE") == "1", "set AGENT_RUNTIME_LIVE=1 for the live run")

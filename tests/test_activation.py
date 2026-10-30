@@ -137,8 +137,19 @@ class ActivationWiringTest(unittest.TestCase):
             self.assertIn("wait(target=inbox, timeout=0)", text, path)
             self.assertNotIn("native messaging", text, path)
         readme = (REPO / "README.md").read_text()
-        for word in ("AGENT_RUNTIME_DISPATCH", "dispatch.sqlite3", "Rollback", "fresh assignment", "claude plugin update agent-runtime@dotfiles"):
+        for word in ("AGENT_RUNTIME_DISPATCH", "dispatch.sqlite3", "Rollback", "fresh assignment"):
             self.assertIn(word, readme)
+
+    def test_S8_readme_install_says_in_place_and_no_update_steps(self):
+        readme = (REPO / "README.md").read_text()
+        start = readme.index("- `agents/plugins/agent-runtime`")
+        block = readme[start:readme.index("\n- `agents/.stow-local-ignore`", start)]
+        section = next(l for l in block.splitlines() if l.strip().startswith("- **Install:**"))
+        self.assertRegex(section, r"(?i)in place")
+        self.assertRegex(section, r"(?i)next (Claude/Codex )?session")
+        self.assertRegex(section, r"(?i)record[- ]only")
+        self.assertNotIn("marketplace update", block)
+        self.assertNotIn("plugin update", block)
 
 
 if __name__ == "__main__":
