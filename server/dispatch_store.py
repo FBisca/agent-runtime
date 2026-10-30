@@ -14,6 +14,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+import dispatch_events
+
 MAX_WORKERS = MAX_MESSAGES = 32
 MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
 REPORT_KINDS = ("progress", "complete", "blocked", "decision")
@@ -157,7 +159,8 @@ class Store:
                        (message_id, row["team"], row["lead"], assignment, body))
             db.execute("UPDATE assignments SET state=? WHERE id=?",
                        ({"complete": "complete", "blocked": "blocked", "decision": "decision"}.get(kind, "working"), assignment))
-            return envelope
+        dispatch_events.notify(self.directory)
+        return envelope
 
     def acknowledge(self, db, team, recipient, receipt):
         if receipt is None:
@@ -168,18 +171,44 @@ class Store:
         for message_id in json.loads(row["ids"]):
             db.execute("UPDATE messages SET acked=1 WHERE id=?", (message_id,))
 
-    def read(self, team, recipient, target, receipt=None):
+    def snapshot(self, team, recipient, target, receipt=None):
+        """Acknowledge the previous result and freeze membership before listening."""
         with self.transaction() as db:
             self.acknowledge(db, team, recipient, receipt)
+            return [dict(row) for row in db.execute(
+                "SELECT a.id AS assignment_id,w.name,w.address,t.lead FROM assignments a "
+                "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
+                "WHERE a.team=? AND (a.current=1 OR a.id=?) "
+                "AND (? IN ('all','any') OR w.name=? OR a.id=?) ORDER BY a.rowid",
+                (team, target, target, target, target))]
+
+    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None):
+        """Optional pure ready(batch) returns a final reason or None under this transaction.
+
+        A pending snapshot creates no receipt; a final snapshot and its receipt
+        commit together, so concurrent publications/acks cannot invalidate readiness.
+        """
+        with self.transaction() as db:
+            self.acknowledge(db, team, recipient, receipt)
+            selection = "a.current=1"
+            selected_params = []
+            if assignment_ids is not None:
+                selection = "a.id IN (%s)" % (",".join("?" for _ in assignment_ids) or "NULL")
+                selected_params = list(assignment_ids)
             assignments = [dict(row) for row in db.execute(
-                "SELECT a.id AS assignment_id,a.worker AS worker_id,a.state,w.name FROM assignments a "
-                "JOIN workers w ON w.id=a.worker WHERE a.team=? AND a.current=1 ORDER BY a.rowid", (team,))]
-            if target not in ("any", "all"):
+                "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
+                "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name FROM assignments a "
+                "JOIN workers w ON w.id=a.worker WHERE a.team=? AND " + selection + " ORDER BY a.rowid",
+                [team] + selected_params)]
+            if assignment_ids is None and target not in ("any", "all"):
                 assignments = [a for a in assignments if target in (a["name"], a["assignment_id"])]
             # Historical reports remain readable for all/any; named reads select that worker's history.
             query = "SELECT body FROM messages WHERE team=? AND recipient=? AND acked=0"
             params = [team, recipient]
-            if target not in ("any", "all"):
+            if assignment_ids is not None:
+                query += " AND assignment IN (%s)" % (",".join("?" for _ in assignment_ids) or "NULL")
+                params.extend(assignment_ids)
+            elif target not in ("any", "all"):
                 query += " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
                 params.extend((team, target, target))
             messages, size, more = [], 2, False  # Opening and closing array brackets.
@@ -191,11 +220,6 @@ class Store:
                     break
                 messages.append(json.loads(body))
                 size += entry_size
-            token = None
-            if messages:
-                token = uid()
-                db.execute("INSERT INTO receipts VALUES (?,?,?,?)",
-                           (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
             unfinished = [a["assignment_id"] for a in assignments if a["state"] != "complete"]
             reason = "timeout"
             if not assignments and not messages:
@@ -206,5 +230,13 @@ class Store:
                 reason = "completed"
             elif target == "any" and messages:
                 reason = "messages"
-            return {"reason": reason, "messages": messages, "assignments": assignments,
-                    "unfinished": unfinished, "receipt": token, "more": more}
+            batch = {"reason": reason, "messages": messages, "assignments": assignments,
+                     "unfinished": unfinished, "receipt": None, "more": more}
+            if ready is not None:
+                batch["reason"] = ready(batch)
+            if messages and issue_receipt and (ready is None or batch["reason"] is not None):
+                token = uid()
+                db.execute("INSERT INTO receipts VALUES (?,?,?,?)",
+                           (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
+                batch["receipt"] = token
+            return batch

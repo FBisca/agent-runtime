@@ -47,6 +47,8 @@ Gather found no covering PRD or associated Linear feature/project. Relevant exis
 
 | D15 | Keep new dispatch opt-in via `AGENT_RUNTIME_DISPATCH=1` until T6 activates the completed path in CLI wiring; default retains legacy transport/waits during intermediate merges | Install incomplete behavior after each ticket merge | T1 alone cannot preserve old blocking waits/resume; migration must remain usable | T1 integration review, 2026-10-30 |
 
+| D16 | Surface an observed selected-worker failure before returning a queued nonterminal event; preserve queued messages in that result | Queued progress indefinitely bypassing runtime reconciliation | Advisory T2 review found repeated unacknowledged progress can hide an exit/interruption | T2 advisory review, 2026-10-30 |
+
 API direction: retain existing tools and add only `task`. `spawn`/`resume` return `team_id`, `worker_id`, `assignment_id` and optional linked `task_id`. `report(text, kind, assignment_id, message_id?)` derives sender/recipient server-side. `message(to, text, message_id?)` accepts authorized teammates as well as children. `wait(target, timeout, receipt?)` returns `{reason, messages, assignments, unfinished, receipt, more}`. `task(action, ...)` handles shared task operations. Other tools can carry optional `receipt` and return pending inbound messages with their ordinary result. Exact field validation belongs to each ticket's schema and tests, preserving existing positional meanings.
 
 The store owns delivery and assignment truth. IPC is a wakeup hint: register a listener, recheck durable state, then block; after notifications or bounded internal reconciliation, read durable state again. This closes registration races and recovers a publisher that commits then crashes before notifying. Reconciliation is internal and never creates a model call. The implementation must set and test its finite recovery bound. No always-on launchd service is required.
@@ -83,6 +85,8 @@ Wait membership is snapshotted at invocation; later spawns do not extend it. An 
 - **S25** WHEN dispatch activation is absent during intermediate merges, THEN existing spawn/report/wait/resume behavior stays usable; when explicitly enabled, THEN the new structured path applies.
 - **S26** WHEN serialized message arrays meet the configured byte boundary, THEN JSON framing bytes count toward the limit and pagination remains lossless.
 
+- **S27** WHEN `wait(any)` has queued progress and a bounded hc observation reports its selected worker exited or interrupted, THEN the result surfaces failure and unfinished assignments while preserving those messages; replay cannot bypass that observation indefinitely.
+
 ## Out of scope
 
 - Native Claude Teams adoption, enabling its experimental flag, Herdmates integration, hc upstream changes.
@@ -110,13 +114,17 @@ Each ticket is one vertical slice, targeted below 800 hand-written lines includi
 | # | What it delivers | Satisfies | Blocked by | Paths | Owner | Status |
 |---|---|---|---|---|---|---|
 | T1 | Durable report publication and bounded immediate wait results across MCP processes: versioned private SQLite store, team/worker/assignment registration, structured envelope, idempotent publication and replay receipts; report stops using hc send | S1–S4, S13, S20, S25 | none | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR25 cfecece; 141 tests, converge, review PASS; hosted CI n/a) |
-| T2 | One event-driven pending wait with strict all/any/named predicates, deadline/cancellation, cross-process wakeups and lost-notification recovery; messages and states returned together | S5–S11 | T1, T8 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
-| T3 | Concurrent dispatch and same-team peer exchange: nonblocking resume, fresh assignment identity, inbound delivery through tool results, piggyback acknowledgment and stop semantics | S12, S14, S19, S21 | T2 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
+| T2 | One event-driven pending wait with strict all/any/named predicates, deadline/cancellation, cross-process wakeups and lost-notification recovery; messages and states returned together | S5–S11 | T1, T8 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | IN PROGRESS |
+| T3 | Concurrent dispatch and same-team peer exchange: nonblocking resume, fresh assignment identity, inbound delivery through tool results, piggyback acknowledgment and stop semantics | S12, S14, S19, S21 | T2, T9 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
 | T4 | Shared tasks through one MCP task tool: durable create/list/update/atomic claim, dependency validation and completion integrated with report transaction | S16–S18 | T3 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
 | T5 | Guard and fallback compatibility across the complete API: team/assignment authorization, hooks for new mutation actions, status/collect diagnostics, conflict/cancellation/restart coverage | S15, S22 | T4 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/hooks/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
 | T6 | Both CLI installations and concise tool instructions use dispatch results: deadline wiring, permission/schema compatibility, description budget, implementer/orchestrator guidance and upgrade notes | S23 | T5 | agents/plugins/agent-runtime/, agents/.codex/config.toml, agents/.claude/settings.json, agents/.claude/agents/implementer.md, agents/.codex/agents/implementer.toml, agents/.agents/skills/orchestrate/, README.md | agent | TO-DO |
 | T7 | Live mixed-CLI acceptance through existing agent-runtime tools; record report provenance, peer exchange, wait call counts, blocker/resume and restart/replay evidence; fix only dispatch regressions exposed by this run | S24 | T6 | agents/plugins/agent-runtime/, docs/plans/2026-10-30-agent-runtime-dispatch.plan.md | agent | TO-DO |
-| T8 | Advisory gap correction: count JSON framing in exact-byte batch limits and prove boundary pagination with a regression | S26 | T1 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | IN PROGRESS |
+| T8 | Advisory gap correction: count JSON framing in exact-byte batch limits and prove boundary pagination with a regression | S26 | T1 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR26 bf5575c; 142 tests, converge, review PASS; hosted CI n/a) |
+
+| T9 | Advisory gap correction: reconcile selected worker failure before finalizing queued nonterminal any-events, including replay | S27 | T2 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
+
+Advisory T2 gap review identified T9 (partial S7: queued progress can bypass runtime observation).
 
 Advisory T1 gap review identified T8 (partial S20: array framing excluded from the declared message-byte budget). T1 correctness review ran on Sonnet 5.5 because this runtime exposed no native Agent/Opus tool; no blockers in its initial diff. D15/S25 record the integration correction before further implementation.
 

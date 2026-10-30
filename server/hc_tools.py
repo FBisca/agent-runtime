@@ -10,6 +10,7 @@ import time
 
 import agent_runtime as lib
 import dispatch_store as dispatch
+import dispatch_wait
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 COLLECT_LINES = 200
@@ -33,9 +34,13 @@ class Context:
     def __init__(self):
         self.cancelled = threading.Event()
         self.proc = None
+        self.wake = None
 
     def cancel(self):
         self.cancelled.set()
+        wake = self.wake
+        if wake is not None:
+            wake()
         proc = self.proc
         if proc is not None and proc.poll() is None:
             proc.kill()
@@ -323,12 +328,36 @@ def wait(arguments, env, ctx):
     if not dispatch_enabled(env):
         return legacy_wait(arguments, env, ctx)
     (target,) = need(arguments, "target")
-    wait_seconds(arguments)
+    seconds = wait_seconds(arguments)
     store, team = lead_store(env)
-    if ctx.cancelled.is_set():
+    def observe(members, timeout):
+        try:
+            code, out, _ = run(["hc", "ls", "--all", "--json"], env, ctx, timeout)
+            raw = json.loads(out) if code == 0 else None
+            if not isinstance(raw, dict) or not isinstance(raw.get("terminals"), list):
+                return {}
+        except (ToolError, ValueError):
+            return {}
+        observations = {}
+        for member in members:
+            row = next((r for r in raw["terminals"] if isinstance(r, dict) and r.get("address") == member["address"]), None)
+            state = "exited"
+            if row:
+                state = row.get("status")
+                state = state.get("state") if isinstance(state, dict) else state
+                if row.get("state") in ("exited", "finished", "interrupted"):
+                    state = row["state"]
+                if (row.get("name"), row.get("parent")) != (member["name"], member["lead"]):
+                    state = "replaced"
+            if state not in ("working", "idle", "done", "blocked", "exited", "finished", "interrupted", "replaced"):
+                state = "unknown"
+            observations[member["assignment_id"]] = state
+        return observations
+    try:
+        return result(dispatch_wait.wait(store, team, env["HC_TERMINAL_ID"], target, seconds,
+                      arguments.get("receipt"), ctx, observe), structured=True)
+    except InterruptedError:
         raise ToolError("cancelled")
-    # Immediate durable snapshot; blocking waits can reuse the same read transaction.
-    return result(store.read(team, env["HC_TERMINAL_ID"], target, arguments.get("receipt")), structured=True)
 
 
 def collect(arguments, env, ctx):

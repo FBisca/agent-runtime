@@ -38,7 +38,7 @@ TOOLS = [
      schema({"to": text("worker name"), "text": text("message")}, ["to", "text"])),
     ("resume", "Give a finished, idle or interrupted worker another turn. A new spawn is not resumption.",
      schema({"name": text("worker name"), "task": text("what to do next")}, ["name", "task"])),
-    ("wait", "Wait for children. Dispatch opt-in returns durable reports and assignment states immediately.",
+    ("wait", "Wait for children. Dispatch opt-in buffers reports until completion, attention or deadline.",
      schema({"target": text("any, all or a worker name"),
              "timeout": {"type": "integer", "description": "seconds, default 170, max 590; dispatch allows 0"},
              "receipt": text("acknowledge previous batch")}, ["target"])),
