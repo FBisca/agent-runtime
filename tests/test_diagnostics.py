@@ -104,3 +104,65 @@ class DiagnosticTests(ToolCase):
         listed, _ = self.call(self.workers[1], "list", {})  # w2 is nobody's parent
         self.assertEqual(self.assert_degraded(listed)["result"], [])
         self.assertEqual(self.runs("read"), [r for r in self.runs("read") if r[1] == "child"])
+
+
+class ReceiptGatedInboxTests(ToolCase):
+    prepare = EventWaitTests.prepare
+    spawn = EventWaitTests.spawn
+    publish = EventWaitTests.publish
+
+    def read_calls(self):
+        return (("status", {"name": "w1"}), ("list", {}), ("collect", {"name": "w1"}),
+                ("task", {"action": "list"}))
+
+    def unacked(self):
+        with sqlite3.connect(Store(self.env).path) as db:
+            return db.execute("SELECT COUNT(*) FROM messages WHERE acked=0").fetchone()[0], \
+                db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], \
+                db.execute("SELECT COUNT(*) FROM callers").fetchone()[0]
+
+    def test_S18_receipt_free_reads_carry_no_inbox_and_acknowledge_nothing(self):
+        self.prepare()
+        self.publish(0, kind="progress", text="pending for lead")
+        before = self.unacked()
+        for name, arguments in self.read_calls():
+            reply = self.rpc.get(self.rpc.tool(name, arguments))["result"]
+            self.assertFalse(reply["isError"], reply)
+            self.assertNotIn("inbox", reply["content"][0]["text"])
+        proof = {"assignment_id": self.assignments[1]["assignment_id"]}
+        for name, arguments in self.read_calls():  # a worker's first-contact reads write no pin either
+            reply, text = self.call(self.workers[1], name, dict(arguments, **proof))
+            self.assertFalse(reply["isError"], text)
+            self.assertNotIn("inbox", text)
+        messages, receipts, pins = self.unacked()
+        self.assertEqual((messages, receipts), before[:2])
+        self.assertEqual(pins, before[2] + 1)  # first contact still pins the worker's session (once)
+
+    def test_S18_first_contact_receipt_free_read_still_pins_the_worker(self):
+        self.prepare()
+        proof = {"assignment_id": self.assignments[1]["assignment_id"]}
+        for name, arguments in (("task", {"action": "list"}), ("status", {"name": "w2"}),
+                                ("list", {}), ("collect", {"name": "w2"})):
+            if name != "task":  # fresh session per read tool: a new generation has no pin yet
+                session = Session(dict(self.env, HC_TERMINAL_ID="t2", CODEX_THREAD_ID="fresh-" + name))
+                self.addCleanup(session.close)
+                session.handshake()
+            else:
+                session = self.workers[1]
+            reply, text = self.call(session, name, dict(arguments, **proof))
+            self.assertFalse(reply["isError"], text)
+            bare, text = self.call(session, "wait", {"target": "inbox", "timeout": 0})
+            self.assertFalse(bare["isError"], text)
+
+    def test_S18_valid_receipt_returns_pending_inbox_as_before(self):
+        self.prepare()
+        self.publish(0, kind="progress", text="pending for lead")
+        batch = self.rpc.get(self.rpc.tool("wait", {"target": "any", "timeout": 0}))["result"]["structuredContent"]
+        self.publish(0, kind="progress", text="second")
+        for name, arguments in self.read_calls():
+            reply = self.rpc.get(self.rpc.tool(name, dict(arguments, receipt=batch["receipt"])))["result"]
+            self.assertFalse(reply["isError"], reply)
+            payload = reply["structuredContent"]
+            self.assertEqual([m["text"] for m in payload["inbox"]["messages"]], ["second"], name)
+            batch = {"receipt": payload["inbox"]["receipt"]}
+            self.publish(0, kind="progress", text="second")

@@ -49,7 +49,12 @@ class BudgetTests(ToolCase):
                    for i in range(70)]
         sent = [self.publish(i, kind="progress", text=chr(97 + n) * 60000)["message_id"]
                 for n, i in enumerate((0, 1, 0))]
-        tasks, delivered, arguments, pages = [], [], {"action": "list"}, 0
+        # Reads piggyback the inbox only with a receipt (D15): the mutating create below delivers the first page.
+        seed = self.ask("task", action="create", subject="seed")["structuredContent"]
+        created.append(seed["task_id"])
+        first = seed["inbox"]
+        self.assertEqual(self.store_receipt(first["receipt"]), [m["message_id"] for m in first["messages"]])
+        tasks, delivered, arguments, pages = [], [m["message_id"] for m in first["messages"]], {"action": "list", "receipt": first["receipt"]}, 0
         while True:
             payload = self.ask("task", **arguments)["structuredContent"]
             self.assertLessEqual(canonical(payload), MAX_RESPONSE_BYTES)

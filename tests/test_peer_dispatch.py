@@ -66,9 +66,10 @@ class PeerDispatchTests(ToolCase):
         self.assignments[1] = self.tool("resume", name="w2", task="continue work")["structuredContent"]
         resume_sends = self.runs("send")
         self.assertNotIn("idle data", resume_sends[0][-1])
-        result, text = self.call(self.workers[1], "status", {"name": "w2", "assignment_id": self.assignments[1]["assignment_id"]})
-        self.assertFalse(result["isError"], text)
-        inbox = result["structuredContent"]["inbox"]
+        result, text = self.call(self.workers[1], "wait", {"target": "inbox", "timeout": 0,
+                                                           "assignment_id": self.assignments[1]["assignment_id"]})
+        self.assertFalse(result["isError"], text)  # status no longer piggybacks the inbox without a receipt (D15)
+        inbox = result["structuredContent"]
         self.assertEqual(inbox["messages"], [event])
         empty, text = self.call(self.workers[1], "wait", {"target": "inbox", "timeout": 0, "receipt": inbox["receipt"]})
         self.assertFalse(empty["isError"], text)

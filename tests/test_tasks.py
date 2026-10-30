@@ -193,7 +193,10 @@ class TaskTests(ToolCase):
         with sqlite3.connect(Store(self.env).path) as db:  # later inbox query now fails; setup and indexes still exist
             db.execute("ALTER TABLE messages RENAME COLUMN acked TO acked_broken")
             pins = db.execute("SELECT COUNT(*) FROM callers").fetchone()[0]
-        reply, _ = self.call(self.workers[0], "status", {"name": "w1", "assignment_id": self.assignments[0]["assignment_id"]})
+            team = db.execute("SELECT team FROM workers WHERE id=?", (self.assignments[0]["worker_id"],)).fetchone()[0]
+            db.execute("INSERT INTO receipts VALUES ('r-late', ?, ?, '[]')", (team, self.assignments[0]["worker_id"]))
+        reply, _ = self.call(self.workers[0], "status", {"name": "w1", "receipt": "r-late",
+                                                         "assignment_id": self.assignments[0]["assignment_id"]})
         self.assertFalse(reply["isError"], reply)
         payload = reply["structuredContent"]
         self.assertIn("delivery_error", payload)
@@ -205,7 +208,7 @@ class TaskTests(ToolCase):
             self.assertEqual(states[self.assignments[1]["assignment_id"]], "complete")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
             db.execute("ALTER TABLE messages RENAME COLUMN acked_broken TO acked")
-        again, text = self.call(self.workers[0], "status", {"name": "w1", "assignment_id": self.assignments[0]["assignment_id"]})
+        again, text = self.call(self.workers[0], "status", {"name": "w1", "receipt": "r-late", "assignment_id": self.assignments[0]["assignment_id"]})
         self.assertFalse(again["isError"], text)
         self.assertNotIn("delivery_error", text)
         with sqlite3.connect(Store(self.env).path) as db:

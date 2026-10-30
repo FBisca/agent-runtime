@@ -670,6 +670,8 @@ def call_dispatch(name, arguments, env, ctx):
         return HANDLERS[name](arguments, env, ctx)
     info, caller = require_hc(env)
     diagnostic_call = name in DIAGNOSTICS
+    # D15: read tools piggyback the inbox only when the call carries a receipt (subagents are denied receipts).
+    gated_read = diagnostic_call or (name == "task" and arguments.get("action") == "list")
     if info["role"] not in ("lead", "worker"):
         if diagnostic_call:
             raise DiagnosticUnavailable("hc role lookup failed")
@@ -688,7 +690,7 @@ def call_dispatch(name, arguments, env, ctx):
         raw_name = json.loads(hc(["get", caller, "--json"], env, ctx)).get("name")
     ctx.actor = ctx.store.actor(scope, caller, info.get("parent"), generation,
                                arguments.get("assignment_id"), raw_name,
-                                defer_pin=name in ("status", "collect"))
+                                defer_pin=gated_read)
     if not ctx.actor["worker_id"]:
         ctx.owned_team = ctx.actor["team_id"]
     ctx.ack = None
@@ -710,6 +712,10 @@ def call_dispatch(name, arguments, env, ctx):
             payload = outcome["content"][0]["text"]
     if not isinstance(payload, dict):
         payload = {"result": payload}
+    if gated_read and arguments.get("receipt") is None:
+        if ctx.actor.get("pin"):  # session state, not inbox state: first contact still pins
+            ctx.store.pin(ctx.actor["pin"])
+        return outcome  # no inbox read, ack or receipt row
     # The inbox page budgets against the already-bounded base, then receipt/pin/ack commit together.
     reserve = len(json.dumps(payload, separators=(",", ":")).encode()) + len(',"inbox":')
     inbox = ctx.store.read(ctx.actor["team_id"], ctx.actor["recipient"], "any", assignment_ids=[],

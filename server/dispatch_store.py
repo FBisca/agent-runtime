@@ -352,6 +352,11 @@ class Store:
             # A pending fast report proves the session only when publication commits.
             return actor
 
+    def pin(self, pin):
+        """Commit a deferred first-contact pin on its own (receipt-free reads skip the inbox transaction)."""
+        with self.transaction() as db:
+            self._pin(db, *pin)
+
     def _pin(self, db, scope, address, generation, team):
         pinned = db.execute("SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
                             (scope, address, generation)).fetchone()
