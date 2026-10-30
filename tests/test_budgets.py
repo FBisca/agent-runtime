@@ -116,22 +116,30 @@ class BudgetTests(ToolCase):
                                      chr(97 + n % 26) * 4000, "progress")["message_id"])
         def observe(members, budget):
             return {m["assignment_id"]: "interrupted" for m in members}
-        delivered, receipt, rounds = [], None, 0
+        delivered, failures, receipt, rounds = [], [], None, 0
         while True:
             rounds += 1
             self.assertLess(rounds, 6)
             batch = dispatch_wait.wait(store, team, "t0", "all", 1, receipt, hc_tools.Context(), observe)
-            self.assertEqual(len(batch["assignments"]), 32)
-            self.assertEqual(batch["assignments"][0]["runtime_state"], "interrupted")
+            if batch["more"]:  # the last page keeps only assignments with unacknowledged results (D26)
+                self.assertEqual(len(batch["assignments"]), 32)
+            if rounds == 1:
+                self.assertEqual(batch["assignments"][0]["runtime_state"], "interrupted")
+            else:  # persisted: the store, not the probe, now says failed
+                self.assertEqual({a["state"] for a in batch["assignments"]}, {"failed"})
+                with store.transaction() as db:
+                    self.assertEqual({r[0] for r in db.execute("SELECT state FROM assignments")}, {"failed"})
             self.assertLessEqual(canonical(batch), MAX_RESPONSE_BYTES)
             self.assertTrue(batch["messages"])
             names = [m["message_id"] for m in batch["messages"]]
+            failures += [m["message_id"] for m in batch["messages"] if m["kind"] == "failed"]
             self.assertEqual(self.store_receipt(batch["receipt"]), names)
             delivered += names
             receipt = batch["receipt"]
             if not batch["more"]:
                 break
-        self.assertEqual(delivered, ids)
+        self.assertEqual([m for m in delivered if m not in failures], ids)  # D2 adds one persisted failure each
+        self.assertEqual(len(failures), 32)
         self.assertGreater(rounds, 1)
         final = dispatch_wait.wait(store, team, "t0", "all", 0, receipt, hc_tools.Context(), observe)
         self.assertEqual(final["messages"], [])

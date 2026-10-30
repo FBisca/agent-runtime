@@ -436,19 +436,64 @@ def collect(arguments, env, ctx):
     return result("\n".join(lines[-COLLECT_LINES:]))
 
 
+def terminal_gone(error, name):
+    """hc reports a missing terminal as error.kind == "not_found" (or `no terminal "<name>"`); nothing else is gone."""
+    text = str(error)
+    try:
+        body = json.loads(text)
+        info = body.get("error") if isinstance(body, dict) else None
+        if isinstance(info, dict):
+            return info.get("kind") == "not_found"
+    except ValueError:
+        pass
+    return text.strip() == 'no terminal "%s"' % name
+
+
 def stop(arguments, env, ctx):
     (name,) = need(arguments, "name")
     worker_name(name)
-    require_child(name, env, ctx)
-    note = ""
+    if not dispatch_enabled(env):
+        require_child(name, env, ctx)
+        note = ""
+        try:
+            hc(["kill", name], env, ctx)
+        except ToolError as error:
+            note = " (kill: %s)" % error  # an exited terminal still needs removing
+        hc(["rm", name], env, ctx)
+        return result("stopped %s%s" % (name, note))
+    _, caller = require_hc(env)
+    store, team = lead_store(env, ctx)
+    # D1/D13: a terminal that is gone or now belongs to another lead is never touched; our record is still stopped.
     try:
-        hc(["kill", name], env, ctx)
+        raw = json.loads(hc(["get", name, "--json"], env, ctx))
+        ours = bool(caller) and isinstance(raw, dict) and raw.get("parent") == caller
+        reason = "not your child" if not ours else None
     except ToolError as error:
-        note = " (kill: %s)" % error  # an exited terminal still needs removing
-    hc(["rm", name], env, ctx)
-    if dispatch_enabled(env):
-        store, team = lead_store(env, ctx)
+        if not terminal_gone(error, name):
+            raise
+        reason = "terminal already gone"
+    except ValueError:
+        raise ToolError("cannot read %s" % name)
+    note = ""
+    if reason is None:
+        try:
+            hc(["kill", name], env, ctx)
+        except ToolError as error:
+            note = " (kill: %s)" % error  # an exited terminal still needs removing
+        try:
+            hc(["rm", name], env, ctx)
+        except ToolError as error:
+            if not terminal_gone(error, name):
+                raise
+            note += " (rm: %s)" % error
+    else:
+        note = " (%s; terminal untouched)" % reason
+    try:
         store.stopped(team, name, ctx.ack)
+    except dispatch.StoreError:
+        if reason == "not your child":
+            raise ToolError("%s is not your child; refusing" % name)
+        raise
     return result("stopped %s%s" % (name, note))
 
 

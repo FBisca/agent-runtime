@@ -27,12 +27,22 @@ def turn_ended(assignment, observations):
     return seen is not None and seen > recorded + (assignment.get("mode") == "working")
 
 
+FAILURE_STATES = ("exited", "finished", "interrupted", "replaced")
+
+
+def persist_failures(store, observations):
+    """D2: commit observed failures before the read, so the result carries the one persisted message."""
+    failures = {k: v for k, v in observations.items() if isinstance(k, str) and v in FAILURE_STATES}
+    if failures:
+        store.fail_observed(failures)
+
+
 def reason(batch, target, observations):
     for assignment in batch["assignments"]:
         runtime = observations.get(assignment["assignment_id"])
         if runtime and assignment["state"] != "complete":
             assignment["runtime_state"] = runtime
-            if runtime in ("exited", "finished", "interrupted", "replaced"):
+            if runtime in FAILURE_STATES:
                 assignment["state"] = "failed"
             elif runtime == "blocked":
                 assignment["state"] = "blocked"
@@ -86,6 +96,7 @@ def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=F
                 if needs_observation:
                     budget = min(OBSERVE_TIMEOUT, remaining) if remaining > 0 else OBSERVE_TIMEOUT
                     observations = observe(members, budget)
+                    persist_failures(store, observations)
                     observed = True
                     reconcile_at = time.monotonic() + RECONCILE_INTERVAL
                     continue  # Finalize a fresh atomic snapshot after the bounded probe.
@@ -97,6 +108,7 @@ def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=F
                 now = time.monotonic()
                 if now >= reconcile_at:
                     observations = observe(members, min(OBSERVE_TIMEOUT, remaining))
+                    persist_failures(store, observations)
                     observed = True
                     reconcile_at = time.monotonic() + RECONCILE_INTERVAL
                     continue  # Recheck commits that raced the hc observation.

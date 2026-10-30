@@ -163,6 +163,13 @@ class EventWaitTests(ToolCase):
                 batch = self.batch(self.rpc, request_id)
                 self.assertEqual(batch["reason"], "attention" if state in ("idle", "done", "blocked") else "failed")
                 self.assertEqual(len(batch["unfinished"]), 2)
+                if batch["reason"] == "failed":  # D2: persisted, so a fresh assignment replaces the failed one
+                    self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0, "receipt": batch["receipt"]}))
+                    self.rows[0]["status"] = "working"
+                    self.replies["ls"]["out"] = json.dumps({"terminals": self.rows})
+                    (self.dir / "replies").write_text(json.dumps(self.replies))
+                    self.assignments[0] = self.rpc.get(self.rpc.tool("spawn", {
+                        "kind": "worker", "name": "w1", "task": "again", "cwd": "/tmp"}))["result"]["structuredContent"]
         self.rows[0]["status"] = "working"
         self.replies["ls"]["out"] = json.dumps({"terminals": self.rows})
         (self.dir / "replies").write_text(json.dumps(self.replies))
@@ -371,8 +378,8 @@ os._exit(0)
         """agent-runtime/R60
         agent-runtime-dispatch/S27"""
         self.prepare()
-        progress = self.publish(0, "progress")
         for state in ("exited", "interrupted"):
+            progress = self.publish(0, "progress")
             self.rows[0]["status"] = state
             self.replies["ls"]["out"] = json.dumps({"terminals": self.rows})
             tmp = self.dir / "next-replies"
@@ -383,16 +390,28 @@ os._exit(0)
                     before = len(self.runs("ls"))
                     batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0 if replay else 1}))
                     self.assertEqual(batch["reason"], "failed")
-                    self.assertEqual(batch["messages"], [progress])
+                    # D2: the observed failure is persisted once; a replay re-reads it without probing again.
+                    self.assertEqual([(m["kind"], m["assignment_id"]) for m in batch["messages"]],
+                                     [("progress", progress["assignment_id"]), ("failed", progress["assignment_id"])])
+                    self.assertEqual(batch["messages"][0], progress)
                     self.assertEqual(len(batch["unfinished"]), 2)
-                    self.assertEqual(batch["assignments"][0]["runtime_state"], state)
-                    self.assertEqual(len(self.runs("ls")), before + 1)
+                    if not replay:
+                        w1 = [a for a in batch["assignments"] if a["name"] == "w1"][0]
+                        self.assertEqual(w1["runtime_state"], state)
+                        self.assertEqual(len(self.runs("ls")), before + 1)
+            receipt = batch["receipt"]
+            self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0, "receipt": receipt}))
+            # The failed assignment is cleared; a fresh one for the same name continues the scenario.
+            self.rows[0]["status"] = "working"
+            self.replies["ls"]["out"] = json.dumps({"terminals": self.rows})
+            (self.dir / "replies").write_text(json.dumps(self.replies))
+            self.assignments[0] = self.rpc.get(self.rpc.tool(
+                "spawn", {"kind": "worker", "name": "w1", "task": "again", "cwd": "/tmp"}))["result"]["structuredContent"]
         self.publish(0)
         self.publish(1)
         complete = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
         self.assertEqual(complete["reason"], "completed")
         self.assertEqual(complete["unfinished"], [])
-        self.assertEqual(complete["messages"][0], progress)
 
     def test_completion_committed_during_bounded_probe_overrides_observed_exit(self):
         """agent-runtime/R60

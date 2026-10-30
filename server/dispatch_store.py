@@ -174,6 +174,7 @@ class Store:
                         "assignment_id": gone["id"], "sender": gone["worker"], "recipient": gone["lead"],
                         "kind": "failed", "text": "worker terminal was replaced before completion"}
             db.execute("UPDATE assignments SET state='failed' WHERE id=?", (gone["id"],))
+            self._release(db, gone["id"])
             db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
                        (envelope["message_id"], gone["team"], gone["lead"], gone["id"],
                         json.dumps(envelope, separators=(",", ":"))))
@@ -190,9 +191,49 @@ class Store:
             self._bind(db, assignment, address, scope, turn, mode)
         dispatch_events.notify(self.directory)
 
+    @staticmethod
+    def _release(db, assignment):
+        """D9/D12: a dead assignment never keeps an unfinished task."""
+        db.execute("UPDATE tasks SET status='pending',owner=NULL,assignment=NULL WHERE assignment=? AND status!='complete'",
+                   (assignment,))
+
+    def fail_observed(self, failures):
+        """D2: persist observed exit/interrupt/replacement once: failed state, one lead message, task released.
+
+        failures maps assignment id to the observed runtime state. Assignments already complete/failed are
+        skipped, so repeated waits and restarts add nothing.
+        """
+        wrote = False
+        with self.transaction() as db:
+            for assignment, runtime in failures.items():
+                gone = db.execute("SELECT a.id,a.team,a.worker,a.current,t.lead FROM assignments a JOIN teams t ON t.id=a.team "
+                                  "WHERE a.id=? AND a.state NOT IN ('complete','failed')", (assignment,)).fetchone()
+                if not gone:
+                    continue
+                wrote = True
+                db.execute("UPDATE assignments SET state='failed' WHERE id=?", (gone["id"],))
+                self._release(db, gone["id"])
+                for old in db.execute("SELECT id FROM assignments WHERE worker=? AND id!=? AND state NOT IN ('complete','failed')",
+                                      (gone["worker"], gone["id"])).fetchall():  # superseded by a resume
+                    db.execute("UPDATE assignments SET state='failed' WHERE id=?", (old[0],))
+                    self._release(db, old[0])
+                if not gone["current"]:
+                    continue  # superseded by a resume: failed and released silently, one message per terminal exit
+                envelope = {"message_id": uid(), "team_id": gone["team"], "worker_id": gone["worker"],
+                            "assignment_id": gone["id"], "sender": gone["worker"], "recipient": gone["lead"],
+                            "kind": "failed", "text": "worker terminal %s before completion" % runtime}
+                db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                           (envelope["message_id"], gone["team"], gone["lead"], gone["id"],
+                            json.dumps(envelope, separators=(",", ":"))))
+        if wrote:
+            dispatch_events.notify(self.directory)
+
     def fail(self, assignment):
         with self.transaction() as db:
-            db.execute("UPDATE assignments SET state='failed' WHERE id=? AND state IN ('pending','working')", (assignment,))
+            changed = db.execute("UPDATE assignments SET state='failed' WHERE id=? AND state IN ('pending','working')",
+                                 (assignment,)).rowcount
+            if changed:  # a blocked/decision report that landed first keeps its task
+                self._release(db, assignment)
             # A worker that never bound an address never started: it is not a teammate (D25).
             db.execute("UPDATE workers SET active=0 WHERE address IS NULL AND id=(SELECT worker FROM assignments WHERE id=?)",
                        (assignment,))
@@ -342,6 +383,8 @@ class Store:
             if not worker:
                 raise StoreError("worker is not registered in this team")
             db.execute("UPDATE workers SET active=0 WHERE id=?", (worker[0],))
+            for row in db.execute("SELECT id FROM assignments WHERE worker=? AND state!='complete'", (worker[0],)).fetchall():
+                self._release(db, row[0])
             db.execute("UPDATE assignments SET state='failed' WHERE worker=? AND state!='complete'", (worker[0],))
         dispatch_events.notify(self.directory)
 
