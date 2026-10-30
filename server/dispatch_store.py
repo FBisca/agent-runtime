@@ -26,6 +26,50 @@ MAX_RESPONSE_BYTES, MAX_BASE_BYTES, MAX_PAGE_BYTES = 196608, 98304, 65536
 REPORT_KINDS = ("progress", "complete", "blocked", "decision")
 
 
+SNAPSHOT_SQL = (
+    "SELECT a.id AS assignment_id,d.turn,d.mode,w.name,w.address,t.lead FROM assignments a "
+    "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
+    "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
+    "WHERE a.team=? AND (a.current=1 OR a.id=? OR (? IN ('all','any') AND EXISTS "
+    "(SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0))) "
+    "AND (? IN ('all','any') OR w.name=? OR a.id=?) "
+    # D26: all/any cover unfinished work of active workers plus results not yet acknowledged.
+    "AND (? NOT IN ('all','any') OR (w.active=1 AND a.state NOT IN ('complete','failed')) "
+    "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) ORDER BY a.rowid"
+)
+READ_MEMBERS_SQL = (
+    "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
+    "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name,d.turn,d.mode FROM assignments a LEFT JOIN dispatch_turns d ON d.assignment=a.id "
+    "JOIN workers w ON w.id=a.worker WHERE a.team=? AND {selection} ORDER BY a.rowid"
+)
+READ_MESSAGES_SQL = "SELECT body FROM messages WHERE team=? AND recipient=? AND acked=0"
+READ_NAMED_CLAUSE = " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
+
+
+BIND_NEWER_ADDRESS_SQL = (
+    "SELECT 1 FROM workers w JOIN teams t ON t.id=w.team "
+    "JOIN assignments a ON a.worker=w.id WHERE w.address=? AND t.scope=? "
+    "AND a.current=1 AND a.rowid>? LIMIT 1"
+)
+BIND_NEWER_ASSIGNMENT_SQL = "SELECT 1 FROM assignments WHERE worker=? AND rowid>? LIMIT 1"
+BIND_GONE_SQL = (
+    "SELECT a.id,a.team,a.worker,t.lead FROM assignments a JOIN workers w ON w.id=a.worker "
+    "JOIN teams t ON t.id=a.team WHERE w.address=? AND w.id!=? AND t.scope=? "
+    "AND a.state NOT IN ('complete','failed')"
+)
+ACTOR_SQL = (
+    "SELECT a.id,a.state,w.id AS worker,t.id AS team FROM assignments a "
+    "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
+    "WHERE t.scope=? AND t.lead=? AND ((w.address=? AND w.active=1 AND a.current=1) "
+    "OR (a.id=? AND a.state='pending' AND w.name=?)) ORDER BY a.rowid DESC LIMIT 1"
+)
+READ_PINNED_CLAUSE = " AND (assignment IN ({ids}) OR assignment IS NULL)"
+TASK_REPORT_SQL = "UPDATE tasks SET status=? WHERE assignment=? AND status IN ('in_progress','blocked')"
+TASKS_DONE_SQL = "SELECT id FROM tasks WHERE team=? AND status='complete'"
+TASKS_LIST_SQL = "SELECT rowid AS cursor,* FROM tasks WHERE team=? AND rowid>? ORDER BY rowid"
+TASKS_DEPS_SQL = "SELECT id,deps FROM tasks WHERE team=?"
+
+
 class StoreError(Exception):
     pass
 
@@ -62,6 +106,13 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS dispatch_turns (assignment TEXT PRIMARY KEY, turn INTEGER, mode TEXT)",
                 # v2: shared tasks; rowid order is the durable ID sequence.
                 "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, team TEXT, subject TEXT, status TEXT, owner TEXT, assignment TEXT, deps TEXT)",
+                # D7: hot wait/read lookups; additive, so 0.2.x writers and user_version are untouched.
+                "CREATE INDEX IF NOT EXISTS idx_assignments_team_current ON assignments(team,current)",
+                "CREATE INDEX IF NOT EXISTS idx_assignments_worker ON assignments(worker)",
+                "CREATE INDEX IF NOT EXISTS idx_workers_address ON workers(address)",
+                "CREATE INDEX IF NOT EXISTS idx_messages_assignment_acked ON messages(assignment,acked)",
+                "CREATE INDEX IF NOT EXISTS idx_tasks_team_status ON tasks(team,status)",
+                "CREATE INDEX IF NOT EXISTS idx_tasks_assignment ON tasks(assignment)",
             ):
                 db.execute(statement)
             db.execute("PRAGMA user_version=2")
@@ -110,21 +161,15 @@ class Store:
             return  # A fast report may already have bound/completed this assignment.
         # Tables are append-only: registration order and lead-generation order are
         # durable authority, even when a pending launch never finished binding.
-        newer_assignment = db.execute("SELECT 1 FROM assignments WHERE worker=? AND rowid>? LIMIT 1",
-                                      (row["worker"], row["sequence"])).fetchone()
+        newer_assignment = db.execute(BIND_NEWER_ASSIGNMENT_SQL, (row["worker"], row["sequence"])).fetchone()
         newer_generation = db.execute("SELECT 1 FROM teams WHERE scope=? AND lead=? AND rowid>? LIMIT 1",
                                       (scope, row["lead"], row["generation"])).fetchone()
-        newer_address = db.execute("SELECT 1 FROM workers w JOIN teams t ON t.id=w.team "
-                                   "JOIN assignments a ON a.worker=w.id WHERE w.address=? AND t.scope=? "
-                                   "AND a.current=1 AND a.rowid>? LIMIT 1",
-                                   (address, scope, row["sequence"])).fetchone()
+        newer_address = db.execute(BIND_NEWER_ADDRESS_SQL, (address, scope, row["sequence"])).fetchone()
         if newer_assignment or newer_generation or newer_address:
             raise StoreError("assignment is stale; newer registration or generation owns binding")
         db.execute("UPDATE assignments SET current=0 WHERE worker=?", (row["worker"],))
         # A reused address means the previous terminal is gone: surface its unfinished work once, to its lead.
-        for gone in db.execute("SELECT a.id,a.team,a.worker,t.lead FROM assignments a JOIN workers w ON w.id=a.worker "
-                               "JOIN teams t ON t.id=a.team WHERE w.address=? AND w.id!=? AND t.scope=? "
-                               "AND a.state NOT IN ('complete','failed')", (address, row["worker"], scope)).fetchall():
+        for gone in db.execute(BIND_GONE_SQL, (address, row["worker"], scope)).fetchall():
             envelope = {"message_id": uid(), "team_id": gone["team"], "worker_id": gone["worker"],
                         "assignment_id": gone["id"], "sender": gone["worker"], "recipient": gone["lead"],
                         "kind": "failed", "text": "worker terminal was replaced before completion"}
@@ -192,7 +237,7 @@ class Store:
             db.execute("UPDATE assignments SET state=? WHERE id=?",
                        ({"complete": "complete", "blocked": "blocked", "decision": "decision"}.get(kind, "working"), assignment))
             if kind in ("complete", "blocked"):  # same transaction as the report; replays returned above
-                db.execute("UPDATE tasks SET status=? WHERE assignment=? AND status IN ('in_progress','blocked')",
+                db.execute(TASK_REPORT_SQL,
                            ("complete" if kind == "complete" else "blocked", assignment))
         dispatch_events.notify(self.directory)
         return envelope
@@ -205,11 +250,7 @@ class Store:
                 actor = {"team_id": team, "recipient": address, "worker_id": None, "assignment_id": None,
                          "scope": scope, "address": address, "parent": None}
             else:
-                row = db.execute("SELECT a.id,a.state,w.id AS worker,t.id AS team FROM assignments a "
-                                 "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
-                                 "WHERE t.scope=? AND t.lead=? AND ((w.address=? AND w.active=1 AND a.current=1) "
-                                 "OR (a.id=? AND a.state='pending' AND w.name=?)) ORDER BY a.rowid DESC LIMIT 1",
-                                 (scope, parent, address, assignment, name)).fetchone()
+                row = db.execute(ACTOR_SQL, (scope, parent, address, assignment, name)).fetchone()
                 if not row or (assignment and row["id"] != assignment):
                     raise StoreError("caller has no matching active assignment")
                 actor = {"team_id": row["team"], "recipient": row["worker"], "worker_id": row["worker"],
@@ -318,16 +359,7 @@ class Store:
         with self.transaction() as db:
             self.acknowledge(db, *(ack or (team, recipient, receipt)))
             return [dict(row) for row in db.execute(
-                "SELECT a.id AS assignment_id,d.turn,d.mode,w.name,w.address,t.lead FROM assignments a "
-                "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
-                "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
-                "WHERE a.team=? AND (a.current=1 OR a.id=? OR (? IN ('all','any') AND EXISTS "
-                "(SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0))) "
-                "AND (? IN ('all','any') OR w.name=? OR a.id=?) "
-                # D26: all/any cover unfinished work of active workers plus results not yet acknowledged.
-                "AND (? NOT IN ('all','any') OR (w.active=1 AND a.state NOT IN ('complete','failed')) "
-                "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) ORDER BY a.rowid",
-                (team, target, target, target, target, target, target))]
+                SNAPSHOT_SQL, (team, target, target, target, target, target, target))]
 
     def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None, reserve=0):
         """Optional pure ready(batch) returns a final reason or None under this transaction.
@@ -345,20 +377,17 @@ class Store:
                 selection = "a.id IN (%s)" % (",".join("?" for _ in assignment_ids) or "NULL")
                 selected_params = list(assignment_ids)
             assignments = [dict(row) for row in db.execute(
-                "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
-                "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name,d.turn,d.mode FROM assignments a LEFT JOIN dispatch_turns d ON d.assignment=a.id "
-                "JOIN workers w ON w.id=a.worker WHERE a.team=? AND " + selection + " ORDER BY a.rowid",
-                [team] + selected_params)]
+                READ_MEMBERS_SQL.format(selection=selection), [team] + selected_params)]
             if assignment_ids is None and target not in ("any", "all"):
                 assignments = [a for a in assignments if target in (a["name"], a["assignment_id"])]
             # Historical reports remain readable for all/any; named reads select that worker's history.
-            query = "SELECT body FROM messages WHERE team=? AND recipient=? AND acked=0"
+            query = READ_MESSAGES_SQL
             params = [team, recipient]
             if assignment_ids is not None and not inbox:
-                query += " AND (assignment IN (%s) OR assignment IS NULL)" % (",".join("?" for _ in assignment_ids) or "NULL")
+                query += READ_PINNED_CLAUSE.format(ids=",".join("?" for _ in assignment_ids) or "NULL")
                 params.extend(assignment_ids)
             elif assignment_ids is None and not inbox and target not in ("any", "all"):
-                query += " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
+                query += READ_NAMED_CLAUSE
                 params.extend((team, target, target))
             unfinished = [a["assignment_id"] for a in assignments if a["state"] != "complete"]
             # Worst-case fixed fields (receipt, longest reason, a runtime_state added by wait) are
@@ -403,9 +432,9 @@ class Store:
 
     def _tasks(self, db, team, cursor=0, only=None):
         """Team-scoped rows after rowid cursor, at most MAX_PAGE_BYTES of JSON; second item is the next cursor."""
-        done = {r[0] for r in db.execute("SELECT id FROM tasks WHERE team=? AND status='complete'", (team,))}
+        done = {r[0] for r in db.execute(TASKS_DONE_SQL, (team,))}
         page, size, last = [], 2, None
-        for r in db.execute("SELECT rowid AS cursor,* FROM tasks WHERE team=? AND rowid>? ORDER BY rowid", (team, cursor)):
+        for r in db.execute(TASKS_LIST_SQL, (team, cursor)):
             deps = json.loads(r["deps"])
             item = {"task_id": r["id"], "subject": r["subject"], "status": r["status"], "owner": r["owner"],
                     "assignment_id": r["assignment"], "depends_on": deps,
@@ -422,7 +451,7 @@ class Store:
     def _deps(self, db, team, task, deps):
         if not isinstance(deps, list) or len(deps) > MAX_WORKERS or not all(isinstance(d, str) and len(d) <= 64 for d in deps):
             raise StoreError("depends_on must be a list of at most 32 task IDs")
-        known = {r[0]: json.loads(r[1]) for r in db.execute("SELECT id,deps FROM tasks WHERE team=?", (team,))}
+        known = {r[0]: json.loads(r[1]) for r in db.execute(TASKS_DEPS_SQL, (team,))}
         for dep in deps:
             if dep not in known:
                 raise StoreError("missing dependency: %s" % dep)
@@ -458,7 +487,7 @@ class Store:
                 if not row:
                     raise StoreError("unknown task for this team")
                 if action == "claim":
-                    done = {r[0] for r in db.execute("SELECT id FROM tasks WHERE team=? AND status='complete'", (team,))}
+                    done = {r[0] for r in db.execute(TASKS_DONE_SQL, (team,))}
                     if actor["worker_id"] and db.execute("SELECT state FROM assignments WHERE id=?",
                                                          (actor["assignment_id"],)).fetchone()[0] in ("complete", "failed"):
                         raise StoreError("claim requires a current unfinished assignment")
