@@ -103,6 +103,24 @@ class NativeChildGuardTests(unittest.TestCase):
             main = {"tool_name": prefix + "status", "tool_input": "not json"}
             self.assertIsNone(run(PRE, main, *extra), prefix)
 
+    def test_S6_subagent_string_input_that_is_not_an_object_is_denied_but_a_lead_passes(self):
+        """agent-runtime-followups/S6"""
+        for prefix, extra in ((CODEX, ("--cli", "codex")), (TOOL, ())):
+            for raw in ("not json", "[1]", '"text"', "42", "null", ""):
+                sub = {"tool_name": prefix + "status", "tool_input": raw, "agent_id": "sub-1", "agent_type": "worker"}
+                out = run(PRE, sub, *extra)
+                self.assertTrue(denied(out), (prefix, raw))
+                self.assertIn("unreadable input", out["hookSpecificOutput"]["permissionDecisionReason"])
+                self.assertIsNone(run(PRE, {"tool_name": prefix + "status", "tool_input": raw}, *extra), (prefix, raw))
+
+    def test_S7_stdin_that_is_not_json_emits_no_decision_and_exits_zero(self):
+        """agent-runtime-followups/S7"""
+        for extra in ((), ("--cli", "codex")):
+            for raw in ("not json", "", "{", "[]", "null", "42"):
+                done = subprocess.run([sys.executable, "-B", str(PRE), *extra], input=raw,
+                                      capture_output=True, text=True, timeout=20)
+                self.assertEqual((done.returncode, done.stdout.strip()), (0, ""), (extra, raw))
+
     def test_subagent_start_notice_names_allowed_reads(self):
         """agent-runtime/R74"""
         ctx = run(START, {})["hookSpecificOutput"]["additionalContext"]
