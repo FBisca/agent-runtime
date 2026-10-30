@@ -37,30 +37,35 @@ def decision(result):
 
 
 class SessionStartTests(unittest.TestCase):
-    def test_S16_claude_session_context_has_pointer_line(self):
+    def test_claude_session_context_has_pointer_line(self):
+        """agent-runtime/R16"""
         r = run_hook("session_start.py", {"hook_event_name": "SessionStart"}, ["--cli", "claude"],
                      {"HC_TERMINAL_ID": "w1"}, '{"parent": "lead1"}')
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(),
                          "agent-runtime: runtime=hc role=worker parent=lead1" + SUFFIX + REPORT)
 
-    def test_S16_hc_lead_gets_no_report_hint(self):
+    def test_hc_lead_gets_no_report_hint(self):
+        """agent-runtime/R16"""
         r = run_hook("session_start.py", {}, ["--cli", "claude"], {"HC_TERMINAL_ID": "l1"})
         self.assertEqual(r.stdout.strip(), "agent-runtime: runtime=hc role=lead parent=-" + SUFFIX)
 
-    def test_S16_parent_dash_when_none(self):
+    def test_parent_dash_when_none(self):
+        """agent-runtime/R16"""
         r = run_hook("session_start.py", {}, ["--cli", "claude"])
         self.assertEqual(r.stdout.strip(),
                          "agent-runtime: runtime=native role=lead parent=-" + SUFFIX)
 
-    def test_S17_codex_session_context_has_same_line(self):
+    def test_codex_session_context_has_same_line(self):
+        """agent-runtime/R17"""
         r = run_hook("session_start.py", {"hook_event_name": "SessionStart", "source": "startup"},
                      ["--cli", "codex"], {"HERDR_PANE_ID": "p1"})
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(),
                          "agent-runtime: runtime=native role=lead parent=-" + SUFFIX)
 
-    def test_S16_bad_stdin_still_exits_zero(self):
+    def test_bad_stdin_still_exits_zero(self):
+        """agent-runtime/R16"""
         r = subprocess.run([sys.executable, "-B", str(HOOKS / "session_start.py"), "--cli", "claude"],
                            input="not json", capture_output=True, text=True, timeout=20,
                            env={"PATH": "/usr/bin:/bin"})
@@ -68,7 +73,8 @@ class SessionStartTests(unittest.TestCase):
 
 
 class SubagentStartTests(unittest.TestCase):
-    def test_S18_subagent_told_not_to_run_runtime_commands(self):
+    def test_subagent_told_not_to_run_runtime_commands(self):
+        """agent-runtime/R18"""
         r = run_hook("subagent_start.py", {"hook_event_name": "SubagentStart", "agent_id": "a1"})
         self.assertEqual(r.returncode, 0)
         out = json.loads(r.stdout)["hookSpecificOutput"]
@@ -97,7 +103,8 @@ class PreToolUseTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "", command)
 
-    def test_S19_subagent_non_readonly_hc_denied(self):
+    def test_subagent_non_readonly_hc_denied(self):
+        """agent-runtime/R19"""
         for command in ("hc run claude", "hc send t1 hi", "hc kill t1", "hc keys t7 enter",
                         "cd x && hc send t1 hi", "echo a; hc kill t1", "echo a | hc run x",
                         "FOO=1 hc send t1 hi", "~/.local/bin/hc send t1 hi",
@@ -115,7 +122,8 @@ class PreToolUseTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertDenied(command, agent_id="a1")
 
-    def test_S19_subagent_readonly_hc_allowed(self):
+    def test_subagent_readonly_hc_allowed(self):
+        """agent-runtime/R19"""
         for command in ("hc ls", "hc get t7", "hc --json read t9", "hc wait t7", "hc templates",
                         "hc events", "hc file read t7", "hc --json file read f", "hc file --help", "hc exec ls", "hc exec echo hi", "hc schema", "hc --help",
                         "hc -h", "hc --version", "hc keys --help", "hc send -h", "hc kill --help",
@@ -125,20 +133,24 @@ class PreToolUseTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertAllowed(command, agent_id="a1")
 
-    def test_S20_teammux_launch_denied_for_everyone(self):
+    def test_teammux_launch_denied_for_everyone(self):
+        """agent-runtime/R20"""
         self.assertDenied("herdmates teammux-launch foo")
         self.assertDenied("cd x && herdmates teammux-launch", agent_id="a1")
         self.assertAllowed('echo "herdmates teammux-launch"')
 
-    def test_S21_lead_hc_send_allowed(self):
+    def test_lead_hc_send_allowed(self):
+        """agent-runtime/R21"""
         for command in ("hc send t1 hi", "hc run claude", "hc kill t1"):
             with self.subTest(command=command):
                 self.assertAllowed(command)
 
-    def test_S21_agent_type_without_agent_id_is_a_lead(self):
+    def test_agent_type_without_agent_id_is_a_lead(self):
+        """agent-runtime/R21"""
         self.assertAllowed("hc send t7 done", agent_type="implementer")
 
-    def test_S21_internal_error_allows(self):
+    def test_internal_error_allows(self):
+        """agent-runtime/R21"""
         r = subprocess.run([sys.executable, "-B", str(HOOKS / "pre_tool_use.py")],
                            input="garbage", capture_output=True, text=True, timeout=20)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, ""))
@@ -183,7 +195,8 @@ class WorkerGuardTests(unittest.TestCase):
         r = self.call(command, **kw)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, ""), command)
 
-    def test_S28_worker_destructive_calls_at_parent_denied(self):
+    def test_worker_destructive_calls_at_parent_denied(self):
+        """agent-runtime/R28"""
         for command in ("hc keys t1 enter", "hc interrupt t1", "hc kill t1", "hc send --force t1 x",
                         "hc send t1 x --force", "hc --json keys t1 enter", "hc keys lead enter",
                         "hc kill lead", "echo a\nhc keys t1 enter", "cd x\n\nhc kill t1",
@@ -193,42 +206,49 @@ class WorkerGuardTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertDenied(command)
 
-    def test_S28_unknown_option_before_target_denied_when_parent_named(self):
+    def test_unknown_option_before_target_denied_when_parent_named(self):
+        """agent-runtime/R28"""
         for command in ("hc keys --on m t1 enter", "hc keys --on m boss enter", "hc kill --zzz boss",
                         "hc interrupt --timeout 5 t1", "hc send --if idle --force t1 x",
                         "hc send --mystery v --force boss x"):
             with self.subTest(command=command):
                 self.assertDenied(command)
 
-    def test_S28_unknown_option_before_target_allowed_when_parent_absent(self):
+    def test_unknown_option_before_target_allowed_when_parent_absent(self):
+        """agent-runtime/R28"""
         for command in ("hc keys --on m t12 enter", "hc keys --on m ghost enter",
                         "hc kill --zzz kid", "hc send --mystery v --force t10 x",
                         "hc interrupt --timeout 5 t12", "hc send --if idle --force t12 x"):
             with self.subTest(command=command):
                 self.assertAllowed(command)
 
-    def test_S28_literal_parent_address_denied_when_target_unresolvable(self):
+    def test_literal_parent_address_denied_when_target_unresolvable(self):
+        """agent-runtime/R28"""
         terminals = {"t9": self.TERMINALS["t9"]}
         self.assertDenied("hc keys t1 enter", terminals=terminals)
 
-    def test_S29_worker_sends_result_to_parent(self):
+    def test_worker_sends_result_to_parent(self):
+        """agent-runtime/R29"""
         for command in ("hc send t1 'done: all green'", "hc send lead 'done'",
                         "hc send --if idle --wait t1 x", 'echo "a\nhc keys t1 enter"', "hc get t1", "hc read t1", "hc ls"):
             with self.subTest(command=command):
                 self.assertAllowed(command)
 
-    def test_S29_worker_commands_at_child_or_sibling_allowed(self):
+    def test_worker_commands_at_child_or_sibling_allowed(self):
+        """agent-runtime/R29"""
         for command in ("hc keys t12 enter", "hc kill t12", "hc interrupt kid", "hc send --force t12 x",
                         "hc keys t10 enter", "hc kill sib", "hc send --force sib x"):
             with self.subTest(command=command):
                 self.assertAllowed(command)
 
-    def test_S29_fail_open_when_resolution_fails(self):
+    def test_fail_open_when_resolution_fails(self):
+        """agent-runtime/R29"""
         self.assertAllowed("hc keys ghost enter")
         self.assertAllowed("hc keys t1 enter", terminals={})  # caller unreadable
         self.assertAllowed("hc interrupt")  # no target
 
-    def test_S29_leads_and_non_hc_sessions_unrestricted(self):
+    def test_leads_and_non_hc_sessions_unrestricted(self):
+        """agent-runtime/R29"""
         self.assertAllowed("hc keys t9 enter", caller="t1")
         self.assertAllowed("hc kill t1", caller=None)
         self.assertAllowed("hc kill t1", agent_type="implementer", caller="t1")
@@ -247,14 +267,15 @@ class CodexWorkerGuardTests(WorkerGuardTests):
         return super().call(command, payload=payload or codex_bash(command),
                             args=("--cli", "codex"), **kw)
 
-    test_S28_worker_destructive_calls_at_parent_denied = None  # replaced below
-    test_S28_literal_parent_address_denied_when_target_unresolvable = None
-    test_S29_worker_sends_result_to_parent = None
-    test_S29_worker_commands_at_child_or_sibling_allowed = None
-    test_S29_fail_open_when_resolution_fails = None
-    test_S29_leads_and_non_hc_sessions_unrestricted = None
+    test_worker_destructive_calls_at_parent_denied = None  # replaced below
+    test_literal_parent_address_denied_when_target_unresolvable = None
+    test_worker_sends_result_to_parent = None
+    test_worker_commands_at_child_or_sibling_allowed = None
+    test_fail_open_when_resolution_fails = None
+    test_leads_and_non_hc_sessions_unrestricted = None
 
-    def test_S31_codex_worker_destructive_calls_at_parent_denied(self):
+    def test_codex_worker_destructive_calls_at_parent_denied(self):
+        """agent-runtime/R31"""
         for command in ("hc keys t1 enter", "hc interrupt t1", "hc kill lead", "hc send --force t1 x",
                         "echo a\nhc keys t1 enter", "hc keys $P enter"):
             with self.subTest(command=command):
@@ -262,7 +283,8 @@ class CodexWorkerGuardTests(WorkerGuardTests):
         r = self.call("hc kill t1")
         self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["hookEventName"], "PreToolUse")
 
-    def test_S31_codex_worker_allowed_calls(self):
+    def test_codex_worker_allowed_calls(self):
+        """agent-runtime/R31"""
         for command in ("hc send t1 'done'", "hc send lead 'done'", "hc keys t12 enter",
                         "hc kill sib", "hc get t1", "ls"):
             with self.subTest(command=command):
@@ -270,20 +292,24 @@ class CodexWorkerGuardTests(WorkerGuardTests):
         self.assertAllowed("hc keys t1 enter", caller="t1")  # lead
         self.assertAllowed("hc keys t1 enter", caller=None)
 
-    def test_S31_codex_fail_open_when_resolution_fails(self):
+    def test_codex_fail_open_when_resolution_fails(self):
+        """agent-runtime/R31"""
         self.assertAllowed("hc keys ghost enter")
         self.assertAllowed("hc keys t1 enter", terminals={})  # caller unreadable
         self.assertAllowed("hc interrupt")  # no target
 
-    def test_S31_codex_literal_parent_denied_when_target_unresolvable(self):
+    def test_codex_literal_parent_denied_when_target_unresolvable(self):
+        """agent-runtime/R31"""
         self.assertDenied("hc keys t1 enter", terminals={"t9": self.TERMINALS["t9"]})
 
-    def test_S31_codex_non_bash_tools_ignored(self):
+    def test_codex_non_bash_tools_ignored(self):
+        """agent-runtime/R31"""
         payload = codex_bash("hc keys t1 enter")
         payload["tool_name"] = "apply_patch"
         self.assertAllowed("", payload=payload)
 
-    def test_S31_codex_config_has_pre_tool_use_hook(self):
+    def test_codex_config_has_pre_tool_use_hook(self):
+        """agent-runtime/R31"""
         try:
             import tomllib
         except ImportError:
@@ -304,11 +330,13 @@ class WiringTests(unittest.TestCase):
     NEW = {"SessionStart": "session_start.py", "SubagentStart": "subagent_start.py",
            "PreToolUse": "pre_tool_use.py"}
 
-    def test_S16_hook_scripts_executable(self):
+    def test_hook_scripts_executable(self):
+        """agent-runtime/R16"""
         for name in self.NEW.values():
             self.assertTrue(os.access(HOOKS / name, os.X_OK), name)
 
-    def test_S16_settings_json_has_new_entries_pointing_at_existing_files(self):
+    def test_settings_json_has_new_entries_pointing_at_existing_files(self):
+        """agent-runtime/R16"""
         settings = json.loads((REPO / ".claude/settings.json").read_text())
         for event, script in self.NEW.items():
             commands = [h["command"] for g in settings["hooks"][event] for h in g["hooks"]]
@@ -330,7 +358,8 @@ class WiringTests(unittest.TestCase):
         self.assertTrue(any("herdr-agent-state" in c for c in others))
         self.assertTrue(any("session_start.py" in c for c in others))
 
-    def test_S17_codex_config_has_session_start_hook(self):
+    def test_codex_config_has_session_start_hook(self):
+        """agent-runtime/R17"""
         try:
             import tomllib
         except ImportError:

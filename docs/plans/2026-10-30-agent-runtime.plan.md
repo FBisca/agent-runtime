@@ -1,6 +1,6 @@
 # Plan: agent runtime contract
 
-Slug: `agent-runtime`. Living spec: `docs/specs/agent-runtime.md`. Status: APPROVED 2026-10-30.
+Slug: `agent-runtime`. Living spec: `docs/specs/agent-runtime.md`. Status: ARCHIVED 2026-10-30.
 
 ## Why now
 
@@ -126,10 +126,10 @@ Routing and worker guard
 | T3 | `status` and `list` with normalized state, `native`, `next`; herdmates mapping and its 2 tests moved in | S11–S15 | T2 | agents/.agents/skills/agent-runtime/ | agent | COMPLETE (db70b0a; review no blocking; converge PASS) |
 | T4 | Claude SessionStart pointer, SubagentStart notice, PreToolUse guard, hook tests | S16, S18–S21 | T1 | agents/.claude/settings.json, agents/.agents/skills/agent-runtime/ | agent | COMPLETE (d2adba1, 94de45a; converge PASS; review: no blocking) |
 | T5 | Codex inline SessionStart hook in config.toml, staging only the `[hooks]` hunk | S17 | T1 | agents/.codex/config.toml | agent | COMPLETE (2c18281; converge PASS; review: no blocking) |
-| T6 | Trust the Codex hook in `/hooks` and confirm the pointer line appears | S17 | T12 | none | Felippe | TO-DO |
+| T6 | Trust the Codex hook in `/hooks` and confirm the pointer line appears | S17 | T12 | none | Felippe | COMPLETE (Felippe confirmed 2026-10-30) |
 | T7 | Rewrite orchestrate and implementer against the contract, delegating by the D15 routing rule; remove `herdr` subcommand; `inspect` uses resolve; README Agent Tooling | S22, S23 | T3 | agents/.agents/skills/orchestrate/, agents/.claude/agents/implementer.md, agents/.codex/agents/implementer.toml, README.md | agent | COMPLETE (73610f1; review no blocking; converge PASS) |
 | T8 | Live run: Claude and Codex workers through the hc adapter; in-process teammate hits the guard (apply D16 if not); measure one hc worker vs one subagent on the same small task (tokens, seconds); confirm a sandboxed Codex worker can `hc send` its report; fix adapter text found wrong | S24, S25, S27 | T12 | agents/.agents/skills/agent-runtime/ | agent | COMPLETE: S24 PASS (Claude worker nested, reported `<hc from="t1g rt-claude2">`); S25 PASS (Codex --no-daemon worker reported, workspace-write sandbox reaches hc); S27 FAIL (in-process teammate got SessionStart role=lead, no agent_id, `hc send t7` typed into the lead) → D16 applied; cost: subagent 32.7k tokens/8 s vs hc worker 38.7k (no report) to 81.6k (with report)/9–12 s; findings → T21–T23 |
-| T9 | Check the Herdr.app sidebar during T8 | S26 | T8 | none | Felippe | TO-DO |
+| T9 | Check the Herdr.app sidebar during T8 | S26 | T8 | none | Felippe | COMPLETE (Felippe confirmed 2026-10-30) |
 | T10 | Guard hardening: subagent allow-list of read-only hc subcommands, options before the subcommand, shell keywords/wrappers (`then`, `{`, `timeout`, `xargs`, `-lc`), worker-thread allow test, notice text aligned with the contract | S19, S21 | T4 | agents/.agents/skills/agent-runtime/hooks/, agents/.agents/skills/agent-runtime/tests/test_hooks.py | agent | COMPLETE (5317749, 5623401; review blocking fixed; converge PASS) |
 | T11 | Contract trim to ~500 words; trust-dialog keypress in-contract for spawn; hc `error` maps to `unknown` | S8, S9 | T2 | agents/.agents/skills/agent-runtime/references/, agents/.agents/skills/agent-runtime/adapters/, agents/.agents/skills/agent-runtime/tests/test_agent_runtime.py | agent | COMPLETE (9b09ed1; review no blocking; converge PASS) |
 | T12 | Merge the PR, pull the live dotfiles checkout (resolve its uncommitted config.toml), restow `bin` so `~/bin/agent-runtime` exists | none | T7, T10, T11, T11b, T13, T14, T15, T16, T17, T18, T19 | none | Felippe | COMPLETE (PR #21 merged 6853712; live checkout on main, local config.toml kept, ~/bin folded so no restow) |
