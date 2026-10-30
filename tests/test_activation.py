@@ -78,7 +78,7 @@ class ActivationWiringTest(unittest.TestCase):
 
     def test_S23_plugin_version_is_bumped_and_consistent(self):
         version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
-        self.assertNotEqual(version, "0.1.0")
+        self.assertEqual(version, "0.2.1")
         self.assertEqual(mcp_server.SERVER_INFO["version"], version)
         market = json.loads((REPO / "agents/.claude-plugin/marketplace.json").read_text())
         for plugin in market["plugins"]:

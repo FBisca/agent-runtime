@@ -146,7 +146,7 @@ class EventWaitTests(ToolCase):
         self.pending(self.rpc, request_id)  # Exactly one final result.
         self.assertEqual(self.rpc.counts[request_id], 1)
 
-    def test_S7_reports_and_runtime_failures_need_attention_but_idle_done_are_not_success(self):
+    def test_S7_reports_and_runtime_failures_need_attention_and_ended_turns_need_attention(self):
         self.prepare()
         for state in ("idle", "done", "blocked", "interrupted", "exited", "removed"):
             with self.subTest(runtime_state=state):
@@ -157,8 +157,7 @@ class EventWaitTests(ToolCase):
                 tmp.replace(self.dir / "replies")
                 request_id = self.rpc.tool("wait", {"target": "all", "timeout": 0.3})
                 batch = self.batch(self.rpc, request_id)
-                self.assertEqual(batch["reason"], "timeout" if state in ("idle", "done") else
-                                 "attention" if state == "blocked" else "failed")
+                self.assertEqual(batch["reason"], "attention" if state in ("idle", "done", "blocked") else "failed")
                 self.assertEqual(len(batch["unfinished"]), 2)
         self.rows[0]["status"] = "working"
         self.replies["ls"]["out"] = json.dumps({"terminals": self.rows})

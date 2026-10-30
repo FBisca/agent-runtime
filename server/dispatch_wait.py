@@ -13,6 +13,22 @@ RECONCILE_INTERVAL = 0.5
 OBSERVE_TIMEOUT = 0.2
 
 
+def turn_ended(assignment, observations):
+    """Working assignment whose hc state is done/idle on a turn that is new for this dispatch.
+
+    hc's turn counts finished turns. mode at dispatch: fresh spawn (any numbering: done/idle is the end),
+    ended (resume of a finished worker: needs a later turn), working (resume of a mid-turn worker: the
+    old turn's end is one more turn that does not count).
+    """
+    if assignment["state"] != "working" or observations.get(assignment["assignment_id"]) not in ("done", "idle"):
+        return False
+    mode = assignment.get("mode") or "fresh"
+    if mode == "fresh":
+        return True
+    seen, recorded = observations.get((assignment["assignment_id"], "turn")), assignment.get("turn")
+    return seen is not None and recorded is not None and seen > recorded + (mode == "working")
+
+
 def reason(batch, target, observations):
     for assignment in batch["assignments"]:
         runtime = observations.get(assignment["assignment_id"])
@@ -24,11 +40,17 @@ def reason(batch, target, observations):
                 assignment["state"] = "blocked"
     batch["unfinished"] = [a["assignment_id"] for a in batch["assignments"] if a["state"] != "complete"]
     states = {a["state"] for a in batch["assignments"]}
+    # D24: the turn ended (hc done/idle) with no accepted complete/blocked/decision report. A report that
+    # committed before this snapshot already made the state complete/blocked/decision, so it wins.
+    ended = any(turn_ended(a, observations) for a in batch["assignments"])
+    for a in batch["assignments"]:
+        a.pop("turn", None)
+        a.pop("mode", None)  # internal dispatch marker, not part of the result
     if not batch["assignments"]:
         return "empty"
     if "failed" in states:
         return "failed"
-    if states.intersection(("blocked", "decision")):
+    if ended or states.intersection(("blocked", "decision")):
         return "attention"
     if not batch["unfinished"]:
         return "completed"

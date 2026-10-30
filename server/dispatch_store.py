@@ -58,6 +58,8 @@ class Store:
                 "CREATE INDEX IF NOT EXISTS inbox ON messages(team,recipient,acked,seq)",
                 "CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, team TEXT, recipient TEXT, ids TEXT)",
                 "CREATE TABLE IF NOT EXISTS callers (scope TEXT,address TEXT,generation TEXT,team TEXT,PRIMARY KEY(scope,address,generation))",
+                # Side table (not columns) keeps 0.2.0 servers' INSERT INTO assignments working on a shared store.
+                "CREATE TABLE IF NOT EXISTS dispatch_turns (assignment TEXT PRIMARY KEY, turn INTEGER, mode TEXT)",
                 # v2: shared tasks; rowid order is the durable ID sequence.
                 "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, team TEXT, subject TEXT, status TEXT, owner TEXT, assignment TEXT, deps TEXT)",
             ):
@@ -99,7 +101,7 @@ class Store:
             db.execute("INSERT INTO assignments VALUES (?,?,?,'pending',0)", (assignment, team, worker))
             return {"team_id": team, "worker_id": worker, "assignment_id": assignment}
 
-    def _bind(self, db, assignment, address, scope):
+    def _bind(self, db, assignment, address, scope, turn=None, mode="fresh"):
         row = db.execute("SELECT a.worker,a.state,a.rowid AS sequence,t.rowid AS generation,t.scope,t.lead "
                          "FROM assignments a JOIN teams t ON t.id=a.team WHERE a.id=?", (assignment,)).fetchone()
         if not row or row["scope"] != scope:
@@ -123,16 +125,20 @@ class Store:
                    (address, scope))
         db.execute("UPDATE workers SET address=?,active=1 WHERE id=?", (address, row["worker"]))
         db.execute("UPDATE assignments SET state='working',current=1 WHERE id=?", (assignment,))
+        db.execute("INSERT OR REPLACE INTO dispatch_turns VALUES (?,?,?)", (assignment, turn, mode))
 
-    def bind(self, assignment, address, scope, ack=None):
+    def bind(self, assignment, address, scope, ack=None, turn=None, mode="fresh"):
         with self.transaction() as db:
             if ack:
                 self.acknowledge(db, *ack)
-            self._bind(db, assignment, address, scope)
+            self._bind(db, assignment, address, scope, turn, mode)
 
     def fail(self, assignment):
         with self.transaction() as db:
             db.execute("UPDATE assignments SET state='failed' WHERE id=? AND state IN ('pending','working')", (assignment,))
+            # A worker that never bound an address never started: it is not a teammate (D25).
+            db.execute("UPDATE workers SET active=0 WHERE address IS NULL AND id=(SELECT worker FROM assignments WHERE id=?)",
+                       (assignment,))
 
     def publish(self, scope, address, parent, assignment, text, kind, message_id=None, caller_name=None, ack=None, generation=None):
         if kind not in REPORT_KINDS:
@@ -300,7 +306,8 @@ class Store:
         with self.transaction() as db:
             self.acknowledge(db, *(ack or (team, recipient, receipt)))
             return [dict(row) for row in db.execute(
-                "SELECT a.id AS assignment_id,w.name,w.address,t.lead FROM assignments a "
+                "SELECT a.id AS assignment_id,d.turn,d.mode,w.name,w.address,t.lead FROM assignments a "
+                "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
                 "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
                 "WHERE a.team=? AND (a.current=1 OR a.id=?) "
                 "AND (? IN ('all','any') OR w.name=? OR a.id=?) ORDER BY a.rowid",
@@ -323,7 +330,7 @@ class Store:
                 selected_params = list(assignment_ids)
             assignments = [dict(row) for row in db.execute(
                 "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
-                "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name FROM assignments a "
+                "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name,d.turn,d.mode FROM assignments a LEFT JOIN dispatch_turns d ON d.assignment=a.id "
                 "JOIN workers w ON w.id=a.worker WHERE a.team=? AND " + selection + " ORDER BY a.rowid",
                 [team] + selected_params)]
             if assignment_ids is None and target not in ("any", "all"):

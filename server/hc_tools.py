@@ -150,13 +150,25 @@ def discard(name, env):
             pass
 
 
+def row_state(raw):
+    status = raw.get("status")
+    return status.get("state") if isinstance(status, dict) else status
+
+
+def hc_server(env):
+    """Runtime scope is the hc server, shared by a lead and its workers. HC_SCOPE is a per-starter
+    token that differs between them, so it is only a fallback when no socket is visible."""
+    socket = env.get("HC_TERMINAL_SOCKET")
+    return os.path.realpath(socket) if socket else env.get("HC_SCOPE") or "default"
+
+
 def dispatch_identity(env):
     """Scope plus CLI session generation; MCP process restarts retain the CLI ancestor.
 
     Prefer the nearest CLI process PID/start time over possibly inherited session
     markers. Hosts without visible CLI ancestry must supply a session ID.
     """
-    scope = env.get("HC_SCOPE") or env.get("HC_TERMINAL_SOCKET") or "default"
+    scope = hc_server(env)
     generation = None
     pid = os.getppid()
     deadline = time.monotonic() + lib.ANCESTRY_BUDGET_SECONDS
@@ -246,16 +258,19 @@ def spawn(arguments, env, ctx):
             store.fail(identity["assignment_id"])
         raise ToolError("worker %s started but its task was not sent: hc read %s; no blind resend" % (name, name))
     info = {"name": name, "address": None, "parent": caller}
+    turn, mode = None, "fresh"
     try:
         raw = json.loads(hc(["get", name, "--json"], env, ctx))
         info.update(address=raw.get("address"), parent=raw.get("parent") or caller)
+        turn = raw.get("turn")
+        mode = "ended" if row_state(raw) in ("done", "idle") else "fresh"
     except (ToolError, ValueError, AttributeError):
         pass
     if not store:
         return result(info)
     if info["address"]:
         scope, _ = dispatch_identity(env)
-        store.bind(identity["assignment_id"], info["address"], scope, getattr(ctx, "ack", None))
+        store.bind(identity["assignment_id"], info["address"], scope, getattr(ctx, "ack", None), turn, mode)
     else:
         store.fail(identity["assignment_id"])
         raise ToolError("worker started but address unavailable; assignment cannot accept reports")
@@ -313,7 +328,8 @@ def resume(arguments, env, ctx):
                 raise ToolError("resume task was not sent; no blind resend")
             if ctx.cancelled.is_set():
                 raise ToolError("cancelled")
-            store.bind(identity["assignment_id"], raw["address"], ctx.actor["scope"], ctx.ack)
+            store.bind(identity["assignment_id"], raw["address"], ctx.actor["scope"], ctx.ack, raw.get("turn"),
+                       "ended" if row_state(raw) in ("done", "idle") else "working")
         except (ToolError, dispatch.StoreError):
             store.fail(identity["assignment_id"])
             raise
@@ -394,6 +410,11 @@ def wait(arguments, env, ctx):
             if state not in ("working", "idle", "done", "blocked", "exited", "finished", "interrupted", "replaced"):
                 state = "unknown"
             observations[member["assignment_id"]] = state
+            if row:
+                turn = row.get("turn")
+                status = row.get("status")
+                turn = status.get("turn") if turn is None and isinstance(status, dict) else turn
+                observations[(member["assignment_id"], "turn")] = turn
         return observations
     try:
         return result(dispatch_wait.wait(store, team, recipient, target, seconds,
@@ -453,7 +474,7 @@ def report(arguments, env, ctx):
         raise gap("%s support for report" % info["runtime"], NATIVE_TOOLS[info["runtime"]])
     if info["role"] != "worker" or not info.get("parent"):
         raise ToolError("report is for hc workers with a registered assignment")
-    scope = env.get("HC_SCOPE") or env.get("HC_TERMINAL_SOCKET") or "default"
+    scope = hc_server(env)
     if ctx.cancelled.is_set():
         raise ToolError("cancelled")
     try:
