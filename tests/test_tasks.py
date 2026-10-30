@@ -23,8 +23,9 @@ class TaskTests(ToolCase):
         self.assertEqual(result["isError"], not ok, text)
         return result["structuredContent"] if ok else text
 
-    def test_S16_lead_tasks_with_dependencies_are_identical_for_all_teammates_after_restart(self):
-        """agent-runtime-dispatch/S16"""
+    def test_lead_tasks_with_dependencies_are_identical_for_all_teammates_after_restart(self):
+        """agent-runtime/R49
+        agent-runtime-dispatch/S16"""
         self.prepare()
         base = self.task(self.lead, action="create", subject="build")
         after = self.task(self.lead, action="create", subject="test", depends_on=[base["task_id"]])
@@ -42,8 +43,9 @@ class TaskTests(ToolCase):
         self.assertEqual(by_id[base["task_id"]]["status"], "in_progress")
         self.assertEqual((by_id[after["task_id"]]["status"], by_id[after["task_id"]]["ready"]), ("pending", False))
 
-    def test_S17_one_concurrent_claim_wins_and_bad_dependencies_are_rejected(self):
-        """agent-runtime-dispatch/S17"""
+    def test_one_concurrent_claim_wins_and_bad_dependencies_are_rejected(self):
+        """agent-runtime/R50
+        agent-runtime-dispatch/S17"""
         self.prepare()
         ready = self.task(self.lead, action="create", subject="ready")
         blocked = self.task(self.lead, action="create", subject="later", depends_on=[ready["task_id"]])
@@ -65,8 +67,9 @@ class TaskTests(ToolCase):
         self.assertIn("cycle", self.task(self.lead, ok=False, action="update", task_id=ready["task_id"],
                                         depends_on=[ready["task_id"]]))
 
-    def test_S18_reports_transition_linked_task_once_and_unlock_dependents(self):
-        """agent-runtime-dispatch/S18"""
+    def test_reports_transition_linked_task_once_and_unlock_dependents(self):
+        """agent-runtime/R51
+        agent-runtime-dispatch/S18"""
         self.prepare()
         first = self.task(self.lead, action="create", subject="first")
         second = self.task(self.lead, action="create", subject="second", depends_on=[first["task_id"]])
@@ -100,8 +103,9 @@ class TaskTests(ToolCase):
     def listed(self):
         return {t["task_id"]: t for t in self.task(self.lead, action="list")["tasks"]}
 
-    def test_S18_matching_complete_after_blocked_or_progress_finishes_linked_task(self):
-        """agent-runtime-dispatch/S18"""
+    def test_matching_complete_after_blocked_or_progress_finishes_linked_task(self):
+        """agent-runtime/R51
+        agent-runtime-dispatch/S18"""
         self.prepare()
         first = self.task(self.lead, action="create", subject="first")
         second = self.task(self.lead, action="create", subject="second", depends_on=[first["task_id"]])
@@ -114,8 +118,9 @@ class TaskTests(ToolCase):
         self.assertEqual(tasks[first["task_id"]]["status"], "complete")
         self.assertTrue(tasks[second["task_id"]]["ready"])
 
-    def test_S18_stale_assignment_and_finished_assignment_cannot_mutate_or_claim_tasks(self):
-        """agent-runtime-dispatch/S17"""
+    def test_stale_assignment_and_finished_assignment_cannot_mutate_or_claim_tasks(self):
+        """agent-runtime/R51
+        agent-runtime-dispatch/S17"""
         self.prepare()
         old = self.task(self.lead, action="create", subject="old")
         other = self.task(self.lead, action="create", subject="other")
@@ -133,8 +138,9 @@ class TaskTests(ToolCase):
         self.assertIn("unfinished", self.task(self.workers[0], 0, ok=False, action="claim", task_id=other["task_id"]))
         self.assertEqual(self.listed()[other["task_id"]]["status"], "pending")
 
-    def test_S15_forged_assignment_identity_cannot_change_task_state(self):
-        """agent-runtime-dispatch/S15"""
+    def test_forged_assignment_identity_cannot_change_task_state(self):
+        """agent-runtime/R48
+        agent-runtime-dispatch/S15"""
         self.prepare()
         item = self.task(self.lead, action="create", subject="guarded")
         before = self.listed()
@@ -146,8 +152,9 @@ class TaskTests(ToolCase):
         self.assertIn("receipt", foreign)
         self.assertEqual(self.listed(), before)
 
-    def test_S22_status_and_collect_report_diagnostics_when_storage_fails_but_auth_errors_stay_errors(self):
-        """agent-runtime-dispatch/S22"""
+    def test_status_and_collect_report_diagnostics_when_storage_fails_but_auth_errors_stay_errors(self):
+        """agent-runtime/R55
+        agent-runtime-dispatch/S22"""
         from dispatch_store import Store
         self.prepare()
         self.replies["read"] = {"out": "screen says finished"}
@@ -165,8 +172,9 @@ class TaskTests(ToolCase):
         mutate = self.rpc.get(self.rpc.tool("task", {"action": "list"}))["result"]
         self.assertTrue(mutate["isError"])  # no fallback for non-diagnostic tools
 
-    def test_S22_diagnostic_fallback_never_covers_authorization_failures(self):
-        """agent-runtime-dispatch/S22"""
+    def test_diagnostic_fallback_never_covers_authorization_failures(self):
+        """agent-runtime/R55
+        agent-runtime-dispatch/S22"""
         self.prepare()
         denied, _ = self.call(self.workers[0], "status", {"name": "w1"})  # no first-call assignment proof
         self.assertTrue(denied["isError"])
@@ -175,8 +183,9 @@ class TaskTests(ToolCase):
         batch = self.rpc.get(self.rpc.tool("wait", {"target": "all", "timeout": 0}))["result"]["structuredContent"]
         self.assertEqual(batch["unfinished"].__len__(), 2)  # diagnostics never completed an assignment
 
-    def test_S22_late_inbox_read_failure_leaves_no_first_contact_pin_and_keeps_reports(self):
-        """agent-runtime-dispatch/S22"""
+    def test_late_inbox_read_failure_leaves_no_first_contact_pin_and_keeps_reports(self):
+        """agent-runtime/R55
+        agent-runtime-dispatch/S22"""
         import sqlite3
         from dispatch_store import Store
         self.prepare()

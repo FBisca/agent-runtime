@@ -28,7 +28,8 @@ def count_words(node):
 
 
 class ActivationWiringTest(unittest.TestCase):
-    def test_S23_both_hosts_enable_dispatch_with_600_second_deadline(self):
+    def test_both_hosts_enable_dispatch_with_600_second_deadline(self):
+        """agent-runtime/R56"""
         claude = json.loads(MCP_JSON.read_text())["mcpServers"]["agent-runtime"]
         self.assertEqual(claude["env"]["AGENT_RUNTIME_DISPATCH"], "1")
         self.assertEqual(claude["timeout"], 600000)
@@ -37,7 +38,8 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertIn("HC_TERMINAL_ID", CODEX["env_vars"])
         self.assertLessEqual(hc_tools.WAIT_MAX, claude["timeout"] // 1000 - 10)
 
-    def test_S23_codex_approves_every_mutation_tool_and_hooks_match_them(self):
+    def test_codex_approves_every_mutation_tool_and_hooks_match_them(self):
+        """agent-runtime/R56"""
         for tool in MUTATING:
             self.assertEqual(CODEX["tools"][tool]["approval_mode"], "approve", tool)
         for tool in mcp_server.TOOL_NAMES:
@@ -47,7 +49,8 @@ class ActivationWiringTest(unittest.TestCase):
             name = f"mcp__plugin_agent-runtime_agent-runtime__{tool}"
             self.assertTrue(any(re.fullmatch(h["matcher"], name) for h in hooks), tool)
 
-    def test_S23_schema_carries_new_optional_fields(self):
+    def test_schema_carries_new_optional_fields(self):
+        """agent-runtime/R56"""
         tools = {n: s["properties"] for n, _, s in mcp_server.TOOLS}
         for name, props in tools.items():
             self.assertIn("receipt", props, name)
@@ -57,7 +60,8 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertIn("message_id", tools["message"])
         self.assertIn("cursor", tools["task"])
 
-    def test_S23_descriptions_fit_400_words_and_teach_the_wait_flow(self):
+    def test_descriptions_fit_400_words_and_teach_the_wait_flow(self):
+        """agent-runtime/R56"""
         listing = [{"description": d, "inputSchema": s} for _, d, s in mcp_server.TOOLS]
         self.assertLessEqual(count_words(listing), 400)
         text = " ".join(d for _, d, _ in mcp_server.TOOLS).lower()
@@ -68,7 +72,8 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertIn("diagnostic", desc["collect"])
         self.assertIn("promptly", desc["spawn"])
 
-    def test_S23_claude_worker_tools_include_the_dispatch_flow(self):
+    def test_claude_worker_tools_include_the_dispatch_flow(self):
+        """agent-runtime/R56"""
         text = (REPO / "agents/.claude/agents/implementer.md").read_text()
         front = text.split("---")[1]
         line = next(l for l in front.splitlines() if l.startswith("tools:"))
@@ -76,7 +81,8 @@ class ActivationWiringTest(unittest.TestCase):
         for tool in ("report", "message", "wait", "task", "status"):
             self.assertIn(f"mcp__plugin_agent-runtime_agent-runtime__{tool}", tools)
 
-    def test_S23_plugin_version_is_bumped_and_consistent(self):
+    def test_plugin_version_is_bumped_and_consistent(self):
+        """agent-runtime/R56"""
         version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
         self.assertEqual(version, "0.2.2")
         self.assertEqual(mcp_server.SERVER_INFO["version"], version)
@@ -84,12 +90,14 @@ class ActivationWiringTest(unittest.TestCase):
         for plugin in market["plugins"]:
             self.assertIn(plugin.get("version", version), (version,))
 
-    def test_S23_codex_pretooluse_matcher_covers_task(self):
+    def test_codex_pretooluse_matcher_covers_task(self):
+        """agent-runtime/R56"""
         config = tomllib.loads((REPO / "agents/.codex/config.toml").read_text())
         matchers = [e["matcher"] for e in config["hooks"]["PreToolUse"]]
         self.assertTrue(any(re.search(m, "mcp__agent-runtime__task") for m in matchers))
 
-    def test_S23_descriptions_state_lookup_and_dispatch_rules(self):
+    def test_descriptions_state_lookup_and_dispatch_rules(self):
+        """agent-runtime/R56"""
         desc = {n: d for n, d, _ in mcp_server.TOOLS}
         self.assertIn("lookup is rejected", desc["spawn"])
         self.assertIn("per work period", desc["wait"])
@@ -97,7 +105,8 @@ class ActivationWiringTest(unittest.TestCase):
         wait = next(s for n, _, s in mcp_server.TOOLS if n == "wait")
         self.assertIn("dispatch allows 0", wait["properties"]["timeout"]["description"])
 
-    def test_S23_instructions_use_report_and_one_wait(self):
+    def test_instructions_use_report_and_one_wait(self):
+        """agent-runtime/R56"""
         orch = (REPO / "agents/.agents/skills/orchestrate/SKILL.md").read_text()
         self.assertIn("wait(all)", orch)
         self.assertRegex(orch, r"(?i)fallback")

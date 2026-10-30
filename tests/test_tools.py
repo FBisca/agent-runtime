@@ -223,8 +223,9 @@ class WaitCollectStopReportTests(ToolCase):
         self.assertLess(time.monotonic() - started, 8)
         self.assertEqual(session.proc.stdout.read(), "")
 
-    def test_S1_unregistered_wait_returns_empty_without_hc_wait(self):
-        """agent-runtime-dispatch/S1; supersedes agent-runtime-tools/S5 transport."""
+    def test_unregistered_wait_returns_empty_without_hc_wait(self):
+        """agent-runtime/R34
+        agent-runtime-dispatch/S1; supersedes agent-runtime-tools/S5 transport."""
         session = self.start(env={"AGENT_RUNTIME_DISPATCH": "1"})
         for target in ("any", "all", "w1"):
             result, text = self.call(session, "wait", {"target": target, "timeout": 0})
@@ -232,15 +233,17 @@ class WaitCollectStopReportTests(ToolCase):
             self.assertEqual(json.loads(text)["reason"], "empty")
         self.assertEqual(self.runs("wait"), [])
 
-    def test_S1_wait_rejects_invalid_timeout(self):
-        """agent-runtime-dispatch/S1"""
+    def test_wait_rejects_invalid_timeout(self):
+        """agent-runtime/R34
+        agent-runtime-dispatch/S1"""
         session = self.start(env={"AGENT_RUNTIME_DISPATCH": "1"})
         for timeout in (-1, True, "3"):
             result, _ = self.call(session, "wait", {"target": "any", "timeout": timeout})
             self.assertTrue(result["isError"])
 
-    def test_S1_long_collect_does_not_block_ping_and_cancel_ends_it(self):
-        """agent-runtime-dispatch/S1; retains transport cancellation coverage."""
+    def test_long_collect_does_not_block_ping_and_cancel_ends_it(self):
+        """agent-runtime/R34
+        agent-runtime-dispatch/S1; retains transport cancellation coverage."""
         session = self.start({"read": {"sleep": 30}})
         write = lambda m: (session.proc.stdin.write(json.dumps(m) + "\n"), session.proc.stdin.flush())
         write({"jsonrpc": "2.0", "id": 50, "method": "tools/call",
@@ -303,8 +306,9 @@ class WaitCollectStopReportTests(ToolCase):
         self.assertFalse(result["isError"])
         self.assertEqual(self.runs("send"), [["send", "t0", "done: abc"]])
 
-    def test_S1_unregistered_worker_report_refuses_injection(self):
-        """agent-runtime-dispatch/S1; replaces agent-runtime-tools/S8 hc-send assertion."""
+    def test_unregistered_worker_report_refuses_injection(self):
+        """agent-runtime/R34
+        agent-runtime-dispatch/S1; replaces agent-runtime-tools/S8 hc-send assertion."""
         session = self.start(env={"HC_TERMINAL_ID": "t1", "AGENT_RUNTIME_DISPATCH": "1"})
         result, _ = self.call(session, "report", {"text": "done: abc"})
         self.assertTrue(result["isError"])

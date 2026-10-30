@@ -23,7 +23,8 @@ class PeerDispatchTests(ToolCase):
         self.assertFalse(result["isError"], result)
         return result
 
-    def test_S12_mixed_workers_resume_promptly_with_fresh_ids_and_preserve_failed_dispatch(self):
+    def test_mixed_workers_resume_promptly_with_fresh_ids_and_preserve_failed_dispatch(self):
+        """agent-runtime/R45"""
         self.prepare()
         self.assignments[1] = self.tool("spawn", kind="worker", cli="codex", name="w2",
                                         task="codex work", cwd="/tmp")["structuredContent"]
@@ -53,7 +54,8 @@ class PeerDispatchTests(ToolCase):
                                                      "assignment_id": self.assignments[0]["assignment_id"]})
         self.assertTrue(old["isError"])
 
-    def test_S14_peer_idle_and_active_inboxes_deliver_true_sender_without_hc_injection(self):
+    def test_peer_idle_and_active_inboxes_deliver_true_sender_without_hc_injection(self):
+        """agent-runtime/R47"""
         self.prepare()
         first, text = self.call(self.workers[0], "message", {"to": "w2", "text": "idle data",
                                                           "assignment_id": self.assignments[0]["assignment_id"]})
@@ -99,7 +101,8 @@ class PeerDispatchTests(ToolCase):
         denied, _ = self.call(self.workers[1], "message", {"to": "foreign-worker-id", "text": "no"})
         self.assertTrue(denied["isError"])
 
-    def test_S14_stale_worker_session_cannot_route_into_reused_team_generation(self):
+    def test_stale_worker_session_cannot_route_into_reused_team_generation(self):
+        """agent-runtime/R47"""
         self.prepare()
         old, text = self.call(self.workers[0], "message", {"to": "w2", "text": "old team",
                                                         "assignment_id": self.assignments[0]["assignment_id"]})
@@ -120,7 +123,8 @@ class PeerDispatchTests(ToolCase):
         received = store.read(fresh[1]["team_id"], fresh[1]["worker_id"], "any", assignment_ids=[], inbox=True)
         self.assertEqual([m["text"] for m in received["messages"]], ["new team"])
 
-    def test_S14_worker_can_message_its_own_child_without_crossing_peer_team(self):
+    def test_worker_can_message_its_own_child_without_crossing_peer_team(self):
+        """agent-runtime/R47"""
         self.prepare()
         child = self.spawn(self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"])
         sent, text = self.call(self.workers[0], "message", {"to": "child", "text": "child data"})
@@ -136,7 +140,8 @@ class PeerDispatchTests(ToolCase):
         replacement.handshake()
         return replacement, [self.spawn(replacement, name) for name in ("w1", "w2")]
 
-    def test_S14_first_message_requires_assignment_proof_before_generation_pin(self):
+    def test_first_message_requires_assignment_proof_before_generation_pin(self):
+        """agent-runtime/R47"""
         self.prepare()
         _, fresh = self.replace_team_without_contacting_old_workers()
         for proof in (None, self.assignments[0]["assignment_id"]):
@@ -151,7 +156,8 @@ class PeerDispatchTests(ToolCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], 0)
         self.assertEqual(store.read(fresh[1]["team_id"], fresh[1]["worker_id"], "any", inbox=True)["messages"], [])
 
-    def test_S14_first_inbox_wait_cannot_adopt_reused_address_or_read_new_team(self):
+    def test_first_inbox_wait_cannot_adopt_reused_address_or_read_new_team(self):
+        """agent-runtime/R47"""
         self.prepare()
         replacement, fresh = self.replace_team_without_contacting_old_workers()
         sent, text = self.call(replacement, "message", {"to": "w1", "text": "new team private data"})
@@ -177,7 +183,8 @@ class PeerDispatchTests(ToolCase):
             finally:
                 worker.close()
 
-    def test_S14_failed_pending_report_cannot_establish_first_use_proof(self):
+    def test_failed_pending_report_cannot_establish_first_use_proof(self):
+        """agent-runtime/R47"""
         self.prepare()
         store = Store(self.env)
         team = self.assignments[0]["team_id"]
@@ -191,7 +198,8 @@ class PeerDispatchTests(ToolCase):
         denied, _ = self.call(self.workers[0], "message", {"to": "w2", "text": "unproven"})
         self.assertTrue(denied["isError"])
 
-    def test_S14_successful_fast_report_proves_session_in_publication_transaction(self):
+    def test_successful_fast_report_proves_session_in_publication_transaction(self):
+        """agent-runtime/R47"""
         self.prepare()
         store = Store(self.env)
         pending = store.register(self.assignments[0]["team_id"], "w1")
@@ -204,7 +212,8 @@ class PeerDispatchTests(ToolCase):
         self.assertFalse(result["isError"], text)
         self.assertEqual(result["structuredContent"]["assignment_id"], pending["assignment_id"])
 
-    def test_S19_piggyback_ack_is_atomic_and_invalid_or_foreign_receipts_do_not_act(self):
+    def test_piggyback_ack_is_atomic_and_invalid_or_foreign_receipts_do_not_act(self):
+        """agent-runtime/R52"""
         self.prepare()
         self.publish(0, "progress", "first")
         first = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
@@ -227,7 +236,8 @@ class PeerDispatchTests(ToolCase):
         self.assertTrue(final["structuredContent"]["message_id"])
         self.assertEqual(self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))["messages"], [])
 
-    def test_S21_stop_wakes_wait_preserves_reports_and_keeps_accepted_completion(self):
+    def test_stop_wakes_wait_preserves_reports_and_keeps_accepted_completion(self):
+        """agent-runtime/R54"""
         self.prepare()
         progress = self.publish(0, "progress")
         request_id = self.begin()

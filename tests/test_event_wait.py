@@ -117,7 +117,8 @@ class EventWaitTests(ToolCase):
         self.pending(rpc, request_id)
         return request_id
 
-    def test_S5_all_buffers_progress_and_partial_completion_with_fixed_membership(self):
+    def test_all_buffers_progress_and_partial_completion_with_fixed_membership(self):
+        """agent-runtime/R38"""
         self.prepare()
         request_id = self.begin()
         store = Store(self.env)
@@ -134,7 +135,8 @@ class EventWaitTests(ToolCase):
         self.assertEqual(len(batch["assignments"]), 2)
         self.assertEqual(batch["unfinished"], [])
 
-    def test_S6_one_wait_returns_all_completed_reports_without_collect(self):
+    def test_one_wait_returns_all_completed_reports_without_collect(self):
+        """agent-runtime/R39"""
         self.prepare()
         request_id = self.begin()
         messages = [self.publish(i) for i in (0, 1)]
@@ -146,7 +148,8 @@ class EventWaitTests(ToolCase):
         self.pending(self.rpc, request_id)  # Exactly one final result.
         self.assertEqual(self.rpc.counts[request_id], 1)
 
-    def test_S7_reports_and_runtime_failures_need_attention_and_ended_turns_need_attention(self):
+    def test_reports_and_runtime_failures_need_attention_and_ended_turns_need_attention(self):
+        """agent-runtime/R40"""
         self.prepare()
         for state in ("idle", "done", "blocked", "interrupted", "exited", "removed"):
             with self.subTest(runtime_state=state):
@@ -175,7 +178,8 @@ class EventWaitTests(ToolCase):
         self.publish(1)
         self.assertEqual(self.batch(self.rpc, self.rpc.tool("wait", {"target": "all"}))["reason"], "completed")
 
-    def test_S8_any_batches_eligible_events_and_named_wait_excludes_old_assignment(self):
+    def test_any_batches_eligible_events_and_named_wait_excludes_old_assignment(self):
+        """agent-runtime/R41"""
         self.prepare()
         old = self.publish(0)
         # Reuse the name; the prior completion stays out of the named wait but, being unacknowledged (D26),
@@ -190,7 +194,8 @@ class EventWaitTests(ToolCase):
         self.assertEqual(any_batch["messages"], [old, first, second])
         self.assertEqual(any_batch["reason"], "messages")
 
-    def test_S9_deadline_empty_and_cancel_preserve_replay_and_workers(self):
+    def test_deadline_empty_and_cancel_preserve_replay_and_workers(self):
+        """agent-runtime/R42"""
         self.prepare()
         progress = self.publish(0, "progress")
         started = time.monotonic()
@@ -218,7 +223,8 @@ class EventWaitTests(ToolCase):
         self.assertEqual(replay["messages"], [progress])
         self.assertEqual(self.runs("kill") + self.runs("rm"), [])
 
-    def test_S10_commit_then_process_exit_without_hint_recovers_within_bound(self):
+    def test_commit_then_process_exit_without_hint_recovers_within_bound(self):
+        """agent-runtime/R43"""
         self.prepare()
         request_id = self.begin(target="w1")
         assignment = self.assignments[0]
@@ -242,7 +248,8 @@ os._exit(0)
         self.assertEqual(batch["reason"], "completed")
         self.assertEqual(batch["messages"], [envelope])
 
-    def test_S10_publication_between_snapshot_and_listener_is_rechecked(self):
+    def test_publication_between_snapshot_and_listener_is_rechecked(self):
+        """agent-runtime/R43"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")
@@ -258,7 +265,8 @@ os._exit(0)
                                    {"HC_TERMINAL_ID": "t0", "AGENT_RUNTIME_DISPATCH": "1"}, hc_tools.Context())
         self.assertEqual(result["structuredContent"]["reason"], "completed")
 
-    def test_S10_cross_process_ipc_wakes_without_waiting_for_recovery_timer(self):
+    def test_cross_process_ipc_wakes_without_waiting_for_recovery_timer(self):
+        """agent-runtime/R43"""
         self.prepare()
         store = Store(self.env)
         observed = threading.Event()
@@ -274,7 +282,8 @@ os._exit(0)
         self.assertEqual(batch["messages"], [message])
         self.assertEqual(batch["reason"], "completed")
 
-    def test_S11_wait_keeps_same_process_ping_report_and_cancellation_responsive(self):
+    def test_wait_keeps_same_process_ping_report_and_cancellation_responsive(self):
+        """agent-runtime/R44"""
         self.prepare()
         child = self.spawn(self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"])
         worker_rpc = AsyncRPC(self.workers[0])
@@ -293,8 +302,9 @@ os._exit(0)
         self.assertEqual(worker_rpc.counts.get(request_id, 0), 0)
         self.assertEqual(worker_rpc.counts[completed_id], 1)
 
-    def test_S5_S7_attention_cleared_during_finalization_cannot_become_early_timeout(self):
-        """agent-runtime-dispatch/S5; agent-runtime-dispatch/S7"""
+    def test_attention_cleared_during_finalization_cannot_become_early_timeout(self):
+        """agent-runtime/R38 agent-runtime/R40
+        agent-runtime-dispatch/S5; agent-runtime-dispatch/S7"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -325,8 +335,9 @@ os._exit(0)
         self.assertEqual(len(receipts), 1)
         self.assertEqual(json.loads(receipts[0][0]), [m["message_id"] for m in batch["messages"]])
 
-    def test_S8_concurrent_ack_during_finalization_keeps_batch_and_receipt_consistent(self):
-        """agent-runtime-dispatch/S8"""
+    def test_concurrent_ack_during_finalization_keeps_batch_and_receipt_consistent(self):
+        """agent-runtime/R41
+        agent-runtime-dispatch/S8"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -356,8 +367,9 @@ os._exit(0)
             ids = json.loads(db.execute("SELECT ids FROM receipts WHERE id=?", (batch["receipt"],)).fetchone()[0])
         self.assertEqual(ids, [m["message_id"] for m in batch["messages"]])
 
-    def test_S27_queued_progress_and_replay_surface_exited_or_interrupted_worker(self):
-        """agent-runtime-dispatch/S27"""
+    def test_queued_progress_and_replay_surface_exited_or_interrupted_worker(self):
+        """agent-runtime/R60
+        agent-runtime-dispatch/S27"""
         self.prepare()
         progress = self.publish(0, "progress")
         for state in ("exited", "interrupted"):
@@ -382,8 +394,9 @@ os._exit(0)
         self.assertEqual(complete["unfinished"], [])
         self.assertEqual(complete["messages"][0], progress)
 
-    def test_S27_completion_committed_during_bounded_probe_overrides_observed_exit(self):
-        """agent-runtime-dispatch/S27"""
+    def test_completion_committed_during_bounded_probe_overrides_observed_exit(self):
+        """agent-runtime/R60
+        agent-runtime-dispatch/S27"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]

@@ -37,7 +37,8 @@ class DispatchTests(ToolCase):
         self.assertEqual(result["structuredContent"], json.loads(text))
         return result["structuredContent"]
 
-    def test_S1_structured_reports_from_both_clis_without_hc_send(self):
+    def test_structured_reports_from_both_clis_without_hc_send(self):
+        """agent-runtime/R34"""
         for cli in ("claude", "codex"):
             lead = self.lead(cli)
             assignment = self.spawn(lead, cli)
@@ -52,7 +53,8 @@ class DispatchTests(ToolCase):
             self.assertEqual(batch["reason"], "completed")
         self.assertEqual(self.runs("send"), [])
 
-    def test_S2_restart_keeps_reports_and_receipts_private(self):
+    def test_restart_keeps_reports_and_receipts_private(self):
+        """agent-runtime/R35"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -69,7 +71,8 @@ class DispatchTests(ToolCase):
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
 
-    def test_S1_fast_report_binds_pending_assignment_without_resetting_completion(self):
+    def test_fast_report_binds_pending_assignment_without_resetting_completion(self):
+        """agent-runtime/R34"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         identity = store.register(team, "w1")
@@ -79,7 +82,8 @@ class DispatchTests(ToolCase):
         store.bind(identity["assignment_id"], "t9", "test")
         self.assertEqual(store.read(team, "t0", "all")["reason"], "completed")
 
-    def test_S1_failure_after_fast_complete_preserves_completion(self):
+    def test_failure_after_fast_complete_preserves_completion(self):
+        """agent-runtime/R34"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         identity = store.register(team, "w1")
@@ -89,7 +93,8 @@ class DispatchTests(ToolCase):
         self.assertEqual(batch["reason"], "completed")
         self.assertEqual(batch["unfinished"], [])
 
-    def test_S25_explicit_opt_in_uses_structured_path_and_validates_report(self):
+    def test_explicit_opt_in_uses_structured_path_and_validates_report(self):
+        """agent-runtime/R58"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -103,7 +108,8 @@ class DispatchTests(ToolCase):
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.runs("wait"), [])
 
-    def test_S13_failed_launch_preserves_previous_assignment(self):
+    def test_failed_launch_preserves_previous_assignment(self):
+        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         old = store.register(team, "w1")
@@ -112,7 +118,8 @@ class DispatchTests(ToolCase):
         store.fail(failed["assignment_id"])
         self.assertEqual(store.read(team, "t0", "all")["unfinished"], [old["assignment_id"]])
 
-    def test_S13_stale_pending_cannot_replace_newer_registration_or_binding(self):
+    def test_stale_pending_cannot_replace_newer_registration_or_binding(self):
+        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         for bound in (False, True):
@@ -131,7 +138,8 @@ class DispatchTests(ToolCase):
                 self.assertEqual([a["assignment_id"] for a in batch["assignments"]], [current["assignment_id"]])
                 self.assertEqual([m["text"] for m in batch["messages"]], ["current"])
 
-    def test_S13_stale_pending_cannot_steal_address_from_new_team_generation(self):
+    def test_stale_pending_cannot_steal_address_from_new_team_generation(self):
+        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         old_team = store.team("test", "t0", "old-lead")
         old = store.register(old_team, "old-name")
@@ -150,7 +158,8 @@ class DispatchTests(ToolCase):
         self.assertEqual(store.read(old_team, "t0", "all")["messages"], [])
         self.assertEqual(store.read(new_team, "t0", "all")["reason"], "completed")
 
-    def test_S3_replay_and_repeated_ack_are_idempotent(self):
+    def test_replay_and_repeated_ack_are_idempotent(self):
+        """agent-runtime/R36"""
         lead = self.lead()
         assignment = self.spawn(lead)
         self.publish(self.worker(), assignment)
@@ -162,7 +171,8 @@ class DispatchTests(ToolCase):
                                                             "receipt": first["receipt"]})
         self.assertTrue(result["isError"])
 
-    def test_S4_publication_deduplicates_and_conflicts(self):
+    def test_publication_deduplicates_and_conflicts(self):
+        """agent-runtime/R37"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -174,7 +184,8 @@ class DispatchTests(ToolCase):
         self.assertIn("conflict", text)
         self.assertEqual(len(self.read(lead)["messages"]), 1)
 
-    def test_S13_old_assignment_and_reused_address_are_isolated(self):
+    def test_old_assignment_and_reused_address_are_isolated(self):
+        """agent-runtime/R46"""
         lead = self.lead()
         old = self.spawn(lead)
         current = self.spawn(lead)
@@ -189,7 +200,8 @@ class DispatchTests(ToolCase):
         self.assertTrue(result["isError"])
         self.assertEqual(self.read(foreign)["messages"], [])
 
-    def test_S20_bounded_batches_and_large_payload_are_lossless(self):
+    def test_bounded_batches_and_large_payload_are_lossless(self):
+        """agent-runtime/R53"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -219,8 +231,9 @@ class DispatchTests(ToolCase):
         self.assertEqual(len(last["messages"]), 1)
         self.assertFalse(last["more"])
 
-    def test_S26_exact_compact_array_boundary_and_one_byte_overflow_are_lossless(self):
-        """agent-runtime-dispatch/S26"""
+    def test_exact_compact_array_boundary_and_one_byte_overflow_are_lossless(self):
+        """agent-runtime/R59
+        agent-runtime-dispatch/S26"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -252,7 +265,8 @@ class DispatchTests(ToolCase):
                 self.assertFalse(continuation["more"])
                 self.assertEqual(self.read(lead, receipt=continuation["receipt"])["messages"], [])
 
-    def test_S29_worker_binds_and_reports_with_its_own_hc_scope_token(self):
+    def test_worker_binds_and_reports_with_its_own_hc_scope_token(self):
+        """agent-runtime/R62"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -268,7 +282,8 @@ class DispatchTests(ToolCase):
         result, _ = self.publish(other, assignment, message_id="foreign")
         self.assertTrue(result["isError"])
 
-    def test_S30_worker_turn_ended_without_final_report_returns_attention(self):
+    def test_worker_turn_ended_without_final_report_returns_attention(self):
+        """agent-runtime/R63"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0", "working")},
                            "ls": {"out": json.dumps({"terminals": [{"address": "t9", "name": "w1", "parent": "t0",
                                                                     "turn": 1, "status": {"state": "done"}}]})}},
@@ -283,7 +298,8 @@ class DispatchTests(ToolCase):
         self.publish(self.worker(), assignment)
         self.assertEqual(self.read(lead)["reason"], "completed")
 
-    def test_S30_fresh_spawn_idle_before_first_turn_is_not_attention(self):
+    def test_fresh_spawn_idle_before_first_turn_is_not_attention(self):
+        """agent-runtime/R63"""
         started = json.loads(raw("w1", "t0", "idle"))
         started["turn"] = 0
         row = {"address": "t9", "name": "w1", "parent": "t0", "turn": 0, "status": {"state": "idle"}}
@@ -299,7 +315,8 @@ class DispatchTests(ToolCase):
         result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
         self.assertEqual(result["structuredContent"]["reason"], "attention", text)  # first turn ended, no report
 
-    def test_S30_resume_then_immediate_wait_ignores_the_old_done_turn(self):
+    def test_resume_then_immediate_wait_ignores_the_old_done_turn(self):
+        """agent-runtime/R63"""
         def ls(turn):
             return {"out": json.dumps({"terminals": [{"address": "t9", "name": "w1", "parent": "t0", "turn": turn,
                                                        "status": {"state": "done"}}]})}
@@ -320,7 +337,8 @@ class DispatchTests(ToolCase):
         self.assertEqual(result["structuredContent"]["reason"], "attention")
         self.assertEqual(len(result["structuredContent"]["unfinished"]), 1)
 
-    def test_S30_resume_of_a_mid_turn_worker_ignores_the_old_turn_ending(self):
+    def test_resume_of_a_mid_turn_worker_ignores_the_old_turn_ending(self):
+        """agent-runtime/R63"""
         def ls(turn):
             return {"out": json.dumps({"terminals": [{"address": "t9", "name": "w1", "parent": "t0", "turn": turn,
                                                        "status": {"state": "done"}}]})}
@@ -341,7 +359,8 @@ class DispatchTests(ToolCase):
         result, _ = self.call(lead, "wait", {"target": "all", "timeout": 2})
         self.assertEqual(result["structuredContent"]["reason"], "attention")
 
-    def test_S31_unsent_spawn_can_be_recovered_by_resume(self):
+    def test_unsent_spawn_can_be_recovered_by_resume(self):
+        """agent-runtime/R64"""
         lead = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})},
                            "get:w1": {"out": raw("w1", "t0")}},
                           {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
@@ -353,12 +372,14 @@ class DispatchTests(ToolCase):
         result, text = self.call(lead, "message", {"to": "w1", "text": "hi"})
         self.assertFalse(result["isError"], text)
 
-    def test_S13_old_shape_assignment_insert_still_works_after_init(self):
+    def test_old_shape_assignment_insert_still_works_after_init(self):
+        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         with store.transaction() as db:
             db.execute("INSERT INTO assignments VALUES (?,?,?,'pending',0)", ("a", "t", "w"))
 
-    def test_S32_wait_all_excludes_stopped_and_acknowledged_assignments(self):
+    def test_wait_all_excludes_stopped_and_acknowledged_assignments(self):
+        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         stopped = store.register(team, "stopped")
@@ -382,7 +403,8 @@ class DispatchTests(ToolCase):
         self.assertEqual(store.snapshot(team, "t0", "any"), [])
         self.assertEqual(store.read(team, "t0", "all", assignment_ids=[])["reason"], "empty")
 
-    def test_S32_address_reuse_surfaces_the_replaced_assignment_once(self):
+    def test_address_reuse_surfaces_the_replaced_assignment_once(self):
+        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         a, b = store.register(team, "a"), store.register(team, "b")
@@ -399,7 +421,8 @@ class DispatchTests(ToolCase):
         self.assertEqual([m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
                          [b["assignment_id"]])
 
-    def test_S32_unacknowledged_report_of_a_superseded_assignment_stays_a_member(self):
+    def test_unacknowledged_report_of_a_superseded_assignment_stays_a_member(self):
+        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         old = store.register(team, "c")
@@ -414,7 +437,8 @@ class DispatchTests(ToolCase):
         self.assertEqual([m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
                          [new["assignment_id"]])
 
-    def test_S32_runtime_failure_and_acknowledged_attention_stay_members(self):
+    def test_runtime_failure_and_acknowledged_attention_stay_members(self):
+        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         working, blocked = store.register(team, "w"), store.register(team, "b")
@@ -426,13 +450,15 @@ class DispatchTests(ToolCase):
         names = {m["name"] for m in store.snapshot(team, "t0", "all", batch["receipt"])}
         self.assertEqual(names, {"w", "b"})
 
-    def test_S32_messages_without_members_are_not_empty(self):
+    def test_messages_without_members_are_not_empty(self):
+        """agent-runtime/R65"""
         import dispatch_wait
         batch = {"assignments": [], "messages": [{"message_id": "m"}], "unfinished": []}
         self.assertEqual(dispatch_wait.reason(batch, "all", {}), "messages")
         self.assertEqual(dispatch_wait.reason(dict(batch, messages=[]), "all", {}), "empty")
 
-    def test_S32_acknowledged_completion_leaves_the_next_wait_empty(self):
+    def test_acknowledged_completion_leaves_the_next_wait_empty(self):
+        """agent-runtime/R65"""
         lead = self.lead()
         assignment = self.spawn(lead)
         self.publish(self.worker(), assignment)
@@ -441,7 +467,8 @@ class DispatchTests(ToolCase):
         later = self.read(lead, receipt=first["receipt"])
         self.assertEqual((later["reason"], later["assignments"], later["unfinished"]), ("empty", [], []))
 
-    def test_S31_failed_spawn_deactivates_worker_and_rejects_message_and_resume(self):
+    def test_failed_spawn_deactivates_worker_and_rejects_message_and_resume(self):
+        """agent-runtime/R64"""
         lead = self.start({"run": {"rc": 1, "err": "bad name shaped like an id"},
                            "get:w1": {"rc": 1, "err": "no such terminal"}},
                           {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
@@ -457,7 +484,8 @@ class DispatchTests(ToolCase):
 
 
 class ActivationTests(ToolCase):
-    def test_S23_status_without_hc_falls_back_to_legacy_with_dispatch_on(self):
+    def test_status_without_hc_falls_back_to_legacy_with_dispatch_on(self):
+        """agent-runtime/R56"""
         out = []
         for flag in ("0", "1"):
             session = self.start(env={"HC_TERMINAL_ID": "", "HERDR_ENV": "", "AGENT_RUNTIME_DISPATCH": flag})
@@ -466,7 +494,8 @@ class ActivationTests(ToolCase):
         self.assertEqual(out[0], out[1])
         self.assertNotIn("gap: add native support", out[1][1])
 
-    def test_S25_default_preserves_legacy_spawn_report_wait_resume_and_schema(self):
+    def test_default_preserves_legacy_spawn_report_wait_resume_and_schema(self):
+        """agent-runtime/R58"""
         for flag in (None, "0"):
             with self.subTest(flag=flag):
                 env = {} if flag is None else {"AGENT_RUNTIME_DISPATCH": flag}

@@ -72,7 +72,8 @@ def large_body(nonce, kb=60):
 
 
 class HarnessTests(unittest.TestCase):
-    def test_S24_harness_accepts_name_arguments(self):
+    def test_harness_accepts_name_arguments(self):
+        """agent-runtime/R57"""
         lead = object.__new__(Lead)
         lead.log, lead.i, lead.lines = lambda *a, **k: None, 0, 0
         seen = []
@@ -86,7 +87,8 @@ class HarnessTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE") == "1", "set AGENT_RUNTIME_LIVE=1 for the live run")
 class LiveAcceptance(unittest.TestCase):
-    def test_S24_live_mixed_cli_dispatch(self):
+    def test_live_mixed_cli_dispatch(self):
+        """agent-runtime/R57"""
         work = tempfile.mkdtemp(prefix="agent-runtime-live-")
         log_path = os.environ.get("AGENT_RUNTIME_LIVE_LOG") or os.path.join(work, "live.log")
         logfile = open(log_path, "a")

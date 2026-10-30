@@ -55,8 +55,9 @@ CODEX = "mcp__agent-runtime__"
 
 
 class NativeChildGuardTests(unittest.TestCase):
-    def test_S15_native_children_cannot_mutate_tasks_or_ack_receipts_on_either_client(self):
-        """agent-runtime-dispatch/S15"""
+    def test_native_children_cannot_mutate_tasks_or_ack_receipts_on_either_client(self):
+        """agent-runtime/R48
+        agent-runtime-dispatch/S15"""
         for prefix, extra in ((TOOL, ()), (CODEX, ("--cli", "codex"))):
             def child(name, arguments=None):
                 return run(PRE, {"tool_name": prefix + name, "tool_input": arguments or {}, "agent_id": "sub-1",
@@ -72,8 +73,9 @@ class NativeChildGuardTests(unittest.TestCase):
             self.assertIsNone(run(PRE, {"tool_name": prefix + "task", "tool_input": {"action": "claim"}}, *extra), prefix)
             self.assertIsNone(run(PRE, {"tool_name": prefix + "status", "tool_input": {"receipt": "r1"}}, *extra), prefix)
 
-    def test_S15_codex_bash_guard_remains_and_unrelated_mcp_servers_are_ignored(self):
-        """agent-runtime-dispatch/S15"""
+    def test_codex_bash_guard_remains_and_unrelated_mcp_servers_are_ignored(self):
+        """agent-runtime/R48
+        agent-runtime-dispatch/S15"""
         self.assertTrue(denied(run(PRE, bash("hc kill w", agent_id="sub-1"), "--cli", "codex")))
         other = {"tool_name": "mcp__other__task", "tool_input": {"action": "claim"}, "agent_id": "sub-1"}
         self.assertIsNone(run(PRE, other, "--cli", "codex"))

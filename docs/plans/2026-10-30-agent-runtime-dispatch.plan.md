@@ -1,6 +1,6 @@
 # Plan: durable runtime dispatch through tool results
 
-Slug: `agent-runtime-dispatch`. Living spec: `docs/specs/agent-runtime.md`. Status: APPROVED 2026-10-30.
+Slug: `agent-runtime-dispatch`. Living spec: `docs/specs/agent-runtime.md`. Status: ARCHIVED 2026-10-30.
 
 ## Why now
 
@@ -149,7 +149,7 @@ Each ticket is one vertical slice, targeted below 800 hand-written lines includi
 | T4 | Shared tasks through one MCP task tool: durable create/list/update/atomic claim, dependency validation and completion integrated with report transaction | S16–S18 | T3 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR30 77b4f3a; 170 tests both Python versions, converge/review PASS; CI n/a) |
 | T5 | Guard and fallback compatibility across the complete API: team/assignment authorization, hooks for new mutation actions, status/collect diagnostics, conflict/cancellation/restart coverage | S15, S22 | T4 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/hooks/, agents/plugins/agent-runtime/tests/, agents/.codex/config.toml | agent | COMPLETE (PR31 7e555f2; 176 tests, converge/review PASS; CI n/a) |
 | T6 | Both CLI installations and concise tool instructions use dispatch results: deadline wiring, permission/schema compatibility, description budget, implementer/orchestrator guidance and upgrade notes | S23 | T5, T10 | agents/plugins/agent-runtime/, agents/.codex/config.toml, agents/.claude/settings.json, agents/.claude/agents/implementer.md, agents/.codex/agents/implementer.toml, agents/.agents/skills/orchestrate/, README.md | agent | COMPLETE (PR33 bf7d334; 195 tests, converge/review PASS; CI n/a) |
-| T7 | Live mixed-CLI acceptance through existing agent-runtime tools; record report provenance, peer exchange, wait call counts, blocker/resume and restart/replay evidence; fix only dispatch regressions exposed by this run | S24, S29–S32 | T6 | agents/plugins/agent-runtime/, docs/plans/2026-10-30-agent-runtime-dispatch.plan.md | agent | IN PROGRESS |
+| T7 | Live mixed-CLI acceptance through existing agent-runtime tools; record report provenance, peer exchange, wait call counts, blocker/resume and restart/replay evidence; fix only dispatch regressions exposed by this run | S24, S29–S32 | T6 | agents/plugins/agent-runtime/, docs/plans/2026-10-30-agent-runtime-dispatch.plan.md | agent | COMPLETE (PR34 0c3ea5f, PR35 58a6312; live S24 passed 2026-10-30 run 6: both CLIs, 60KB nonces delivered, one wait per period, restart replay, fresh resume; CI n/a) |
 | T8 | Advisory gap correction: count JSON framing in exact-byte batch limits and prove boundary pagination with a regression | S26 | T1 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR26 bf5575c; 142 tests, converge, review PASS; hosted CI n/a) |
 
 | T9 | Advisory gap correction: reconcile selected worker failure before finalizing queued nonterminal any-events, including replay | S27 | T2 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR28 626f258; 155 tests, converge, review PASS; hosted CI n/a) |

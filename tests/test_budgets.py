@@ -29,8 +29,9 @@ class BudgetTests(ToolCase):
         self.assertEqual(result["isError"], not ok, result)
         return result
 
-    def test_S28_maximum_legal_report_fits_the_complete_wait_envelope(self):
-        """agent-runtime-dispatch/S28"""
+    def test_maximum_legal_report_fits_the_complete_wait_envelope(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         self.prepare()
         self.publish(0, kind="progress", text="é" * 10900)  # 65400 JSON bytes after escaping
         result = self.ask("wait", target="any", timeout=0)
@@ -40,8 +41,9 @@ class BudgetTests(ToolCase):
         self.assertLessEqual(canonical(payload), MAX_RESPONSE_BYTES)
         self.assertEqual(json.loads(result["content"][0]["text"]), payload)
 
-    def test_S28_task_base_plus_inbox_is_paginated_without_losing_ids_or_over_acking(self):
-        """agent-runtime-dispatch/S28"""
+    def test_task_base_plus_inbox_is_paginated_without_losing_ids_or_over_acking(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         self.prepare()
         created = [self.ask("task", action="create", subject="%03d%s" % (i, "s" * 996))["structuredContent"]["task_id"]
                    for i in range(70)]
@@ -73,8 +75,9 @@ class BudgetTests(ToolCase):
         with Store(self.env).transaction() as db:
             return json.loads(db.execute("SELECT ids FROM receipts WHERE id=?", (receipt,)).fetchone()[0])
 
-    def test_S28_oversized_collect_text_is_explicitly_partial_not_silently_clipped(self):
-        """agent-runtime-dispatch/S28"""
+    def test_oversized_collect_text_is_explicitly_partial_not_silently_clipped(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         self.prepare()
         self.replies["read"] = {"out": ("z" * 4000 + "\n") * 2000}
         (self.dir / "replies").write_text(json.dumps(self.replies))
@@ -83,8 +86,9 @@ class BudgetTests(ToolCase):
         self.assertGreater(payload["original_bytes"], len(payload["result"]))
         self.assertLessEqual(canonical(payload), MAX_RESPONSE_BYTES)
 
-    def test_S28_host_metadata_and_isolated_codex_limits_cover_every_tool_above_the_envelope_bound(self):
-        """agent-runtime-dispatch/S28"""
+    def test_host_metadata_and_isolated_codex_limits_cover_every_tool_above_the_envelope_bound(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         session = self.start()
         listed = {t["name"]: t for t in session.send("tools/list")["result"]["tools"]}
         self.assertEqual(set(listed), set(TOOLS))
@@ -98,8 +102,9 @@ class BudgetTests(ToolCase):
         self.assertLess(2 * MAX_RESPONSE_BYTES + 4096, 500000)
         self.assertLess(2 * MAX_RESPONSE_BYTES + 4096, 524288)
 
-    def test_S28_worst_case_wait_all_fixed_arithmetic_fits_and_defers_losslessly(self):
-        """agent-runtime-dispatch/S28"""
+    def test_worst_case_wait_all_fixed_arithmetic_fits_and_defers_losslessly(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         self.env = {"HOME": str(self.dir / "home")}
         store = Store(self.env)
         team = store.team("worst", "t0", "lead")
@@ -131,8 +136,9 @@ class BudgetTests(ToolCase):
         final = dispatch_wait.wait(store, team, "t0", "all", 0, receipt, hc_tools.Context(), observe)
         self.assertEqual(final["messages"], [])
 
-    def test_S28_structured_base_at_the_cap_still_admits_the_first_message(self):
-        """agent-runtime-dispatch/S28"""
+    def test_structured_base_at_the_cap_still_admits_the_first_message(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("starve", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -145,8 +151,9 @@ class BudgetTests(ToolCase):
         with self.assertRaises(StoreError):  # an unbounded base could starve the inbox: refuse, never "more" with nothing
             store.read(team, "t0", "any", assignment_ids=[], inbox=True, reserve=MAX_BASE_BYTES + 1000)
 
-    def test_S28_collect_partial_keeps_the_tail_with_a_single_bounded_trim(self):
-        """agent-runtime-dispatch/S28"""
+    def test_collect_partial_keeps_the_tail_with_a_single_bounded_trim(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         self.prepare()
         out = "head-marker\n" + ("z" * 4000 + "\n") * 40 + "final-result-marker"
         self.replies["read"] = {"out": out}
@@ -159,14 +166,16 @@ class BudgetTests(ToolCase):
         self.assertGreater(len(json.dumps(payload["result"])), MAX_BASE_BYTES // 2 - 4096)
         self.assertLessEqual(len(json.dumps(payload["result"])), MAX_BASE_BYTES // 2)
 
-    def test_S28_task_list_rejects_unicode_digit_cursor_with_a_store_error(self):
-        """agent-runtime-dispatch/S28"""
+    def test_task_list_rejects_unicode_digit_cursor_with_a_store_error(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         self.prepare()
         result = self.ask("task", ok=False, action="list", cursor="\u00b2")
         self.assertIn("cursor", result["content"][0]["text"])
 
-    def test_S28_task_schema_advertises_depends_on_limits(self):
-        """agent-runtime-dispatch/S28"""
+    def test_task_schema_advertises_depends_on_limits(self):
+        """agent-runtime/R61
+        agent-runtime-dispatch/S28"""
         session = self.start()
         listed = {t["name"]: t for t in session.send("tools/list")["result"]["tools"]}
         depends = listed["task"]["inputSchema"]["properties"]["depends_on"]
