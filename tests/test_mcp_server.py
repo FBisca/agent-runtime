@@ -11,7 +11,7 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parents[1]
 SERVER = PLUGIN / "server" / "mcp_server.py"
 MARKETPLACE = PLUGIN.parents[1] / ".claude-plugin" / "marketplace.json"
-TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "stop", "report"]
+TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "stop", "report", "task"]
 
 
 class Session:
@@ -67,7 +67,7 @@ class ServerCase(unittest.TestCase):
 
 
 class ToolListTests(ServerCase):
-    def test_S1_tools_list_returns_the_nine_tools_within_400_words(self):
+    def test_S1_tools_list_returns_the_ten_tools_within_400_words(self):
         """agent-runtime-tools/S1"""
         session = self.start()
         init = session.handshake()

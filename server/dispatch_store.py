@@ -43,7 +43,7 @@ class Store:
         os.close(fd)
         with self.transaction() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise StoreError("incompatible dispatch schema version")
             for statement in (
                 "CREATE TABLE IF NOT EXISTS teams (id TEXT PRIMARY KEY, scope TEXT, lead TEXT, generation TEXT, UNIQUE(scope,lead,generation))",
@@ -53,9 +53,11 @@ class Store:
                 "CREATE INDEX IF NOT EXISTS inbox ON messages(team,recipient,acked,seq)",
                 "CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, team TEXT, recipient TEXT, ids TEXT)",
                 "CREATE TABLE IF NOT EXISTS callers (scope TEXT,address TEXT,generation TEXT,team TEXT,PRIMARY KEY(scope,address,generation))",
+                # v2: shared tasks; rowid order is the durable ID sequence.
+                "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, team TEXT, subject TEXT, status TEXT, owner TEXT, assignment TEXT, deps TEXT)",
             ):
                 db.execute(statement)
-            db.execute("PRAGMA user_version=1")
+            db.execute("PRAGMA user_version=2")
 
     @contextmanager
     def transaction(self):
@@ -166,6 +168,9 @@ class Store:
                        (message_id, row["team"], row["lead"], assignment, body))
             db.execute("UPDATE assignments SET state=? WHERE id=?",
                        ({"complete": "complete", "blocked": "blocked", "decision": "decision"}.get(kind, "working"), assignment))
+            if kind in ("complete", "blocked"):  # same transaction as the report; replays returned above
+                db.execute("UPDATE tasks SET status=? WHERE assignment=? AND status IN ('in_progress','blocked')",
+                           ("complete" if kind == "complete" else "blocked", assignment))
         dispatch_events.notify(self.directory)
         return envelope
 
@@ -351,3 +356,79 @@ class Store:
                            (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
                 batch["receipt"] = token
             return batch
+
+    TASK_STATUSES = ("pending", "in_progress", "complete", "blocked")
+
+    def _tasks(self, db, team):
+        rows = [dict(r) for r in db.execute("SELECT * FROM tasks WHERE team=? ORDER BY rowid", (team,))]
+        done = {r["id"] for r in rows if r["status"] == "complete"}
+        return [{"task_id": r["id"], "subject": r["subject"], "status": r["status"], "owner": r["owner"],
+                 "assignment_id": r["assignment"], "depends_on": json.loads(r["deps"]),
+                 "ready": r["status"] == "pending" and all(d in done for d in json.loads(r["deps"]))}
+                for r in rows]
+
+    def _deps(self, db, team, task, deps):
+        if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
+            raise StoreError("depends_on must be a list of task IDs")
+        known = {r[0]: json.loads(r[1]) for r in db.execute("SELECT id,deps FROM tasks WHERE team=?", (team,))}
+        for dep in deps:
+            if dep not in known:
+                raise StoreError("missing dependency: %s" % dep)
+        known[task] = deps
+        seen, stack = set(), [task]
+        while stack:  # a path from task back to itself is a cycle
+            for dep in known[stack.pop()]:
+                if dep == task:
+                    raise StoreError("dependency cycle")
+                if dep not in seen:
+                    seen.add(dep)
+                    stack.append(dep)
+        return sorted(set(deps))
+
+    def task(self, actor, action, arguments, ack=None):
+        """Create/list/claim/update tasks for the actor's own team in one transaction."""
+        with self.transaction() as db:
+            self.authorize(db, actor)
+            if ack:
+                self.acknowledge(db, *ack)
+            team, task = actor["team_id"], arguments.get("task_id")
+            row = db.execute("SELECT * FROM tasks WHERE id=? AND team=?", (task, team)).fetchone() if task else None
+            if action == "create":
+                subject = arguments.get("subject")
+                if not isinstance(subject, str) or not subject.strip() or len(subject) > 1000:
+                    raise StoreError("subject must be 1-1000 characters")
+                task = uid()
+                deps = self._deps(db, team, task, arguments.get("depends_on") or [])
+                db.execute("INSERT INTO tasks VALUES (?,?,?,'pending',NULL,NULL,?)", (task, team, subject, json.dumps(deps)))
+            elif action != "list":
+                if action not in ("claim", "update"):
+                    raise StoreError("action must be create, list, claim or update")
+                if not row:
+                    raise StoreError("unknown task for this team")
+                if action == "claim":
+                    done = {r[0] for r in db.execute("SELECT id FROM tasks WHERE team=? AND status='complete'", (team,))}
+                    if actor["worker_id"] and db.execute("SELECT state FROM assignments WHERE id=?",
+                                                         (actor["assignment_id"],)).fetchone()[0] in ("complete", "failed"):
+                        raise StoreError("claim requires a current unfinished assignment")
+                    if row["status"] != "pending":
+                        raise StoreError("task is not pending (status %s)" % row["status"])
+                    if any(d not in done for d in json.loads(row["deps"])):
+                        raise StoreError("unsatisfied dependencies")
+                    db.execute("UPDATE tasks SET status='in_progress',owner=?,assignment=? WHERE id=?",
+                               (actor["worker_id"] or actor["team_id"], actor["assignment_id"], task))
+                else:
+                    if actor["worker_id"] and row["assignment"] != actor["assignment_id"]:
+                        raise StoreError("only the lead or the linked assignment can update this task")
+                    status, deps = arguments.get("status"), arguments.get("depends_on")
+                    if status is not None:
+                        if status not in self.TASK_STATUSES:
+                            raise StoreError("status must be one of %s" % ", ".join(self.TASK_STATUSES))
+                        if status == "pending":
+                            db.execute("UPDATE tasks SET owner=NULL,assignment=NULL WHERE id=?", (task,))
+                        db.execute("UPDATE tasks SET status=? WHERE id=?", (status, task))
+                    if deps is not None:
+                        db.execute("UPDATE tasks SET deps=? WHERE id=?", (json.dumps(self._deps(db, team, task, deps)), task))
+            tasks = self._tasks(db, team)
+        if action == "list":
+            return {"tasks": tasks}
+        return next(t for t in tasks if t["task_id"] == task)

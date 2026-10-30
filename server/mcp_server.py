@@ -55,6 +55,11 @@ TOOLS = [
      schema({"text": text("result; max 65536 bytes"), "assignment_id": text("assigned ID"),
              "kind": {"type": "string", "enum": ["progress", "complete", "blocked", "decision"]},
              "message_id": text("optional retry ID")}, ["text"])),
+    ("task", "Dispatch opt-in shared team tasks. Claim needs finished dependencies; complete/blocked reports update the claimed task.",
+     schema({"action": {"type": "string", "enum": ["create", "list", "claim", "update"]},
+             "task_id": text("task ID"), "subject": text("create text"),
+             "depends_on": {"type": "array", "items": {"type": "string"}, "description": "prerequisite task IDs"},
+             "status": {"type": "string", "enum": ["pending", "in_progress", "complete", "blocked"]}}, ["action"])),
 ]
 for _, _, input_schema in TOOLS:
     input_schema["properties"].setdefault("receipt", text("acknowledge prior batch"))

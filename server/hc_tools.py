@@ -466,6 +466,13 @@ def report(arguments, env, ctx):
                   generation=ctx.generation), structured=True)
 
 
+def task(arguments, env, ctx):
+    if not dispatch_enabled(env):
+        raise ToolError("task requires AGENT_RUNTIME_DISPATCH=1")
+    (action,) = need(arguments, "action")
+    return result(ctx.store.task(ctx.actor, action, arguments, ack=ctx.ack), structured=True)
+
+
 def status(arguments, env, ctx):
     (name,) = need(arguments, "name")
     return result(lib.status(lib.resolve(env)["runtime"], name, env))
@@ -479,7 +486,7 @@ def list_agents(arguments, env, ctx):
 
 
 HANDLERS = {"spawn": spawn, "message": message, "resume": resume, "wait": wait, "status": status,
-            "list": list_agents, "collect": collect, "stop": stop, "report": report}
+            "list": list_agents, "collect": collect, "stop": stop, "report": report, "task": task}
 
 
 def call(name, arguments, env, ctx):
