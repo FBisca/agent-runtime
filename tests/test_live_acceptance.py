@@ -41,22 +41,24 @@ class Lead:
             if message.get("id") == self.i:
                 return message
 
-    def tool(self, name, **args):
+    def tool(self, _tool, /, **args):  # positional-only: tool arguments such as name= cannot clash
         started = time.time()
-        result = self.rpc("tools/call", {"name": name, "arguments": args}).get("result", {})
+        result = self.rpc("tools/call", {"name": _tool, "arguments": args}).get("result", {})
         text = (result.get("content") or [{}])[0].get("text", "")
         structured = result.get("structuredContent")
         if structured is not None and json.loads(text) != structured:
-            raise AssertionError("structuredContent differs from text for %s" % name)
-        self.log("call", tool=name, secs=round(time.time() - started, 1), is_error=result.get("isError", False),
+            raise AssertionError("structuredContent differs from text for %s" % _tool)
+        self.log("call", tool=_tool, secs=round(time.time() - started, 1), is_error=result.get("isError", False),
                  bytes=len(text.encode()))
         if result.get("isError"):
-            raise AssertionError("%s failed: %s" % (name, text[:300]))
+            raise AssertionError("%s failed: %s" % (_tool, text[:300]))
         return structured if structured is not None else text
 
     def close(self):
         self.p.kill()
         self.p.wait()
+        for pipe in (self.p.stdin, self.p.stdout):
+            pipe.close()
 
 
 def large_body(nonce, kb=60):
@@ -67,6 +69,19 @@ def large_body(nonce, kb=60):
         out.append(word)
         size += len(word) + 1
     return " ".join(out) + "\nTAIL NONCE: " + nonce
+
+
+class HarnessTests(unittest.TestCase):
+    def test_S24_harness_accepts_name_arguments(self):
+        lead = object.__new__(Lead)
+        lead.log, lead.i, lead.lines = lambda *a, **k: None, 0, 0
+        seen = []
+        lead.rpc = lambda method, params: seen.append(params) or {"result": {"content": [{"text": "{}"}],
+                                                                                "structuredContent": {}}}
+        for tool in ("spawn", "resume", "stop", "status"):
+            lead.tool(tool, name="live-codex-ab12", task="x")
+        self.assertEqual([p["name"] for p in seen], ["spawn", "resume", "stop", "status"])
+        self.assertTrue(all(p["arguments"]["name"] == "live-codex-ab12" for p in seen))
 
 
 @unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE") == "1", "set AGENT_RUNTIME_LIVE=1 for the live run")
@@ -86,6 +101,25 @@ class LiveAcceptance(unittest.TestCase):
         lead = Lead(log)
         started, receipt = [], None
         try:
+            listed = lead.tool("list")  # leftover workers from earlier aborted runs
+            records = listed.get("result", []) if isinstance(listed, dict) else []
+            for record in records if isinstance(records, list) else []:
+                leftover = record.get("name", "") if isinstance(record, dict) else ""
+                if leftover.startswith(("live-", "diag-")):
+                    try:
+                        lead.tool("stop", name=leftover)
+                        log("leftover_stopped", name=leftover)
+                    except Exception as error:
+                        log("leftover_stop_error", name=leftover, error=repr(error))
+            pending, drained = None, False  # acknowledge stale reports so they cannot pollute assertions
+            for iteration in range(1, 21):
+                batch = lead.tool("wait", target="inbox", timeout=0, **({"receipt": pending} if pending else {}))
+                pending = batch.get("receipt")
+                if not batch.get("messages") and not batch.get("more"):
+                    drained = True
+                    break
+            log("stale_inbox_drain", iterations=iteration, drained=drained)
+            self.assertTrue(drained, "stale inbox did not drain after 20 wait(inbox) calls; cannot trust assertions")
             nonce_cx, nonce_cl = secrets.token_hex(8), secrets.token_hex(8)
             first = lead.tool("task", action="create", subject="live first step")
             second = lead.tool("task", action="create", subject="live depends on first", depends_on=[first["task_id"]])

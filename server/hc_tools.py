@@ -263,7 +263,6 @@ def spawn(arguments, env, ctx):
         raw = json.loads(hc(["get", name, "--json"], env, ctx))
         info.update(address=raw.get("address"), parent=raw.get("parent") or caller)
         turn = raw.get("turn")
-        mode = "ended" if row_state(raw) in ("done", "idle") else "fresh"
     except (ToolError, ValueError, AttributeError):
         pass
     if not store:

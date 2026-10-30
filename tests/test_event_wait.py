@@ -151,6 +151,7 @@ class EventWaitTests(ToolCase):
         for state in ("idle", "done", "blocked", "interrupted", "exited", "removed"):
             with self.subTest(runtime_state=state):
                 self.rows[0]["status"] = state
+                self.rows[0]["turn"] = 1  # a finished turn since dispatch
                 self.replies["ls"]["out"] = json.dumps({"terminals": self.rows[1:] if state == "removed" else self.rows})
                 tmp = self.dir / "next-replies"
                 tmp.write_text(json.dumps(self.replies))
@@ -176,8 +177,9 @@ class EventWaitTests(ToolCase):
 
     def test_S8_any_batches_eligible_events_and_named_wait_excludes_old_assignment(self):
         self.prepare()
-        self.publish(0)
-        # Reuse the name; prior unacknowledged completion must not enter this selection.
+        old = self.publish(0)
+        # Reuse the name; the prior completion stays out of the named wait but, being unacknowledged (D26),
+        # is still delivered to wait(any).
         replacement = self.rpc.tool("spawn", {"kind": "worker", "name": "w1", "task": "again", "cwd": "/tmp"})
         self.assignments[0] = self.rpc.get(replacement)["result"]["structuredContent"]
         first, second = self.publish(0), self.publish(1, "progress")
@@ -185,7 +187,7 @@ class EventWaitTests(ToolCase):
         self.assertEqual(named["messages"], [first])
         self.assertEqual([a["assignment_id"] for a in named["assignments"]], [first["assignment_id"]])
         any_batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any"}))
-        self.assertEqual(any_batch["messages"], [first, second])
+        self.assertEqual(any_batch["messages"], [old, first, second])
         self.assertEqual(any_batch["reason"], "messages")
 
     def test_S9_deadline_empty_and_cancel_preserve_replay_and_workers(self):

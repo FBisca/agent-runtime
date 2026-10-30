@@ -121,6 +121,17 @@ class Store:
         if newer_assignment or newer_generation or newer_address:
             raise StoreError("assignment is stale; newer registration or generation owns binding")
         db.execute("UPDATE assignments SET current=0 WHERE worker=?", (row["worker"],))
+        # A reused address means the previous terminal is gone: surface its unfinished work once, to its lead.
+        for gone in db.execute("SELECT a.id,a.team,a.worker,t.lead FROM assignments a JOIN workers w ON w.id=a.worker "
+                               "JOIN teams t ON t.id=a.team WHERE w.address=? AND w.id!=? AND t.scope=? "
+                               "AND a.state NOT IN ('complete','failed')", (address, row["worker"], scope)).fetchall():
+            envelope = {"message_id": uid(), "team_id": gone["team"], "worker_id": gone["worker"],
+                        "assignment_id": gone["id"], "sender": gone["worker"], "recipient": gone["lead"],
+                        "kind": "failed", "text": "worker terminal was replaced before completion"}
+            db.execute("UPDATE assignments SET state='failed' WHERE id=?", (gone["id"],))
+            db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                       (envelope["message_id"], gone["team"], gone["lead"], gone["id"],
+                        json.dumps(envelope, separators=(",", ":"))))
         db.execute("UPDATE workers SET active=0 WHERE address=? AND team IN (SELECT id FROM teams WHERE scope=?)",
                    (address, scope))
         db.execute("UPDATE workers SET address=?,active=1 WHERE id=?", (address, row["worker"]))
@@ -132,6 +143,7 @@ class Store:
             if ack:
                 self.acknowledge(db, *ack)
             self._bind(db, assignment, address, scope, turn, mode)
+        dispatch_events.notify(self.directory)
 
     def fail(self, assignment):
         with self.transaction() as db:
@@ -309,9 +321,13 @@ class Store:
                 "SELECT a.id AS assignment_id,d.turn,d.mode,w.name,w.address,t.lead FROM assignments a "
                 "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
                 "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
-                "WHERE a.team=? AND (a.current=1 OR a.id=?) "
-                "AND (? IN ('all','any') OR w.name=? OR a.id=?) ORDER BY a.rowid",
-                (team, target, target, target, target))]
+                "WHERE a.team=? AND (a.current=1 OR a.id=? OR (? IN ('all','any') AND EXISTS "
+                "(SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0))) "
+                "AND (? IN ('all','any') OR w.name=? OR a.id=?) "
+                # D26: all/any cover unfinished work of active workers plus results not yet acknowledged.
+                "AND (? NOT IN ('all','any') OR (w.active=1 AND a.state NOT IN ('complete','failed')) "
+                "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) ORDER BY a.rowid",
+                (team, target, target, target, target, target, target))]
 
     def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None, reserve=0):
         """Optional pure ready(batch) returns a final reason or None under this transaction.

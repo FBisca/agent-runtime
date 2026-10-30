@@ -271,7 +271,7 @@ class DispatchTests(ToolCase):
     def test_S30_worker_turn_ended_without_final_report_returns_attention(self):
         lead = self.start({"get:w1": {"out": raw("w1", "t0", "working")},
                            "ls": {"out": json.dumps({"terminals": [{"address": "t9", "name": "w1", "parent": "t0",
-                                                                    "status": {"state": "done"}}]})}},
+                                                                    "turn": 1, "status": {"state": "done"}}]})}},
                           {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
                            "AGENT_RUNTIME_DISPATCH": "1"})
         assignment = self.spawn(lead)
@@ -283,16 +283,21 @@ class DispatchTests(ToolCase):
         self.publish(self.worker(), assignment)
         self.assertEqual(self.read(lead)["reason"], "completed")
 
-    def test_S30_spawn_with_turn_numbered_one_at_creation_ends_on_the_same_turn(self):
-        started = json.loads(raw("w1", "t0", "working"))
-        started["turn"] = 1
-        row = {"address": "t9", "name": "w1", "parent": "t0", "turn": 1, "status": {"state": "done"}}
-        lead = self.start({"get:w1": {"out": json.dumps(started)}, "ls": {"out": json.dumps({"terminals": [row]})}},
-                          {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                           "AGENT_RUNTIME_DISPATCH": "1"})
+    def test_S30_fresh_spawn_idle_before_first_turn_is_not_attention(self):
+        started = json.loads(raw("w1", "t0", "idle"))
+        started["turn"] = 0
+        row = {"address": "t9", "name": "w1", "parent": "t0", "turn": 0, "status": {"state": "idle"}}
+        replies = {"get:w1": {"out": json.dumps(started)}, "ls": {"out": json.dumps({"terminals": [row]})},
+                   "get:t0": {"out": raw("lead", None)}}
+        lead = self.start(replies, {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
+                                    "AGENT_RUNTIME_DISPATCH": "1"})
         self.spawn(lead)
+        result, text = self.call(lead, "wait", {"target": "all", "timeout": 1})
+        self.assertEqual(result["structuredContent"]["reason"], "timeout", text)  # CLI still starting up
+        replies["ls"] = {"out": json.dumps({"terminals": [dict(row, turn=1, status={"state": "done"})]})}
+        (self.dir / "replies").write_text(json.dumps(replies))
         result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
-        self.assertEqual(result["structuredContent"]["reason"], "attention", text)
+        self.assertEqual(result["structuredContent"]["reason"], "attention", text)  # first turn ended, no report
 
     def test_S30_resume_then_immediate_wait_ignores_the_old_done_turn(self):
         def ls(turn):
@@ -352,6 +357,89 @@ class DispatchTests(ToolCase):
         store = Store({"HOME": str(self.dir / "home")})
         with store.transaction() as db:
             db.execute("INSERT INTO assignments VALUES (?,?,?,'pending',0)", ("a", "t", "w"))
+
+    def test_S32_wait_all_excludes_stopped_and_acknowledged_assignments(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        stopped = store.register(team, "stopped")
+        done = store.register(team, "done")
+        live = store.register(team, "live")
+        for n, identity in enumerate((stopped, done, live)):
+            store.bind(identity["assignment_id"], "t%d" % (n + 1), "test")
+        store.publish("test", "t2", "t0", done["assignment_id"], "ok", "complete", caller_name="done")
+        before = store.snapshot(team, "t0", "all")  # a wait already in progress keeps its members (S21)
+        store.stopped(team, "stopped")
+        self.assertEqual(len(before), 3)
+        # The unacknowledged complete result is still a member; the stopped worker is not.
+        names = {m["name"] for m in store.snapshot(team, "t0", "all")}
+        self.assertEqual(names, {"done", "live"})
+        batch = store.read(team, "t0", "all", assignment_ids=[m["assignment_id"] for m in before])
+        self.assertEqual(batch["reason"], "attention")  # S21: the in-progress wait still sees the stop
+        receipt = batch["receipt"]
+        # After acknowledgement, only current unfinished work remains.
+        self.assertEqual([m["name"] for m in store.snapshot(team, "t0", "all", receipt)], ["live"])
+        store.stopped(team, "live")
+        self.assertEqual(store.snapshot(team, "t0", "any"), [])
+        self.assertEqual(store.read(team, "t0", "all", assignment_ids=[])["reason"], "empty")
+
+    def test_S32_address_reuse_surfaces_the_replaced_assignment_once(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        a, b = store.register(team, "a"), store.register(team, "b")
+        store.bind(a["assignment_id"], "t1", "test")
+        store.bind(b["assignment_id"], "t1", "test")  # a's terminal vanished; the address was reused
+        members = store.snapshot(team, "t0", "all")
+        self.assertEqual({m["assignment_id"] for m in members}, {a["assignment_id"], b["assignment_id"]})
+        batch = store.read(team, "t0", "all", assignment_ids=[m["assignment_id"] for m in members])
+        self.assertEqual(batch["reason"], "attention")
+        failure, = batch["messages"]
+        self.assertEqual((failure["assignment_id"], failure["kind"]), (a["assignment_id"], "failed"))
+        self.assertIn("replaced", failure["text"])
+        # Once acknowledged the replaced assignment is gone; the live one remains.
+        self.assertEqual([m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
+                         [b["assignment_id"]])
+
+    def test_S32_unacknowledged_report_of_a_superseded_assignment_stays_a_member(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        old = store.register(team, "c")
+        store.bind(old["assignment_id"], "t1", "test")
+        store.publish("test", "t1", "t0", old["assignment_id"], "stuck", "blocked", caller_name="c")
+        new = store.register(team, "c")
+        store.bind(new["assignment_id"], "t1", "test")  # resumed before the lead waited
+        members = store.snapshot(team, "t0", "all")
+        self.assertEqual({m["assignment_id"] for m in members}, {old["assignment_id"], new["assignment_id"]})
+        batch = store.read(team, "t0", "all", assignment_ids=[m["assignment_id"] for m in members])
+        self.assertEqual([m["text"] for m in batch["messages"]], ["stuck"])
+        self.assertEqual([m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
+                         [new["assignment_id"]])
+
+    def test_S32_runtime_failure_and_acknowledged_attention_stay_members(self):
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("test", "t0", "lead")
+        working, blocked = store.register(team, "w"), store.register(team, "b")
+        store.bind(working["assignment_id"], "t1", "test")
+        store.bind(blocked["assignment_id"], "t2", "test")
+        store.publish("test", "t2", "t0", blocked["assignment_id"], "help", "decision", caller_name="b")
+        batch = store.read(team, "t0", "all")
+        # w's terminal exited but the store still says working; b's decision is acknowledged but unanswered.
+        names = {m["name"] for m in store.snapshot(team, "t0", "all", batch["receipt"])}
+        self.assertEqual(names, {"w", "b"})
+
+    def test_S32_messages_without_members_are_not_empty(self):
+        import dispatch_wait
+        batch = {"assignments": [], "messages": [{"message_id": "m"}], "unfinished": []}
+        self.assertEqual(dispatch_wait.reason(batch, "all", {}), "messages")
+        self.assertEqual(dispatch_wait.reason(dict(batch, messages=[]), "all", {}), "empty")
+
+    def test_S32_acknowledged_completion_leaves_the_next_wait_empty(self):
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        self.publish(self.worker(), assignment)
+        first = self.read(lead)
+        self.assertEqual(first["reason"], "completed")
+        later = self.read(lead, receipt=first["receipt"])
+        self.assertEqual((later["reason"], later["assignments"], later["unfinished"]), ("empty", [], []))
 
     def test_S31_failed_spawn_deactivates_worker_and_rejects_message_and_resume(self):
         lead = self.start({"run": {"rc": 1, "err": "bad name shaped like an id"},

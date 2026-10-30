@@ -14,19 +14,17 @@ OBSERVE_TIMEOUT = 0.2
 
 
 def turn_ended(assignment, observations):
-    """Working assignment whose hc state is done/idle on a turn that is new for this dispatch.
+    """Working assignment whose terminal is done/idle after at least one turn finished since dispatch.
 
-    hc's turn counts finished turns. mode at dispatch: fresh spawn (any numbering: done/idle is the end),
-    ended (resume of a finished worker: needs a later turn), working (resume of a mid-turn worker: the
-    old turn's end is one more turn that does not count).
+    The turn counter counts finished turns, so a just-started CLI is idle at its recorded turn (usually 0)
+    and is not ended. Recorded turn defaults to 0; a resume of a mid-turn worker (mode working) must also
+    outlast the turn that was already running. No observed turn fails safe to no attention.
     """
     if assignment["state"] != "working" or observations.get(assignment["assignment_id"]) not in ("done", "idle"):
         return False
-    mode = assignment.get("mode") or "fresh"
-    if mode == "fresh":
-        return True
-    seen, recorded = observations.get((assignment["assignment_id"], "turn")), assignment.get("turn")
-    return seen is not None and recorded is not None and seen > recorded + (mode == "working")
+    seen = observations.get((assignment["assignment_id"], "turn"))
+    recorded = assignment.get("turn") or 0
+    return seen is not None and seen > recorded + (assignment.get("mode") == "working")
 
 
 def reason(batch, target, observations):
@@ -47,7 +45,7 @@ def reason(batch, target, observations):
         a.pop("turn", None)
         a.pop("mode", None)  # internal dispatch marker, not part of the result
     if not batch["assignments"]:
-        return "empty"
+        return "messages" if batch["messages"] else "empty"
     if "failed" in states:
         return "failed"
     if ended or states.intersection(("blocked", "decision")):
