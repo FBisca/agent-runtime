@@ -134,6 +134,7 @@ def file_read_only(args, sub):
 HC_DENIED = {"run", "send", "kill", "rm"}
 HC_ASKED = {"keys", "interrupt"}
 MUTATING_TOOLS = {"spawn", "message", "resume", "stop", "report", "task"}
+SESSION_TOOLS = {"wait"}  # subagents may not block on the lead's inbox
 TOOL_NAME = re.compile(r"^mcp__(?:plugin_agent-runtime_)?agent-runtime__(\w+)$")
 
 
@@ -165,11 +166,21 @@ def tool_verdict(tool_name, is_subagent, arguments=None):
     match = TOOL_NAME.match(tool_name or "")
     if not is_subagent or not match:
         return None
-    tool, arguments = match.group(1), arguments if isinstance(arguments, dict) else {}
-    if tool == "task" and arguments.get("action") == "list" and arguments.get("receipt") is None:
+    tool = match.group(1)
+    if isinstance(arguments, str):  # some hosts serialize tool input as a JSON string
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            pass
+    if not isinstance(arguments, dict):
+        return "Subagents must not call agent-runtime tools with unreadable input: report through your return value."
+    if tool == "task" and arguments.get("action") == "list" and arguments.get("receipt") is None \
+            and arguments.get("assignment_id") is None:
         return None  # read-only listing
-    if tool in MUTATING_TOOLS:
+    if tool in MUTATING_TOOLS | SESSION_TOOLS:
         return "Subagents must not call the agent-runtime %s tool: report through your return value." % tool
+    if arguments.get("assignment_id") is not None:  # would pin a session or read the lead's reports
+        return "Subagents must not pass assignment_id to agent-runtime tools: report through your return value."
     if arguments.get("receipt") is not None:  # an explicit ack mutates the lead's or teammate's inbox
         return "Subagents must not acknowledge agent-runtime receipts: report through your return value."
     return None

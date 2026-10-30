@@ -39,7 +39,7 @@ class SubagentToolTests(unittest.TestCase):
     def test_S16_main_agent_may_call_mutating_tools_and_subagent_may_read(self):
         """agent-runtime-tools/S16"""
         self.assertIsNone(run(PRE, {"tool_name": TOOL + "spawn", "tool_input": {}}))
-        for name in ("wait", "status", "list", "collect"):
+        for name in ("status", "list", "collect"):
             self.assertIsNone(run(PRE, {"tool_name": TOOL + name, "tool_input": {}, "agent_id": "sub-1"}), name)
 
     def test_S16_subagent_start_notice_names_the_rule(self):
@@ -72,6 +72,43 @@ class NativeChildGuardTests(unittest.TestCase):
             self.assertIsNone(child("status", {"name": "w1"}), prefix)
             self.assertIsNone(run(PRE, {"tool_name": prefix + "task", "tool_input": {"action": "claim"}}, *extra), prefix)
             self.assertIsNone(run(PRE, {"tool_name": prefix + "status", "tool_input": {"receipt": "r1"}}, *extra), prefix)
+
+    def test_S9_native_children_cannot_wait_or_address_an_assignment(self):
+        """agent-runtime-hardening/S9"""
+        for prefix, extra in ((TOOL, ()), (CODEX, ("--cli", "codex"))):
+            def child(name, arguments=None):
+                return run(PRE, {"tool_name": prefix + name, "tool_input": arguments or {}, "agent_id": "sub-1",
+                                 "agent_type": "worker"}, *extra)
+            self.assertTrue(denied(child("wait", {"target": "all"})), prefix)
+            for name in ("status", "list", "collect", "task"):
+                self.assertTrue(denied(child(name, {"assignment_id": "a1", "action": "list"})), (prefix, name))
+            self.assertIsNone(child("task", {"action": "list"}), prefix)
+            for name in ("status", "list", "collect"):
+                self.assertIsNone(child(name, {"name": "w1"}), (prefix, name))
+            self.assertIsNone(run(PRE, {"tool_name": prefix + "wait", "tool_input": {"target": "all"}}, *extra), prefix)
+            self.assertIsNone(run(PRE, {"tool_name": prefix + "status", "tool_input": {"assignment_id": "a1"}}, *extra), prefix)
+
+    def test_S9_string_tool_input_is_parsed_and_unparseable_input_is_denied_for_children(self):
+        """agent-runtime-hardening/S9"""
+        for prefix, extra in ((CODEX, ("--cli", "codex")), (TOOL, ())):
+            def child(raw):
+                return run(PRE, {"tool_name": prefix + "status", "tool_input": raw, "agent_id": "sub-1",
+                                 "agent_type": "worker"}, *extra)
+            self.assertTrue(denied(child('{"assignment_id": "a1"}')), prefix)
+            self.assertTrue(denied(child('{"receipt": "r1"}')), prefix)
+            self.assertTrue(denied(child("not json")), prefix)
+            self.assertTrue(denied(child("[1]")), prefix)
+            self.assertTrue(denied(child(None)), prefix)
+            self.assertIsNone(child('{"name": "w1"}'), prefix)
+            main = {"tool_name": prefix + "status", "tool_input": "not json"}
+            self.assertIsNone(run(PRE, main, *extra), prefix)
+
+    def test_S9_subagent_start_notice_names_allowed_reads(self):
+        """agent-runtime-hardening/S9"""
+        ctx = run(START, {})["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("wait", ctx)
+        self.assertIn("assignment_id", ctx)
+        self.assertIn("task list", ctx)
 
     def test_codex_bash_guard_remains_and_unrelated_mcp_servers_are_ignored(self):
         """agent-runtime/R48
@@ -158,9 +195,8 @@ class WiringTests(unittest.TestCase):
 
     def test_S18_settings_json_drops_agent_runtime_hooks_and_keeps_the_rest(self):
         """agent-runtime-tools/S18"""
-        text = SETTINGS.read_text()
-        self.assertNotIn("agent-runtime", text)
-        hooks = json.loads(text)["hooks"]
+        hooks = json.loads(SETTINGS.read_text())["hooks"]
+        self.assertNotIn("agent-runtime", json.dumps(hooks))
         self.assertIn("SessionEnd", hooks)
         self.assertIn("SessionStart", hooks)
         self.assertTrue(any("agent-fleet/hooks/session_start.py" in h["command"]

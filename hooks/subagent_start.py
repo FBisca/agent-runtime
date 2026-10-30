@@ -4,8 +4,9 @@
 import json
 import sys
 
-CONTEXT = ("Subagents never use the agent-runtime spawn/message/resume/stop/report tools or raw hc; "
-           "report through your return value.")
+CONTEXT = ("Subagents never use the agent-runtime spawn/message/resume/stop/report tools, wait, any call with "
+           "assignment_id or receipt, or raw hc; only task list and status/list/collect without assignment_id "
+           "are allowed. Report through your return value.")
 
 
 def main():
