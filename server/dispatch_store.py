@@ -74,6 +74,10 @@ class StoreError(Exception):
     pass
 
 
+class StorageError(StoreError):
+    """The store itself is unusable (directory ownership, schema version); never an authorization verdict."""
+
+
 def uid():
     return uuid.uuid4().hex
 
@@ -84,7 +88,7 @@ class Store:
         self.directory = root / "agent-runtime"
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.directory.is_symlink() or self.directory.stat().st_uid != os.getuid():
-            raise StoreError("dispatch directory must be owned by the current user")
+            raise StorageError("dispatch directory must be owned by the current user")
         self.directory.chmod(0o700)
         self.path = self.directory / "dispatch.sqlite3"
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -93,7 +97,7 @@ class Store:
         with self.transaction() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 1, 2):
-                raise StoreError("incompatible dispatch schema version")
+                raise StorageError("incompatible dispatch schema version")
             for statement in (
                 "CREATE TABLE IF NOT EXISTS teams (id TEXT PRIMARY KEY, scope TEXT, lead TEXT, generation TEXT, UNIQUE(scope,lead,generation))",
                 "CREATE TABLE IF NOT EXISTS workers (id TEXT PRIMARY KEY, team TEXT, name TEXT, address TEXT, active INTEGER, UNIQUE(team,name))",

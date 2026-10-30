@@ -29,6 +29,14 @@ class ToolError(Exception):
     """A tool failure whose text goes to the model."""
 
 
+class DiagnosticUnavailable(Exception):
+    """Dispatch cannot be consulted (store, session identity or hc role lookup failed), as opposed to a
+    caller being refused. Diagnostics (status, collect, list) degrade to hc-only state on this alone."""
+
+
+DIAGNOSTICS = ("status", "collect", "list")
+
+
 class Context:
     """Per-call cancellation: kills the running subprocess when the client cancels."""
 
@@ -611,6 +619,11 @@ def diagnostic(name, arguments, env, ctx, error):
 
     No store call happens, so nothing is acknowledged, pinned, adopted or completed.
     """
+    # An unproven caller (the store failed before actor() succeeded) gets no wider than its own children.
+    if name in ("status", "collect") and not getattr(ctx, "actor", None):
+        (target,) = need(arguments, "name")
+        worker_name(target)
+        require_child(target, env, ctx)
     out = HANDLERS[name](arguments, env, ctx)
     out = bounded(out)
     body = out["content"][0]["text"]
@@ -620,7 +633,7 @@ def diagnostic(name, arguments, env, ctx, error):
         payload = {"result": body}
     if not isinstance(payload, dict):
         payload = {"result": payload}
-    payload["delivery_error"] = ("dispatch storage unavailable (%s); diagnostic only, not an accepted report; "
+    payload["delivery_error"] = ("dispatch unavailable (%s); diagnostic only, not an accepted report; "
                                  "any receipt was not processed" % error)
     return result(payload, structured=True)
 
@@ -629,8 +642,8 @@ def call(name, arguments, env, ctx):
     try:
         try:
             return call_dispatch(name, arguments, env, ctx)
-        except (sqlite3.Error, OSError) as error:
-            if name in ("status", "collect") and dispatch_enabled(env):
+        except (sqlite3.Error, OSError, dispatch.StorageError, DiagnosticUnavailable) as error:
+            if name in DIAGNOSTICS and dispatch_enabled(env):
                 return diagnostic(name, arguments, env, ctx, error)
             raise
     except (ToolError, dispatch.StoreError) as error:
@@ -643,9 +656,17 @@ def call_dispatch(name, arguments, env, ctx):
     if name in ("status", "list", "collect") and lib.resolve(env)["runtime"] != "hc":
         return HANDLERS[name](arguments, env, ctx)
     info, caller = require_hc(env)
+    diagnostic_call = name in DIAGNOSTICS
     if info["role"] not in ("lead", "worker"):
+        if diagnostic_call:
+            raise DiagnosticUnavailable("hc role lookup failed")
         raise ToolError("cannot establish dispatch caller")
-    scope, generation = dispatch_identity(env)
+    try:
+        scope, generation = dispatch_identity(env)
+    except ToolError as error:
+        if diagnostic_call:
+            raise DiagnosticUnavailable("caller identity unresolved: %s" % error)
+        raise
     ctx.identity = (scope, generation)
     ctx.generation = generation
     ctx.store = dispatch.Store(env)
