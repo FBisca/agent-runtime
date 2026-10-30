@@ -22,6 +22,7 @@ The user explicitly waived the PRD prerequisite on 2026-10-30. This conversation
 | [MCP server](../../agents/plugins/agent-runtime/server/mcp_server.py) | Each call runs on a thread; cancellation kills its subprocess; stdio protocol currently returns one result |
 | [Current tests](../../agents/plugins/agent-runtime/tests/) | Subprocess JSON-RPC and fake-hc seams, screen fixtures, hooks/config wiring checks |
 | [MCP tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) and [progress](https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/progress) | Structured tool results; progress notifications are separate from the final request result; no portable repeated model turns from one result |
+| [Claude output limits](https://code.claude.com/docs/en/mcp#mcp-output-limits-and-warnings), installed 2.1.314; local Codex models cache and official per-tool config | Default host truncation is below legal batch sizes; Claude supports per-tool anthropic/maxResultSizeChars, Codex per-tool output_token_limit |
 | [Claude MCP time limits](https://code.claude.com/docs/en/mcp#time-limits-on-mcp-tool-calls), installed Claude 2.1.314 schema | Per-server `timeout` is host-side milliseconds; server `env` cannot configure the host deadline |
 | [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) and tracked `agents/.codex/config.toml` | Configurable call deadline; this checkout already sets runtime `tool_timeout_sec = 600` |
 
@@ -51,6 +52,10 @@ Gather found no covering PRD or associated Linear feature/project. Relevant exis
 | D16 | Surface an observed selected-worker failure before returning a queued nonterminal event; preserve queued messages in that result | Queued progress indefinitely bypassing runtime reconciliation | Advisory T2 review found repeated unacknowledged progress can hide an exit/interruption | T2 advisory review, 2026-10-30 |
 
 | D17 | Configure a 600-second host ceiling for both CLIs: Claude server-level `timeout: 600000`, Codex `tool_timeout_sec = 600`; internal wait stays at most 590 seconds | Put a host timeout only in the Python server environment; rely on progress to extend a hard deadline | Verified host settings and units, with deadline headroom | Official Claude timeout docs and installed 2.1.314 schema; Codex config |
+
+| D18 | Bound complete tool envelopes, including inbox/base payload, states and receipt; paginate without acknowledging undelivered messages; configure supported per-tool host limits above the proven envelope bound | A messages-only cap; moving receipt fields before data; relying on default host truncation/file fallback | Codex default 10k-token truncation and Claude default 50k-character file fallback can break legal batches; existing legal reports must remain retrievable | Read-only host-output investigation, official docs and installed clients, 2026-10-30 |
+
+| D19 | Before pinning a worker session, prove its dispatched assignment identity or a verified launch-time binding; an address-only first call cannot adopt current membership | Pin whichever team currently owns a reused address on first contact | Review reproduced stale first-use adoption into replacement teams | T3 correctness and advisory review (same S14 blocker), 2026-10-30 |
 
 API direction: retain existing tools and add only `task`. `spawn`/`resume` return `team_id`, `worker_id`, `assignment_id` and optional linked `task_id`. `report(text, kind, assignment_id, message_id?)` derives sender/recipient server-side. `message(to, text, message_id?)` accepts authorized teammates as well as children. `wait(target, timeout, receipt?)` returns `{reason, messages, assignments, unfinished, receipt, more}`. `task(action, ...)` handles shared task operations. Other tools can carry optional `receipt` and return pending inbound messages with their ordinary result. Exact field validation belongs to each ticket's schema and tests, preserving existing positional meanings.
 
@@ -90,6 +95,8 @@ Wait membership is snapshotted at invocation; later spawns do not extend it. An 
 
 - **S27** WHEN `wait(any)` has queued progress and a bounded hc observation reports its selected worker exited or interrupted, THEN the result surfaces failure and unfinished assignments while preserving those messages; replay cannot bypass that observation indefinitely.
 
+- **S28** WHEN a legal response approaches the complete-envelope budget, THEN states, reports, receipt and continuation fit configured Codex/Claude output limits; deferred messages remain retrievable and acknowledgments cover only delivered messages, including inbox piggyback results.
+
 ## Out of scope
 
 - Native Claude Teams adoption, enabling its experimental flag, Herdmates integration, hc upstream changes.
@@ -118,16 +125,22 @@ Each ticket is one vertical slice, targeted below 800 hand-written lines includi
 |---|---|---|---|---|---|---|
 | T1 | Durable report publication and bounded immediate wait results across MCP processes: versioned private SQLite store, team/worker/assignment registration, structured envelope, idempotent publication and replay receipts; report stops using hc send | S1–S4, S13, S20, S25 | none | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR25 cfecece; 141 tests, converge, review PASS; hosted CI n/a) |
 | T2 | One event-driven pending wait with strict all/any/named predicates, deadline/cancellation, cross-process wakeups and lost-notification recovery; messages and states returned together | S5–S11 | T1, T8 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR27 be96bc4; 153 tests, converge, review PASS; hosted CI n/a) |
-| T3 | Concurrent dispatch and same-team peer exchange: nonblocking resume, fresh assignment identity, inbound delivery through tool results, piggyback acknowledgment and stop semantics | S12, S14, S19, S21 | T2, T9 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
+| T3 | Concurrent dispatch and same-team peer exchange: nonblocking resume, fresh assignment identity, inbound delivery through tool results, piggyback acknowledgment and stop semantics | S12, S14, S19, S21 | T2, T9 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | IN PROGRESS |
 | T4 | Shared tasks through one MCP task tool: durable create/list/update/atomic claim, dependency validation and completion integrated with report transaction | S16–S18 | T3 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
 | T5 | Guard and fallback compatibility across the complete API: team/assignment authorization, hooks for new mutation actions, status/collect diagnostics, conflict/cancellation/restart coverage | S15, S22 | T4 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/hooks/, agents/plugins/agent-runtime/tests/ | agent | TO-DO |
-| T6 | Both CLI installations and concise tool instructions use dispatch results: deadline wiring, permission/schema compatibility, description budget, implementer/orchestrator guidance and upgrade notes | S23 | T5 | agents/plugins/agent-runtime/, agents/.codex/config.toml, agents/.claude/settings.json, agents/.claude/agents/implementer.md, agents/.codex/agents/implementer.toml, agents/.agents/skills/orchestrate/, README.md | agent | TO-DO |
+| T6 | Both CLI installations and concise tool instructions use dispatch results: deadline wiring, permission/schema compatibility, description budget, implementer/orchestrator guidance and upgrade notes | S23 | T5, T10 | agents/plugins/agent-runtime/, agents/.codex/config.toml, agents/.claude/settings.json, agents/.claude/agents/implementer.md, agents/.codex/agents/implementer.toml, agents/.agents/skills/orchestrate/, README.md | agent | TO-DO |
 | T7 | Live mixed-CLI acceptance through existing agent-runtime tools; record report provenance, peer exchange, wait call counts, blocker/resume and restart/replay evidence; fix only dispatch regressions exposed by this run | S24 | T6 | agents/plugins/agent-runtime/, docs/plans/2026-10-30-agent-runtime-dispatch.plan.md | agent | TO-DO |
 | T8 | Advisory gap correction: count JSON framing in exact-byte batch limits and prove boundary pagination with a regression | S26 | T1 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR26 bf5575c; 142 tests, converge, review PASS; hosted CI n/a) |
 
-| T9 | Advisory gap correction: reconcile selected worker failure before finalizing queued nonterminal any-events, including replay | S27 | T2 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | IN PROGRESS |
+| T9 | Advisory gap correction: reconcile selected worker failure before finalizing queued nonterminal any-events, including replay | S27 | T2 | agents/plugins/agent-runtime/server/, agents/plugins/agent-runtime/tests/ | agent | COMPLETE (PR28 626f258; 155 tests, converge, review PASS; hosted CI n/a) |
+
+| T10 | Close host-output gap: complete-envelope pagination/receipt accounting and supported per-tool output limits, preserving legal single-report retrieval; largest-envelope regression and host wiring checks | S28 | T5 | agents/plugins/agent-runtime/, agents/.codex/config.toml | agent | TO-DO |
+
+Host-output investigation identified T10: legal 128KiB message batches exceed default Codex/Claude output policies; activation remains blocked until envelope and host budgets agree. Live T7 must include a legal large-response probe through both installed hosts.
 
 Advisory T2 gap review identified T9 (partial S7: queued progress can bypass runtime observation).
+
+T3 advisory first-use identity finding duplicates its blocking S14 correctness finding and is handled by the current T3 correction.
 
 Advisory T1 gap review identified T8 (partial S20: array framing excluded from the declared message-byte budget). T1 correctness review ran on Sonnet 5.5 because this runtime exposed no native Agent/Opus tool; no blockers in its initial diff. D15/S25 record the integration correction before further implementation.
 

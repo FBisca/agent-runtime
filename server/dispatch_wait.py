@@ -37,16 +37,18 @@ def reason(batch, target, observations):
     return None
 
 
-def wait(store, team, recipient, target, timeout, receipt, ctx, observe):
+def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=False):
     deadline = time.monotonic() + timeout
-    members = store.snapshot(team, recipient, target, receipt)
+    members = store.snapshot(team, recipient, "inbox" if inbox else target, receipt, ack=getattr(ctx, "ack", None))
+    if inbox:
+        members = []  # Inbox delivery never waits on teammates' assignment completion.
     assignment_ids = [m["assignment_id"] for m in members]
     observations, reconcile_at = {}, 0
     observed, needs_observation = False, False
     def ready(batch):
         nonlocal needs_observation
-        candidate = reason(batch, target, observations)
-        needs_observation = candidate == "messages" and (not observed or time.monotonic() >= reconcile_at)
+        candidate = ("messages" if batch["messages"] else None) if inbox else reason(batch, target, observations)
+        needs_observation = not inbox and candidate == "messages" and (not observed or time.monotonic() >= reconcile_at)
         if needs_observation:
             return None  # Do not issue a receipt before reconciling runtime failure.
         return candidate or ("timeout" if time.monotonic() >= deadline else None)
@@ -57,7 +59,7 @@ def wait(store, team, recipient, target, timeout, receipt, ctx, observe):
             while True:
                 if ctx.cancelled.is_set():
                     raise InterruptedError("cancelled")
-                batch = store.read(team, recipient, target, assignment_ids=assignment_ids, ready=ready)
+                batch = store.read(team, recipient, target, assignment_ids=assignment_ids, ready=ready, inbox=inbox)
                 if batch["reason"] is not None:
                     return batch
                 remaining = deadline - time.monotonic()
@@ -68,6 +70,9 @@ def wait(store, team, recipient, target, timeout, receipt, ctx, observe):
                     reconcile_at = time.monotonic() + RECONCILE_INTERVAL
                     continue  # Finalize a fresh atomic snapshot after the bounded probe.
                 if remaining <= 0:
+                    continue
+                if inbox:
+                    listener.wait(min(remaining, RECONCILE_INTERVAL))
                     continue
                 now = time.monotonic()
                 if now >= reconcile_at:

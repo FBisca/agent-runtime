@@ -20,9 +20,9 @@ class DispatchTests(ToolCase):
         self.assertFalse(result["isError"], text)
         return json.loads(text)
 
-    def worker(self):
+    def worker(self, generation="worker-session"):
         return self.start(env={"HC_TERMINAL_ID": "t9", "HC_SCOPE": "test",
-                              "CODEX_THREAD_ID": "worker-session", "AGENT_RUNTIME_DISPATCH": "1"},
+                              "CODEX_THREAD_ID": generation, "AGENT_RUNTIME_DISPATCH": "1"},
                           replies={"get:t9": {"out": raw("w1", "t0")}})
 
     def publish(self, worker, assignment, **extra):
@@ -40,7 +40,7 @@ class DispatchTests(ToolCase):
         for cli in ("claude", "codex"):
             lead = self.lead(cli)
             assignment = self.spawn(lead, cli)
-            result, text = self.publish(self.worker(), assignment)
+            result, text = self.publish(self.worker(generation=cli), assignment)
             self.assertFalse(result["isError"], text)
             batch = self.read(lead)
             message, = batch["messages"]

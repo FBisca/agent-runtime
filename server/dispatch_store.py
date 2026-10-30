@@ -52,6 +52,7 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, team TEXT, recipient TEXT, assignment TEXT, body TEXT, acked INTEGER DEFAULT 0)",
                 "CREATE INDEX IF NOT EXISTS inbox ON messages(team,recipient,acked,seq)",
                 "CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, team TEXT, recipient TEXT, ids TEXT)",
+                "CREATE TABLE IF NOT EXISTS callers (scope TEXT,address TEXT,generation TEXT,team TEXT,PRIMARY KEY(scope,address,generation))",
             ):
                 db.execute(statement)
             db.execute("PRAGMA user_version=1")
@@ -116,15 +117,17 @@ class Store:
         db.execute("UPDATE workers SET address=?,active=1 WHERE id=?", (address, row["worker"]))
         db.execute("UPDATE assignments SET state='working',current=1 WHERE id=?", (assignment,))
 
-    def bind(self, assignment, address, scope):
+    def bind(self, assignment, address, scope, ack=None):
         with self.transaction() as db:
+            if ack:
+                self.acknowledge(db, *ack)
             self._bind(db, assignment, address, scope)
 
     def fail(self, assignment):
         with self.transaction() as db:
             db.execute("UPDATE assignments SET state='failed' WHERE id=? AND state IN ('pending','working')", (assignment,))
 
-    def publish(self, scope, address, parent, assignment, text, kind, message_id=None, caller_name=None):
+    def publish(self, scope, address, parent, assignment, text, kind, message_id=None, caller_name=None, ack=None, generation=None):
         if kind not in REPORT_KINDS:
             raise StoreError("kind must be progress, complete, blocked or decision")
         if max(len(text.encode("utf-8")), len(json.dumps(text).encode("utf-8"))) > MAX_TEXT_BYTES:
@@ -133,6 +136,8 @@ class Store:
             raise StoreError("message_id must be 1-128 characters")
         message_id = message_id or uid()
         with self.transaction() as db:
+            if ack:
+                self.acknowledge(db, *ack)
             row = db.execute("SELECT a.*,w.address,w.name,w.active,t.scope,t.lead FROM assignments a "
                              "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team WHERE a.id=?",
                              (assignment,)).fetchone()
@@ -149,6 +154,8 @@ class Store:
                         "kind": kind, "text": text}
             body = json.dumps(envelope, separators=(",", ":"))
             previous = db.execute("SELECT body FROM messages WHERE id=?", (message_id,)).fetchone()
+            if generation:
+                self._pin(db, scope, address, generation, row["team"])
             if previous:
                 if previous[0] != body:
                     raise StoreError("message_id conflict")
@@ -162,6 +169,110 @@ class Store:
         dispatch_events.notify(self.directory)
         return envelope
 
+    def actor(self, scope, address, parent, generation=None, assignment=None, name=None):
+        team = self.team(scope, address, generation) if parent is None else None
+        with self.transaction() as db:
+            pending = False
+            if parent is None:
+                actor = {"team_id": team, "recipient": address, "worker_id": None, "assignment_id": None,
+                         "scope": scope, "address": address, "parent": None}
+            else:
+                row = db.execute("SELECT a.id,a.state,w.id AS worker,t.id AS team FROM assignments a "
+                                 "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
+                                 "WHERE t.scope=? AND t.lead=? AND ((w.address=? AND w.active=1 AND a.current=1) "
+                                 "OR (a.id=? AND a.state='pending' AND w.name=?)) ORDER BY a.rowid DESC LIMIT 1",
+                                 (scope, parent, address, assignment, name)).fetchone()
+                if not row or (assignment and row["id"] != assignment):
+                    raise StoreError("caller has no matching active assignment")
+                actor = {"team_id": row["team"], "recipient": row["worker"], "worker_id": row["worker"],
+                         "assignment_id": row["id"], "scope": scope, "address": address, "parent": parent}
+                pinned = db.execute("SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
+                                    (scope, address, generation)).fetchone()
+                if not generation or (not pinned and not assignment):
+                    raise StoreError("assignment_id required on first worker call to prove session")
+                if pinned and pinned[0] != row["team"]:
+                    raise StoreError("stale caller session cannot adopt another team generation")
+                pending = row["state"] == "pending"
+            self.authorize(db, actor, pending=pending)
+            if actor["worker_id"] and not pending:
+                self._pin(db, scope, address, generation, actor["team_id"])
+            # A pending fast report proves the session only when publication commits.
+            return actor
+
+    def _pin(self, db, scope, address, generation, team):
+        pinned = db.execute("SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
+                            (scope, address, generation)).fetchone()
+        if pinned and pinned[0] != team:
+            raise StoreError("stale caller session cannot adopt another team generation")
+        db.execute("INSERT OR IGNORE INTO callers VALUES (?,?,?,?)", (scope, address, generation, team))
+
+    def authorize(self, db, actor, pending=False):
+        latest = db.execute("SELECT id FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
+                            (actor["scope"], actor["parent"] or actor["address"])).fetchone()
+        if not latest or latest[0] != actor["team_id"]:
+            raise StoreError("stale team generation")
+        if actor["worker_id"] and not pending:
+            row = db.execute("SELECT 1 FROM workers w JOIN assignments a ON a.worker=w.id "
+                             "WHERE w.id=? AND w.address=? AND w.active=1 AND a.id=? AND a.current=1",
+                             (actor["worker_id"], actor["address"], actor["assignment_id"])).fetchone()
+            if not row:
+                raise StoreError("stale worker assignment")
+
+    def receipt_owner(self, receipt):
+        with self.transaction() as db:
+            row = db.execute("SELECT team,recipient FROM receipts WHERE id=?", (receipt,)).fetchone()
+            if not row:
+                raise StoreError("invalid receipt")
+            return row["team"], row["recipient"], receipt
+
+    def has_worker(self, team, target):
+        with self.transaction() as db:
+            return db.execute("SELECT 1 FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
+                              (team, target, target)).fetchone() is not None
+
+    def peer(self, actor, target, text, message_id=None, ack=None):
+        if max(len(text.encode()), len(json.dumps(text).encode())) > MAX_TEXT_BYTES:
+            raise StoreError("message limit is 65536 bytes")
+        if message_id is not None and (not isinstance(message_id, str) or not 1 <= len(message_id) <= 128):
+            raise StoreError("message_id must be 1-128 characters")
+        with self.transaction() as db:
+            self.authorize(db, actor)
+            if ack:
+                self.acknowledge(db, *ack)
+            lead = db.execute("SELECT lead FROM teams WHERE id=?", (actor["team_id"],)).fetchone()[0]
+            recipient = lead if target in ("lead", lead, actor["team_id"]) else None
+            if recipient is None:
+                row = db.execute("SELECT id FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
+                                 (actor["team_id"], target, target)).fetchone()
+                if not row:
+                    raise StoreError("recipient is not an active teammate")
+                recipient = row[0]
+            envelope = {"message_id": message_id or uid(), "team_id": actor["team_id"],
+                        "worker_id": actor["worker_id"], "assignment_id": actor["assignment_id"],
+                        "sender": actor["worker_id"] or actor["team_id"], "recipient": recipient,
+                        "kind": "message", "text": text}
+            body = json.dumps(envelope, separators=(",", ":"))
+            previous = db.execute("SELECT body FROM messages WHERE id=?", (envelope["message_id"],)).fetchone()
+            if previous and previous[0] != body:
+                raise StoreError("message_id conflict")
+            if not previous:
+                # NULL distinguishes peer data from assignment reports during selection.
+                db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,NULL,?)",
+                           (envelope["message_id"], actor["team_id"], recipient, body))
+        dispatch_events.notify(self.directory)
+        return envelope
+
+    def stopped(self, team, name, ack=None):
+        with self.transaction() as db:
+            if ack:
+                self.acknowledge(db, *ack)
+            worker = db.execute("SELECT id FROM workers WHERE team=? AND name=?", (team, name)).fetchone()
+            if not worker:
+                raise StoreError("worker is not registered in this team")
+            db.execute("UPDATE workers SET active=0 WHERE id=?", (worker[0],))
+            db.execute("UPDATE assignments SET state='failed' WHERE worker=? AND state!='complete'", (worker[0],))
+        dispatch_events.notify(self.directory)
+
     def acknowledge(self, db, team, recipient, receipt):
         if receipt is None:
             return
@@ -171,10 +282,10 @@ class Store:
         for message_id in json.loads(row["ids"]):
             db.execute("UPDATE messages SET acked=1 WHERE id=?", (message_id,))
 
-    def snapshot(self, team, recipient, target, receipt=None):
+    def snapshot(self, team, recipient, target, receipt=None, ack=None):
         """Acknowledge the previous result and freeze membership before listening."""
         with self.transaction() as db:
-            self.acknowledge(db, team, recipient, receipt)
+            self.acknowledge(db, *(ack or (team, recipient, receipt)))
             return [dict(row) for row in db.execute(
                 "SELECT a.id AS assignment_id,w.name,w.address,t.lead FROM assignments a "
                 "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
@@ -182,14 +293,14 @@ class Store:
                 "AND (? IN ('all','any') OR w.name=? OR a.id=?) ORDER BY a.rowid",
                 (team, target, target, target, target))]
 
-    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None):
+    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None):
         """Optional pure ready(batch) returns a final reason or None under this transaction.
 
         A pending snapshot creates no receipt; a final snapshot and its receipt
         commit together, so concurrent publications/acks cannot invalidate readiness.
         """
         with self.transaction() as db:
-            self.acknowledge(db, team, recipient, receipt)
+            self.acknowledge(db, *(ack or (team, recipient, receipt)))
             selection = "a.current=1"
             selected_params = []
             if assignment_ids is not None:
@@ -205,10 +316,10 @@ class Store:
             # Historical reports remain readable for all/any; named reads select that worker's history.
             query = "SELECT body FROM messages WHERE team=? AND recipient=? AND acked=0"
             params = [team, recipient]
-            if assignment_ids is not None:
-                query += " AND assignment IN (%s)" % (",".join("?" for _ in assignment_ids) or "NULL")
+            if assignment_ids is not None and not inbox:
+                query += " AND (assignment IN (%s) OR assignment IS NULL)" % (",".join("?" for _ in assignment_ids) or "NULL")
                 params.extend(assignment_ids)
-            elif target not in ("any", "all"):
+            elif assignment_ids is None and not inbox and target not in ("any", "all"):
                 query += " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
                 params.extend((team, target, target))
             messages, size, more = [], 2, False  # Opening and closing array brackets.

@@ -183,11 +183,16 @@ def dispatch_identity(env):
     return scope, generation
 
 
-def lead_store(env):
+def lead_store(env, ctx=None):
+    if ctx is not None and getattr(ctx, "owned_team", None):
+        return ctx.store, ctx.owned_team
     _, caller = require_hc(env)
     scope, generation = dispatch_identity(env)
-    store = dispatch.Store(env)
-    return store, store.team(scope, caller, generation)
+    store = getattr(ctx, "store", None) or dispatch.Store(env)
+    team = store.team(scope, caller, generation)
+    if ctx is not None:
+        ctx.owned_team = team
+    return store, team
 
 
 def spawn(arguments, env, ctx):
@@ -208,9 +213,10 @@ def spawn(arguments, env, ctx):
     store = None
     message = "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
     if dispatch_enabled(env):
-        store, team = lead_store(env)
+        store, team = lead_store(env, ctx)
         identity = store.register(team, name)
         message += " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
+        message += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
     if cli == "claude":
         program = ["claude", "--agent", "implementer", "--permission-mode", "auto", message]
     else:
@@ -248,7 +254,7 @@ def spawn(arguments, env, ctx):
         return result(info)
     if info["address"]:
         scope, _ = dispatch_identity(env)
-        store.bind(identity["assignment_id"], info["address"], scope)
+        store.bind(identity["assignment_id"], info["address"], scope, getattr(ctx, "ack", None))
     else:
         store.fail(identity["assignment_id"])
         raise ToolError("worker started but address unavailable; assignment cannot accept reports")
@@ -263,6 +269,7 @@ def require_child(name, env, ctx):
         raise ToolError("cannot read %s" % name)
     if not caller or not isinstance(raw, dict) or raw.get("parent") != caller:
         raise ToolError("%s is not your child; refusing" % name)
+    return raw
 
 
 def send(args_before, target, text, env, ctx, timeout=SHORT_SECONDS):
@@ -274,11 +281,42 @@ def send(args_before, target, text, env, ctx, timeout=SHORT_SECONDS):
 
 def message(arguments, env, ctx):
     to, text = need(arguments, "to", "text")
+    if dispatch_enabled(env):
+        actor = ctx.actor
+        if actor["worker_id"]:
+            store, own_team = lead_store(env, ctx)
+            if store.has_worker(own_team, to):
+                actor = store.actor(actor["scope"], actor["address"], None, ctx.generation)
+        return result(ctx.store.peer(actor, to, text, arguments.get("message_id"), ctx.ack), structured=True)
     return result(send([], to, text, env, ctx) or "sent")
 
 
 def resume(arguments, env, ctx):
     name, task = need(arguments, "name", "task")
+    if dispatch_enabled(env):
+        worker_name(name)
+        raw = require_child(name, env, ctx)
+        if not raw.get("address"):
+            raise ToolError("worker address unavailable")
+        store, team = lead_store(env, ctx)
+        identity = store.register(team, name)
+        prompt = "%s\n\nUse assignment_id=%s for report(kind=progress|complete|blocked|decision)." % (task, identity["assignment_id"])
+        prompt += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
+        try:
+            out = hc(["send", name, prompt], env, ctx)
+            try:
+                sent = json.loads(out)
+            except ValueError:
+                sent = None
+            if isinstance(sent, dict) and (sent.get("sent") is False or (sent.get("first_message") or {}).get("sent") is False):
+                raise ToolError("resume task was not sent; no blind resend")
+            if ctx.cancelled.is_set():
+                raise ToolError("cancelled")
+            store.bind(identity["assignment_id"], raw["address"], ctx.actor["scope"], ctx.ack)
+        except (ToolError, dispatch.StoreError):
+            store.fail(identity["assignment_id"])
+            raise
+        return result(dict(identity, name=name, address=raw["address"], parent=raw["parent"]), structured=True)
     out = send(["--wait", "--timeout", str(WAIT_DEFAULT)], name, task, env, ctx, WAIT_DEFAULT + 10)
     return result(out or "turn ended")
 
@@ -329,7 +367,10 @@ def wait(arguments, env, ctx):
         return legacy_wait(arguments, env, ctx)
     (target,) = need(arguments, "target")
     seconds = wait_seconds(arguments)
-    store, team = lead_store(env)
+    actor = getattr(ctx, "actor", None)
+    inbox = target == "inbox" or bool(actor and actor["worker_id"] and target == "any")
+    store, team = (ctx.store, actor["team_id"]) if inbox and actor else lead_store(env, ctx)
+    recipient = actor["recipient"] if inbox and actor else env["HC_TERMINAL_ID"]
     def observe(members, timeout):
         try:
             code, out, _ = run(["hc", "ls", "--all", "--json"], env, ctx, timeout)
@@ -354,8 +395,8 @@ def wait(arguments, env, ctx):
             observations[member["assignment_id"]] = state
         return observations
     try:
-        return result(dispatch_wait.wait(store, team, env["HC_TERMINAL_ID"], target, seconds,
-                      arguments.get("receipt"), ctx, observe), structured=True)
+        return result(dispatch_wait.wait(store, team, recipient, target, seconds,
+                      arguments.get("receipt"), ctx, observe, inbox=inbox), structured=True)
     except InterruptedError:
         raise ToolError("cancelled")
 
@@ -384,6 +425,9 @@ def stop(arguments, env, ctx):
     except ToolError as error:
         note = " (kill: %s)" % error  # an exited terminal still needs removing
     hc(["rm", name], env, ctx)
+    if dispatch_enabled(env):
+        store, team = lead_store(env, ctx)
+        store.stopped(team, name, ctx.ack)
     return result("stopped %s%s" % (name, note))
 
 
@@ -417,8 +461,9 @@ def report(arguments, env, ctx):
         raise ToolError("cannot verify report sender")
     if not isinstance(raw, dict) or raw.get("parent") != info["parent"]:
         raise ToolError("report sender changed during resolution")
-    return result(dispatch.Store(env).publish(scope, caller, info["parent"], assignment, text,
-                  arguments.get("kind"), arguments.get("message_id"), caller_name=raw.get("name")), structured=True)
+    return result(ctx.store.publish(scope, caller, info["parent"], assignment, text,
+                  arguments.get("kind"), arguments.get("message_id"), caller_name=raw.get("name"), ack=ctx.ack,
+                  generation=ctx.generation), structured=True)
 
 
 def status(arguments, env, ctx):
@@ -439,6 +484,42 @@ HANDLERS = {"spawn": spawn, "message": message, "resume": resume, "wait": wait, 
 
 def call(name, arguments, env, ctx):
     try:
-        return HANDLERS[name](arguments, env, ctx)
+        if not dispatch_enabled(env):
+            return HANDLERS[name](arguments, env, ctx)
+        info, caller = require_hc(env)
+        if info["role"] not in ("lead", "worker"):
+            raise ToolError("cannot establish dispatch caller")
+        scope, generation = dispatch_identity(env)
+        ctx.generation = generation
+        ctx.store = dispatch.Store(env)
+        raw_name = None
+        if info["role"] == "worker" and name == "report":
+            raw_name = json.loads(hc(["get", caller, "--json"], env, ctx)).get("name")
+        ctx.actor = ctx.store.actor(scope, caller, info.get("parent"), generation,
+                                   arguments.get("assignment_id"), raw_name)
+        if not ctx.actor["worker_id"]:
+            ctx.owned_team = ctx.actor["team_id"]
+        ctx.ack = None
+        if arguments.get("receipt") is not None:
+            ctx.ack = ctx.store.receipt_owner(arguments["receipt"])
+            if ctx.ack[:2] != (ctx.actor["team_id"], ctx.actor["recipient"]):
+                _, own_team = lead_store(env, ctx)
+                if ctx.ack[:2] != (own_team, caller):
+                    raise ToolError("foreign receipt")
+        outcome = HANDLERS[name](arguments, env, ctx)
+        if name == "wait":
+            return outcome
+        inbox = ctx.store.read(ctx.actor["team_id"], ctx.actor["recipient"], "any", assignment_ids=[],
+                               inbox=True, ack=ctx.ack)
+        if inbox["messages"]:
+            payload = outcome.get("structuredContent")
+            if payload is None:
+                try:
+                    payload = json.loads(outcome["content"][0]["text"])
+                except ValueError:
+                    payload = outcome["content"][0]["text"]
+            payload = dict(payload, inbox=inbox) if isinstance(payload, dict) else {"result": payload, "inbox": inbox}
+            return result(payload, structured=True)
+        return outcome
     except (ToolError, dispatch.StoreError) as error:
         return result(str(error), True)

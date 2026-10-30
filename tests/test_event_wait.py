@@ -79,9 +79,11 @@ class EventWaitTests(ToolCase):
             self.workers.append(session)
         self.rpc = AsyncRPC(self.lead)
 
-    def spawn(self, session, name):
-        result, text = self.call(session, "spawn", {"kind": "worker", "name": name,
-                                                 "task": "work", "cwd": "/tmp"})
+    def spawn(self, session, name, assignment_id=None):
+        arguments = {"kind": "worker", "name": name, "task": "work", "cwd": "/tmp"}
+        if assignment_id:
+            arguments["assignment_id"] = assignment_id
+        result, text = self.call(session, "spawn", arguments)
         self.assertFalse(result["isError"], text)
         return result["structuredContent"]
 
@@ -273,7 +275,7 @@ os._exit(0)
 
     def test_S11_wait_keeps_same_process_ping_report_and_cancellation_responsive(self):
         self.prepare()
-        child = self.spawn(self.workers[0], "child")
+        child = self.spawn(self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"])
         worker_rpc = AsyncRPC(self.workers[0])
         request_id = self.begin(worker_rpc)
         report_id = worker_rpc.tool("report", {"assignment_id": self.assignments[0]["assignment_id"],

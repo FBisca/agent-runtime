@@ -35,11 +35,12 @@ TOOLS = [
              "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory")}, ["kind", "name", "task", "cwd"])),
     ("message", "Send text to a worker. Never forces input past a permission dialog.",
-     schema({"to": text("worker name"), "text": text("message")}, ["to", "text"])),
+     schema({"to": text("teammate name/ID or lead"), "text": text("message"),
+             "message_id": text("optional retry ID")}, ["to", "text"])),
     ("resume", "Give a finished, idle or interrupted worker another turn. A new spawn is not resumption.",
      schema({"name": text("worker name"), "task": text("what to do next")}, ["name", "task"])),
     ("wait", "Wait for children. Dispatch opt-in buffers reports until completion, attention or deadline.",
-     schema({"target": text("any, all or a worker name"),
+     schema({"target": text("any, all, worker name/ID, or inbox"),
              "timeout": {"type": "integer", "description": "seconds, default 170, max 590; dispatch allows 0"},
              "receipt": text("acknowledge previous batch")}, ["target"])),
     ("status", "State of one agent: {name, runtime, role, parent, state, turn, native, next[]}. "
@@ -55,6 +56,9 @@ TOOLS = [
              "kind": {"type": "string", "enum": ["progress", "complete", "blocked", "decision"]},
              "message_id": text("optional retry ID")}, ["text"])),
 ]
+for _, _, input_schema in TOOLS:
+    input_schema["properties"].setdefault("receipt", text("acknowledge prior batch"))
+    input_schema["properties"].setdefault("assignment_id", text("required on first worker call"))
 TOOL_NAMES = [name for name, _, _ in TOOLS]
 
 
