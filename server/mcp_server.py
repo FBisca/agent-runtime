@@ -15,7 +15,7 @@ import hc_tools  # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
-SERVER_INFO = {"name": "agent-runtime", "version": "0.1.0"}
+SERVER_INFO = {"name": "agent-runtime", "version": "0.2.0"}
 
 
 def schema(properties=None, required=()):
@@ -28,34 +28,35 @@ def text(description):
 
 TOOLS = [
     ("spawn", "Start one agent on one task in one checkout; put the whole task in the call. "
-              "kind=lookup: short read-only work, use the CLI's own subagent tool instead. "
-              "kind=worker: implementation, long tasks, Codex, or anything watched. cli defaults to claude. "
-              "Returns name, parent and dispatch IDs.",
+              "Returns promptly with worker_id and assignment_id; then one wait(all) per work period. "
+              "kind=lookup is rejected: use the CLI's own subagent tool. "
+              "kind=worker: implementation, long tasks, Codex. cli defaults to claude.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
              "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory")}, ["kind", "name", "task", "cwd"])),
-    ("message", "Send text to a worker. Never forces input past a permission dialog.",
+    ("message", "Send text to a teammate or lead. Peer messages arrive in tool results. Never forces input past a permission dialog.",
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
-    ("resume", "Give a finished, idle or interrupted worker another turn. A new spawn is not resumption.",
+    ("resume", "Give a finished, idle or interrupted worker another assignment; returns promptly. A new spawn is not resumption.",
      schema({"name": text("worker name"), "task": text("what to do next")}, ["name", "task"])),
-    ("wait", "Wait for children. Dispatch opt-in buffers reports until completion, attention or deadline.",
+    ("wait", "Block until children report, need attention or time out (max 590s); use one wait(all) per work period. "
+             "Returns reports, assignment states and a receipt: pass it on your next call.",
      schema({"target": text("any, all, worker name/ID, or inbox"),
              "timeout": {"type": "integer", "description": "seconds, default 170, max 590; dispatch allows 0"},
              "receipt": text("acknowledge previous batch")}, ["target"])),
-    ("status", "State of one agent: {name, runtime, role, parent, state, turn, native, next[]}. "
-               "state is working|idle|blocked|done|exited|unknown; blocked needs the user.",
+    ("status", "Diagnostic fallback, not the normal flow: {name, runtime, role, parent, state, turn, native, next[]}. "
+               "state is working|idle|blocked|done|exited|unknown.",
      schema({"name": text("worker name or address")}, ["name"])),
-    ("list", "Status records of the agents you started (hc only).", schema()),
-    ("collect", "Read a worker's actual result from its screen after its last prompt. Never infer success.",
+    ("list", "Diagnostic: status records of the agents you started.", schema()),
+    ("collect", "Diagnostic fallback: read a worker's screen after its last prompt when no report arrived. Never infer success.",
      schema({"name": text("worker name")}, ["name"])),
     ("stop", "End a worker you started, after its work is accepted.",
      schema({"name": text("worker name")}, ["name"])),
-    ("report", "Worker only: send your result or blocker to your parent when done or stuck.",
+    ("report", "Worker only: send progress or your result to your parent. Use kind=progress|complete|blocked|decision; kind and assignment_id are required under dispatch.",
      schema({"text": text("result; max 65536 bytes"), "assignment_id": text("assigned ID"),
              "kind": {"type": "string", "enum": ["progress", "complete", "blocked", "decision"]},
              "message_id": text("optional retry ID")}, ["text"])),
-    ("task", "Dispatch opt-in shared team tasks. Claim needs finished dependencies; complete/blocked reports update the claimed task.",
+    ("task", "Shared team tasks. Claim needs finished dependencies; complete/blocked reports update the claimed task.",
      schema({"action": {"type": "string", "enum": ["create", "list", "claim", "update"]},
              "task_id": text("task ID"), "subject": text("create text"), "cursor": text("list continuation"),
              "depends_on": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 64}, "description": "prerequisite task IDs"},

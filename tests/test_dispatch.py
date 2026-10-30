@@ -253,6 +253,15 @@ class DispatchTests(ToolCase):
 
 
 class ActivationTests(ToolCase):
+    def test_S23_status_without_hc_falls_back_to_legacy_with_dispatch_on(self):
+        out = []
+        for flag in ("0", "1"):
+            session = self.start(env={"HC_TERMINAL_ID": "", "HERDR_ENV": "", "AGENT_RUNTIME_DISPATCH": flag})
+            result, text = self.call(session, "status", {"name": "w1"})
+            out.append((result["isError"], text))
+        self.assertEqual(out[0], out[1])
+        self.assertNotIn("gap: add native support", out[1][1])
+
     def test_S25_default_preserves_legacy_spawn_report_wait_resume_and_schema(self):
         for flag in (None, "0"):
             with self.subTest(flag=flag):

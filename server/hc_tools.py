@@ -540,6 +540,8 @@ def call(name, arguments, env, ctx):
 def call_dispatch(name, arguments, env, ctx):
     if not dispatch_enabled(env):
         return HANDLERS[name](arguments, env, ctx)
+    if name in ("status", "list", "collect") and lib.resolve(env)["runtime"] != "hc":
+        return HANDLERS[name](arguments, env, ctx)
     info, caller = require_hc(env)
     if info["role"] not in ("lead", "worker"):
         raise ToolError("cannot establish dispatch caller")

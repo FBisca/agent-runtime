@@ -3,7 +3,9 @@
     "agent-runtime": {
       "command": "python3",
       "args": ["${CLAUDE_PLUGIN_ROOT}/server/mcp_server.py"],
+      "timeout": 600000,
       "env": {
+        "AGENT_RUNTIME_DISPATCH": "1",
         "HC_TERMINAL_ID": "${HC_TERMINAL_ID:-}",
         "HC_SCOPE": "${HC_SCOPE:-}",
         "HC_TERMINAL_SOCKET": "${HC_TERMINAL_SOCKET:-}",

@@ -1,5 +1,5 @@
 {
   "name": "agent-runtime",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Delegate to other agents through tools: spawn, message, resume, wait, status, list, collect, stop, report."
 }
