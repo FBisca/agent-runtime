@@ -140,7 +140,8 @@ class ActivationWiringTest(unittest.TestCase):
         for word in ("AGENT_RUNTIME_DISPATCH", "dispatch.sqlite3", "Rollback", "fresh assignment"):
             self.assertIn(word, readme)
 
-    def test_S8_readme_install_says_in_place_and_no_update_steps(self):
+    def test_readme_install_says_in_place_and_no_update_steps(self):
+        """agent-runtime/R91"""
         readme = (REPO / "README.md").read_text()
         start = readme.index("- `agents/plugins/agent-runtime`")
         block = readme[start:readme.index("\n- `agents/.stow-local-ignore`", start)]
@@ -151,7 +152,8 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertNotIn("marketplace update", block)
         self.assertNotIn("plugin update", block)
 
-    def test_S9_spec_intro_says_diagnostics_authorize_store_first_then_fall_back(self):
+    def test_spec_intro_says_diagnostics_authorize_store_first_then_fall_back(self):
+        """agent-runtime/R92"""
         spec = (REPO / "docs/specs/agent-runtime.md").read_text()
         intro = spec[:spec.index("## Requirements")]
         self.assertRegex(intro, r"(?is)diagnostics authorize against the dispatch store first")

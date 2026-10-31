@@ -164,8 +164,8 @@ class StoreTaskReleaseTests(unittest.TestCase):
             return [json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")
                     if json.loads(r[0])["kind"] == "failed"]
 
-    def test_S1_removed_terminal_after_a_blocked_report_fails_and_releases_the_task(self):
-        """agent-runtime/R69"""
+    def test_removed_terminal_after_a_blocked_report_fails_and_releases_the_task(self):
+        """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("blocked")
         self.store.fail(self.identity["assignment_id"], inactive=True)
         self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
@@ -173,8 +173,8 @@ class StoreTaskReleaseTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT state FROM assignments").fetchone()[0], "failed")
         self.assertEqual(self.failed_messages(), ["failed"])
 
-    def test_S1_removed_terminal_after_a_decision_report_fails_and_releases_the_task(self):
-        """agent-runtime/R69"""
+    def test_removed_terminal_after_a_decision_report_fails_and_releases_the_task(self):
+        """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("decision")
         self.store.fail(self.identity["assignment_id"], inactive=True)
         self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
@@ -182,15 +182,15 @@ class StoreTaskReleaseTests(unittest.TestCase):
         self.store.fail(self.identity["assignment_id"], inactive=True)  # repeating adds nothing
         self.assertEqual(self.failed_messages(), ["failed"])
 
-    def test_S1_removed_terminal_keeps_a_completed_assignment(self):
-        """agent-runtime/R69"""
+    def test_removed_terminal_keeps_a_completed_assignment(self):
+        """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("complete")
         self.store.fail(self.identity["assignment_id"], inactive=True)
         self.assertEqual(task_row(self.store)["status"], "complete")
         self.assertEqual(self.failed_messages(), [])
 
-    def test_S3_failed_resume_after_a_blocked_report_keeps_the_task_owned(self):
-        """agent-runtime/R69"""
+    def test_failed_resume_after_a_blocked_report_keeps_the_task_owned(self):
+        """agent-runtime/R86; agent-runtime/R69"""
         self.report_then("blocked")
         before = task_row(self.store)
         self.store.fail(self.identity["assignment_id"])  # resume failure: the worker is still alive

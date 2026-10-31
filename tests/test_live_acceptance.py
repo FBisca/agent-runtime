@@ -90,7 +90,8 @@ class HarnessTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE") == "1" and shutil.which("claude"),
                      "set AGENT_RUNTIME_LIVE=1 with claude on PATH")
 class LiveMarketplaceRegistration(unittest.TestCase):
-    def test_S5_marketplace_registers_at_expanded_home_path(self):
+    def test_marketplace_registers_at_expanded_home_path(self):
+        """agent-runtime/R88; agent-runtime/R93"""
         agents = Path(__file__).resolve().parents[3]
         tracked = json.loads((agents / ".claude" / "settings.json").read_text())
         with tempfile.TemporaryDirectory() as tmp:

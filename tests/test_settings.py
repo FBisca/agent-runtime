@@ -22,7 +22,8 @@ class TrackedSettingsTests(unittest.TestCase):
         self.assertEqual(self.settings["extraKnownMarketplaces"]["dotfiles"],
                          {"source": {"source": "directory", "path": "~/developer/dotfiles/agents"}})
 
-    def test_S4_marketplace_path_is_home_relative_and_runtime_has_no_absolute_home(self):
+    def test_marketplace_path_is_home_relative_and_runtime_has_no_absolute_home(self):
+        """agent-runtime/R87"""
         mk = self.settings["extraKnownMarketplaces"]["dotfiles"]["source"]
         self.assertEqual(mk, {"source": "directory", "path": "~/developer/dotfiles/agents"})
         runtime = [mk["path"]]

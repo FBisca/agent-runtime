@@ -230,12 +230,12 @@ class FastReportTests(ToolCase):
             kinds = [json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")]
         self.assertEqual([k for k in kinds if k == "failed"], ["failed"])
 
-    def test_S1_unsent_spawn_after_a_blocked_report_fails_and_releases_the_task(self):
-        """agent-runtime/R72; agent-runtime/R69"""
+    def test_unsent_spawn_after_a_blocked_report_fails_and_releases_the_task(self):
+        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         self.check_unsent("blocked")
 
-    def test_S1_unsent_spawn_after_a_decision_report_fails_and_releases_the_task(self):
-        """agent-runtime/R72; agent-runtime/R69"""
+    def test_unsent_spawn_after_a_decision_report_fails_and_releases_the_task(self):
+        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         self.check_unsent("decision")
 
     def failed_count(self, store):
@@ -247,8 +247,8 @@ class FastReportTests(ToolCase):
         return scope, {"team_id": store.team(scope, "t0", lead), "recipient": "t0", "worker_id": None,
                        "assignment_id": None, "scope": scope, "address": "t0", "parent": None}
 
-    def test_S2_timed_out_hc_run_after_a_fast_report_leaves_the_worker_inactive(self):
-        """agent-runtime/R72"""
+    def test_timed_out_hc_run_after_a_fast_report_leaves_the_worker_inactive(self):
+        """agent-runtime/R85; agent-runtime/R72"""
         store, seen = self.spawn_with_fast_report(
             {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "progress", link_task=False)
         self.assertEqual([c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]])
@@ -268,8 +268,8 @@ class FastReportTests(ToolCase):
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.failed_count(store), 1)
 
-    def test_S1_timed_out_hc_run_after_a_fast_blocked_report_releases_the_task(self):
-        """agent-runtime/R72; agent-runtime/R69"""
+    def test_timed_out_hc_run_after_a_fast_blocked_report_releases_the_task(self):
+        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         store, seen = self.spawn_with_fast_report(
             {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "blocked")
         with store.transaction() as db:
@@ -277,8 +277,8 @@ class FastReportTests(ToolCase):
             self.assertEqual(tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()), ("pending", None, None))
         self.assertEqual(self.failed_count(store), 1)
 
-    def test_S2_a_live_worker_bound_by_a_concurrent_spawn_is_not_discarded(self):
-        """agent-runtime/R72"""
+    def test_a_live_worker_bound_by_a_concurrent_spawn_is_not_discarded(self):
+        """agent-runtime/R94; agent-runtime/R72"""
         self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
@@ -304,8 +304,8 @@ class FastReportTests(ToolCase):
             states = sorted(r[0] for r in db.execute("SELECT state FROM assignments"))
         self.assertEqual(states, ["failed", "working"])
 
-    def test_S1_respawn_of_a_finished_worker_after_a_fast_blocked_report_is_cleaned_up(self):
-        """agent-runtime/R72; agent-runtime/R69"""
+    def test_respawn_of_a_finished_worker_after_a_fast_blocked_report_is_cleaned_up(self):
+        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         scope, generation = hc_tools.dispatch_identity(self.env)[:2]
@@ -340,8 +340,8 @@ class FastReportTests(ToolCase):
             self.assertEqual(tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()), ("pending", None, None))
         self.assertEqual(self.failed_count(store), 1)
 
-    def test_S2_a_store_error_in_the_orphan_check_keeps_the_original_error_and_still_fails(self):
-        """agent-runtime/R72"""
+    def test_a_store_error_in_the_orphan_check_keeps_the_original_error_and_still_fails(self):
+        """agent-runtime/R94; agent-runtime/R72"""
         self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         real_run = hc_tools.run
 
@@ -357,8 +357,8 @@ class FastReportTests(ToolCase):
         with Store(self.env).transaction() as db:
             self.assertEqual([r[0] for r in db.execute("SELECT state FROM assignments")], ["failed"])
 
-    def test_S2_a_completed_result_is_mentioned_when_hc_run_times_out(self):
-        """agent-runtime/R72"""
+    def test_a_completed_result_is_mentioned_when_hc_run_times_out(self):
+        """agent-runtime/R95; agent-runtime/R72"""
         self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
@@ -379,8 +379,8 @@ class FastReportTests(ToolCase):
             with self.assertRaisesRegex(hc_tools.ToolError, "result had already landed"):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
 
-    def test_S1_failure_after_the_exit_was_observed_adds_no_second_failed_message(self):
-        """agent-runtime/R69"""
+    def test_failure_after_the_exit_was_observed_adds_no_second_failed_message(self):
+        """agent-runtime/R84; agent-runtime/R69"""
         self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
@@ -402,8 +402,8 @@ class FastReportTests(ToolCase):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
         self.assertEqual(self.failed_count(store), 1)
 
-    def test_S3_resume_failing_after_the_report_landed_keeps_the_report_and_task(self):
-        """agent-runtime/R80"""
+    def test_resume_failing_after_the_report_landed_keeps_the_report_and_task(self):
+        """agent-runtime/R86; agent-runtime/R80"""
         self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         scope, generation = hc_tools.dispatch_identity(self.env)[:2]
