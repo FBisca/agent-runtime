@@ -7,7 +7,7 @@ Slug: `agent-runtime-followups`. Living spec: `docs/specs/agent-runtime.md`. Sta
 The hardening plan's final gap review left four findings:
 - A failed spawn can keep its linked task when a fast blocked/decision report landed first.
 - Diagnostics check the store first, while hardening D3 said hc first.
-- Tracked Claude settings hard-code `/Users/fbisca/...` for the `dotfiles` marketplace. This is the user's priority.
+- Tracked Claude settings hard-code `~/...` for the `dotfiles` marketplace. This is the user's priority.
 - The hook's deny of unparseable subagent input is untested.
 
 The user also asked whether the runtime belongs in dotfiles or in its own repo. No PRD; the request and the archived plans are the sources.

@@ -1,5 +1,11 @@
 {
   "name": "agent-runtime",
   "version": "0.2.4",
-  "description": "Delegate to other agents through tools: spawn, message, resume, wait, task, status, list, collect, stop, report."
+  "description": "Delegate to other agents through tools: spawn, message, resume, wait, task, status, list, collect, stop, report.",
+  "author": {
+    "name": "Felippe Bisca"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/FBisca/agent-runtime",
+  "repository": "https://github.com/FBisca/agent-runtime"
 }
