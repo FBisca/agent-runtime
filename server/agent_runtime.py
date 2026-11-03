@@ -152,8 +152,12 @@ def record(runtime, name, state, role="unknown", parent=None, turn=None, native=
 
 UNREPORTED_GRACE_SECONDS = 30
 UNREPORTED_WHY = "never reported a status and may be at a folder-trust or startup dialog"
-UNREPORTED_NEXT = ("worker " + UNREPORTED_WHY + ": collect it, ask the user, then clear it with the "
-                   "user-approved hc keys or stop it")
+UNREPORTED_STEPS = (("it " + UNREPORTED_WHY, "collect the screen", "collect"),
+                    ("a startup dialog needs the user's say-so", "ask the user what to answer", None),
+                    ("the user approved hc keys, or the worker is not needed",
+                     "send the user-approved hc keys, or stop it", "stop"))
+# wait's `next` text is the status rows' actions joined, so both surfaces say the same thing.
+UNREPORTED_NEXT = "worker " + UNREPORTED_WHY + ": " + "; ".join(step[1] for step in UNREPORTED_STEPS)
 ERROR_NEXT = "hc reports an error status: collect it, ask the user, or stop it"
 
 
@@ -194,11 +198,9 @@ def hc_next(name, state):
         return [row("a person is needed (permission or question)", "read the screen and ask the user", "collect"),
                 row("answering the dialog needs the user's say-so", "ask the user what to answer")]
     if state == "unreported":
-        return [row("it " + UNREPORTED_WHY, "read the screen", "collect"),
-                row("a startup dialog needs the user's say-so", "ask the user what to answer"),
-                row("the user approved hc keys, or the worker is not needed", "send the approved hc keys, or stop it", "stop")]
+        return [row(*step) for step in UNREPORTED_STEPS]
     if state == "error":
-        return [row("hc reports an error status", "read the screen", "collect"),
+        return [row("hc reports an error status", "collect the screen", "collect"),
                 row("a person is needed", "ask the user what to do"),
                 row("worker no longer needed", "end it", "stop")]
     if state == "exited":

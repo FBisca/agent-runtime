@@ -463,6 +463,8 @@ os._exit(0)
         self.assertEqual(silent["state"], "working")
         for verb in ("collect", "ask the user", "hc keys", "stop"):
             self.assertIn(verb, silent["next"])
+        rows = hc_tools.lib.hc_next("w1", "unreported")
+        self.assertTrue(silent["next"].endswith("; ".join(r["do"] for r in rows)))
 
     def test_S6_never_reported_worker_inside_grace_keeps_working(self):
         """lead-delivery-gaps/S6 -> agent-runtime/R101"""
