@@ -1,0 +1,19 @@
+{
+  "name": "agent-runtime",
+  "owner": {
+    "name": "Felippe Bisca"
+  },
+  "metadata": {
+    "description": "Delegate work from Claude Code and Codex to other agents through MCP tools."
+  },
+  "plugins": [
+    {
+      "name": "agent-runtime",
+      "source": "./",
+      "description": "Delegate to other agents through tools: spawn, message, resume, wait, task, status, list, collect, stop, report.",
+      "version": "0.2.4",
+      "license": "MIT",
+      "repository": "https://github.com/FBisca/agent-runtime"
+    }
+  ]
+}

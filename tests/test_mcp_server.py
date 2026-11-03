@@ -10,7 +10,7 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
 SERVER = PLUGIN / "server" / "mcp_server.py"
-MARKETPLACE = PLUGIN.parents[1] / ".claude-plugin" / "marketplace.json"
+MARKETPLACE = PLUGIN / ".claude-plugin" / "marketplace.json"
 TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "stop", "report", "task"]
 
 
@@ -187,8 +187,8 @@ class WiringTests(unittest.TestCase):
         self.assertTrue(market["name"])
         self.assertTrue(market["owner"]["name"])
         entry = {p["name"]: p for p in market["plugins"]}["agent-runtime"]
-        self.assertEqual(entry["source"], "./plugins/agent-runtime")
-        self.assertTrue((MARKETPLACE.parents[1] / entry["source"] / ".claude-plugin" / "plugin.json").is_file())
+        self.assertEqual(entry["source"], "./")
+        self.assertTrue((PLUGIN / entry["source"] / ".claude-plugin" / "plugin.json").is_file())
 
 
 if __name__ == "__main__":

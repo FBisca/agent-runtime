@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "server" / "agent_runtime.py"
-BIN = Path(__file__).resolve().parents[4] / "bin" / "bin" / "agent-runtime"
+BIN = SCRIPT
 spec = importlib.util.spec_from_file_location("agent_runtime", SCRIPT)
 app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(app)

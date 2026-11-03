@@ -8,7 +8,6 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
 HOOKS = PLUGIN / "hooks"
-SETTINGS = PLUGIN.parents[1] / ".claude" / "settings.json"
 PRE = HOOKS / "pre_tool_use.py"
 START = HOOKS / "subagent_start.py"
 TOOL = "mcp__plugin_agent-runtime_agent-runtime__"
@@ -211,16 +210,6 @@ class WiringTests(unittest.TestCase):
             self.assertIn("${CLAUDE_PLUGIN_ROOT}/hooks/", command)
         self.assertNotIn("SessionStart", hooks)
 
-    def test_S18_settings_json_drops_agent_runtime_hooks_and_keeps_the_rest(self):
-        """agent-runtime-tools/S18"""
-        hooks = json.loads(SETTINGS.read_text())["hooks"]
-        self.assertNotIn("agent-runtime", json.dumps(hooks))
-        self.assertIn("SessionEnd", hooks)
-        self.assertIn("SessionStart", hooks)
-        self.assertTrue(any("agent-fleet/hooks/session_start.py" in h["command"]
-                            for entry in hooks["SessionStart"] for h in entry["hooks"]))
-        self.assertNotIn("SubagentStart", hooks)
-        self.assertNotIn("PreToolUse", hooks)
 
 
 if __name__ == "__main__":
