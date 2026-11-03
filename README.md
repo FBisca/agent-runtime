@@ -8,6 +8,10 @@ A lead agent calls `spawn`, workers run in their own terminal panes, and every r
 
 ![agent-runtime architecture](docs/assets/architecture.png)
 
+![A Claude lead delegating one question to a Claude judge and a Codex judge](docs/assets/demo.gif)
+
+*A Claude lead asks a Claude judge and a Codex judge the same question, then merges their verdicts ([full-quality MP4](docs/assets/demo.mp4)).*
+
 ## Architecture
 
 - **MCP server** (`server/mcp_server.py`): serves the ten delegation tools over stdio.
