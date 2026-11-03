@@ -57,6 +57,38 @@ class PeerDispatchTests(ToolCase):
         self.assertNotIn("unfinished", sent)
         self.assertNotIn("next", sent)
 
+    def test_S3_stopped_and_exited_then_acked_workers_count_as_finished(self):
+        """agent-runtime/R98"""
+        self.prepare()
+        self.tool("stop", name="w1")
+        Store(self.env).fail_observed({self.assignments[1]["assignment_id"]: "exited"})
+        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
+        self.assertEqual(batch["reason"], "failed")
+        sent = self.tool("message", to="w2", text="still there?", receipt=batch["receipt"])["structuredContent"]
+        self.assertNotIn("unfinished", sent)
+        self.assertNotIn("next", sent)
+        empty = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
+        self.assertEqual(empty["unfinished"], [])
+
+    def test_S2_worker_leading_its_own_children_gets_the_nudge_over_its_own_team(self):
+        """agent-runtime/R97"""
+        self.prepare()
+        row = {"name": "kid", "address": "t5", "parent": "t1", "status": "working"}
+        self.replies.update({"get:kid": {"out": json.dumps(row)}, "get:t5": {"out": json.dumps(row)}})
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+        proof = {"assignment_id": self.assignments[0]["assignment_id"]}
+        spawned, text = self.call(self.workers[0], "spawn", dict(proof, kind="worker", name="kid",
+                                                                 task="sub", cwd="/tmp"))
+        self.assertFalse(spawned["isError"], text)
+        self.assertEqual(spawned["structuredContent"]["unfinished"], 1)
+        self.assertEqual(spawned["structuredContent"]["next"], self.NUDGE)
+        down, text = self.call(self.workers[0], "message", {"to": "kid", "text": "go"})
+        self.assertEqual(down["structuredContent"]["unfinished"], 1, text)
+        up, text = self.call(self.workers[0], "message", {"to": "lead", "text": "hi"})
+        self.assertNotIn("unfinished", up["structuredContent"], text)
+        peer, text = self.call(self.workers[0], "message", {"to": "w2", "text": "hi"})
+        self.assertNotIn("unfinished", peer["structuredContent"], text)
+
     def test_mixed_workers_resume_promptly_with_fresh_ids_and_preserve_failed_dispatch(self):
         """agent-runtime/R45"""
         self.prepare()

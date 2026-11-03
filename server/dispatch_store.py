@@ -483,11 +483,20 @@ class Store:
             return [dict(row) for row in db.execute(
                 SNAPSHOT_SQL, (team, target, target, target, target, target, target))]
 
-    def unfinished_count(self, team):
-        """Current assignments of the team that are not complete: the set `wait` reports as unfinished."""
+    def owned_team(self, scope, lead, generation):
+        """The team this caller leads, or None; never creates one."""
         with self.transaction() as db:
-            return sum(1 for row in db.execute(READ_MEMBERS_SQL.format(selection="a.current=1"), [team])
-                       if row["state"] != "complete")
+            row = db.execute("SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
+                             (scope, lead, generation)).fetchone()
+            return row[0] if row else None
+
+    def unfinished_count(self, team):
+        """Unfinished members of wait(all)'s snapshot, read without acknowledging anything."""
+        with self.transaction() as db:
+            return db.execute(
+                "SELECT COUNT(*) FROM assignments WHERE state!='complete' AND id IN "
+                "(SELECT assignment_id FROM (%s))" % SNAPSHOT_SQL,
+                (team, "all", "all", "all", "all", "all", "all")).fetchone()[0]
 
     def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None, reserve=0):
         """Optional pure ready(batch) returns a final reason or None under this transaction.

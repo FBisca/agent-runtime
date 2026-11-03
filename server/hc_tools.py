@@ -673,6 +673,19 @@ def diagnostic(name, arguments, env, ctx, error):
 WAIT_NUDGE = "call wait(target=all) to receive their reports"
 
 
+def lead_unfinished(name, arguments, ctx, scope, generation, caller):
+    """Unfinished count over the caller's own team, or 0; a failed count never fails the call."""
+    try:
+        if not ctx.actor["worker_id"]:
+            return ctx.store.unfinished_count(ctx.actor["team_id"])
+        team = ctx.store.owned_team(scope, caller, generation)  # a worker with children leads its own team
+        if not team or (name == "message" and not ctx.store.has_worker(team, arguments.get("to"))):
+            return 0
+        return ctx.store.unfinished_count(team)
+    except (dispatch.StoreError, sqlite3.Error):
+        return 0
+
+
 def call(name, arguments, env, ctx):
     try:
         try:
@@ -734,8 +747,8 @@ def call_dispatch(name, arguments, env, ctx):
             payload = outcome["content"][0]["text"]
     if not isinstance(payload, dict):
         payload = {"result": payload}
-    if name in ("spawn", "resume", "message") and not outcome.get("isError") and not ctx.actor["worker_id"]:
-        pending = ctx.store.unfinished_count(ctx.actor["team_id"])
+    if name in ("spawn", "resume", "message") and not outcome.get("isError"):
+        pending = lead_unfinished(name, arguments, ctx, scope, generation, caller)
         if pending:
             payload = dict(payload, unfinished=pending, next=WAIT_NUDGE)
             outcome = result(payload, structured=True)
