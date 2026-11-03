@@ -6,22 +6,9 @@ An MCP server that lets coding agents delegate work to other agents, as plain to
 
 A lead agent calls `spawn`, workers run in their own terminal panes, and every report, message and task flows through a durable local store instead of terminal text. Leads block on one `wait` and get results back as tool results, so orchestration stays deterministic, auditable and resumable across both CLIs.
 
-## Architecture
+![agent-runtime architecture](docs/assets/architecture.png)
 
-```mermaid
-flowchart LR
-    subgraph Hosts
-        C[Claude Code]
-        X[Codex]
-    end
-    C -- MCP stdio --> S
-    X -- MCP stdio --> S
-    S[MCP server<br/>10 tools] --> D[(Dispatch store<br/>SQLite)]
-    S -- Herdr CLI --> H[Herdr panes<br/>workers]
-    H -- report --> S
-    C -. PreToolUse / SubagentStart .-> K[Hooks]
-    X -. PreToolUse .-> K
-```
+## Architecture
 
 - **MCP server** (`server/mcp_server.py`): serves the ten delegation tools over stdio.
 - **Dispatch store** (`server/dispatch_store.py`): private, versioned SQLite. Holds assignments, reports, peer messages and shared tasks, with idempotent server-attributed events.
@@ -38,7 +25,16 @@ flowchart LR
 - `status` and `collect` are diagnostic fallbacks and authorize against the store first.
 - Standard library only.
 
-## Hosts
+## Hosts and servers
+
+Two roles are swappable in principle, and neither has an adapter interface: the **host** (the coding agent that leads or works) and the **server** (the backend that runs worker sessions). Claude Code and Codex are the tested hosts; [Herdr](https://herdr.dev/core/)'s `hc` is the only supported server.
+
+| Role | Supported today | Where it plugs in |
+|---|---|---|
+| Host | Claude Code, Codex | `CLIS`, `spawn`, `cli_of_args`, `detect_cli`, `dispatch_identity` and the hooks (see Hosts) |
+| Server | Herdr `hc` | `hc` and `run` in `server/hc_tools.py`, `hc_get` and `run_command` in `server/agent_runtime.py` (see Servers) |
+
+### Hosts
 
 The MCP server and the dispatch store are host-agnostic: any coding agent that speaks MCP over stdio can call the ten tools. Hosts are pluggable in that sense only. Claude Code and Codex are the only hosts tested, and there is no host registry or adapter interface: support for each is a handful of explicit branches. Adding a host today means editing these integration points:
 
@@ -56,6 +52,25 @@ The MCP server and the dispatch store are host-agnostic: any coding agent that s
 | MCP registration | `.mcp.json` and `hooks/hooks.json` (Claude plugin); the block printed by `install.sh` (Codex) | the host's own config entry for a stdio MCP server |
 
 Spawning workers also requires Herdr's `hc` CLI whatever the host.
+
+### Servers
+
+Worker panes are run by Herdr's [`hc`](https://herdr.dev/core/) CLI. There is no backend interface: `hc` is called directly, through two small helpers, so a new server replaces those calls. The dispatch store (reports, messages, tasks) is local SQLite and does not depend on the server; the server is only how workers are started, addressed, observed and stopped.
+
+| Server job | Today's call | Where |
+|---|---|---|
+| Run helpers | every call goes through `hc` and `run` | `server/hc_tools.py` |
+| Start a worker pane | `hc run --bg --name <n> --cwd <dir> --parent <id> --json <argv>` | `spawn` in `server/hc_tools.py` |
+| Terminal state and identity | `hc get <id> --json` (name, parent, status, foreground argv) | `hc_get` in `server/agent_runtime.py`, with `hc_state` and `hc_record` there mapping the reply to a worker state |
+| Send text to a terminal | `hc send [flags] <target> <text>` (prompts, resume, peer messages) | `server/hc_tools.py` |
+| Read a screen | `hc read <n> --lines N` | `collect` in `server/hc_tools.py`; `run_command` in `server/agent_runtime.py` for `status` |
+| Wait for news | `hc wait --children any\|all` or `hc wait <n>`, with `--timeout --json` | `wait` in `server/hc_tools.py` |
+| List terminals | `hc ls --all --json` | `server/hc_tools.py`, `server/agent_runtime.py` |
+| Stop and remove | `hc kill <n>`, `hc rm <n>` | `stop` in `server/hc_tools.py` |
+| Terminal IDs and scope | `HC_TERMINAL_ID` is the caller's terminal; `hc_server` derives the scope from `HC_TERMINAL_SOCKET` (else `HC_SCOPE`) | `me` and `hc_server` in `server/hc_tools.py` |
+| Screen markers | per-app prompt and interrupt text that tell idle from busy in a read screen | `server/markers.json` |
+
+A new backend must provide: start a named background terminal under a parent and return its ID, report a terminal's state and parent, accept text input, return recent screen text, block until a child changes state, list terminals, and stop and remove one. The `hc`-specific reply shapes are parsed where listed above, so those parsers change with the backend. The `herdmates` and `native` runtimes in `resolve` are separate paths without `hc` and only offer status.
 
 ## Requirements
 
