@@ -72,6 +72,19 @@ Worker panes are run by Herdr's [`hc`](https://herdr.dev/core/) CLI. There is no
 
 A new backend must provide: start a named background terminal under a parent and return its ID, report a terminal's state and parent, accept text input, return recent screen text, block until a child changes state, list terminals, and stop and remove one. The `hc`-specific reply shapes are parsed where listed above, so those parsers change with the backend. The `herdmates` and `native` runtimes in `resolve` are separate paths without `hc` and only offer status.
 
+## Usage
+
+Ask in plain words; the lead agent turns it into tool calls.
+
+| You say | Lead calls |
+|---|---|
+| "Ask Codex to review this diff" | `spawn(kind="worker", cli="codex", name="codex-review", task=…, cwd=…)`, then `wait(target="all")` |
+| "Have Claude and Codex both try this" | two `spawn`s (`cli="claude"`, `cli="codex"`), one `wait(target="all")` |
+| "Tell the reviewer to also check tests" | `message(to="codex-review", text=…)` or `resume(name=…, task=…)` |
+| "What is it doing?" | `status(name=…)`, then `collect` if it went quiet |
+
+`cli` defaults to `claude`. Reports return as tool results; the lead never polls panes.
+
 ## Requirements
 
 - Python 3.11+
