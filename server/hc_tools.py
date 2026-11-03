@@ -670,6 +670,9 @@ def diagnostic(name, arguments, env, ctx, error):
     return result(payload, structured=True)
 
 
+WAIT_NUDGE = "call wait(target=all) to receive their reports"
+
+
 def call(name, arguments, env, ctx):
     try:
         try:
@@ -731,6 +734,11 @@ def call_dispatch(name, arguments, env, ctx):
             payload = outcome["content"][0]["text"]
     if not isinstance(payload, dict):
         payload = {"result": payload}
+    if name in ("spawn", "resume", "message") and not outcome.get("isError") and not ctx.actor["worker_id"]:
+        pending = ctx.store.unfinished_count(ctx.actor["team_id"])
+        if pending:
+            payload = dict(payload, unfinished=pending, next=WAIT_NUDGE)
+            outcome = result(payload, structured=True)
     if gated_read and arguments.get("receipt") is None:
         if ctx.actor.get("pin"):  # session state, not inbox state: first contact still pins
             ctx.store.pin(ctx.actor["pin"])

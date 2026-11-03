@@ -62,6 +62,15 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertIn("diagnostic", desc["collect"])
         self.assertIn("promptly", desc["spawn"])
 
+    def test_S4_wait_and_resume_descriptions_say_delivery_is_pull_only(self):
+        """agent-runtime/R99"""
+        desc = {n: d.lower() for n, d, _ in mcp_server.TOOLS}
+        for name in ("wait", "resume"):
+            self.assertIn("pull-only", desc[name], name)
+            self.assertIn("new wait(all)", desc[name], name)
+        listing = [{"description": d, "inputSchema": s} for _, d, s in mcp_server.TOOLS]
+        self.assertLessEqual(count_words(listing), 400)
+
     def test_plugin_version_is_bumped_and_consistent(self):
         """agent-runtime/R56"""
         version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]

@@ -483,6 +483,12 @@ class Store:
             return [dict(row) for row in db.execute(
                 SNAPSHOT_SQL, (team, target, target, target, target, target, target))]
 
+    def unfinished_count(self, team):
+        """Current assignments of the team that are not complete: the set `wait` reports as unfinished."""
+        with self.transaction() as db:
+            return sum(1 for row in db.execute(READ_MEMBERS_SQL.format(selection="a.current=1"), [team])
+                       if row["state"] != "complete")
+
     def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None, reserve=0):
         """Optional pure ready(batch) returns a final reason or None under this transaction.
 
