@@ -125,6 +125,32 @@ class InstallWiringTest(unittest.TestCase):
             self.assertEqual((Path(tmp) / "bin" / "agent-runtime").resolve(), ROOT / "bin" / "agent-runtime")
 
 
+class HostsSectionTest(unittest.TestCase):
+    POINTS = {"server/hc_tools.py": ["CLIS", "spawn", "dispatch_identity", "codex_instructions", "SUBAGENT_TOOL"],
+              "server/agent_runtime.py": ["cli_of_args", "detect_cli", "foreground_cli", "hc_app", "CODEX_ENV_MARKERS", "resolve"],
+              "server/mcp_server.py": ["TOOLS"],
+              "server/markers.json": ["claude-code", "codex"],
+              "hooks/pre_tool_use.py": ["agent_id", "TOOL_NAME"]}
+
+    def test_S16_readme_says_hosts_are_pluggable_names_the_tested_ones_and_points_to_the_code(self):
+        """agent-runtime-standalone/S16"""
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("Works with any coding agent that speaks MCP; tested with Claude Code and Codex.", readme)
+        start = readme.index("## Hosts")
+        end = readme.find("\n## ", start + 1)
+        section = readme[start:end if end > 0 else None]
+        self.assertRegex(section, r"(?i)pluggable")
+        self.assertIn("Claude Code", section)
+        self.assertIn("Codex", section)
+        self.assertIn("integration points", section)
+        for path, symbols in self.POINTS.items():
+            self.assertIn(f"`{path}`", section, path)
+            code = (ROOT / path).read_text()
+            for symbol in symbols:
+                self.assertIn(symbol, code, f"{symbol} missing from {path}")
+                self.assertIn(f"`{symbol}`", section, f"README does not point to {symbol}")
+
+
 class CiWorkflowTest(unittest.TestCase):
     def test_S5_ci_runs_the_unittest_suite_on_python_311_and_up(self):
         """agent-runtime-standalone/S5"""
