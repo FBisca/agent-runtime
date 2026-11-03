@@ -27,6 +27,9 @@ def turn_ended(assignment, observations):
     return seen is not None and seen > recorded + (assignment.get("mode") == "working")
 
 
+NEEDS_PERSON_STATES = ("unreported", "error")
+UNREPORTED_NEXT = ("worker never reported a status and may be at a folder-trust or startup dialog: collect it, "
+                   "ask the user, then clear it with the user-approved hc keys or stop it")
 FAILURE_STATES = ("exited", "finished", "interrupted", "replaced")
 
 
@@ -46,6 +49,8 @@ def reason(batch, target, observations):
                 assignment["state"] = "failed"
             elif runtime == "blocked":
                 assignment["state"] = "blocked"
+            elif runtime == "unreported":
+                assignment["next"] = UNREPORTED_NEXT
     batch["unfinished"] = [a["assignment_id"] for a in batch["assignments"] if a["state"] != "complete"]
     states = {a["state"] for a in batch["assignments"]}
     # D24: the turn ended (hc done/idle) with no accepted complete/blocked/decision report. A report that
@@ -58,7 +63,8 @@ def reason(batch, target, observations):
         return "messages" if batch["messages"] else "empty"
     if "failed" in states:
         return "failed"
-    if ended or states.intersection(("blocked", "decision")):
+    stuck = any(a.get("runtime_state") in NEEDS_PERSON_STATES and a["state"] != "complete" for a in batch["assignments"])
+    if ended or stuck or states.intersection(("blocked", "decision")):
         return "attention"
     if not batch["unfinished"]:
         return "completed"

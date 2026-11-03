@@ -435,3 +435,77 @@ os._exit(0)
         observe.assert_called_once()
         with store.transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], 1)
+
+    def set_row(self, index, status, **extra):
+        """Rewrite w1/w2's hc ls row and hc get reply."""
+        row = dict(self.rows[index], status=status, **extra)
+        self.rows[index] = row
+        self.replies["ls"]["out"] = json.dumps({"terminals": self.rows})
+        for key in (row["name"], row["address"]):
+            self.replies["get:" + key] = {"out": json.dumps(row)}
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+
+    def silent(self, index=0, age=60, **extra):
+        self.set_row(index, None, state="live", status_ms=None, reported=False, turn=0,
+                     created_ms=int((time.time() - age) * 1000), exit_code=None, **extra)
+
+    def wait_all(self):
+        return self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0.3}))
+
+    def test_S5_never_reported_worker_past_grace_needs_attention(self):
+        """lead-delivery-gaps/S5 -> agent-runtime/R100"""
+        self.prepare()
+        self.silent(0, age=60)
+        batch = self.wait_all()
+        self.assertEqual(batch["reason"], "attention")
+        silent = next(a for a in batch["assignments"] if a["name"] == "w1")
+        self.assertEqual(silent["runtime_state"], "unreported")
+        self.assertEqual(silent["state"], "working")
+        for verb in ("collect", "ask the user", "hc keys", "stop"):
+            self.assertIn(verb, silent["next"])
+
+    def test_S6_never_reported_worker_inside_grace_keeps_working(self):
+        """lead-delivery-gaps/S6 -> agent-runtime/R101"""
+        self.prepare()
+        self.silent(0, age=5)
+        batch = self.wait_all()
+        self.assertEqual(batch["reason"], "timeout")
+        self.assertNotIn("unreported", json.dumps(batch["assignments"]))
+
+    def test_S7_worker_that_reported_before_is_not_unreported(self):
+        """lead-delivery-gaps/S7 -> agent-runtime/R102"""
+        self.prepare()
+        self.silent(0, age=60)
+        self.set_row(0, None, state="live", status_ms=1000, reported=True, turn=2,
+                     created_ms=int((time.time() - 60) * 1000), exit_code=None)
+        batch = self.wait_all()
+        self.assertEqual(batch["reason"], "timeout")
+        self.assertNotIn("unreported", json.dumps(batch["assignments"]))
+
+    def test_S8_exited_never_reported_worker_fails_not_unreported(self):
+        """lead-delivery-gaps/S8 -> agent-runtime/R103"""
+        for state in ("exited", "interrupted"):
+            with self.subTest(state=state):
+                self.prepare()
+                self.silent(0, age=60)
+                self.rows[0]["state"] = state
+                self.set_row(0, None, state=state)
+                batch = self.wait_all()
+                self.assertEqual(batch["reason"], "failed")
+                self.assertNotIn("unreported", json.dumps(batch))
+
+    def test_S9_hc_error_status_needs_attention(self):
+        """lead-delivery-gaps/S9 -> agent-runtime/R104"""
+        self.prepare()
+        self.set_row(0, "error")
+        batch = self.wait_all()
+        self.assertEqual(batch["reason"], "attention")
+        self.assertEqual(next(a for a in batch["assignments"] if a["name"] == "w1")["runtime_state"], "error")
+
+    def test_S11_all_statuses_non_null_runs_no_hc_get(self):
+        """lead-delivery-gaps/S11 -> agent-runtime/R106"""
+        self.prepare()
+        workers = lambda: [c for c in self.runs("get") if c[1] in ("w1", "w2", "t1", "t2")]
+        before = len(workers())
+        self.wait_all()
+        self.assertEqual(len(workers()), before)

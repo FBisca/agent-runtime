@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -202,3 +203,22 @@ class ArgvTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnreportedTests(unittest.TestCase):
+    def silent(self, age):
+        return {"address": "t9", "name": "fix", "parent": "t0", "state": "live", "status": None, "status_ms": None,
+                "reported": False, "turn": 0, "created_ms": int((time.time() - age) * 1000), "exit_code": None}
+
+    def test_S10_status_shows_unreported_with_the_same_next_rows(self):
+        """lead-delivery-gaps/S10 -> agent-runtime/R105"""
+        info = status_of(self.silent(60))
+        self.assertEqual(info["state"], "unreported")
+        self.assertEqual([r["verb"] for r in info["next"]], ["collect", None, None])
+        text = " ".join(r["do"] for r in info["next"])
+        for word in ("ask the user", "hc keys", "stop"):
+            self.assertIn(word, text)
+
+    def test_S10_status_inside_grace_stays_unknown(self):
+        """lead-delivery-gaps/S10 -> agent-runtime/R105"""
+        self.assertEqual(status_of(self.silent(5))["state"], "unknown")

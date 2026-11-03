@@ -129,7 +129,7 @@ def format_line(info):
     return " ".join("%s=%s" % (key, info[key]) for key in FIELDS if key in info)
 
 
-CONTRACT_STATES = ("working", "idle", "interrupted", "blocked", "done", "exited", "unknown")
+CONTRACT_STATES = ("working", "idle", "interrupted", "blocked", "done", "exited", "unreported", "unknown")
 READ_ERRORS = (OSError, RuntimeError, ValueError, subprocess.SubprocessError)
 
 
@@ -150,6 +150,21 @@ def record(runtime, name, state, role="unknown", parent=None, turn=None, native=
             "turn": turn, "native": native, "next": list(next_rows)}
 
 
+UNREPORTED_GRACE_SECONDS = 30
+UNREPORTED_NEXT = ("never reported a status and may be at a folder-trust or startup dialog: collect it, "
+                   "ask the user, then clear it with the user-approved hc keys or stop it")
+
+
+def never_reported(raw, now=None):
+    """A live terminal that reported no status ever, more than the grace period after it was created."""
+    created = raw.get("created_ms")
+    if raw.get("state") != "live" or raw.get("status") is not None or raw.get("status_ms") is not None:
+        return False
+    if raw.get("reported") is not False or raw.get("turn") or isinstance(created, bool) or not isinstance(created, (int, float)):
+        return False
+    return ((now if now is not None else time.time()) * 1000 - created) > UNREPORTED_GRACE_SECONDS * 1000
+
+
 def hc_state(raw):
     """Map an `hc get`/`hc ls` record (status is an object {app, state} or a string) to a contract state."""
     status = raw.get("status")
@@ -157,6 +172,8 @@ def hc_state(raw):
         status = status.get("state")
     if "exited" in (raw.get("state"), status) or "finished" in (raw.get("state"), status):
         return "exited"
+    if never_reported(raw):
+        return "unreported"
     return status if status in ("working", "idle", "blocked", "done") else "unknown"
 
 
@@ -171,6 +188,10 @@ def hc_next(name, state):
     if state == "blocked":
         return [row("a person is needed (permission or question)", "read the screen and ask the user", "collect"),
                 row("answering the dialog needs the user's say-so", "ask the user what to answer")]
+    if state == "unreported":
+        return [row("it " + UNREPORTED_NEXT.split(": ")[0], "read the screen", "collect"),
+                row("a startup dialog needs the user's say-so", "ask the user what to answer"),
+                row("clear it with the user-approved hc keys, or end the worker", "send the approved hc keys, or stop it")]
     if state == "exited":
         return [row("process ended", "read the output", "collect"), row("clean up", "end it", "stop")]
     return [row("state not reported", "check again", "status"), row("see the screen", "read the output", "collect")]

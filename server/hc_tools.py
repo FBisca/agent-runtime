@@ -481,7 +481,17 @@ def wait(arguments, env, ctx):
                     state = row["state"]
                 if (row.get("name"), row.get("parent")) != (member["name"], member["lead"]):
                     state = "replaced"
-            if state not in ("working", "idle", "done", "blocked", "exited", "finished", "interrupted", "replaced"):
+            if row and state is None and row.get("state") == "live":
+                # ls lacks created_ms/reported: read the one terminal, only for silent live members.
+                try:
+                    code, out, _ = run(["hc", "get", member["address"], "--json"], env, ctx, timeout)
+                    detail = json.loads(out) if code == 0 else None
+                except (ToolError, ValueError):
+                    detail = None
+                if isinstance(detail, dict) and lib.never_reported(detail):
+                    state = "unreported"
+            if state not in ("working", "idle", "done", "blocked", "error", "unreported", "exited", "finished",
+                             "interrupted", "replaced"):
                 state = "unknown"
             observations[member["assignment_id"]] = state
             if row:
