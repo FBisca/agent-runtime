@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -40,10 +41,11 @@ class MarketplaceInstallTest(unittest.TestCase):
         # Launched the way Claude launches it from .mcp.json, with the plugin root substituted.
         spec = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]["agent-runtime"]
         argv = [spec["command"], *[a.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin)) for a in spec["args"]]]
-        env = {"PATH": os.environ["PATH"], "HOME": tempfile.gettempdir()}
-        self.assertEqual(sorted(converse(argv, env)), sorted(TOOLS))
-        # And the way Codex launches it, through the bin shim.
-        self.assertEqual(sorted(converse([str(ROOT / "bin" / "agent-runtime-mcp")], env)), sorted(TOOLS))
+        with tempfile.TemporaryDirectory() as home:
+            env = {"PATH": os.environ["PATH"], "HOME": home}
+            self.assertEqual(sorted(converse(argv, env)), sorted(TOOLS))
+            # And the way Codex launches it, through the bin shim.
+            self.assertEqual(sorted(converse([str(ROOT / "bin" / "agent-runtime-mcp")], env)), sorted(TOOLS))
 
 
 class BinShimTest(unittest.TestCase):
@@ -74,6 +76,53 @@ class BinShimTest(unittest.TestCase):
                 self.assertTrue((Path(tmp) / "bin" / name).resolve() == (ROOT / "bin" / name))
             self.assertIn("/plugin marketplace add FBisca/agent-runtime", outs[0].stdout)
             self.assertIn("agent-runtime-mcp", outs[0].stdout)
+
+
+class InstallWiringTest(unittest.TestCase):
+    def run_install(self, bin_dir, home):
+        return subprocess.run([str(ROOT / "install.sh")], env={"PATH": os.environ["PATH"], "HOME": home, "BIN_DIR": bin_dir},
+                              capture_output=True, text=True, timeout=15)
+
+    def test_printed_codex_block_is_complete_valid_toml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.run_install(tmp + '/my "bin', tmp)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            cfg = tomllib.loads(out.stdout[out.stdout.index("[mcp_servers.agent-runtime]"):])
+            server = cfg["mcp_servers"]["agent-runtime"]
+            self.assertEqual(server["command"], tmp + '/my "bin/agent-runtime-mcp')
+            self.assertEqual(server["env"]["AGENT_RUNTIME_DISPATCH"], "1")
+            self.assertEqual(server["tool_timeout_sec"], 600)
+            self.assertEqual(sorted(server["tools"]), sorted(TOOLS))
+            for name, tool in server["tools"].items():
+                self.assertEqual(tool["output_token_limit"], 524288, name)
+                if name in ("spawn", "message", "resume", "stop", "report", "task"):
+                    self.assertEqual(tool["approval_mode"], "approve", name)
+                else:
+                    self.assertNotIn("approval_mode", tool, name)
+            pre = cfg["hooks"]["PreToolUse"]
+            self.assertRegex("Bash", pre[0]["matcher"])
+            self.assertRegex("mcp__agent-runtime__task", pre[1]["matcher"])
+            for entry in pre:
+                hook = entry["hooks"][0]
+                self.assertEqual(hook["timeout"], 5)
+                self.assertEqual(hook["command"], '"%s/my "bin/agent-runtime-hook" --cli codex' % tmp)
+
+    def test_refuses_to_overwrite_a_real_file_or_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "bin" / "agent-runtime-hook").mkdir(parents=True)
+            out = self.run_install(tmp + "/bin", tmp)
+            self.assertNotEqual(out.returncode, 0)
+            self.assertIn("refusing", out.stderr)
+            self.assertFalse((Path(tmp) / "bin" / "agent-runtime").exists())
+
+    def test_installer_resolves_its_root_through_a_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / "install.sh"
+            link.symlink_to(ROOT / "install.sh")
+            out = subprocess.run([str(link)], env={"PATH": os.environ["PATH"], "HOME": tmp, "BIN_DIR": tmp + "/bin"},
+                                 capture_output=True, text=True, timeout=15)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual((Path(tmp) / "bin" / "agent-runtime").resolve(), ROOT / "bin" / "agent-runtime")
 
 
 class CiWorkflowTest(unittest.TestCase):

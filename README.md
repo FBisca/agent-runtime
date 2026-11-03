@@ -68,7 +68,7 @@ git clone https://github.com/FBisca/agent-runtime.git
 
 ### Codex
 
-Codex has no plugin marketplace, so it uses shims. `install.sh` links `agent-runtime`, `agent-runtime-hook` and `agent-runtime-mcp` into `~/.local/bin` (override with `BIN_DIR`) and prints a ready-to-paste `~/.codex/config.toml` block. It is idempotent.
+Codex has no plugin marketplace, so it uses shims. `install.sh` links `agent-runtime`, `agent-runtime-hook` and `agent-runtime-mcp` into `~/.local/bin` (override with `BIN_DIR`) and prints a complete, ready-to-paste `~/.codex/config.toml` block. It is idempotent.
 
 ```sh
 ./install.sh
@@ -76,7 +76,7 @@ Codex has no plugin marketplace, so it uses shims. `install.sh` links `agent-run
 
 The block registers the MCP server with `AGENT_RUNTIME_DISPATCH=1`, a 600 s tool timeout and `approve` mode on the mutating tools (`spawn`, `message`, `resume`, `stop`, `report`, `task`), plus PreToolUse hooks for Bash and the runtime's own tools.
 
-`agent-runtime resolve` and `agent-runtime contract` show which runtime a session resolves to.
+`agent-runtime resolve` shows which runtime a session resolves to; `status` and `list` inspect workers.
 
 ## Tests
 
@@ -88,7 +88,7 @@ No dependencies. Tests drive the server over stdio against a fake `hc`. The live
 
 ## How it is built
 
-Spec- and plan-driven. [`docs/specs/agent-runtime.md`](docs/specs/agent-runtime.md) is the living contract: numbered WHEN/THEN requirements, each traced to a scenario and a test. [`docs/plans/`](docs/plans/) holds the archived plans that produced it, with their decisions and scenarios. Every behavior change starts as a scenario, is written red first, and lands with its requirement.
+Spec- and plan-driven. [`docs/specs/agent-runtime.md`](docs/specs/agent-runtime.md) is the living contract: numbered WHEN/THEN requirements, each traced to a scenario and a test (requirements about a consuming repo's config are marked as moved there). [`docs/plans/`](docs/plans/) holds the archived plans that produced it, with their decisions and scenarios. Every behavior change starts as a scenario, is written red first, and lands with its requirement.
 
 ## License
 

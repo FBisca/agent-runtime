@@ -207,7 +207,7 @@ class WiringTests(unittest.TestCase):
         commands = [h["command"] for entry in pre + hooks["SubagentStart"] for h in entry["hooks"]]
         self.assertEqual(len(commands), 3)
         for command in commands:
-            self.assertIn("${CLAUDE_PLUGIN_ROOT}/hooks/", command)
+        self.assertIn('"${CLAUDE_PLUGIN_ROOT}"/hooks/', command)
         self.assertNotIn("SessionStart", hooks)
 
 
