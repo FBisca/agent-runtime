@@ -22,7 +22,7 @@ Under structured dispatch (`AGENT_RUNTIME_DISPATCH=1`, enabled in both Claude an
 - **R9** WHEN `agent-runtime help` runs, THEN it lists the runtime's capabilities, each marked in-contract yes or no. (from agent-runtime/S9)
 - **R10** WHEN a capability is marked not in contract, THEN the printed gap rule says: propose the change in chat in one line, ask before the raw command. (from agent-runtime/S10)
 - **R11** WHEN `agent-runtime status <name>` runs under hc, THEN it prints JSON with `name, runtime, role, parent, state, turn, native, next` and `next` is non-empty. (from agent-runtime/S11)
-- **R12** WHEN hc reports working, idle, done, blocked, exited/finished or anything else, THEN `state` is working, idle, done, blocked, exited or unknown, and a blocked worker's `next` includes a raw `hc keys` row marked as a gap. (from agent-runtime/S12)
+- **R12** WHEN hc reports working, idle, done, blocked, exited/finished or anything else, THEN `state` is working, idle, done, blocked, error, exited or unknown (`error` for an hc `error` status, R104), and a blocked worker's `next` includes a raw `hc keys` row marked as a gap. (from agent-runtime/S12)
 - **R13** WHEN `status` runs under herdmates, THEN it maps `herdr pane get` output (the logic moved from `orchestrate.py herdr`) and the two moved tests pass. (from agent-runtime/S13)
 - **R14** WHEN `status` runs under native, THEN `state` is unknown and `next` points to the return value or SendMessage. (from agent-runtime/S14)
 - **R15** WHEN `agent-runtime list` runs under hc, THEN it returns one status per child of the caller. (from agent-runtime/S15)

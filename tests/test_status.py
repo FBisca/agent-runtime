@@ -201,10 +201,6 @@ class ArgvTests(unittest.TestCase):
         self.assertEqual(app.trim_argv(["y" * 40, "y" * 41]), ["y" * 40, "<task>"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UnreportedTests(unittest.TestCase):
     def silent(self, age):
         return {"address": "t9", "name": "fix", "parent": "t0", "state": "live", "status": None, "status_ms": None,
@@ -214,11 +210,30 @@ class UnreportedTests(unittest.TestCase):
         """lead-delivery-gaps/S10 -> agent-runtime/R105"""
         info = status_of(self.silent(60))
         self.assertEqual(info["state"], "unreported")
-        self.assertEqual([r["verb"] for r in info["next"]], ["collect", None, None])
+        self.assertEqual([r["verb"] for r in info["next"]], ["collect", None, "stop"])
         text = " ".join(r["do"] for r in info["next"])
         for word in ("ask the user", "hc keys", "stop"):
             self.assertIn(word, text)
 
+    def test_S10_rows_missing_reported_or_created_ms_are_never_flagged(self):
+        """lead-delivery-gaps/S10 -> agent-runtime/R105"""
+        for missing in ("reported", "created_ms", "status_ms", "turn"):
+            raw = self.silent(60)
+            del raw[missing]
+            with self.subTest(missing=missing):
+                self.assertEqual(status_of(raw)["state"], "unknown")
+
+    def test_S9_status_shows_error_with_next_rows(self):
+        """lead-delivery-gaps/S9 -> agent-runtime/R104"""
+        raw = dict(self.silent(60), status="error", status_ms=5, reported=True, turn=1)
+        info = status_of(raw)
+        self.assertEqual(info["state"], "error")
+        self.assertEqual([r["verb"] for r in info["next"]], ["collect", None, "stop"])
+
     def test_S10_status_inside_grace_stays_unknown(self):
         """lead-delivery-gaps/S10 -> agent-runtime/R105"""
         self.assertEqual(status_of(self.silent(5))["state"], "unknown")
+
+
+if __name__ == "__main__":
+    unittest.main()
