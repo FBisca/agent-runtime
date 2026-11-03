@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -123,6 +124,68 @@ class InstallWiringTest(unittest.TestCase):
                                  capture_output=True, text=True, timeout=15)
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertEqual((Path(tmp) / "bin" / "agent-runtime").resolve(), ROOT / "bin" / "agent-runtime")
+
+
+class HostsSectionTest(unittest.TestCase):
+    POINTS = {"server/hc_tools.py": ["CLIS", "spawn", "dispatch_identity", "codex_instructions", "SUBAGENT_TOOL"],
+              "server/agent_runtime.py": ["cli_of_args", "detect_cli", "foreground_cli", "hc_app", "CODEX_ENV_MARKERS", "resolve"],
+              "server/mcp_server.py": ["TOOLS"],
+              "server/markers.json": ["claude-code", "codex"],
+              "hooks/pre_tool_use.py": ["agent_id", "TOOL_NAME"]}
+    SERVER_POINTS = {"server/hc_tools.py": ["hc", "run", "spawn", "hc_server", "me", "collect", "wait", "stop"],
+                     "server/agent_runtime.py": ["hc_get", "run_command", "hc_state", "hc_record"],
+                     "server/markers.json": ["prompt", "interrupt"]}
+
+    def test_S16_readme_says_hosts_are_pluggable_names_the_tested_ones_and_points_to_the_code(self):
+        """agent-runtime-standalone/S16"""
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("Works with any coding agent that speaks MCP; tested with Claude Code and Codex.", readme)
+        start = readme.index("## Hosts")
+        end = readme.find("\n## ", start + 1)
+        section = readme[start:end if end > 0 else None]
+        self.assertRegex(section, r"(?i)pluggable")
+        self.assertIn("Claude Code", section)
+        self.assertIn("Codex", section)
+        self.assertIn("integration points", section)
+        for path, symbols in self.POINTS.items():
+            self.assertIn(f"`{path}`", section, path)
+            code = (ROOT / path).read_text()
+            for symbol in symbols:
+                self.assertIn(symbol, code, f"{symbol} missing from {path}")
+                self.assertIn(f"`{symbol}`", section, f"README does not point to {symbol}")
+
+
+    def test_S16_readme_names_herdr_hc_as_the_server_and_points_to_its_integration_points(self):
+        """agent-runtime-standalone/S16"""
+        readme = (ROOT / "README.md").read_text()
+        start = readme.index("### Servers")
+        end = readme.find("\n## ", start + 1)
+        section = readme[start:end if end > 0 else None]
+        self.assertIn("(https://herdr.dev/core/)", section)
+        self.assertIn("`hc`", section)
+        self.assertRegex(section, r"(?i)no backend interface")
+        for path, symbols in self.SERVER_POINTS.items():
+            self.assertIn(f"`{path}`", section, path)
+            code = (ROOT / path).read_text()
+            for symbol in symbols:
+                if path.endswith(".py"):
+                    self.assertRegex(code, r"(?m)^def %s\(" % symbol, f"{symbol} missing from {path}")
+                    self.assertIn(f"`{symbol}`", section, f"README does not point to {symbol}")
+                else:
+                    self.assertIn(symbol, code)
+        for call in ("run --bg", "get <id> --json", "send", "read", "wait", "ls --all --json", "kill", "rm"):
+            self.assertIn(f"hc {call}", section)
+            self.assertIn(call.split()[0], (ROOT / "server/hc_tools.py").read_text() + (ROOT / "server/agent_runtime.py").read_text())
+
+    def test_readme_shows_an_architecture_image_that_exists_and_is_small(self):
+        readme = (ROOT / "README.md").read_text()
+        match = re.search(r"!\[[^\]]*\]\((docs/assets/[^)]+\.png)\)", readme)
+        self.assertIsNotNone(match, "README has no image under docs/assets")
+        image = ROOT / match.group(1)
+        self.assertTrue(image.is_file())
+        self.assertLess(image.stat().st_size, 600_000)
+        self.assertEqual(image.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertLess(readme.index(match.group(0)), readme.index("## Architecture"), "image sits under the intro")
 
 
 class CiWorkflowTest(unittest.TestCase):

@@ -2,26 +2,13 @@
 
 [![ci](https://github.com/FBisca/agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/FBisca/agent-runtime/actions/workflows/ci.yml)
 
-An MCP server that lets Claude Code and Codex delegate work to other agents, as plain tool calls.
+An MCP server that lets coding agents delegate work to other agents, as plain tool calls. Works with any coding agent that speaks MCP; tested with Claude Code and Codex.
 
 A lead agent calls `spawn`, workers run in their own terminal panes, and every report, message and task flows through a durable local store instead of terminal text. Leads block on one `wait` and get results back as tool results, so orchestration stays deterministic, auditable and resumable across both CLIs.
 
-## Architecture
+![agent-runtime architecture](docs/assets/architecture.png)
 
-```mermaid
-flowchart LR
-    subgraph Hosts
-        C[Claude Code]
-        X[Codex]
-    end
-    C -- MCP stdio --> S
-    X -- MCP stdio --> S
-    S[MCP server<br/>10 tools] --> D[(Dispatch store<br/>SQLite)]
-    S -- Herdr CLI --> H[Herdr panes<br/>workers]
-    H -- report --> S
-    C -. PreToolUse / SubagentStart .-> K[Hooks]
-    X -. PreToolUse .-> K
-```
+## Architecture
 
 - **MCP server** (`server/mcp_server.py`): serves the ten delegation tools over stdio.
 - **Dispatch store** (`server/dispatch_store.py`): private, versioned SQLite. Holds assignments, reports, peer messages and shared tasks, with idempotent server-attributed events.
@@ -37,6 +24,53 @@ flowchart LR
 - Failure hygiene: a failed spawn fails its assignment and releases its linked task.
 - `status` and `collect` are diagnostic fallbacks and authorize against the store first.
 - Standard library only.
+
+## Hosts and servers
+
+Two roles are swappable in principle, and neither has an adapter interface: the **host** (the coding agent that leads or works) and the **server** (the backend that runs worker sessions). Claude Code and Codex are the tested hosts; [Herdr](https://herdr.dev/core/)'s `hc` is the only supported server.
+
+| Role | Supported today | Where it plugs in |
+|---|---|---|
+| Host | Claude Code, Codex | `CLIS`, `spawn`, `cli_of_args`, `detect_cli`, `dispatch_identity` and the hooks (see Hosts) |
+| Server | Herdr `hc` | `hc` and `run` in `server/hc_tools.py`, `hc_get` and `run_command` in `server/agent_runtime.py` (see Servers) |
+
+### Hosts
+
+The MCP server and the dispatch store are host-agnostic: any coding agent that speaks MCP over stdio can call the ten tools. Hosts are pluggable in that sense only. Claude Code and Codex are the only hosts tested, and there is no host registry or adapter interface: support for each is a handful of explicit branches. Adding a host today means editing these integration points:
+
+| Concern | Where | What a new host provides |
+|---|---|---|
+| Host names | `CLIS` in `server/hc_tools.py`; the `cli` enum in `TOOLS` in `server/mcp_server.py`; the `--cli` choices in `server/agent_runtime.py` | a name |
+| Launching a worker | `spawn` in `server/hc_tools.py` | the argv that starts the CLI non-interactively with the task text (Claude: `--agent implementer`; Codex: `--no-daemon` plus its implementer instructions) |
+| Worker instructions | `codex_instructions` in `server/hc_tools.py`; for Claude, the agent file the host loads | where the host reads the implementer role from |
+| Subagent wording | `SUBAGENT_TOOL` in `server/hc_tools.py` | the name of the host's own subagent tool, used in the `lookup` refusal |
+| Detecting the host | `cli_of_args` (process name), `detect_cli` and `CODEX_ENV_MARKERS` (environment markers), `foreground_cli` (Herdr foreground program), all in `server/agent_runtime.py` | a process basename and/or environment variable that identifies it |
+| Runtime choice | `resolve` in `server/agent_runtime.py` | which runtime (`herdmates` or `native`) the host gets under Herdr |
+| Session identity | `dispatch_identity` in `server/hc_tools.py` | a session ID in the environment (today `CODEX_THREAD_ID` or `CLAUDE_SESSION_ID`); the lead's generation is derived from it |
+| Reading its terminal | `hc_app` in `server/agent_runtime.py`, and `server/markers.json` | an app name (`claude-code`, `codex`) plus its prompt glyph, anchor and interrupt text, for `status` and `collect` |
+| Hook protocol | `hooks/pre_tool_use.py` and `hooks/subagent_start.py` | a PreToolUse hook that sends JSON with `tool_name`, `tool_input` and `agent_id` for subagents; `TOOL_NAME` in the hook matches the plugin and plain `mcp__agent-runtime__` tool prefixes (the `--cli codex` argument Codex passes is not branched on) |
+| MCP registration | `.mcp.json` and `hooks/hooks.json` (Claude plugin); the block printed by `install.sh` (Codex) | the host's own config entry for a stdio MCP server |
+
+Spawning workers also requires Herdr's `hc` CLI whatever the host.
+
+### Servers
+
+Worker panes are run by Herdr's [`hc`](https://herdr.dev/core/) CLI. There is no backend interface: `hc` is called directly, through two small helpers, so a new server replaces those calls. The dispatch store (reports, messages, tasks) is local SQLite and does not depend on the server; the server is only how workers are started, addressed, observed and stopped.
+
+| Server job | Today's call | Where |
+|---|---|---|
+| Run helpers | every call goes through `hc` and `run` | `server/hc_tools.py` |
+| Start a worker pane | `hc run --bg --name <n> --cwd <dir> --parent <id> --json <argv>` | `spawn` in `server/hc_tools.py` |
+| Terminal state and identity | `hc get <id> --json` (name, parent, status, foreground argv) | `hc_get` in `server/agent_runtime.py`, with `hc_state` and `hc_record` there mapping the reply to a worker state |
+| Send text to a terminal | `hc send [flags] <target> <text>` (prompts, resume, peer messages) | `server/hc_tools.py` |
+| Read a screen | `hc read <n> --lines N` | `collect` in `server/hc_tools.py`; `run_command` in `server/agent_runtime.py` for `status` |
+| Wait for news | `hc wait --children any\|all` or `hc wait <n>`, with `--timeout --json` | `wait` in `server/hc_tools.py` |
+| List terminals | `hc ls --all --json` | `server/hc_tools.py`, `server/agent_runtime.py` |
+| Stop and remove | `hc kill <n>`, `hc rm <n>` | `stop` in `server/hc_tools.py` |
+| Terminal IDs and scope | `HC_TERMINAL_ID` is the caller's terminal; `hc_server` derives the scope from `HC_TERMINAL_SOCKET` (else `HC_SCOPE`) | `me` and `hc_server` in `server/hc_tools.py` |
+| Screen markers | per-app prompt and interrupt text that tell idle from busy in a read screen | `server/markers.json` |
+
+A new backend must provide: start a named background terminal under a parent and return its ID, report a terminal's state and parent, accept text input, return recent screen text, block until a child changes state, list terminals, and stop and remove one. The `hc`-specific reply shapes are parsed where listed above, so those parsers change with the backend. The `herdmates` and `native` runtimes in `resolve` are separate paths without `hc` and only offer status.
 
 ## Requirements
 
