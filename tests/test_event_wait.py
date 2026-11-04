@@ -1,6 +1,7 @@
 """Event waits through real MCP processes; fake hc, explicit reconciliation barriers."""
 import json
 import queue
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -14,6 +15,7 @@ from test_tools import ToolCase
 sys.path.insert(0, str(SERVER.parent))
 import hc_tools
 import dispatch_wait
+import dispatch_store
 from dispatch_events import endpoints
 from dispatch_store import Store
 
@@ -116,6 +118,84 @@ class EventWaitTests(ToolCase):
             threading.Event().wait(0.005)
         self.pending(rpc, request_id)
         return request_id
+
+    def test_S3_final_wait_records_reason_and_fingerprint_atomically(self):
+        """agent-runtime/R109"""
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("events", "t0", "lead")
+        assignment = store.register(team, "w1")["assignment_id"]
+        store.bind(assignment, "t1", "events")
+        # A poll or diagnostic read must not claim the lead saw a final wait.
+        store.read(team, "t0", "all", ready=lambda batch: None)
+        store.read(team, "t0", "all")
+        with store.transaction() as db:
+            self.assertEqual(db.execute("SELECT * FROM last_wait").fetchall(), [])
+        attention = dispatch_wait.wait(store, team, "t0", "all", 1, None,
+                                       hc_tools.Context(), lambda *_: {assignment: "blocked"})
+        self.assertEqual(attention["reason"], "attention")
+        self.assertIsNone(attention["receipt"])
+        with store.transaction() as db:
+            self.assertEqual(db.execute("SELECT reason FROM last_wait WHERE team=?", (team,)).fetchone()[0], "attention")
+        for target, kind, expected in (("all", "blocked", "attention"),
+                                       ("any", "progress", "messages"),
+                                       ("w1", "complete", "completed"),
+                                       ("absent", None, "empty")):
+            with self.subTest(target=target):
+                if kind:
+                    store.publish("events", "t1", "t0", assignment, kind, kind)
+                batch = dispatch_wait.wait(store, team, "t0", target, 0, None,
+                                           hc_tools.Context(), lambda *_: {})
+                self.assertEqual(batch["reason"], expected)
+                with sqlite3.connect(store.path.as_uri() + "?mode=ro", uri=True) as db:
+                    row = db.execute("SELECT reason,fingerprint FROM last_wait WHERE team=?", (team,)).fetchone()
+                    self.assertEqual(row, (expected, dispatch_store.wait_fingerprint(db, team)))
+                    if batch["receipt"]:
+                        ids = db.execute("SELECT ids FROM receipts WHERE id=?", (batch["receipt"],)).fetchone()[0]
+                        self.assertEqual(json.loads(ids), [m["message_id"] for m in batch["messages"]])
+                        self.assertEqual(db.execute("SELECT SUM(acked) FROM messages").fetchone()[0], 0)
+        # Abort the row write: neither a new receipt nor a partial last-wait update may commit.
+        with store.transaction() as db:
+            before = db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0]
+            db.execute("CREATE TRIGGER reject_wait BEFORE INSERT ON last_wait "
+                       "BEGIN SELECT RAISE(ABORT, 'reject wait'); END")
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "reject wait"):
+            dispatch_wait.wait(store, team, "t0", "all", 0, None, hc_tools.Context(), lambda *_: {})
+        with store.transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], before)
+            self.assertEqual(db.execute("SELECT reason FROM last_wait WHERE team=?", (team,)).fetchone()[0], "empty")
+
+    def test_S4_read_only_fingerprint_changes_with_messages_states_and_turns(self):
+        """agent-runtime/R110"""
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("events", "t0", "lead")
+        assignment = store.register(team, "w1")["assignment_id"]
+        store.bind(assignment, "t1", "events", turn=0)
+        batch = dispatch_wait.wait(store, team, "t0", "all", 0, None,
+                                   hc_tools.Context(), lambda *_: {})
+        self.assertEqual(batch["reason"], "timeout")
+        def fingerprint():
+            with sqlite3.connect(store.path.as_uri() + "?mode=ro", uri=True) as db:
+                return dispatch_store.wait_fingerprint(db, team)
+        with store.transaction() as db:
+            stored = db.execute("SELECT fingerprint FROM last_wait WHERE team=?", (team,)).fetchone()[0]
+        self.assertEqual(fingerprint(), stored)
+        other = store.team("events", "other", "lead")
+        other_assignment = store.register(other, "other")["assignment_id"]
+        store.bind(other_assignment, "t2", "events", turn=9)
+        self.assertEqual(fingerprint(), stored, "other teams must not change this fingerprint")
+        lead = store.actor("events", "t0", None, "lead")
+        store.peer(lead, "w1", "new message")
+        message_fingerprint = fingerprint()
+        self.assertNotEqual(message_fingerprint, stored)
+        with store.transaction() as db:
+            db.execute("UPDATE assignments SET state='blocked' WHERE id=?", (assignment,))
+        state_fingerprint = fingerprint()
+        self.assertNotEqual(state_fingerprint, message_fingerprint)
+        with store.transaction() as db:
+            db.execute("UPDATE dispatch_turns SET turn=1 WHERE assignment=?", (assignment,))
+        self.assertNotEqual(fingerprint(), state_fingerprint)
+        with store.transaction() as db:
+            self.assertEqual(db.execute("SELECT fingerprint FROM last_wait WHERE team=?", (team,)).fetchone()[0], stored)
 
     def test_all_buffers_progress_and_partial_completion_with_fixed_membership(self):
         """agent-runtime/R38"""

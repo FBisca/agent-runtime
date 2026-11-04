@@ -7,6 +7,7 @@ fails explicitly; reads never truncate or acknowledge implicitly. A receipt name
 exactly the returned IDs; passing it on the next read acknowledges that page.
 Connections/transactions are per operation, allowing separate MCP processes.
 """
+import hashlib
 import json
 import os
 import re
@@ -82,6 +83,23 @@ def uid():
     return uuid.uuid4().hex
 
 
+def wait_fingerprint(db, team):
+    """Pure team-state digest; accepts a read-only sqlite connection without a Store.
+
+    One SELECT captures assignment states/dispatch turns and the team's message
+    high-water mark in one SQLite snapshot. IDs and current flags include pending
+    registrations and assignment replacement; acknowledgements never change it.
+    """
+    rows = db.execute(
+        "SELECT a.id,a.state,a.current,d.turn,d.mode,"
+        "(SELECT MAX(seq) FROM messages WHERE team=?) FROM teams t "
+        "LEFT JOIN assignments a ON a.team=t.id "
+        "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
+        "WHERE t.id=? ORDER BY a.id", (team, team))
+    payload = json.dumps([tuple(row) for row in rows], separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class Store:
     def __init__(self, env):
         root = Path(env.get("XDG_STATE_HOME") or Path(env.get("HOME") or Path.home()) / ".local/state")
@@ -108,6 +126,7 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS callers (scope TEXT,address TEXT,generation TEXT,team TEXT,PRIMARY KEY(scope,address,generation))",
                 # Side table (not columns) keeps 0.2.0 servers' INSERT INTO assignments working on a shared store.
                 "CREATE TABLE IF NOT EXISTS dispatch_turns (assignment TEXT PRIMARY KEY, turn INTEGER, mode TEXT)",
+                "CREATE TABLE IF NOT EXISTS last_wait (team TEXT PRIMARY KEY, reason TEXT, fingerprint TEXT)",
                 # v2: shared tasks; rowid order is the durable ID sequence.
                 "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, team TEXT, subject TEXT, status TEXT, owner TEXT, assignment TEXT, deps TEXT)",
                 # D7: hot wait/read lookups; additive, so 0.2.x writers and user_version are untouched.
@@ -503,6 +522,7 @@ class Store:
 
         A pending snapshot creates no receipt; a final snapshot and its receipt
         commit together, so concurrent publications/acks cannot invalidate readiness.
+        Final non-inbox waits also record the team state in that same transaction.
         """
         with self.transaction() as db:
             self.acknowledge(db, *(ack or (team, recipient, receipt)))
@@ -563,6 +583,10 @@ class Store:
                 db.execute("INSERT INTO receipts VALUES (?,?,?,?)",
                            (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
                 batch["receipt"] = token
+            if ready is not None and batch["reason"] is not None and not inbox:
+                db.execute("INSERT INTO last_wait VALUES (?,?,?) ON CONFLICT(team) DO UPDATE "
+                           "SET reason=excluded.reason,fingerprint=excluded.fingerprint",
+                           (team, batch["reason"], wait_fingerprint(db, team)))
             return batch
 
     TASK_STATUSES = ("pending", "in_progress", "complete", "blocked")
