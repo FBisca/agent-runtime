@@ -54,7 +54,13 @@ def reason(batch, target, observations):
     states = {a["state"] for a in batch["assignments"]}
     # D24: the turn ended (hc done/idle) with no accepted complete/blocked/decision report. A report that
     # committed before this snapshot already made the state complete/blocked/decision, so it wins.
-    ended = any(turn_ended(a, observations) for a in batch["assignments"])
+    ended = {a["assignment_id"] for a in batch["assignments"] if turn_ended(a, observations)}
+    # Internal metadata consumed by Store.read in the final receipt transaction.
+    batch["_attention"] = sum(
+        a["state"] in ("blocked", "decision") or
+        (a["state"] not in ("complete", "failed") and
+         (a.get("runtime_state") in NEEDS_PERSON_STATES or a["assignment_id"] in ended))
+        for a in batch["assignments"])
     for a in batch["assignments"]:
         a.pop("turn", None)
         a.pop("mode", None)  # internal dispatch marker, not part of the result
