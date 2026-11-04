@@ -7,9 +7,12 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from test_mcp_server import SERVER, Session
+
+sys.path.insert(0, str(SERVER.parent))
 
 FAKE = '''#!%(python)s
 import json, sys, time
@@ -59,7 +62,7 @@ class ToolCase(unittest.TestCase):
         self.log = self.dir / "log"
         self.log.write_text("")
 
-    def start(self, replies=None, env=None):
+    def start(self, replies=None, env=None, new_cli=False):
         replies = dict(replies or {})
         replies.setdefault("get:t0", {"out": raw("lead", None)})
         replies.setdefault("get:t1", {"out": raw("worker", "t0")})
@@ -70,7 +73,7 @@ class ToolCase(unittest.TestCase):
         full = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
                 "HC_TERMINAL_ID": "t0", "CODEX_THREAD_ID": "test-session"}
         full.update(env or {})
-        session = Session(full)
+        session = Session(full, new_cli=new_cli)
         self.addCleanup(session.close)
         session.handshake()
         return session
@@ -82,6 +85,34 @@ class ToolCase(unittest.TestCase):
     def runs(self, command=None):
         calls = [json.loads(l) for l in self.log.read_text().splitlines()]
         return [c for c in calls if command is None or c[0] == command]
+
+
+class IdentityTests(ToolCase):
+    ENV = {"HC_TERMINAL_SOCKET": "/hc/sock"}
+
+    def identity(self, **extra):
+        import hc_tools
+        with mock.patch.object(hc_tools.lib, "ps_entry", side_effect={100: (90, "/usr/bin/zsh"), 90: (1, "claude")}.get), \
+                mock.patch.object(hc_tools.lib, "lstart", return_value="Wed Nov  4 10:00:00 2026"), \
+                mock.patch.object(hc_tools.os, "getppid", return_value=100):
+            return hc_tools.dispatch_identity(dict(self.ENV, **extra))
+
+    def test_S1_server_identity_ignores_session_ids_under_a_cli_ancestor(self):
+        """lead-liveness-hooks/S1"""
+        scope, generation = self.identity(CODEX_THREAD_ID="t", CLAUDE_CODE_SESSION_ID="c", CLAUDE_SESSION_ID="s")
+        self.assertEqual(generation, "90:Wed Nov  4 10:00:00 2026")
+
+    def test_S2_clear_or_new_in_same_process_keeps_team_and_assignments(self):
+        """lead-liveness-hooks/S2"""
+        import hc_tools
+        from dispatch_store import Store
+        env = {"HOME": str(self.dir / "home")}
+        store = Store(env)
+        first = self.identity(CODEX_THREAD_ID="thread-a")
+        team = store.team(first[0], "t0", first[1])
+        again = self.identity(CODEX_THREAD_ID="thread-b")  # /new: same process, new thread id
+        self.assertEqual(first, again)
+        self.assertEqual(store.team(again[0], "t0", again[1]), team)
 
 
 class SpawnTests(ToolCase):

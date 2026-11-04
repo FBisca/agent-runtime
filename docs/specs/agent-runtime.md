@@ -117,5 +117,8 @@ Under structured dispatch (`AGENT_RUNTIME_DISPATCH=1`, enabled in both Claude an
 - **R104** WHEN hc reports a worker's status as `error`, THEN `wait` returns `attention` for it instead of a timeout. (from lead-delivery-gaps/S9)
 - **R105** WHEN `status(name)` targets a never-reported worker past the grace period, THEN it shows state `unreported` with the same next rows as R100. (from lead-delivery-gaps/S10)
 - **R106** WHEN `wait` polls a team whose members all have a non-null hc status, THEN it runs no `hc get`; only live members whose `hc ls` status is null are read with `hc get`. (from lead-delivery-gaps/S11)
+- **R107** WHEN the MCP server and a hook run under the same Claude or Codex process, even with `CODEX_THREAD_ID` or `CLAUDE_CODE_SESSION_ID` set, THEN both compute generation `<pid>:<lstart>` of the nearest CLI ancestor, with no suffix. (from lead-liveness-hooks/S1)
+- **R108** WHEN a lead runs `/clear` (Claude) or `/new` (Codex) in the same process, THEN its next runtime call stays on the same team and sees the same assignments. (from lead-liveness-hooks/S2)
 - **R109** WHEN a lead's `wait(all)` returns a final batch, THEN the team's last-wait row holds that batch's reason, attention count and current fingerprint, committed in the same transaction as the receipt; narrower and cancelled waits leave the row unchanged. (from lead-liveness-hooks/S3)
 - **R110** WHEN after that a lead-addressed message arrives, an assignment changes state or a turn is recorded, THEN the fingerprint computed from the store differs from the stored one; outbound and worker peer messages do not change it. (from lead-liveness-hooks/S4)
+||||||| parent of ef23ca8 (fix: share a suffix-free CLI generation between the server and hooks)

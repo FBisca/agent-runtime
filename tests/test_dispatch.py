@@ -13,7 +13,7 @@ class DispatchTests(ToolCase):
     def lead(self, generation="lead-session"):
         return self.start({"get:w1": {"out": raw("w1", "t0")}},
                           {"CODEX_THREAD_ID": generation, "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                           "AGENT_RUNTIME_DISPATCH": "1"})
+                           "AGENT_RUNTIME_DISPATCH": "1"}, new_cli=generation != "lead-session")
 
     def spawn(self, lead, cli="claude"):
         result, text = self.call(lead, "spawn", {"kind": "worker", "cli": cli,
@@ -24,7 +24,7 @@ class DispatchTests(ToolCase):
     def worker(self, generation="worker-session"):
         return self.start(env={"HC_TERMINAL_ID": "t9", "HC_SCOPE": "worker-token", "HC_TERMINAL_SOCKET": "/hc/sock",
                               "CODEX_THREAD_ID": generation, "AGENT_RUNTIME_DISPATCH": "1"},
-                          replies={"get:t9": {"out": raw("w1", "t0")}})
+                          replies={"get:t9": {"out": raw("w1", "t0")}}, new_cli=generation != "worker-session")
 
     def publish(self, worker, assignment, **extra):
         args = {"text": "done", "kind": "complete", "assignment_id": assignment["assignment_id"]}

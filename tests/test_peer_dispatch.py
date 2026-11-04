@@ -174,13 +174,13 @@ class PeerDispatchTests(ToolCase):
         old, text = self.call(self.workers[0], "message", {"to": "w2", "text": "old team",
                                                         "assignment_id": self.assignments[0]["assignment_id"]})
         self.assertFalse(old["isError"], text)
-        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"))
+        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"), new_cli=True)
         self.addCleanup(replacement.close)
         replacement.handshake()
         fresh = [self.spawn(replacement, name) for name in ("w1", "w2")]
         denied, _ = self.call(self.workers[0], "message", {"to": "w2", "text": "stale caller"})
         self.assertTrue(denied["isError"])
-        new_worker = Session(dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker"))
+        new_worker = Session(dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker"), new_cli=True)
         self.addCleanup(new_worker.close)
         new_worker.handshake()
         sent, text = self.call(new_worker, "message", {"to": "w2", "text": "new team", "assignment_id": fresh[0]["assignment_id"]})
@@ -202,7 +202,7 @@ class PeerDispatchTests(ToolCase):
         self.assertEqual(self.runs("send"), [])
 
     def replace_team_without_contacting_old_workers(self):
-        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"))
+        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"), new_cli=True)
         self.addCleanup(replacement.close)
         replacement.handshake()
         return replacement, [self.spawn(replacement, name) for name in ("w1", "w2")]

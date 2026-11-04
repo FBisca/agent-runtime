@@ -17,8 +17,13 @@ TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "sto
 class Session:
     """One server subprocess speaking newline-delimited JSON-RPC."""
 
-    def __init__(self, env):
-        self.proc = subprocess.Popen([sys.executable, "-B", str(SERVER)], env=env, text=True,
+    def __init__(self, env, new_cli=False):
+        """new_cli runs the server under its own fake `codex` process, so it has a generation of its own
+        (pid:lstart of that ancestor) regardless of what the test runner itself runs under."""
+        argv = [sys.executable, "-B", str(SERVER)]
+        if new_cli:
+            argv = ["codex", "-c", '"$@"; exit $?', "codex"] + argv  # non-exec shell stays the parent
+        self.proc = subprocess.Popen(argv, executable="/bin/bash" if new_cli else None, env=env, text=True,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.next_id = 0
 
