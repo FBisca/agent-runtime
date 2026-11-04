@@ -1,5 +1,6 @@
 #!/bin/sh
 # Resolve this script through symlinks, then run the Python entrypoint in the repo.
+command -v python3 >/dev/null 2>&1 || exit 0 # hooks fail open when python3 is missing
 self=$0
 while [ -L "$self" ]; do
   dir=$(cd "$(dirname "$self")" && pwd)
