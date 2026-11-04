@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import dispatch_events
+from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
 
 MAX_WORKERS = MAX_MESSAGES = 32
 MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
@@ -409,22 +410,41 @@ class Store:
         return int(self.clock() * 1000)
 
     def track_progress(self, observations):
-        """Start each observed assignment's idle clock at first observation; a turn change is progress."""
+        """Start each observed assignment's idle clock at first observation; a turn change is progress.
+
+        A plain read decides first, so polls that change nothing never take the write lock.
+        """
         turns = {k[0]: v for k, v in observations.items() if isinstance(k, tuple) and k[1] == "turn"}
         if not turns:
             return
-        with self.transaction() as db:
-            now = self.now_ms()
+        def pending(db):
+            work = {}
             for assignment, turn in turns.items():
                 if not db.execute("SELECT 1 FROM assignments WHERE id=?", (assignment,)).fetchone():
                     continue
                 row = db.execute("SELECT last_turn FROM stall_progress WHERE assignment=?", (assignment,)).fetchone()
                 if row is None:
+                    work[assignment] = ("insert", turn)
+                elif turn is not None and row[0] is None:
+                    work[assignment] = ("adopt", turn)
+                elif turn is not None and turn != row[0]:
+                    work[assignment] = ("progress", turn)
+            return work
+        reader = sqlite3.connect(self.path, timeout=5)
+        try:
+            if not pending(reader):
+                return
+        finally:
+            reader.close()
+        with self.transaction() as db:
+            now = self.now_ms()
+            for assignment, (action, turn) in pending(db).items():
+                if action == "insert":
                     db.execute("INSERT INTO stall_progress(assignment,last_progress_ms,last_turn) VALUES (?,?,?)",
                                (assignment, now, turn))
-                elif turn is not None and row[0] is None:
+                elif action == "adopt":
                     db.execute("UPDATE stall_progress SET last_turn=? WHERE assignment=?", (turn, assignment))
-                elif turn is not None and turn != row[0]:
+                else:
                     db.execute("UPDATE stall_progress SET last_progress_ms=?,last_turn=? WHERE assignment=?",
                                (now, turn, assignment))
 
@@ -602,7 +622,7 @@ class Store:
             # Worst-case fixed fields (receipt, longest reason, a runtime_state added by wait) are
             # budgeted before selection so the receipt below names exactly what fits.
             fixed = len(json.dumps({"reason": "x" * 9, "messages": [], "assignments": [
-                dict(a, runtime_state="interrupted", attention="stalled", next=STALL_NEXT) for a in assignments], "unfinished": unfinished,
+                dict(a, runtime_state="interrupted", attention="stalled", next=max(STALL_NEXT, UNREPORTED_NEXT, ERROR_NEXT, key=len)) for a in assignments], "unfinished": unfinished,
                 "receipt": "0" * 32, "more": False}, separators=(",", ":")).encode())
             if reserve > MAX_BASE_BYTES + len(',"inbox":'):
                 # A base above its cap could leave no room for even one legal message (infinite more=true retries).

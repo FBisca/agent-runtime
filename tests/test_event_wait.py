@@ -329,6 +329,63 @@ class EventWaitTests(ToolCase):
         with store2.transaction() as db:
             self.assertEqual(db.execute("SELECT state FROM assignments WHERE id=?", (assignment2,)).fetchone()[0], "working")
 
+    def reported_for(self, store, assignment):
+        with store.transaction() as db:
+            return db.execute("SELECT stall_reported_for FROM stall_progress WHERE assignment=?", (assignment,)).fetchone()[0]
+
+    def test_S5_needs_person_runtime_keeps_its_own_next_and_is_not_stalled(self):
+        """lead-liveness-hooks/S5 -> agent-runtime/R111"""
+        from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
+        for runtime, expected in (("unreported", UNREPORTED_NEXT), ("error", ERROR_NEXT)):
+            with self.subTest(runtime=runtime):
+                store, team, assignment, now, state, wait = self.stall_rig()
+                state["runtime"] = runtime
+                wait()
+                now[0] += 3600
+                batch = wait()
+                self.assertEqual(batch["reason"], "attention")
+                self.assertEqual(self.stalled(batch), [])
+                self.assertEqual(batch["assignments"][0]["next"], expected)
+                self.assertIsNone(self.reported_for(store, assignment))
+
+    def test_S5_nonfinal_read_does_not_mark_the_stall_reported(self):
+        """lead-liveness-hooks/S5 -> agent-runtime/R111"""
+        store, team, assignment, now, state, wait = self.stall_rig()
+        wait()
+        now[0] += 15 * 60
+        store.read(team, "t0", "all", ready=lambda batch: None)
+        self.assertIsNone(self.reported_for(store, assignment))
+        self.assertEqual(wait()["reason"], "attention")
+        self.assertIsNotNone(self.reported_for(store, assignment))
+
+    def test_S5_stalled_worker_alongside_blocked_worker_is_not_reported_early(self):
+        """lead-liveness-hooks/S5 -> agent-runtime/R111"""
+        store, team, assignment, now, state, wait = self.stall_rig()
+        other = store.register(team, "w2")["assignment_id"]
+        store.bind(other, "t2", "events", turn=0)
+        store.publish("events", "t2", "t0", other, "need input", "blocked")
+        now[0] += 3600
+        batch = wait()  # The blocked report returns at once, before any observation can start a stall clock.
+        self.assertEqual(batch["reason"], "attention")
+        self.assertEqual(self.stalled(batch), [])
+        with store.transaction() as db:
+            self.assertEqual(db.execute("SELECT attention FROM last_wait WHERE team=?", (team,)).fetchone()[0], 1)
+            self.assertIsNone(db.execute("SELECT 1 FROM stall_progress WHERE assignment=?", (assignment,)).fetchone())
+
+    def test_S5_unchanged_polls_take_no_write_lock(self):
+        """lead-liveness-hooks/S5 -> agent-runtime/R111"""
+        store, team, assignment, now, state, wait = self.stall_rig()
+        wait()
+        locker = sqlite3.connect(store.path, isolation_level=None)
+        locker.execute("BEGIN IMMEDIATE")
+        try:
+            started = time.monotonic()
+            store.track_progress({assignment: "working", (assignment, "turn"): 0})
+            self.assertLess(time.monotonic() - started, 1)
+        finally:
+            locker.execute("ROLLBACK")
+            locker.close()
+
     def test_all_buffers_progress_and_partial_completion_with_fixed_membership(self):
         """agent-runtime/R38"""
         self.prepare()
