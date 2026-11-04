@@ -86,3 +86,35 @@ command = "\\"$hook\\" --cli codex"
 timeout = 5
 statusMessage = "Checking agent-runtime caller"
 EOT
+
+# Lead-liveness hooks (Stop guard, SessionStart and UserPromptSubmit context). Opt-in: Codex runs a hook only
+# after it is trusted, and an untrusted one raises a "Hooks need review" prompt, so print them on request,
+# then approve them with /hooks (see docs/verification/codex-hooks.md).
+if [ "${CODEX_LEAD_HOOKS:-}" = 1 ]; then
+  cat <<EOT
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "\\"$hook\\" stop --cli codex"
+timeout = 5
+statusMessage = "Checking for unseen worker results"
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "\\"$hook\\" context --cli codex"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "\\"$hook\\" context --cli codex"
+timeout = 5
+EOT
+else
+  printf '\n# Optional lead hooks for Codex: re-run with CODEX_LEAD_HOOKS=1 to print the Stop, SessionStart and\n# UserPromptSubmit blocks.\n'
+fi

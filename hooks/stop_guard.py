@@ -23,7 +23,8 @@ def main():
     if not blocking:
         hook_lib.reset_budget(os.environ, who)  # nothing to block on: a new period
         return
-    if hook_lib.running_wait_task(payload):
+    codex = "codex" in sys.argv[1:]  # Codex payloads carry no background_tasks: no exemption there
+    if not codex and hook_lib.running_wait_task(payload):
         return  # a backgrounded wait(all) will deliver; no budget spent, none reset
     allowed, first_time = hook_lib.spend_budget(os.environ, who)
     if allowed:
