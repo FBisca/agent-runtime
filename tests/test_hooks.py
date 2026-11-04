@@ -3,9 +3,11 @@
 import json
 import os
 import sqlite3
+import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import time
 import unittest
 from pathlib import Path
@@ -357,9 +359,10 @@ class LeadContextTests(HookStoreCase):
             self.assertIsNone(self.hook(self.PROMPT, seed_locked))
         finally:
             locked["db"].close()
-        done = subprocess.run(["/bin/sh", str(SHIM)], input="{}", env={"PATH": "/nonexistent"},
-                              capture_output=True, text=True, timeout=20)
-        self.assertEqual((done.returncode, done.stdout), (0, ""))
+        for args in ([], ["stop", "--cli", "codex"], ["context", "--cli", "codex"]):  # default, stop, context
+            done = subprocess.run(["/bin/sh", str(SHIM)] + args, input="{}", env={"PATH": "/nonexistent"},
+                                  capture_output=True, text=True, timeout=20)
+            self.assertEqual((done.returncode, done.stdout), (0, ""), args)
 
     def hook_twice(self, payload, seed, env):
         """Run the hook twice under ONE fake CLI process (one generation); returns both outputs."""
@@ -743,11 +746,28 @@ class CodexHookTests(HookStoreCase):
         self.assertNotIn("hooks.Stop", plain.stdout)
         asked = subprocess.run([str(PLUGIN / "install.sh")], env=dict(base, CODEX_LEAD_HOOKS="1"),
                                capture_output=True, text=True, timeout=30)
-        for event in ("Stop", "SessionStart", "UserPromptSubmit"):
-            self.assertIn("[[hooks.%s.hooks]]" % event, asked.stdout)
-        self.assertEqual(asked.stdout.count(" stop --cli codex"), 1)
-        self.assertEqual(asked.stdout.count(" context --cli codex"), 2)
-        self.assertIn("[[hooks.PreToolUse.hooks]]", asked.stdout)  # the existing guard blocks stay
+        def toml(out):  # the printed config starts after the instructions
+            return tomllib.loads(out[out.index("[mcp_servers.agent-runtime]"):])
+
+        hooks = toml(asked.stdout)["hooks"]
+        for event, suffix in (("Stop", " stop --cli codex"), ("SessionStart", " context --cli codex"),
+                              ("UserPromptSubmit", " context --cli codex")):
+            commands = [h["command"] for group in hooks[event] for h in group["hooks"]]
+            self.assertEqual(len(commands), 1, event)
+            self.assertTrue(commands[0].endswith(suffix), commands)
+            self.assertIn("agent-runtime-hook", commands[0])
+        self.assertIn("PreToolUse", hooks)  # the existing guard blocks stay
+        self.assertNotIn("Stop", toml(plain.stdout).get("hooks", {}))
+
+    def test_S19_shim_exits_zero_when_its_script_is_missing(self):
+        """lead-liveness-hooks/S19"""
+        (self.root / "bin").mkdir()
+        (self.root / "hooks").mkdir()
+        shim = self.root / "bin" / "agent-runtime-hook"
+        shutil.copy(SHIM, shim)  # no hooks/stop_guard.py next to it
+        done = subprocess.run(["/bin/sh", str(shim), "stop", "--cli", "codex"], input="{}", capture_output=True,
+                              text=True, timeout=20)
+        self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
 
     def test_S20_attention_line_and_default_subcommand_is_still_the_pre_tool_use_guard(self):
         """lead-liveness-hooks/S20"""

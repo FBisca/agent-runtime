@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Stop hook: refuse to end a lead's turn while it has undelivered messages or unseen working
+"""Claude and Codex Stop hook: refuse to end a lead's turn while it has undelivered messages or unseen working
 assignments, at most three times per user work period. Fails open on every error."""
 
 import json

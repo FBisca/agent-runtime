@@ -10,7 +10,9 @@ while [ -L "$self" ]; do
 done
 root=$(cd "$(dirname "$self")/.." && pwd)
 case ${1:-} in
-  stop) shift; exec python3 "$root/hooks/stop_guard.py" "$@" ;;
-  context) shift; exec python3 "$root/hooks/lead_context.py" "$@" ;;
-  *) exec python3 "$root/hooks/pre_tool_use.py" "$@" ;;
+  stop) shift; script=$root/hooks/stop_guard.py ;;
+  context) shift; script=$root/hooks/lead_context.py ;;
+  *) script=$root/hooks/pre_tool_use.py ;;
 esac
+[ -f "$script" ] || exit 0 # a missing script must not fail closed (python3 would exit 2)
+exec python3 "$script" "$@"

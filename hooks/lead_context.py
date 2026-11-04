@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude SessionStart (compact/clear) and UserPromptSubmit hook: remind a lead of unseen runtime work."""
+"""Claude and Codex SessionStart (compact/clear) and UserPromptSubmit hook: remind a lead of unseen runtime work."""
 
 import json
 import os

@@ -45,8 +45,13 @@ dir. Nothing under `~/.codex` was read for write or changed. Source notes: Codex
 
 ## S21 manual check (owner, after trusting the hooks)
 
-1. Add the printed `[[hooks.*]]` blocks (`CODEX_LEAD_HOOKS=1 ./install.sh`) to `~/.codex/config.toml`, start
-   Codex, run `/hooks` and trust the three new hooks.
-2. From a Claude or Codex lead, `spawn(kind="worker", cli="codex", …)` with a trivial task.
+1. `CODEX_LEAD_HOOKS=1 ./install.sh` reprints the whole config (incl. `[mcp_servers.agent-runtime]`): copy ONLY
+   the `[[hooks.Stop]]`, `[[hooks.SessionStart]]` and `[[hooks.UserPromptSubmit]]` blocks to
+   `~/.codex/config.toml`, start Codex, run `/hooks` and trust the three new hooks. Trust is positional: an
+   existing stale `[hooks.state."…config.toml:session_start:0:0"]` entry (old retired hook) shows as changed and
+   must be re-trusted or deleted.
+2. From inside an hc terminal run
+   `AGENT_RUNTIME_LIVE_CODEX_HOOKS=1 python3 -B -m unittest discover -s tests -p test_live_acceptance.py -k S21`
+   (or `spawn(kind="worker", cli="codex", …)` with a trivial task by hand).
 3. Pass if the worker starts the task with no "Hooks need review" prompt and its `report` arrives. Fail: run
    `hc get <name>` and check the terminal for the review modal; untrust or remove the hooks.
