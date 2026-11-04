@@ -209,6 +209,17 @@ def linked_task(arguments, env):
     return task_id
 
 
+def spawn_model(arguments):
+    model = arguments.get("model")
+    if model is None:
+        return []
+    if not isinstance(model, str) or not model.strip():
+        raise ToolError("model must be a model name")
+    if model.startswith("-"):
+        raise ToolError("model must not start with '-'")
+    return ["--model", model]
+
+
 def owned_orphan(name, caller, env, earlier, other):
     """True only when a terminal we may have started exists under our parent and no other spawn of this name owns it.
 
@@ -234,6 +245,7 @@ def spawn(arguments, env, ctx):
     name, task, cwd = need(arguments, "name", "task", "cwd")
     worker_name(name)
     task_id = linked_task(arguments, env)
+    model = spawn_model(arguments)
     _, caller = require_hc(env)
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
@@ -244,9 +256,9 @@ def spawn(arguments, env, ctx):
         scope, _ = dispatch_identity(env, ctx)
         store, team = lead_store(env, ctx)
     if cli == "claude":
-        program = ["claude", "--agent", "implementer", "--permission-mode", "auto", message]
+        program = ["claude", "--agent", "implementer", "--permission-mode", "auto"] + model + [message]
     else:
-        program = ["codex", "--no-daemon", "%s\n\n%s" % (codex_instructions(), message)]
+        program = ["codex", "--no-daemon"] + model + ["%s\n\n%s" % (codex_instructions(), message)]
     if store:
         earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)
