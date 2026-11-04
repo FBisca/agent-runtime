@@ -668,6 +668,63 @@ class StopGuardTests(HookStoreCase):
         self.sql(self.store, "DROP TABLE stall_progress")  # older store: no reported stalls
         self.assertEqual(self.stop()[0]["decision"], "block")
 
+    def record_wait(self, reason="attention"):
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO last_wait(team,reason,attention,fingerprint) VALUES (?,?,0,?) ON CONFLICT(team) DO UPDATE "
+                       "SET reason=excluded.reason,attention=0,fingerprint=excluded.fingerprint",
+                       (self.team_id, reason, dispatch_store.wait_fingerprint(db, self.team_id)))
+
+    def test_recovery_after_a_stall_batch_that_was_the_last_wait_is_unseen(self):
+        """agent-runtime/R128"""
+        ident = self.unseen()
+        self.sql(self.store, "INSERT INTO stall_progress(assignment,last_progress_ms,last_turn,stall_reported_for) "
+                             "VALUES (?,?,?,?)", ident["assignment_id"], 5, 1, 5)
+        self.record_wait()  # the stall batch was the lead's last wait(all)
+        self.assertIsNone(self.stop()[0])
+        self.assertIsNone(self.prompt())
+        self.sql(self.store, "UPDATE stall_progress SET last_progress_ms=9,last_turn=2 WHERE assignment=?", ident["assignment_id"])
+        self.assertEqual(self.stop()[0]["decision"], "block")
+        self.assertIn("call wait(all)", self.line(self.prompt()))
+
+    def test_turns_after_a_following_wait_do_not_flip_seen(self):
+        """agent-runtime/R128"""
+        ident = self.unseen()
+        self.sql(self.store, "INSERT INTO stall_progress(assignment,last_progress_ms,last_turn,stall_reported_for) "
+                             "VALUES (?,?,?,?)", ident["assignment_id"], 5, 1, 5)
+        self.sql(self.store, "UPDATE stall_progress SET last_progress_ms=9,last_turn=2 WHERE assignment=?", ident["assignment_id"])
+        self.record_wait("timeout")
+        self.record_wait("attention")  # a later wait(all) delivered nothing new
+        self.assertIsNone(self.stop()[0])
+        for turn in (3, 4):
+            self.sql(self.store, "UPDATE stall_progress SET last_progress_ms=?,last_turn=? WHERE assignment=?",
+                     10 + turn, turn, ident["assignment_id"])
+            self.assertIsNone(self.stop()[0])
+            self.assertIsNone(self.prompt())
+
+    def test_fingerprint_is_identical_for_server_and_readonly_connection_with_or_without_stall_progress(self):
+        """agent-runtime/R128"""
+        ident = self.unseen()
+        self.sql(self.store, "INSERT INTO stall_progress(assignment,last_progress_ms,last_turn,stall_reported_for) "
+                             "VALUES (?,?,?,?)", ident["assignment_id"], 5, 1, 5)
+        def both():
+            with self.store.transaction() as db:
+                server = dispatch_store.wait_fingerprint(db, self.team_id)
+            ro = sqlite3.connect((self.state / "agent-runtime" / "dispatch.sqlite3").as_uri() + "?mode=ro", uri=True)
+            try:
+                return server, dispatch_store.wait_fingerprint(ro, self.team_id)
+            finally:
+                ro.close()
+        reported = both()
+        self.assertEqual(reported[0], reported[1])
+        self.sql(self.store, "UPDATE stall_progress SET last_progress_ms=9 WHERE assignment=?", ident["assignment_id"])
+        recovered = both()
+        self.assertEqual(recovered[0], recovered[1])
+        self.assertNotEqual(reported[0], recovered[0])
+        self.sql(self.store, "DROP TABLE stall_progress")
+        absent = both()
+        self.assertEqual(absent[0], absent[1])
+        self.assertEqual(absent[0], recovered[0])  # absent behaves as "not reported"
+
 
 class CodexHookTests(HookStoreCase):
     """The Codex adapter: the shim routes `stop` / `context` subcommands to the same hooks, fed with Codex-shaped
