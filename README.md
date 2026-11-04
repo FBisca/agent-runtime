@@ -23,6 +23,7 @@ A lead agent calls `spawn`, workers run in their own terminal panes, and every r
 
 - Ten tools: `spawn`, `message`, `resume`, `wait`, `status`, `list`, `collect`, `stop`, `report`, `task`.
 - Reports and peer messages as tool results: `wait` returns reports and assignment states together, with `receipt` acknowledgements and `more` continuations that bound payload size.
+- Pull-only delivery: reports landing after a `wait` returns need a new `wait(target=all)`. A lead's `spawn`, `resume` and `message` results carry `unfinished: N` and a `next` hint while N > 0.
 - Durable shared tasks with dependencies and atomic claims (`task`).
 - Idempotent reports: retries are safe, and senders are derived by the server, never self-declared.
 - Failure hygiene: a failed spawn fails its assignment and releases its linked task.

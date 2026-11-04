@@ -39,12 +39,12 @@ TOOLS = [
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
     ("resume", "Give a finished, idle or interrupted worker another assignment; returns promptly. A new spawn is not resumption. "
-              "Pass task_id to keep the worker's task.",
+              "Pass task_id to keep the worker's task. Delivery is pull-only: reports landing after this resume returns need a new wait(all).",
      schema({"name": text("worker name"), "task": text("what to do next"),
              "task_id": text("optional task to move to this assignment")}, ["name", "task"])),
     ("wait", "Block until children report, need attention or time out (max 590s); use one wait(all) per work period. "
              "Returns reports, assignment states and a receipt: pass it on your next call. With no workers left, "
-             "use target=inbox to block on peer messages.",
+             "use target=inbox to block on peer messages. Delivery is pull-only: reports landing after this wait returns need a new wait(all).",
      schema({"target": text("any, all, worker name/ID, or inbox"),
              "timeout": {"type": "integer", "description": "seconds, default 170, max 590; dispatch allows 0"},
              "receipt": text("acknowledge previous batch")}, ["target"])),
