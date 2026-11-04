@@ -242,8 +242,8 @@ class PeerDispatchTests(ToolCase):
         self.addCleanup(cli.close)
         for restart in (False, True):
             worker = Session(new_env, new_cli=cli)
-            worker.handshake()
             try:
+                worker.handshake()
                 arguments = {"target": "inbox", "timeout": 0}
                 if not restart:
                     arguments["assignment_id"] = fresh[0]["assignment_id"]

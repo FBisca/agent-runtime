@@ -479,7 +479,8 @@ class SharedGenerationTests(unittest.TestCase):
             ps.chmod(0o755)
             stamps = set()
             for loc in ({}, {"LC_ALL": "de_DE.UTF-8"}, {"LC_TIME": "en_GB.UTF-8", "LC_ALL": "en_GB.UTF-8"}):
-                with patch.dict(os.environ, dict(loc, PATH="%s:%s" % (tmp, os.environ["PATH"]))):
+                with patch.dict(os.environ, dict(loc, PATH="%s:%s" % (tmp, os.environ["PATH"]))), \
+                        patch.object(app, "PS_TIMEOUT_SECONDS", 10):
                     stamps.add(app.lstart(os.getpid()))
         self.assertEqual(stamps, {"Wed Nov  4 10:00:00 2026"})
 
