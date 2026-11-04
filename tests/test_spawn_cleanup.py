@@ -174,7 +174,7 @@ class SpawnCleanupTests(ToolCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
     def test_invalid_model_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime/R73 spawn-model/S4 spawn-model/S4a spawn-model/S5"""
+        """agent-runtime/R73 agent-runtime/R132 agent-runtime/R133 agent-runtime/R134"""
         lead = self.start({}, ENV)
         for model in ("  ", 3, "-x"):
             result, _ = self.call(lead, "spawn", dict(ARGS, model=model))
@@ -184,7 +184,7 @@ class SpawnCleanupTests(ToolCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
     def test_invalid_agent_starts_no_terminal_and_registers_nothing(self):
-        """spawn-model/S10 spawn-model/S10a"""
+        """agent-runtime/R139 agent-runtime/R140"""
         lead = self.start({}, ENV)
         for cli, agent in (("claude", "-x"), ("claude", 3), ("codex", "a/b"), ("codex", "plugin:x")):
             result, _ = self.call(lead, "spawn", dict(ARGS, cli=cli, agent=agent))
@@ -194,7 +194,7 @@ class SpawnCleanupTests(ToolCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
     def test_codex_agent_without_instructions_starts_no_terminal_and_registers_nothing(self):
-        """spawn-model/S11"""
+        """agent-runtime/R141"""
         lead = self.start({}, ENV)
         result, text = self.call(lead, "spawn", dict(ARGS, cli="codex", agent="reviewer"))
         self.assertTrue(result["isError"])
