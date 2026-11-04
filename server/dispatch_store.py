@@ -92,10 +92,11 @@ def wait_fingerprint(db, team):
     """
     rows = db.execute(
         "SELECT a.id,a.state,a.current,d.turn,d.mode,"
-        "(SELECT MAX(seq) FROM messages WHERE team=t.id AND recipient=t.lead) FROM teams t "
+        "(SELECT MAX(seq) FROM messages WHERE team=?1 "
+        "AND recipient=(SELECT lead FROM teams WHERE id=?1)) FROM teams t "
         "LEFT JOIN assignments a ON a.team=t.id "
         "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
-        "WHERE t.id=? ORDER BY a.id", (team,))
+        "WHERE t.id=?1 ORDER BY a.id", (team,))
     payload = json.dumps([tuple(row) for row in rows], separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -604,7 +605,7 @@ class Store:
                            (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
                 batch["receipt"] = token
             if ready is not None and batch["reason"] is not None and target == "all" and not inbox:
-                db.execute("INSERT INTO last_wait VALUES (?,?,?,?) ON CONFLICT(team) DO UPDATE "
+                db.execute("INSERT INTO last_wait(team,reason,attention,fingerprint) VALUES (?,?,?,?) ON CONFLICT(team) DO UPDATE "
                            "SET reason=excluded.reason,attention=excluded.attention,fingerprint=excluded.fingerprint",
                            (team, batch["reason"], attention, wait_fingerprint(db, team)))
             return batch
