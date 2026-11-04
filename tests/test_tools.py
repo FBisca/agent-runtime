@@ -138,8 +138,8 @@ class SpawnTests(ToolCase):
         info = json.loads(text)
         self.assertEqual((info["name"], info["address"], info["parent"]), ("w1", "t9", "t0"))
 
-    def test_S1_workers_start_with_no_notify_before_the_program(self):
-        """lead-delivery-gaps/S1"""
+    def test_workers_start_with_no_notify_before_the_program(self):
+        """agent-runtime/R96"""
         for cli, program in (("claude", "claude"), ("codex", "codex")):
             with self.subTest(cli=cli):
                 session = self.start({"get:w1": {"out": raw("w1", "t0")}})
