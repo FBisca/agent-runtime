@@ -8,6 +8,7 @@ zero-timeout replay: zero skips waiting for events, not the bounded status probe
 import time
 
 from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
+from dispatch_store import STALL_NEXT
 from dispatch_events import Listener
 
 RECONCILE_INTERVAL = 0.5
@@ -33,10 +34,19 @@ FAILURE_STATES = ("exited", "finished", "interrupted", "replaced")
 
 
 def persist_failures(store, observations):
-    """D2: commit observed failures before the read, so the result carries the one persisted message."""
+    """D2: commit observed failures before the read, so the result carries the one persisted message.
+
+    Also records hc turns for the stall clock (D14); no extra hc call is made.
+    """
+    store.track_progress(observations)
     failures = {k: v for k, v in observations.items() if isinstance(k, str) and v in FAILURE_STATES}
     if failures:
         store.fail_observed(failures)
+
+
+def stall(assignment):
+    """D14: still working after the failure/blocked overrides, so failed and blocked win over stalled."""
+    return bool(assignment.get("_stalled")) and assignment["state"] == "working"
 
 
 def reason(batch, target, observations):
@@ -50,6 +60,13 @@ def reason(batch, target, observations):
                 assignment["state"] = "blocked"
             elif runtime in NEEDS_PERSON_STATES:
                 assignment["next"] = UNREPORTED_NEXT if runtime == "unreported" else ERROR_NEXT
+    for a in batch["assignments"]:
+        if a["assignment_id"] not in observations:
+            a["_stalled"] = False  # Never report idle before this call has seen the runtime state (failure wins).
+        if a.get("_stalled") and not stall(a):
+            a["_stalled"] = False
+        elif stall(a):
+            a["attention"], a["next"] = "stalled", STALL_NEXT
     batch["unfinished"] = [a["assignment_id"] for a in batch["assignments"] if a["state"] != "complete"]
     states = {a["state"] for a in batch["assignments"]}
     # D24: the turn ended (hc done/idle) with no accepted complete/blocked/decision report. A report that
@@ -59,7 +76,7 @@ def reason(batch, target, observations):
     batch["_attention"] = sum(
         a["state"] in ("blocked", "decision") or
         (a["state"] not in ("complete", "failed") and
-         (a.get("runtime_state") in NEEDS_PERSON_STATES or a["assignment_id"] in ended))
+         (a.get("runtime_state") in NEEDS_PERSON_STATES or a["assignment_id"] in ended or stall(a)))
         for a in batch["assignments"])
     for a in batch["assignments"]:
         a.pop("turn", None)
@@ -69,7 +86,7 @@ def reason(batch, target, observations):
     if "failed" in states:
         return "failed"
     stuck = any(a.get("runtime_state") in NEEDS_PERSON_STATES and a["state"] != "complete" for a in batch["assignments"])
-    if ended or stuck or states.intersection(("blocked", "decision")):
+    if ended or stuck or any(stall(a) for a in batch["assignments"]) or states.intersection(("blocked", "decision")):
         return "attention"
     if not batch["unfinished"]:
         return "completed"
