@@ -1,5 +1,6 @@
 #!/bin/sh
 # Resolve this script through symlinks, then run the Python entrypoint in the repo.
+# Usage: agent-runtime-hook [stop|context] [--cli codex]; no subcommand is the PreToolUse guard.
 command -v python3 >/dev/null 2>&1 || exit 0 # hooks fail open when python3 is missing
 self=$0
 while [ -L "$self" ]; do
@@ -8,4 +9,10 @@ while [ -L "$self" ]; do
   case $self in /*) ;; *) self=$dir/$self ;; esac
 done
 root=$(cd "$(dirname "$self")/.." && pwd)
-exec python3 "$root/hooks/pre_tool_use.py" "$@"
+case ${1:-} in
+  stop) shift; script=$root/hooks/stop_guard.py ;;
+  context) shift; script=$root/hooks/lead_context.py ;;
+  *) script=$root/hooks/pre_tool_use.py ;;
+esac
+[ -f "$script" ] || exit 0 # a missing script must not fail closed (python3 would exit 2)
+exec python3 "$script" "$@"

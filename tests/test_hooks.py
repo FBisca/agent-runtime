@@ -3,9 +3,11 @@
 import json
 import os
 import sqlite3
+import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import time
 import unittest
 from pathlib import Path
@@ -357,9 +359,10 @@ class LeadContextTests(HookStoreCase):
             self.assertIsNone(self.hook(self.PROMPT, seed_locked))
         finally:
             locked["db"].close()
-        done = subprocess.run(["/bin/sh", str(SHIM)], input="{}", env={"PATH": "/nonexistent"},
-                              capture_output=True, text=True, timeout=20)
-        self.assertEqual((done.returncode, done.stdout), (0, ""))
+        for args in ([], ["stop", "--cli", "codex"], ["context", "--cli", "codex"]):  # default, stop, context
+            done = subprocess.run(["/bin/sh", str(SHIM)] + args, input="{}", env={"PATH": "/nonexistent"},
+                                  capture_output=True, text=True, timeout=20)
+            self.assertEqual((done.returncode, done.stdout), (0, ""), args)
 
     def hook_twice(self, payload, seed, env):
         """Run the hook twice under ONE fake CLI process (one generation); returns both outputs."""
@@ -439,12 +442,14 @@ class FakeCliProcess:
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.generation = "%d:%s" % (self.proc.pid, lib.lstart(self.proc.pid))
 
-    def run(self, script, payload=None, raw=None):
+    def run(self, script, payload=None, raw=None, args=()):
+        """script is a Python hook path, or a list for a command run as-is (the shim); args follow it."""
         self.count += 1
         n = self.count
         (self.root / ("p%d.json" % n)).write_text(raw if raw is not None else json.dumps(payload))
-        (self.root / ("s%d.sh" % n)).write_text('%s -B %s <"$DIR/p%d.json" >"$DIR/o%d" 2>"$DIR/e%d"; echo $? >"$DIR/r%d"\n'
-                                                % (sys.executable, script, n, n, n, n))
+        command = " ".join(script) if isinstance(script, list) else "%s -B %s" % (sys.executable, script)
+        (self.root / ("s%d.sh" % n)).write_text('%s %s <"$DIR/p%d.json" >"$DIR/o%d" 2>"$DIR/e%d"; echo $? >"$DIR/r%d"\n'
+                                                % (command, " ".join(args), n, n, n, n))
         self.proc.stdin.write("%d\n" % n)
         self.proc.stdin.flush()
         assert self.proc.stdout.readline().strip() == "ok"
@@ -662,6 +667,116 @@ class StopGuardTests(HookStoreCase):
         self.assertIn("call wait(all)", self.line(self.prompt()))
         self.sql(self.store, "DROP TABLE stall_progress")  # older store: no reported stalls
         self.assertEqual(self.stop()[0]["decision"], "block")
+
+
+class CodexHookTests(HookStoreCase):
+    """The Codex adapter: the shim routes `stop` / `context` subcommands to the same hooks, fed with Codex-shaped
+    payloads (docs/verification/codex-hooks.md)."""
+
+    SHIM_CMD = ["/bin/sh", str(SHIM)]
+    STOP = {"session_id": "s", "turn_id": "t", "cwd": "/", "hook_event_name": "Stop", "model": "m",
+            "permission_mode": "default", "transcript_path": None, "stop_hook_active": False,
+            "last_assistant_message": "done"}
+    PROMPT = {"session_id": "s", "turn_id": "t", "cwd": "/", "hook_event_name": "UserPromptSubmit",
+              "model": "m", "permission_mode": "default", "transcript_path": None, "prompt": "hi"}
+
+    def setUp(self):
+        super().setUp()
+        self.cli = FakeCliProcess(self.env, self.root)
+        self.addCleanup(self.cli.close)
+        self.store = dispatch_store.Store(self.env)
+        self.team_id = self.store.team("scope", "t0", self.cli.generation)
+
+    def stop(self, **extra):
+        out, err, code = self.cli.run(self.SHIM_CMD, dict(self.STOP, **extra), args=("stop", "--cli", "codex"))
+        self.assertEqual(code, 0, err)
+        return out, err
+
+    def context(self, payload):
+        out, err, code = self.cli.run(self.SHIM_CMD, payload, args=("context", "--cli", "codex"))
+        self.assertEqual(code, 0, err)
+        return out
+
+    def budget(self):
+        files = list((self.state / "agent-runtime" / "stop-guard").glob("*"))
+        return int(files[0].read_text()) if files else None
+
+    def test_S19_codex_stop_blocks_with_the_wait_reason_and_allows_with_empty_output(self):
+        """lead-liveness-hooks/S19"""
+        ident = self.worker(self.store, self.team_id)
+        out, _ = self.stop()
+        self.assertEqual(out, {"decision": "block", "reason": "agent-runtime: 1 unfinished, 0 undelivered — "
+                                                            "call wait(all) before ending the turn"})
+        self.sql(self.store, "UPDATE assignments SET state='blocked' WHERE id=?", ident["assignment_id"])
+        self.assertEqual(self.cli.run(self.SHIM_CMD, self.STOP, args=("stop", "--cli", "codex")), (None, "", 0))
+
+    def test_S19_codex_budget_ignores_stop_hook_active_and_background_tasks_then_resets_on_prompt(self):
+        """lead-liveness-hooks/S19"""
+        self.worker(self.store, self.team_id)
+        mcp = [{"type": "MCP task", "server": "plugin:agent-runtime:agent-runtime", "tool": "wait", "status": "running"}]
+        self.assertIsNotNone(self.stop(background_tasks=mcp)[0])  # no D10 exemption on Codex
+        self.assertIsNotNone(self.stop(stop_hook_active=True)[0])  # only the budget bounds it
+        self.assertIsNotNone(self.stop(stop_hook_active=True)[0])
+        out, err = self.stop(stop_hook_active=True)
+        self.assertEqual(out, None)
+        self.assertIn("agent-runtime", err)
+        self.assertEqual(self.budget(), -1)
+        self.context(self.PROMPT)  # Codex UserPromptSubmit resets
+        self.assertEqual(self.budget(), 3)
+        self.assertIsNotNone(self.stop()[0])
+
+    def test_S20_codex_session_start_and_prompt_carry_the_context_line(self):
+        """lead-liveness-hooks/S20"""
+        self.worker(self.store, self.team_id)
+        line = "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)"
+        base = {"session_id": "s", "cwd": "/", "model": "m", "permission_mode": "default", "transcript_path": None}
+        for source in ("compact", "clear"):
+            out = self.context(dict(base, hook_event_name="SessionStart", source=source))
+            self.assertEqual(out, {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": line}})
+        for source in ("startup", "resume", "fork"):
+            self.assertIsNone(self.context(dict(base, hook_event_name="SessionStart", source=source)), source)
+        out = self.context(self.PROMPT)
+        self.assertEqual(out, {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": line}})
+
+    def test_S19_install_prints_the_codex_lead_hooks_only_on_request(self):
+        """lead-liveness-hooks/S19"""
+        base = {"PATH": os.environ["PATH"], "HOME": str(self.root / "home"), "BIN_DIR": str(self.root / "bin")}
+        plain = subprocess.run([str(PLUGIN / "install.sh")], env=base, capture_output=True, text=True, timeout=30)
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertNotIn("hooks.Stop", plain.stdout)
+        asked = subprocess.run([str(PLUGIN / "install.sh")], env=dict(base, CODEX_LEAD_HOOKS="1"),
+                               capture_output=True, text=True, timeout=30)
+        def toml(out):  # the printed config starts after the instructions
+            return tomllib.loads(out[out.index("[mcp_servers.agent-runtime]"):])
+
+        hooks = toml(asked.stdout)["hooks"]
+        for event, suffix in (("Stop", " stop --cli codex"), ("SessionStart", " context --cli codex"),
+                              ("UserPromptSubmit", " context --cli codex")):
+            commands = [h["command"] for group in hooks[event] for h in group["hooks"]]
+            self.assertEqual(len(commands), 1, event)
+            self.assertTrue(commands[0].endswith(suffix), commands)
+            self.assertIn("agent-runtime-hook", commands[0])
+        self.assertIn("PreToolUse", hooks)  # the existing guard blocks stay
+        self.assertNotIn("Stop", toml(plain.stdout).get("hooks", {}))
+
+    def test_S19_shim_exits_zero_when_its_script_is_missing(self):
+        """lead-liveness-hooks/S19"""
+        (self.root / "bin").mkdir()
+        (self.root / "hooks").mkdir()
+        shim = self.root / "bin" / "agent-runtime-hook"
+        shutil.copy(SHIM, shim)  # no hooks/stop_guard.py next to it
+        done = subprocess.run(["/bin/sh", str(shim), "stop", "--cli", "codex"], input="{}", capture_output=True,
+                              text=True, timeout=20)
+        self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
+
+    def test_S20_attention_line_and_default_subcommand_is_still_the_pre_tool_use_guard(self):
+        """lead-liveness-hooks/S20"""
+        self.worker(self.store, self.team_id)
+        self.last_wait(self.store, self.team_id, "attention", 1)
+        self.assertEqual(self.line(self.context(self.PROMPT)), "agent-runtime: 1 workers need you — check status")
+        out, err, code = self.cli.run(self.SHIM_CMD, {"tool_name": "Bash", "tool_input": {"command": "hc send w hi"}},
+                                      args=("--cli", "codex"))
+        self.assertTrue(denied(out), err)
 
 
 if __name__ == "__main__":

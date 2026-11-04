@@ -285,3 +285,36 @@ class LiveAcceptance(unittest.TestCase):
             finally:
                 lead.close()
 
+
+@unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE_CODEX_HOOKS") == "1",
+                     "owner sign-off: set AGENT_RUNTIME_LIVE_CODEX_HOOKS=1 after trusting the Codex hooks via /hooks")
+class CodexHooksTrustTests(unittest.TestCase):
+    def test_S21_spawned_codex_worker_starts_its_task_with_the_lead_hooks_installed(self):
+        """lead-liveness-hooks/S21"""
+        try:
+            config = (Path.home() / ".codex" / "config.toml").read_text()
+        except OSError:
+            config = ""
+        if " stop --cli codex" not in config or " context --cli codex" not in config:
+            self.skipTest("~/.codex/config.toml lacks the Stop and context hooks: add the blocks printed by "
+                          "CODEX_LEAD_HOOKS=1 ./install.sh and trust them with /hooks (docs/verification/codex-hooks.md)")
+        work = tempfile.mkdtemp(prefix="agent-runtime-live-codex-hooks-")
+        self.addCleanup(shutil.rmtree, work, True)
+        name = "live-hooks-" + secrets.token_hex(3)
+        lead = Lead(lambda *args, **kwargs: None)
+        self.addCleanup(lead.close)
+        try:
+            lead.tool("spawn", kind="worker", cli="codex", name=name, cwd=work,
+                      task="Live test: call the agent-runtime report tool with kind='complete', text='hooks-ok' and "
+                           "your assignment_id. Do not edit files. Then stop.")
+            deadline, seen, receipt = time.time() + 150, [], None
+            while time.time() < deadline and not seen:
+                batch = lead.tool("wait", target="all", timeout=30, **({"receipt": receipt} if receipt else {}))
+                receipt = batch.get("receipt")
+                seen = [m for m in batch.get("messages", []) if "hooks-ok" in m.get("text", "")]
+            self.assertTrue(seen, "no report within 150 s: check the worker terminal for a 'Hooks need review' prompt")
+        finally:
+            try:
+                lead.tool("stop", name=name)
+            except Exception:
+                pass
