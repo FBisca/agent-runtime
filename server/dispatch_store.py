@@ -95,13 +95,18 @@ def wait_fingerprint(db, team):
     message high-water mark in one SQLite snapshot. IDs and current flags include pending
     registrations and assignment replacement; acknowledgements never change it.
     """
+    # "Stall reported and unchanged" (R128) is part of the digest so a worker's recovery reads as new work;
+    # raw progress times and turns stay out, or every turn would flip "seen". Older stores lack stall_progress.
+    has_stall = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'").fetchone()
     rows = db.execute(
         "SELECT a.id,a.state,a.current,d.turn,d.mode,"
         "(SELECT MAX(seq) FROM messages WHERE team=?1 "
-        "AND recipient=(SELECT lead FROM teams WHERE id=?1)) FROM teams t "
-        "LEFT JOIN assignments a ON a.team=t.id "
+        "AND recipient=(SELECT lead FROM teams WHERE id=?1)),"
+        + ("COALESCE(sp.stall_reported_for IS NOT NULL AND sp.stall_reported_for=sp.last_progress_ms,0)" if has_stall else "0")
+        + " FROM teams t LEFT JOIN assignments a ON a.team=t.id "
         "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
-        "WHERE t.id=?1 ORDER BY a.id", (team,))
+        + ("LEFT JOIN stall_progress sp ON sp.assignment=a.id " if has_stall else "")
+        + "WHERE t.id=?1 ORDER BY a.id", (team,))
     payload = json.dumps([tuple(row) for row in rows], separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
