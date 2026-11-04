@@ -12,6 +12,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import agent_runtime as lib  # noqa: E402  (no side effects on import)
@@ -44,10 +45,13 @@ def identity(env=None):
     """(scope, lead, generation) or None when any part is unavailable."""
     env = os.environ if env is None else env
     lead = env.get("HC_TERMINAL_ID")
-    generation = lib.cli_generation()
-    if not lead or not generation:
+    if not lead:
         return None
-    return hc_tools.hc_server(env), lead, generation
+    try:  # same function as the server, including its no-ancestor session-ID fallback
+        scope, generation = hc_tools.dispatch_identity(env)
+    except hc_tools.ToolError:
+        return None
+    return scope, lead, generation
 
 
 def store_path(env=None):
@@ -76,11 +80,10 @@ def led_team(db, who):
 
 def undelivered(db, team, lead):
     """Lead-addressed messages not acknowledged and not named by any receipt (a delivered final read)."""
-    delivered = set()
-    for row in db.execute("SELECT ids FROM receipts WHERE team=? AND recipient=?", (team, lead)):
-        delivered.update(json.loads(row["ids"]))
-    rows = db.execute("SELECT id FROM messages WHERE team=? AND recipient=? AND acked=0", (team, lead))
-    return sum(1 for row in rows if row["id"] not in delivered)
+    return db.execute(
+        "SELECT COUNT(*) FROM messages m WHERE m.team=? AND m.recipient=? AND m.acked=0 AND NOT EXISTS "
+        "(SELECT 1 FROM receipts r, json_each(r.ids) j WHERE r.team=m.team AND r.recipient=m.recipient "
+        "AND j.value=m.id)", (team, lead)).fetchone()[0]
 
 
 def working(db, team):
@@ -112,7 +115,11 @@ def lead_needs(env=None):
         return None
     db = open_readonly(env)
     try:
-        team = led_team(db, who)
-        return needs(db, team, who[1]) if team else None
+        db.execute("BEGIN")  # one read snapshot for the team lookup and every count
+        try:
+            team = led_team(db, who)
+            return needs(db, team, who[1]) if team else None
+        finally:
+            db.rollback()
     finally:
         db.close()

@@ -356,25 +356,58 @@ class LeadContextTests(unittest.TestCase):
                               capture_output=True, text=True, timeout=20)
         self.assertEqual((done.returncode, done.stdout), (0, ""))
 
+    def hook_twice(self, payload, seed, env):
+        """Run the hook twice under ONE fake CLI process (one generation); returns both outputs."""
+        payload_file = self.root / "payload.json"
+        payload_file.write_text(json.dumps(payload))
+        script = 'read -r _; for _ in 1 2; do "$@" <"$PAYLOAD"; done'
+        proc = subprocess.Popen(["codex", "-c", script, "codex", sys.executable, "-B", str(CONTEXT)],
+                                executable="/bin/bash", env=dict(env, PAYLOAD=str(payload_file)), text=True,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        seed("%d:%s" % (proc.pid, lib.lstart(proc.pid)))
+        out, err = proc.communicate("go\n", timeout=30)
+        self.assertEqual(proc.returncode, 0, err)
+        return [json.loads(line) for line in out.splitlines()]
+
     def test_S9_hook_never_writes_the_store_and_honours_xdg_state_home(self):
         """lead-liveness-hooks/S9"""
         def seed(generation):
             store, team = self.team(generation)
             self.worker(store, team)
-        def snapshot():
-            return sorted((str(p.relative_to(self.root)), p.stat().st_mtime_ns, p.stat().st_size)
-                          for p in self.root.rglob("*"))
+        def snapshot():  # the database and any SQLite sidecar files
+            return sorted((p.name, p.stat().st_mtime_ns, p.stat().st_size)
+                          for p in (self.state / "agent-runtime").glob("dispatch.sqlite3*"))
         for flag in (None, "1"):
             env = dict(self.env, **({"AGENT_RUNTIME_DISPATCH": flag} if flag else {}))
-            self.hook(self.PROMPT, seed, env=env)  # seeds (first run) and reads
+            outs = self.hook_twice(self.PROMPT, seed, env)
+            self.assertEqual([self.line(o) for o in outs],
+                             ["agent-runtime: 1 unfinished, 0 undelivered — call wait(all)"] * 2)
             before = snapshot()
-            out = self.hook(self.PROMPT, env=env)  # same hook process shape, same store, no seeding
-            self.assertIsNone(out)  # new fake CLI process = new generation: a different team, so silent
+            self.hook_twice(self.PROMPT, lambda generation: None, env)  # reads only (other generation)
             self.assertEqual(snapshot(), before, flag)
         self.assertFalse((self.root / "home").exists())
         missing = dict(self.env, XDG_STATE_HOME=str(self.root / "absent"))
         self.hook(self.PROMPT, env=missing)
         self.assertFalse((self.root / "absent").exists())
+
+    def test_S8_broken_import_exits_zero_silently(self):
+        """lead-liveness-hooks/S8"""
+        broken = self.root / "broken"
+        broken.mkdir()
+        (broken / "lead_context.py").write_text((HOOKS / "lead_context.py").read_text())
+        (broken / "hook_lib.py").write_text("raise ImportError('boom')\n")
+        done = subprocess.run([sys.executable, "-B", str(broken / "lead_context.py")], input=json.dumps(self.PROMPT),
+                              env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
+
+    def test_S8_claude_hook_commands_allow_silently_without_python3(self):
+        """lead-liveness-hooks/S8"""
+        hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
+        for event in ("SessionStart", "UserPromptSubmit"):
+            command = hooks[event][0]["hooks"][0]["command"]
+            done = subprocess.run(command, shell=True, input="{}", capture_output=True, text=True, timeout=20,
+                                  env={"PATH": "/nonexistent", "CLAUDE_PLUGIN_ROOT": str(PLUGIN)})
+            self.assertEqual((done.returncode, done.stdout), (0, ""), event)
 
     def test_S1_hook_shaped_process_computes_the_servers_generation(self):
         """lead-liveness-hooks/S1"""
