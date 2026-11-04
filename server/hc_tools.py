@@ -463,6 +463,7 @@ def wait(arguments, env, ctx):
     inbox = target == "inbox" or bool(actor and actor["worker_id"] and target == "any")
     store, team = (ctx.store, actor["team_id"]) if inbox and actor else lead_store(env, ctx)
     recipient = actor["recipient"] if inbox and actor else env["HC_TERMINAL_ID"]
+    reported = set()  # addresses that ever reported: their null status is never a silent worker
     def observe(members, timeout):
         try:
             code, out, _ = run(["hc", "ls", "--all", "--json"], env, ctx, timeout)
@@ -482,7 +483,21 @@ def wait(arguments, env, ctx):
                     state = row["state"]
                 if (row.get("name"), row.get("parent")) != (member["name"], member["lead"]):
                     state = "replaced"
-            if state not in ("working", "idle", "done", "blocked", "exited", "finished", "interrupted", "replaced"):
+            if row and state is not None:
+                reported.add(member["address"])
+            if row and state is None and row.get("state") == "live" and member["address"] not in reported:
+                # ls lacks created_ms/reported: read the one terminal, only for silent live members.
+                try:
+                    code, out, _ = run(["hc", "get", member["address"], "--json"], env, ctx, timeout)
+                    detail = json.loads(out) if code == 0 else None
+                except (ToolError, ValueError):
+                    detail = None
+                if isinstance(detail, dict) and lib.never_reported(detail):
+                    state = "unreported"
+                elif isinstance(detail, dict) and (detail.get("reported") is True or detail.get("status_ms") is not None):
+                    reported.add(member["address"])
+            if state not in ("working", "idle", "done", "blocked", "error", "unreported", "exited", "finished",
+                             "interrupted", "replaced"):
                 state = "unknown"
             observations[member["assignment_id"]] = state
             if row:

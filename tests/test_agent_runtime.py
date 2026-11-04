@@ -251,7 +251,7 @@ class StatusTests(unittest.TestCase):
         """agent-runtime/R12"""
         cases = [({"app": "x", "state": "working"}, "live", "working"), ("working", "live", "working"),
                  ("idle", "live", "idle"), ({"app": "x", "state": "done"}, "live", "done"),
-                 ("blocked", "live", "blocked"), ("error", "live", "unknown"), (None, "live", "unknown"),
+                 ("blocked", "live", "blocked"), ("error", "live", "error"), (None, "live", "unknown"),
                  ({"state": "weird"}, "live", "unknown"), ("done", "finished", "exited"),
                  (None, "finished", "exited")]
         for status, state, expected in cases:
@@ -291,9 +291,9 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(info["state"], "unknown")
         self.assertTrue(info["next"])
 
-    def test_hc_error_state_maps_to_unknown(self):
-        """agent-runtime/R12: hc error state maps to unknown."""
-        self.assertEqual(hc_status(raw("error"))["state"], "unknown")
+    def test_hc_error_state_maps_to_error(self):
+        """agent-runtime/R12: hc error state maps to error (updated by lead-delivery-gaps/S9)."""
+        self.assertEqual(hc_status(raw("error"))["state"], "error")
 
     def test_herdmates_missing_identity_never_calls_cli(self):
         """agent-runtime/R13"""

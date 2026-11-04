@@ -1,12 +1,13 @@
 """One bounded wait: durable membership/messages, IPC hints, internal reconciliation.
 
-Lost hints recover on a 0.5s recheck interval. Each hc observation has a 0.2s
-budget; SQLite retains its finite 5s busy timeout. No host/model polling is needed.
+Lost hints recover on a 0.5s recheck interval. Each hc call in an observation
+(`hc ls`, plus `hc get` per silent live member) has a 0.2s budget; SQLite retains its finite 5s busy timeout. No host/model polling is needed.
 Queued nonterminal any-events require an observation on each call, including
 zero-timeout replay: zero skips waiting for events, not the bounded status probe.
 """
 import time
 
+from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
 from dispatch_events import Listener
 
 RECONCILE_INTERVAL = 0.5
@@ -27,6 +28,7 @@ def turn_ended(assignment, observations):
     return seen is not None and seen > recorded + (assignment.get("mode") == "working")
 
 
+NEEDS_PERSON_STATES = ("unreported", "error")
 FAILURE_STATES = ("exited", "finished", "interrupted", "replaced")
 
 
@@ -46,6 +48,8 @@ def reason(batch, target, observations):
                 assignment["state"] = "failed"
             elif runtime == "blocked":
                 assignment["state"] = "blocked"
+            elif runtime in NEEDS_PERSON_STATES:
+                assignment["next"] = UNREPORTED_NEXT if runtime == "unreported" else ERROR_NEXT
     batch["unfinished"] = [a["assignment_id"] for a in batch["assignments"] if a["state"] != "complete"]
     states = {a["state"] for a in batch["assignments"]}
     # D24: the turn ended (hc done/idle) with no accepted complete/blocked/decision report. A report that
@@ -58,7 +62,8 @@ def reason(batch, target, observations):
         return "messages" if batch["messages"] else "empty"
     if "failed" in states:
         return "failed"
-    if ended or states.intersection(("blocked", "decision")):
+    stuck = any(a.get("runtime_state") in NEEDS_PERSON_STATES and a["state"] != "complete" for a in batch["assignments"])
+    if ended or stuck or states.intersection(("blocked", "decision")):
         return "attention"
     if not batch["unfinished"]:
         return "completed"
