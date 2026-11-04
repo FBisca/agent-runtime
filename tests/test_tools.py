@@ -167,24 +167,24 @@ class SpawnTests(ToolCase):
         self.assertFalse(result["isError"], text)
         return self.runs("run")[-1][10:]
 
-    def test_S1_claude_model_flag(self):
-        """spawn-model/S1"""
+    def test_claude_model_flag(self):
+        """agent-runtime/R129"""
         argv = self.spawn_argv(cli="claude", model="haiku")
         self.assertEqual(argv[:6], ["claude", "--agent", "implementer", "--permission-mode", "auto", "--model"])
         self.assertEqual(argv[6], "haiku")
         self.assertEqual(len(argv), 8)
         self.assertTrue(argv[-1].startswith("do x"))
 
-    def test_S2_codex_model_flag(self):
-        """spawn-model/S2"""
+    def test_codex_model_flag(self):
+        """agent-runtime/R130"""
         argv = self.spawn_argv(cli="codex", model="gpt-5.5")
         self.assertEqual(argv[:4], ["codex", "--no-daemon", "--model", "gpt-5.5"])
         self.assertEqual(len(argv), 5)
         self.assertTrue(argv[-1].startswith("CODEX IMPLEMENTER RULES"))
         self.assertNotIn("permission-mode", " ".join(argv))
 
-    def test_S3_no_model_keeps_argv(self):
-        """spawn-model/S3"""
+    def test_no_model_keeps_argv(self):
+        """agent-runtime/R131"""
         claude = self.spawn_argv(cli="claude")
         self.assertEqual(claude[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
         self.assertEqual(len(claude), 6)
@@ -193,8 +193,8 @@ class SpawnTests(ToolCase):
         self.assertEqual(len(codex), 3)
         self.assertNotIn("--model", claude + codex)
 
-    def test_S4_blank_or_non_string_model_is_an_error(self):
-        """spawn-model/S4"""
+    def test_blank_or_non_string_model_is_an_error(self):
+        """agent-runtime/R132"""
         for model in ("", "   ", 5, ["haiku"], True):
             with self.subTest(model=model):
                 session = self.start()
@@ -202,8 +202,8 @@ class SpawnTests(ToolCase):
                 self.assertTrue(result["isError"])
                 self.assertEqual(self.runs("run"), [])
 
-    def test_S4a_whitespace_or_control_characters_in_model_are_an_error(self):
-        """spawn-model/S4a"""
+    def test_whitespace_or_control_characters_in_model_are_an_error(self):
+        """agent-runtime/R133"""
         for model in (" haiku", "haiku ", "  -x", "ha iku", "ha\niku", "ha\x00iku", "ha\x7fiku", "ha\tiku"):
             with self.subTest(model=model):
                 session = self.start()
@@ -214,8 +214,8 @@ class SpawnTests(ToolCase):
     def write_agent(self, name, body='developer_instructions = """\nREVIEWER RULES\n"""\n'):
         (self.dir / "home" / ".codex" / "agents" / ("%s.toml" % name)).write_text(body)
 
-    def test_S7_claude_agent_flag(self):
-        """spawn-model/S7"""
+    def test_claude_agent_flag(self):
+        """agent-runtime/R136"""
         argv = self.spawn_argv(cli="claude", agent="scene-reviewer")
         self.assertEqual(argv[:5], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto"])
         self.assertEqual(len(argv), 6)
@@ -225,8 +225,8 @@ class SpawnTests(ToolCase):
         self.assertEqual(len(argv), 8)
         self.assertTrue(argv[-1].startswith("do x"))
 
-    def test_S8_codex_agent_instructions(self):
-        """spawn-model/S8"""
+    def test_codex_agent_instructions(self):
+        """agent-runtime/R137"""
         self.write_agent("reviewer")
         argv = self.spawn_argv(cli="codex", agent="reviewer")
         self.assertEqual(argv[:2], ["codex", "--no-daemon"])
@@ -234,8 +234,8 @@ class SpawnTests(ToolCase):
         self.assertTrue(argv[-1].startswith("REVIEWER RULES\n\ndo x"))
         self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
 
-    def test_S9_no_agent_keeps_implementer(self):
-        """spawn-model/S9"""
+    def test_no_agent_keeps_implementer(self):
+        """agent-runtime/R138"""
         claude = self.spawn_argv(cli="claude")
         self.assertEqual(claude[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
         self.assertEqual(len(claude), 6)
@@ -243,8 +243,8 @@ class SpawnTests(ToolCase):
         self.assertTrue(codex[-1].startswith("CODEX IMPLEMENTER RULES"))
         self.assertEqual(len(codex), 3)
 
-    def test_S10_invalid_agent_is_an_error(self):
-        """spawn-model/S10"""
+    def test_invalid_agent_is_an_error(self):
+        """agent-runtime/R139"""
         for agent in ("", "   ", 5, ["a"], True, "-x", "../x", "a/b", "a.b", "a" * 65, " a", "a b", "a\n"):
             for cli in ("claude", "codex"):
                 with self.subTest(agent=agent, cli=cli):
@@ -253,8 +253,8 @@ class SpawnTests(ToolCase):
                     self.assertTrue(result["isError"])
                     self.assertEqual(self.runs("run"), [])
 
-    def test_S10a_colon_agent_is_claude_only(self):
-        """spawn-model/S10a"""
+    def test_colon_agent_is_claude_only(self):
+        """agent-runtime/R140"""
         argv = self.spawn_argv(cli="claude", agent="plugin:reviewer")
         self.assertEqual(argv[:3], ["claude", "--agent", "plugin:reviewer"])
         self.write_agent("plugin:reviewer")
@@ -264,8 +264,8 @@ class SpawnTests(ToolCase):
         self.assertIn(":", text)
         self.assertEqual(len(self.runs("run")), 1)  # only the Claude spawn above
 
-    def test_S11_codex_agent_file_missing_or_without_instructions(self):
-        """spawn-model/S11"""
+    def test_codex_agent_file_missing_or_without_instructions(self):
+        """agent-runtime/R141"""
         for body in (None, 'name = "reviewer"\n', "developer_instructions = 5\n",
                      'developer_instructions = ""\n', 'developer_instructions = "  \\n "\n'):
             with self.subTest(body=body):
@@ -277,8 +277,8 @@ class SpawnTests(ToolCase):
                 self.assertIn("reviewer.toml", text)
                 self.assertEqual(self.runs("run"), [])
 
-    def test_S5_dash_model_is_an_error(self):
-        """spawn-model/S5"""
+    def test_dash_model_is_an_error(self):
+        """agent-runtime/R134"""
         for cli in ("claude", "codex"):
             with self.subTest(cli=cli):
                 session = self.start()

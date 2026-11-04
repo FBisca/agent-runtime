@@ -145,16 +145,16 @@ class ToolListTests(ServerCase):
             words += sum(len(p.get("description", "").split()) for p in tool["inputSchema"]["properties"].values())
         self.assertLessEqual(words, 400)
 
-    def test_S6_spawn_schema_has_optional_string_model(self):
-        """spawn-model/S6"""
+    def test_spawn_schema_has_optional_string_model(self):
+        """agent-runtime/R135"""
         session = self.start()
         session.handshake()
         spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
         self.assertEqual(spawn["inputSchema"]["properties"]["model"]["type"], "string")
         self.assertNotIn("model", spawn["inputSchema"]["required"])
 
-    def test_S12_spawn_schema_has_optional_string_agent(self):
-        """spawn-model/S12"""
+    def test_spawn_schema_has_optional_string_agent(self):
+        """agent-runtime/R142"""
         session = self.start()
         session.handshake()
         spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
