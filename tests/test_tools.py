@@ -202,6 +202,15 @@ class SpawnTests(ToolCase):
                 self.assertTrue(result["isError"])
                 self.assertEqual(self.runs("run"), [])
 
+    def test_S4a_whitespace_or_control_characters_in_model_are_an_error(self):
+        """spawn-model/S4a"""
+        for model in (" haiku", "haiku ", "  -x", "ha iku", "ha\niku", "ha\x00iku", "ha\x7fiku", "ha\tiku"):
+            with self.subTest(model=model):
+                session = self.start()
+                result, _ = self.call(session, "spawn", dict(self.ARGS, model=model))
+                self.assertTrue(result["isError"])
+                self.assertEqual(self.runs("run"), [])
+
     def test_S5_dash_model_is_an_error(self):
         """spawn-model/S5"""
         for cli in ("claude", "codex"):

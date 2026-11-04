@@ -215,6 +215,8 @@ def spawn_model(arguments):
         return []
     if not isinstance(model, str) or not model.strip():
         raise ToolError("model must be a model name")
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in model):
+        raise ToolError("model must not contain whitespace or control characters")
     if model.startswith("-"):
         raise ToolError("model must not start with '-'")
     return ["--model", model]
