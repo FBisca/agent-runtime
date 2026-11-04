@@ -12,11 +12,13 @@ import json
 import os
 import re
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
 import dispatch_events
+from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
 
 MAX_WORKERS = MAX_MESSAGES = 32
 MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
@@ -24,6 +26,9 @@ MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
 # structuredContent copies) stays under MAX_RESPONSE_BYTES. A base payload (tool result before an
 # inbox piggyback) stays under MAX_BASE_BYTES, so a legal 64 KiB report always fits beside it.
 MAX_RESPONSE_BYTES, MAX_BASE_BYTES, MAX_PAGE_BYTES = 196608, 98304, 65536
+STALL_NEXT = ("no progress for 15 minutes: collect it, message it, ask the user, or stop it; "
+              "the runtime never stops it or marks it complete")
+STALL_MS = 15 * 60 * 1000
 REPORT_KINDS = ("progress", "complete", "blocked", "decision")
 
 
@@ -121,7 +126,8 @@ def last_wait_state(db, team):
 
 
 class Store:
-    def __init__(self, env):
+    def __init__(self, env, clock=time.time):
+        self.clock = clock
         root = Path(env.get("XDG_STATE_HOME") or Path(env.get("HOME") or Path.home()) / ".local/state")
         self.directory = root / "agent-runtime"
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -147,6 +153,8 @@ class Store:
                 # Side table (not columns) keeps 0.2.0 servers' INSERT INTO assignments working on a shared store.
                 "CREATE TABLE IF NOT EXISTS dispatch_turns (assignment TEXT PRIMARY KEY, turn INTEGER, mode TEXT)",
                 "CREATE TABLE IF NOT EXISTS last_wait (team TEXT PRIMARY KEY, reason TEXT, attention INTEGER, fingerprint TEXT)",
+                # Stall tracking is additive and keyed by assignment, so `assignments` INSERTs stay untouched.
+                "CREATE TABLE IF NOT EXISTS stall_progress (assignment TEXT PRIMARY KEY, last_progress_ms INTEGER, last_turn INTEGER, stall_reported_for INTEGER)",
                 # v2: shared tasks; rowid order is the durable ID sequence.
                 "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, team TEXT, subject TEXT, status TEXT, owner TEXT, assignment TEXT, deps TEXT)",
                 # D7: hot wait/read lookups; additive, so 0.2.x writers and user_version are untouched.
@@ -390,11 +398,55 @@ class Store:
                        (message_id, row["team"], row["lead"], assignment, body))
             db.execute("UPDATE assignments SET state=? WHERE id=?",
                        ({"complete": "complete", "blocked": "blocked", "decision": "decision"}.get(kind, "working"), assignment))
+            db.execute("INSERT INTO stall_progress(assignment,last_progress_ms) VALUES (?,?) ON CONFLICT(assignment) "
+                       "DO UPDATE SET last_progress_ms=excluded.last_progress_ms", (assignment, self.now_ms()))
             if kind in ("complete", "blocked"):  # same transaction as the report; replays returned above
                 db.execute(TASK_REPORT_SQL,
                            ("complete" if kind == "complete" else "blocked", assignment))
         dispatch_events.notify(self.directory)
         return envelope
+
+    def now_ms(self):
+        return int(self.clock() * 1000)
+
+    def track_progress(self, observations):
+        """Start each observed assignment's idle clock at first observation; a turn change is progress.
+
+        A plain read decides first, so polls that change nothing never take the write lock.
+        """
+        turns = {k[0]: v for k, v in observations.items() if isinstance(k, tuple) and k[1] == "turn"}
+        if not turns:
+            return
+        def pending(db):
+            work = {}
+            for assignment, turn in turns.items():
+                if not db.execute("SELECT 1 FROM assignments WHERE id=?", (assignment,)).fetchone():
+                    continue
+                row = db.execute("SELECT last_turn FROM stall_progress WHERE assignment=?", (assignment,)).fetchone()
+                if row is None:
+                    work[assignment] = ("insert", turn)
+                elif turn is not None and row[0] is None:
+                    work[assignment] = ("adopt", turn)
+                elif turn is not None and turn != row[0]:
+                    work[assignment] = ("progress", turn)
+            return work
+        reader = sqlite3.connect(self.path, timeout=5)
+        try:
+            if not pending(reader):
+                return
+        finally:
+            reader.close()
+        with self.transaction() as db:
+            now = self.now_ms()
+            for assignment, (action, turn) in pending(db).items():
+                if action == "insert":
+                    db.execute("INSERT INTO stall_progress(assignment,last_progress_ms,last_turn) VALUES (?,?,?)",
+                               (assignment, now, turn))
+                elif action == "adopt":
+                    db.execute("UPDATE stall_progress SET last_turn=? WHERE assignment=?", (turn, assignment))
+                else:
+                    db.execute("UPDATE stall_progress SET last_progress_ms=?,last_turn=? WHERE assignment=?",
+                               (now, turn, assignment))
 
     def actor(self, scope, address, parent, generation=None, assignment=None, name=None, defer_pin=False):
         team = self.team(scope, address, generation) if parent is None else None
@@ -570,7 +622,7 @@ class Store:
             # Worst-case fixed fields (receipt, longest reason, a runtime_state added by wait) are
             # budgeted before selection so the receipt below names exactly what fits.
             fixed = len(json.dumps({"reason": "x" * 9, "messages": [], "assignments": [
-                dict(a, runtime_state="interrupted") for a in assignments], "unfinished": unfinished,
+                dict(a, runtime_state="interrupted", attention="stalled", next=max(STALL_NEXT, UNREPORTED_NEXT, ERROR_NEXT, key=len)) for a in assignments], "unfinished": unfinished,
                 "receipt": "0" * 32, "more": False}, separators=(",", ":")).encode())
             if reserve > MAX_BASE_BYTES + len(',"inbox":'):
                 # A base above its cap could leave no room for even one legal message (infinite more=true retries).
@@ -596,8 +648,19 @@ class Store:
                 reason = "messages"
             batch = {"reason": reason, "messages": messages, "assignments": assignments,
                      "unfinished": unfinished, "receipt": None, "more": more}
+            if ready is not None and not inbox:
+                idle_since = self.now_ms() - STALL_MS
+                for a in assignments:
+                    row = a["state"] == "working" and db.execute(
+                        "SELECT last_progress_ms,stall_reported_for FROM stall_progress WHERE assignment=?",
+                        (a["assignment_id"],)).fetchone()
+                    a["_stalled"] = bool(row and row[0] is not None and row[0] <= idle_since and row[1] != row[0])
             if ready is not None:
                 batch["reason"] = ready(batch)
+            for a in assignments:
+                if a.pop("_stalled", False) and batch["reason"] is not None:
+                    db.execute("UPDATE stall_progress SET stall_reported_for=last_progress_ms WHERE assignment=?",
+                               (a["assignment_id"],))
             attention = batch.pop("_attention", 0)
             if messages and issue_receipt and (ready is None or batch["reason"] is not None):
                 token = uid()
