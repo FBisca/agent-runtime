@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -212,16 +213,18 @@ class WiringTests(unittest.TestCase):
         mcp = [m for m in matchers if m != "Bash"]
         self.assertEqual(len(mcp), 1)
         self.assertRegex(TOOL + "spawn", mcp[0])
-        context = hooks["SessionStart"] + hooks["UserPromptSubmit"]
+        context = hooks["SessionStart"] + hooks["UserPromptSubmit"] + hooks["Stop"]
         commands = [h["command"] for entry in pre + hooks["SubagentStart"] + context for h in entry["hooks"]]
-        self.assertEqual(len(commands), 5)
+        self.assertEqual(len(commands), 6)
         for command in commands:
             self.assertIn('"${CLAUDE_PLUGIN_ROOT}"/hooks/', command)
         self.assertEqual({e.get("matcher") for e in hooks["SessionStart"]}, {"compact|clear"})
+        for entry in context:  # the new hooks fail open when python3 is missing
+            self.assertIn("command -v python3", entry["hooks"][0]["command"])
 
 
 
-class LeadContextTests(unittest.TestCase):
+class HookStoreCase(unittest.TestCase):
     """Hooks run under a fake `codex` process (so a CLI ancestor exists) against a store seeded in a temp
     XDG_STATE_HOME; the seed callback receives the generation the hook will compute."""
 
@@ -271,6 +274,8 @@ class LeadContextTests(unittest.TestCase):
 
     PROMPT = {"hook_event_name": "UserPromptSubmit", "prompt": "hi"}
 
+
+class LeadContextTests(HookStoreCase):
     def test_S10_unseen_work_prints_the_wait_reminder_for_all_three_events(self):
         """lead-liveness-hooks/S10"""
         def seed(generation):
@@ -403,7 +408,7 @@ class LeadContextTests(unittest.TestCase):
     def test_S8_claude_hook_commands_allow_silently_without_python3(self):
         """lead-liveness-hooks/S8"""
         hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
-        for event in ("SessionStart", "UserPromptSubmit"):
+        for event in ("SessionStart", "UserPromptSubmit", "Stop"):
             command = hooks[event][0]["hooks"][0]["command"]
             done = subprocess.run(command, shell=True, input="{}", capture_output=True, text=True, timeout=20,
                                   env={"PATH": "/nonexistent", "CLAUDE_PLUGIN_ROOT": str(PLUGIN)})
@@ -421,6 +426,242 @@ class LeadContextTests(unittest.TestCase):
         expected = "%d:%s" % (proc.pid, lib.lstart(proc.pid))
         out, err = proc.communicate(timeout=30)
         self.assertEqual(out.split("\n")[:2], [expected, expected], err)
+
+
+class FakeCliProcess:
+    """One fake `codex` process that runs hook commands on request, so successive hooks (and seeding between
+    them) share one generation. Each run returns (parsed stdout or None, stderr, returncode)."""
+
+    def __init__(self, env, root):
+        self.root, self.count = Path(root), 0
+        self.proc = subprocess.Popen(["codex", "-c", 'while read -r n; do . "$DIR/s$n.sh"; echo ok; done', "codex"],
+                                     executable="/bin/bash", env=dict(env, DIR=str(root)), text=True,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.generation = "%d:%s" % (self.proc.pid, lib.lstart(self.proc.pid))
+
+    def run(self, script, payload=None, raw=None):
+        self.count += 1
+        n = self.count
+        (self.root / ("p%d.json" % n)).write_text(raw if raw is not None else json.dumps(payload))
+        (self.root / ("s%d.sh" % n)).write_text('%s -B %s <"$DIR/p%d.json" >"$DIR/o%d" 2>"$DIR/e%d"; echo $? >"$DIR/r%d"\n'
+                                                % (sys.executable, script, n, n, n, n))
+        self.proc.stdin.write("%d\n" % n)
+        self.proc.stdin.flush()
+        assert self.proc.stdout.readline().strip() == "ok"
+        out = (self.root / ("o%d" % n)).read_text()
+        return (json.loads(out) if out.strip() else None, (self.root / ("e%d" % n)).read_text(),
+                int((self.root / ("r%d" % n)).read_text()))
+
+    def close(self):
+        self.proc.stdin.close()
+        self.proc.wait(timeout=10)
+        self.proc.stdout.close()
+        self.proc.stderr.close()
+
+
+STOP = HOOKS / "stop_guard.py"
+
+
+class StopGuardTests(HookStoreCase):
+    STOP = {"hook_event_name": "Stop", "stop_hook_active": False}
+    REASON = "agent-runtime: %d unfinished, %d undelivered — call wait(all) before ending the turn"
+    MCP_WAIT = {"type": "MCP task", "server": "plugin:agent-runtime:agent-runtime", "tool": "wait",
+                "status": "running"}
+
+    def setUp(self):
+        super().setUp()
+        self.cli = FakeCliProcess(self.env, self.root)
+        self.addCleanup(self.cli.close)
+        self.store = dispatch_store.Store(self.env)
+        self.team_id = self.store.team("scope", "t0", self.cli.generation)
+
+    def stop(self, payload=None):
+        out, err, code = self.cli.run(STOP, payload or self.STOP)
+        self.assertEqual(code, 0, err)
+        return out, err
+
+    def prompt(self):
+        out, err, code = self.cli.run(CONTEXT, self.PROMPT)
+        self.assertEqual(code, 0, err)
+        return out
+
+    def budget(self):
+        files = list((self.state / "agent-runtime" / "stop-guard").glob("*"))
+        self.assertLessEqual(len(files), 1)
+        if not files:
+            return None
+        self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
+        return int(files[0].read_text().strip())
+
+    def unseen(self):
+        return self.worker(self.store, self.team_id)
+
+    def test_S13_blocks_with_the_wait_reason_when_work_is_unseen(self):
+        """lead-liveness-hooks/S13"""
+        ident = self.unseen()
+        self.message(self.store, self.team_id, assignment=ident["assignment_id"])
+        out, _ = self.stop()
+        self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 1)})
+        self.assertEqual(self.budget(), 2)
+
+    def test_S13_unseen_working_assignment_alone_blocks(self):
+        """lead-liveness-hooks/S13"""
+        self.unseen()
+        out, _ = self.stop()
+        self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 0)})
+
+    def test_S14_allows_blocked_decision_failed_seen_and_resets_the_budget(self):
+        """lead-liveness-hooks/S14"""
+        ident = self.unseen()
+        self.stop()
+        self.assertEqual(self.budget(), 2)
+        for state in ("blocked", "decision", "failed"):
+            self.sql(self.store, "UPDATE assignments SET state=? WHERE id=?", state, ident["assignment_id"])
+            self.assertEqual(self.stop()[0], None, state)
+        self.assertEqual(self.budget(), 3)  # a check that finds nothing to block on resets
+        self.sql(self.store, "UPDATE assignments SET state='working' WHERE id=?", ident["assignment_id"])
+        self.last_wait(self.store, self.team_id, "completed", 0)
+        self.assertIsNone(self.stop()[0])  # reason != timeout and fingerprint unchanged
+        self.sql(self.store, "UPDATE assignments SET state='failed' WHERE id=?", ident["assignment_id"])
+        self.assertIsNone(self.stop()[0])  # fingerprint changed but nothing left working
+
+    def test_S15_running_wait_task_allows_without_spending_or_resetting_budget(self):
+        """lead-liveness-hooks/S15"""
+        self.unseen()
+        self.stop()
+        self.assertEqual(self.budget(), 2)
+        for variant in ({}, {"server": "agent-runtime"}, {"tool": "mcp__plugin_agent-runtime_agent-runtime__wait"},
+                        {"status": "pending"}):  # status values are undocumented: anything non-terminal exempts
+            out, _ = self.stop(dict(self.STOP, background_tasks=[dict(self.MCP_WAIT, **variant)]))
+            self.assertIsNone(out, variant)
+            self.assertEqual(self.budget(), 2)
+        terminal = [dict(self.MCP_WAIT, status=status) for status in
+                    ("completed", "failed", "killed", "stopped", "cancelled")]
+        for other in (dict(self.MCP_WAIT, tool="status"), dict(self.MCP_WAIT, type="Bash"),
+                      dict(self.MCP_WAIT, server="plugin:other:other"), *terminal, "junk"):
+            self.prompt()  # fresh budget for each probe
+            out, _ = self.stop(dict(self.STOP, background_tasks=[other]))
+            self.assertIsNotNone(out, other)  # unknown or other work: no exemption
+            self.assertEqual(self.budget(), 2)
+
+    def test_S8_stop_allows_silently_on_bad_stdin_no_identity_and_broken_import(self):
+        """lead-liveness-hooks/S8"""
+        self.unseen()
+        for raw in ("not json", "[1]", ""):
+            out, err, code = self.cli.run(STOP, raw=raw)
+            self.assertEqual((out, err, code), (None, "", 0), raw)
+        (self.root / "n").mkdir()
+        nobody = FakeCliProcess({k: v for k, v in self.env.items() if k != "HC_TERMINAL_ID"}, self.root / "n")
+        self.addCleanup(nobody.close)
+        self.assertEqual(nobody.run(STOP, self.STOP), (None, "", 0))
+        broken = self.root / "broken"
+        broken.mkdir()
+        (broken / "stop_guard.py").write_text(STOP.read_text())
+        (broken / "hook_lib.py").write_text("raise ImportError('boom')\n")
+        self.assertEqual(self.cli.run(broken / "stop_guard.py", self.STOP), (None, "", 0))
+        self.assertIsNone(self.budget())  # none of those touched the budget
+
+    def test_S9_stop_never_writes_the_dispatch_store(self):
+        """lead-liveness-hooks/S9"""
+        self.unseen()
+        def snapshot():
+            return sorted((p.name, p.stat().st_mtime_ns, p.stat().st_size)
+                          for p in (self.state / "agent-runtime").glob("dispatch.sqlite3*"))
+        before = snapshot()
+        self.assertIsNotNone(self.stop()[0])  # blocks, spends budget
+        self.assertEqual(self.stop(dict(self.STOP, background_tasks=[self.MCP_WAIT]))[0], None)
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(self.budget(), 2)
+
+    def test_S17_reset_prunes_stale_budget_files_only(self):
+        """lead-liveness-hooks/S17"""
+        self.unseen()
+        self.stop()
+        folder = self.state / "agent-runtime" / "stop-guard"
+        stale, fresh = folder / "stale", folder / "fresh"
+        stale.write_text("1")
+        fresh.write_text("1")
+        old = time.time() - 8 * 86400
+        os.utime(stale, (old, old))
+        self.prompt()
+        self.assertFalse(stale.exists())
+        self.assertTrue(fresh.exists())
+
+    def test_S16_blocks_three_times_then_allows_with_one_stderr_note(self):
+        """lead-liveness-hooks/S16"""
+        self.unseen()
+        for _ in range(3):
+            self.assertIsNotNone(self.stop()[0])
+        out, err = self.stop()
+        self.assertIsNone(out)
+        self.assertIn("agent-runtime", err)
+        out, err = self.stop()
+        self.assertEqual((out, err), (None, ""))  # later Stops keep allowing, silently
+        self.prompt()  # UserPromptSubmit resets
+        self.assertIsNotNone(self.stop()[0])
+
+    def test_S17_exemption_budget_spent_and_errors_do_not_reset_but_prompt_does(self):
+        """lead-liveness-hooks/S17"""
+        self.unseen()
+        self.stop()
+        self.stop(dict(self.STOP, background_tasks=[self.MCP_WAIT]))
+        self.assertEqual(self.budget(), 2)  # exemption
+        locked = sqlite3.connect(self.state / "agent-runtime" / "dispatch.sqlite3", isolation_level=None)
+        locked.execute("BEGIN EXCLUSIVE")
+        try:
+            self.assertEqual(self.stop()[0], None)
+        finally:
+            locked.close()
+        self.assertEqual(self.budget(), 2)  # error
+        self.stop()
+        self.stop()
+        self.stop()
+        self.assertEqual(self.budget(), -1)  # spent: noted once, saturated
+        self.stop()
+        self.assertEqual(self.budget(), -1)
+        self.prompt()
+        self.assertEqual(self.budget(), 3)
+
+    def test_S17_prompt_resets_even_when_the_context_hook_has_nothing_to_say(self):
+        """lead-liveness-hooks/S17"""
+        ident = self.unseen()
+        self.stop()
+        self.sql(self.store, "UPDATE assignments SET state='complete' WHERE id=?", ident["assignment_id"])
+        self.assertEqual(self.budget(), 2)
+        self.assertIsNone(self.prompt())
+        self.assertEqual(self.budget(), 3)
+
+    def test_S18_worker_leading_children_blocks_and_dead_or_superseded_teams_allow(self):
+        """lead-liveness-hooks/S18"""
+        worker_env = dict(self.env, HC_TERMINAL_ID="t5")
+        child = FakeCliProcess(worker_env, self.root / "w") if (self.root / "w").mkdir() is None else None
+        self.addCleanup(child.close)
+        team = self.store.team("scope", "t5", child.generation)
+        self.worker(self.store, team)
+        out, err, code = child.run(STOP, self.STOP)
+        self.assertEqual((out["decision"], code), ("block", 0), err)
+        self.store.team("scope", "t5", "1:newer")  # a newer team supersedes the hook's
+        self.assertIsNone(child.run(STOP, self.STOP)[0])
+        self.assertIsNone(self.stop()[0])  # t0 leads no team with needs
+        other = dispatch_store.Store(self.env)
+        dead = other.team("scope", "t9", "999:dead")  # a dead generation
+        self.worker(other, dead)
+        nobody = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t9"), self.root / "n") if (self.root / "n").mkdir() is None else None
+        self.addCleanup(nobody.close)
+        self.assertIsNone(nobody.run(STOP, self.STOP)[0])
+
+    def test_S18a_reported_unchanged_stall_counts_as_seen_until_progress(self):
+        """lead-liveness-hooks/S18a"""
+        ident = self.unseen()
+        self.sql(self.store, "INSERT INTO stall_progress(assignment,last_progress_ms,last_turn,stall_reported_for) "
+                             "VALUES (?,?,?,?)", ident["assignment_id"], 5, 1, 5)
+        self.assertIsNone(self.stop()[0])
+        self.assertIsNone(self.prompt())  # no "call wait(all)" line either
+        self.sql(self.store, "UPDATE stall_progress SET last_progress_ms=9 WHERE assignment=?", ident["assignment_id"])
+        self.assertEqual(self.stop()[0]["decision"], "block")
+        self.assertIn("call wait(all)", self.line(self.prompt()))
+        self.sql(self.store, "DROP TABLE stall_progress")  # older store: no reported stalls
+        self.assertEqual(self.stop()[0]["decision"], "block")
 
 
 if __name__ == "__main__":

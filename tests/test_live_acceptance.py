@@ -284,3 +284,4 @@ class LiveAcceptance(unittest.TestCase):
                 log("drain_error", error=repr(error))
             finally:
                 lead.close()
+
