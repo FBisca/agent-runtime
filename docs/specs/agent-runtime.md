@@ -26,8 +26,8 @@ Under structured dispatch (`AGENT_RUNTIME_DISPATCH=1`, enabled in both Claude an
 - **R13** WHEN `status` runs under herdmates, THEN it maps `herdr pane get` output (the logic moved from `orchestrate.py herdr`) and the two moved tests pass. (from agent-runtime/S13)
 - **R14** WHEN `status` runs under native, THEN `state` is unknown and `next` points to the return value or SendMessage. (from agent-runtime/S14)
 - **R15** WHEN `agent-runtime list` runs under hc, THEN it returns one status per child of the caller. (from agent-runtime/S15)
-- **R16** WHEN a Claude session starts, THEN its context contains `agent-runtime: runtime=… role=… parent=… · run agent-runtime contract before delegating`. (from agent-runtime/S16)
-- **R17** WHEN a Codex session starts after the hook is trusted, THEN its context contains the same line. (from agent-runtime/S17)
+- **R16** WHEN a Claude session starts, THEN its context contains `agent-runtime: runtime=… role=… parent=… · run agent-runtime contract before delegating`. (from agent-runtime/S16) *Superseded by R116–R118 (lead-liveness-hooks): no session pointer is injected; the context hook prints one action-aware reminder only for leads with unseen work.*
+- **R17** WHEN a Codex session starts after the hook is trusted, THEN its context contains the same line. (from agent-runtime/S17) *Superseded by R116–R118 (lead-liveness-hooks): no session pointer is injected; the context hook prints one action-aware reminder only for leads with unseen work.*
 - **R18** WHEN a Claude subagent or in-process teammate starts, THEN its context says it is a subagent and must not run runtime commands. (from agent-runtime/S18)
 - **R19** WHEN a subagent's Bash call runs `hc run`, `hc send` or `hc kill`, THEN the PreToolUse hook denies it with a reason. (from agent-runtime/S19)
 - **R20** WHEN a Bash call inside an agent session runs `herdmates teammux-launch`, THEN it is denied. (from agent-runtime/S20)
@@ -121,4 +121,8 @@ Under structured dispatch (`AGENT_RUNTIME_DISPATCH=1`, enabled in both Claude an
 - **R108** WHEN a lead runs `/clear` (Claude) or `/new` (Codex) in the same process, THEN its next runtime call stays on the same team and sees the same assignments. (from lead-liveness-hooks/S2)
 - **R109** WHEN a lead's `wait(all)` returns a final batch, THEN the team's last-wait row holds that batch's reason, attention count and current fingerprint, committed in the same transaction as the receipt; narrower and cancelled waits leave the row unchanged. (from lead-liveness-hooks/S3)
 - **R110** WHEN after that a lead-addressed message arrives, an assignment changes state or a turn is recorded, THEN the fingerprint computed from the store differs from the stored one; outbound and worker peer messages do not change it. (from lead-liveness-hooks/S4)
-||||||| parent of ef23ca8 (fix: share a suffix-free CLI generation between the server and hooks)
+- **R114** WHEN a new hook gets invalid JSON on stdin, the store is missing or write-locked, python3 is missing, or no identity resolves, THEN it exits 0 and allows (Claude: no output; Codex: empty or `{}`). (from lead-liveness-hooks/S8)
+- **R115** WHEN a hook reads the store, THEN it never creates or changes files under the store directory, and honours `XDG_STATE_HOME` whether or not `AGENT_RUNTIME_DISPATCH` is set in its env. (from lead-liveness-hooks/S9)
+- **R116** WHEN Claude SessionStart fires with `source` compact or clear, or UserPromptSubmit fires, for a lead with undelivered messages or unseen working assignments, THEN `additionalContext` is `agent-runtime: N unfinished, M undelivered — call wait(all)`. (from lead-liveness-hooks/S10)
+- **R117** WHEN the last delivered wait reported attention and the fingerprint is unchanged, THEN `additionalContext` is `agent-runtime: N workers need you — check status`. (from lead-liveness-hooks/S11)
+- **R118** WHEN the caller leads no team with needs, its team's generation differs from the hook's, or SessionStart `source` is startup, resume or fork, THEN the hook prints nothing. (from lead-liveness-hooks/S12)

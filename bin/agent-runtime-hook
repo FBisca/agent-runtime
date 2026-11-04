@@ -6,5 +6,6 @@ while [ -L "$self" ]; do
   self=$(readlink "$self")
   case $self in /*) ;; *) self=$dir/$self ;; esac
 done
+command -v python3 >/dev/null 2>&1 || exit 0 # hooks fail open when python3 is missing
 root=$(cd "$(dirname "$self")/.." && pwd)
 exec python3 "$root/hooks/pre_tool_use.py" "$@"

@@ -1,8 +1,11 @@
 """Plugin hooks driven as subprocesses with real payloads, plus settings.json and hooks.json wiring."""
 
 import json
+import os
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +15,11 @@ PRE = HOOKS / "pre_tool_use.py"
 START = HOOKS / "subagent_start.py"
 TOOL = "mcp__plugin_agent-runtime_agent-runtime__"
 DENY_TEXT = "use the agent-runtime tools"
+CONTEXT = HOOKS / "lead_context.py"
+SHIM = PLUGIN / "bin" / "agent-runtime-hook"
+sys.path.insert(0, str(PLUGIN / "server"))
+import agent_runtime as lib  # noqa: E402
+import dispatch_store  # noqa: E402
 
 
 def run(script, payload, *args):
@@ -204,12 +212,182 @@ class WiringTests(unittest.TestCase):
         mcp = [m for m in matchers if m != "Bash"]
         self.assertEqual(len(mcp), 1)
         self.assertRegex(TOOL + "spawn", mcp[0])
-        commands = [h["command"] for entry in pre + hooks["SubagentStart"] for h in entry["hooks"]]
-        self.assertEqual(len(commands), 3)
+        context = hooks["SessionStart"] + hooks["UserPromptSubmit"]
+        commands = [h["command"] for entry in pre + hooks["SubagentStart"] + context for h in entry["hooks"]]
+        self.assertEqual(len(commands), 5)
         for command in commands:
             self.assertIn('"${CLAUDE_PLUGIN_ROOT}"/hooks/', command)
-        self.assertNotIn("SessionStart", hooks)
+        self.assertEqual({e.get("matcher") for e in hooks["SessionStart"]}, {"compact|clear"})
 
+
+
+class LeadContextTests(unittest.TestCase):
+    """Hooks run under a fake `codex` process (so a CLI ancestor exists) against a store seeded in a temp
+    XDG_STATE_HOME; the seed callback receives the generation the hook will compute."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.state = self.root / "state"
+        self.env = {"PATH": os.environ["PATH"], "HOME": str(self.root / "home"), "XDG_STATE_HOME": str(self.state),
+                    "HC_SCOPE": "scope", "HC_TERMINAL_ID": "t0"}
+
+    def hook(self, payload, seed=None, env=None, script=CONTEXT, raw=None):
+        proc = subprocess.Popen(["codex", "-c", '"$@"; exit $?', "codex", sys.executable, "-B", str(script)],
+                                executable="/bin/bash", env=env or self.env, text=True, stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if seed:
+            seed("%d:%s" % (proc.pid, lib.lstart(proc.pid)))
+        out, err = proc.communicate(raw if raw is not None else json.dumps(payload), timeout=30)
+        self.assertEqual(proc.returncode, 0, err)
+        return json.loads(out) if out.strip() else None
+
+    def team(self, generation, lead="t0", scope="scope"):
+        store = dispatch_store.Store(self.env)
+        return store, store.team(scope, lead, generation)
+
+    def sql(self, store, statement, *params):
+        with store.transaction() as db:
+            db.execute(statement, params)
+
+    def worker(self, store, team, name="w1", state="working"):
+        ident = store.register(team, name)
+        self.sql(store, "UPDATE assignments SET state=?,current=1 WHERE id=?", state, ident["assignment_id"])
+        return ident
+
+    def message(self, store, team, lead="t0", assignment=None, message_id="m1"):
+        self.sql(store, "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                 message_id, team, lead, assignment, "{}")
+
+    def last_wait(self, store, team, reason, attention):
+        with store.transaction() as db:
+            db.execute("INSERT INTO last_wait(team,reason,attention,fingerprint) VALUES (?,?,?,?)",
+                       (team, reason, attention, dispatch_store.wait_fingerprint(db, team)))
+
+    @staticmethod
+    def line(out):
+        return out["hookSpecificOutput"]["additionalContext"]
+
+    PROMPT = {"hook_event_name": "UserPromptSubmit", "prompt": "hi"}
+
+    def test_S10_unseen_work_prints_the_wait_reminder_for_all_three_events(self):
+        """lead-liveness-hooks/S10"""
+        def seed(generation):
+            store, team = self.team(generation)
+            ident = self.worker(store, team)
+            self.worker(store, team, "w2", "blocked")
+            self.message(store, team, assignment=ident["assignment_id"], message_id="m" + generation)
+        for payload in (self.PROMPT, {"hook_event_name": "SessionStart", "source": "compact"},
+                        {"hook_event_name": "SessionStart", "source": "clear"}):
+            out = self.hook(payload, seed)  # each hook run is a new fake CLI process, so seed per run
+            self.assertEqual(out["hookSpecificOutput"]["hookEventName"], payload["hook_event_name"])
+            self.assertEqual(self.line(out), "agent-runtime: 2 unfinished, 1 undelivered — call wait(all)")
+
+    def test_S10_working_assignment_the_lead_has_not_seen_is_enough(self):
+        """lead-liveness-hooks/S10"""
+        def seed(generation):
+            store, team = self.team(generation)
+            self.worker(store, team)
+            self.last_wait(store, team, "timeout", 0)  # a timeout never counts as seen
+        self.assertEqual(self.line(self.hook(self.PROMPT, seed)),
+                         "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)")
+
+    def test_S11_attention_already_delivered_and_unchanged_points_at_status(self):
+        """lead-liveness-hooks/S11"""
+        def seed(generation):
+            store, team = self.team(generation)
+            self.worker(store, team)
+            self.worker(store, team, "w2")
+            self.last_wait(store, team, "attention", 2)
+        self.assertEqual(self.line(self.hook(self.PROMPT, seed)), "agent-runtime: 2 workers need you — check status")
+
+    def test_S12_prints_nothing_without_needs_or_with_the_wrong_team(self):
+        """lead-liveness-hooks/S12"""
+        def delivered(generation):  # blocked work, one message already named by a receipt
+            store, team = self.team(generation)
+            self.worker(store, team, state="blocked")
+            self.message(store, team)
+            self.sql(store, "INSERT INTO receipts VALUES (?,?,?,?)", "r1", team, "t0", json.dumps(["m1"]))
+        def seen(generation):  # working work whose wait was delivered, no attention
+            store, team = self.team(generation)
+            self.worker(store, team)
+            self.last_wait(store, team, "completed", 0)
+        def other_generation(generation):
+            store, team = self.team("999:other")
+            self.worker(store, team)
+        def superseded(generation):  # the hook's team exists but a newer team for the lead does too
+            store, team = self.team(generation)
+            self.worker(store, team)
+            self.team("1:newer")
+        def other_lead(generation):
+            store, team = self.team(generation, lead="t7")
+            self.worker(store, team)
+        for seed in (None, delivered, seen, other_generation, superseded, other_lead):
+            self.assertIsNone(self.hook(self.PROMPT, seed), getattr(seed, "__name__", "no store"))
+
+    def test_S12_session_start_sources_other_than_compact_and_clear_print_nothing(self):
+        """lead-liveness-hooks/S12"""
+        def seed(generation):
+            store, team = self.team(generation)
+            self.worker(store, team)
+        for source in ("startup", "resume", "fork"):
+            self.assertIsNone(self.hook({"hook_event_name": "SessionStart", "source": source}, seed), source)
+
+    def test_S8_every_failure_allows_silently(self):
+        """lead-liveness-hooks/S8"""
+        def seed(generation):
+            store, team = self.team(generation)
+            self.worker(store, team)
+        self.assertIsNone(self.hook(None, seed, raw="not json"))
+        self.assertIsNone(self.hook(None, seed, raw="[1]"))
+        no_identity = {k: v for k, v in self.env.items() if k != "HC_TERMINAL_ID"}
+        self.assertIsNone(self.hook(self.PROMPT, seed, env=no_identity))
+        locked = {}
+        def seed_locked(generation):
+            seed(generation)
+            locked["db"] = sqlite3.connect(self.state / "agent-runtime" / "dispatch.sqlite3", isolation_level=None)
+            locked["db"].execute("BEGIN EXCLUSIVE")
+        try:
+            self.assertIsNone(self.hook(self.PROMPT, seed_locked))
+        finally:
+            locked["db"].close()
+        done = subprocess.run(["/bin/sh", str(SHIM)], input="{}", env={"PATH": "/nonexistent"},
+                              capture_output=True, text=True, timeout=20)
+        self.assertEqual((done.returncode, done.stdout), (0, ""))
+
+    def test_S9_hook_never_writes_the_store_and_honours_xdg_state_home(self):
+        """lead-liveness-hooks/S9"""
+        def seed(generation):
+            store, team = self.team(generation)
+            self.worker(store, team)
+        def snapshot():
+            return sorted((str(p.relative_to(self.root)), p.stat().st_mtime_ns, p.stat().st_size)
+                          for p in self.root.rglob("*"))
+        for flag in (None, "1"):
+            env = dict(self.env, **({"AGENT_RUNTIME_DISPATCH": flag} if flag else {}))
+            self.hook(self.PROMPT, seed, env=env)  # seeds (first run) and reads
+            before = snapshot()
+            out = self.hook(self.PROMPT, env=env)  # same hook process shape, same store, no seeding
+            self.assertIsNone(out)  # new fake CLI process = new generation: a different team, so silent
+            self.assertEqual(snapshot(), before, flag)
+        self.assertFalse((self.root / "home").exists())
+        missing = dict(self.env, XDG_STATE_HOME=str(self.root / "absent"))
+        self.hook(self.PROMPT, env=missing)
+        self.assertFalse((self.root / "absent").exists())
+
+    def test_S1_hook_shaped_process_computes_the_servers_generation(self):
+        """lead-liveness-hooks/S1"""
+        code = ("import sys; sys.path.insert(0, %r); sys.path.insert(0, %r); import hook_lib, hc_tools; "
+                "env = {'HC_SCOPE': 's', 'HC_TERMINAL_ID': 't0', 'CODEX_THREAD_ID': 'thread-x'}; "
+                "print(hook_lib.identity(env)[2]); print(hc_tools.dispatch_identity(env)[1])") % (
+            str(HOOKS), str(PLUGIN / "server"))
+        proc = subprocess.Popen(["codex", "-c", '"$@"; exit $?', "codex", "/bin/sh", "-c",
+                                 'python3 -c "$0"', code], executable="/bin/bash",
+                                env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        expected = "%d:%s" % (proc.pid, lib.lstart(proc.pid))
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(out.split("\n")[:2], [expected, expected], err)
 
 
 if __name__ == "__main__":
