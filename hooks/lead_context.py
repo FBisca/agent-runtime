@@ -33,6 +33,13 @@ def main():
     import hook_lib  # inside the fail-open path: an import error must not fail the host
 
     payload = hook_lib.read_payload()
+    if payload and payload.get("hook_event_name") == "UserPromptSubmit":
+        try:  # a new work period, even when there is nothing to remind about; failure stays silent
+            who = hook_lib.identity()
+            if who:
+                hook_lib.reset_budget(os.environ, who)
+        except Exception:
+            pass
     line = reminder(payload, hook_lib) if payload else None
     if line:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": payload["hook_event_name"],

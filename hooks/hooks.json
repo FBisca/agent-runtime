@@ -15,6 +15,13 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "/bin/sh -c 'command -v python3 >/dev/null 2>&1 || exit 0; exec python3 \"$0\"' \"${CLAUDE_PLUGIN_ROOT}\"/hooks/stop_guard.py", "timeout": 5}
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "hooks": [

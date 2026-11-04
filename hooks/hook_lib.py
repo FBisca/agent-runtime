@@ -6,6 +6,8 @@ computed exactly like the MCP server's: scope from the hc socket/scope, lead fro
 the generation from the nearest Claude/Codex ancestor (agent_runtime.cli_generation).
 """
 
+import fcntl
+import hashlib
 import json
 import os
 import sqlite3
@@ -87,10 +89,15 @@ def undelivered(db, team, lead):
 
 
 def working(db, team):
-    """Current assignments of active workers that are pending or working."""
-    return db.execute("SELECT COUNT(*) FROM assignments a JOIN workers w ON w.id=a.worker "
-                      "WHERE a.team=? AND a.current=1 AND w.active=1 AND a.state IN ('pending','working')",
-                      (team,)).fetchone()[0]
+    """Current assignments of active workers that are pending or working, except those whose stall was
+    already reported with no progress since (the lead was told; it must not be nagged about them)."""
+    query = ("SELECT COUNT(*) FROM assignments a JOIN workers w ON w.id=a.worker %s "
+             "WHERE a.team=? AND a.current=1 AND w.active=1 AND a.state IN ('pending','working')%s")
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'").fetchone():
+        return db.execute(query % ("LEFT JOIN stall_progress sp ON sp.assignment=a.id",
+                                   " AND NOT (sp.stall_reported_for IS NOT NULL AND sp.stall_reported_for=sp.last_progress_ms)"),
+                          (team,)).fetchone()[0]
+    return db.execute(query % ("", ""), (team,)).fetchone()[0]
 
 
 def unfinished(db, team):
@@ -108,18 +115,88 @@ def needs(db, team, lead):
             "unfinished": unfinished(db, team), "seen": seen, "attention": last[1] if seen else 0}
 
 
-def lead_needs(env=None):
-    """needs() for the caller's own team, or None when it leads none (or anything is unavailable)."""
+def lead_check(env=None):
+    """(identity, needs) where needs is None when the caller leads no team; (None, None) without identity."""
     who = identity(env)
     if not who:
-        return None
+        return None, None
     db = open_readonly(env)
     try:
         db.execute("BEGIN")  # one read snapshot for the team lookup and every count
         try:
             team = led_team(db, who)
-            return needs(db, team, who[1]) if team else None
+            return who, needs(db, team, who[1]) if team else None
         finally:
             db.rollback()
     finally:
         db.close()
+
+
+def lead_needs(env=None):
+    """needs() for the caller's own team, or None when it leads none (or anything is unavailable)."""
+    return lead_check(env)[1]
+
+
+# --- Stop-guard block budget (the only file hooks write; never the dispatch store) ---------------------
+
+BUDGET = 3  # blocks per user work period; -1 marks "spent and already noted"
+
+
+def state_root(env=None):
+    return store_path(env).parent.parent
+
+
+def budget_file(env, who):
+    key = "\0".join([str(state_root(env)), *who])
+    return state_root(env) / "agent-runtime" / "stop-guard" / hashlib.sha256(key.encode()).hexdigest()[:32]
+
+
+def update_budget(env, who, change, create=True):
+    """Atomically (flock) apply change(remaining) -> new remaining to the 0600 budget file; returns
+    (old, new). A missing or unreadable file reads as a full budget."""
+    path = budget_file(env, who)
+    if not create and not path.exists():
+        return BUDGET, BUDGET  # nothing recorded means a full budget already
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            old = int(os.read(fd, 32).decode().strip())
+        except ValueError:
+            old = BUDGET
+        new = change(old)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, str(new).encode())
+        return old, new
+    finally:
+        os.close(fd)  # also releases the lock
+
+
+def spend_budget(env, who):
+    """True when a block may be issued (one unit spent); False when spent. Returns (allowed, first_time)."""
+    old, _ = update_budget(env, who, lambda n: n - 1 if n > 0 else -1)
+    return old > 0, old == 0
+
+
+def reset_budget(env, who):
+    update_budget(env, who, lambda n: BUDGET, create=False)  # never creates state for non-leads
+
+
+def running_wait_task(payload):
+    """True when background_tasks holds a running MCP task for the agent-runtime server's `wait` tool.
+    Any other or unrecognised shape is not an exemption."""
+    tasks = payload.get("background_tasks")
+    if not isinstance(tasks, list):
+        return False
+    for task in tasks:
+        if not isinstance(task, dict) or task.get("type") != "MCP task" or task.get("status") != "running":
+            continue
+        server = task.get("server") or task.get("server_name") or ""
+        tool = task.get("tool") or task.get("tool_name")
+        if isinstance(server, str) and (server == "agent-runtime" or server.endswith("_agent-runtime")) \
+                and tool == "wait":
+            return True
+    return False

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -284,3 +285,32 @@ class LiveAcceptance(unittest.TestCase):
                 log("drain_error", error=repr(error))
             finally:
                 lead.close()
+
+
+@unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE_STOP") == "1",
+                     "set AGENT_RUNTIME_LIVE_STOP=1 to record a real Claude Stop payload")
+class StopPayloadShapeTests(unittest.TestCase):
+    """Opt-in: runs one real `claude -p` turn with a Stop hook that saves its stdin, then checks the payload
+    carries the fields the stop guard reads. The output file (AGENT_RUNTIME_LIVE_STOP_OUT, default a temp
+    path printed on failure) shows the real `background_tasks` entry shape for an MCP `wait` call."""
+
+    def test_S15_real_stop_payload_has_background_tasks_shape(self):
+        """lead-liveness-hooks/S15"""
+        claude = shutil.which("claude")
+        if not claude:
+            self.skipTest("claude not on PATH")
+        work = tempfile.mkdtemp()
+        out = os.environ.get("AGENT_RUNTIME_LIVE_STOP_OUT") or os.path.join(work, "stop-payload.json")
+        settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "cat > %s" % shlex.quote(out)}]}]}}
+        done = subprocess.run([claude, "-p", "reply with the single word ok", "--settings", json.dumps(settings)],
+                              capture_output=True, text=True, timeout=300, cwd=work)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        payload = json.loads(Path(out).read_text())
+        self.assertEqual(payload.get("hook_event_name"), "Stop", out)
+        self.assertIn("stop_hook_active", payload, out)
+        tasks = payload.get("background_tasks", [])
+        self.assertIsInstance(tasks, list, out)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+        import hook_lib
+        for task in tasks:  # whatever is running now must parse without error
+            hook_lib.running_wait_task({"background_tasks": [task]})
