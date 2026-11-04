@@ -97,13 +97,13 @@ class IdentityTests(ToolCase):
                 mock.patch.object(hc_tools.os, "getppid", return_value=100):
             return hc_tools.dispatch_identity(dict(self.ENV, **extra))
 
-    def test_S1_server_identity_ignores_session_ids_under_a_cli_ancestor(self):
-        """lead-liveness-hooks/S1"""
+    def test_server_identity_ignores_session_ids_under_a_cli_ancestor(self):
+        """agent-runtime/R107"""
         scope, generation = self.identity(CODEX_THREAD_ID="t", CLAUDE_CODE_SESSION_ID="c", CLAUDE_SESSION_ID="s")
         self.assertEqual(generation, "90:Wed Nov  4 10:00:00 2026")
 
-    def test_S2_clear_or_new_in_same_process_keeps_team_and_assignments(self):
-        """lead-liveness-hooks/S2"""
+    def test_clear_or_new_in_same_process_keeps_team_and_assignments(self):
+        """agent-runtime/R108"""
         import hc_tools
         from dispatch_store import Store
         env = {"HOME": str(self.dir / "home")}
