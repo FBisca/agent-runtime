@@ -4,6 +4,7 @@ import threading
 import time
 
 from test_event_wait import AsyncRPC, Session
+from test_mcp_server import FakeCli
 import test_event_wait as event_helpers
 from test_tools import ToolCase
 from dispatch_events import endpoints
@@ -237,8 +238,10 @@ class PeerDispatchTests(ToolCase):
                 denied, text = self.call(self.workers[0], "wait", arguments)
                 self.assertTrue(denied["isError"], text)
         new_env = dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker")
+        cli = FakeCli()  # both server processes belong to one CLI: a restart keeps its generation
+        self.addCleanup(cli.close)
         for restart in (False, True):
-            worker = Session(new_env)
+            worker = Session(new_env, new_cli=cli)
             worker.handshake()
             try:
                 arguments = {"target": "inbox", "timeout": 0}

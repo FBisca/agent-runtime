@@ -180,7 +180,7 @@ def dispatch_identity(env, ctx=None):
     if cached:
         return cached  # computed once per call
     scope = hc_server(env)
-    generation = lib.cli_generation(env)
+    generation = lib.cli_generation()
     if not generation:  # no visible CLI ancestor: the host must supply a session ID
         generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
     if not generation:

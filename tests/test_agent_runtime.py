@@ -458,11 +458,11 @@ class SharedGenerationTests(unittest.TestCase):
     PROCS = {100: (90, "/bin/zsh -c mcp"), 90: (80, "/opt/homebrew/bin/codex exec"), 80: (1, "launchd")}
     STAMPS = {90: "Wed Nov  4 10:00:00 2026"}
 
-    def generation(self, env):
+    def generation(self, env=None):
         with patch.object(app, "ps_entry", side_effect=self.PROCS.get), \
                 patch.object(app, "lstart", side_effect=self.STAMPS.get), \
                 patch.object(app.os, "getppid", return_value=100):
-            return app.cli_generation(env)
+            return app.cli_generation()
 
     def test_S1_generation_is_nearest_cli_pid_and_lstart_without_session_suffix(self):
         """lead-liveness-hooks/S1"""
@@ -470,6 +470,18 @@ class SharedGenerationTests(unittest.TestCase):
         self.assertEqual(plain, "90:Wed Nov  4 10:00:00 2026")
         env = {"CODEX_THREAD_ID": "thread-a", "CLAUDE_CODE_SESSION_ID": "sess-a", "CLAUDE_SESSION_ID": "sess-b"}
         self.assertEqual(self.generation(env), plain)
+
+    def test_S1_lstart_is_locale_independent(self):
+        """lead-liveness-hooks/S1"""
+        with tempfile.TemporaryDirectory() as tmp:
+            ps = Path(tmp) / "ps"
+            ps.write_text("#!/bin/sh\n[ \"$LC_ALL\" = C ] && echo 'Wed Nov  4 10:00:00 2026' || echo 'Mi Nov  4 10:00:00 2026'\n")
+            ps.chmod(0o755)
+            stamps = set()
+            for loc in ({}, {"LC_ALL": "de_DE.UTF-8"}, {"LC_TIME": "en_GB.UTF-8", "LC_ALL": "en_GB.UTF-8"}):
+                with patch.dict(os.environ, dict(loc, PATH="%s:%s" % (tmp, os.environ["PATH"]))):
+                    stamps.add(app.lstart(os.getpid()))
+        self.assertEqual(stamps, {"Wed Nov  4 10:00:00 2026"})
 
     def test_S2_new_session_id_in_same_process_keeps_generation(self):
         """lead-liveness-hooks/S2"""

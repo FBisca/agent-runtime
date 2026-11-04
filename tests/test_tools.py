@@ -110,9 +110,13 @@ class IdentityTests(ToolCase):
         store = Store(env)
         first = self.identity(CODEX_THREAD_ID="thread-a")
         team = store.team(first[0], "t0", first[1])
+        assignment = store.register(team, "w1")["assignment_id"]
         again = self.identity(CODEX_THREAD_ID="thread-b")  # /new: same process, new thread id
         self.assertEqual(first, again)
         self.assertEqual(store.team(again[0], "t0", again[1]), team)
+        with store.transaction() as db:
+            seen = [r[0] for r in db.execute("SELECT id FROM assignments WHERE team=?", (team,))]
+        self.assertEqual(seen, [assignment])
 
 
 class SpawnTests(ToolCase):
