@@ -173,35 +173,16 @@ def hc_server(env):
 def dispatch_identity(env, ctx=None):
     """Scope plus CLI session generation; MCP process restarts retain the CLI ancestor.
 
-    Prefer the nearest CLI process PID/start time over possibly inherited session
-    markers. Hosts without visible CLI ancestry must supply a session ID.
+    The generation is the nearest CLI process PID/start time alone, shared with hooks. Hosts
+    without visible CLI ancestry must supply a session ID.
     """
     cached = getattr(ctx, "identity", None)
     if cached:
         return cached  # computed once per call
     scope = hc_server(env)
-    generation = None
-    pid = os.getppid()
-    deadline = time.monotonic() + lib.ANCESTRY_BUDGET_SECONDS
-    for _ in range(lib.MAX_ANCESTOR_HOPS):
-        if pid <= 1 or time.monotonic() >= deadline:
-            break
-        entry = lib.ps_entry(pid)
-        if not entry:
-            break
-        parent, args = entry
-        if lib.cli_of_args(args):
-            try:
-                stamp = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
-                                       text=True, timeout=lib.PS_TIMEOUT_SECONDS)
-                if stamp.returncode == 0 and stamp.stdout.strip():
-                    generation = "%s:%s" % (pid, stamp.stdout.strip())
-            except (OSError, subprocess.SubprocessError):
-                pass
-            break
-        pid = parent
-    session = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
-    generation = "%s:%s" % (generation, session) if generation and session else generation or session
+    generation = lib.cli_generation()
+    if not generation:  # no visible CLI ancestor: the host must supply a session ID
+        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
     if not generation:
         raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
     return scope, generation

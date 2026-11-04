@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -14,11 +15,73 @@ MARKETPLACE = PLUGIN / ".claude-plugin" / "marketplace.json"
 TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "stop", "report", "task"]
 
 
+class _Launched:
+    """Popen-like handle for a server started by a FakeCli through named pipes."""
+
+    def __init__(self, directory):
+        self.rc = directory / "rc"
+        self.stdin = open(directory / "in", "w")
+        self.stdout = open(directory / "out")
+        self.stderr = open(directory / "err")
+
+    def wait(self, timeout=None):
+        reader = threading.Thread(target=self.stdout.read, daemon=True)  # EOF means the server exited
+        reader.start()
+        reader.join(timeout)
+        if reader.is_alive():
+            raise subprocess.TimeoutExpired("server", timeout)
+        return int(self.rc.read_text())
+
+
+class FakeCli:
+    """A long-lived fake `codex` process. Servers launched under it share its pid:lstart generation,
+    like successive MCP processes of one real CLI (restart); each FakeCli is a generation of its own.
+    Relies on bash exec'ing the backgrounded simple command directly (env -> python wrapper), so every
+    server's nearest CLI ancestor is this one process and they share its pid:lstart."""
+
+    # runs the server, then records its exit status where _Launched.wait reads it
+    WRAP = "import subprocess, sys; rc = subprocess.call(sys.argv[2:]); open(sys.argv[1], 'w').write(str(rc))"
+
+    def __init__(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.count = 0
+        self.proc = subprocess.Popen(["codex", "-c", 'while IFS= read -r d; do v=(); while IFS= read -r -d "" e; do v+=("$e"); done <"$d/env"; \
+env -i "${v[@]}" "$PYTHON" -B -c "$WRAP" "$d/rc" "$@" <"$d/in" >"$d/out" 2>"$d/err" & done; wait',
+                                      "codex", sys.executable, "-B", str(SERVER)], executable="/bin/bash",
+                                     stdin=subprocess.PIPE, text=True,
+                                     env=dict(os.environ, PYTHON=sys.executable, WRAP=self.WRAP))
+
+    def launch(self, env):
+        self.count += 1
+        directory = Path(self.dir.name) / str(self.count)
+        directory.mkdir()
+        for name in ("in", "out", "err"):
+            os.mkfifo(directory / name)
+        (directory / "env").write_bytes(b"".join(("%s=%s" % kv).encode() + b"\0" for kv in env.items()))
+        self.proc.stdin.write(directory.as_posix() + "\n")
+        self.proc.stdin.flush()
+        return _Launched(directory)
+
+    def close(self):
+        self.proc.stdin.close()
+        self.proc.wait(timeout=10)
+        self.dir.cleanup()
+
+
 class Session:
     """One server subprocess speaking newline-delimited JSON-RPC."""
 
-    def __init__(self, env):
-        self.proc = subprocess.Popen([sys.executable, "-B", str(SERVER)], env=env, text=True,
+    def __init__(self, env, new_cli=False):
+        """new_cli=True runs the server under its own fake `codex` process, so it has a generation of its own
+        (pid:lstart of that ancestor) regardless of what the test runner itself runs under; a FakeCli runs it under that shared fake CLI instead."""
+        if isinstance(new_cli, FakeCli):  # a further server process under an existing fake CLI
+            self.proc = new_cli.launch(env)
+            self.next_id = 0
+            return
+        argv = [sys.executable, "-B", str(SERVER)]
+        if new_cli:
+            argv = ["codex", "-c", '"$@"; exit $?', "codex"] + argv  # non-exec shell stays the parent
+        self.proc = subprocess.Popen(argv, executable="/bin/bash" if new_cli else None, env=env, text=True,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.next_id = 0
 

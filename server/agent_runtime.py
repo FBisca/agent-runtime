@@ -74,6 +74,36 @@ def ancestor_cli():
     return None
 
 
+def lstart(pid):
+    """Process start time string via ps, or None on any failure."""
+    try:
+        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL, timeout=PS_TIMEOUT_SECONDS,
+                                env=dict(os.environ, LC_ALL="C"))  # locale-stable; the server and hooks differ in env
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+def cli_generation():
+    """`<pid>:<lstart>` of the nearest codex/claude ancestor, else None. Shared by the MCP server and
+    hooks; session IDs are deliberately ignored so /clear and /new stay on one team. Read-only."""
+    deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
+    pid = os.getppid()
+    for _ in range(MAX_ANCESTOR_HOPS):
+        if pid <= 1 or time.monotonic() >= deadline:
+            return None
+        entry = ps_entry(pid)
+        if not entry:
+            return None
+        parent, args = entry
+        if cli_of_args(args):
+            stamp = lstart(pid)
+            return "%s:%s" % (pid, stamp) if stamp else None
+        pid = parent
+    return None
+
+
 def detect_cli(env):
     """Process ancestry first (env markers are inherited when one CLI starts the other), then env
     markers (Codex sets CODEX_THREAD_ID/CODEX_TOOL_CALL_ID; Claude Code sets CLAUDECODE), else None."""

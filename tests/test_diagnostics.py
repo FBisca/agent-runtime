@@ -146,7 +146,7 @@ class ReceiptGatedInboxTests(ToolCase):
         for name, arguments in (("task", {"action": "list"}), ("status", {"name": "w2"}),
                                 ("list", {}), ("collect", {"name": "w2"})):
             if name != "task":  # fresh session per read tool: a new generation has no pin yet
-                session = Session(dict(self.env, HC_TERMINAL_ID="t2", CODEX_THREAD_ID="fresh-" + name))
+                session = Session(dict(self.env, HC_TERMINAL_ID="t2", CODEX_THREAD_ID="fresh-" + name), new_cli=True)
                 self.addCleanup(session.close)
                 session.handshake()
             else:

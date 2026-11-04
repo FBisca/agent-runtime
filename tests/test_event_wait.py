@@ -75,7 +75,7 @@ class EventWaitTests(ToolCase):
         self.assignments = [self.spawn(self.lead, name) for name in ("w1", "w2")]
         self.workers = []
         for address in ("t1", "t2"):
-            session = Session(dict(self.env, HC_TERMINAL_ID=address, CODEX_THREAD_ID="worker-" + address))
+            session = Session(dict(self.env, HC_TERMINAL_ID=address, CODEX_THREAD_ID="worker-" + address), new_cli=True)
             self.addCleanup(session.close)
             session.handshake()
             self.workers.append(session)

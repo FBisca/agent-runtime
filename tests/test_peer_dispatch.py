@@ -4,6 +4,7 @@ import threading
 import time
 
 from test_event_wait import AsyncRPC, Session
+from test_mcp_server import FakeCli
 import test_event_wait as event_helpers
 from test_tools import ToolCase
 from dispatch_events import endpoints
@@ -174,13 +175,13 @@ class PeerDispatchTests(ToolCase):
         old, text = self.call(self.workers[0], "message", {"to": "w2", "text": "old team",
                                                         "assignment_id": self.assignments[0]["assignment_id"]})
         self.assertFalse(old["isError"], text)
-        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"))
+        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"), new_cli=True)
         self.addCleanup(replacement.close)
         replacement.handshake()
         fresh = [self.spawn(replacement, name) for name in ("w1", "w2")]
         denied, _ = self.call(self.workers[0], "message", {"to": "w2", "text": "stale caller"})
         self.assertTrue(denied["isError"])
-        new_worker = Session(dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker"))
+        new_worker = Session(dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker"), new_cli=True)
         self.addCleanup(new_worker.close)
         new_worker.handshake()
         sent, text = self.call(new_worker, "message", {"to": "w2", "text": "new team", "assignment_id": fresh[0]["assignment_id"]})
@@ -202,7 +203,7 @@ class PeerDispatchTests(ToolCase):
         self.assertEqual(self.runs("send"), [])
 
     def replace_team_without_contacting_old_workers(self):
-        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"))
+        replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"), new_cli=True)
         self.addCleanup(replacement.close)
         replacement.handshake()
         return replacement, [self.spawn(replacement, name) for name in ("w1", "w2")]
@@ -237,10 +238,12 @@ class PeerDispatchTests(ToolCase):
                 denied, text = self.call(self.workers[0], "wait", arguments)
                 self.assertTrue(denied["isError"], text)
         new_env = dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker")
+        cli = FakeCli()  # both server processes belong to one CLI: a restart keeps its generation
+        self.addCleanup(cli.close)
         for restart in (False, True):
-            worker = Session(new_env)
-            worker.handshake()
+            worker = Session(new_env, new_cli=cli)
             try:
+                worker.handshake()
                 arguments = {"target": "inbox", "timeout": 0}
                 if not restart:
                     arguments["assignment_id"] = fresh[0]["assignment_id"]
