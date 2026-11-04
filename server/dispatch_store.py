@@ -7,6 +7,7 @@ fails explicitly; reads never truncate or acknowledge implicitly. A receipt name
 exactly the returned IDs; passing it on the next read acknowledges that page.
 Connections/transactions are per operation, allowing separate MCP processes.
 """
+import hashlib
 import json
 import os
 import re
@@ -82,6 +83,43 @@ def uid():
     return uuid.uuid4().hex
 
 
+def wait_fingerprint(db, team):
+    """Pure team-state digest; accepts a read-only sqlite connection without a Store.
+
+    One SELECT captures assignment states/dispatch turns and the lead inbox's
+    message high-water mark in one SQLite snapshot. IDs and current flags include pending
+    registrations and assignment replacement; acknowledgements never change it.
+    """
+    rows = db.execute(
+        "SELECT a.id,a.state,a.current,d.turn,d.mode,"
+        "(SELECT MAX(seq) FROM messages WHERE team=?1 "
+        "AND recipient=(SELECT lead FROM teams WHERE id=?1)) FROM teams t "
+        "LEFT JOIN assignments a ON a.team=t.id "
+        "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
+        "WHERE t.id=?1 ORDER BY a.id", (team,))
+    payload = json.dumps([tuple(row) for row in rows], separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def last_wait_state(db, team):
+    """Return (reason, attention, stored fingerprint, current fingerprint), or None.
+
+    Both reads share one read transaction, including on mode=ro connections.
+    Preserve a caller's existing transaction; never initialize an older store.
+    """
+    own_transaction = not db.in_transaction
+    if own_transaction:
+        db.execute("BEGIN")
+    try:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='last_wait'").fetchone():
+            return None
+        row = db.execute("SELECT reason,attention,fingerprint FROM last_wait WHERE team=?", (team,)).fetchone()
+        return (*row, wait_fingerprint(db, team)) if row else None
+    finally:
+        if own_transaction:
+            db.rollback()
+
+
 class Store:
     def __init__(self, env):
         root = Path(env.get("XDG_STATE_HOME") or Path(env.get("HOME") or Path.home()) / ".local/state")
@@ -108,6 +146,7 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS callers (scope TEXT,address TEXT,generation TEXT,team TEXT,PRIMARY KEY(scope,address,generation))",
                 # Side table (not columns) keeps 0.2.0 servers' INSERT INTO assignments working on a shared store.
                 "CREATE TABLE IF NOT EXISTS dispatch_turns (assignment TEXT PRIMARY KEY, turn INTEGER, mode TEXT)",
+                "CREATE TABLE IF NOT EXISTS last_wait (team TEXT PRIMARY KEY, reason TEXT, attention INTEGER, fingerprint TEXT)",
                 # v2: shared tasks; rowid order is the durable ID sequence.
                 "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, team TEXT, subject TEXT, status TEXT, owner TEXT, assignment TEXT, deps TEXT)",
                 # D7: hot wait/read lookups; additive, so 0.2.x writers and user_version are untouched.
@@ -503,6 +542,7 @@ class Store:
 
         A pending snapshot creates no receipt; a final snapshot and its receipt
         commit together, so concurrent publications/acks cannot invalidate readiness.
+        Final wait(all) reads also record the team state in that same transaction.
         """
         with self.transaction() as db:
             self.acknowledge(db, *(ack or (team, recipient, receipt)))
@@ -558,11 +598,16 @@ class Store:
                      "unfinished": unfinished, "receipt": None, "more": more}
             if ready is not None:
                 batch["reason"] = ready(batch)
+            attention = batch.pop("_attention", 0)
             if messages and issue_receipt and (ready is None or batch["reason"] is not None):
                 token = uid()
                 db.execute("INSERT INTO receipts VALUES (?,?,?,?)",
                            (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
                 batch["receipt"] = token
+            if ready is not None and batch["reason"] is not None and target == "all" and not inbox:
+                db.execute("INSERT INTO last_wait(team,reason,attention,fingerprint) VALUES (?,?,?,?) ON CONFLICT(team) DO UPDATE "
+                           "SET reason=excluded.reason,attention=excluded.attention,fingerprint=excluded.fingerprint",
+                           (team, batch["reason"], attention, wait_fingerprint(db, team)))
             return batch
 
     TASK_STATUSES = ("pending", "in_progress", "complete", "blocked")
