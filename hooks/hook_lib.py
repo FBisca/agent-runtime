@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -115,9 +116,10 @@ def needs(db, team, lead):
             "unfinished": unfinished(db, team), "seen": seen, "attention": last[1] if seen else 0}
 
 
-def lead_check(env=None):
-    """(identity, needs) where needs is None when the caller leads no team; (None, None) without identity."""
-    who = identity(env)
+def lead_check(env=None, who=None):
+    """(identity, needs) where needs is None when the caller leads no team; (None, None) without identity.
+    Pass `who` to reuse an identity already computed."""
+    who = who or identity(env)
     if not who:
         return None, None
     db = open_readonly(env)
@@ -181,22 +183,45 @@ def spend_budget(env, who):
     return old > 0, old == 0
 
 
+STALE_SECONDS = 7 * 86400
+
+
+def prune_budgets(env, now=None):
+    """Best-effort removal of budget files untouched for a week (dead sessions)."""
+    folder = state_root(env) / "agent-runtime" / "stop-guard"
+    cutoff = (now or time.time()) - STALE_SECONDS
+    try:
+        for path in folder.iterdir():
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def reset_budget(env, who):
+    prune_budgets(env)
     update_budget(env, who, lambda n: BUDGET, create=False)  # never creates state for non-leads
 
 
+TERMINAL_STATUSES = ("completed", "failed", "killed", "stopped", "cancelled")
+
+
 def running_wait_task(payload):
-    """True when background_tasks holds a running MCP task for the agent-runtime server's `wait` tool.
-    Any other or unrecognised shape is not an exemption."""
+    """True when background_tasks holds a not-yet-finished MCP task for the agent-runtime server's `wait`.
+    Plugin servers are named `plugin:<plugin>:<server>`; a manually added one is just `<server>`. Status
+    values are undocumented, so anything but a terminal status counts as running. Other shapes: no exemption
+    (the `wait` target is not visible here, so a wait of any target exempts)."""
     tasks = payload.get("background_tasks")
     if not isinstance(tasks, list):
         return False
     for task in tasks:
-        if not isinstance(task, dict) or task.get("type") != "MCP task" or task.get("status") != "running":
+        if not isinstance(task, dict) or task.get("type") != "MCP task" or task.get("status") in TERMINAL_STATUSES:
             continue
-        server = task.get("server") or task.get("server_name") or ""
-        tool = task.get("tool") or task.get("tool_name")
-        if isinstance(server, str) and (server == "agent-runtime" or server.endswith("_agent-runtime")) \
-                and tool == "wait":
+        server, tool = task.get("server"), task.get("tool")
+        if isinstance(server, str) and isinstance(tool, str) and server.rsplit(":", 1)[-1] == "agent-runtime" \
+                and tool.rsplit("__", 1)[-1] == "wait":
             return True
     return False

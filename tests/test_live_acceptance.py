@@ -290,27 +290,37 @@ class LiveAcceptance(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE_STOP") == "1",
                      "set AGENT_RUNTIME_LIVE_STOP=1 to record a real Claude Stop payload")
 class StopPayloadShapeTests(unittest.TestCase):
-    """Opt-in: runs one real `claude -p` turn with a Stop hook that saves its stdin, then checks the payload
-    carries the fields the stop guard reads. The output file (AGENT_RUNTIME_LIVE_STOP_OUT, default a temp
-    path printed on failure) shows the real `background_tasks` entry shape for an MCP `wait` call."""
+    """Opt-in: one real `claude -p` turn with this plugin loaded and only its `wait` tool allowed. The prompt
+    starts an agent-runtime `wait` long enough (>120 s) for Claude to background it, then ends the turn; a
+    capturing Stop hook saves the payload. Run from an hc terminal (the plugin's wait needs the lead's hc
+    identity). The captured payload (AGENT_RUNTIME_LIVE_STOP_OUT, default a temp path shown on failure) shows
+    the real `background_tasks` entry. If `claude -p` cannot background the call, this fails with a clear
+    message instead of passing."""
 
-    def test_S15_real_stop_payload_has_background_tasks_shape(self):
+    def test_S15_real_stop_payload_holds_a_running_wait_task(self):
         """lead-liveness-hooks/S15"""
         claude = shutil.which("claude")
         if not claude:
             self.skipTest("claude not on PATH")
+        plugin = Path(__file__).resolve().parents[1]
         work = tempfile.mkdtemp()
         out = os.environ.get("AGENT_RUNTIME_LIVE_STOP_OUT") or os.path.join(work, "stop-payload.json")
-        settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "cat > %s" % shlex.quote(out)}]}]}}
-        done = subprocess.run([claude, "-p", "reply with the single word ok", "--settings", json.dumps(settings)],
-                              capture_output=True, text=True, timeout=300, cwd=work)
+        capture = "cat > %s.tmp && mv %s.tmp %s" % ((shlex.quote(out),) * 3)  # last Stop payload wins
+        settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": capture}]}]}}
+        prompt = ("Call the agent-runtime wait tool exactly once with target=inbox and timeout=200. "
+                  "Do not wait for its result: after starting it, end your turn immediately.")
+        done = subprocess.run([claude, "-p", prompt, "--plugin-dir", str(plugin), "--settings", json.dumps(settings),
+                               "--allowedTools", "mcp__plugin_agent-runtime_agent-runtime__wait"],
+                              capture_output=True, text=True, timeout=400, cwd=work)
         self.assertEqual(done.returncode, 0, done.stderr)
         payload = json.loads(Path(out).read_text())
+        tasks = payload.get("background_tasks")
         self.assertEqual(payload.get("hook_event_name"), "Stop", out)
-        self.assertIn("stop_hook_active", payload, out)
-        tasks = payload.get("background_tasks", [])
-        self.assertIsInstance(tasks, list, out)
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+        mcp = [t for t in tasks or [] if isinstance(t, dict) and t.get("type") == "MCP task"]
+        self.assertTrue(mcp, "claude -p did not leave a backgrounded MCP task in the Stop payload "
+                             "(background_tasks=%r; assistant said %r); payload saved at %s. Run it from a lead "
+                             "terminal: a worker's wait needs assignment_id and returns at once."
+                        % (tasks, payload.get("last_assistant_message"), out))
+        sys.path.insert(0, str(plugin / "hooks"))
         import hook_lib
-        for task in tasks:  # whatever is running now must parse without error
-            hook_lib.running_wait_task({"background_tasks": [task]})
+        self.assertTrue(hook_lib.running_wait_task(payload), "real entry not recognised: %r (%s)" % (mcp, out))

@@ -36,7 +36,8 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
-    except Exception:  # fail open: any error, including an import error, allows the stop
+        import hook_lib
+        hook_lib.fail_open(main)
+    except Exception:  # an import error also allows the stop
         pass
     sys.exit(0)
