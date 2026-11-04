@@ -219,6 +219,7 @@ class SpawnTests(ToolCase):
         argv = self.spawn_argv(cli="claude", agent="scene-reviewer")
         self.assertEqual(argv[:5], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto"])
         self.assertEqual(len(argv), 6)
+        self.assertTrue(argv[-1].startswith("do x"))
         argv = self.spawn_argv(cli="claude", agent="scene-reviewer", model="haiku")
         self.assertEqual(argv[:7], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto", "--model", "haiku"])
         self.assertEqual(len(argv), 8)
@@ -230,8 +231,7 @@ class SpawnTests(ToolCase):
         argv = self.spawn_argv(cli="codex", agent="reviewer")
         self.assertEqual(argv[:2], ["codex", "--no-daemon"])
         self.assertEqual(len(argv), 3)
-        self.assertTrue(argv[-1].startswith("REVIEWER RULES"))
-        self.assertIn("do x", argv[-1])
+        self.assertTrue(argv[-1].startswith("REVIEWER RULES\n\ndo x"))
         self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
 
     def test_S9_no_agent_keeps_implementer(self):
@@ -259,13 +259,15 @@ class SpawnTests(ToolCase):
         self.assertEqual(argv[:3], ["claude", "--agent", "plugin:reviewer"])
         self.write_agent("plugin:reviewer")
         session = self.start()
-        result, _ = self.call(session, "spawn", dict(self.ARGS, cli="codex", agent="plugin:reviewer"))
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex", agent="plugin:reviewer"))
         self.assertTrue(result["isError"])
+        self.assertIn(":", text)
         self.assertEqual(len(self.runs("run")), 1)  # only the Claude spawn above
 
     def test_S11_codex_agent_file_missing_or_without_instructions(self):
         """spawn-model/S11"""
-        for body in (None, 'name = "reviewer"\n'):
+        for body in (None, 'name = "reviewer"\n', "developer_instructions = 5\n",
+                     'developer_instructions = ""\n', 'developer_instructions = "  \\n "\n'):
             with self.subTest(body=body):
                 if body is not None:
                     self.write_agent("reviewer", body)

@@ -138,12 +138,15 @@ def codex_instructions(agent="implementer"):
             text = handle.read()
         try:
             import tomllib
-            return tomllib.loads(text)["developer_instructions"].strip()
+            found = tomllib.loads(text)["developer_instructions"]
         except ImportError:  # Python < 3.11
-            found = re.search(r'^developer_instructions\s*=\s*"""(.*?)"""', text, re.S | re.M)
-            if not found:
+            match = re.search(r'^developer_instructions\s*=\s*"""(.*?)"""', text, re.S | re.M)
+            if not match:
                 raise KeyError("developer_instructions")
-            return found.group(1).strip()
+            found = match.group(1)
+        if not isinstance(found, str) or not found.strip():
+            raise ValueError("developer_instructions must be a non-empty string")
+        return found.strip()
     except (OSError, KeyError, ValueError) as error:
         raise ToolError("cannot read Codex %s instructions from %s: %s" % (agent, path, error))
 
@@ -231,6 +234,8 @@ def spawn_agent(arguments, cli):
     if agent is None:
         return "implementer"
     # Codex reads ~/.codex/agents/<agent>.toml, so it never takes ':' (path-safe names only).
+    if cli == "codex" and isinstance(agent, str) and ":" in agent:
+        raise ToolError("Codex agents cannot contain ':' (Claude plugin agents only)")
     pattern = AGENT_CLAUDE if cli == "claude" else AGENT_CODEX
     if not isinstance(agent, str) or not pattern.fullmatch(agent):
         raise ToolError("agent must match %s" % pattern.pattern)

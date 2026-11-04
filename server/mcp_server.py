@@ -28,15 +28,15 @@ def text(description):
 
 TOOLS = [
     ("spawn", "Start one agent on one task in one checkout; put the whole task in the call. "
-              "Returns promptly with worker_id and assignment_id; then one wait(all) per work period. "
+              "Returns promptly: worker_id, assignment_id; then one wait(all) per work period. "
               "kind=lookup is rejected: use the CLI's own subagent tool. "
-              "kind=worker: implementation, long tasks, Codex. cli defaults to claude.",
+              "kind=worker: implementation, long tasks, Codex. cli default claude.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
-             "name": text("unique, a-z 0-9 - _, max 32"), "task": text("task text"),
+             "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory"),
              "task_id": text("optional ready task to link"),
              "model": text("optional model"),
-             "agent": text("agent; needs report tool")}, ["kind", "name", "task", "cwd"])),
+             "agent": text("optional agent, default implementer; needs report")}, ["kind", "name", "task", "cwd"])),
     ("message", "Send text to a teammate or lead. Peer messages arrive in tool results. Never forces input past a permission dialog.",
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
