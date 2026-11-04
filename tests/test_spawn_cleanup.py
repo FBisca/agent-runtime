@@ -173,6 +173,16 @@ class SpawnCleanupTests(ToolCase):
         with Store(env).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    def test_invalid_model_starts_no_terminal_and_registers_nothing(self):
+        """agent-runtime/R73 spawn-model/S4 spawn-model/S4a spawn-model/S5"""
+        lead = self.start({}, ENV)
+        for model in ("  ", 3, "-x"):
+            result, _ = self.call(lead, "spawn", dict(ARGS, model=model))
+            self.assertTrue(result["isError"])
+        self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
     def test_codex_without_instructions_starts_no_terminal_and_registers_nothing(self):
         """agent-runtime/R73"""
         (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()

@@ -161,6 +161,65 @@ class SpawnTests(ToolCase):
         self.assertIn("call the agent-runtime report tool", argv[12])
         self.assertNotIn("permission-mode", " ".join(argv))
 
+    def spawn_argv(self, **extra):
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+        result, text = self.call(session, "spawn", dict(self.ARGS, **extra))
+        self.assertFalse(result["isError"], text)
+        return self.runs("run")[-1][10:]
+
+    def test_S1_claude_model_flag(self):
+        """spawn-model/S1"""
+        argv = self.spawn_argv(cli="claude", model="haiku")
+        self.assertEqual(argv[:6], ["claude", "--agent", "implementer", "--permission-mode", "auto", "--model"])
+        self.assertEqual(argv[6], "haiku")
+        self.assertEqual(len(argv), 8)
+        self.assertTrue(argv[-1].startswith("do x"))
+
+    def test_S2_codex_model_flag(self):
+        """spawn-model/S2"""
+        argv = self.spawn_argv(cli="codex", model="gpt-5.5")
+        self.assertEqual(argv[:4], ["codex", "--no-daemon", "--model", "gpt-5.5"])
+        self.assertEqual(len(argv), 5)
+        self.assertTrue(argv[-1].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertNotIn("permission-mode", " ".join(argv))
+
+    def test_S3_no_model_keeps_argv(self):
+        """spawn-model/S3"""
+        claude = self.spawn_argv(cli="claude")
+        self.assertEqual(claude[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
+        self.assertEqual(len(claude), 6)
+        codex = self.spawn_argv(cli="codex")
+        self.assertEqual(codex[:2], ["codex", "--no-daemon"])
+        self.assertEqual(len(codex), 3)
+        self.assertNotIn("--model", claude + codex)
+
+    def test_S4_blank_or_non_string_model_is_an_error(self):
+        """spawn-model/S4"""
+        for model in ("", "   ", 5, ["haiku"], True):
+            with self.subTest(model=model):
+                session = self.start()
+                result, _ = self.call(session, "spawn", dict(self.ARGS, model=model))
+                self.assertTrue(result["isError"])
+                self.assertEqual(self.runs("run"), [])
+
+    def test_S4a_whitespace_or_control_characters_in_model_are_an_error(self):
+        """spawn-model/S4a"""
+        for model in (" haiku", "haiku ", "  -x", "ha iku", "ha\niku", "ha\x00iku", "ha\x7fiku", "ha\tiku"):
+            with self.subTest(model=model):
+                session = self.start()
+                result, _ = self.call(session, "spawn", dict(self.ARGS, model=model))
+                self.assertTrue(result["isError"])
+                self.assertEqual(self.runs("run"), [])
+
+    def test_S5_dash_model_is_an_error(self):
+        """spawn-model/S5"""
+        for cli in ("claude", "codex"):
+            with self.subTest(cli=cli):
+                session = self.start()
+                result, _ = self.call(session, "spawn", dict(self.ARGS, cli=cli, model="--dangerous"))
+                self.assertTrue(result["isError"])
+                self.assertEqual(self.runs("run"), [])
+
     def test_S2_unsent_first_message_is_an_error(self):
         """agent-runtime-tools/S2"""
         session = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}})
