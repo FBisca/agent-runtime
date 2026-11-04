@@ -94,13 +94,25 @@ class SpawnTests(ToolCase):
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="claude"))
         self.assertFalse(result["isError"], text)
         (argv,) = self.runs("run")
-        self.assertEqual(argv[:9], ["run", "--bg", "--name", "w1", "--cwd", "/tmp/c", "--parent", "t0", "--json"])
-        self.assertEqual(argv[9:14], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
-        self.assertTrue(argv[14].startswith("do x"))
-        self.assertIn("When done or stuck, call the agent-runtime report tool with your result.", argv[14])
-        self.assertNotIn("hc send", argv[14])
+        self.assertEqual(argv[:10], ["run", "--bg", "--name", "w1", "--cwd", "/tmp/c", "--parent", "t0", "--json",
+                                         "--no-notify"])
+        self.assertEqual(argv[10:15], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
+        self.assertTrue(argv[15].startswith("do x"))
+        self.assertIn("When done or stuck, call the agent-runtime report tool with your result.", argv[15])
+        self.assertNotIn("hc send", argv[15])
         info = json.loads(text)
         self.assertEqual((info["name"], info["address"], info["parent"]), ("w1", "t9", "t0"))
+
+    def test_S1_workers_start_with_no_notify_before_the_program(self):
+        """lead-delivery-gaps/S1"""
+        for cli, program in (("claude", "claude"), ("codex", "codex")):
+            with self.subTest(cli=cli):
+                session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+                result, text = self.call(session, "spawn", dict(self.ARGS, cli=cli))
+                self.assertFalse(result["isError"], text)
+                argv = self.runs("run")[-1]
+                self.assertIn("--no-notify", argv)
+                self.assertLess(argv.index("--no-notify"), argv.index(program))
 
     def test_S2_codex_worker_is_no_daemon_with_implementer_instructions(self):
         """agent-runtime-tools/S2"""
@@ -108,10 +120,10 @@ class SpawnTests(ToolCase):
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex"))
         self.assertFalse(result["isError"], text)
         (argv,) = self.runs("run")
-        self.assertEqual(argv[9:11], ["codex", "--no-daemon"])
-        self.assertTrue(argv[11].startswith("CODEX IMPLEMENTER RULES"))
-        self.assertIn("do x", argv[11])
-        self.assertIn("call the agent-runtime report tool", argv[11])
+        self.assertEqual(argv[10:12], ["codex", "--no-daemon"])
+        self.assertTrue(argv[12].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertIn("do x", argv[12])
+        self.assertIn("call the agent-runtime report tool", argv[12])
         self.assertNotIn("permission-mode", " ".join(argv))
 
     def test_S2_unsent_first_message_is_an_error(self):
