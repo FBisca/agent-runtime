@@ -131,8 +131,8 @@ def require_hc(env):
     return info, caller
 
 
-def codex_instructions():
-    path = os.path.join(os.path.expanduser("~"), ".codex", "agents", "implementer.toml")
+def codex_instructions(agent="implementer"):
+    path = os.path.join(os.path.expanduser("~"), ".codex", "agents", "%s.toml" % agent)
     try:
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
@@ -145,7 +145,7 @@ def codex_instructions():
                 raise KeyError("developer_instructions")
             return found.group(1).strip()
     except (OSError, KeyError, ValueError) as error:
-        raise ToolError("cannot read Codex implementer instructions from %s: %s" % (path, error))
+        raise ToolError("cannot read Codex %s instructions from %s: %s" % (agent, path, error))
 
 
 def discard(name, env):
@@ -209,6 +209,10 @@ def linked_task(arguments, env):
     return task_id
 
 
+AGENT_CODEX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+AGENT_CLAUDE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_:-]{0,63}")
+
+
 def spawn_model(arguments):
     model = arguments.get("model")
     if model is None:
@@ -220,6 +224,17 @@ def spawn_model(arguments):
     if model.startswith("-"):
         raise ToolError("model must not start with '-'")
     return ["--model", model]
+
+
+def spawn_agent(arguments, cli):
+    agent = arguments.get("agent")
+    if agent is None:
+        return "implementer"
+    # Codex reads ~/.codex/agents/<agent>.toml, so it never takes ':' (path-safe names only).
+    pattern = AGENT_CLAUDE if cli == "claude" else AGENT_CODEX
+    if not isinstance(agent, str) or not pattern.fullmatch(agent):
+        raise ToolError("agent must match %s" % pattern.pattern)
+    return agent
 
 
 def owned_orphan(name, caller, env, earlier, other):
@@ -248,6 +263,7 @@ def spawn(arguments, env, ctx):
     worker_name(name)
     task_id = linked_task(arguments, env)
     model = spawn_model(arguments)
+    agent = spawn_agent(arguments, cli)
     _, caller = require_hc(env)
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
@@ -258,9 +274,9 @@ def spawn(arguments, env, ctx):
         scope, _ = dispatch_identity(env, ctx)
         store, team = lead_store(env, ctx)
     if cli == "claude":
-        program = ["claude", "--agent", "implementer", "--permission-mode", "auto"] + model + [message]
+        program = ["claude", "--agent", agent, "--permission-mode", "auto"] + model + [message]
     else:
-        program = ["codex", "--no-daemon"] + model + ["%s\n\n%s" % (codex_instructions(), message)]
+        program = ["codex", "--no-daemon"] + model + ["%s\n\n%s" % (codex_instructions(agent), message)]
     if store:
         earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)

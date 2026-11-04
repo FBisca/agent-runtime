@@ -153,6 +153,16 @@ class ToolListTests(ServerCase):
         self.assertEqual(spawn["inputSchema"]["properties"]["model"]["type"], "string")
         self.assertNotIn("model", spawn["inputSchema"]["required"])
 
+    def test_S12_spawn_schema_has_optional_string_agent(self):
+        """spawn-model/S12"""
+        session = self.start()
+        session.handshake()
+        spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
+        agent = spawn["inputSchema"]["properties"]["agent"]
+        self.assertEqual(agent["type"], "string")
+        self.assertIn("report", agent["description"])
+        self.assertNotIn("agent", spawn["inputSchema"]["required"])
+
     def test_ping_and_unknown_method(self):
         """agent-runtime-tools/S1"""
         session = self.start()

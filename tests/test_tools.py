@@ -211,6 +211,70 @@ class SpawnTests(ToolCase):
                 self.assertTrue(result["isError"])
                 self.assertEqual(self.runs("run"), [])
 
+    def write_agent(self, name, body='developer_instructions = """\nREVIEWER RULES\n"""\n'):
+        (self.dir / "home" / ".codex" / "agents" / ("%s.toml" % name)).write_text(body)
+
+    def test_S7_claude_agent_flag(self):
+        """spawn-model/S7"""
+        argv = self.spawn_argv(cli="claude", agent="scene-reviewer")
+        self.assertEqual(argv[:5], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto"])
+        self.assertEqual(len(argv), 6)
+        argv = self.spawn_argv(cli="claude", agent="scene-reviewer", model="haiku")
+        self.assertEqual(argv[:7], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto", "--model", "haiku"])
+        self.assertEqual(len(argv), 8)
+        self.assertTrue(argv[-1].startswith("do x"))
+
+    def test_S8_codex_agent_instructions(self):
+        """spawn-model/S8"""
+        self.write_agent("reviewer")
+        argv = self.spawn_argv(cli="codex", agent="reviewer")
+        self.assertEqual(argv[:2], ["codex", "--no-daemon"])
+        self.assertEqual(len(argv), 3)
+        self.assertTrue(argv[-1].startswith("REVIEWER RULES"))
+        self.assertIn("do x", argv[-1])
+        self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
+
+    def test_S9_no_agent_keeps_implementer(self):
+        """spawn-model/S9"""
+        claude = self.spawn_argv(cli="claude")
+        self.assertEqual(claude[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
+        self.assertEqual(len(claude), 6)
+        codex = self.spawn_argv(cli="codex")
+        self.assertTrue(codex[-1].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertEqual(len(codex), 3)
+
+    def test_S10_invalid_agent_is_an_error(self):
+        """spawn-model/S10"""
+        for agent in ("", "   ", 5, ["a"], True, "-x", "../x", "a/b", "a.b", "a" * 65, " a", "a b", "a\n"):
+            for cli in ("claude", "codex"):
+                with self.subTest(agent=agent, cli=cli):
+                    session = self.start()
+                    result, _ = self.call(session, "spawn", dict(self.ARGS, cli=cli, agent=agent))
+                    self.assertTrue(result["isError"])
+                    self.assertEqual(self.runs("run"), [])
+
+    def test_S10a_colon_agent_is_claude_only(self):
+        """spawn-model/S10a"""
+        argv = self.spawn_argv(cli="claude", agent="plugin:reviewer")
+        self.assertEqual(argv[:3], ["claude", "--agent", "plugin:reviewer"])
+        self.write_agent("plugin:reviewer")
+        session = self.start()
+        result, _ = self.call(session, "spawn", dict(self.ARGS, cli="codex", agent="plugin:reviewer"))
+        self.assertTrue(result["isError"])
+        self.assertEqual(len(self.runs("run")), 1)  # only the Claude spawn above
+
+    def test_S11_codex_agent_file_missing_or_without_instructions(self):
+        """spawn-model/S11"""
+        for body in (None, 'name = "reviewer"\n'):
+            with self.subTest(body=body):
+                if body is not None:
+                    self.write_agent("reviewer", body)
+                session = self.start()
+                result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex", agent="reviewer"))
+                self.assertTrue(result["isError"])
+                self.assertIn("reviewer.toml", text)
+                self.assertEqual(self.runs("run"), [])
+
     def test_S5_dash_model_is_an_error(self):
         """spawn-model/S5"""
         for cli in ("claude", "codex"):

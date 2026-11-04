@@ -183,6 +183,26 @@ class SpawnCleanupTests(ToolCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    def test_invalid_agent_starts_no_terminal_and_registers_nothing(self):
+        """spawn-model/S10 spawn-model/S10a"""
+        lead = self.start({}, ENV)
+        for cli, agent in (("claude", "-x"), ("claude", 3), ("codex", "a/b"), ("codex", "plugin:x")):
+            result, _ = self.call(lead, "spawn", dict(ARGS, cli=cli, agent=agent))
+            self.assertTrue(result["isError"])
+        self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
+    def test_codex_agent_without_instructions_starts_no_terminal_and_registers_nothing(self):
+        """spawn-model/S11"""
+        lead = self.start({}, ENV)
+        result, text = self.call(lead, "spawn", dict(ARGS, cli="codex", agent="reviewer"))
+        self.assertTrue(result["isError"])
+        self.assertIn("reviewer.toml", text)
+        self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
     def test_codex_without_instructions_starts_no_terminal_and_registers_nothing(self):
         """agent-runtime/R73"""
         (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()

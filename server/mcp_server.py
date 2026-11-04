@@ -32,10 +32,11 @@ TOOLS = [
               "kind=lookup is rejected: use the CLI's own subagent tool. "
               "kind=worker: implementation, long tasks, Codex. cli defaults to claude.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
-             "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
+             "name": text("unique, a-z 0-9 - _, max 32"), "task": text("task text"),
              "cwd": text("checkout directory"),
              "task_id": text("optional ready task to link"),
-             "model": text("optional model")}, ["kind", "name", "task", "cwd"])),
+             "model": text("optional model"),
+             "agent": text("agent; needs report tool")}, ["kind", "name", "task", "cwd"])),
     ("message", "Send text to a teammate or lead. Peer messages arrive in tool results. Never forces input past a permission dialog.",
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
