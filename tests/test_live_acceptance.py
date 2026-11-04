@@ -289,8 +289,8 @@ class LiveAcceptance(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE_CODEX_HOOKS") == "1",
                      "owner sign-off: set AGENT_RUNTIME_LIVE_CODEX_HOOKS=1 after trusting the Codex hooks via /hooks")
 class CodexHooksTrustTests(unittest.TestCase):
-    def test_S21_spawned_codex_worker_starts_its_task_with_the_lead_hooks_installed(self):
-        """lead-liveness-hooks/S21"""
+    def test_spawned_codex_worker_starts_its_task_with_the_lead_hooks_installed(self):
+        """agent-runtime/R127"""
         try:
             config = (Path.home() / ".codex" / "config.toml").read_text()
         except OSError:

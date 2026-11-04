@@ -464,15 +464,15 @@ class SharedGenerationTests(unittest.TestCase):
                 patch.object(app.os, "getppid", return_value=100):
             return app.cli_generation()
 
-    def test_S1_generation_is_nearest_cli_pid_and_lstart_without_session_suffix(self):
-        """lead-liveness-hooks/S1"""
+    def test_generation_is_nearest_cli_pid_and_lstart_without_session_suffix(self):
+        """agent-runtime/R107"""
         plain = self.generation({})
         self.assertEqual(plain, "90:Wed Nov  4 10:00:00 2026")
         env = {"CODEX_THREAD_ID": "thread-a", "CLAUDE_CODE_SESSION_ID": "sess-a", "CLAUDE_SESSION_ID": "sess-b"}
         self.assertEqual(self.generation(env), plain)
 
-    def test_S1_lstart_is_locale_independent(self):
-        """lead-liveness-hooks/S1"""
+    def test_lstart_is_locale_independent(self):
+        """agent-runtime/R107"""
         with tempfile.TemporaryDirectory() as tmp:
             ps = Path(tmp) / "ps"
             ps.write_text("#!/bin/sh\n[ \"$LC_ALL\" = C ] && echo 'Wed Nov  4 10:00:00 2026' || echo 'Mi Nov  4 10:00:00 2026'\n")
@@ -484,8 +484,8 @@ class SharedGenerationTests(unittest.TestCase):
                     stamps.add(app.lstart(os.getpid()))
         self.assertEqual(stamps, {"Wed Nov  4 10:00:00 2026"})
 
-    def test_S2_new_session_id_in_same_process_keeps_generation(self):
-        """lead-liveness-hooks/S2"""
+    def test_new_session_id_in_same_process_keeps_generation(self):
+        """agent-runtime/R108"""
         before = self.generation({"CODEX_THREAD_ID": "thread-a"})
         after = self.generation({"CODEX_THREAD_ID": "thread-b"})
         self.assertEqual(before, after)

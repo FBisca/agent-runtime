@@ -51,7 +51,7 @@ dir. Nothing under `~/.codex` was read for write or changed. Source notes: Codex
    existing stale `[hooks.state."…config.toml:session_start:0:0"]` entry (old retired hook) shows as changed and
    must be re-trusted or deleted.
 2. From inside an hc terminal run
-   `AGENT_RUNTIME_LIVE_CODEX_HOOKS=1 python3 -B -m unittest discover -s tests -p test_live_acceptance.py -k S21`
+   `AGENT_RUNTIME_LIVE_CODEX_HOOKS=1 python3 -B -m unittest discover -s tests -p test_live_acceptance.py -k spawned_codex_worker`
    (or `spawn(kind="worker", cli="codex", …)` with a trivial task by hand).
 3. Pass if the worker starts the task with no "Hooks need review" prompt and its `report` arrives. Fail: run
    `hc get <name>` and check the terminal for the review modal; untrust or remove the hooks.

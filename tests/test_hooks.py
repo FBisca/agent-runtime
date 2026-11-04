@@ -278,8 +278,8 @@ class HookStoreCase(unittest.TestCase):
 
 
 class LeadContextTests(HookStoreCase):
-    def test_S10_unseen_work_prints_the_wait_reminder_for_all_three_events(self):
-        """lead-liveness-hooks/S10"""
+    def test_unseen_work_prints_the_wait_reminder_for_all_three_events(self):
+        """agent-runtime/R116"""
         def seed(generation):
             store, team = self.team(generation)
             ident = self.worker(store, team)
@@ -291,8 +291,8 @@ class LeadContextTests(HookStoreCase):
             self.assertEqual(out["hookSpecificOutput"]["hookEventName"], payload["hook_event_name"])
             self.assertEqual(self.line(out), "agent-runtime: 2 unfinished, 1 undelivered — call wait(all)")
 
-    def test_S10_working_assignment_the_lead_has_not_seen_is_enough(self):
-        """lead-liveness-hooks/S10"""
+    def test_working_assignment_the_lead_has_not_seen_is_enough(self):
+        """agent-runtime/R116"""
         def seed(generation):
             store, team = self.team(generation)
             self.worker(store, team)
@@ -300,8 +300,8 @@ class LeadContextTests(HookStoreCase):
         self.assertEqual(self.line(self.hook(self.PROMPT, seed)),
                          "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)")
 
-    def test_S11_attention_already_delivered_and_unchanged_points_at_status(self):
-        """lead-liveness-hooks/S11"""
+    def test_attention_already_delivered_and_unchanged_points_at_status(self):
+        """agent-runtime/R117"""
         def seed(generation):
             store, team = self.team(generation)
             self.worker(store, team)
@@ -309,8 +309,8 @@ class LeadContextTests(HookStoreCase):
             self.last_wait(store, team, "attention", 2)
         self.assertEqual(self.line(self.hook(self.PROMPT, seed)), "agent-runtime: 2 workers need you — check status")
 
-    def test_S12_prints_nothing_without_needs_or_with_the_wrong_team(self):
-        """lead-liveness-hooks/S12"""
+    def test_prints_nothing_without_needs_or_with_the_wrong_team(self):
+        """agent-runtime/R118"""
         def delivered(generation):  # blocked work, one message already named by a receipt
             store, team = self.team(generation)
             self.worker(store, team, state="blocked")
@@ -333,16 +333,16 @@ class LeadContextTests(HookStoreCase):
         for seed in (None, delivered, seen, other_generation, superseded, other_lead):
             self.assertIsNone(self.hook(self.PROMPT, seed), getattr(seed, "__name__", "no store"))
 
-    def test_S12_session_start_sources_other_than_compact_and_clear_print_nothing(self):
-        """lead-liveness-hooks/S12"""
+    def test_session_start_sources_other_than_compact_and_clear_print_nothing(self):
+        """agent-runtime/R118"""
         def seed(generation):
             store, team = self.team(generation)
             self.worker(store, team)
         for source in ("startup", "resume", "fork"):
             self.assertIsNone(self.hook({"hook_event_name": "SessionStart", "source": source}, seed), source)
 
-    def test_S8_every_failure_allows_silently(self):
-        """lead-liveness-hooks/S8"""
+    def test_every_failure_allows_silently(self):
+        """agent-runtime/R114"""
         def seed(generation):
             store, team = self.team(generation)
             self.worker(store, team)
@@ -377,8 +377,8 @@ class LeadContextTests(HookStoreCase):
         self.assertEqual(proc.returncode, 0, err)
         return [json.loads(line) for line in out.splitlines()]
 
-    def test_S9_hook_never_writes_the_store_and_honours_xdg_state_home(self):
-        """lead-liveness-hooks/S9"""
+    def test_hook_never_writes_the_store_and_honours_xdg_state_home(self):
+        """agent-runtime/R115"""
         def seed(generation):
             store, team = self.team(generation)
             self.worker(store, team)
@@ -398,8 +398,8 @@ class LeadContextTests(HookStoreCase):
         self.hook(self.PROMPT, env=missing)
         self.assertFalse((self.root / "absent").exists())
 
-    def test_S8_broken_import_exits_zero_silently(self):
-        """lead-liveness-hooks/S8"""
+    def test_broken_import_exits_zero_silently(self):
+        """agent-runtime/R114"""
         broken = self.root / "broken"
         broken.mkdir()
         (broken / "lead_context.py").write_text((HOOKS / "lead_context.py").read_text())
@@ -408,8 +408,8 @@ class LeadContextTests(HookStoreCase):
                               env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
 
-    def test_S8_claude_hook_commands_allow_silently_without_python3(self):
-        """lead-liveness-hooks/S8"""
+    def test_claude_hook_commands_allow_silently_without_python3(self):
+        """agent-runtime/R114"""
         hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
         for event in ("SessionStart", "UserPromptSubmit", "Stop"):
             command = hooks[event][0]["hooks"][0]["command"]
@@ -417,8 +417,8 @@ class LeadContextTests(HookStoreCase):
                                   env={"PATH": "/nonexistent", "CLAUDE_PLUGIN_ROOT": str(PLUGIN)})
             self.assertEqual((done.returncode, done.stdout), (0, ""), event)
 
-    def test_S1_hook_shaped_process_computes_the_servers_generation(self):
-        """lead-liveness-hooks/S1"""
+    def test_hook_shaped_process_computes_the_servers_generation(self):
+        """agent-runtime/R107"""
         code = ("import sys; sys.path.insert(0, %r); sys.path.insert(0, %r); import hook_lib, hc_tools; "
                 "env = {'HC_SCOPE': 's', 'HC_TERMINAL_ID': 't0', 'CODEX_THREAD_ID': 'thread-x'}; "
                 "print(hook_lib.identity(env)[2]); print(hc_tools.dispatch_identity(env)[1])") % (
@@ -501,22 +501,22 @@ class StopGuardTests(HookStoreCase):
     def unseen(self):
         return self.worker(self.store, self.team_id)
 
-    def test_S13_blocks_with_the_wait_reason_when_work_is_unseen(self):
-        """lead-liveness-hooks/S13"""
+    def test_blocks_with_the_wait_reason_when_work_is_unseen(self):
+        """agent-runtime/R119"""
         ident = self.unseen()
         self.message(self.store, self.team_id, assignment=ident["assignment_id"])
         out, _ = self.stop()
         self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 1)})
         self.assertEqual(self.budget(), 2)
 
-    def test_S13_unseen_working_assignment_alone_blocks(self):
-        """lead-liveness-hooks/S13"""
+    def test_unseen_working_assignment_alone_blocks(self):
+        """agent-runtime/R119"""
         self.unseen()
         out, _ = self.stop()
         self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 0)})
 
-    def test_S14_allows_blocked_decision_failed_seen_and_resets_the_budget(self):
-        """lead-liveness-hooks/S14"""
+    def test_allows_blocked_decision_failed_seen_and_resets_the_budget(self):
+        """agent-runtime/R120"""
         ident = self.unseen()
         self.stop()
         self.assertEqual(self.budget(), 2)
@@ -530,8 +530,8 @@ class StopGuardTests(HookStoreCase):
         self.sql(self.store, "UPDATE assignments SET state='failed' WHERE id=?", ident["assignment_id"])
         self.assertIsNone(self.stop()[0])  # fingerprint changed but nothing left working
 
-    def test_S15_running_wait_task_allows_without_spending_or_resetting_budget(self):
-        """lead-liveness-hooks/S15"""
+    def test_running_wait_task_allows_without_spending_or_resetting_budget(self):
+        """agent-runtime/R121"""
         self.unseen()
         self.stop()
         self.assertEqual(self.budget(), 2)
@@ -549,8 +549,8 @@ class StopGuardTests(HookStoreCase):
             self.assertIsNotNone(out, other)  # unknown or other work: no exemption
             self.assertEqual(self.budget(), 2)
 
-    def test_S8_stop_allows_silently_on_bad_stdin_no_identity_and_broken_import(self):
-        """lead-liveness-hooks/S8"""
+    def test_stop_allows_silently_on_bad_stdin_no_identity_and_broken_import(self):
+        """agent-runtime/R114"""
         self.unseen()
         for raw in ("not json", "[1]", ""):
             out, err, code = self.cli.run(STOP, raw=raw)
@@ -566,8 +566,8 @@ class StopGuardTests(HookStoreCase):
         self.assertEqual(self.cli.run(broken / "stop_guard.py", self.STOP), (None, "", 0))
         self.assertIsNone(self.budget())  # none of those touched the budget
 
-    def test_S9_stop_never_writes_the_dispatch_store(self):
-        """lead-liveness-hooks/S9"""
+    def test_stop_never_writes_the_dispatch_store(self):
+        """agent-runtime/R115"""
         self.unseen()
         def snapshot():
             return sorted((p.name, p.stat().st_mtime_ns, p.stat().st_size)
@@ -578,8 +578,8 @@ class StopGuardTests(HookStoreCase):
         self.assertEqual(snapshot(), before)
         self.assertEqual(self.budget(), 2)
 
-    def test_S17_reset_prunes_stale_budget_files_only(self):
-        """lead-liveness-hooks/S17"""
+    def test_reset_prunes_stale_budget_files_only(self):
+        """agent-runtime/R123"""
         self.unseen()
         self.stop()
         folder = self.state / "agent-runtime" / "stop-guard"
@@ -592,8 +592,8 @@ class StopGuardTests(HookStoreCase):
         self.assertFalse(stale.exists())
         self.assertTrue(fresh.exists())
 
-    def test_S16_blocks_three_times_then_allows_with_one_stderr_note(self):
-        """lead-liveness-hooks/S16"""
+    def test_blocks_three_times_then_allows_with_one_stderr_note(self):
+        """agent-runtime/R122"""
         self.unseen()
         for _ in range(3):
             self.assertIsNotNone(self.stop()[0])
@@ -605,8 +605,8 @@ class StopGuardTests(HookStoreCase):
         self.prompt()  # UserPromptSubmit resets
         self.assertIsNotNone(self.stop()[0])
 
-    def test_S17_exemption_budget_spent_and_errors_do_not_reset_but_prompt_does(self):
-        """lead-liveness-hooks/S17"""
+    def test_exemption_budget_spent_and_errors_do_not_reset_but_prompt_does(self):
+        """agent-runtime/R123"""
         self.unseen()
         self.stop()
         self.stop(dict(self.STOP, background_tasks=[self.MCP_WAIT]))
@@ -627,8 +627,8 @@ class StopGuardTests(HookStoreCase):
         self.prompt()
         self.assertEqual(self.budget(), 3)
 
-    def test_S17_prompt_resets_even_when_the_context_hook_has_nothing_to_say(self):
-        """lead-liveness-hooks/S17"""
+    def test_prompt_resets_even_when_the_context_hook_has_nothing_to_say(self):
+        """agent-runtime/R123"""
         ident = self.unseen()
         self.stop()
         self.sql(self.store, "UPDATE assignments SET state='complete' WHERE id=?", ident["assignment_id"])
@@ -636,8 +636,8 @@ class StopGuardTests(HookStoreCase):
         self.assertIsNone(self.prompt())
         self.assertEqual(self.budget(), 3)
 
-    def test_S18_worker_leading_children_blocks_and_dead_or_superseded_teams_allow(self):
-        """lead-liveness-hooks/S18"""
+    def test_worker_leading_children_blocks_and_dead_or_superseded_teams_allow(self):
+        """agent-runtime/R124"""
         worker_env = dict(self.env, HC_TERMINAL_ID="t5")
         child = FakeCliProcess(worker_env, self.root / "w") if (self.root / "w").mkdir() is None else None
         self.addCleanup(child.close)
@@ -655,8 +655,8 @@ class StopGuardTests(HookStoreCase):
         self.addCleanup(nobody.close)
         self.assertIsNone(nobody.run(STOP, self.STOP)[0])
 
-    def test_S18a_reported_unchanged_stall_counts_as_seen_until_progress(self):
-        """lead-liveness-hooks/S18a"""
+    def test_reported_unchanged_stall_counts_as_seen_until_progress(self):
+        """agent-runtime/R128"""
         ident = self.unseen()
         self.sql(self.store, "INSERT INTO stall_progress(assignment,last_progress_ms,last_turn,stall_reported_for) "
                              "VALUES (?,?,?,?)", ident["assignment_id"], 5, 1, 5)
@@ -701,8 +701,8 @@ class CodexHookTests(HookStoreCase):
         files = list((self.state / "agent-runtime" / "stop-guard").glob("*"))
         return int(files[0].read_text()) if files else None
 
-    def test_S19_codex_stop_blocks_with_the_wait_reason_and_allows_with_empty_output(self):
-        """lead-liveness-hooks/S19"""
+    def test_codex_stop_blocks_with_the_wait_reason_and_allows_with_empty_output(self):
+        """agent-runtime/R125"""
         ident = self.worker(self.store, self.team_id)
         out, _ = self.stop()
         self.assertEqual(out, {"decision": "block", "reason": "agent-runtime: 1 unfinished, 0 undelivered — "
@@ -710,8 +710,8 @@ class CodexHookTests(HookStoreCase):
         self.sql(self.store, "UPDATE assignments SET state='blocked' WHERE id=?", ident["assignment_id"])
         self.assertEqual(self.cli.run(self.SHIM_CMD, self.STOP, args=("stop", "--cli", "codex")), (None, "", 0))
 
-    def test_S19_codex_budget_ignores_stop_hook_active_and_background_tasks_then_resets_on_prompt(self):
-        """lead-liveness-hooks/S19"""
+    def test_codex_budget_ignores_stop_hook_active_and_background_tasks_then_resets_on_prompt(self):
+        """agent-runtime/R125"""
         self.worker(self.store, self.team_id)
         mcp = [{"type": "MCP task", "server": "plugin:agent-runtime:agent-runtime", "tool": "wait", "status": "running"}]
         self.assertIsNotNone(self.stop(background_tasks=mcp)[0])  # no D10 exemption on Codex
@@ -725,8 +725,8 @@ class CodexHookTests(HookStoreCase):
         self.assertEqual(self.budget(), 3)
         self.assertIsNotNone(self.stop()[0])
 
-    def test_S20_codex_session_start_and_prompt_carry_the_context_line(self):
-        """lead-liveness-hooks/S20"""
+    def test_codex_session_start_and_prompt_carry_the_context_line(self):
+        """agent-runtime/R126"""
         self.worker(self.store, self.team_id)
         line = "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)"
         base = {"session_id": "s", "cwd": "/", "model": "m", "permission_mode": "default", "transcript_path": None}
@@ -738,8 +738,8 @@ class CodexHookTests(HookStoreCase):
         out = self.context(self.PROMPT)
         self.assertEqual(out, {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": line}})
 
-    def test_S19_install_prints_the_codex_lead_hooks_only_on_request(self):
-        """lead-liveness-hooks/S19"""
+    def test_install_prints_the_codex_lead_hooks_only_on_request(self):
+        """agent-runtime/R125"""
         base = {"PATH": os.environ["PATH"], "HOME": str(self.root / "home"), "BIN_DIR": str(self.root / "bin")}
         plain = subprocess.run([str(PLUGIN / "install.sh")], env=base, capture_output=True, text=True, timeout=30)
         self.assertEqual(plain.returncode, 0, plain.stderr)
@@ -759,8 +759,8 @@ class CodexHookTests(HookStoreCase):
         self.assertIn("PreToolUse", hooks)  # the existing guard blocks stay
         self.assertNotIn("Stop", toml(plain.stdout).get("hooks", {}))
 
-    def test_S19_shim_exits_zero_when_its_script_is_missing(self):
-        """lead-liveness-hooks/S19"""
+    def test_shim_exits_zero_when_its_script_is_missing(self):
+        """agent-runtime/R125"""
         (self.root / "bin").mkdir()
         (self.root / "hooks").mkdir()
         shim = self.root / "bin" / "agent-runtime-hook"
@@ -769,8 +769,8 @@ class CodexHookTests(HookStoreCase):
                               text=True, timeout=20)
         self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
 
-    def test_S20_attention_line_and_default_subcommand_is_still_the_pre_tool_use_guard(self):
-        """lead-liveness-hooks/S20"""
+    def test_attention_line_and_default_subcommand_is_still_the_pre_tool_use_guard(self):
+        """agent-runtime/R126"""
         self.worker(self.store, self.team_id)
         self.last_wait(self.store, self.team_id, "attention", 1)
         self.assertEqual(self.line(self.context(self.PROMPT)), "agent-runtime: 1 workers need you — check status")
