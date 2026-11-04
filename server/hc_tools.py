@@ -274,7 +274,8 @@ def spawn(arguments, env, ctx):
         suffix += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         program[-1] += suffix
     try:
-        code, out, err = run(["hc", "run", "--bg", "--name", name, "--cwd", cwd, "--parent", caller, "--json"] + program,
+        code, out, err = run(["hc", "run", "--bg", "--name", name, "--cwd", cwd, "--parent", caller, "--json",
+                              "--no-notify"] + program,
                              env, ctx, SHORT_SECONDS)
         if code != 0 and ctx.cancelled.is_set():  # cancel killed hc run mid-flight: not an hc refusal
             raise ToolError("cancelled")
