@@ -76,6 +76,23 @@ def cli_names(env):
         return list(BUILTINS)
 
 
+def scrubbed_variables(configured):
+    """Provider variables plus every key any profile sets: a worker inherits none of them, only its profile's."""
+    keys = set(PROVIDER_VARIABLES)
+    for profile in configured.values():
+        keys.update(profile.get("env", {}))
+    return sorted(keys)
+
+
+def scrub_prefix(env):
+    """`env -u NAME...` for a built-in spawn, so it runs on the CLI's own login whatever the lead or pane carries."""
+    try:
+        configured = load(env)
+    except ProfileError:
+        configured = {}  # the provider variables still go
+    return ["env"] + [arg for key in scrubbed_variables(configured) for arg in ("-u", key)]
+
+
 def launch(argv, env):
     """Resolve references here, immediately before exec; never pass values through argv."""
     if len(argv) < 4 or argv[2] != "--":
@@ -95,7 +112,8 @@ def launch(argv, env):
                 raise ProfileError("profile %r requires environment variable %s" % (name, reference))
             value = env[reference]
         overlay[key] = value
-    worker_env = {key: value for key, value in env.items() if key not in PROVIDER_VARIABLES}
+    scrubbed = set(scrubbed_variables(configured))
+    worker_env = {key: value for key, value in env.items() if key not in scrubbed}
     worker_env.update(overlay)
     try:
         os.execvpe(program[0], program, worker_env)

@@ -327,6 +327,8 @@ def spawn(arguments, env, ctx):
     if profile:
         launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agent-runtime-profile")
         program = [os.path.normpath(launcher), profile, str(profiles.config_path(env)), "--"] + program
+    else:
+        program = profiles.scrub_prefix(env) + program
     if store:
         earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)

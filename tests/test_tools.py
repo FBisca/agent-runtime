@@ -37,7 +37,9 @@ if argv[0] == "run" and replies.get("execute_profile"):
     child = subprocess.run(argv[10:], env=login, text=True, capture_output=True)
     with open(%(overlay)r, "a") as log:
         log.write(child.stdout)
-    artifacts = {"argv": %(log)r, "config": argv[12], "overlay": %(overlay)r}
+    artifacts = {"argv": %(log)r, "overlay": %(overlay)r}
+    if argv[10].endswith("agent-runtime-profile"):
+        artifacts["config"] = argv[12]
     with open(%(overlay)r + ".audit", "w") as audit:
         json.dump({name: login["PROFILE_TEST_SECRET"].encode() in open(path, "rb").read()
                    for name, path in artifacts.items()}, audit)
@@ -81,6 +83,23 @@ def raw(name, parent, state="idle", app=None):
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+PROVIDERS = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+             "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"]
+
+
+def scrub(keys):
+    """The `env -u NAME...` prefix a built-in spawn runs under."""
+    return ["env"] + [arg for key in sorted(keys) for arg in ("-u", key)]
+
+
+def unwrap(argv):
+    """The CLI argv after the built-in `env -u NAME...` scrub."""
+    if argv[:1] != ["env"]:
+        return argv
+    i = 1
+    while argv[i:i + 1] == ["-u"]:
+        i += 2
+    return argv[i:]
 
 
 class ToolCase(unittest.TestCase):
@@ -165,10 +184,11 @@ class SpawnTests(ToolCase):
         (argv,) = self.runs("run")
         self.assertEqual(argv[:10], ["run", "--bg", "--name", "w1", "--cwd", "/tmp/c", "--parent", "t0", "--json",
                                          "--no-notify"])
-        self.assertEqual(argv[10:15], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
-        self.assertTrue(argv[15].startswith("do x"))
-        self.assertIn("When done or stuck, call the agent-runtime report tool with your result.", argv[15])
-        self.assertNotIn("hc send", argv[15])
+        program = unwrap(argv[10:])
+        self.assertEqual(program[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
+        self.assertTrue(program[5].startswith("do x"))
+        self.assertIn("When done or stuck, call the agent-runtime report tool with your result.", program[5])
+        self.assertNotIn("hc send", program[5])
         info = json.loads(text)
         self.assertEqual((info["name"], info["address"], info["parent"]), ("w1", "t9", "t0"))
 
@@ -189,17 +209,18 @@ class SpawnTests(ToolCase):
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex"))
         self.assertFalse(result["isError"], text)
         (argv,) = self.runs("run")
-        self.assertEqual(argv[10:12], ["codex", "--no-daemon"])
-        self.assertTrue(argv[12].startswith("CODEX IMPLEMENTER RULES"))
-        self.assertIn("do x", argv[12])
-        self.assertIn("call the agent-runtime report tool", argv[12])
+        program = unwrap(argv[10:])
+        self.assertEqual(program[:2], ["codex", "--no-daemon"])
+        self.assertTrue(program[2].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertIn("do x", program[2])
+        self.assertIn("call the agent-runtime report tool", program[2])
         self.assertNotIn("permission-mode", " ".join(argv))
 
     def spawn_argv(self, **extra):
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
         result, text = self.call(session, "spawn", dict(self.ARGS, **extra))
         self.assertFalse(result["isError"], text)
-        return self.runs("run")[-1][10:]
+        return unwrap(self.runs("run")[-1][10:])
 
     def test_claude_model_flag(self):
         """agent-runtime/R129"""
@@ -483,7 +504,56 @@ class ProfileTests(ToolCase):
             result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
             self.assertFalse(result["isError"], text)
             self.assertEqual(self.runs("run")[-1], ["run", "--bg", "--name", "w1", "--cwd", "/tmp", "--parent", "t0",
-                                                   "--json", "--no-notify"] + program)
+                                                   "--json", "--no-notify"] + scrub(PROVIDERS) + program)
+
+    MINIMAX = {"cli": "claude", "env": {"ANTHROPIC_BASE_URL": "https://provider.example/api",
+                                        "ANTHROPIC_MODEL": "provider-model", "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "512000"}}
+    WATCHED = PROVIDERS + ["CLAUDE_CODE_MAX_CONTEXT_TOKENS"]
+
+    def env_printer(self, name):
+        program = self.dir / "bin" / name
+        program.write_text("#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n"
+                           % (sys.executable, self.WATCHED))
+        program.chmod(0o755)
+
+    def overlays(self):
+        return [json.loads(line) for line in (self.dir / "overlay").read_text().splitlines()]
+
+    def test_builtin_spawn_inherits_no_provider_or_profile_variable(self):
+        """#35: built-in workers run on the CLI's own login, whatever the lead, pane or an earlier profile left."""
+        self.config({"minimax": self.MINIMAX})
+        for family in ("claude", "codex"):
+            self.env_printer(family)
+        leaked = {key: "inherited" for key in self.WATCHED if key != "ANTHROPIC_BASE_URL"}
+        session = self.start({"execute_profile": True, "login_env": leaked, "get:w1": {"out": raw("w1", "t0")}},
+                             {"ANTHROPIC_BASE_URL": "lead-value"})
+        for family in ("claude", "codex"):
+            result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
+            self.assertFalse(result["isError"], text)
+        self.assertEqual(self.overlays(), [{}, {}])
+
+    def test_builtin_scrub_survives_a_malformed_config(self):
+        """#35: an unreadable profile config still scrubs every provider variable."""
+        path = self.dir / "home" / ".config" / "agent-runtime" / "profiles.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json")
+        self.env_printer("claude")
+        session = self.start({"execute_profile": True, "login_env": dict.fromkeys(PROVIDERS, "inherited"),
+                              "get:w1": {"out": raw("w1", "t0")}})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="claude"))
+        self.assertFalse(result["isError"], text)
+        self.assertEqual(self.overlays(), [{}])
+
+    def test_profile_gets_exactly_its_own_values(self):
+        """#35: another profile's overlay keys never reach a profile worker."""
+        self.config({"minimax": self.MINIMAX, "other": {"cli": "claude", "env": {"ANTHROPIC_MODEL": "other-model"}}})
+        self.env_printer("claude")
+        session = self.start({"execute_profile": True, "get:w1": {"out": raw("w1", "t0")},
+                              "login_env": {key: "inherited" for key in self.WATCHED}})
+        for profile in ("other", "minimax"):
+            result, text = self.call(session, "spawn", dict(self.ARGS, cli=profile))
+            self.assertFalse(result["isError"], text)
+        self.assertEqual(self.overlays(), [{"ANTHROPIC_MODEL": "other-model"}, self.MINIMAX["env"]])
 
     def test_S17_profiles_wrap_each_family_with_prompt_last(self):
         """S17: configured names launch the family's standard argv through the installed shim."""
