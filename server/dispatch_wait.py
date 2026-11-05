@@ -8,7 +8,7 @@ zero-timeout replay: zero skips waiting for events, not the bounded status probe
 import time
 
 from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
-from dispatch_store import STALL_NEXT
+from dispatch_store import NOT_STARTED_NEXT, STALL_NEXT
 from dispatch_events import Listener
 
 RECONCILE_INTERVAL = 0.5
@@ -56,11 +56,18 @@ def reason(batch, target, observations):
             elif runtime in NEEDS_PERSON_STATES:
                 assignment["next"] = UNREPORTED_NEXT if runtime == "unreported" else ERROR_NEXT
     ended = {a["assignment_id"] for a in batch["assignments"] if turn_ended(a, observations)}
+    not_started = set()
     for a in batch["assignments"]:
+        baseline = a.pop("_resume_turn", None)
+        seen = observations.get((a["assignment_id"], "turn"))
+        if (a["state"] == "working" and a.get("runtime_state") in ("idle", "done")
+                and baseline is not None and seen is not None and seen <= baseline):
+            not_started.add(a["assignment_id"])
+            a["attention"], a["next"] = "not_started", NOT_STARTED_NEXT
         # Idle is reported only after this call saw the runtime state (failure wins), and never over an
         # attention that already carries its own next step (unreported/error/ended turn).
         if (a["assignment_id"] not in observations or a.get("runtime_state") in NEEDS_PERSON_STATES
-                or a["assignment_id"] in ended or a["state"] != "working"):
+                or a["assignment_id"] in ended or a["assignment_id"] in not_started or a["state"] != "working"):
             a["_stalled"] = False
         elif a.get("_stalled"):
             a["attention"], a["next"] = "stalled", STALL_NEXT
@@ -72,7 +79,8 @@ def reason(batch, target, observations):
     batch["_attention"] = sum(
         a["state"] in ("blocked", "decision") or
         (a["state"] not in ("complete", "failed") and
-         (a.get("runtime_state") in NEEDS_PERSON_STATES or a["assignment_id"] in ended or a.get("_stalled")))
+         (a.get("runtime_state") in NEEDS_PERSON_STATES or a["assignment_id"] in ended
+          or a["assignment_id"] in not_started or a.get("_stalled")))
         for a in batch["assignments"])
     for a in batch["assignments"]:
         a.pop("turn", None)
@@ -82,7 +90,7 @@ def reason(batch, target, observations):
     if "failed" in states:
         return "failed"
     stuck = any(a.get("runtime_state") in NEEDS_PERSON_STATES and a["state"] != "complete" for a in batch["assignments"])
-    if ended or stuck or any(a.get("_stalled") for a in batch["assignments"]) or states.intersection(("blocked", "decision")):
+    if ended or not_started or stuck or any(a.get("_stalled") for a in batch["assignments"]) or states.intersection(("blocked", "decision")):
         return "attention"
     if not batch["unfinished"]:
         return "completed"
