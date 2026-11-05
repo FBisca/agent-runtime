@@ -6,8 +6,6 @@ import re
 from pathlib import Path
 
 BUILTINS = ("claude", "codex")
-RESERVED_VARIABLES = ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV",
-                      "HERDR_SOCKET_PATH", "HERDR_SESSION", "AGENT_RUNTIME_DISPATCH", "PATH")
 PROVIDER_VARIABLES = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
                       "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
                       "ANTHROPIC_DEFAULT_HAIKU_MODEL")
@@ -52,7 +50,7 @@ def load(env, path=None):
                 problem = "each profile needs an env object"
                 break
             for key, value in overlay.items():
-                if key in RESERVED_VARIABLES:
+                if key.startswith(("HC_", "HERDR_")) or key in ("AGENT_RUNTIME_DISPATCH", "PATH"):
                     problem = "reserved environment variable %s" % key
                     break
                 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str) or "\0" in value:

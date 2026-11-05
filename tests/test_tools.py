@@ -37,6 +37,10 @@ if argv[0] == "run" and replies.get("execute_profile"):
     child = subprocess.run(argv[10:], env=login, text=True, capture_output=True)
     with open(%(overlay)r, "a") as log:
         log.write(child.stdout)
+    artifacts = {"argv": %(log)r, "config": argv[12], "overlay": %(overlay)r}
+    with open(%(overlay)r + ".audit", "w") as audit:
+        json.dump({name: login["PROFILE_TEST_SECRET"].encode() in open(path, "rb").read()
+                   for name, path in artifacts.items()}, audit)
     if child.returncode:
         if login["PROFILE_TEST_SECRET"] in child.stderr:
             sys.stderr.write("secret-leaked ")
@@ -353,6 +357,9 @@ class SpawnTests(ToolCase):
 
 class ProfileTests(ToolCase):
     ARGS = {"kind": "worker", "name": "w1", "task": "profile task", "cwd": "/tmp"}
+    PROMPT = "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
+    BUILTIN_PROGRAMS = {"claude": ["claude", "--agent", "implementer", "--permission-mode", "auto", PROMPT],
+                        "codex": ["codex", "--no-daemon", "CODEX IMPLEMENTER RULES\n\n" + PROMPT]}
 
     def config(self, profiles):
         path = self.dir / "home" / ".config" / "agent-runtime" / "profiles.json"
@@ -389,8 +396,8 @@ class ProfileTests(ToolCase):
         self.assertFalse(result["isError"], text)
         self.assertEqual(json.loads((self.dir / "overlay").read_text()), {"ANTHROPIC_MODEL": "profile-model"})
 
-    def test_S18_reference_expansion_is_launcher_only_and_missing_reference_fails(self):
-        """S18: references resolve in the login environment without persisting the secret."""
+    def test_S18_private_references_and_failures_within_startup_window(self):
+        """S18: references stay private; diagnostics and exits inside the startup window fail launch."""
         path = self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$ANTHROPIC_API_KEY"}}})
         program = self.dir / "bin" / "claude"
         program.write_text("#!%s\nimport hashlib, os\nassert 'ANTHROPIC_API_KEY' not in os.environ\nassert hashlib.sha256(os.environ['ANTHROPIC_AUTH_TOKEN'].encode()).hexdigest() == os.environ['PROFILE_TEST_DIGEST']\nprint('reference-ok')\n" % sys.executable)
@@ -399,6 +406,8 @@ class ProfileTests(ToolCase):
                              {"ANTHROPIC_API_KEY": "server-value-must-not-be-used", "AGENT_RUNTIME_DISPATCH": "1"})
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
         self.assertFalse(result["isError"], text)
+        self.assertEqual(json.loads((self.dir / "overlay.audit").read_text()),
+                         {"argv": False, "config": False, "overlay": False})
         self.assertEqual((self.dir / "overlay").read_text(), "reference-ok\n")
         self.assertNotIn("server-value-must-not-be-used", self.log.read_text())
         self.assertIn("$ANTHROPIC_API_KEY", path.read_text())
@@ -424,6 +433,22 @@ class ProfileTests(ToolCase):
                 self.assertIn("MISSING_PROFILE_SECRET", text)
                 self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
                 from dispatch_store import Store
+                with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+                    self.assertEqual(db.execute("SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1").fetchone()[0], "failed")
+                    self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
+        # Exits observed inside the startup window are failures even without a diagnostic.
+        for state in ("finished", "exited"):
+            with self.subTest(state=state):
+                replies = json.loads((self.dir / "replies").read_text())
+                replies.update(execute_profile=False, profile_ready_at=0)
+                replies["get:w1"] = {"out": json.dumps({"address": "t9", "parent": "t0", "state": state})}
+                replies["read:w1"] = {"out": ""}
+                (self.dir / "replies").write_text(json.dumps(replies))
+                result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
+                self.assertTrue(result["isError"])
+                self.assertIn("w1", text)
+                self.assertIn("launcher exited", text)
+                self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
                 with Store({"HOME": str(self.dir / "home")}).transaction() as db:
                     self.assertEqual(db.execute("SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1").fetchone()[0], "failed")
                     self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
@@ -454,9 +479,7 @@ class ProfileTests(ToolCase):
         path.unlink()
         tools = session.send("tools/list")["result"]["tools"]
         self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex"])
-        prompt = "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
-        for family, program in (("claude", ["claude", "--agent", "implementer", "--permission-mode", "auto", prompt]),
-                                ("codex", ["codex", "--no-daemon", "CODEX IMPLEMENTER RULES\n\n" + prompt])):
+        for family, program in self.BUILTIN_PROGRAMS.items():
             result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
             self.assertFalse(result["isError"], text)
             self.assertEqual(self.runs("run")[-1], ["run", "--bg", "--name", "w1", "--cwd", "/tmp", "--parent", "t0",
@@ -467,17 +490,14 @@ class ProfileTests(ToolCase):
         config = self.config({"custom-claude": {"cli": "claude", "env": {}},
                      "custom-codex": {"cli": "codex", "env": {}}})
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
-        for family, prefix in (("claude", ["claude", "--agent", "implementer", "--permission-mode", "auto"]),
-                               ("codex", ["codex", "--no-daemon"])):
+        for family, builtin in self.BUILTIN_PROGRAMS.items():
             with self.subTest(family=family):
                 result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom-" + family, model="sample"))
                 self.assertFalse(result["isError"], text)
                 argv = self.runs("run")[-1][10:]
-                self.assertEqual(argv[:4], [str(SERVER.parent.parent / "bin" / "agent-runtime-profile"),
-                                           "custom-" + family, str(config), "--"])
-                self.assertEqual(argv[4:-1], prefix + ["--model", "sample"])
-                self.assertTrue(argv[-1].endswith("When done or stuck, call the agent-runtime report tool with your result."))
-                self.assertIn("profile task", argv[-1])
+                self.assertEqual(argv, [str(SERVER.parent.parent / "bin" / "agent-runtime-profile"),
+                                        "custom-" + family, str(config), "--"] +
+                                 builtin[:-1] + ["--model", "sample"] + builtin[-1:])
 
 
 class SendTests(ToolCase):

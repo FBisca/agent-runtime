@@ -18,6 +18,8 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 COLLECT_LINES = 200
 HISTORY_LINES = 1000
 SHORT_SECONDS = 30
+# Configured launches get at most one second to expose a diagnostic or terminal exit.
+PROFILE_STARTUP_WINDOW_SECONDS = 1.0
 WAIT_DEFAULT, WAIT_MAX = 170, 590
 KINDS = ("worker", "lookup")
 CLIS = profiles.BUILTINS
@@ -257,20 +259,29 @@ def owned_orphan(name, caller, env, earlier, other):
 
 def profile_launch_error(name, env, ctx):
     """Allow a bounded startup window for a launcher diagnostic, including a delayed exit."""
-    deadline = time.monotonic() + 1
-    for _ in range(10):
+    deadline = time.monotonic() + PROFILE_STARTUP_WINDOW_SECONDS
+    while time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         if ctx.cancelled.is_set():
             return ToolError("cancelled")
+        exited = False
         try:
-            screen = hc(["read", name, "--lines", "30"], env, ctx, min(0.2, remaining))
+            raw = json.loads(hc(["get", name, "--json"], env, ctx, min(0.2, remaining)))
+            exited = isinstance(raw, dict) and lib.hc_state(raw) == "exited"
+        except (ToolError, ValueError):
+            pass
+        remaining = deadline - time.monotonic()
+        try:
+            screen = hc(["read", name, "--lines", "30"], env, ctx, min(0.2, remaining)) if remaining > 0 else ""
         except ToolError:
             screen = ""
         for line in screen.splitlines():
             if line.startswith("agent-runtime-profile:"):
                 return ToolError(line)
+        if exited:
+            return ToolError("worker %s launcher exited during startup" % name)
         ctx.cancelled.wait(min(0.05, max(0, deadline - time.monotonic())))
     return None
 

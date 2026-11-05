@@ -16,6 +16,43 @@ from test_mcp_server import SERVER
 
 MAX_PERIOD_WAITS = 4
 
+PROFILE_ENV_PROBE = '''import json, os, subprocess, sys, tempfile
+sys.path.insert(0, sys.argv[2] + '/server')
+import profiles
+name = sys.argv[1]
+env = dict(os.environ)
+overlay = profiles.load(env, sys.argv[3])[name]['env']
+references = [value[1:] for key, value in overlay.items() if key in profiles.PROVIDER_VARIABLES and value.startswith('$')]
+if not references:
+    print('profile-env-skip: requires a provider $NAME reference')
+    sys.exit(0)
+source = references[0]
+if source not in env:
+    print('profile-env-skip: login session lacks ' + source)
+    sys.exit(0)
+# Seed every provider setting, so each omitted setting must actually be scrubbed.
+env.update({key: 'inherited-probe-value' for key in profiles.PROVIDER_VARIABLES if key != source})
+base = {key: 'profile-probe-value' for key in profiles.PROVIDER_VARIABLES}
+for key in ('ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'):
+    base[key] = '$' + source
+launcher = sys.argv[2] + '/bin/agent-runtime-profile'
+check = "import json,os,sys; expected=json.load(sys.stdin); assert all(os.environ.get(k)==v for k,v in expected.items()); print('probe-case-ok')"
+with tempfile.TemporaryDirectory(prefix='agent-runtime-profile-matrix-') as directory:
+    path = directory + '/profiles.json'
+    for omitted in (None,) + profiles.PROVIDER_VARIABLES:
+        case = {key: value for key, value in base.items() if key != omitted}
+        # The temporary config holds references and nonsecret sentinel values only.
+        with open(path, 'w') as config:
+            json.dump({'profiles': {'probe': {'cli': 'claude', 'env': case}}}, config)
+        expected = {key: None for key in profiles.PROVIDER_VARIABLES}
+        expected.update({key: env[value[1:]] if value.startswith('$') else value for key, value in case.items()})
+        child = subprocess.run([launcher, 'probe', path, '--', sys.executable, '-B', '-c', check],
+                               env=env, input=json.dumps(expected), capture_output=True, text=True, timeout=10)
+        if child.returncode or child.stdout.strip() != 'probe-case-ok':
+            sys.exit('profile-env-failed: ' + (omitted or 'all providers'))
+print('profile-env-ok: 8 cases')
+'''
+
 
 class Lead:
     """The server under test as an MCP stdio subprocess; every stdout line must parse as JSON."""
@@ -74,6 +111,22 @@ def large_body(nonce, kb=60):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_S18_S19_live_probe_requires_reference_and_tests_every_provider(self):
+        """S18 S19: the live probe skips vacuous inputs and verifies each provider set and scrubbed."""
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "profiles.json"
+            cases = [({}, "profile-env-skip: requires a provider $NAME reference"),
+                     ({"ANTHROPIC_AUTH_TOKEN": "$ABSENT_LIVE_SOURCE"}, "profile-env-skip: login session lacks ABSENT_LIVE_SOURCE"),
+                     ({"ANTHROPIC_AUTH_TOKEN": "$LIVE_SOURCE"}, "profile-env-ok: 8 cases")]
+            for overlay, expected in cases:
+                with self.subTest(overlay=overlay):
+                    config.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": overlay}}}))
+                    done = subprocess.run([sys.executable, "-B", "-c", PROFILE_ENV_PROBE, "custom",
+                                           str(SERVER.parent.parent), str(config)], capture_output=True, text=True,
+                                          env={"PATH": os.environ["PATH"], "LIVE_SOURCE": "synthetic-test-value"}, timeout=20)
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    self.assertEqual(done.stdout.strip(), expected)
+
     def test_harness_accepts_name_arguments(self):
         """agent-runtime/R57"""
         lead = object.__new__(Lead)
@@ -103,29 +156,7 @@ class LiveProfileTests(unittest.TestCase):
         root = str(SERVER.parent.parent)
         # The probe's parent computes expectations in the login environment. Values travel
         # over an anonymous pipe only; neither argv nor terminal output contains them.
-        probe = '''import json, os, sys
-sys.path.insert(0, sys.argv[2] + '/server')
-import profiles
-name = sys.argv[1]
-env = dict(os.environ)
-overlay = profiles.load(env, sys.argv[3])[name]['env']
-expected = {key: None for key in profiles.PROVIDER_VARIABLES}
-expected.update({key: env[value[1:]] if value.startswith('$') else value for key, value in overlay.items()})
-read, write = os.pipe()
-pid = os.fork()
-if pid == 0:
-    os.close(write)
-    os.dup2(read, 0)
-    os.close(read)
-    check = "import json,os,sys; expected=json.load(sys.stdin); assert all(os.environ.get(k)==v for k,v in expected.items()); print('profile-env-ok')"
-    launcher = sys.argv[2] + '/bin/agent-runtime-profile'
-    os.execvpe(launcher, [launcher, name, sys.argv[3], '--', sys.executable, '-B', '-c', check], env)
-os.close(read)
-with os.fdopen(write, 'w') as pipe:
-    json.dump(expected, pipe)
-_, status = os.waitpid(pid, 0)
-sys.exit(os.waitstatus_to_exitcode(status))
-'''
+        probe = PROFILE_ENV_PROBE
         suffix = secrets.token_hex(3)
         probe_name, worker_name = "live-profile-probe-" + suffix, "live-profile-" + suffix
         with tempfile.TemporaryDirectory(prefix="agent-runtime-profile-") as work:
@@ -139,7 +170,10 @@ sys.exit(os.waitstatus_to_exitcode(status))
                                capture_output=True, text=True, check=True, timeout=40)
                 screen = subprocess.run(["hc", "read", probe_name, "--lines", "30"],
                                         capture_output=True, text=True, check=True, timeout=10).stdout
-                self.assertIn("profile-env-ok", screen)
+                for line in screen.splitlines():
+                    if line.startswith("profile-env-skip:"):
+                        self.skipTest(line)
+                self.assertIn("profile-env-ok: 8 cases", screen)
             finally:
                 for verb in ("kill", "rm"):
                     subprocess.run(["hc", verb, probe_name], capture_output=True, timeout=10)

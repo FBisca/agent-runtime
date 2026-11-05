@@ -64,7 +64,8 @@ class SpawnCleanupTests(ToolCase):
         path = self.dir / "profiles.json"
         lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
         for variable in ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV",
-                         "HERDR_SOCKET_PATH", "HERDR_SESSION", "AGENT_RUNTIME_DISPATCH", "PATH"):
+                         "HERDR_SOCKET_PATH", "HERDR_SESSION", "AGENT_RUNTIME_DISPATCH", "PATH",
+                         "HC_SESSION", "HERDR_FUTURE_CONTROL", "HERDR_PLUGIN_TEST"):
             with self.subTest(variable=variable):
                 path.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": {variable: "changed"}}}}))
                 result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
