@@ -661,6 +661,23 @@ class Store:
                     "SELECT DISTINCT j.value FROM receipts r, json_each(r.ids) j WHERE r.team=? AND r.recipient=? "
                     "AND j.value IN (%s)" % ",".join("?" for _ in ids), [team, recipient] + ids)}
                 undelivered = [m["message_id"] for m in messages if m["message_id"] not in named]
+                if target == "all" and more and not undelivered:
+                    # A replay-only first page must not hide new reports behind it. Keep
+                    # replay rows unacked and select only new rows for this wait page.
+                    unseen = query + (" AND NOT EXISTS (SELECT 1 FROM receipts r, json_each(r.ids) j "
+                                      "WHERE r.team=messages.team AND r.recipient=messages.recipient "
+                                      "AND j.value=messages.id) ORDER BY seq")
+                    fresh, size = [], 2
+                    for row in db.execute(unseen, params):
+                        body = row[0]
+                        entry_size = len(body.encode("utf-8")) + (1 if fresh else 0)
+                        if len(fresh) >= MAX_MESSAGES or size + entry_size > limit:
+                            break
+                        fresh.append(json.loads(body))
+                        size += entry_size
+                    if fresh:
+                        messages = fresh
+                        undelivered = [m["message_id"] for m in fresh]
             batch = {"reason": reason, "messages": messages, "assignments": assignments,
                      "unfinished": unfinished, "receipt": None, "more": more, "_undelivered": undelivered}
             if ready is not None and not inbox:

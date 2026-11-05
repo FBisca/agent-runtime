@@ -480,6 +480,26 @@ class EventWaitTests(ToolCase):
         third = dispatch_wait.wait(store, team, "t0", "all", 0, first["receipt"], hc_tools.Context(), lambda *_: {})
         self.assertEqual(third["messages"], [])
 
+    def test_S1_new_report_behind_unacknowledged_replay_page(self):
+        """S1/S2: a full replay page cannot hide a new report; old reports remain readable."""
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("events", "t0", "lead")
+        assignment = store.register(team, "w1")["assignment_id"]
+        store.bind(assignment, "t1", "events")
+        old = [store.publish("events", "t1", "t0", assignment, str(i), "progress") for i in range(2)]
+        with mock.patch.object(dispatch_store, "MAX_MESSAGES", 2):
+            first = dispatch_wait.wait(store, team, "t0", "all", 0, None, hc_tools.Context(), lambda *_: {})
+            self.assertEqual(first["messages"], old)
+            new = store.publish("events", "t1", "t0", assignment, "new", "progress")
+            batch = dispatch_wait.wait(store, team, "t0", "all", 0, None, hc_tools.Context(), lambda *_: {})
+            self.assertEqual(batch["reason"], "messages")
+            self.assertIn(new, batch["messages"])
+            with store.transaction() as db:
+                ids = json.loads(db.execute("SELECT ids FROM receipts WHERE id=?", (batch["receipt"],)).fetchone()[0])
+            self.assertEqual(ids, [m["message_id"] for m in batch["messages"]])
+            replay = store.read(team, "t0", "all", issue_receipt=False)
+            self.assertEqual(replay["messages"], old)
+
     def test_S4_wait_all_returns_completed_with_the_reports_and_writes_last_wait(self):
         """S4: every selected assignment complete -> completed, the reports, an empty unfinished list and the
         last_wait row written in the same transaction as the receipt."""
