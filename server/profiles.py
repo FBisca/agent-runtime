@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 
 BUILTINS = ("claude", "codex")
+RESERVED_VARIABLES = ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV",
+                      "HERDR_SOCKET_PATH", "HERDR_SESSION", "AGENT_RUNTIME_DISPATCH", "PATH")
 PROVIDER_VARIABLES = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
                       "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
                       "ANTHROPIC_DEFAULT_HAIKU_MODEL")
@@ -21,11 +23,11 @@ def config_path(env):
     if override == "~" or (override and override.startswith("~/")):
         override = home + override[1:]
     return Path(override or
-                Path(env.get("XDG_CONFIG_HOME") or Path(home) / ".config") / "agent-runtime" / "profiles.json")
+                Path(env.get("XDG_CONFIG_HOME") or Path(home) / ".config") / "agent-runtime" / "profiles.json").absolute()
 
 
-def load(env):
-    path = config_path(env)
+def load(env, path=None):
+    path = Path(path) if path is not None else config_path(env)
     try:
         with path.open(encoding="utf-8") as handle:
             data = json.load(handle)
@@ -50,11 +52,17 @@ def load(env):
                 problem = "each profile needs an env object"
                 break
             for key, value in overlay.items():
+                if key in RESERVED_VARIABLES:
+                    problem = "reserved environment variable %s" % key
+                    break
                 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str) or "\0" in value:
                     problem = "env requires variable names and string values without NUL"
                     break
                 if value.startswith("$") and not re.fullmatch(r"\$[A-Za-z_][A-Za-z0-9_]*", value):
                     problem = "env references must be $NAME"
+                    break
+                if key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY") and not value.startswith("$"):
+                    problem = "%s requires a $NAME credential reference" % key
                     break
             if problem:
                 break
@@ -72,10 +80,10 @@ def cli_names(env):
 
 def launch(argv, env):
     """Resolve references here, immediately before exec; never pass values through argv."""
-    if len(argv) < 3 or argv[1] != "--":
-        raise ProfileError("usage: agent-runtime-profile <profile> -- <program> <args...>")
-    name, program = argv[0], argv[2:]
-    configured = load(env)
+    if len(argv) < 4 or argv[2] != "--":
+        raise ProfileError("usage: agent-runtime-profile <profile> <config-path> -- <program> <args...>")
+    name, program = argv[0], argv[3:]
+    configured = load(env, argv[1])
     if name not in configured:
         raise ProfileError("unknown CLI profile %r" % name)
     family = configured[name]["cli"]
@@ -91,7 +99,11 @@ def launch(argv, env):
         overlay[key] = value
     worker_env = {key: value for key, value in env.items() if key not in PROVIDER_VARIABLES}
     worker_env.update(overlay)
-    os.execvpe(program[0], program, worker_env)
+    try:
+        os.execvpe(program[0], program, worker_env)
+    except (OSError, ValueError) as error:
+        # execvpe's filename may come from PATH and contain a resolved credential.
+        raise ProfileError("cannot exec %s" % program[0]) from error
 
 
 if __name__ == "__main__":
@@ -99,6 +111,6 @@ if __name__ == "__main__":
 
     try:
         launch(sys.argv[1:], os.environ)
-    except (ProfileError, OSError) as error:
+    except ProfileError as error:
         print("agent-runtime-profile: %s" % error, file=sys.stderr)
         sys.exit(1)

@@ -15,28 +15,41 @@ from test_mcp_server import SERVER, Session
 sys.path.insert(0, str(SERVER.parent))
 
 FAKE = '''#!%(python)s
-import json, os, secrets, subprocess, sys, time
+import hashlib, json, os, secrets, subprocess, sys, time
 argv = sys.argv[1:]
 with open(%(log)r, "a") as log:
     log.write(json.dumps(argv) + "\\n")
 replies = json.load(open(%(replies)r))
 key = argv[0] + ":" + argv[1] if len(argv) > 1 and argv[0] + ":" + argv[1] in replies else argv[0]
 reply = replies.get(key, {"rc": 0, "out": ""})
+if replies.get("profile_ready_at") and argv[0] == "read":
+    if time.monotonic() < replies["profile_ready_at"]:
+        reply = {"out": ""}
 # Execute only opt-in test programs, using a simulated login environment. Log no full environment.
 if argv[0] == "run" and replies.get("execute_profile"):
     login = dict(os.environ)
     login.update(replies.get("login_env", {}))
     login["PROFILE_TEST_SECRET"] = secrets.token_hex(24)
+    login["ANTHROPIC_API_KEY"] = login["PROFILE_TEST_SECRET"]
+    login["PROFILE_TEST_DIGEST"] = hashlib.sha256(login["PROFILE_TEST_SECRET"].encode()).hexdigest()
+    if replies.get("exec_failure_path"):
+        login["PATH"] = replies["exec_failure_path"] + ":/" + login["PROFILE_TEST_SECRET"]
     child = subprocess.run(argv[10:], env=login, text=True, capture_output=True)
     with open(%(overlay)r, "a") as log:
         log.write(child.stdout)
     if child.returncode:
+        if login["PROFILE_TEST_SECRET"] in child.stderr:
+            sys.stderr.write("secret-leaked ")
+            sys.exit(1)
         if not replies.get("profile_exit"):
             sys.stderr.write(child.stderr)
             sys.exit(child.returncode)
         replies["read:w1"] = {"out": child.stderr}
         replies["get:w1"] = {"out": json.dumps({"address": "t9", "parent": "t0", "state": "finished"})}
-        reply = {"out": json.dumps({"first_message": {"sent": replies["profile_exit"] == "sent"}})}
+        if replies["profile_exit"] == "delayed":
+            replies["profile_ready_at"] = time.monotonic() + 0.3
+            replies["get:w1"] = {"out": json.dumps({"address": "t9", "parent": "t0", "state": "live"})}
+        reply = {"out": json.dumps({"first_message": {"sent": replies["profile_exit"] != "unsent"}})}
         json.dump(replies, open(%(replies)r, "w"))
 # Opt-in live-name model: replies["live"] lists terminal names; hc run refuses a live name like real hc.
 if "live" in replies and argv[0] in ("run", "rm"):
@@ -347,6 +360,20 @@ class ProfileTests(ToolCase):
         path.write_text(json.dumps({"profiles": profiles}))
         return path
 
+    def test_S26_exec_failure_never_echoes_expanded_secret(self):
+        """S26: exec errors name the program without leaking a path containing a credential."""
+        self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$PROFILE_TEST_SECRET"}}})
+        bindir = self.dir / "launcher-bin"
+        bindir.mkdir()
+        (bindir / "python3").symlink_to(sys.executable)
+        (bindir / "dirname").symlink_to("/usr/bin/dirname")
+        session = self.start({"execute_profile": True, "exec_failure_path": str(bindir)})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
+        self.assertTrue(result["isError"])
+        self.assertNotIn("secret-leaked", text)
+        self.assertIn("cannot exec claude", text)
+        self.assertNotIn(str(bindir), text)
+
     def test_S19_profile_scrubs_unset_provider_variables(self):
         """S19: only explicitly configured provider settings reach the worker."""
         providers = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
@@ -364,17 +391,18 @@ class ProfileTests(ToolCase):
 
     def test_S18_reference_expansion_is_launcher_only_and_missing_reference_fails(self):
         """S18: references resolve in the login environment without persisting the secret."""
-        path = self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$PROFILE_TEST_SECRET"}}})
+        path = self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$ANTHROPIC_API_KEY"}}})
         program = self.dir / "bin" / "claude"
-        program.write_text("#!%s\nimport os\nassert os.environ['ANTHROPIC_AUTH_TOKEN'] == os.environ['PROFILE_TEST_SECRET']\nprint('reference-ok')\n" % sys.executable)
+        program.write_text("#!%s\nimport hashlib, os\nassert 'ANTHROPIC_API_KEY' not in os.environ\nassert hashlib.sha256(os.environ['ANTHROPIC_AUTH_TOKEN'].encode()).hexdigest() == os.environ['PROFILE_TEST_DIGEST']\nprint('reference-ok')\n" % sys.executable)
         program.chmod(0o755)
         session = self.start({"execute_profile": True, "live": [], "get:w1": {"out": raw("w1", "t0")}},
-                             {"PROFILE_TEST_SECRET": "server-value-must-not-be-used"})
+                             {"ANTHROPIC_API_KEY": "server-value-must-not-be-used", "AGENT_RUNTIME_DISPATCH": "1"})
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
         self.assertFalse(result["isError"], text)
         self.assertEqual((self.dir / "overlay").read_text(), "reference-ok\n")
         self.assertNotIn("server-value-must-not-be-used", self.log.read_text())
-        self.assertIn("$PROFILE_TEST_SECRET", path.read_text())
+        self.assertIn("$ANTHROPIC_API_KEY", path.read_text())
+        self.call(session, "stop", {"name": "w1"})
         replies = json.loads((self.dir / "replies").read_text())
         replies["live"] = []
         (self.dir / "replies").write_text(json.dumps(replies))
@@ -385,7 +413,7 @@ class ProfileTests(ToolCase):
         self.assertIn("agent-runtime-profile", text)
         self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
         # hc can accept the launch before the shim exits; its screen then holds the error.
-        for delivery in ("unsent", "sent"):
+        for delivery in ("unsent", "sent", "delayed"):
             with self.subTest(delivery=delivery):
                 replies = json.loads((self.dir / "replies").read_text())
                 replies["profile_exit"] = delivery
@@ -395,6 +423,10 @@ class ProfileTests(ToolCase):
                 self.assertIn("agent-runtime-profile:", text)
                 self.assertIn("MISSING_PROFILE_SECRET", text)
                 self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
+                from dispatch_store import Store
+                with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+                    self.assertEqual(db.execute("SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1").fetchone()[0], "failed")
+                    self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
 
     def test_S22_override_replaces_default_config_for_schema_and_launcher(self):
         """S22: AGENT_RUNTIME_PROFILES selects a different file for listing and launching."""
@@ -404,7 +436,9 @@ class ProfileTests(ToolCase):
         program = self.dir / "bin" / "claude"
         program.write_text("#!%s\nimport os\nprint(os.environ['PROFILE_MARKER'])\n" % sys.executable)
         program.chmod(0o755)
-        session = self.start({"execute_profile": True, "get:w1": {"out": raw("w1", "t0")}},
+        session = self.start({"execute_profile": True, "get:w1": {"out": raw("w1", "t0")},
+                              "login_env": {"AGENT_RUNTIME_PROFILES": str(self.dir / "wrong.json"),
+                                            "XDG_CONFIG_HOME": "/wrong"}},
                              {"AGENT_RUNTIME_PROFILES": "~/alternate.json"})
         tools = session.send("tools/list")["result"]["tools"]
         self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "selected"])
@@ -430,7 +464,7 @@ class ProfileTests(ToolCase):
 
     def test_S17_profiles_wrap_each_family_with_prompt_last(self):
         """S17: configured names launch the family's standard argv through the installed shim."""
-        self.config({"custom-claude": {"cli": "claude", "env": {}},
+        config = self.config({"custom-claude": {"cli": "claude", "env": {}},
                      "custom-codex": {"cli": "codex", "env": {}}})
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
         for family, prefix in (("claude", ["claude", "--agent", "implementer", "--permission-mode", "auto"]),
@@ -439,9 +473,9 @@ class ProfileTests(ToolCase):
                 result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom-" + family, model="sample"))
                 self.assertFalse(result["isError"], text)
                 argv = self.runs("run")[-1][10:]
-                self.assertEqual(argv[:3], [str(SERVER.parent.parent / "bin" / "agent-runtime-profile"),
-                                           "custom-" + family, "--"])
-                self.assertEqual(argv[3:-1], prefix + ["--model", "sample"])
+                self.assertEqual(argv[:4], [str(SERVER.parent.parent / "bin" / "agent-runtime-profile"),
+                                           "custom-" + family, str(config), "--"])
+                self.assertEqual(argv[4:-1], prefix + ["--model", "sample"])
                 self.assertTrue(argv[-1].endswith("When done or stuck, call the agent-runtime report tool with your result."))
                 self.assertIn("profile task", argv[-1])
 

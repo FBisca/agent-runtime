@@ -108,7 +108,7 @@ sys.path.insert(0, sys.argv[2] + '/server')
 import profiles
 name = sys.argv[1]
 env = dict(os.environ)
-overlay = profiles.load(env)[name]['env']
+overlay = profiles.load(env, sys.argv[3])[name]['env']
 expected = {key: None for key in profiles.PROVIDER_VARIABLES}
 expected.update({key: env[value[1:]] if value.startswith('$') else value for key, value in overlay.items()})
 read, write = os.pipe()
@@ -119,7 +119,7 @@ if pid == 0:
     os.close(read)
     check = "import json,os,sys; expected=json.load(sys.stdin); assert all(os.environ.get(k)==v for k,v in expected.items()); print('profile-env-ok')"
     launcher = sys.argv[2] + '/bin/agent-runtime-profile'
-    os.execvpe(launcher, [launcher, name, '--', sys.executable, '-B', '-c', check], env)
+    os.execvpe(launcher, [launcher, name, sys.argv[3], '--', sys.executable, '-B', '-c', check], env)
 os.close(read)
 with os.fdopen(write, 'w') as pipe:
     json.dump(expected, pipe)
@@ -132,7 +132,7 @@ sys.exit(os.waitstatus_to_exitcode(status))
             try:
                 started = subprocess.run(["hc", "run", "--bg", "--name", probe_name, "--cwd", work,
                                           "--parent", os.environ["HC_TERMINAL_ID"], "--json", "--no-notify",
-                                          sys.executable, "-B", "-c", probe, selected, root],
+                                          sys.executable, "-B", "-c", probe, selected, root, str(profiles.config_path(os.environ))],
                                          capture_output=True, text=True, timeout=30)
                 self.assertEqual(started.returncode, 0, started.stderr)
                 subprocess.run(["hc", "wait", probe_name, "--timeout", "30"],

@@ -33,6 +33,8 @@ class SpawnCleanupTests(ToolCase):
         path = self.dir / "profiles.json"
         lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
         for body in ('{', '[]', '{}', '{"profiles": []}', '{"profiles": {"custom": null}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "literal-secret"}}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "literal-secret"}}}}',
                      '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": 1}}}}',
                      '{"profiles": {"custom": {"cli": "claude", "env": {"BAD=NAME": "x"}}}}',
                      '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": "$"}}}}'):
@@ -56,6 +58,22 @@ class SpawnCleanupTests(ToolCase):
         self.assertIn("custom", text)
         self.assertEqual(self.runs("run"), [])
         self.assertEqual(self.removed(), [])
+
+    def test_S25_control_plane_environment_is_rejected_before_run(self):
+        """S25: profiles cannot rewrite runtime identity, dispatch or executable lookup."""
+        path = self.dir / "profiles.json"
+        lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
+        for variable in ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV",
+                         "HERDR_SOCKET_PATH", "HERDR_SESSION", "AGENT_RUNTIME_DISPATCH", "PATH"):
+            with self.subTest(variable=variable):
+                path.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": {variable: "changed"}}}}))
+                result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
+                self.assertTrue(result["isError"])
+                self.assertIn("reserved", text)
+                self.assertIn(variable, text)
+                self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
     def removed(self):
         return [c[:2] for c in self.runs() if c[0] in ("kill", "rm")]

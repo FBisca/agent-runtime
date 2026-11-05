@@ -1,5 +1,6 @@
 #!/bin/sh
 # Resolve this script through symlinks, then run the worker-side profile launcher.
+# Usage: agent-runtime-profile <profile> <config-path> -- <program> <args...>
 set -eu
 self=$0
 while [ -L "$self" ]; do

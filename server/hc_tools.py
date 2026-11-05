@@ -256,14 +256,22 @@ def owned_orphan(name, caller, env, earlier, other):
 
 
 def profile_launch_error(name, env, ctx):
-    """A launcher that exited before CLI readiness leaves its diagnostic on the screen."""
-    try:
-        screen = hc(["read", name, "--lines", "30"], env, ctx)
-    except ToolError:
-        return None
-    for line in screen.splitlines():
-        if line.startswith("agent-runtime-profile:"):
-            return ToolError(line)
+    """Allow a bounded startup window for a launcher diagnostic, including a delayed exit."""
+    deadline = time.monotonic() + 1
+    for _ in range(10):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if ctx.cancelled.is_set():
+            return ToolError("cancelled")
+        try:
+            screen = hc(["read", name, "--lines", "30"], env, ctx, min(0.2, remaining))
+        except ToolError:
+            screen = ""
+        for line in screen.splitlines():
+            if line.startswith("agent-runtime-profile:"):
+                return ToolError(line)
+        ctx.cancelled.wait(min(0.05, max(0, deadline - time.monotonic())))
     return None
 
 
@@ -307,7 +315,7 @@ def spawn(arguments, env, ctx):
         program = ["codex", "--no-daemon"] + model + ["%s\n\n%s" % (codex_instructions(agent), message)]
     if profile:
         launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agent-runtime-profile")
-        program = [os.path.normpath(launcher), profile, "--"] + program
+        program = [os.path.normpath(launcher), profile, str(profiles.config_path(env)), "--"] + program
     if store:
         earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)
@@ -367,13 +375,14 @@ def spawn(arguments, env, ctx):
     except ValueError:
         started = {}
     sent = (started.get("first_message") or {}).get("sent") if isinstance(started, dict) else None
-    if sent is False:
-        error = profile_launch_error(name, env, ctx) if profile else None
+    if profile:
+        error = profile_launch_error(name, env, ctx)
         if error:
             if store:
                 undo(error)
             discard(name, env)
             raise error
+    if sent is False:
         if not store:
             raise ToolError("worker %s started but its task was not sent: hc read %s; no blind resend" % (name, name))
         undo(ToolError("worker %s started but its task was not sent and was removed; spawn it again" % name))
@@ -386,13 +395,6 @@ def spawn(arguments, env, ctx):
         turn = raw.get("turn")
     except (ToolError, ValueError, AttributeError):
         pass
-    if profile and isinstance(raw, dict) and lib.hc_state(raw) == "exited":
-        error = profile_launch_error(name, env, ctx)
-        if error:
-            if store:
-                undo(error)
-            discard(name, env)
-            raise error
     if not store:
         return result(info)
     if ctx.cancelled.is_set():
