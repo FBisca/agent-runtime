@@ -1,0 +1,12 @@
+#!/bin/sh
+# Resolve this script through symlinks, then run the worker-side profile launcher.
+# Usage: agent-runtime-profile <profile> <config-path> -- <program> <args...>
+set -eu
+self=$0
+while [ -L "$self" ]; do
+  dir=$(cd "$(dirname "$self")" && pwd)
+  self=$(readlink "$self")
+  case $self in /*) ;; *) self=$dir/$self ;; esac
+done
+root=$(cd "$(dirname "$self")/.." && pwd)
+exec python3 -B "$root/server/profiles.py" "$@"

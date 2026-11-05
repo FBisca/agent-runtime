@@ -17,6 +17,65 @@ ARGS = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}
 
 
 class SpawnCleanupTests(ToolCase):
+    def test_S20_unknown_profile_is_rejected_before_hc_run(self):
+        """S20: unknown profile names register no assignment and start no terminal."""
+        lead = self.start({}, ENV)
+        result, text = self.call(lead, "spawn", dict(ARGS, cli="absent-profile"))
+        self.assertTrue(result["isError"])
+        self.assertIn("unknown profile 'absent-profile'", text)
+        self.assertEqual(self.runs("run"), [])
+        self.assertEqual(self.removed(), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
+    def test_S23_malformed_config_falls_back_and_refuses_profiles_before_run(self):
+        """S23: invalid JSON or invalid shape publishes built-ins and explains failed profile spawns."""
+        path = self.dir / "profiles.json"
+        lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
+        for body in ('{', '[]', '{}', '{"profiles": []}', '{"profiles": {"custom": null}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "literal-secret"}}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "literal-secret"}}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": 1}}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"BAD=NAME": "x"}}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": "$"}}}}'):
+            with self.subTest(body=body):
+                path.write_text(body)
+                tools = lead.send("tools/list")["result"]["tools"]
+                self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex"])
+                result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
+                self.assertTrue(result["isError"])
+                self.assertIn("invalid profile config", text)
+                self.assertEqual(self.runs("run"), [])
+
+    def test_S24_unknown_cli_family_is_rejected_before_hc_run(self):
+        """S24: a configured profile cannot launch an unsupported CLI family."""
+        path = self.dir / "profiles.json"
+        path.write_text(json.dumps({"profiles": {"custom": {"cli": "unsupported", "env": {}}}}))
+        lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
+        result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
+        self.assertTrue(result["isError"])
+        self.assertIn("unsupported CLI family 'unsupported'", text)
+        self.assertIn("custom", text)
+        self.assertEqual(self.runs("run"), [])
+        self.assertEqual(self.removed(), [])
+
+    def test_S25_control_plane_environment_is_rejected_before_run(self):
+        """S25: profiles cannot rewrite runtime identity, dispatch or executable lookup."""
+        path = self.dir / "profiles.json"
+        lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
+        for variable in ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV",
+                         "HERDR_SOCKET_PATH", "HERDR_SESSION", "AGENT_RUNTIME_DISPATCH", "PATH",
+                         "HC_SESSION", "HERDR_FUTURE_CONTROL", "HERDR_PLUGIN_TEST"):
+            with self.subTest(variable=variable):
+                path.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": {variable: "changed"}}}}))
+                result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
+                self.assertTrue(result["isError"])
+                self.assertIn("reserved", text)
+                self.assertIn(variable, text)
+                self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
     def removed(self):
         return [c[:2] for c in self.runs() if c[0] in ("kill", "rm")]
 

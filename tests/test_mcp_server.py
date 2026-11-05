@@ -145,6 +145,18 @@ class ToolListTests(ServerCase):
             words += sum(len(p.get("description", "").split()) for p in tool["inputSchema"]["properties"].values())
         self.assertLessEqual(words, 400)
 
+    def test_S16_profiles_are_listed_dynamically(self):
+        """S16: tools/list reads configured names on every request."""
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "agent-runtime" / "profiles.json"
+            config.parent.mkdir()
+            session = self.start(env={"XDG_CONFIG_HOME": directory})
+            session.handshake()
+            config.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": {}}}}))
+            tools = session.send("tools/list")["result"]["tools"]
+            self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"],
+                             ["claude", "codex", "custom"])
+
     def test_spawn_schema_has_optional_string_model(self):
         """agent-runtime/R135"""
         session = self.start()

@@ -16,13 +16,13 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 (3.11+) is required" >&2; 
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || { echo "Python 3.11+ is required" >&2; exit 1; }
 
 mkdir -p "$bin_dir"
-for shim in agent-runtime agent-runtime-hook agent-runtime-mcp; do
+for shim in agent-runtime agent-runtime-hook agent-runtime-mcp agent-runtime-profile; do
   if [ -e "$bin_dir/$shim" ] && [ ! -L "$bin_dir/$shim" ]; then
     echo "refusing to overwrite $bin_dir/$shim: not a symlink" >&2
     exit 1
   fi
 done
-for shim in agent-runtime agent-runtime-hook agent-runtime-mcp; do
+for shim in agent-runtime agent-runtime-hook agent-runtime-mcp agent-runtime-profile; do
   ln -sfn "$root/bin/$shim" "$bin_dir/$shim"
   echo "linked $bin_dir/$shim"
 done

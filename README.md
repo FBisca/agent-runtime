@@ -98,6 +98,32 @@ Ask in plain words; the lead agent turns it into tool calls.
 
 `cli` defaults to `claude`. Reports return as tool results; the lead never polls panes.
 
+### CLI profiles
+
+Define local worker profiles in `$XDG_CONFIG_HOME/agent-runtime/profiles.json` (default `~/.config/agent-runtime/profiles.json`), or set `AGENT_RUNTIME_PROFILES` to another path. The repository ships no configured profiles. For example:
+
+```json
+{
+  "profiles": {
+    "custom-worker": {
+      "cli": "claude",
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://provider.example/api",
+        "ANTHROPIC_AUTH_TOKEN": "$WORKER_API_KEY"
+      }
+    }
+  }
+}
+```
+
+Use `spawn(cli="custom-worker", …)`. Each `tools/list` request publishes the built-ins plus the configured names. `cli` selects a `claude` or `codex` family; `model` and `agent` keep that family's normal behavior. Built-in `claude` and `codex` launch exactly as before.
+
+Configured names run through the installed `bin/agent-runtime-profile <profile> <config-path> -- <program> <args...>` launcher. The server passes its resolved absolute config path, so launcher settings cannot select a different file. It clears `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL`, then applies the profile's env and execs the CLI. Other login-session variables remain inherited. `$NAME` references expand from the original launcher environment before scrubbing. `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` require references; literals remain allowed for nonsecret settings such as endpoints and models. Resolved credentials never enter the config, launch argv or temporary files. Exec errors name only the requested program, never a path containing an expanded value. A one-second startup window checks launcher diagnostics and terminal exits, removing failed workers. A launcher failing after this window is not caught by spawn and surfaces instead through `not_started` attention.
+
+Profiles cannot set any variable beginning with `HC_` or `HERDR_`, or the exact names `AGENT_RUNTIME_DISPATCH` and `PATH`. Reserved variables, literal credentials, unknown names and unsupported CLI families fail validation before `hc run`. Malformed config publishes only built-ins and returns an explicit error for configured spawns.
+
+An opt-in live check derives a provider `$NAME` reference from an existing local profile and runs eight launcher probes: every provider variable is seeded in the inherited environment, then tested both configured and omitted, checking expansion and scrubbing without printing values. It skips with a reason if no provider reference exists or its source is unavailable in the login session. Separately, it spawns the selected CLI, requires its report and checks `hc get` detection: `AGENT_RUNTIME_LIVE_PROFILE=<name> python3 -B -m unittest discover -s tests -p test_live_acceptance.py -k test_S17_S18_S19`. Run inside an hc terminal.
+
 ## Requirements
 
 - Python 3.11+
@@ -128,7 +154,7 @@ git clone https://github.com/FBisca/agent-runtime.git
 
 ### Codex
 
-Codex has no plugin marketplace, so it uses shims. `install.sh` links `agent-runtime`, `agent-runtime-hook` and `agent-runtime-mcp` into `~/.local/bin` (override with `BIN_DIR`) and prints a complete, ready-to-paste `~/.codex/config.toml` block. It is idempotent.
+Codex has no plugin marketplace, so it uses shims. `install.sh` links `agent-runtime`, `agent-runtime-hook`, `agent-runtime-mcp` and `agent-runtime-profile` into `~/.local/bin` (override with `BIN_DIR`) and prints a complete, ready-to-paste `~/.codex/config.toml` block. It is idempotent.
 
 ```sh
 ./install.sh
