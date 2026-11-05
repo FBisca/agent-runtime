@@ -88,6 +88,10 @@ def reason(batch, target, observations):
         return "completed"
     if target == "any" and batch["messages"]:
         return "messages"
+    # D2: wait(all) returns the first undelivered report instead of waiting for every assignment.
+    # A report already named by a receipt is delivered: it stays readable, but it does not wake the wait.
+    if target == "all" and batch.get("_undelivered"):
+        return "messages"
     return None
 
 

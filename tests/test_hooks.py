@@ -23,6 +23,8 @@ SHIM = PLUGIN / "bin" / "agent-runtime-hook"
 sys.path.insert(0, str(PLUGIN / "server"))
 import agent_runtime as lib  # noqa: E402
 import dispatch_store  # noqa: E402
+import dispatch_wait  # noqa: E402
+import hc_tools  # noqa: E402
 
 
 def run(script, payload, *args):
@@ -508,6 +510,24 @@ class StopGuardTests(HookStoreCase):
         out, _ = self.stop()
         self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 1)})
         self.assertEqual(self.budget(), 2)
+
+    def test_S3_stop_guard_still_blocks_after_a_partial_wait_result(self):
+        """S3: a partial wait(all) result leaves the last-wait row untouched, so the guard still blocks."""
+        ident = self.unseen()
+        body = json.dumps({"message_id": "m1", "team_id": self.team_id, "worker_id": "w1",
+                           "assignment_id": ident["assignment_id"], "sender": "w1", "recipient": "t0",
+                           "kind": "progress", "text": "half done"}, separators=(",", ":"))
+        self.sql(self.store, "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                 "m1", self.team_id, "t0", ident["assignment_id"], body)
+        self.last_wait(self.store, self.team_id, "timeout", 0)
+        with self.store.transaction() as db:
+            before = tuple(db.execute("SELECT * FROM last_wait WHERE team=?", (self.team_id,)).fetchone())
+        batch = dispatch_wait.wait(self.store, self.team_id, "t0", "all", 0, None, hc_tools.Context(), lambda *_: {})
+        self.assertEqual(batch["reason"], "messages")
+        with self.store.transaction() as db:
+            self.assertEqual(tuple(db.execute("SELECT * FROM last_wait WHERE team=?", (self.team_id,)).fetchone()), before)
+        out, _ = self.stop()
+        self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 0)})
 
     def test_unseen_working_assignment_alone_blocks(self):
         """agent-runtime/R119"""

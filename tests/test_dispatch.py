@@ -232,7 +232,8 @@ class DispatchTests(ToolCase):
         self.assertFalse(last["more"])
 
     def test_exact_compact_array_boundary_and_one_byte_overflow_are_lossless(self):
-        """agent-runtime/R59
+        """S1/S2: new reports behind a full replay page return without losing replay.
+        agent-runtime/R59
         agent-runtime-dispatch/S26"""
         lead = self.lead()
         assignment = self.spawn(lead)
@@ -259,7 +260,8 @@ class DispatchTests(ToolCase):
                 self.assertLessEqual(len(encode(page["messages"])), MAX_BATCH_BYTES)
                 self.assertEqual(page["messages"], [first] if overflow else [first, second])
                 self.assertEqual(page["more"], bool(overflow))
-                self.assertEqual(self.read(lead)["messages"], page["messages"])
+                replay = self.read(lead)
+                self.assertEqual(replay["messages"], [second] if overflow else page["messages"])
                 continuation = self.read(lead, receipt=page["receipt"])
                 self.assertEqual(continuation["messages"], [second] if overflow else [])
                 self.assertFalse(continuation["more"])

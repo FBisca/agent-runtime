@@ -4,7 +4,7 @@
 
 An MCP server that lets coding agents delegate work to other agents, as plain tool calls. Works with any coding agent that speaks MCP; tested with Claude Code and Codex.
 
-A lead agent calls `spawn`, workers run in their own terminal panes, and every report, message and task flows through a durable local store instead of terminal text. Leads block on one `wait` and get results back as tool results, so orchestration stays deterministic, auditable and resumable across both CLIs.
+A lead agent calls `spawn`, workers run in their own terminal panes, and every report, message and task flows through a durable local store instead of terminal text. Leads block on `wait` calls and get results back as tool results, so orchestration stays deterministic, auditable and resumable across both CLIs.
 
 ![agent-runtime architecture](docs/assets/architecture.png)
 
@@ -31,6 +31,7 @@ The same guard and reminders run on Codex through the shim: `agent-runtime-hook 
 
 - Ten tools: `spawn`, `message`, `resume`, `wait`, `status`, `list`, `collect`, `stop`, `report`, `task`.
 - Reports and peer messages as tool results: `wait` returns reports and assignment states together, with `receipt` acknowledgements and `more` continuations that bound payload size.
+- Early delivery: `wait(target=all)` returns as soon as a report is undelivered; `unfinished` names the assignments still open and the lead waits again for the rest.
 - Pull-only delivery: reports landing after a `wait` returns need a new `wait(target=all)`. A lead's `spawn`, `resume` and `message` results carry `unfinished: N` and a `next` hint while N > 0.
 - Durable shared tasks with dependencies and atomic claims (`task`).
 - Idempotent reports: retries are safe, and senders are derived by the server, never self-declared.
