@@ -46,9 +46,9 @@ TOOLS = [
               "Pass task_id to keep the task. Delivery is pull-only: reports landing after this resume returns need a new wait(all).",
      schema({"name": text("worker name"), "task": text("what to do next"),
              "task_id": text("task to move to this assignment")}, ["name", "task"])),
-    ("wait", "Block until children report, need attention or time out (max 590s). target=all returns as soon as a report is "
-             "undelivered: reports, assignment states, unfinished (the work still open) and a receipt. "
-             "Workers: wait per work period; pass receipt and wait for remaining reports. "
+    ("wait", "Block until children report, need attention or time out (max 590s). target=all with workers returns as soon as a report is "
+             "undelivered: reports, assignment states, unfinished (open work), receipt. "
+             "Wait per work period; pass receipt and wait again for remaining reports. "
              "No workers left: use target=inbox for peer messages. "
              "Delivery is pull-only: reports landing after this wait returns need a new wait(all).",
      schema({"target": text("any, all, worker name/ID, or inbox"),
