@@ -307,6 +307,18 @@ class PeerDispatchTests(ToolCase):
         self.assertTrue(final["structuredContent"]["message_id"])
         self.assertEqual(self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))["messages"], [])
 
+    def test_stop_wakes_an_already_pending_wait(self):
+        """agent-runtime/R54"""
+        self.prepare()
+        request_id = self.begin()
+        self.tool("stop", name="w1")
+        batch = self.batch(self.rpc, request_id)
+        self.assertEqual(batch["reason"], "failed")
+        self.assertEqual(set(batch["unfinished"]), {a["assignment_id"] for a in self.assignments})
+        states = {a["assignment_id"]: a["state"] for a in batch["assignments"]}
+        self.assertEqual(states[self.assignments[0]["assignment_id"]], "failed")
+        self.assertEqual(states[self.assignments[1]["assignment_id"]], "working")
+
     def test_stop_wakes_wait_preserves_reports_and_keeps_accepted_completion(self):
         """agent-runtime/R54
         S1: the queued report returns at once; the stop still surfaces the assignment as failed."""
