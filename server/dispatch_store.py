@@ -243,6 +243,10 @@ class Store:
             raise StoreError("assignment does not belong to this scope")
         if row["state"] != "pending":
             return  # A fast report may already have bound/completed this assignment.
+        resume = db.execute("SELECT turn,mode FROM resume_marks WHERE assignment=?", (assignment,)).fetchone()
+        if resume:
+            # A report can bind before send returns; retain the pre-resume turn in that path too.
+            turn, mode = resume
         # Tables are append-only: registration order and lead-generation order are
         # durable authority, even when a pending launch never finished binding.
         newer_assignment = db.execute(BIND_NEWER_ASSIGNMENT_SQL, (row["worker"], row["sequence"])).fetchone()

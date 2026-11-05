@@ -113,10 +113,13 @@ def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=F
     observed, needs_observation = False, False
     def ready(batch):
         nonlocal needs_observation
+        resume_due = any(a.get("_resume_turn") is not None for a in batch["assignments"])
         candidate = ("messages" if batch["messages"] else None) if inbox else reason(batch, target, observations)
-        needs_observation = not inbox and candidate == "messages" and (not observed or time.monotonic() >= reconcile_at)
+        needs_observation = not inbox and (
+            (resume_due and not observed) or
+            (candidate == "messages" and (not observed or time.monotonic() >= reconcile_at)))
         if needs_observation:
-            return None  # Do not issue a receipt before reconciling runtime failure.
+            return None  # Reconcile overdue resumes and runtime failure, including at zero timeout.
         return candidate or ("timeout" if time.monotonic() >= deadline else None)
     # Register before re-reading: a publication during registration cannot be lost.
     with Listener(store.directory) as listener:
