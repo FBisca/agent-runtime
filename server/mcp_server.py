@@ -46,9 +46,9 @@ TOOLS = [
               "Pass task_id to keep the task. Delivery is pull-only: reports landing after this resume returns need a new wait(all).",
      schema({"name": text("worker name"), "task": text("what to do next"),
              "task_id": text("task to move to this assignment")}, ["name", "task"])),
-    ("wait", "Block until children report, need attention or time out (max 590s). Returns as soon as a report is "
+    ("wait", "Block until children report, need attention or time out (max 590s). target=all returns as soon as a report is "
              "undelivered: reports, assignment states, unfinished (the work still open) and a receipt. "
-             "Pass the receipt next time and wait again for the rest; expect several calls per work period. "
+             "Pass the receipt next time and wait again for the rest. "
              "No workers left: use target=inbox for peer messages. "
              "Delivery is pull-only: reports landing after this wait returns need a new wait(all).",
      schema({"target": text("any, all, worker name/ID, or inbox"),
@@ -75,7 +75,7 @@ TOOLS = [
 HOST_RESULT_CHARS = 500000  # Claude per-tool text threshold; canonical payloads stay under 192 KiB (D22)
 for _, _, input_schema in TOOLS:
     input_schema["properties"].setdefault("receipt", text("acknowledge prior batch"))
-    input_schema["properties"].setdefault("assignment_id", text("required on first call"))
+    input_schema["properties"].setdefault("assignment_id", text("required on first worker call"))
 TOOL_NAMES = [name for name, _, _ in TOOLS]
 
 
