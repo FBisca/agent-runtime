@@ -308,12 +308,16 @@ class PeerDispatchTests(ToolCase):
         self.assertEqual(self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))["messages"], [])
 
     def test_stop_wakes_wait_preserves_reports_and_keeps_accepted_completion(self):
-        """agent-runtime/R54"""
+        """agent-runtime/R54
+        S1: the queued report returns at once; the stop still surfaces the assignment as failed."""
         self.prepare()
         progress = self.publish(0, "progress")
-        request_id = self.begin()
-        self.tool("stop", name="w1")
+        request_id = self.rpc.tool("wait", {"target": "all", "timeout": 5})
         batch = self.batch(self.rpc, request_id)
+        self.assertEqual(batch["reason"], "messages")
+        self.assertEqual(batch["messages"], [progress])
+        self.tool("stop", name="w1")
+        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 5}))
         self.assertEqual(batch["reason"], "failed")
         self.assertEqual(batch["messages"], [progress])
         self.assertEqual(len(batch["unfinished"]), 2)

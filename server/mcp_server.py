@@ -30,25 +30,27 @@ def text(description):
 
 TOOLS = [
     ("spawn", "Start one agent per task and checkout; include the whole task. "
-              "Returns promptly: worker_id, assignment_id; then one wait(all) per work period. "
+              "Returns promptly: worker_id, assignment_id; then wait(all) for reports. "
               "kind=lookup is rejected: use the CLI's own subagent tool. "
               "kind=worker: implementation, long tasks, Codex. cli: built-in or local profile; default claude.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
-             "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
+             "name": text("unique a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory"),
-             "task_id": text("optional ready task to link"),
+             "task_id": text("ready task to link"),
              "model": text("optional model"),
-             "agent": text("optional agent, default implementer; needs report")}, ["kind", "name", "task", "cwd"])),
+             "agent": text("agent, default implementer; needs report")}, ["kind", "name", "task", "cwd"])),
     ("message", "Send text to a teammate or lead. Peer messages arrive in tool results. Never forces input past a permission dialog.",
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
     ("resume", "Give a finished, idle or interrupted worker another assignment; returns promptly. A new spawn is not resumption. "
-              "Pass task_id to keep the worker's task. Delivery is pull-only: reports landing after this resume returns need a new wait(all).",
+              "Pass task_id to keep the task. Delivery is pull-only: reports landing after this resume returns need a new wait(all).",
      schema({"name": text("worker name"), "task": text("what to do next"),
-             "task_id": text("optional task to move to this assignment")}, ["name", "task"])),
-    ("wait", "Block until children report, need attention or time out (max 590s); use one wait(all) per work period. "
-             "Returns reports, assignment states and a receipt: pass it on your next call. With no workers left, "
-             "use target=inbox to block on peer messages. Delivery is pull-only: reports landing after this wait returns need a new wait(all).",
+             "task_id": text("task to move to this assignment")}, ["name", "task"])),
+    ("wait", "Block until children report, need attention or time out (max 590s). Returns as soon as a report is "
+             "undelivered: reports, assignment states, unfinished (the work still open) and a receipt. "
+             "Pass the receipt next time and wait again for the rest; expect several calls per work period. "
+             "No workers left: use target=inbox for peer messages. "
+             "Delivery is pull-only: reports landing after this wait returns need a new wait(all).",
      schema({"target": text("any, all, worker name/ID, or inbox"),
              "timeout": {"type": "integer", "description": "seconds, default 170, max 590; dispatch allows 0"},
              "receipt": text("acknowledge previous batch")}, ["target"])),
@@ -60,11 +62,11 @@ TOOLS = [
      schema({"name": text("worker name")}, ["name"])),
     ("stop", "End a worker you started, after its work is accepted.",
      schema({"name": text("worker name")}, ["name"])),
-    ("report", "Worker only: send progress or your result to your parent. Use kind=progress|complete|blocked|decision; kind and assignment_id are required under dispatch.",
+    ("report", "Worker only: send progress or your result to your parent. kind=progress|complete|blocked|decision; kind and assignment_id are required under dispatch.",
      schema({"text": text("result; max 65536 bytes"), "assignment_id": text("assigned ID"),
              "kind": {"type": "string", "enum": ["progress", "complete", "blocked", "decision"]},
              "message_id": text("optional retry ID")}, ["text"])),
-    ("task", "Shared team tasks. Claim needs finished dependencies; complete/blocked reports update the claimed task.",
+    ("task", "Shared team tasks. Claim needs finished dependencies; complete/blocked reports update the claim.",
      schema({"action": {"type": "string", "enum": ["create", "list", "claim", "update"]},
              "task_id": text("task ID"), "subject": text("create text"), "cursor": text("list continuation"),
              "depends_on": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 64}, "description": "prerequisite task IDs"},
@@ -73,7 +75,7 @@ TOOLS = [
 HOST_RESULT_CHARS = 500000  # Claude per-tool text threshold; canonical payloads stay under 192 KiB (D22)
 for _, _, input_schema in TOOLS:
     input_schema["properties"].setdefault("receipt", text("acknowledge prior batch"))
-    input_schema["properties"].setdefault("assignment_id", text("required on first worker call"))
+    input_schema["properties"].setdefault("assignment_id", text("required on first call"))
 TOOL_NAMES = [name for name, _, _ in TOOLS]
 
 

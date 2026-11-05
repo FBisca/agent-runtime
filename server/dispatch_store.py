@@ -599,7 +599,8 @@ class Store:
 
         A pending snapshot creates no receipt; a final snapshot and its receipt
         commit together, so concurrent publications/acks cannot invalidate readiness.
-        Final wait(all) reads also record the team state in that same transaction.
+        Final wait(all) reads also record the team state in that same transaction, except for a
+        partial "messages" result: it leaves the row untouched.
         """
         with self.transaction() as db:
             self.acknowledge(db, *(ack or (team, recipient, receipt)))
@@ -651,8 +652,17 @@ class Store:
                 reason = "completed"
             elif target == "any" and messages:
                 reason = "messages"
+            # Undelivered: unacked and not named by any receipt for (team, recipient) - the same
+            # definition the lead hooks use. Only this page is checked, never the whole queue.
+            undelivered = []
+            if ready is not None and not inbox and messages:
+                ids = [m["message_id"] for m in messages]
+                named = {row[0] for row in db.execute(
+                    "SELECT DISTINCT j.value FROM receipts r, json_each(r.ids) j WHERE r.team=? AND r.recipient=? "
+                    "AND j.value IN (%s)" % ",".join("?" for _ in ids), [team, recipient] + ids)}
+                undelivered = [m["message_id"] for m in messages if m["message_id"] not in named]
             batch = {"reason": reason, "messages": messages, "assignments": assignments,
-                     "unfinished": unfinished, "receipt": None, "more": more}
+                     "unfinished": unfinished, "receipt": None, "more": more, "_undelivered": undelivered}
             if ready is not None and not inbox:
                 idle_since = self.now_ms() - STALL_MS
                 for a in assignments:
@@ -672,10 +682,12 @@ class Store:
                 db.execute("INSERT INTO receipts VALUES (?,?,?,?)",
                            (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
                 batch["receipt"] = token
-            if ready is not None and batch["reason"] is not None and target == "all" and not inbox:
+            if ready is not None and batch["reason"] is not None and batch["reason"] != "messages" \
+                    and target == "all" and not inbox:
                 db.execute("INSERT INTO last_wait(team,reason,attention,fingerprint) VALUES (?,?,?,?) ON CONFLICT(team) DO UPDATE "
                            "SET reason=excluded.reason,attention=excluded.attention,fingerprint=excluded.fingerprint",
                            (team, batch["reason"], attention, wait_fingerprint(db, team)))
+            batch.pop("_undelivered", None)
             return batch
 
     TASK_STATUSES = ("pending", "in_progress", "complete", "blocked")
