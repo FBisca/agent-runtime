@@ -12,6 +12,7 @@ import time
 import agent_runtime as lib
 import dispatch_store as dispatch
 import dispatch_wait
+import profiles
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 COLLECT_LINES = 200
@@ -19,7 +20,7 @@ HISTORY_LINES = 1000
 SHORT_SECONDS = 30
 WAIT_DEFAULT, WAIT_MAX = 170, 590
 KINDS = ("worker", "lookup")
-CLIS = ("claude", "codex")
+CLIS = profiles.BUILTINS
 SUBAGENT_TOOL = {"claude": "Claude's Agent tool", "codex": "Codex's MultiAgent V2 spawn tool"}
 NATIVE_TOOLS = {"herdmates": "SendMessage and the Agent tool (named teammate), the CLI's own subagent tool",
                 "native": "the CLI's own subagent tool (Claude Agent tool, Codex MultiAgent spawn tool)"}
@@ -254,6 +255,18 @@ def owned_orphan(name, caller, env, earlier, other):
                 and raw.get("address") != earlier and not other(raw["address"]))
 
 
+def profile_launch_error(name, env, ctx):
+    """A launcher that exited before CLI readiness leaves its diagnostic on the screen."""
+    try:
+        screen = hc(["read", name, "--lines", "30"], env, ctx)
+    except ToolError:
+        return None
+    for line in screen.splitlines():
+        if line.startswith("agent-runtime-profile:"):
+            return ToolError(line)
+    return None
+
+
 def spawn(arguments, env, ctx):
     kind = arguments.get("kind")
     cli = arguments.get("cli") or "claude"
@@ -262,8 +275,18 @@ def spawn(arguments, env, ctx):
                         % SUBAGENT_TOOL.get(cli, "the CLI's subagent tool"))
     if kind != "worker":
         raise gap("spawn kind=%s" % kind, "hc run --bg ...")
+    profile = None
     if cli not in CLIS:
-        raise gap("spawn cli=%s" % cli, "hc run --bg --name <name> %s" % cli)
+        profile = cli
+        try:
+            configured = profiles.load(env)
+        except profiles.ProfileError as error:
+            raise ToolError(str(error)) from error
+        if cli not in configured:
+            raise gap("unknown profile %r" % cli, "configure a profile")
+        cli = configured[cli]["cli"]
+        if cli not in CLIS:
+            raise ToolError("profile %r has unsupported CLI family %r" % (profile, cli))
     name, task, cwd = need(arguments, "name", "task", "cwd")
     worker_name(name)
     task_id = linked_task(arguments, env)
@@ -282,6 +305,9 @@ def spawn(arguments, env, ctx):
         program = ["claude", "--agent", agent, "--permission-mode", "auto"] + model + [message]
     else:
         program = ["codex", "--no-daemon"] + model + ["%s\n\n%s" % (codex_instructions(agent), message)]
+    if profile:
+        launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agent-runtime-profile")
+        program = [os.path.normpath(launcher), profile, "--"] + program
     if store:
         earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)
@@ -342,10 +368,17 @@ def spawn(arguments, env, ctx):
         started = {}
     sent = (started.get("first_message") or {}).get("sent") if isinstance(started, dict) else None
     if sent is False:
+        error = profile_launch_error(name, env, ctx) if profile else None
+        if error:
+            if store:
+                undo(error)
+            discard(name, env)
+            raise error
         if not store:
             raise ToolError("worker %s started but its task was not sent: hc read %s; no blind resend" % (name, name))
         undo(ToolError("worker %s started but its task was not sent and was removed; spawn it again" % name))
     info = {"name": name, "address": None, "parent": caller}
+    raw = {}
     turn, mode = None, "fresh"
     try:
         raw = json.loads(hc(["get", name, "--json"], env, ctx))
@@ -353,6 +386,13 @@ def spawn(arguments, env, ctx):
         turn = raw.get("turn")
     except (ToolError, ValueError, AttributeError):
         pass
+    if profile and isinstance(raw, dict) and lib.hc_state(raw) == "exited":
+        error = profile_launch_error(name, env, ctx)
+        if error:
+            if store:
+                undo(error)
+            discard(name, env)
+            raise error
     if not store:
         return result(info)
     if ctx.cancelled.is_set():

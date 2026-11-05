@@ -87,6 +87,85 @@ class HarnessTests(unittest.TestCase):
         self.assertTrue(all(p["arguments"]["name"] == "live-codex-ab12" for p in seen))
 
 
+@unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE_PROFILE"),
+                     "set AGENT_RUNTIME_LIVE_PROFILE to an existing configured name")
+class LiveProfileTests(unittest.TestCase):
+    def test_S17_S18_S19_profile_environment_and_cli_detection(self):
+        """S17 S18 S19: real hc preserves the profile env and identifies the exec'd CLI."""
+        if not os.environ.get("HC_TERMINAL_ID"):
+            self.skipTest("run inside an hc terminal")
+        sys.path.insert(0, str(SERVER.parent))
+        import agent_runtime
+        import profiles
+
+        selected = os.environ["AGENT_RUNTIME_LIVE_PROFILE"]
+        family = profiles.load(os.environ)[selected]["cli"]
+        root = str(SERVER.parent.parent)
+        # The probe's parent computes expectations in the login environment. Values travel
+        # over an anonymous pipe only; neither argv nor terminal output contains them.
+        probe = '''import json, os, sys
+sys.path.insert(0, sys.argv[2] + '/server')
+import profiles
+name = sys.argv[1]
+env = dict(os.environ)
+overlay = profiles.load(env)[name]['env']
+expected = {key: None for key in profiles.PROVIDER_VARIABLES}
+expected.update({key: env[value[1:]] if value.startswith('$') else value for key, value in overlay.items()})
+read, write = os.pipe()
+pid = os.fork()
+if pid == 0:
+    os.close(write)
+    os.dup2(read, 0)
+    os.close(read)
+    check = "import json,os,sys; expected=json.load(sys.stdin); assert all(os.environ.get(k)==v for k,v in expected.items()); print('profile-env-ok')"
+    launcher = sys.argv[2] + '/bin/agent-runtime-profile'
+    os.execvpe(launcher, [launcher, name, '--', sys.executable, '-B', '-c', check], env)
+os.close(read)
+with os.fdopen(write, 'w') as pipe:
+    json.dump(expected, pipe)
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+'''
+        suffix = secrets.token_hex(3)
+        probe_name, worker_name = "live-profile-probe-" + suffix, "live-profile-" + suffix
+        with tempfile.TemporaryDirectory(prefix="agent-runtime-profile-") as work:
+            try:
+                started = subprocess.run(["hc", "run", "--bg", "--name", probe_name, "--cwd", work,
+                                          "--parent", os.environ["HC_TERMINAL_ID"], "--json", "--no-notify",
+                                          sys.executable, "-B", "-c", probe, selected, root],
+                                         capture_output=True, text=True, timeout=30)
+                self.assertEqual(started.returncode, 0, started.stderr)
+                subprocess.run(["hc", "wait", probe_name, "--timeout", "30"],
+                               capture_output=True, text=True, check=True, timeout=40)
+                screen = subprocess.run(["hc", "read", probe_name, "--lines", "30"],
+                                        capture_output=True, text=True, check=True, timeout=10).stdout
+                self.assertIn("profile-env-ok", screen)
+            finally:
+                for verb in ("kill", "rm"):
+                    subprocess.run(["hc", verb, probe_name], capture_output=True, timeout=10)
+            lead = Lead(lambda *args, **kwargs: None)
+            try:
+                lead.tool("spawn", kind="worker", cli=selected, name=worker_name, cwd=work,
+                          task="Live test: report kind='complete', text='profile-cli-ok' with your assignment_id. "
+                               "Do not edit files. Then stop.")
+                deadline, seen, receipt = time.time() + 150, [], None
+                while time.time() < deadline and not seen:
+                    batch = lead.tool("wait", target="all", timeout=30, **({"receipt": receipt} if receipt else {}))
+                    receipt = batch.get("receipt")
+                    seen = [m for m in batch.get("messages", []) if "profile-cli-ok" in m.get("text", "")]
+                self.assertTrue(seen, "no profile report within 150 s")
+                raw = json.loads(subprocess.run(["hc", "get", worker_name, "--json"], capture_output=True,
+                                                text=True, check=True, timeout=10).stdout)
+                self.assertEqual(agent_runtime.hc_app(raw), {"claude": "claude-code", "codex": "codex"}[family])
+                lead.tool("status", name=worker_name)
+                lead.tool("collect", name=worker_name)
+            finally:
+                try:
+                    lead.tool("stop", name=worker_name)
+                finally:
+                    lead.close()
+
+
 @unittest.skipUnless(os.environ.get("AGENT_RUNTIME_LIVE") == "1", "set AGENT_RUNTIME_LIVE=1 for the live run")
 class LiveAcceptance(unittest.TestCase):
     def test_live_mixed_cli_dispatch(self):

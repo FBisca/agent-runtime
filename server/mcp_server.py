@@ -4,6 +4,7 @@
 stdout carries protocol JSON only; diagnostics go to stderr.
 """
 
+import copy
 import io
 import json
 import os
@@ -12,6 +13,7 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hc_tools  # noqa: E402
+import profiles  # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -27,10 +29,10 @@ def text(description):
 
 
 TOOLS = [
-    ("spawn", "Start one agent on one task in one checkout; put the whole task in the call. "
+    ("spawn", "Start one agent per task and checkout; include the whole task. "
               "Returns promptly: worker_id, assignment_id; then one wait(all) per work period. "
               "kind=lookup is rejected: use the CLI's own subagent tool. "
-              "kind=worker: implementation, long tasks, Codex. cli default claude.",
+              "kind=worker: implementation, long tasks, Codex. cli: built-in or local profile; default claude.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
              "name": text("unique, a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory"),
@@ -127,8 +129,10 @@ def dispatch(method, request_id, params, env):
     elif method == "ping":
         result = {}
     elif method == "tools/list":
+        listed = copy.deepcopy(TOOLS)
+        listed[0][2]["properties"]["cli"]["enum"] = profiles.cli_names(env)
         result = {"tools": [{"name": n, "description": d, "inputSchema": s,
-                             "_meta": {"anthropic/maxResultSizeChars": HOST_RESULT_CHARS}} for n, d, s in TOOLS]}
+                             "_meta": {"anthropic/maxResultSizeChars": HOST_RESULT_CHARS}} for n, d, s in listed]}
     elif method == "tools/call":
         name = params.get("name")
         if name not in TOOL_NAMES:

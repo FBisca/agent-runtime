@@ -15,13 +15,29 @@ from test_mcp_server import SERVER, Session
 sys.path.insert(0, str(SERVER.parent))
 
 FAKE = '''#!%(python)s
-import json, sys, time
+import json, os, secrets, subprocess, sys, time
 argv = sys.argv[1:]
 with open(%(log)r, "a") as log:
     log.write(json.dumps(argv) + "\\n")
 replies = json.load(open(%(replies)r))
 key = argv[0] + ":" + argv[1] if len(argv) > 1 and argv[0] + ":" + argv[1] in replies else argv[0]
 reply = replies.get(key, {"rc": 0, "out": ""})
+# Execute only opt-in test programs, using a simulated login environment. Log no full environment.
+if argv[0] == "run" and replies.get("execute_profile"):
+    login = dict(os.environ)
+    login.update(replies.get("login_env", {}))
+    login["PROFILE_TEST_SECRET"] = secrets.token_hex(24)
+    child = subprocess.run(argv[10:], env=login, text=True, capture_output=True)
+    with open(%(overlay)r, "a") as log:
+        log.write(child.stdout)
+    if child.returncode:
+        if not replies.get("profile_exit"):
+            sys.stderr.write(child.stderr)
+            sys.exit(child.returncode)
+        replies["read:w1"] = {"out": child.stderr}
+        replies["get:w1"] = {"out": json.dumps({"address": "t9", "parent": "t0", "state": "finished"})}
+        reply = {"out": json.dumps({"first_message": {"sent": replies["profile_exit"] == "sent"}})}
+        json.dump(replies, open(%(replies)r, "w"))
 # Opt-in live-name model: replies["live"] lists terminal names; hc run refuses a live name like real hc.
 if "live" in replies and argv[0] in ("run", "rm"):
     name = argv[argv.index("--name") + 1] if argv[0] == "run" else argv[1]
@@ -68,7 +84,8 @@ class ToolCase(unittest.TestCase):
         replies.setdefault("get:t1", {"out": raw("worker", "t0")})
         (self.dir / "replies").write_text(json.dumps(replies))
         hc = self.dir / "bin" / "hc"
-        hc.write_text(FAKE % {"python": sys.executable, "log": str(self.log), "replies": str(self.dir / "replies")})
+        hc.write_text(FAKE % {"python": sys.executable, "log": str(self.log), "replies": str(self.dir / "replies"),
+                              "overlay": str(self.dir / "overlay")})
         hc.chmod(0o755)
         full = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
                 "HC_TERMINAL_ID": "t0", "CODEX_THREAD_ID": "test-session"}
@@ -319,6 +336,114 @@ class SpawnTests(ToolCase):
             result, _ = self.call(session, "spawn", dict(self.ARGS, name=name))
             self.assertTrue(result["isError"], name)
         self.assertEqual(self.runs("run"), [])
+
+
+class ProfileTests(ToolCase):
+    ARGS = {"kind": "worker", "name": "w1", "task": "profile task", "cwd": "/tmp"}
+
+    def config(self, profiles):
+        path = self.dir / "home" / ".config" / "agent-runtime" / "profiles.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"profiles": profiles}))
+        return path
+
+    def test_S19_profile_scrubs_unset_provider_variables(self):
+        """S19: only explicitly configured provider settings reach the worker."""
+        providers = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+                     "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"]
+        self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_MODEL": "profile-model"}}})
+        program = self.dir / "bin" / "claude"
+        program.write_text("#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n" %
+                           (sys.executable, providers))
+        program.chmod(0o755)
+        session = self.start({"execute_profile": True, "login_env": dict.fromkeys(providers, "inherited"),
+                              "get:w1": {"out": raw("w1", "t0")}})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
+        self.assertFalse(result["isError"], text)
+        self.assertEqual(json.loads((self.dir / "overlay").read_text()), {"ANTHROPIC_MODEL": "profile-model"})
+
+    def test_S18_reference_expansion_is_launcher_only_and_missing_reference_fails(self):
+        """S18: references resolve in the login environment without persisting the secret."""
+        path = self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$PROFILE_TEST_SECRET"}}})
+        program = self.dir / "bin" / "claude"
+        program.write_text("#!%s\nimport os\nassert os.environ['ANTHROPIC_AUTH_TOKEN'] == os.environ['PROFILE_TEST_SECRET']\nprint('reference-ok')\n" % sys.executable)
+        program.chmod(0o755)
+        session = self.start({"execute_profile": True, "live": [], "get:w1": {"out": raw("w1", "t0")}},
+                             {"PROFILE_TEST_SECRET": "server-value-must-not-be-used"})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
+        self.assertFalse(result["isError"], text)
+        self.assertEqual((self.dir / "overlay").read_text(), "reference-ok\n")
+        self.assertNotIn("server-value-must-not-be-used", self.log.read_text())
+        self.assertIn("$PROFILE_TEST_SECRET", path.read_text())
+        replies = json.loads((self.dir / "replies").read_text())
+        replies["live"] = []
+        (self.dir / "replies").write_text(json.dumps(replies))
+        self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$MISSING_PROFILE_SECRET"}}})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
+        self.assertTrue(result["isError"])
+        self.assertIn("MISSING_PROFILE_SECRET", text)
+        self.assertIn("agent-runtime-profile", text)
+        self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
+        # hc can accept the launch before the shim exits; its screen then holds the error.
+        for delivery in ("unsent", "sent"):
+            with self.subTest(delivery=delivery):
+                replies = json.loads((self.dir / "replies").read_text())
+                replies["profile_exit"] = delivery
+                (self.dir / "replies").write_text(json.dumps(replies))
+                result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
+                self.assertTrue(result["isError"])
+                self.assertIn("agent-runtime-profile:", text)
+                self.assertIn("MISSING_PROFILE_SECRET", text)
+                self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
+
+    def test_S22_override_replaces_default_config_for_schema_and_launcher(self):
+        """S22: AGENT_RUNTIME_PROFILES selects a different file for listing and launching."""
+        self.config({"ignored": {"cli": "claude", "env": {}}})
+        override = self.dir / "home" / "alternate.json"
+        override.write_text(json.dumps({"profiles": {"selected": {"cli": "claude", "env": {"PROFILE_MARKER": "selected"}}}}))
+        program = self.dir / "bin" / "claude"
+        program.write_text("#!%s\nimport os\nprint(os.environ['PROFILE_MARKER'])\n" % sys.executable)
+        program.chmod(0o755)
+        session = self.start({"execute_profile": True, "get:w1": {"out": raw("w1", "t0")}},
+                             {"AGENT_RUNTIME_PROFILES": "~/alternate.json"})
+        tools = session.send("tools/list")["result"]["tools"]
+        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "selected"])
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="selected"))
+        self.assertFalse(result["isError"], text)
+        self.assertEqual((self.dir / "overlay").read_text(), "selected\n")
+
+    def test_S21_absent_config_keeps_builtins_and_original_argv(self):
+        """S21: removing config restores exactly the original built-in schema and commands."""
+        path = self.config({"custom": {"cli": "claude", "env": {}}})
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+        self.assertIn("custom", session.send("tools/list")["result"]["tools"][0]["inputSchema"]["properties"]["cli"]["enum"])
+        path.unlink()
+        tools = session.send("tools/list")["result"]["tools"]
+        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex"])
+        prompt = "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
+        for family, program in (("claude", ["claude", "--agent", "implementer", "--permission-mode", "auto", prompt]),
+                                ("codex", ["codex", "--no-daemon", "CODEX IMPLEMENTER RULES\n\n" + prompt])):
+            result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
+            self.assertFalse(result["isError"], text)
+            self.assertEqual(self.runs("run")[-1], ["run", "--bg", "--name", "w1", "--cwd", "/tmp", "--parent", "t0",
+                                                   "--json", "--no-notify"] + program)
+
+    def test_S17_profiles_wrap_each_family_with_prompt_last(self):
+        """S17: configured names launch the family's standard argv through the installed shim."""
+        self.config({"custom-claude": {"cli": "claude", "env": {}},
+                     "custom-codex": {"cli": "codex", "env": {}}})
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+        for family, prefix in (("claude", ["claude", "--agent", "implementer", "--permission-mode", "auto"]),
+                               ("codex", ["codex", "--no-daemon"])):
+            with self.subTest(family=family):
+                result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom-" + family, model="sample"))
+                self.assertFalse(result["isError"], text)
+                argv = self.runs("run")[-1][10:]
+                self.assertEqual(argv[:3], [str(SERVER.parent.parent / "bin" / "agent-runtime-profile"),
+                                           "custom-" + family, "--"])
+                self.assertEqual(argv[3:-1], prefix + ["--model", "sample"])
+                self.assertTrue(argv[-1].endswith("When done or stuck, call the agent-runtime report tool with your result."))
+                self.assertIn("profile task", argv[-1])
 
 
 class SendTests(ToolCase):
