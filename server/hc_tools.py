@@ -13,6 +13,7 @@ import agent_runtime as lib
 import dispatch_store as dispatch
 import dispatch_wait
 import profiles
+import usage
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 COLLECT_LINES = 200
@@ -340,10 +341,17 @@ def spawn(arguments, env, ctx):
         # D4: identity and inputs are resolved before hc run, so nothing is started on an invalid spawn.
         scope, _ = dispatch_identity(env, ctx)
         store, team = lead_store(env, ctx)
+    codex_profile = None
     if cli == "claude":
         program = ["claude", "--agent", agent] + launch_args + model + [message]
     else:
-        program = ["codex", "--no-daemon"] + model + ["%s\n\n%s" % (codex_instructions(agent), message)]
+        # The worker profile names the policy Codex actually runs; without it the worker runs the
+        # CLI's defaults, so the profile is only passed when it is usable.
+        codex_profile = usage.resolve_codex_profile(env)
+        program = ["codex", "--no-daemon"]
+        if codex_profile.applied:
+            program += ["-p", codex_profile.name]
+        program += model + ["%s\n\n%s" % (codex_instructions(agent), message)]
     if profile:
         launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agent-runtime-profile")
         program = [os.path.normpath(launcher), profile, str(profiles.config_path(env)), "--"] + program
@@ -391,6 +399,14 @@ def spawn(arguments, env, ctx):
         if store:
             store.fail(identity["assignment_id"])
         raise ToolError(err.strip() or out.strip() or "hc run failed")
+    if store:  # the metadata belongs to an assignment; without dispatch there is no state at all
+        usage.write_worker_metadata(env, name,
+                                    assignment_id=identity["assignment_id"], cli=cli, cwd=cwd,
+                                    base_commit=usage.base_commit(cwd), spawned_ms=usage.now_ms(),
+                                    profile_applied=bool(codex_profile and codex_profile.applied),
+                                    profile_reason=codex_profile.reason if codex_profile else None,
+                                    profile_name=codex_profile.name if codex_profile else None,
+                                    session_id=None)
     out = out.strip()
 
     def undo(error):
