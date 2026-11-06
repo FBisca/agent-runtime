@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 HC_TIMEOUT_SECONDS = 2
+CALL_LEAD_ENV = "AGENT_RUNTIME_CALL_LEAD"
 RUNTIMES = ("herdmates", "hc", "native")
 FIELDS = ("runtime", "role", "parent", "cli")
 
@@ -87,7 +88,11 @@ def lstart(pid):
 
 def cli_generation():
     """`<pid>:<lstart>` of the nearest codex/claude ancestor, else None. Shared by the MCP server and
-    hooks; session IDs are deliberately ignored so /clear and /new stay on one team. Read-only."""
+    hooks; session IDs are deliberately ignored so /clear and /new stay on one team. Read-only.
+    `agent-runtime call --lead` sets CALL_LEAD_ENV for its own process, which pins the generation."""
+    forced = os.environ.get(CALL_LEAD_ENV)
+    if forced:
+        return forced
     deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
     pid = os.getppid()
     for _ in range(MAX_ANCESTOR_HOPS):
@@ -492,6 +497,41 @@ def cmd_list(args):
     return 0
 
 
+def hc_tools_module():
+    """The MCP tool table; imported lazily so resolve, status and list never load the dispatch store."""
+    server = os.path.dirname(os.path.abspath(__file__))
+    if server not in sys.path:
+        sys.path.insert(0, server)
+    import hc_tools
+    return hc_tools
+
+
+def cmd_call(args):
+    hc_tools = hc_tools_module()
+    try:
+        arguments = json.loads(args.json)
+    except ValueError:
+        arguments = None
+    if args.tool not in hc_tools.HANDLERS or not isinstance(arguments, dict) or args.lead == "":
+        print("usage: agent-runtime call <tool> [--lead ID] [--json '{...}'] (tools: %s)"
+              % " ".join(sorted(hc_tools.HANDLERS)), file=sys.stderr)
+        return 2
+    env = dict(os.environ, AGENT_RUNTIME_DISPATCH="1")
+    try:
+        hc_tools.require_hc(env)
+    except hc_tools.ToolError as error:
+        print(error, file=sys.stderr)
+        return 2
+    if args.lead:
+        os.environ[CALL_LEAD_ENV] = args.lead
+    out = hc_tools.call(args.tool, arguments, env, hc_tools.Context())
+    if out.get("isError"):
+        print(json.dumps(out, separators=(",", ":")))
+        return 1
+    print(out["content"][0]["text"])
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="agent-runtime", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -514,6 +554,11 @@ def build_parser():
     p.add_argument("--runtime", choices=RUNTIMES, help="override the resolved runtime")
     p.add_argument("--pretty", action="store_true", help="indent the JSON")
     p.set_defaults(func=cmd_list)
+    p = sub.add_parser("call", help="run one dispatch tool in an hc terminal and print its JSON result")
+    p.add_argument("tool", help="an MCP tool name: spawn, message, resume, wait, status, list, collect, stop, report, task")
+    p.add_argument("--lead", help="lead identity; processes passing the same ID share one team")
+    p.add_argument("--json", default="{}", help="the tool arguments as one JSON object")
+    p.set_defaults(func=cmd_call)
     return parser
 
 

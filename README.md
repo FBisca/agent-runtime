@@ -165,7 +165,7 @@ Codex has no plugin marketplace, so it uses shims. `install.sh` links `agent-run
 
 The block registers the MCP server with `AGENT_RUNTIME_DISPATCH=1`, a 600 s tool timeout and `approve` mode on the mutating tools (`spawn`, `message`, `resume`, `stop`, `report`, `task`), plus PreToolUse hooks for Bash and the runtime's own tools.
 
-`agent-runtime resolve` shows which runtime a session resolves to; `status` and `list` inspect workers.
+`agent-runtime resolve` shows which runtime a session resolves to; `status` and `list` inspect workers. `agent-runtime call <tool> [--lead ID] [--json '{...}']` runs one MCP tool from a script in an hc terminal, printing its JSON result (exit 1 on a tool error, 2 on usage or outside hc); processes passing the same `--lead` share one team.
 
 ## Tests
 
