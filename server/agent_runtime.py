@@ -528,22 +528,23 @@ def live_lead_conflict(hc_tools, env):
     return row[1] if live else None
 
 
-HC_SERVER_EXECUTABLES = ("herdr-core", "hc")  # a pane's processes start below this process
 MAX_CALL_ANCESTOR_HOPS = 40
 CALL_ANCESTRY_BUDGET_SECONDS = 5.0
 CALL_PS_TIMEOUT_SECONDS = 2.0  # a refusal is cheaper than a timeout flake on a loaded machine
 
 
-def call_ancestry_refusal():
-    """Why `call` must not run here, or None. Walks the process ancestors up to the hc server (or pid 1):
-    a claude/codex executable on the way means an LLM launched this process, whatever shell form it used.
-    Stopping at the hc server keeps a server restarted from a Claude Bash from tainting every pane.
-    Fail closed: an unreadable table or a walk that ends elsewhere refuses."""
+def call_ancestry_refusal(terminal_pid):
+    """Why `call` must not run here, or None. Walks the process ancestors up to this hc terminal's root
+    process, checking that one too: a claude/codex executable on the way means an LLM launched this process,
+    whatever shell form it used. The stop point is the terminal's pid from `hc get`, never a process name,
+    which a caller controls. Reaching pid 1 first (an orphan, or an `hc exec` daemon) refuses. Fail closed:
+    an unreadable table or a walk that ends elsewhere refuses."""
     deadline = time.monotonic() + CALL_ANCESTRY_BUDGET_SECONDS
     pid, seen = os.getppid(), set()
     for _ in range(MAX_CALL_ANCESTOR_HOPS):
         if pid <= 1:
-            return None
+            return "process ancestry reached pid 1 without reaching this hc terminal, so cannot prove this " \
+                   "is not an agent session"
         if pid in seen or time.monotonic() > deadline:
             break
         seen.add(pid)
@@ -555,11 +556,21 @@ def call_ancestry_refusal():
         if found:
             return "refusing: ancestor process %d (%s) is an agent session; `call` is for scripts in a plain " \
                    "terminal or hc pane, agents use the MCP tools" % (pid, found)
-        tokens = args.split()
-        if tokens and os.path.basename(tokens[0]) in HC_SERVER_EXECUTABLES:
+        if pid == terminal_pid:
             return None
         pid = parent
-    return "process ancestry did not reach the hc server or pid 1, so cannot prove this is not an agent session"
+    return "process ancestry did not reach this hc terminal, so cannot prove this is not an agent session"
+
+
+def terminal_root_pid(terminal_id):
+    """The root process of an hc terminal (`hc get` field pid), or None when it cannot be read."""
+    if not terminal_id:
+        return None
+    try:
+        pid = hc_get(terminal_id).get("pid")
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError, AttributeError):
+        return None
+    return pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1 else None
 
 
 def cmd_call(args):
@@ -573,15 +584,15 @@ def cmd_call(args):
         print("usage: agent-runtime call <tool> [--lead ID] [--json '{...}'] (tools: %s)"
               % " ".join(sorted(hc_tools.HANDLERS)), file=sys.stderr)
         return 2
-    refusal = call_ancestry_refusal()
-    if refusal:
-        print(refusal, file=sys.stderr)
-        return 2
     env = dict(os.environ, AGENT_RUNTIME_DISPATCH="1")
     try:
         hc_tools.require_hc(env)
     except hc_tools.ToolError as error:
         print(error, file=sys.stderr)
+        return 2
+    refusal = call_ancestry_refusal(terminal_root_pid(os.environ.get("HC_TERMINAL_ID")))
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 2
     if args.lead:
         hc_tools.lib.FORCED_GENERATION = args.lead  # hc_tools reads the generation from its own module copy
