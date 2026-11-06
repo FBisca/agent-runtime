@@ -628,6 +628,26 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)["reason"], "completed")
 
+    def test_S7_other_generation_is_refused_while_the_live_one_has_an_unacknowledged_report(self):
+        """call-cli/S7"""
+        spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
+        code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
+        self.assertEqual(code, 0, err)
+        assignment = json.loads(out)["assignment_id"]
+        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})}})
+        code, out, err = self.call("report", "--lead", "W1", "--json",
+                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
+        self.assertEqual(code, 0, err)
+        code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 2)
+        self.assertIn("L1", err)
+        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        self.assertEqual(code, 0, err)
+        result = json.loads(out)
+        self.assertEqual(result["reason"], "completed")
+        self.assertEqual([(m["assignment_id"], m["kind"], m["text"]) for m in result["messages"]],
+                         [(assignment, "complete", "done")])
+
     def test_S7_other_generation_may_start_once_the_live_one_has_nothing_unfinished(self):
         """call-cli/S7"""
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')

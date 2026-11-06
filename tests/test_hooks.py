@@ -214,17 +214,54 @@ class CallCliTests(unittest.TestCase):
                         "agent-runtime call spawn --lead L1 --json '{}'",
                         "bin/agent-runtime call task --json '{\"action\":\"list\",\"receipt\":\"r\"}'",
                         "agent-runtime call status --json '{not json'",
-                        "cd x && agent-runtime call stop --json '{}'"):
+                        "cd x && agent-runtime call stop --json '{}'",
+                        "agent-runtime call --json '{\"target\":\"all\"}' wait",
+                        "agent-runtime call --lead L1 wait --json '{\"target\":\"all\"}'",
+                        "agent-runtime call --lead L1 spawn --json '{}'",
+                        "agent-runtime call status --js '{\"assignment_id\":\"x\"}'",
+                        "agent-runtime call status --lead",
+                        "agent-runtime call --bogus status"):
             self.assertTrue(denied(run(PRE, bash(command, agent_id="sub-1"))), command)
+
+    def test_S6_subagent_is_denied_the_entrypoint_run_by_path_or_python(self):
+        """call-cli/S6"""
+        for command in ("python3 server/agent_runtime.py call wait --json '{}'",
+                        "python3 -B /x/server/agent_runtime.py call spawn --json '{}'",
+                        "/x/server/agent_runtime.py call wait --json '{}'"):
+            self.assertTrue(denied(run(PRE, bash(command, agent_id="sub-1"))), command)
+        self.assertIsNone(run(PRE, bash("python3 other.py call wait", agent_id="sub-1")))
+
+    def test_S6_hook_reads_call_arguments_the_way_the_cli_parser_does(self):
+        """call-cli/S6"""
+        sys.path.insert(0, str(HOOKS))
+        import pre_tool_use
+        parser = lib.build_parser()
+        for argv in (["wait", "--json", "{}"], ["--json", "{}", "wait"], ["--lead", "L1", "wait"],
+                     ["--lead=L1", "spawn", "--json={}"], ["status", "--js", "{}"], ["status", "--lead"],
+                     ["--bogus", "status"], ["wait", "extra"]):
+            with self.subTest(argv=argv):
+                hook = pre_tool_use.parse_call(argv)
+                try:
+                    cli = parser.parse_args(["call", *argv])
+                except SystemExit:
+                    cli = None
+                self.assertEqual(hook is None, cli is None)
+                if cli is not None:
+                    self.assertEqual((hook.tool, hook.lead, hook.json), (cli.tool, cli.lead, cli.json))
 
     def test_S6_non_subagent_is_asked_on_mutating_tools_only(self):
         """call-cli/S6"""
         for tool in ("spawn", "message", "resume", "stop", "report"):
             out = run(PRE, bash("agent-runtime call %s --lead L1 --json '{}'" % tool))
             self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "ask", tool)
+        for command in ("agent-runtime call --lead L1 spawn --json '{}'", "agent-runtime call --json '{}' stop",
+                        "agent-runtime call status --lead", "agent-runtime call status --js '{}'"):
+            out = run(PRE, bash(command))
+            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "ask", command)
         for command in ("agent-runtime call wait --json '{}'", "agent-runtime call status --json '{}'",
                         "agent-runtime call task --json '{\"action\":\"list\"}'", "agent-runtime status w1",
-                        "agent-runtime resolve"):
+                        "agent-runtime resolve", "agent-runtime call --lead L1 wait --json '{}'",
+                        "agent-runtime call --help"):
             self.assertIsNone(run(PRE, bash(command)), command)
         self.assertIsNone(run(PRE, bash("agent-runtime call task --json '{\"action\":\"list\"}'", agent_id="sub-1")))
 

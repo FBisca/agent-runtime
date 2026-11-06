@@ -508,17 +508,24 @@ def hc_tools_module():
 
 
 def live_lead_conflict(hc_tools, env):
-    """The generation of this terminal's latest team when it differs from ours and still has
-    unfinished assignments, else None. One hc terminal has one live lead generation."""
+    """The generation of this terminal's latest team when it differs from ours and that team is live, else None.
+    Live means wait(all) still has something for it: unfinished assignments or results not yet acknowledged,
+    or any unacknowledged message to its lead. One hc terminal has one live lead generation. The check reads
+    in one transaction; the team row is inserted later by the tool itself, so a concurrent call under the
+    live generation can still land in between (the driver runs in its own terminal, which keeps this rare)."""
     _, caller = hc_tools.require_hc(env)
     scope, generation = hc_tools.dispatch_identity(env)
     store = hc_tools.dispatch.Store(env)
     with store.transaction() as db:
         row = db.execute("SELECT id, generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
                          (scope, caller)).fetchone()
-    if row and row[1] != generation and store.unfinished_count(row[0]):
-        return row[1]
-    return None
+        if not row or row[1] == generation:
+            return None
+        live = db.execute("SELECT 1 FROM (%s) LIMIT 1" % hc_tools.dispatch.SNAPSHOT_SQL,
+                          (row[0], "all", "all", "all", "all", "all", "all")).fetchone() \
+            or db.execute("SELECT 1 FROM messages WHERE team=? AND recipient=? AND acked=0 LIMIT 1",
+                          (row[0], caller)).fetchone()
+    return row[1] if live else None
 
 
 def cmd_call(args):
@@ -543,7 +550,7 @@ def cmd_call(args):
     try:
         live = live_lead_conflict(hc_tools, env)
         if live:
-            print("this terminal's live lead generation is %s with unfinished assignments; "
+            print("this terminal's live lead generation is %s with unfinished assignments or unacknowledged reports; "
                   "run this driver in its own hc terminal or pass --lead %s" % (live, live), file=sys.stderr)
             return 2
         out = hc_tools.call(args.tool, arguments, env, hc_tools.Context())
@@ -583,7 +590,9 @@ def build_parser():
     p.add_argument("--runtime", choices=RUNTIMES, help="override the resolved runtime")
     p.add_argument("--pretty", action="store_true", help="indent the JSON")
     p.set_defaults(func=cmd_list)
-    p = sub.add_parser("call", help="run one dispatch tool in an hc terminal and print its JSON result")
+    # allow_abbrev=False: hooks/pre_tool_use.py parse_call() reads these options exactly; keep both in step.
+    p = sub.add_parser("call", help="run one dispatch tool in an hc terminal and print its JSON result",
+                       allow_abbrev=False)
     p.add_argument("tool", help="an MCP tool name (the usage error lists them)")
     p.add_argument("--lead", help="lead identity (A-Z a-z 0-9 . _ : -, up to 128); processes passing the same ID share one team")
     p.add_argument("--json", default="{}", help="the tool arguments as one JSON object")
