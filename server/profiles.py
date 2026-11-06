@@ -8,8 +8,9 @@ from pathlib import Path
 BUILTINS = ("claude", "codex")
 PROVIDER_VARIABLES = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
                       "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
-                      "ANTHROPIC_DEFAULT_HAIKU_MODEL")
-# Claude Code's --permission-mode choices. A provider other than Anthropic cannot run auto mode's server-side check.
+                      "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_AUTO_MODE_SERVER", "CLAUDE_CODE_AUTO_MODE_MODEL")
+# Claude Code's --permission-mode choices. Another provider gives no server-side auto mode review: its profile sets
+# CLAUDE_CODE_AUTO_MODE_SERVER=0 and CLAUDE_CODE_AUTO_MODE_MODEL, or picks a mode that needs no classifier.
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "dontAsk", "manual", "plan")
 
 
