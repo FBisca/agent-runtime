@@ -364,6 +364,20 @@ def spawn(arguments, env, ctx):
         suffix = " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
         suffix += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         program[-1] += suffix
+    # The base commit is read before the spawn: a worker that commits right away must not empty the diff.
+    base = usage.base_commit(cwd, env) if store else None
+
+    def record():
+        """The worker's own record: the assignment it belongs to and the profile it ran under."""
+        if not store:
+            return
+        usage.write_worker_metadata(env, name,
+                                    assignment_id=identity["assignment_id"], cli=cli, cwd=cwd,
+                                    base_commit=base, spawned_ms=usage.now_ms(),
+                                    profile_applied=None if codex_profile is None else bool(codex_profile.applied),
+                                    profile_reason=codex_profile.reason if codex_profile else None,
+                                    profile_name=codex_profile.name if codex_profile else None,
+                                    session_id=None)
     try:
         code, out, err = run(["hc", "run", "--bg", "--name", name, "--cwd", cwd, "--parent", caller, "--json",
                               "--no-notify"] + program,
@@ -386,6 +400,8 @@ def spawn(arguments, env, ctx):
             finally:
                 if orphan:
                     discard(name, env)
+            if not orphan and not str(error).startswith("cannot run"):
+                record()  # the terminal was not discarded: the worker may still be running
             try:
                 landed = store.assignment_state(mine) == "complete"
             except (dispatch.StoreError, sqlite3.Error):
@@ -399,14 +415,6 @@ def spawn(arguments, env, ctx):
         if store:
             store.fail(identity["assignment_id"])
         raise ToolError(err.strip() or out.strip() or "hc run failed")
-    if store:  # the metadata belongs to an assignment; without dispatch there is no state at all
-        usage.write_worker_metadata(env, name,
-                                    assignment_id=identity["assignment_id"], cli=cli, cwd=cwd,
-                                    base_commit=usage.base_commit(cwd), spawned_ms=usage.now_ms(),
-                                    profile_applied=bool(codex_profile and codex_profile.applied),
-                                    profile_reason=codex_profile.reason if codex_profile else None,
-                                    profile_name=codex_profile.name if codex_profile else None,
-                                    session_id=None)
     out = out.strip()
 
     def undo(error):
@@ -454,6 +462,7 @@ def spawn(arguments, env, ctx):
         store.bind(identity["assignment_id"], info["address"], scope, getattr(ctx, "ack", None), turn, mode)
     except (dispatch.StoreError, sqlite3.Error) as error:
         undo(error)
+    record()  # the worker is live and bound: only now does its record describe a running worker
     return result(dict(info, **identity), structured=True)
 
 

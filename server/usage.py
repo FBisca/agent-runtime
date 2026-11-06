@@ -23,8 +23,13 @@ APPLIED, MISSING_FILE, LEGACY_TABLE, DISABLED_BY_ENV = ("applied", "missing_file
                                                         "disabled_by_env")
 # A profile name names a file inside CODEX_HOME: keep it to a plain file name.
 PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+# Worker names are terminal names; this mirrors the runtime's own NAME_RE so a name can never
+# become a path.
+WORKER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 GIT_HASH_RE = re.compile(r"[0-9a-f]{40,64}")
 LEGACY_TABLE_RE = re.compile(r"^\s*\[\s*profiles\s*\.[^\]]*\]", re.M)
+# Git's own environment can point the command at another repository.
+GIT_ENVIRONMENT = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 
 CodexProfile = namedtuple("CodexProfile", "name applied reason")
 
@@ -42,7 +47,29 @@ def worktrees_dir(env):
 
 
 def worker_metadata_path(env, worker):
+    """The metadata file of one worker. The name is a terminal name: nothing else becomes a path."""
+    if not WORKER_NAME_RE.fullmatch(worker):
+        raise ValueError("invalid worker name %r" % worker)
     return worktrees_dir(env) / ("%s.json" % worker)
+
+
+def _prepare_dir(path):
+    """Create path and any missing parent with mode 0700; refuse a link or a foreign directory."""
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o700)
+        directory.chmod(0o700)
+    if path.is_symlink() or path.stat().st_uid != os.getuid():
+        return False
+    path.chmod(0o700)
+    return True
 
 
 def write_worker_metadata(env, worker, **fields):
@@ -50,16 +77,14 @@ def write_worker_metadata(env, worker, **fields):
 
     Never raises: metadata is a record, not a precondition for the worker.
     """
-    path = worker_metadata_path(env, worker)
-    directory = path.parent
-    payload = dict(fields)
-    payload["worker"] = worker
-    data = json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n"
     try:
-        if directory.is_symlink():  # never write through a link someone else owns
+        path = worker_metadata_path(env, worker)
+        payload = dict(fields)
+        payload["worker"] = worker
+        data = json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n"
+        directory = path.parent
+        if not _prepare_dir(state_root(env)) or not _prepare_dir(directory):
             return None
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        directory.chmod(0o700)
         handle, temp = tempfile.mkstemp(dir=str(directory), prefix=".%s." % worker)
         try:
             os.fchmod(handle, 0o600)
@@ -77,13 +102,13 @@ def write_worker_metadata(env, worker, **fields):
         finally:
             if handle is not None:
                 os.close(handle)
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError):
         return None
     return path
 
 
 def read_worker_metadata(env, worker):
-    """The worker's metadata, or None when it is missing or unreadable."""
+    """The worker's metadata, or None when it is missing, invalid or unreadable."""
     try:
         with worker_metadata_path(env, worker).open(encoding="utf-8") as handle:
             data = json.load(handle)
@@ -92,13 +117,16 @@ def read_worker_metadata(env, worker):
     return data if isinstance(data, dict) else None
 
 
-def base_commit(cwd, timeout=5):
+def base_commit(cwd, env=None, timeout=5):
     """The commit the worker starts from; None when it cannot be read."""
     if not cwd or not os.path.isdir(cwd):
         return None
+    clean = dict(os.environ if env is None else env)
+    for key in GIT_ENVIRONMENT:
+        clean.pop(key, None)  # git's own environment can point the command at another repository
     try:
         proc = subprocess.run(["git", "-C", cwd, "rev-parse", "HEAD"], capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, env=clean)
     except (OSError, subprocess.SubprocessError):
         return None
     value = proc.stdout.strip() if proc.returncode == 0 else ""

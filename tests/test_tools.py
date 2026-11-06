@@ -217,8 +217,8 @@ class SpawnTests(ToolCase):
         self.assertIn("call the agent-runtime report tool", program[2])
         self.assertNotIn("permission-mode", " ".join(argv))
 
-    def spawn_argv(self, **extra):
-        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+    def spawn_argv(self, env=None, **extra):
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}}, env=env)
         result, text = self.call(session, "spawn", dict(self.ARGS, **extra))
         self.assertFalse(result["isError"], text)
         return unwrap(self.runs("run")[-1][10:])
@@ -233,7 +233,10 @@ class SpawnTests(ToolCase):
 
     def test_codex_model_flag(self):
         """agent-runtime/R130"""
-        argv = self.spawn_argv(cli="codex", model="gpt-5.5")
+        # A CODEX_HOME without a profile file: the worker profile is not usable, so no -p is passed.
+        codex_home = self.dir / "codex-home"
+        codex_home.mkdir()
+        argv = self.spawn_argv(env={"CODEX_HOME": str(codex_home)}, cli="codex", model="gpt-5.5")
         self.assertEqual(argv[:4], ["codex", "--no-daemon", "--model", "gpt-5.5"])
         self.assertEqual(len(argv), 5)
         self.assertTrue(argv[-1].startswith("CODEX IMPLEMENTER RULES"))
