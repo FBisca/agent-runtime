@@ -503,6 +503,13 @@ sys.exit(reply.get("rc", 0))
 """
 
 
+# sh and awk, not python: the walk gives each ps a 0.2 s timeout, which a python start-up can miss under load
+FAKE_PS = """#!/bin/sh
+[ "$1 $2" = "-o ppid=,args=" ] && [ "$3" = "-p" ] || exit 1
+awk -v pid="$4" '$1 == pid { found = 1; $1 = ""; sub(/^ /, ""); print } END { exit !found }' %(table)s
+"""
+
+
 class CallTests(unittest.TestCase):
     """`agent-runtime call` against a fake hc on PATH that logs argv; the dispatch store lives in a temp dir."""
 
@@ -512,7 +519,9 @@ class CallTests(unittest.TestCase):
         self.dir = Path(self.temp.name)
         self.bin = self.dir / "bin"
         self.bin.mkdir()
-        (self.bin / "ps").write_text("#!/bin/sh\nexit 1\n")
+        self.table = self.dir / "ps-table"
+        self.set_ancestors([(5000, "/bin/zsh -l"), (6000, "/Users/x/.local/bin/herdr-core hold --socket s")])
+        (self.bin / "ps").write_text(FAKE_PS % {"table": str(self.table)})
         (self.bin / "ps").chmod(0o755)
         self.log = self.dir / "log"
         self.log.write_text("")
@@ -521,6 +530,14 @@ class CallTests(unittest.TestCase):
         hc = self.bin / "hc"
         hc.write_text(FAKE_HC % {"python": sys.executable, "log": str(self.log), "replies": str(self.replies)})
         hc.chmod(0o755)
+
+    def set_ancestors(self, chain, end=1):
+        """Fake process table for `call`: the test runner is its parent, then each (pid, args), nearest first;
+        the last one's parent is `end`, which has no entry (pid 1 ends the walk, any other pid is unreadable)."""
+        pids = [os.getpid()] + [pid for pid, _ in chain]
+        names = ["python3 -m unittest"] + [args for _, args in chain]
+        lines = ["%d %d %s" % (pid, (pids + [end])[index + 1], names[index]) for index, pid in enumerate(pids)]
+        self.table.write_text("\n".join(lines) + "\n")
 
     def set_replies(self, replies):
         base = {"get t0": {"out": json.dumps({"address": "t0", "name": "lead", "parent": None})},
@@ -654,6 +671,60 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
+
+    SERVER = (6000, "/Users/x/.local/bin/herdr-core hold --socket s")
+
+    def assert_refused_without_dispatch(self, code, err, needle):
+        self.assertEqual(code, 2, err)
+        self.assertIn(needle, err)
+        self.assertEqual(self.hc_calls(), [])
+
+    def test_ancestry_S1_claude_or_codex_below_the_server_is_refused_naming_pid_and_name(self):
+        for pid, args, name in ((7001, "claude --agent implementer", "claude"),
+                                (7002, "/opt/bin/codex exec", "codex"),
+                                (7003, "node /usr/lib/codex/bin/codex", "codex")):
+            self.set_ancestors([(5000, "/bin/zsh -c call"), (pid, args), self.SERVER])
+            code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+            self.assert_refused_without_dispatch(code, err, "%d (%s)" % (pid, name))
+            self.assertEqual(out, "")
+
+    def test_ancestry_S2_walk_reaching_the_server_with_no_llm_ancestor_runs_the_call(self):
+        self.set_ancestors([(5000, "/bin/zsh -l"), (5001, "python3 driver.py"), self.SERVER])
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["name"], "w1")
+
+    def test_ancestry_S2_llm_above_the_server_is_not_an_ancestor_below_it(self):
+        self.set_ancestors([(5000, "/bin/zsh -l"), self.SERVER, (8000, "claude")])
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 0, err)
+
+    def test_ancestry_S3_unreadable_process_table_refuses(self):
+        (self.bin / "ps").write_text("#!/bin/sh\nexit 1\n")
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assert_refused_without_dispatch(code, err, "process")
+
+    def test_ancestry_S3_walk_ending_on_an_unreadable_pid_refuses(self):
+        self.set_ancestors([(5000, "/bin/zsh -l"), (5001, "python3 driver.py")], end=4242)
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assert_refused_without_dispatch(code, err, "process")
+
+    def test_ancestry_S3_walk_longer_than_the_hop_limit_refuses(self):
+        self.set_ancestors([(5000 + n, "/bin/sh") for n in range(app.MAX_CALL_ANCESTOR_HOPS + 2)] + [self.SERVER])
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assert_refused_without_dispatch(code, err, "process")
+
+    def test_ancestry_S3_reaching_pid_1_without_an_llm_is_not_a_refusal(self):
+        self.set_ancestors([(5000, "/bin/zsh -l")])
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 0, err)
+
+    def test_ancestry_S4_shell_forms_that_hide_call_from_the_hook_are_refused_by_the_cli(self):
+        # The CLI never sees the command text: whatever shell form launched it, the claude ancestor decides.
+        for form in ("/bin/zsh -c $(printf call)", "/usr/bin/env agent-runtime call wait", "/usr/bin/nohup agent-runtime call"):
+            self.set_ancestors([(5000, form), (5001, "/bin/zsh -c eval"), (7001, "claude"), self.SERVER])
+            code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+            self.assert_refused_without_dispatch(code, err, "7001 (claude)")
 
 
 if __name__ == "__main__":

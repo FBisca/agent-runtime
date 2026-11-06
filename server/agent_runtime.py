@@ -528,6 +528,40 @@ def live_lead_conflict(hc_tools, env):
     return row[1] if live else None
 
 
+HC_SERVER_EXECUTABLES = ("herdr-core", "hc")  # a pane's processes start below this process
+MAX_CALL_ANCESTOR_HOPS = 40
+CALL_ANCESTRY_BUDGET_SECONDS = 5.0
+CALL_PS_TIMEOUT_SECONDS = 2.0  # a refusal is cheaper than a timeout flake on a loaded machine
+
+
+def call_ancestry_refusal():
+    """Why `call` must not run here, or None. Walks the process ancestors up to the hc server (or pid 1):
+    a claude/codex executable on the way means an LLM launched this process, whatever shell form it used.
+    Stopping at the hc server keeps a server restarted from a Claude Bash from tainting every pane.
+    Fail closed: an unreadable table or a walk that ends elsewhere refuses."""
+    deadline = time.monotonic() + CALL_ANCESTRY_BUDGET_SECONDS
+    pid, seen = os.getppid(), set()
+    for _ in range(MAX_CALL_ANCESTOR_HOPS):
+        if pid <= 1:
+            return None
+        if pid in seen or time.monotonic() > deadline:
+            break
+        seen.add(pid)
+        entry = real_ps_entry(pid, CALL_PS_TIMEOUT_SECONDS) if ps_entry is real_ps_entry else ps_entry(pid)
+        if not entry:
+            return "cannot read the process table at pid %d, so cannot prove this is not an agent session" % pid
+        parent, args = entry
+        found = cli_of_args(args)
+        if found:
+            return "refusing: ancestor process %d (%s) is an agent session; `call` is for scripts in a plain " \
+                   "terminal or hc pane, agents use the MCP tools" % (pid, found)
+        tokens = args.split()
+        if tokens and os.path.basename(tokens[0]) in HC_SERVER_EXECUTABLES:
+            return None
+        pid = parent
+    return "process ancestry did not reach the hc server or pid 1, so cannot prove this is not an agent session"
+
+
 def cmd_call(args):
     hc_tools = hc_tools_module()
     try:
@@ -538,6 +572,10 @@ def cmd_call(args):
             or (args.lead is not None and not LEAD_ID.fullmatch(args.lead)):
         print("usage: agent-runtime call <tool> [--lead ID] [--json '{...}'] (tools: %s)"
               % " ".join(sorted(hc_tools.HANDLERS)), file=sys.stderr)
+        return 2
+    refusal = call_ancestry_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 2
     env = dict(os.environ, AGENT_RUNTIME_DISPATCH="1")
     try:
