@@ -543,14 +543,31 @@ class CallTests(unittest.TestCase):
         return done.returncode, done.stdout, done.stderr
 
     def test_S1_hc_terminal_runs_the_tool_and_prints_its_json(self):
-        """agent-runtime/S1"""
+        """call-cli/S1"""
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
         info = json.loads(out)
         self.assertEqual((info["name"], info["parent"]), ("w1", "t0"))
 
+    def test_S1_plain_text_tool_result_is_wrapped_as_json(self):
+        """call-cli/S1"""
+        spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
+        code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
+        self.assertEqual(code, 0, err)
+        code, out, err = self.call("stop", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 0, err)
+        self.assertIn("stopped", json.loads(out)["result"])
+
+    def test_S2_unexpected_exception_prints_error_json_not_a_traceback(self):
+        """call-cli/S2"""
+        (self.dir / "state").write_text("not a directory")  # the store cannot open under XDG_STATE_HOME
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 1)
+        self.assertTrue(json.loads(out)["isError"])
+        self.assertNotIn("Traceback", err)
+
     def test_S2_tool_error_prints_result_json_and_exits_1(self):
-        """agent-runtime/S2"""
+        """call-cli/S2"""
         code, out, err = self.call("status", "--lead", "L1", "--json", "{}")
         self.assertEqual(code, 1, err)
         result = json.loads(out)
@@ -558,7 +575,7 @@ class CallTests(unittest.TestCase):
         self.assertIn("name", result["content"][0]["text"])
 
     def test_S3_outside_hc_exits_2_with_require_hc_message_and_starts_nothing(self):
-        """agent-runtime/S3"""
+        """call-cli/S3"""
         code, out, err = self.call("spawn", "--lead", "L1", "--json", '{"kind": "worker", "name": "w1"}',
                                    hc_terminal=None)
         self.assertEqual(code, 2)
@@ -566,7 +583,7 @@ class CallTests(unittest.TestCase):
         self.assertEqual(self.hc_calls(), [])
 
     def test_S4_bad_json_or_unknown_tool_exits_2_with_usage_and_starts_nothing(self):
-        """agent-runtime/S4"""
+        """call-cli/S4"""
         for args in (("status", "--json", "{not json"), ("status", "--json", "[1]"), ("bogus", "--lead", "L1")):
             with self.subTest(args=args):
                 code, out, err = self.call(*args)
@@ -575,20 +592,48 @@ class CallTests(unittest.TestCase):
                 self.assertEqual(self.hc_calls(), [])
 
     def test_S5_same_lead_in_two_processes_shares_assignments(self):
-        """agent-runtime/S5"""
+        """call-cli/S5"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
         assignment = json.loads(out)["assignment_id"]
         self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})}})
-        code, out, err = self.call("report", "--lead", "L1", "--json",
+        code, out, err = self.call("report", "--lead", "W1", "--json",
                                    json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
         self.assertEqual(code, 0, err)
         code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
         self.assertEqual(code, 0, err)
-        self.assertIn(assignment, out)
-        code, out, err = self.call("wait", "--lead", "L2", "--json", '{"target": "all", "timeout": 0}')
-        self.assertNotIn(assignment, out)
+        result = json.loads(out)
+        self.assertEqual(result["reason"], "completed")
+        self.assertEqual([(m["assignment_id"], m["kind"], m["text"]) for m in result["messages"]],
+                         [(assignment, "complete", "done")])
+
+    def test_S7_other_generation_with_unfinished_work_is_refused_and_the_live_one_keeps_working(self):
+        """call-cli/S7"""
+        spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
+        code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
+        self.assertEqual(code, 0, err)
+        assignment = json.loads(out)["assignment_id"]
+        before = [c for c in self.hc_calls() if c[0] in ("run", "kill", "rm", "send")]
+        code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("L1", err)
+        self.assertEqual([c for c in self.hc_calls() if c[0] in ("run", "kill", "rm", "send")], before)
+        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})}})
+        code, out, err = self.call("report", "--lead", "W1", "--json",
+                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
+        self.assertEqual(code, 0, err)
+        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["reason"], "completed")
+
+    def test_S7_other_generation_may_start_once_the_live_one_has_nothing_unfinished(self):
+        """call-cli/S7"""
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 0, err)
+        code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 0, err)
 
 
 if __name__ == "__main__":

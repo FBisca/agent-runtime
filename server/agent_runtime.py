@@ -4,13 +4,15 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 HC_TIMEOUT_SECONDS = 2
-CALL_LEAD_ENV = "AGENT_RUNTIME_CALL_LEAD"
+FORCED_GENERATION = None  # set in-process by `agent-runtime call --lead`; never read from the environment
+LEAD_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 RUNTIMES = ("herdmates", "hc", "native")
 FIELDS = ("runtime", "role", "parent", "cli")
 
@@ -89,10 +91,9 @@ def lstart(pid):
 def cli_generation():
     """`<pid>:<lstart>` of the nearest codex/claude ancestor, else None. Shared by the MCP server and
     hooks; session IDs are deliberately ignored so /clear and /new stay on one team. Read-only.
-    `agent-runtime call --lead` sets CALL_LEAD_ENV for its own process, which pins the generation."""
-    forced = os.environ.get(CALL_LEAD_ENV)
-    if forced:
-        return forced
+    `agent-runtime call --lead` sets FORCED_GENERATION for its own process, which pins the generation."""
+    if FORCED_GENERATION:
+        return FORCED_GENERATION
     deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
     pid = os.getppid()
     for _ in range(MAX_ANCESTOR_HOPS):
@@ -506,13 +507,28 @@ def hc_tools_module():
     return hc_tools
 
 
+def live_lead_conflict(hc_tools, env):
+    """The generation of this terminal's latest team when it differs from ours and still has
+    unfinished assignments, else None. One hc terminal has one live lead generation."""
+    _, caller = hc_tools.require_hc(env)
+    scope, generation = hc_tools.dispatch_identity(env)
+    store = hc_tools.dispatch.Store(env)
+    with store.transaction() as db:
+        row = db.execute("SELECT id, generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
+                         (scope, caller)).fetchone()
+    if row and row[1] != generation and store.unfinished_count(row[0]):
+        return row[1]
+    return None
+
+
 def cmd_call(args):
     hc_tools = hc_tools_module()
     try:
         arguments = json.loads(args.json)
     except ValueError:
         arguments = None
-    if args.tool not in hc_tools.HANDLERS or not isinstance(arguments, dict) or args.lead == "":
+    if args.tool not in hc_tools.HANDLERS or not isinstance(arguments, dict) \
+            or (args.lead is not None and not LEAD_ID.fullmatch(args.lead)):
         print("usage: agent-runtime call <tool> [--lead ID] [--json '{...}'] (tools: %s)"
               % " ".join(sorted(hc_tools.HANDLERS)), file=sys.stderr)
         return 2
@@ -523,12 +539,25 @@ def cmd_call(args):
         print(error, file=sys.stderr)
         return 2
     if args.lead:
-        os.environ[CALL_LEAD_ENV] = args.lead
-    out = hc_tools.call(args.tool, arguments, env, hc_tools.Context())
+        hc_tools.lib.FORCED_GENERATION = args.lead  # hc_tools reads the generation from its own module copy
+    try:
+        live = live_lead_conflict(hc_tools, env)
+        if live:
+            print("this terminal's live lead generation is %s with unfinished assignments; "
+                  "run this driver in its own hc terminal or pass --lead %s" % (live, live), file=sys.stderr)
+            return 2
+        out = hc_tools.call(args.tool, arguments, env, hc_tools.Context())
+    except Exception as error:  # the MCP server reports any failure as an error result; so does the CLI
+        out = {"content": [{"type": "text", "text": "%s failed: %s" % (args.tool, error)}], "isError": True}
     if out.get("isError"):
         print(json.dumps(out, separators=(",", ":")))
         return 1
-    print(out["content"][0]["text"])
+    text = out["content"][0]["text"]
+    try:
+        json.loads(text)
+    except ValueError:
+        text = json.dumps({"result": text})
+    print(text)
     return 0
 
 
@@ -555,8 +584,8 @@ def build_parser():
     p.add_argument("--pretty", action="store_true", help="indent the JSON")
     p.set_defaults(func=cmd_list)
     p = sub.add_parser("call", help="run one dispatch tool in an hc terminal and print its JSON result")
-    p.add_argument("tool", help="an MCP tool name: spawn, message, resume, wait, status, list, collect, stop, report, task")
-    p.add_argument("--lead", help="lead identity; processes passing the same ID share one team")
+    p.add_argument("tool", help="an MCP tool name (the usage error lists them)")
+    p.add_argument("--lead", help="lead identity (A-Z a-z 0-9 . _ : -, up to 128); processes passing the same ID share one team")
     p.add_argument("--json", default="{}", help="the tool arguments as one JSON object")
     p.set_defaults(func=cmd_call)
     return parser

@@ -152,6 +152,11 @@ def verdict(command, is_subagent):
             return "deny", "Cannot parse this command and it mentions hc: use the agent-runtime tools."
     result = None
     for program, args in invocations(command):
+        if program == "agent-runtime":
+            gated = call_verdict(args, is_subagent)
+            if gated and gated[0] == "deny":
+                return gated
+            result = result or gated
         if program != "hc":
             continue
         sub = hc_subcommand(args)
@@ -160,6 +165,31 @@ def verdict(command, is_subagent):
         elif sub in HC_DENIED | HC_ASKED or (sub == "file" and not file_read_only(args, sub)):
             return "deny", "Do not run 'hc %s' in Bash: use the agent-runtime tools." % sub
     return result
+
+
+def call_verdict(args, is_subagent):
+    """`agent-runtime call <tool> --json '{...}'` carries the same authority as the MCP tool: gate it alike."""
+    rest = [a for a in args if not a.startswith("-")]
+    if rest[:1] != ["call"]:
+        return None
+    tool = rest[1] if len(rest) > 1 else ""
+    payload = None
+    for i, arg in enumerate(args):
+        if arg.startswith("--json="):
+            payload = arg.split("=", 1)[1]
+        elif arg == "--json" and i + 1 < len(args):
+            payload = args[i + 1]
+    try:
+        arguments = json.loads("{}" if payload is None else payload)
+    except ValueError:
+        arguments = None
+    reason = tool_verdict("mcp__agent-runtime__" + tool, is_subagent, arguments)
+    if reason:
+        return "deny", reason
+    read_only = tool == "task" and isinstance(arguments, dict) and arguments.get("action") == "list"
+    if tool in MUTATING_TOOLS and not read_only and not is_subagent:
+        return "ask", "approve to run the agent-runtime %s tool from Bash" % tool
+    return None
 
 
 def tool_verdict(tool_name, is_subagent, arguments=None):

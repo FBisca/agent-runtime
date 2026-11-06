@@ -207,6 +207,28 @@ class RawHcTests(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout.strip()), (0, ""))
 
 
+class CallCliTests(unittest.TestCase):
+    def test_S6_subagent_is_denied_agent_runtime_call_through_bash(self):
+        """call-cli/S6"""
+        for command in ("agent-runtime call wait --json '{\"target\":\"all\"}'",
+                        "agent-runtime call spawn --lead L1 --json '{}'",
+                        "bin/agent-runtime call task --json '{\"action\":\"list\",\"receipt\":\"r\"}'",
+                        "agent-runtime call status --json '{not json'",
+                        "cd x && agent-runtime call stop --json '{}'"):
+            self.assertTrue(denied(run(PRE, bash(command, agent_id="sub-1"))), command)
+
+    def test_S6_non_subagent_is_asked_on_mutating_tools_only(self):
+        """call-cli/S6"""
+        for tool in ("spawn", "message", "resume", "stop", "report"):
+            out = run(PRE, bash("agent-runtime call %s --lead L1 --json '{}'" % tool))
+            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "ask", tool)
+        for command in ("agent-runtime call wait --json '{}'", "agent-runtime call status --json '{}'",
+                        "agent-runtime call task --json '{\"action\":\"list\"}'", "agent-runtime status w1",
+                        "agent-runtime resolve"):
+            self.assertIsNone(run(PRE, bash(command)), command)
+        self.assertIsNone(run(PRE, bash("agent-runtime call task --json '{\"action\":\"list\"}'", agent_id="sub-1")))
+
+
 class WiringTests(unittest.TestCase):
     def test_S18_hooks_json_registers_both_hooks_through_plugin_root(self):
         """agent-runtime-tools/S18"""
