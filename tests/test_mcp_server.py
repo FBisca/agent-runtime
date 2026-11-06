@@ -165,6 +165,14 @@ class ToolListTests(ServerCase):
         self.assertEqual(spawn["inputSchema"]["properties"]["model"]["type"], "string")
         self.assertNotIn("model", spawn["inputSchema"]["required"])
 
+    def test_spawn_schema_has_optional_effort_enum(self):
+        """agent-runtime/R149"""
+        session = self.start()
+        session.handshake()
+        spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
+        self.assertEqual(spawn["inputSchema"]["properties"]["effort"]["enum"], ["low", "medium", "high", "xhigh", "max"])
+        self.assertNotIn("effort", spawn["inputSchema"]["required"])
+
     def test_spawn_schema_has_optional_string_agent(self):
         """agent-runtime/R142"""
         session = self.start()

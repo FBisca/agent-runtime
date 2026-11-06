@@ -342,6 +342,36 @@ class SpawnTests(ToolCase):
                 self.assertTrue(result["isError"])
                 self.assertEqual(self.runs("run"), [])
 
+    def test_claude_effort_flag(self):
+        """agent-runtime/R147"""
+        argv = self.spawn_argv(cli="claude", model="haiku", effort="low")
+        self.assertEqual(argv[:9], ["claude", "--agent", "implementer", "--permission-mode", "auto",
+                                    "--model", "haiku", "--effort", "low"])
+        self.assertEqual(len(argv), 10)
+
+    def test_codex_effort_config(self):
+        """agent-runtime/R148"""
+        argv = self.spawn_argv(cli="codex", effort="xhigh")
+        self.assertEqual(argv[:4], ["codex", "--no-daemon", "-c", 'model_reasoning_effort="xhigh"'])
+        self.assertEqual(len(argv), 5)
+
+    def test_no_effort_keeps_argv(self):
+        """agent-runtime/R148"""
+        for cli in ("claude", "codex"):
+            with self.subTest(cli=cli):
+                argv = self.spawn_argv(cli=cli)
+                self.assertNotIn("--effort", argv)
+                self.assertNotIn("-c", argv)
+
+    def test_unknown_effort_is_an_error(self):
+        """agent-runtime/R149"""
+        for effort in ("ultra", "", "--x", 3, "high\n"):
+            with self.subTest(effort=effort):
+                session = self.start()
+                result, _ = self.call(session, "spawn", dict(self.ARGS, cli="codex", effort=effort))
+                self.assertTrue(result["isError"])
+                self.assertEqual(self.runs("run"), [])
+
     def test_S2_unsent_first_message_is_an_error(self):
         """agent-runtime-tools/S2"""
         session = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}})
