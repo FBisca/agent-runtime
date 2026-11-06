@@ -12,6 +12,7 @@ from pathlib import Path
 
 HC_TIMEOUT_SECONDS = 2
 FORCED_GENERATION = None  # set in-process by `agent-runtime call --lead`; never read from the environment
+FORCED_LEAD = False  # same process-local override, set only after the ancestry gate
 LEAD_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 RUNTIMES = ("herdmates", "hc", "native")
 FIELDS = ("runtime", "role", "parent", "cli")
@@ -156,6 +157,8 @@ def resolve(env, cli=None, hc_runner=hc_get):
         if parent is None:
             return {"runtime": "hc", "role": "lead", "cli": cli}
         if isinstance(parent, str) and parent and not any(c.isspace() for c in parent):
+            if FORCED_LEAD:
+                return {"runtime": "hc", "role": "lead", "cli": cli}
             return {"runtime": "hc", "role": "worker", "parent": parent, "cli": cli}
         return unknown
     return {"runtime": "native", "role": "lead", "cli": cli}
@@ -596,6 +599,7 @@ def cmd_call(args):
         return 2
     if args.lead:
         hc_tools.lib.FORCED_GENERATION = args.lead  # hc_tools reads the generation from its own module copy
+        hc_tools.lib.FORCED_LEAD = True
     try:
         live = live_lead_conflict(hc_tools, env)
         if live:

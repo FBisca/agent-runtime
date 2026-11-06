@@ -551,11 +551,12 @@ class CallTests(unittest.TestCase):
     def hc_calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def call(self, *args, hc_terminal="t0"):
+    def call(self, *args, hc_terminal="t0", extra_env=None):
         env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.dir / "home"),
                "XDG_STATE_HOME": str(self.dir / "state"), "XDG_CONFIG_HOME": str(self.dir / "config")}
         if hc_terminal:
             env["HC_TERMINAL_ID"] = hc_terminal
+        env.update(extra_env or {})
         done = subprocess.run([sys.executable, "-B", str(BIN), "call", *args], env=env, capture_output=True,
                               text=True, stdin=subprocess.DEVNULL, timeout=30)
         return done.returncode, done.stdout, done.stderr
@@ -616,8 +617,9 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         assignment = json.loads(out)["assignment_id"]
         self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
-        code, out, err = self.call("report", "--lead", "W1", "--json",
-                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
+        code, out, err = self.call("report", "--json",
+                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9",
+                                   extra_env={"CODEX_THREAD_ID": "W1"})
         self.assertEqual(code, 0, err)
         code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
         self.assertEqual(code, 0, err)
@@ -639,8 +641,9 @@ class CallTests(unittest.TestCase):
         self.assertIn("L1", err)
         self.assertEqual([c for c in self.hc_calls() if c[0] in ("run", "kill", "rm", "send")], before)
         self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
-        code, out, err = self.call("report", "--lead", "W1", "--json",
-                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
+        code, out, err = self.call("report", "--json",
+                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9",
+                                   extra_env={"CODEX_THREAD_ID": "W1"})
         self.assertEqual(code, 0, err)
         code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
         self.assertEqual(code, 0, err)
@@ -653,8 +656,9 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         assignment = json.loads(out)["assignment_id"]
         self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
-        code, out, err = self.call("report", "--lead", "W1", "--json",
-                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
+        code, out, err = self.call("report", "--json",
+                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9",
+                                   extra_env={"CODEX_THREAD_ID": "W1"})
         self.assertEqual(code, 0, err)
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
         self.assertEqual(code, 2)
@@ -672,6 +676,29 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
+
+    def test_ancestry_S5_parented_terminal_forced_lead_owns_worker_and_receives_report(self):
+        self.set_replies({"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}})
+        spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
+        code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
+        self.assertEqual(code, 0, out + err)
+        assignment = json.loads(out)["assignment_id"]
+        run = next(c for c in self.hc_calls() if c[0] == "run")
+        self.assertEqual(run[run.index("--parent") + 1], "t0")
+        code, out, err = self.call("report", "--json", json.dumps({"text": "done", "kind": "complete",
+                                                                  "assignment_id": assignment}),
+                                   hc_terminal="t9", extra_env={"CODEX_THREAD_ID": "W1"})
+        self.assertEqual(code, 0, out + err)
+        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([(m["assignment_id"], m["text"]) for m in json.loads(out)["messages"]],
+                         [(assignment, "done")])
+
+    def test_ancestry_S6_parented_terminal_without_lead_remains_worker(self):
+        self.set_replies({"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}})
+        code, out, err = self.call("status", "--json", '{"name": "w1"}', extra_env={"CODEX_THREAD_ID": "W1"})
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("caller has no matching active assignment", out)
 
     SERVER = (6000, "/Users/x/.local/bin/herdr-core hold --socket s")
 
