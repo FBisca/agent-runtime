@@ -39,7 +39,8 @@ TOOLS = [
              "task_id": text("ready task to link"),
              "model": text("optional model"),
              "effort": {"type": "string", "enum": list(hc_tools.EFFORTS)},
-             "agent": text("agent, default implementer; needs report")}, ["kind", "name", "task", "cwd"])),
+             "agent": text("agent, default implementer; none = no role; needs report"),
+             "instructions_file": text("codex only: role text path")}, ["kind", "name", "task", "cwd"])),
     ("message", "Send text to a teammate or lead. Peer messages arrive in tool results. Never forces input past a permission dialog.",
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
@@ -76,7 +77,7 @@ TOOLS = [
 HOST_RESULT_CHARS = 500000  # Claude per-tool text threshold; canonical payloads stay under 192 KiB (D22)
 for _, _, input_schema in TOOLS:
     input_schema["properties"].setdefault("receipt", text("acknowledge prior batch"))
-    input_schema["properties"].setdefault("assignment_id", text("required on first worker call"))
+    input_schema["properties"].setdefault("assignment_id", text("required on first call"))
 TOOL_NAMES = [name for name, _, _ in TOOLS]
 
 

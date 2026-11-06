@@ -155,6 +155,15 @@ def codex_instructions(agent="implementer"):
         raise ToolError("cannot read Codex %s instructions from %s: %s" % (agent, path, error))
 
 
+# The dispatch contract, for a worker whose role file does not carry it: how to report, and what a result is.
+WORKER_PROTOCOL = (
+    "Worker protocol: send your result with the agent-runtime report tool as "
+    "report(kind, assignment_id), where kind is progress, complete, blocked or decision; a final "
+    "message alone never reaches the parent. Return a compact block: STATUS: COMPLETE | BLOCKED | "
+    "PARTIAL, then task id, files changed, checks (command and outcome), decisions, remaining work."
+)
+
+
 def discard(name, env):
     """Best effort: end and remove a terminal we may have started."""
     fresh = Context()
@@ -247,17 +256,48 @@ def spawn_effort(arguments, cli):
     return ["-c", 'model_reasoning_effort="%s"' % effort]
 
 
+NO_AGENT = "none"  # the reserved agent name: no role file, no role text
+
+
 def spawn_agent(arguments, cli):
+    """The role the worker runs under: a name, or None for no role at all."""
     agent = arguments.get("agent")
     if agent is None:
         return "implementer"
-    # Codex reads ~/.codex/agents/<agent>.toml, so it never takes ':' (path-safe names only).
-    if cli == "codex" and isinstance(agent, str) and ":" in agent:
-        raise ToolError("Codex agents cannot contain ':' (Claude plugin agents only)")
     pattern = AGENT_CLAUDE if cli == "claude" else AGENT_CODEX
-    if not isinstance(agent, str) or not pattern.fullmatch(agent):
+    if not isinstance(agent, str):
+        raise ToolError("agent must match %s" % pattern.pattern)
+    if agent == NO_AGENT:
+        return None
+    # Codex reads ~/.codex/agents/<agent>.toml, so it never takes ':' (path-safe names only).
+    if cli == "codex" and ":" in agent:
+        raise ToolError("Codex agents cannot contain ':' (Claude plugin agents only)")
+    if not pattern.fullmatch(agent):
         raise ToolError("agent must match %s" % pattern.pattern)
     return agent
+
+
+def spawn_instructions(arguments, env):
+    """Role text from the file the caller names; None when there is none."""
+    path = arguments.get("instructions_file")
+    if path is None:
+        return None
+    if not isinstance(path, str) or not path.strip():
+        raise ToolError("instructions_file must be a path")
+    home = env.get("HOME") or os.path.expanduser("~")
+    expanded = home + path[1:] if path.startswith("~/") else path
+    if not os.path.isabs(expanded):
+        raise ToolError("instructions_file must be an absolute or ~/ path: %s" % path)
+    if not os.path.isfile(expanded):
+        raise ToolError("instructions_file is not a file: %s" % path)
+    try:
+        with open(expanded, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as error:
+        raise ToolError("cannot read instructions_file %s: %s" % (path, error.strerror or type(error).__name__))
+    if not text.strip():
+        raise ToolError("instructions_file is empty: %s" % path)
+    return text.strip()
 
 
 def owned_orphan(name, caller, env, earlier, other):
@@ -326,6 +366,12 @@ def spawn(arguments, env, ctx):
     task_id = linked_task(arguments, env)
     model = spawn_model(arguments) + spawn_effort(arguments, cli)
     agent = spawn_agent(arguments, cli)
+    instructions = spawn_instructions(arguments, env)
+    if instructions is not None:
+        if cli != "codex":
+            raise ToolError("instructions_file applies to the codex family only")
+        if arguments.get("agent") is not None:
+            raise ToolError("agent and instructions_file are mutually exclusive")
     launch_args = []
     if cli == "claude":
         try:
@@ -337,13 +383,16 @@ def spawn(arguments, env, ctx):
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
     store = None
     message = "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
+    if agent is None or instructions is not None:
+        # No role file supplies the dispatch contract, so the runtime states it.
+        message += "\n\n" + WORKER_PROTOCOL
     if dispatch_enabled(env):
         # D4: identity and inputs are resolved before hc run, so nothing is started on an invalid spawn.
         scope, _ = dispatch_identity(env, ctx)
         store, team = lead_store(env, ctx)
     codex_profile = None
     if cli == "claude":
-        program = ["claude", "--agent", agent] + launch_args + model + [message]
+        program = ["claude"] + (["--agent", agent] if agent else []) + launch_args + model + [message]
     else:
         # The worker profile names the policy Codex actually runs; without it the worker runs the
         # CLI's defaults, so the profile is only passed when it is usable.
@@ -351,7 +400,8 @@ def spawn(arguments, env, ctx):
         program = ["codex", "--no-daemon"]
         if codex_profile.applied:
             program += ["-p", codex_profile.name]
-        program += model + ["%s\n\n%s" % (codex_instructions(agent), message)]
+        preamble = instructions if instructions is not None else (codex_instructions(agent) if agent else "")
+        program += model + ["%s\n\n%s" % (preamble, message) if preamble else message]
     if profile:
         launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agent-runtime-profile")
         program = [os.path.normpath(launcher), profile, str(profiles.config_path(env)), "--"] + program
