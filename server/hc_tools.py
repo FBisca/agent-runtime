@@ -311,6 +311,12 @@ def spawn(arguments, env, ctx):
     task_id = linked_task(arguments, env)
     model = spawn_model(arguments)
     agent = spawn_agent(arguments, cli)
+    launch_args = []
+    if cli == "claude":
+        try:
+            launch_args = profiles.claude_launch_args(configured[profile] if profile else None, env)
+        except profiles.ProfileError as error:
+            raise ToolError("profile %r: %s" % (profile, error)) from error
     _, caller = require_hc(env)
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
@@ -321,7 +327,7 @@ def spawn(arguments, env, ctx):
         scope, _ = dispatch_identity(env, ctx)
         store, team = lead_store(env, ctx)
     if cli == "claude":
-        program = ["claude", "--agent", agent, "--permission-mode", "auto"] + model + [message]
+        program = ["claude", "--agent", agent] + launch_args + model + [message]
     else:
         program = ["codex", "--no-daemon"] + model + ["%s\n\n%s" % (codex_instructions(agent), message)]
     if profile:
