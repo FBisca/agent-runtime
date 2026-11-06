@@ -191,6 +191,8 @@ def now_ms():
 
 SESSION_HEAD_BYTES = 256 * 1024
 SESSION_CREATION_SLACK_MS = 2000
+ASSIGNMENT_MARKER_RE = re.compile(r"\bassignment_id=([A-Za-z0-9][A-Za-z0-9_-]*)")
+SESSION_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 
 
 def _message_text(content):
@@ -203,7 +205,7 @@ def _message_text(content):
 
 
 def _session_match(path, metadata):
-    """Read a bounded head, stopping at the first user message. Never search later reports."""
+    """Match the first marked user prompt, skipping injected context and stopping at assistant output."""
     try:
         info = path.stat()
         created_ms = getattr(info, "st_birthtime", info.st_ctime) * 1000
@@ -221,23 +223,33 @@ def _session_match(path, metadata):
                 if not isinstance(payload, dict):
                     continue
                 if record.get("type") == "session_meta":
-                    session_id, session_cwd = payload.get("session_id"), payload.get("cwd")
+                    session_id = payload.get("session_id") or payload.get("id")
+                    session_cwd = payload.get("cwd")
                     continue
+                if (record.get("type") == "response_item" and payload.get("role") == "assistant") or (
+                        record.get("type") == "event_msg" and payload.get("type") == "agent_message"):
+                    return None
                 if record.get("type") != "response_item" or payload.get("role") != "user":
                     continue
                 content = payload.get("content")
             else:
-                if record.get("type") != "user":
+                if record.get("type") == "assistant":
+                    return None
+                if record.get("type") != "user" or record.get("isMeta"):
                     continue
                 message = record.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
             if session_cwd and metadata.get("cwd") and session_cwd != metadata["cwd"]:
                 return None
-            marker = r"assignment_id=" + re.escape(metadata["assignment_id"]) + r"(?![\w-])"
-            if not re.search(marker, _message_text(content)):
+            assignments = ASSIGNMENT_MARKER_RE.findall(_message_text(content))
+            if not assignments:  # CLI context and literal assignment_id=<id> placeholders are not prompts.
+                continue
+            if metadata["assignment_id"] not in assignments:
                 return None
             if metadata["cli"] == "codex":
-                session_id = session_id or path.stem.rsplit("-", 1)[-1]
+                if not session_id:
+                    uuid = SESSION_UUID_RE.search(path.stem)
+                    session_id = uuid.group() if uuid else path.stem.rsplit("-", 1)[-1]
             else:
                 session_id = path.stem
             return session_id if isinstance(session_id, str) and session_id else None
@@ -249,9 +261,10 @@ def _session_match(path, metadata):
 def resolve_session_log(env, worker):
     """Resolve an assignment's CLI log to a Path, cache its identity, or return None.
 
-    Candidates must be newly created and carry the assignment marker in their first user
-    message. Cached paths are validated too, since worker names can be reused. Reads are
-    bounded and failures never make session metrics a precondition for runtime operations.
+    Candidates must be newly created and carry the assignment marker in their first marked
+    user prompt, before assistant output. Cached paths are validated too, since worker names
+    can be reused. Reads are bounded and failures never make session metrics a precondition
+    for runtime operations.
     """
     try:
         metadata = read_worker_metadata(env, worker)

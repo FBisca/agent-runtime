@@ -1,0 +1,4 @@
+{"type":"user","isMeta":true,"message":{"role":"user","content":"Synthetic context assignment_id=metadata assignment_id=<id>"}}
+{"type":"user","message":{"role":"user","content":"Include assignment_id=ASSIGNMENT"}}
+{"type":"assistant","message":{"role":"assistant","content":"Working"}}
+{"type":"user","message":{"role":"user","content":"report assignment_id=echo"}}
