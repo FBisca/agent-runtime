@@ -181,7 +181,7 @@ class CodexProfileTests(ToolCase):
         self.assertFalse((self.dir / "evil.json").exists())
 
     def test_metadata_records_cwd_base_commit_and_spawn_time(self):
-        """worker-token-metrics/S1a: the record carries the checkout, its base commit and the spawn time."""
+        """worker-token-metrics/S1a: base commit and spawn time are captured before the worker starts."""
         home = self.codex_home("record")
         self.spawn_codex(home=home, cwd="/tmp/c")  # not a repository
         meta = self.metadata("w1")
@@ -204,6 +204,29 @@ class CodexProfileTests(ToolCase):
         self.spawn_codex(home=home, name="w3", cwd=str(repo),
                          extra_env={"GIT_DIR": str(self.dir / "elsewhere.git")})
         self.assertEqual(self.metadata("w3")["base_commit"], head)
+        clock = [1000]
+        env = dict(self.LEAD, HOME=str(self.dir / "home"), XDG_STATE_HOME=str(self.state()),
+                   HC_TERMINAL_ID="t0")
+
+        def worker_starts(argv, *_args):
+            if argv[:2] == ["hc", "run"]:
+                clock[0] = 9000  # Startup can take longer than the log creation-time slack.
+                subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@example.com",
+                                "-c", "user.name=Test", "commit", "-q", "--allow-empty", "-m", "worker"],
+                               check=True)
+                return 0, "{}", ""
+            self.assertEqual(argv[:3], ["hc", "get", "timed"])
+            return 0, raw("timed", "t0"), ""
+
+        with mock.patch.object(hc_tools.lib, "resolve", return_value={"runtime": "hc"}), \
+                mock.patch.object(hc_tools.lib, "cli_generation", return_value="clock-session"), \
+                mock.patch.object(hc_tools, "run", side_effect=worker_starts), \
+                mock.patch.object(usage, "now_ms", side_effect=lambda: clock[0]):
+            result = hc_tools.spawn(dict(self.ARGS, name="timed", cli="claude", cwd=str(repo)),
+                                    env, hc_tools.Context())
+        self.assertFalse(result["isError"])
+        self.assertEqual(self.metadata("timed")["spawned_ms"], 1000)
+        self.assertEqual(self.metadata("timed")["base_commit"], head)
 
     def test_read_worker_metadata_returns_the_record_or_nothing(self):
         """worker-token-metrics/S1b: the reader returns the record that was written, and nothing else."""
@@ -250,8 +273,8 @@ class SessionBindingTests(unittest.TestCase):
         fields.update(extra)
         usage.write_worker_metadata(self.env, worker, **fields)
 
-    def log(self, cli, session_id, assignment="alpha", cwd=None):
-        fixture = Path(__file__).parent / "fixtures/usage" / (cli + "-head.jsonl")
+    def log(self, cli, session_id, assignment="alpha", cwd=None, fixture_name=None):
+        fixture = Path(__file__).parent / "fixtures/usage" / (fixture_name or (cli + "-head.jsonl"))
         text = fixture.read_text().replace("ASSIGNMENT", assignment)
         text = text.replace("SESSION", session_id).replace("CWD", cwd or self.cwd)
         if cli == "codex":
@@ -264,8 +287,25 @@ class SessionBindingTests(unittest.TestCase):
         path.write_text(text)
         return path
 
-    def test_S4_codex_binds_only_the_assignments_first_user_message(self):
-        """worker-token-metrics/S4: same cwd, distinct assignments, creation bound and first user."""
+    def test_S4a_binding_skips_injected_context_and_stops_before_report_echoes(self):
+        """worker-token-metrics/S4a: injected context and placeholders precede the real prompt."""
+        for cli in ("codex", "claude"):
+            with self.subTest(cli=cli):
+                path = self.log(cli, "context-session", fixture_name=cli + "-context-head.jsonl")
+                self.metadata("context", "alpha", cli)
+                self.assertEqual(usage.resolve_session_log(self.env, "context"), path)
+                original = path.read_text()
+                # A different prompt assignment wins even if our id appears after the assistant.
+                path.write_text(original.replace("assignment_id=alpha", "assignment_id=another")
+                                .replace("assignment_id=echo", "assignment_id=alpha"))
+                self.assertIsNone(usage.resolve_session_log(self.env, "context"))
+                # No prompt marker: a report after the first assistant is still not a prompt.
+                path.write_text(original.replace("assignment_id=alpha", "no marker")
+                                .replace("assignment_id=echo", "assignment_id=alpha"))
+                self.assertIsNone(usage.resolve_session_log(self.env, "context"))
+
+    def test_S4_codex_binds_only_the_assignments_first_prompt(self):
+        """worker-token-metrics/S4: same cwd, distinct assignments, creation bound and first prompt."""
         alpha = self.log("codex", "thread-alpha")
         beta = self.log("codex", "thread-beta", "beta")
         for worker, assignment, path in (("w1", "alpha", alpha), ("w2", "beta", beta)):
@@ -307,6 +347,20 @@ class SessionBindingTests(unittest.TestCase):
         with mock.patch.object(Path, "stat", ctime_only):
             self.assertEqual(usage.resolve_session_log(self.env, "fallback"), fallback)
         self.assertEqual(usage.read_worker_metadata(self.env, "fallback")["session_id"], "fallback")
+        uuid = "01a1b0bf-6178-72b1-b259-528453e94da2"
+        full_id = self.log("codex", uuid, "uuid")
+        records = [json.loads(line) for line in full_id.read_text().splitlines()]
+        del records[0]["payload"]["session_id"]
+        for source in ("id", "filename"):
+            with self.subTest(session_id_source=source):
+                if source == "id":
+                    records[0]["payload"]["id"] = uuid
+                else:
+                    del records[0]["payload"]["id"]
+                full_id.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+                self.metadata("uuid", "uuid")
+                self.assertEqual(usage.resolve_session_log(self.env, "uuid"), full_id)
+                self.assertEqual(usage.read_worker_metadata(self.env, "uuid")["session_id"], uuid)
 
     def test_S5_claude_binds_transcript_and_uses_current_session_directly(self):
         """worker-token-metrics/S5: Claude first-user binding, slug and direct environment lookup."""

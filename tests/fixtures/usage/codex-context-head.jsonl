@@ -1,0 +1,5 @@
+{"type":"session_meta","payload":{"session_id":"SESSION","cwd":"CWD"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>synthetic context</environment_context> assignment_id=<id>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Include assignment_id=ASSIGNMENT"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Working"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"report assignment_id=echo"}]}}
