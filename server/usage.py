@@ -1,10 +1,11 @@
-"""Runtime-local worker state: the Codex worker profile decision and the per-worker metadata.
+"""Runtime-local worker metadata, profile decisions and assignment/session binding.
 
-Everything here lives under $XDG_STATE_HOME (default $HOME/.local/state) and is written atomically
-with restrictive modes. Nothing outside the state root and the repo is touched.
+Metadata lives under $XDG_STATE_HOME (default $HOME/.local/state) and is written atomically
+with restrictive modes. CLI session logs are read only, with bounded head reads for binding.
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -186,3 +187,115 @@ def resolve_codex_profile(env):
 def now_ms():
     """Wall clock in milliseconds."""
     return int(time.time() * 1000)
+
+
+SESSION_HEAD_BYTES = 256 * 1024
+SESSION_CREATION_SLACK_MS = 2000
+
+
+def _message_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(part["text"] for part in content
+                         if isinstance(part, dict) and isinstance(part.get("text"), str))
+    return ""
+
+
+def _session_match(path, metadata):
+    """Read a bounded head, stopping at the first user message. Never search later reports."""
+    try:
+        info = path.stat()
+        created_ms = getattr(info, "st_birthtime", info.st_ctime) * 1000
+        if created_ms < metadata["spawned_ms"] - SESSION_CREATION_SLACK_MS:
+            return None
+        with path.open("rb") as stream:
+            head = stream.read(SESSION_HEAD_BYTES)
+        session_id, session_cwd = None, None
+        for line in head.splitlines():
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                return None
+            if metadata["cli"] == "codex":
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if record.get("type") == "session_meta":
+                    session_id, session_cwd = payload.get("session_id"), payload.get("cwd")
+                    continue
+                if record.get("type") != "response_item" or payload.get("role") != "user":
+                    continue
+                content = payload.get("content")
+            else:
+                if record.get("type") != "user":
+                    continue
+                message = record.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+            if session_cwd and metadata.get("cwd") and session_cwd != metadata["cwd"]:
+                return None
+            marker = r"assignment_id=" + re.escape(metadata["assignment_id"]) + r"(?![\w-])"
+            if not re.search(marker, _message_text(content)):
+                return None
+            if metadata["cli"] == "codex":
+                session_id = session_id or path.stem.rsplit("-", 1)[-1]
+            else:
+                session_id = path.stem
+            return session_id if isinstance(session_id, str) and session_id else None
+    except (OSError, ValueError, TypeError, RecursionError):
+        return None
+    return None
+
+
+def resolve_session_log(env, worker):
+    """Resolve an assignment's CLI log to a Path, cache its identity, or return None.
+
+    Candidates must be newly created and carry the assignment marker in their first user
+    message. Cached paths are validated too, since worker names can be reused. Reads are
+    bounded and failures never make session metrics a precondition for runtime operations.
+    """
+    try:
+        metadata = read_worker_metadata(env, worker)
+        if not metadata or metadata.get("cli") not in ("codex", "claude"):
+            return None
+        assignment = metadata.get("assignment_id")
+        spawned = metadata.get("spawned_ms")
+        if not isinstance(assignment, str) or not assignment:
+            return None
+        if not isinstance(spawned, (int, float)) or not math.isfinite(spawned):
+            return None
+
+        def bind(path):
+            session_id = _session_match(path, metadata)
+            if session_id is None:
+                return None
+            cached = dict(metadata, session_id=session_id, session_log=str(path))
+            cached.pop("worker", None)
+            write_worker_metadata(env, worker, **cached)
+            return path
+
+        cached_path = metadata.get("session_log")
+        if isinstance(cached_path, str) and cached_path:
+            result = bind(Path(cached_path))
+            if result is not None:
+                return result
+        if metadata["cli"] == "codex":
+            candidates = (codex_home(env) / "sessions").glob("*/*/*/rollout-*.jsonl")
+        else:
+            cwd = metadata.get("cwd")
+            if not isinstance(cwd, str) or not cwd:
+                return None
+            home = env.get("HOME") or os.path.expanduser("~")
+            directory = Path(home) / ".claude/projects" / cwd.replace("/", "-").replace(".", "-")
+            current = env.get("CLAUDE_CODE_SESSION_ID")
+            if current and Path(current).name == current:
+                result = bind(directory / (current + ".jsonl"))
+                if result is not None:
+                    return result
+            candidates = directory.glob("*.jsonl")
+        for path in candidates:
+            result = bind(path)
+            if result is not None:
+                return result
+    except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+        return None
+    return None

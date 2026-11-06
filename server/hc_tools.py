@@ -210,7 +210,8 @@ def dispatch_identity(env, ctx=None):
                                 "one host, so the lead identity is ambiguous")
             raise ToolError("cannot establish a Pi lead session: no Pi process runs above this "
                             "server; start the MCP server from Pi")
-        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
+        # The Claude variable that is actually set is CLAUDE_CODE_SESSION_ID.
+        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_CODE_SESSION_ID")
     if not generation:
         raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
     return scope, generation
