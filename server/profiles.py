@@ -9,6 +9,8 @@ BUILTINS = ("claude", "codex")
 PROVIDER_VARIABLES = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
                       "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
                       "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+# Claude Code's --permission-mode choices. A provider other than Anthropic cannot run auto mode's server-side check.
+PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "dontAsk", "manual", "plan")
 
 
 class ProfileError(ValueError):
@@ -64,9 +66,39 @@ def load(env, path=None):
                     break
             if problem:
                 break
+            problem = launch_options_problem(profile)
+            if problem:
+                break
     if problem:
         raise ProfileError("invalid profile config %s: %s" % (path, problem))
     return data["profiles"]
+
+
+def launch_options_problem(profile):
+    """Optional claude-family launch options: a permission mode and a settings file (an allowlist, for example)."""
+    mode, settings = profile.get("permission_mode"), profile.get("settings")
+    if (mode is not None or settings is not None) and profile["cli"] != "claude":
+        return "permission_mode and settings apply only to the claude family"
+    if mode is not None and mode not in PERMISSION_MODES:
+        return "permission_mode must be one of %s" % ", ".join(PERMISSION_MODES)
+    if settings is not None and (not isinstance(settings, str) or "\0" in settings
+                                 or not (settings.startswith("/") or settings.startswith("~/"))):
+        return "settings must be an absolute or ~/ path"
+    return None
+
+
+def claude_launch_args(profile, env):
+    """`--permission-mode <mode> [--settings <path>]` for a claude-family worker; built-ins pass profile=None."""
+    profile = profile or {}
+    args = ["--permission-mode", profile.get("permission_mode") or "auto"]
+    settings = profile.get("settings")
+    if settings:
+        if settings.startswith("~/"):
+            settings = (env.get("HOME") or os.path.expanduser("~")) + settings[1:]
+        if not Path(settings).is_file():
+            raise ProfileError("settings file %s does not exist" % settings)
+        args += ["--settings", settings]
+    return args
 
 
 def cli_names(env):

@@ -29,7 +29,7 @@ class SpawnCleanupTests(ToolCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
     def test_S23_malformed_config_falls_back_and_refuses_profiles_before_run(self):
-        """S23: invalid JSON or invalid shape publishes built-ins and explains failed profile spawns."""
+        """S23 agent-runtime/R145: invalid JSON or invalid shape publishes built-ins and explains failed profile spawns."""
         path = self.dir / "profiles.json"
         lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
         for body in ('{', '[]', '{}', '{"profiles": []}', '{"profiles": {"custom": null}}',
@@ -37,7 +37,15 @@ class SpawnCleanupTests(ToolCase):
                      '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "literal-secret"}}}}',
                      '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": 1}}}}',
                      '{"profiles": {"custom": {"cli": "claude", "env": {"BAD=NAME": "x"}}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": "$"}}}}'):
+                     '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": "$"}}}}',
+                     # agent-runtime/R145: launch options are claude-only, a known mode, an absolute or ~/ path
+                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": "yolo"}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": 1}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": "relative.json"}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": "--settings"}}}',
+                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": 1}}}',
+                     '{"profiles": {"custom": {"cli": "codex", "env": {}, "permission_mode": "acceptEdits"}}}',
+                     '{"profiles": {"custom": {"cli": "codex", "env": {}, "settings": "/tmp/s.json"}}}'):
             with self.subTest(body=body):
                 path.write_text(body)
                 tools = lead.send("tools/list")["result"]["tools"]

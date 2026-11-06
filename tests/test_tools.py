@@ -570,6 +570,35 @@ class ProfileTests(ToolCase):
                                  builtin[:-1] + ["--model", "sample"] + builtin[-1:])
 
 
+    def test_profile_permission_mode_and_settings_replace_auto(self):
+        """agent-runtime/R143 agent-runtime/R144"""
+        settings = self.dir / "home" / "worker-settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text("{}")
+        config = self.config({"plain": {"cli": "claude", "env": {}},
+                              "edits": {"cli": "claude", "env": {}, "permission_mode": "acceptEdits",
+                                        "settings": "~/worker-settings.json"}})
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+        launcher = str(SERVER.parent.parent / "bin" / "agent-runtime-profile")
+        builtin = self.BUILTIN_PROGRAMS["claude"]
+        expected = {"plain": builtin,
+                    "edits": ["claude", "--agent", "implementer", "--permission-mode", "acceptEdits",
+                              "--settings", str(settings), self.PROMPT]}
+        for profile, program in expected.items():
+            with self.subTest(profile=profile):
+                result, text = self.call(session, "spawn", dict(self.ARGS, cli=profile))
+                self.assertFalse(result["isError"], text)
+                self.assertEqual(self.runs("run")[-1][10:], [launcher, profile, str(config), "--"] + program)
+
+    def test_missing_settings_file_is_refused_before_hc_run(self):
+        """agent-runtime/R146"""
+        self.config({"edits": {"cli": "claude", "env": {}, "settings": "/nonexistent/worker-settings.json"}})
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="edits"))
+        self.assertTrue(result["isError"])
+        self.assertIn("settings file /nonexistent/worker-settings.json does not exist", text)
+        self.assertEqual(self.runs("run"), [])
+
 class SendTests(ToolCase):
     CHILD = {"get:w1": {"out": raw("w1", "t0")}}
 
