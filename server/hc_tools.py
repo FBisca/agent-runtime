@@ -189,7 +189,7 @@ def dispatch_identity(env, ctx=None):
     scope = hc_server(env)
     generation = lib.cli_generation()
     if not generation:  # no visible CLI ancestor: the host must supply a session ID
-        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
+        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_CODE_SESSION_ID")
     if not generation:
         raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
     return scope, generation
