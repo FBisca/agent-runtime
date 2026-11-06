@@ -540,8 +540,9 @@ class CallTests(unittest.TestCase):
         self.table.write_text("\n".join(lines) + "\n")
 
     def set_replies(self, replies):
-        base = {"get t0": {"out": json.dumps({"address": "t0", "name": "lead", "parent": None})},
+        base = {"get t0": {"out": json.dumps({"address": "t0", "name": "lead", "parent": None, "pid": 6000})},
                 "get t1": {"out": json.dumps({"address": "t1", "name": "w1", "parent": "t0"})},
+                "get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})},
                 "get w1": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})},
                 "run": {"out": json.dumps({"first_message": {"sent": True}})}}
         base.update(replies)
@@ -614,7 +615,7 @@ class CallTests(unittest.TestCase):
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
         assignment = json.loads(out)["assignment_id"]
-        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})}})
+        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
         code, out, err = self.call("report", "--lead", "W1", "--json",
                                    json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
         self.assertEqual(code, 0, err)
@@ -637,7 +638,7 @@ class CallTests(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertIn("L1", err)
         self.assertEqual([c for c in self.hc_calls() if c[0] in ("run", "kill", "rm", "send")], before)
-        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})}})
+        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
         code, out, err = self.call("report", "--lead", "W1", "--json",
                                    json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
         self.assertEqual(code, 0, err)
@@ -651,7 +652,7 @@ class CallTests(unittest.TestCase):
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
         assignment = json.loads(out)["assignment_id"]
-        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})}})
+        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
         code, out, err = self.call("report", "--lead", "W1", "--json",
                                    json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9")
         self.assertEqual(code, 0, err)
@@ -677,7 +678,7 @@ class CallTests(unittest.TestCase):
     def assert_refused_without_dispatch(self, code, err, needle):
         self.assertEqual(code, 2, err)
         self.assertIn(needle, err)
-        self.assertEqual(self.hc_calls(), [])
+        self.assertEqual([c for c in self.hc_calls() if c[:1] != ["get"]], [])
 
     def test_ancestry_S1_claude_or_codex_below_the_server_is_refused_naming_pid_and_name(self):
         for pid, args, name in ((7001, "claude --agent implementer", "claude"),
@@ -714,10 +715,15 @@ class CallTests(unittest.TestCase):
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assert_refused_without_dispatch(code, err, "process")
 
-    def test_ancestry_S3_reaching_pid_1_without_an_llm_is_not_a_refusal(self):
+    def test_ancestry_S3_reaching_pid_1_without_reaching_the_terminal_refuses(self):
         self.set_ancestors([(5000, "/bin/zsh -l")])
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
-        self.assertEqual(code, 0, err)
+        self.assert_refused_without_dispatch(code, err, "pid 1")
+
+    def test_ancestry_S3_unreadable_terminal_pid_refuses(self):
+        self.set_replies({"get t0": {"rc": 1}})
+        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        self.assert_refused_without_dispatch(code, err, "pid 1")
 
     def test_ancestry_S4_shell_forms_that_hide_call_from_the_hook_are_refused_by_the_cli(self):
         # The CLI never sees the command text: whatever shell form launched it, the claude ancestor decides.
@@ -725,6 +731,26 @@ class CallTests(unittest.TestCase):
             self.set_ancestors([(5000, form), (5001, "/bin/zsh -c eval"), (7001, "claude"), self.SERVER])
             code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
             self.assert_refused_without_dispatch(code, err, "7001 (claude)")
+
+    def test_ancestry_S4_orphaned_nohup_shell_reparented_to_pid_1_is_refused(self):
+        self.set_ancestors([(5000, "sh -c sleep 1; agent-runtime call wait")])
+        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        self.assert_refused_without_dispatch(code, err, "pid 1")
+
+    def test_ancestry_S4_process_named_like_the_server_does_not_stop_the_walk(self):
+        self.set_ancestors([(5000, "herdr-core bash -c probe"), (7001, "claude"), self.SERVER])
+        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        self.assert_refused_without_dispatch(code, err, "7001 (claude)")
+
+    def test_ancestry_S4_hc_exec_daemon_reparented_to_pid_1_is_refused(self):
+        self.set_ancestors([(5000, "/bin/sh -c probe"), (5001, "hc --hc-launchd")])
+        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        self.assert_refused_without_dispatch(code, err, "pid 1")
+
+    def test_ancestry_S4_claude_as_the_terminal_root_is_refused(self):
+        self.set_ancestors([(5000, "/bin/zsh -c probe"), (6000, "claude --agent implementer")])
+        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        self.assert_refused_without_dispatch(code, err, "6000 (claude)")
 
 
 if __name__ == "__main__":
