@@ -3,6 +3,7 @@
 agent-runtime tools or acknowledge receipts. Claude (plugin) and Codex (`--cli codex`) both send
 agent_id for native subagents; MCP tool names differ only by prefix."""
 
+import argparse
 import json
 import os
 import re
@@ -152,6 +153,12 @@ def verdict(command, is_subagent):
             return "deny", "Cannot parse this command and it mentions hc: use the agent-runtime tools."
     result = None
     for program, args in invocations(command):
+        runtime_args = entrypoint_args(program, args)
+        if runtime_args is not None:
+            gated = call_verdict(runtime_args, is_subagent)
+            if gated and gated[0] == "deny":
+                return gated
+            result = result or gated
         if program != "hc":
             continue
         sub = hc_subcommand(args)
@@ -160,6 +167,77 @@ def verdict(command, is_subagent):
         elif sub in HC_DENIED | HC_ASKED or (sub == "file" and not file_read_only(args, sub)):
             return "deny", "Do not run 'hc %s' in Bash: use the agent-runtime tools." % sub
     return result
+
+
+ENTRYPOINTS = {"agent-runtime", "agent_runtime.py"}
+PYTHON = re.compile(r"^python[0-9.]*$")
+PYTHON_VALUE_FLAGS = {"-W", "-X", "-Q"}
+
+
+def entrypoint_args(program, args):
+    """Arguments after the agent-runtime entrypoint, whether run by name, by path or as a python script; else None."""
+    if program in ENTRYPOINTS:
+        return args
+    if PYTHON.match(program):
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            if args[i] in ("-c", "-m", "-"):
+                return None
+            i += 2 if args[i] in PYTHON_VALUE_FLAGS else 1
+        if i < len(args) and os.path.basename(args[i]) == "agent_runtime.py":
+            return args[i + 1:]
+    return None
+
+
+class CallUsage(Exception):
+    pass
+
+
+class CallParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise CallUsage(message)
+
+
+def parse_call(argv):
+    """The `call` subcommand's arguments read as server/agent_runtime.py's parser reads them, or None when
+    that parser would reject them. Keep the options and allow_abbrev=False in step with build_parser()."""
+    parser = CallParser(prog="agent-runtime call", add_help=False, allow_abbrev=False)
+    parser.add_argument("tool")
+    parser.add_argument("--lead")
+    parser.add_argument("--json", default="{}")
+    try:
+        return parser.parse_args(argv)
+    except CallUsage:
+        return None
+
+
+def call_verdict(args, is_subagent):
+    """`agent-runtime call <tool> --json '{...}'` carries the same authority as the MCP tool: gate it alike.
+    Arguments the hook cannot read fail closed: denied for subagents, asked otherwise."""
+    rest = [a for a in args if not a.startswith("-")]
+    if rest[:1] != ["call"]:
+        return None
+    argv = args[args.index("call") + 1:]
+    if "-h" in argv or "--help" in argv:
+        return None  # the CLI prints usage and runs nothing
+    parsed = parse_call(argv)
+    if parsed is None:
+        if is_subagent:
+            return "deny", ("Subagents must not run agent-runtime call with unreadable arguments: "
+                            "report through your return value.")
+        return "ask", "approve to run agent-runtime call with arguments the hook cannot read"
+    tool = parsed.tool
+    try:
+        arguments = json.loads(parsed.json)
+    except ValueError:
+        arguments = None
+    reason = tool_verdict("mcp__agent-runtime__" + tool, is_subagent, arguments)
+    if reason:
+        return "deny", reason
+    read_only = tool == "task" and isinstance(arguments, dict) and arguments.get("action") == "list"
+    if tool in MUTATING_TOOLS and not read_only and not is_subagent:
+        return "ask", "approve to run the agent-runtime %s tool from Bash" % tool
+    return None
 
 
 def tool_verdict(tool_name, is_subagent, arguments=None):

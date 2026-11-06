@@ -4,12 +4,15 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 HC_TIMEOUT_SECONDS = 2
+FORCED_GENERATION = None  # set in-process by `agent-runtime call --lead`; never read from the environment
+LEAD_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 RUNTIMES = ("herdmates", "hc", "native")
 FIELDS = ("runtime", "role", "parent", "cli")
 
@@ -87,7 +90,10 @@ def lstart(pid):
 
 def cli_generation():
     """`<pid>:<lstart>` of the nearest codex/claude ancestor, else None. Shared by the MCP server and
-    hooks; session IDs are deliberately ignored so /clear and /new stay on one team. Read-only."""
+    hooks; session IDs are deliberately ignored so /clear and /new stay on one team. Read-only.
+    `agent-runtime call --lead` sets FORCED_GENERATION for its own process, which pins the generation."""
+    if FORCED_GENERATION:
+        return FORCED_GENERATION
     deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
     pid = os.getppid()
     for _ in range(MAX_ANCESTOR_HOPS):
@@ -492,6 +498,76 @@ def cmd_list(args):
     return 0
 
 
+def hc_tools_module():
+    """The MCP tool table; imported lazily so resolve, status and list never load the dispatch store."""
+    server = os.path.dirname(os.path.abspath(__file__))
+    if server not in sys.path:
+        sys.path.insert(0, server)
+    import hc_tools
+    return hc_tools
+
+
+def live_lead_conflict(hc_tools, env):
+    """The generation of this terminal's latest team when it differs from ours and that team is live, else None.
+    Live means wait(all) still has something for it: unfinished assignments or results not yet acknowledged,
+    or any unacknowledged message to its lead. One hc terminal has one live lead generation. The check reads
+    in one transaction; the team row is inserted later by the tool itself, so a concurrent call under the
+    live generation can still land in between (the driver runs in its own terminal, which keeps this rare)."""
+    _, caller = hc_tools.require_hc(env)
+    scope, generation = hc_tools.dispatch_identity(env)
+    store = hc_tools.dispatch.Store(env)
+    with store.transaction() as db:
+        row = db.execute("SELECT id, generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
+                         (scope, caller)).fetchone()
+        if not row or row[1] == generation:
+            return None
+        live = db.execute("SELECT 1 FROM (%s) LIMIT 1" % hc_tools.dispatch.SNAPSHOT_SQL,
+                          (row[0], "all", "all", "all", "all", "all", "all")).fetchone() \
+            or db.execute("SELECT 1 FROM messages WHERE team=? AND recipient=? AND acked=0 LIMIT 1",
+                          (row[0], caller)).fetchone()
+    return row[1] if live else None
+
+
+def cmd_call(args):
+    hc_tools = hc_tools_module()
+    try:
+        arguments = json.loads(args.json)
+    except ValueError:
+        arguments = None
+    if args.tool not in hc_tools.HANDLERS or not isinstance(arguments, dict) \
+            or (args.lead is not None and not LEAD_ID.fullmatch(args.lead)):
+        print("usage: agent-runtime call <tool> [--lead ID] [--json '{...}'] (tools: %s)"
+              % " ".join(sorted(hc_tools.HANDLERS)), file=sys.stderr)
+        return 2
+    env = dict(os.environ, AGENT_RUNTIME_DISPATCH="1")
+    try:
+        hc_tools.require_hc(env)
+    except hc_tools.ToolError as error:
+        print(error, file=sys.stderr)
+        return 2
+    if args.lead:
+        hc_tools.lib.FORCED_GENERATION = args.lead  # hc_tools reads the generation from its own module copy
+    try:
+        live = live_lead_conflict(hc_tools, env)
+        if live:
+            print("this terminal's live lead generation is %s with unfinished assignments or unacknowledged reports; "
+                  "run this driver in its own hc terminal or pass --lead %s" % (live, live), file=sys.stderr)
+            return 2
+        out = hc_tools.call(args.tool, arguments, env, hc_tools.Context())
+    except Exception as error:  # the MCP server reports any failure as an error result; so does the CLI
+        out = {"content": [{"type": "text", "text": "%s failed: %s" % (args.tool, error)}], "isError": True}
+    if out.get("isError"):
+        print(json.dumps(out, separators=(",", ":")))
+        return 1
+    text = out["content"][0]["text"]
+    try:
+        json.loads(text)
+    except ValueError:
+        text = json.dumps({"result": text})
+    print(text)
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="agent-runtime", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -514,6 +590,13 @@ def build_parser():
     p.add_argument("--runtime", choices=RUNTIMES, help="override the resolved runtime")
     p.add_argument("--pretty", action="store_true", help="indent the JSON")
     p.set_defaults(func=cmd_list)
+    # allow_abbrev=False: hooks/pre_tool_use.py parse_call() reads these options exactly; keep both in step.
+    p = sub.add_parser("call", help="run one dispatch tool in an hc terminal and print its JSON result",
+                       allow_abbrev=False)
+    p.add_argument("tool", help="an MCP tool name (the usage error lists them)")
+    p.add_argument("--lead", help="lead identity (A-Z a-z 0-9 . _ : -, up to 128); processes passing the same ID share one team")
+    p.add_argument("--json", default="{}", help="the tool arguments as one JSON object")
+    p.set_defaults(func=cmd_call)
     return parser
 
 
