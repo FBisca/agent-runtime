@@ -209,7 +209,7 @@ class RawHcTests(unittest.TestCase):
 
 class CallCliTests(unittest.TestCase):
     def test_S6_subagent_is_denied_agent_runtime_call_through_bash(self):
-        """call-cli/S6"""
+        """agent-runtime/R155"""
         for command in ("agent-runtime call wait --json '{\"target\":\"all\"}'",
                         "agent-runtime call spawn --lead L1 --json '{}'",
                         "bin/agent-runtime call task --json '{\"action\":\"list\",\"receipt\":\"r\"}'",
@@ -224,7 +224,7 @@ class CallCliTests(unittest.TestCase):
             self.assertTrue(denied(run(PRE, bash(command, agent_id="sub-1"))), command)
 
     def test_S6_subagent_is_denied_the_entrypoint_run_by_path_or_python(self):
-        """call-cli/S6"""
+        """agent-runtime/R155"""
         for command in ("python3 server/agent_runtime.py call wait --json '{}'",
                         "python3 -B /x/server/agent_runtime.py call spawn --json '{}'",
                         "/x/server/agent_runtime.py call wait --json '{}'"):
@@ -232,7 +232,7 @@ class CallCliTests(unittest.TestCase):
         self.assertIsNone(run(PRE, bash("python3 other.py call wait", agent_id="sub-1")))
 
     def test_S6_hook_reads_call_arguments_the_way_the_cli_parser_does(self):
-        """call-cli/S6"""
+        """agent-runtime/R155"""
         sys.path.insert(0, str(HOOKS))
         import pre_tool_use
         parser = lib.build_parser()
@@ -250,7 +250,7 @@ class CallCliTests(unittest.TestCase):
                     self.assertEqual((hook.tool, hook.lead, hook.json), (cli.tool, cli.lead, cli.json))
 
     def test_S6_non_subagent_is_asked_on_mutating_tools_only(self):
-        """call-cli/S6"""
+        """agent-runtime/R155"""
         for tool in ("spawn", "message", "resume", "stop", "report"):
             out = run(PRE, bash("agent-runtime call %s --lead L1 --json '{}'" % tool))
             self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "ask", tool)

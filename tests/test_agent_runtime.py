@@ -543,14 +543,14 @@ class CallTests(unittest.TestCase):
         return done.returncode, done.stdout, done.stderr
 
     def test_S1_hc_terminal_runs_the_tool_and_prints_its_json(self):
-        """call-cli/S1"""
+        """agent-runtime/R150"""
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
         info = json.loads(out)
         self.assertEqual((info["name"], info["parent"]), ("w1", "t0"))
 
     def test_S1_plain_text_tool_result_is_wrapped_as_json(self):
-        """call-cli/S1"""
+        """agent-runtime/R150"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -559,7 +559,7 @@ class CallTests(unittest.TestCase):
         self.assertIn("stopped", json.loads(out)["result"])
 
     def test_S2_unexpected_exception_prints_error_json_not_a_traceback(self):
-        """call-cli/S2"""
+        """agent-runtime/R151"""
         (self.dir / "state").write_text("not a directory")  # the store cannot open under XDG_STATE_HOME
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assertEqual(code, 1)
@@ -567,7 +567,7 @@ class CallTests(unittest.TestCase):
         self.assertNotIn("Traceback", err)
 
     def test_S2_tool_error_prints_result_json_and_exits_1(self):
-        """call-cli/S2"""
+        """agent-runtime/R151"""
         code, out, err = self.call("status", "--lead", "L1", "--json", "{}")
         self.assertEqual(code, 1, err)
         result = json.loads(out)
@@ -575,7 +575,7 @@ class CallTests(unittest.TestCase):
         self.assertIn("name", result["content"][0]["text"])
 
     def test_S3_outside_hc_exits_2_with_require_hc_message_and_starts_nothing(self):
-        """call-cli/S3"""
+        """agent-runtime/R152"""
         code, out, err = self.call("spawn", "--lead", "L1", "--json", '{"kind": "worker", "name": "w1"}',
                                    hc_terminal=None)
         self.assertEqual(code, 2)
@@ -583,7 +583,7 @@ class CallTests(unittest.TestCase):
         self.assertEqual(self.hc_calls(), [])
 
     def test_S4_bad_json_or_unknown_tool_exits_2_with_usage_and_starts_nothing(self):
-        """call-cli/S4"""
+        """agent-runtime/R153"""
         for args in (("status", "--json", "{not json"), ("status", "--json", "[1]"), ("bogus", "--lead", "L1")):
             with self.subTest(args=args):
                 code, out, err = self.call(*args)
@@ -592,7 +592,7 @@ class CallTests(unittest.TestCase):
                 self.assertEqual(self.hc_calls(), [])
 
     def test_S5_same_lead_in_two_processes_shares_assignments(self):
-        """call-cli/S5"""
+        """agent-runtime/R154"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -609,7 +609,7 @@ class CallTests(unittest.TestCase):
                          [(assignment, "complete", "done")])
 
     def test_S7_other_generation_with_unfinished_work_is_refused_and_the_live_one_keeps_working(self):
-        """call-cli/S7"""
+        """agent-runtime/R156"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -629,7 +629,7 @@ class CallTests(unittest.TestCase):
         self.assertEqual(json.loads(out)["reason"], "completed")
 
     def test_S7_other_generation_is_refused_while_the_live_one_has_an_unacknowledged_report(self):
-        """call-cli/S7"""
+        """agent-runtime/R156"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -649,7 +649,7 @@ class CallTests(unittest.TestCase):
                          [(assignment, "complete", "done")])
 
     def test_S7_other_generation_may_start_once_the_live_one_has_nothing_unfinished(self):
-        """call-cli/S7"""
+        """agent-runtime/R156"""
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
