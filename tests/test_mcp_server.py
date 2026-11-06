@@ -183,6 +183,16 @@ class ToolListTests(ServerCase):
         self.assertIn("report", agent["description"])
         self.assertNotIn("agent", spawn["inputSchema"]["required"])
 
+    def test_spawn_schema_has_optional_string_instructions_file(self):
+        """agent-runtime/R164"""
+        session = self.start()
+        session.handshake()
+        spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
+        properties = spawn["inputSchema"]["properties"]
+        self.assertEqual(properties["instructions_file"]["type"], "string")
+        self.assertNotIn("instructions_file", spawn["inputSchema"]["required"])
+        self.assertIn("none", properties["agent"]["description"])
+
     def test_ping_and_unknown_method(self):
         """agent-runtime-tools/S1"""
         session = self.start()

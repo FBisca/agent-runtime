@@ -336,6 +336,43 @@ class SpawnTests(ToolCase):
                 self.assertIn("reviewer.toml", text)
                 self.assertEqual(self.runs("run"), [])
 
+    def test_codex_agent_none_reads_no_role_file(self):
+        """agent-runtime/R157"""
+        argv = self.spawn_argv(cli="codex", agent="none")
+        self.assertEqual(argv[:2], ["codex", "--no-daemon"])
+        self.assertEqual(len(argv), 3)
+        self.assertTrue(argv[-1].startswith("do x"))
+        self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
+
+    def test_claude_agent_none_drops_the_agent_flag(self):
+        """agent-runtime/R158"""
+        argv = self.spawn_argv(cli="claude", agent="none")
+        self.assertEqual(argv[:3], ["claude", "--permission-mode", "auto"])
+        self.assertEqual(len(argv), 4)
+        self.assertTrue(argv[-1].startswith("do x"))
+
+    def test_agent_none_prompt_carries_the_worker_protocol(self):
+        """agent-runtime/R159"""
+        for cli in ("claude", "codex"):
+            with self.subTest(cli=cli):
+                prompt = self.spawn_argv(cli=cli, agent="none")[-1]
+                self.assertIn("report(kind, assignment_id)", prompt)
+                self.assertIn("progress, complete, blocked or decision", prompt)
+                self.assertIn("never reaches the parent", prompt)
+                self.assertIn("STATUS: COMPLETE | BLOCKED | PARTIAL", prompt)
+
+    def test_codex_instructions_file_sets_the_preamble(self):
+        """agent-runtime/R160"""
+        home = self.dir / "home"
+        (home / "role.md").write_text("ROLE FILE RULES\n")
+        for path in (str(home / "role.md"), "~/role.md"):
+            with self.subTest(path=path):
+                argv = self.spawn_argv(cli="codex", instructions_file=path)
+                self.assertEqual(argv[:2], ["codex", "--no-daemon"])
+                self.assertTrue(argv[-1].startswith("ROLE FILE RULES"))
+                self.assertIn("do x", argv[-1])
+                self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
+
     def test_dash_model_is_an_error(self):
         """agent-runtime/R134"""
         for cli in ("claude", "codex"):

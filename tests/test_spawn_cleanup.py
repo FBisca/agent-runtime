@@ -270,6 +270,48 @@ class SpawnCleanupTests(ToolCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    def test_invalid_instructions_file_starts_no_terminal_and_registers_nothing(self):
+        """agent-runtime/R161"""
+        home = self.dir / "home"
+        (home / "blank.md").write_text("   \n")
+        lead = self.start({}, ENV)
+        for value in ("", "   ", 5, ["a"], True, "relative.md", str(home / "missing.md"),
+                      str(home / "blank.md"), str(self.dir)):
+            with self.subTest(value=value):
+                result, text = self.call(lead, "spawn", dict(ARGS, cli="codex", instructions_file=value))
+                self.assertTrue(result["isError"])
+                self.assertIn("instructions_file", text)
+        self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
+    def test_instructions_file_is_codex_only(self):
+        """agent-runtime/R162"""
+        home = self.dir / "home"
+        (home / "role.md").write_text("ROLE FILE RULES\n")
+        lead = self.start({}, ENV)
+        result, text = self.call(lead, "spawn", dict(ARGS, cli="claude", instructions_file=str(home / "role.md")))
+        self.assertTrue(result["isError"])
+        self.assertIn("instructions_file", text)
+        self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
+    def test_agent_and_instructions_file_are_mutually_exclusive(self):
+        """agent-runtime/R163"""
+        home = self.dir / "home"
+        (home / "role.md").write_text("ROLE FILE RULES\n")
+        lead = self.start({}, ENV)
+        for agent in ("none", "reviewer"):
+            with self.subTest(agent=agent):
+                result, text = self.call(lead, "spawn", dict(ARGS, cli="codex", agent=agent,
+                                                             instructions_file=str(home / "role.md")))
+                self.assertTrue(result["isError"])
+                self.assertIn("instructions_file", text)
+        self.assertEqual(self.runs("run"), [])
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
+
     def test_codex_without_instructions_starts_no_terminal_and_registers_nothing(self):
         """agent-runtime/R73"""
         (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()
