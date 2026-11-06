@@ -215,6 +215,8 @@ def linked_task(arguments, env):
     return task_id
 
 
+# Effort levels both CLIs accept: claude --effort, codex model_reasoning_effort.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 AGENT_CODEX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 AGENT_CLAUDE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_:-]{0,63}")
 
@@ -230,6 +232,18 @@ def spawn_model(arguments):
     if model.startswith("-"):
         raise ToolError("model must not start with '-'")
     return ["--model", model]
+
+
+def spawn_effort(arguments, cli):
+    """Per-task effort as a launch flag, so it never touches the CLI's saved default."""
+    effort = arguments.get("effort")
+    if effort is None:
+        return []
+    if effort not in EFFORTS:
+        raise ToolError("effort must be one of %s" % ", ".join(EFFORTS))
+    if cli == "claude":
+        return ["--effort", effort]
+    return ["-c", 'model_reasoning_effort="%s"' % effort]
 
 
 def spawn_agent(arguments, cli):
@@ -309,7 +323,7 @@ def spawn(arguments, env, ctx):
     name, task, cwd = need(arguments, "name", "task", "cwd")
     worker_name(name)
     task_id = linked_task(arguments, env)
-    model = spawn_model(arguments)
+    model = spawn_model(arguments) + spawn_effort(arguments, cli)
     agent = spawn_agent(arguments, cli)
     launch_args = []
     if cli == "claude":

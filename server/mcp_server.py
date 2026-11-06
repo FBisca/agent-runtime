@@ -38,6 +38,7 @@ TOOLS = [
              "cwd": text("checkout directory"),
              "task_id": text("ready task to link"),
              "model": text("optional model"),
+             "effort": {"type": "string", "enum": list(hc_tools.EFFORTS)},
              "agent": text("agent, default implementer; needs report")}, ["kind", "name", "task", "cwd"])),
     ("message", "Send text to a teammate or lead. Peer messages arrive in tool results. Never forces input past a permission dialog.",
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
