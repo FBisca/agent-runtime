@@ -11,6 +11,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -699,6 +700,23 @@ class CallTests(unittest.TestCase):
         code, out, err = self.call("status", "--json", '{"name": "w1"}', extra_env={"CODEX_THREAD_ID": "W1"})
         self.assertEqual(code, 1, out + err)
         self.assertIn("caller has no matching active assignment", out)
+
+    def test_ancestry_S5_forced_lead_override_does_not_outlive_its_call(self):
+        """The forced lead role belongs to the call that asked for it: a later call in the same process
+        resolves the same terminal as a worker again."""
+        self.set_replies({"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}})
+        env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.dir / "home"),
+               "XDG_STATE_HOME": str(self.dir / "state"), "XDG_CONFIG_HOME": str(self.dir / "config"),
+               "HC_TERMINAL_ID": "t0"}
+        forced = SimpleNamespace(tool="status", json='{"name": "w1"}', lead="L1")
+        plain = SimpleNamespace(tool="status", json='{"name": "w1"}', lead=None)
+        chain = {os.getppid(): (5000, "/bin/zsh -l"), 5000: (6000, "/Users/x/.local/bin/herdr-core hold"),
+                 6000: (1, "/sbin/launchd")}
+        out = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), patch.object(app, "ps_entry", lambda pid: chain.get(pid)), \
+                redirect_stdout(out):
+            self.assertEqual(app.cmd_call(forced), 0, out.getvalue())
+            self.assertEqual(app.cmd_call(plain), 1, out.getvalue())  # a worker, not the forced lead
 
     SERVER = (6000, "/Users/x/.local/bin/herdr-core hold --socket s")
 

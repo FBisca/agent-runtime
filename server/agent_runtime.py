@@ -597,6 +597,7 @@ def cmd_call(args):
     if refusal:
         print(refusal, file=sys.stderr)
         return 2
+    forced = (hc_tools.lib.FORCED_GENERATION, hc_tools.lib.FORCED_LEAD)
     if args.lead:
         hc_tools.lib.FORCED_GENERATION = args.lead  # hc_tools reads the generation from its own module copy
         hc_tools.lib.FORCED_LEAD = True
@@ -609,6 +610,9 @@ def cmd_call(args):
         out = hc_tools.call(args.tool, arguments, env, hc_tools.Context())
     except Exception as error:  # the MCP server reports any failure as an error result; so does the CLI
         out = {"content": [{"type": "text", "text": "%s failed: %s" % (args.tool, error)}], "isError": True}
+    finally:
+        # the override lives only for this call: a later call in the same process must resolve as it did before
+        hc_tools.lib.FORCED_GENERATION, hc_tools.lib.FORCED_LEAD = forced
     if out.get("isError"):
         print(json.dumps(out, separators=(",", ":")))
         return 1
