@@ -14,6 +14,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "server" / "agent_runtime.py"
 BIN = SCRIPT

@@ -11,6 +11,11 @@ sys.path.insert(0, str(SERVER.parent))
 import dispatch_store
 from dispatch_store import Store
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 EXPECTED = {
     "assignments": [["team", "current"], ["worker"]],
     "workers": [["address"]],

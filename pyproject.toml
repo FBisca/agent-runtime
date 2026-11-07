@@ -1,0 +1,25 @@
+[project]
+name = "agent-runtime"
+version = "0.1.0"
+description = "The local runtime that gives a lead its workers: one team, one lead, many CLIs."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.6",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
+addopts = "-q --strict-markers"
+markers = [
+    "unit: pure logic, no subprocess and no server (the fast suite)",
+    "integration: drives the server over stdio, a subprocess or the filesystem",
+    "live: touches a real CLI or provider; skipped unless its opt-in variable is set",
+]
+filterwarnings = ["default::pytest.PytestUnhandledThreadExceptionWarning"]

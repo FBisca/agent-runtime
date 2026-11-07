@@ -8,6 +8,11 @@ from test_mcp_server import SERVER
 sys.path.insert(0, str(SERVER.parent))
 from dispatch_store import MAX_BATCH_BYTES, Store, StoreError
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 class DispatchTests(ToolCase):
     def lead(self, generation="lead-session"):

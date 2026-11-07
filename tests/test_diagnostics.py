@@ -6,6 +6,11 @@ from dispatch_store import Store
 from test_event_wait import EventWaitTests, Session
 from test_tools import ToolCase
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 SCREEN = "screen says finished"
 
 

@@ -9,6 +9,11 @@ import threading
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 PLUGIN = Path(__file__).resolve().parents[1]
 SERVER = PLUGIN / "server" / "mcp_server.py"
 MARKETPLACE = PLUGIN / ".claude-plugin" / "marketplace.json"
@@ -25,7 +30,12 @@ class _Launched:
         self.stderr = open(directory / "err")
 
     def wait(self, timeout=None):
-        reader = threading.Thread(target=self.stdout.read, daemon=True)  # EOF means the server exited
+        def read():
+            try:
+                self.stdout.read()  # EOF means the server exited
+            except (ValueError, OSError):
+                return  # the file was closed under the thread: the server is gone anyway
+        reader = threading.Thread(target=read, daemon=True)
         reader.start()
         reader.join(timeout)
         if reader.is_alive():

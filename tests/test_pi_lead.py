@@ -23,6 +23,11 @@ import hc_tools  # noqa: E402
 import host_policy  # noqa: E402
 from dispatch_store import Store  # noqa: E402
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 GENERATION = re.compile(r"^\d+:")
 RULES = {"mutations": True, "backends": ["claude", "codex"], "paths": ["/tmp"]}
 

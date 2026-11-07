@@ -10,6 +10,11 @@ from test_tools import ToolCase
 from dispatch_events import endpoints
 from dispatch_store import Store
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 class PeerDispatchTests(ToolCase):
     prepare = event_helpers.EventWaitTests.prepare
