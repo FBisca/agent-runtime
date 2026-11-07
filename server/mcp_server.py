@@ -32,9 +32,9 @@ TOOLS = [
     ("spawn", "Start one agent per task and checkout; include the whole task. "
               "Returns promptly: worker_id, assignment_id; then wait(all). "
               "kind=lookup is rejected: use the CLI's subagent tool. "
-              "kind=worker: implementation, long tasks, Codex. cli: built-in or profile; "
+              "kind=worker: implementation, long tasks, Codex. cli: built-in (claude, codex, pi) or profile; "
               "default claude; a pi lead names an authorized one.",
-     schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
+     schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": list(profiles.BUILTINS)},
              "name": text("unique a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory"),
              "task_id": text("ready task to link"),

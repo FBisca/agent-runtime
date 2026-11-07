@@ -2,8 +2,10 @@
 
 Claude Code and Codex leads are gated by their own PreToolUse hooks: the runtime treats those hooks as
 defence in depth and never as the authority. Pi ships no such gate by default, so for a Pi session the
-server itself decides what the lead may mutate. An operator writes the policy file and the runtime
-enforces it; without one a Pi lead may only read its own team.
+server itself decides what the session may mutate. A Pi **lead** mutates only what the operator's
+policy allows; a Pi **worker** gets a fixed, narrow set of its own (it reports and reads its team, it
+starts no worker and ends no worker). An operator writes the policy file and the runtime enforces it;
+without one a Pi lead may only read its own team.
 
     $XDG_CONFIG_HOME/agent-runtime/hosts.json   (default ~/.config/agent-runtime/hosts.json)
 
@@ -24,6 +26,9 @@ import agent_runtime as lib
 
 RESTRICTED_HOSTS = ("pi",)  # hosts the server authorizes itself
 MUTATING_TOOLS = ("spawn", "message", "resume", "stop", "report")
+# What a Pi worker may use: its own report, the team's reads and the peer messages. Pi ships no
+# PreToolUse hook, so the server is the authority and a worker's set stays small on purpose.
+WORKER_TOOLS = ("report", "message", "wait", "status", "collect", "list")
 # `task` only reads when it lists.
 READ_ONLY_TASK = "list"
 # The tool argument that names the worker a call acts on.
@@ -129,7 +134,7 @@ def authorize(env, host, role, tool, arguments, ctx):
     if not restricted(host):
         return
     if host == "pi" and role != "lead":
-        raise Refused("pi is supported as a lead only; this session resolves as %r" % role)
+        check_worker(host, role, tool, arguments)
     rules = rules_for(env, host)
     if mutating(tool, arguments) and not rules.get("mutations"):
         raise Refused("the %s host is not authorized to mutate: write %s with "
@@ -138,6 +143,19 @@ def authorize(env, host, role, tool, arguments, ctx):
     if tool == "spawn":
         check_spawn(env, host, rules, arguments)
     check_scope(env, host, tool, arguments, ctx)
+
+
+def check_worker(host, role, tool, arguments):
+    """A Pi worker reports and reads its own team: it starts no worker and ends no worker.
+
+    A worker has no children of its own, so the tools that manage other workers stay closed to it.
+    """
+    if tool in WORKER_TOOLS:
+        return
+    if tool == "task" and arguments.get("action") == READ_ONLY_TASK:
+        return
+    raise Refused("a %s worker may only %s: it starts no worker and ends no worker"
+                  % (host, ", ".join(WORKER_TOOLS)))
 
 
 def check_spawn(env, host, rules, arguments):

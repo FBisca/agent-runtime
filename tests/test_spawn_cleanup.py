@@ -54,7 +54,7 @@ class SpawnCleanupTests(ToolCase):
             with self.subTest(body=body):
                 path.write_text(body)
                 tools = lead.send("tools/list")["result"]["tools"]
-                self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex"])
+                self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi"])
                 result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
                 self.assertTrue(result["isError"])
                 self.assertIn("invalid profile config", text)

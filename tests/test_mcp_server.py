@@ -168,7 +168,7 @@ class ToolListTests(ServerCase):
             config.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": {}}}}))
             tools = session.send("tools/list")["result"]["tools"]
             self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"],
-                             ["claude", "codex", "custom"])
+                             ["claude", "codex", "pi", "custom"])
 
     def test_spawn_schema_has_optional_string_model(self):
         """agent-runtime/R135"""

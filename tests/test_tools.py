@@ -91,7 +91,8 @@ def raw(name, parent, state="idle", app=None):
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PROVIDERS = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
              "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-             "CLAUDE_CODE_AUTO_MODE_SERVER", "CLAUDE_CODE_AUTO_MODE_MODEL"]
+             "CLAUDE_CODE_AUTO_MODE_SERVER", "CLAUDE_CODE_AUTO_MODE_MODEL",
+             "MINIMAX_API_KEY", "PI_API_KEY", "PI_PROVIDER", "PI_MODEL"]
 
 
 def scrub(keys):
@@ -564,7 +565,7 @@ class ProfileTests(ToolCase):
                                             "XDG_CONFIG_HOME": "/wrong"}},
                              {"AGENT_RUNTIME_PROFILES": "~/alternate.json"})
         tools = session.send("tools/list")["result"]["tools"]
-        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "selected"])
+        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi", "selected"])
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="selected"))
         self.assertFalse(result["isError"], text)
         self.assertEqual((self.dir / "overlay").read_text(), "selected\n")
@@ -576,7 +577,7 @@ class ProfileTests(ToolCase):
         self.assertIn("custom", session.send("tools/list")["result"]["tools"][0]["inputSchema"]["properties"]["cli"]["enum"])
         path.unlink()
         tools = session.send("tools/list")["result"]["tools"]
-        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex"])
+        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi"])
         for family, program in self.BUILTIN_PROGRAMS.items():
             result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
             self.assertFalse(result["isError"], text)

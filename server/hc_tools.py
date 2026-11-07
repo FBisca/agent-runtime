@@ -163,6 +163,9 @@ WORKER_PROTOCOL = (
     "message alone never reaches the parent. Return a compact block: STATUS: COMPLETE | BLOCKED | "
     "PARTIAL, then task id, files changed, checks (command and outcome), decisions, remaining work."
 )
+# Pi reaches the runtime over MCP, so its tool carries the server's prefix.
+PI_WORKER_PROTOCOL = WORKER_PROTOCOL.replace(
+    "the agent-runtime report tool as report(", "the agent-runtime report tool `mcp__agent-runtime__report` as ")
 
 
 def discard(name, env):
@@ -234,7 +237,8 @@ def linked_task(arguments, env):
     return task_id
 
 
-# Effort levels both CLIs accept: claude --effort, codex model_reasoning_effort.
+# Effort levels every CLI accepts: claude --effort, codex model_reasoning_effort, pi --thinking.
+# Pi knows off and minimal as well; the runtime never sends a level a CLI does not take.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 AGENT_CODEX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 AGENT_CLAUDE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_:-]{0,63}")
@@ -262,6 +266,8 @@ def spawn_effort(arguments, cli):
         raise ToolError("effort must be one of %s" % ", ".join(EFFORTS))
     if cli == "claude":
         return ["--effort", effort]
+    if cli == "pi":
+        return ["--thinking", effort]
     return ["-c", 'model_reasoning_effort="%s"' % effort]
 
 
@@ -392,7 +398,12 @@ def spawn(arguments, env, ctx):
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
     store = None
     message = "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
-    if agent is None or instructions is not None:
+    if cli == "pi":
+        # Pi has no role file: the role and the dispatch contract travel in the task itself.
+        if agent:
+            message = "Role: %s\n\n%s" % (agent, message)
+        message += "\n\n" + PI_WORKER_PROTOCOL
+    elif agent is None or instructions is not None:
         # No role file supplies the dispatch contract, so the runtime states it.
         message += "\n\n" + WORKER_PROTOCOL
     if dispatch_enabled(env):
@@ -402,6 +413,9 @@ def spawn(arguments, env, ctx):
     codex_profile = None
     if cli == "claude":
         program = ["claude"] + (["--agent", agent] if agent else []) + launch_args + model + [message]
+    elif cli == "pi":
+        # Pi runs non-interactively and takes the task as its only argument; the model names its provider.
+        program = ["pi", "--print"] + model + [message]
     else:
         # The worker profile names the policy Codex actually runs; without it the worker runs the
         # CLI's defaults, so the profile is only passed when it is usable.
@@ -415,7 +429,7 @@ def spawn(arguments, env, ctx):
         launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agent-runtime-profile")
         program = [os.path.normpath(launcher), profile, str(profiles.config_path(env)), "--"] + program
     else:
-        program = profiles.scrub_prefix(env) + program
+        program = profiles.scrub_prefix(env, cli) + program
     if store:
         earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)

@@ -13,8 +13,9 @@ the operator writes.
 
 The MCP server and the dispatch store are host-agnostic. A harness is identified by the process that
 started the server (its direct parent) and, for the session's generation, by the nearest harness
-ancestor in the process tree. Pi is a **lead only** in this plan: it delegates to Claude and Codex
-workers, it is never a worker, and it has no token accounting.
+ancestor in the process tree. Pi is a lead **and** a worker: a lead delegates to Claude, Codex or Pi
+workers, and a Pi worker runs as the `pi` family, reports through Pi's MCP registration and never
+starts or ends a worker of its own. Pi has no token accounting.
 
 ## Trust boundary
 
@@ -44,7 +45,7 @@ never the authority.
 - **R175** WHEN a Pi lead calls `status`, `collect`, `message`, `resume` or `stop` for a worker outside its own team, THEN the call is denied. (from pi-lead-adapter/S3)
 - **R176** WHEN a Pi session runs without `AGENT_RUNTIME_DISPATCH=1`, THEN every call is denied, because without the durable store there is no identity, no attribution and no scope. (from pi-lead-adapter/S2)
 - **R177** WHEN the operator's policy file is malformed, THEN the Pi host is refused rather than trusted. (from pi-lead-adapter/S4)
-- **R178** WHEN a Pi session resolves as a worker rather than a lead, THEN it is refused: Pi is supported as a lead only. (from pi-lead-adapter/S1)
+- **R178** WHEN a Pi session resolves as a worker, THEN it is accepted inside its own team with the narrow worker tool set (R188), instead of being refused outright. (from pi-lead-adapter/S1, amended by pi-worker/T3)
 - **R179** WHEN a Pi lead spawns a Claude or Codex worker, THEN the worker runs through the existing dispatch store, bound to the Pi lead's team and assignment id. (from pi-lead-adapter/S2)
 - **R180** WHEN that worker reports, THEN `wait(target=all)` returns exactly one result whose recipient is the Pi lead's terminal. (from pi-lead-adapter/S2)
 - **R181** WHEN the Pi lead's MCP connection drops and reconnects, THEN it sees its own team and the undelivered report, and the task is not dispatched twice. (from pi-lead-adapter/S3)
@@ -54,6 +55,10 @@ never the authority.
 - **R185** WHEN one worker reports while another still works, THEN `wait(target=all)` returns that report and names the unfinished assignment. (from pi-lead-adapter/S2, issue #31)
 - **R186** WHEN the Claude Code and Codex integrations run, THEN their session identity, usage binding and resume behaviour are unchanged. (from pi-lead-adapter/S5)
 - **R187** WHEN the operator writes the host policy, THEN it can grant mutations, worker backends and directories and nothing else: it never grants a harness a role. (from pi-lead-adapter/S4)
+- **R188** WHEN a Pi worker calls `report`, `message`, `wait`, `status`, `collect`, `list` or a read-only `task list` inside its own team, THEN the runtime accepts the call instead of refusing the session. (from pi-worker/S3, pi-worker/S5)
+- **R189** WHEN a Pi worker calls `spawn`, `stop` or `resume`, THEN the runtime refuses the call with a reason that names the host policy: a Pi worker starts no worker and ends no worker. (from pi-worker/S4)
+- **R190** WHEN a spawn names the `pi` family, THEN the runtime launches `pi --print --model <model> --thinking <effort>` with the task last, and the task carries the role line and the report protocol; an effort Pi does not know is refused before anything starts. (from pi-worker/S1, pi-worker/S6)
+- **R191** WHEN a spawn names the `pi` family, THEN the worker keeps `MINIMAX_API_KEY` and the Pi provider variables, and a claude or codex spawn carries neither; the authorised-directory guarantee is unchanged for a Pi spawn. (from pi-worker/S2, pi-worker/S7, pi-worker/S8)
 
 ## Operator policy
 
@@ -87,3 +92,12 @@ directory is allowed. The file is read on every mutating call, so a change needs
 | S3 | R175, R181 | `tests/test_pi_lead.py`: `test_S3_a_disconnected_pi_lead_reconnects_to_its_own_team`, `test_S3_a_pi_lead_cannot_reach_another_leads_worker`, `test_S1_a_new_pi_process_is_a_new_generation_and_the_old_one_goes_stale` |
 | S4 | R167, R168, R170, R171, R172, R173, R174, R177, R187 | `tests/test_pi_lead.py`: `PiPolicyTests`, `test_S4_a_pi_lead_may_not_mutate_without_a_policy`, `test_S4_a_pi_lead_may_not_choose_a_backend_the_operator_did_not_authorize`, `test_S4_a_pi_lead_may_not_start_a_worker_outside_the_authorised_directory`, `test_S4_a_pi_lead_may_not_omit_the_backend`, `test_a_pi_session_without_a_pi_process_is_refused`, `test_an_ambiguous_pi_session_is_refused` |
 | S5 | R169, R186 | `tests/test_pi_lead.py`: `test_claude_and_codex_keep_their_own_identity`, `test_claude_and_codex_keep_their_session_id_fallback`, `test_claude_and_codex_hosts_keep_their_unrestricted_behaviour`, plus the whole existing suite |
+| pi-worker/S1 | R190 | `tests/test_pi_worker.py`: `test_S1_a_pi_spawn_builds_the_pi_argv_with_the_task_last`, `test_S1_a_pi_spawn_without_a_model_keeps_the_print_flag`, `test_S1_the_pi_task_carries_the_role_and_the_report_protocol`, `test_S1_a_pi_spawn_with_no_role_states_the_protocol_without_a_role_line`, `test_S1_the_pi_family_is_offered_in_the_spawn_schema` |
+| pi-worker/S2 | R191 | `tests/test_pi_worker.py`: `test_S2_a_pi_spawn_keeps_the_minimax_and_pi_provider_variables`, `test_S2_a_claude_or_codex_spawn_loses_them`, `test_S2_the_scrub_list_covers_the_pi_provider_variables` |
+| pi-worker/S3 | R188 | `tests/test_pi_worker.py`: `test_S3_a_pi_worker_may_report`, `test_S3_a_pi_worker_may_read_its_own_team` |
+| pi-worker/S4 | R189 | `tests/test_pi_worker.py`: `test_S4_a_pi_worker_may_not_spawn_stop_or_resume`, `test_S4_a_pi_worker_may_not_create_a_team_task`, `test_S4_a_pi_worker_without_a_policy_may_not_report`, `test_S4_a_pi_worker_may_not_spawn_another_worker` |
+| pi-worker/S5 | R188 | `tests/test_pi_worker.py`: `test_S5_a_pi_worker_may_not_reach_a_worker_outside_its_team` |
+| pi-worker/S6 | R190 | `tests/test_pi_worker.py`: `test_S6_the_effort_maps_onto_pi_thinking`, `test_S6_an_effort_pi_does_not_know_is_refused_before_anything_starts` |
+| pi-worker/S7 | R191 | `tests/test_pi_worker.py`: `test_S7_a_pi_spawn_outside_the_authorized_directory_is_refused`, `test_S7_a_pi_spawn_needs_an_authorized_backend` |
+| pi-worker/S8 | R191 | `tests/test_pi_worker.py`: `test_S8_a_pi_worker_reports_once_and_the_lead_team_receives_it` |
+| pi-worker/S9 | R191 | `README.md` (the local configuration) and `~/.pi/agent/mcp.json` (the registration) |
