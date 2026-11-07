@@ -5,10 +5,14 @@ import os
 import re
 from pathlib import Path
 
-BUILTINS = ("claude", "codex")
+BUILTINS = ("claude", "codex", "pi")
 PROVIDER_VARIABLES = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
                       "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
-                      "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_AUTO_MODE_SERVER", "CLAUDE_CODE_AUTO_MODE_MODEL")
+                      "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_AUTO_MODE_SERVER", "CLAUDE_CODE_AUTO_MODE_MODEL",
+                      "MINIMAX_API_KEY", "PI_API_KEY", "PI_PROVIDER", "PI_MODEL")
+# The variables Pi itself authenticates with. A pi worker keeps them; every other family loses them:
+# a Claude or Codex worker can never use a MiniMax or Pi credential.
+PI_PROVIDER_VARIABLES = ("MINIMAX_API_KEY", "PI_API_KEY", "PI_PROVIDER", "PI_MODEL")
 # Claude Code's --permission-mode choices. Another provider gives no server-side auto mode review: its profile sets
 # CLAUDE_CODE_AUTO_MODE_SERVER=0 and CLAUDE_CODE_AUTO_MODE_MODEL, or picks a mode that needs no classifier.
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "dontAsk", "manual", "plan")
@@ -117,13 +121,19 @@ def scrubbed_variables(configured):
     return sorted(keys)
 
 
-def scrub_prefix(env):
-    """`env -u NAME...` for a built-in spawn, so it runs on the CLI's own login whatever the lead or pane carries."""
+def scrub_prefix(env, cli=None):
+    """`env -u NAME...` for a built-in spawn, so it runs on the CLI's own login whatever the lead or pane carries.
+
+    The family decides what it keeps: a pi worker authenticates with Pi's own provider variables, so those stay.
+    """
     try:
         configured = load(env)
     except ProfileError:
         configured = {}  # the provider variables still go
-    return ["env"] + [arg for key in scrubbed_variables(configured) for arg in ("-u", key)]
+    keys = set(scrubbed_variables(configured))
+    if cli == "pi":
+        keys -= set(PI_PROVIDER_VARIABLES)
+    return ["env"] + [arg for key in sorted(keys) for arg in ("-u", key)]
 
 
 def launch(argv, env):

@@ -45,7 +45,7 @@ Two roles are swappable in principle, and neither has an adapter interface: the 
 
 | Role | Supported today | Where it plugs in |
 |---|---|---|
-| Host | Claude Code, Codex, Pi (lead only) | `CLIS`, `spawn`, `cli_of_args`, `detect_cli`, `dispatch_identity` and the hooks (see Hosts) |
+| Host | Claude Code, Codex, Pi (lead and worker) | `CLIS`, `spawn`, `cli_of_args`, `detect_cli`, `dispatch_identity` and the hooks (see Hosts) |
 | Server | Herdr `hc` | `hc` and `run` in `server/hc_tools.py`, `hc_get` and `run_command` in `server/agent_runtime.py` (see Servers) |
 
 ### Hosts
@@ -68,9 +68,9 @@ The MCP server and the dispatch store are host-agnostic: any coding agent that s
 
 Spawning workers also requires Herdr's `hc` CLI whatever the host.
 
-### Pi as a lead
+### Pi as a lead and a worker
 
-Pi leads; it never works as a worker. A Pi session is identified by its own process: `pi` in the
+Pi leads and works. A Pi session is identified by its own process: `pi` in the
 process ancestry (Pi rewrites its process title to `pi`) or `PI_CODING_AGENT` in the environment as a
 hint. The lead's generation is the Pi process's `<pid>:<lstart>`, so an MCP server that restarts keeps
 the same team, and a Pi restart starts a new one. A Pi session without a visible Pi process, or one
@@ -116,6 +116,34 @@ for it - and reaches only the workers of its own team. Register the server in Pi
 `exposure: direct` declares the tools to the model (the default, `codemode`, keeps them reachable only
 from codemode scripts). The server needs the durable dispatch store, so `AGENT_RUNTIME_DISPATCH=1` is
 required, and the lead needs an `hc` terminal to start workers from.
+
+### Pi as a worker
+
+The `pi` family is a built-in worker backend, next to `claude` and `codex`. A spawn that names it
+launches `pi --print --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
+runtime's own five levels (`low`, `medium`, `high`, `xhigh`, `max`) and Pi's extra levels (`off`,
+`minimal`) are never sent. Pi has no role files and no `--agent` flag, so the role travels in the task
+(`Role: implementer`) and the runtime states the report protocol there too, naming Pi's own tool
+(`mcp__agent-runtime__report`). Pi has no token accounting.
+
+Provider scrubbing is family-aware: a `pi` spawn keeps `MINIMAX_API_KEY` and the Pi provider variables
+(`PI_API_KEY`, `PI_PROVIDER`, `PI_MODEL`), and a `claude` or `codex` spawn loses all of them, so a
+Claude or Codex worker never holds a MiniMax or Pi credential.
+
+A Pi worker is a host the server authorizes itself (Pi ships no PreToolUse hook). Inside its own team
+it may `report`, `message`, `wait`, `status`, `collect`, `list` and read a task list; it may not
+`spawn`, `stop` or `resume`, and it reaches no worker outside its team. The authorised-directory
+guarantee is unchanged: a Pi spawn outside the operator's `paths` is refused before anything starts.
+
+The local configuration, as it stands on this machine:
+
+| What | Where | Value |
+|---|---|---|
+| The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct` |
+| The host policy | `~/.config/agent-runtime/hosts.json` | the `pi` host: `mutations` on, `backends` `["pi", "minimax", "codex", "claude"]`, `paths` covering the checkouts under the developer's home |
+
+The `pi` backend in `backends` is what lets a Pi lead start a Pi worker; without it the spawn is
+refused with the policy's reason.
 
 ### Servers
 
