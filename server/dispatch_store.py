@@ -518,6 +518,12 @@ class Store:
             return db.execute("SELECT 1 FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
                               (team, target, target)).fetchone() is not None
 
+    def team_worker(self, team, target):
+        """True when the worker belongs to this team, active or not: the ownership scope of a host."""
+        with self.transaction() as db:
+            return db.execute("SELECT 1 FROM workers WHERE team=? AND (name=? OR id=?) LIMIT 1",
+                              (team, target, target)).fetchone() is not None
+
     def peer(self, actor, target, text, message_id=None, ack=None):
         if max(len(text.encode()), len(json.dumps(text).encode())) > MAX_TEXT_BYTES:
             raise StoreError("message limit is 65536 bytes")
