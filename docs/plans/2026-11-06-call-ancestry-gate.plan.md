@@ -55,6 +55,6 @@ call-cli review 3 found two more ways around the Bash hook: shell expansions (B8
 
 | # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |
 |---|---|---|---|---|---|---|---|---|
-| T1 | Ancestry walk in `call` stopping at the hc server, fail-closed, README line | S1–S4 | none | server/agent_runtime.py, tests/test_agent_runtime.py, README.md | small | complex | agent | SKIPPED · Lead is merging the branch with the T3 work; the driver-owned attempt is superseded by a Lead-run branch |
+| T1 | Ancestry walk in `call` stopping at the hc server, fail-closed, README line | S1–S4 | none | server/agent_runtime.py, tests/test_agent_runtime.py, README.md | small | complex | agent | COMPLETE 2026-11-06 · merged in https://github.com/FBisca/agent-runtime/pull/49 (68205cd) |
 | T2 | Verify on this machine: the hc server process is found and is not under a claude ancestor after a clean-env restart; a driver pane nested under the Lead passes and dispatches; a Claude Bash is refused | none | T1, T3 | | | | Felippe | TO-DO |
-| T3 | `call --lead` forces the lead role in a parented terminal, after the ancestry check | S5, S6 | T1 | server/agent_runtime.py, server/dispatch_store.py, tests/test_agent_runtime.py, README.md | small | complex | agent | TO-DO |
+| T3 | `call --lead` forces the lead role in a parented terminal, after the ancestry check | S5, S6 | T1 | server/agent_runtime.py, server/dispatch_store.py, tests/test_agent_runtime.py, README.md | small | complex | agent | COMPLETE 2026-11-06 · merged in https://github.com/FBisca/agent-runtime/pull/49 (68205cd) |
