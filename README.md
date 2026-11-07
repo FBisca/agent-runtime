@@ -41,16 +41,16 @@ The same guard and reminders run on Codex through the shim: `agent-runtime-hook 
 
 ## Hosts and servers
 
-Two roles are swappable in principle, and neither has an adapter interface: the **host** (the coding agent that leads or works) and the **server** (the backend that runs worker sessions). Claude Code and Codex are the tested hosts; [Herdr](https://herdr.dev/core/)'s `hc` is the only supported server.
+Two roles are swappable in principle, and neither has an adapter interface: the **host** (the coding agent that leads or works) and the **server** (the backend that runs worker sessions). Claude Code, Codex and Pi are the tested hosts; [Herdr](https://herdr.dev/core/)'s `hc` is the only supported server.
 
 | Role | Supported today | Where it plugs in |
 |---|---|---|
-| Host | Claude Code, Codex | `CLIS`, `spawn`, `cli_of_args`, `detect_cli`, `dispatch_identity` and the hooks (see Hosts) |
+| Host | Claude Code, Codex, Pi (lead only) | `CLIS`, `spawn`, `cli_of_args`, `detect_cli`, `dispatch_identity` and the hooks (see Hosts) |
 | Server | Herdr `hc` | `hc` and `run` in `server/hc_tools.py`, `hc_get` and `run_command` in `server/agent_runtime.py` (see Servers) |
 
 ### Hosts
 
-The MCP server and the dispatch store are host-agnostic: any coding agent that speaks MCP over stdio can call the ten tools. Hosts are pluggable in that sense only. Claude Code and Codex are the only hosts tested, and there is no host registry or adapter interface: support for each is a handful of explicit branches. Adding a host today means editing these integration points:
+The MCP server and the dispatch store are host-agnostic: any coding agent that speaks MCP over stdio can call the ten tools. Hosts are pluggable in that sense only. Claude Code, Codex and Pi are the tested hosts, and there is no host registry or adapter interface: support for each is a handful of explicit branches. Adding a host today means editing these integration points:
 
 | Concern | Where | What a new host provides |
 |---|---|---|
@@ -58,14 +58,64 @@ The MCP server and the dispatch store are host-agnostic: any coding agent that s
 | Launching a worker | `spawn` in `server/hc_tools.py` | the argv that starts the CLI non-interactively with the task text (Claude: `--agent implementer`; Codex: `--no-daemon` plus its implementer instructions; an optional `model` adds `--model <model>` before the prompt; an optional `effort` (`low`, `medium`, `high`, `xhigh`, `max`) sets that task's reasoning effort as a launch flag, Claude `--effort <level>` and Codex `-c model_reasoning_effort="<level>"`, so it never changes the CLI's saved default; an optional `agent` replaces `implementer`: Claude `--agent <agent>`, Codex reads `~/.codex/agents/<agent>.toml`; `agent: "none"` runs the worker with no role at all (Claude drops `--agent`, Codex gets no preamble) and the runtime states the worker protocol in the prompt; `instructions_file` (Codex only) takes the role text from that file instead of a toml, and cannot be combined with `agent`. An agent without the `report` tool leaves the lead seeing the worker as unreported or stalled) |
 | Worker instructions | `codex_instructions` in `server/hc_tools.py`; `spawn_instructions` for `instructions_file`; for Claude, the agent file the host loads | where the host reads the implementer role from (Codex: `~/.codex/agents/<agent>.toml`, default `implementer`) |
 | Subagent wording | `SUBAGENT_TOOL` in `server/hc_tools.py` | the name of the host's own subagent tool, used in the `lookup` refusal |
-| Detecting the host | `cli_of_args` (process name), `detect_cli` and `CODEX_ENV_MARKERS` (environment markers), `foreground_cli` (Herdr foreground program), all in `server/agent_runtime.py` | a process basename and/or environment variable that identifies it |
+| Detecting the host | `cli_of_args` (process name), `detect_cli` and `CODEX_ENV_MARKERS`/`CLAUDE_ENV_MARKERS`/`PI_ENV_MARKERS` (environment markers), `foreground_cli` (Herdr foreground program), all in `server/agent_runtime.py` | a process basename and/or environment variable that identifies it |
 | Runtime choice | `resolve` in `server/agent_runtime.py` | which runtime (`herdmates` or `native`) the host gets under Herdr |
-| Session identity | `dispatch_identity` in `server/hc_tools.py` | the lead's generation is `<pid>:<lstart>` of the nearest Claude or Codex ancestor (`cli_generation` in `server/agent_runtime.py`, shared with hooks), so `/clear` and `/new` stay on one team; a session ID in the environment (`CODEX_THREAD_ID` or `CLAUDE_SESSION_ID`) is used only when no CLI ancestor is visible |
+| Session identity | `dispatch_identity` in `server/hc_tools.py` | the lead's generation is `<pid>:<lstart>` of the nearest Claude, Codex or Pi ancestor (`cli_generation` in `server/agent_runtime.py`, shared with hooks), so `/clear` and `/new` stay on one team; a session ID in the environment (`CODEX_THREAD_ID` or `CLAUDE_SESSION_ID`) is used only when no CLI ancestor is visible (a Pi lead never falls back to a session ID: it has no Pi process, so it has no session) |
+| Host authorization | `host_of` and `authorize` in `server/host_policy.py` | for a host whose trust model the runtime cannot inherit (Pi), what the session may mutate, which worker backends it may start and where |
 | Reading its terminal | `hc_app` in `server/agent_runtime.py`, and `server/markers.json` | an app name (`claude-code`, `codex`) plus its prompt glyph, anchor and interrupt text, for `status` and `collect` |
 | Hook protocol | `hooks/pre_tool_use.py`, `hooks/subagent_start.py` and `hooks/lead_context.py` (helpers in `hooks/hook_lib.py`) | a PreToolUse hook that sends JSON with `tool_name`, `tool_input` and `agent_id` for subagents; `TOOL_NAME` in the hook matches the plugin and plain `mcp__agent-runtime__` tool prefixes (the `--cli codex` argument Codex passes is not branched on) |
 | MCP registration | `.mcp.json` and `hooks/hooks.json` (Claude plugin); the block printed by `install.sh` (Codex) | the host's own config entry for a stdio MCP server |
 
 Spawning workers also requires Herdr's `hc` CLI whatever the host.
+
+### Pi as a lead
+
+Pi leads; it never works as a worker. A Pi session is identified by its own process: `pi` in the
+process ancestry (Pi rewrites its process title to `pi`) or `PI_CODING_AGENT` in the environment as a
+hint. The lead's generation is the Pi process's `<pid>:<lstart>`, so an MCP server that restarts keeps
+the same team, and a Pi restart starts a new one. A Pi session without a visible Pi process, or one
+whose environment claims two hosts at once, is refused: the runtime never substitutes Claude.
+
+Pi has no PreToolUse hook of its own, so the server is the authority. A Pi lead may only read until
+the operator writes `$XDG_CONFIG_HOME/agent-runtime/hosts.json` (default
+`~/.config/agent-runtime/hosts.json`):
+
+```json
+{
+  "hosts": {
+    "pi": {
+      "mutations": true,
+      "backends": ["codex"],
+      "paths": ["/Users/you/developer/checkout"]
+    }
+  }
+}
+```
+
+`mutations` allows the mutating tools (`spawn`, `message`, `resume`, `stop`, `report`, and `task`
+except its read-only listing). `backends` names the worker backends the lead may start (built-ins or
+configured profiles); an empty list starts no worker, so no company-funded model is used until the
+operator says so. `paths` limits where a worker may run; without it only the lead's own working
+directory is allowed. A Pi lead must name its backend explicitly - the runtime never picks a provider
+for it - and reaches only the workers of its own team. Register the server in Pi's own config
+(`~/.pi/agent/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "agent-runtime": {
+      "command": "python3",
+      "args": ["/absolute/path/to/agent-runtime/server/mcp_server.py"],
+      "env": { "AGENT_RUNTIME_DISPATCH": "1" },
+      "exposure": "direct"
+    }
+  }
+}
+```
+
+`exposure: direct` declares the tools to the model (the default, `codemode`, keeps them reachable only
+from codemode scripts). The server needs the durable dispatch store, so `AGENT_RUNTIME_DISPATCH=1` is
+required, and the lead needs an `hc` terminal to start workers from.
 
 ### Servers
 

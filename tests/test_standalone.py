@@ -57,7 +57,8 @@ class BinShimTest(unittest.TestCase):
             env = {"PATH": os.environ["PATH"], "HOME": tmp}
             done = subprocess.run([str(link), "resolve"], env=env, capture_output=True, text=True, timeout=15)
             self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertEqual(done.stdout.strip(), "runtime=native role=lead cli=claude")
+            # The cli names the harness of the session that ran the shim: claude, codex or pi.
+            self.assertRegex(done.stdout.strip(), r"^runtime=native role=lead cli=(claude|codex|pi)$")
 
     def test_hook_shim_denies_raw_hc_mutation_for_a_subagent(self):
         payload = {"tool_name": "Bash", "tool_input": {"command": "hc kill t1"}, "agent_id": "a1"}

@@ -12,6 +12,7 @@ import time
 import agent_runtime as lib
 import dispatch_store as dispatch
 import dispatch_wait
+import host_policy
 import profiles
 import usage
 
@@ -197,7 +198,15 @@ def dispatch_identity(env, ctx=None):
         return cached  # computed once per call
     scope = hc_server(env)
     generation = lib.cli_generation()
-    if not generation:  # no visible CLI ancestor: the host must supply a session ID
+    if not generation:
+        # A Pi lead is identified by its own process: an environment variable alone never stands in
+        # for a session, and two hosts claiming the same session are ambiguous, not Claude.
+        if lib.pi_marked(env):
+            if len(lib.marked_harnesses(env)) > 1:
+                raise ToolError("cannot establish the lead session: the environment claims more than "
+                                "one host, so the lead identity is ambiguous")
+            raise ToolError("cannot establish a Pi lead session: no Pi process runs above this "
+                            "server; start the MCP server from Pi")
         generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
     if not generation:
         raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
@@ -868,6 +877,15 @@ def lead_unfinished(name, arguments, ctx, scope, generation, caller):
         return 0
 
 
+def require_dispatch(env):
+    """A restricted host needs the durable store: without it there is no identity, no attribution
+    and no scope to check."""
+    host = host_policy.host_of(env)
+    if host_policy.restricted(host):
+        raise ToolError("the %s host needs the durable dispatch store: start the MCP server with "
+                        "AGENT_RUNTIME_DISPATCH=1" % host)
+
+
 def call(name, arguments, env, ctx):
     try:
         try:
@@ -882,6 +900,7 @@ def call(name, arguments, env, ctx):
 
 def call_dispatch(name, arguments, env, ctx):
     if not dispatch_enabled(env):
+        require_dispatch(env)
         return HANDLERS[name](arguments, env, ctx)
     if name in ("status", "list", "collect") and lib.resolve(env)["runtime"] != "hc":
         return HANDLERS[name](arguments, env, ctx)
@@ -910,6 +929,11 @@ def call_dispatch(name, arguments, env, ctx):
                                 defer_pin=gated_read)
     if not ctx.actor["worker_id"]:
         ctx.owned_team = ctx.actor["team_id"]
+    # The host that owns this session decides what it may mutate; the server is the authority.
+    try:
+        host_policy.authorize(env, host_policy.host_of(env), info["role"], name, arguments, ctx)
+    except host_policy.Refused as error:
+        raise ToolError(str(error))
     ctx.ack = None
     if arguments.get("receipt") is not None:
         ctx.ack = ctx.store.receipt_owner(arguments["receipt"])

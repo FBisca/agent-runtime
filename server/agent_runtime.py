@@ -16,6 +16,8 @@ FORCED_LEAD = False  # same process-local override, set only after the ancestry 
 LEAD_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 RUNTIMES = ("herdmates", "hc", "native")
 FIELDS = ("runtime", "role", "parent", "cli")
+HARNESSES = ("claude", "codex", "pi")  # the hosts a session can run under
+CLI_CHOICES = HARNESSES
 
 
 def hc_get(terminal_id):
@@ -27,6 +29,11 @@ def hc_get(terminal_id):
 
 
 CODEX_ENV_MARKERS = ("CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID")
+CLAUDE_ENV_MARKERS = ("CLAUDECODE",)
+# Pi sets PI_CODING_AGENT in its own environment so child processes can detect it. It is a hint
+# about the host, never an identity: the process ancestry and the dispatch store decide that.
+PI_ENV_MARKERS = ("PI_CODING_AGENT",)
+PI_PACKAGE = "pi-coding-agent"
 MAX_ANCESTOR_HOPS = 15
 ANCESTRY_BUDGET_SECONDS = 0.5
 PS_TIMEOUT_SECONDS = 0.2
@@ -48,20 +55,45 @@ def real_ps_entry(pid, timeout=PS_TIMEOUT_SECONDS):
 ps_entry = real_ps_entry
 
 
+def pi_program(token):
+    """True when a path names the Pi CLI: `pi` itself, its npm bin link or its package entry.
+
+    Pi rewrites its process title to `pi`, so argv[0] is the bare name; an installed Pi may also
+    run as `node .../node_modules/.bin/pi` or through its package entry point."""
+    if os.path.dirname(token) == "":
+        return True
+    return "/node_modules/" in token
+
+
 def cli_of_args(args):
-    """`codex` or `claude` when argv[0] (or argv[1] after a node/bun wrapper) has that basename."""
+    """`codex`, `claude` or `pi` when argv[0] (or argv[1] after a node/bun wrapper) has that basename."""
     tokens = args.split()
     for token in tokens[:2]:
         name = os.path.basename(token)
         if name in ("codex", "claude"):
             return name
+        if name == "pi" and pi_program(token):
+            return "pi"
+        if PI_PACKAGE in token:
+            return "pi"
         if name not in ("node", "bun", "deno"):
             break
     return None
 
 
+def parent_cli():
+    """The harness that started this process (its direct parent), or None.
+
+    The nearest harness ancestor is the session's generation; the direct parent is the host that owns
+    this process, and the host's trust model is the one the runtime applies."""
+    entry = ps_entry(os.getppid())
+    if not entry:
+        return None
+    return cli_of_args(entry[1])
+
+
 def ancestor_cli():
-    """Nearest ancestor process that is codex or claude; None when the walk fails or finds nothing."""
+    """Nearest ancestor process that is codex, claude or pi; None when the walk fails or finds nothing."""
     deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
     pid, seen = os.getppid(), set()
     for _ in range(MAX_ANCESTOR_HOPS):
@@ -90,7 +122,7 @@ def lstart(pid):
 
 
 def cli_generation():
-    """`<pid>:<lstart>` of the nearest codex/claude ancestor, else None. Shared by the MCP server and
+    """`<pid>:<lstart>` of the nearest codex/claude/pi ancestor, else None. Shared by the MCP server and
     hooks; session IDs are deliberately ignored so /clear and /new stay on one team. Read-only.
     `agent-runtime call --lead` sets FORCED_GENERATION for its own process, which pins the generation."""
     if FORCED_GENERATION:
@@ -111,24 +143,44 @@ def cli_generation():
     return None
 
 
+def marked_harnesses(env):
+    """The host families the environment claims; more than one is ambiguous."""
+    found = []
+    if any(env.get(name) for name in CODEX_ENV_MARKERS):
+        found.append("codex")
+    if any(env.get(name) for name in CLAUDE_ENV_MARKERS):
+        found.append("claude")
+    if any(env.get(name) for name in PI_ENV_MARKERS):
+        found.append("pi")
+    return found
+
+
+def pi_marked(env):
+    """True when the environment says a Pi session started this process (a hint, never an identity)."""
+    return "pi" in marked_harnesses(env)
+
+
 def detect_cli(env):
     """Process ancestry first (env markers are inherited when one CLI starts the other), then env
-    markers (Codex sets CODEX_THREAD_ID/CODEX_TOOL_CALL_ID; Claude Code sets CLAUDECODE), else None."""
+    markers (Codex sets CODEX_THREAD_ID/CODEX_TOOL_CALL_ID; Claude Code sets CLAUDECODE; Pi sets
+    PI_CODING_AGENT), else None."""
     found = ancestor_cli()
     if found:
         return found
-    if any(env.get(name) for name in CODEX_ENV_MARKERS):
-        return "codex"
-    return "claude" if env.get("CLAUDECODE") else None
+    marked = marked_harnesses(env)
+    for harness in ("codex", "claude", "pi"):
+        if harness in marked:
+            return harness
+    return None
 
 
 def foreground_cli(reply):
-    """Fallback under hc: the terminal's foreground program is codex or claude."""
+    """Fallback under hc: the terminal's foreground program is codex, claude or pi."""
     foreground = reply.get("foreground") if isinstance(reply, dict) else None
     argv = foreground.get("argv") if isinstance(foreground, dict) else None
     if isinstance(argv, list) and argv and isinstance(argv[0], str):
         name = os.path.basename(argv[0])
-        return name if name in ("codex", "claude") else None
+        return name if name in HARNESSES else None
     return None
 
 
@@ -629,20 +681,20 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="agent-runtime", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("resolve", help="print the runtime, role and parent of this agent")
-    p.add_argument("--cli", choices=("claude", "codex"), default=None,
+    p.add_argument("--cli", choices=CLI_CHOICES, default=None,
                    help="default: detected from the environment, else claude")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_resolve)
     p = sub.add_parser("status", help="one JSON record for one agent")
     p.add_argument("name", help="hc terminal name or address; Herdr pane ID under herdmates")
     p.add_argument("--session", help="exact Herdr session name (herdmates)")
-    p.add_argument("--cli", choices=("claude", "codex"), default=None,
+    p.add_argument("--cli", choices=CLI_CHOICES, default=None,
                    help="default: detected from the environment, else claude")
     p.add_argument("--runtime", choices=RUNTIMES, help="override the resolved runtime")
     p.add_argument("--pretty", action="store_true", help="indent the JSON")
     p.set_defaults(func=cmd_status)
     p = sub.add_parser("list", help="JSON records for the agents you started (hc)")
-    p.add_argument("--cli", choices=("claude", "codex"), default=None,
+    p.add_argument("--cli", choices=CLI_CHOICES, default=None,
                    help="default: detected from the environment, else claude")
     p.add_argument("--runtime", choices=RUNTIMES, help="override the resolved runtime")
     p.add_argument("--pretty", action="store_true", help="indent the JSON")
@@ -663,7 +715,7 @@ def fallback_resolve(argv):
     for i, arg in enumerate(argv):
         value = arg.split("=", 1)[1] if arg.startswith("--cli=") else (
             argv[i + 1] if arg == "--cli" and i + 1 < len(argv) else None)
-        if value in ("claude", "codex"):
+        if value in CLI_CHOICES:
             cli = value
     info = {"runtime": "native", "role": "unknown", "cli": cli}
     print(json.dumps(info) if "--json" in argv else format_line(info))

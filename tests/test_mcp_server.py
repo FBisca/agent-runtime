@@ -37,17 +37,20 @@ class FakeCli:
     """A long-lived fake `codex` process. Servers launched under it share its pid:lstart generation,
     like successive MCP processes of one real CLI (restart); each FakeCli is a generation of its own.
     Relies on bash exec'ing the backgrounded simple command directly (env -> python wrapper), so every
-    server's nearest CLI ancestor is this one process and they share its pid:lstart."""
+    server's nearest CLI ancestor is this one process and they share its pid:lstart.
+
+    The harness name is the process name the ancestry walk sees: `codex` for the Claude/Codex hosts,
+    `pi` for a Pi host."""
 
     # runs the server, then records its exit status where _Launched.wait reads it
     WRAP = "import subprocess, sys; rc = subprocess.call(sys.argv[2:]); open(sys.argv[1], 'w').write(str(rc))"
 
-    def __init__(self):
+    def __init__(self, harness="codex"):
         self.dir = tempfile.TemporaryDirectory()
         self.count = 0
-        self.proc = subprocess.Popen(["codex", "-c", 'while IFS= read -r d; do v=(); while IFS= read -r -d "" e; do v+=("$e"); done <"$d/env"; \
+        self.proc = subprocess.Popen([harness, "-c", 'while IFS= read -r d; do v=(); while IFS= read -r -d "" e; do v+=("$e"); done <"$d/env"; \
 env -i "${v[@]}" "$PYTHON" -B -c "$WRAP" "$d/rc" "$@" <"$d/in" >"$d/out" 2>"$d/err" & done; wait',
-                                      "codex", sys.executable, "-B", str(SERVER)], executable="/bin/bash",
+                                      harness, sys.executable, "-B", str(SERVER)], executable="/bin/bash",
                                      stdin=subprocess.PIPE, text=True,
                                      env=dict(os.environ, PYTHON=sys.executable, WRAP=self.WRAP))
 

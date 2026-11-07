@@ -30,9 +30,10 @@ def text(description):
 
 TOOLS = [
     ("spawn", "Start one agent per task and checkout; include the whole task. "
-              "Returns promptly: worker_id, assignment_id; then wait(all) for reports. "
-              "kind=lookup is rejected: use the CLI's own subagent tool. "
-              "kind=worker: implementation, long tasks, Codex. cli: built-in or local profile; default claude.",
+              "Returns promptly: worker_id, assignment_id; then wait(all). "
+              "kind=lookup is rejected: use the CLI's subagent tool. "
+              "kind=worker: implementation, long tasks, Codex. cli: built-in or profile; "
+              "default claude; a pi lead names an authorized one.",
      schema({"kind": {"type": "string", "enum": ["worker", "lookup"]}, "cli": {"type": "string", "enum": ["claude", "codex"]},
              "name": text("unique a-z 0-9 - _, max 32"), "task": text("complete task text"),
              "cwd": text("checkout directory"),
@@ -45,14 +46,14 @@ TOOLS = [
      schema({"to": text("teammate name/ID or lead"), "text": text("message"),
              "message_id": text("optional retry ID")}, ["to", "text"])),
     ("resume", "Give a finished, idle or interrupted worker another assignment; returns promptly. A new spawn is not resumption. "
-              "Pass task_id to keep the task. Delivery is pull-only: reports landing after this resume returns need a new wait(all).",
+              "Pass task_id to keep the task. Pull-only: reports landing after this resume returns need a new wait(all).",
      schema({"name": text("worker name"), "task": text("what to do next"),
              "task_id": text("task to move to this assignment")}, ["name", "task"])),
     ("wait", "Block until children report, need attention or time out (max 590s). target=all with workers returns as soon as a report is "
              "undelivered: reports, assignment states, unfinished (open work), receipt. "
              "Wait per work period; pass receipt and wait again for remaining reports. "
              "No workers left: use target=inbox for peer messages. "
-             "Delivery is pull-only: reports landing after this wait returns need a new wait(all).",
+             "Pull-only: reports landing after this wait returns need a new wait(all).",
      schema({"target": text("any, all, worker name/ID, or inbox"),
              "timeout": {"type": "integer", "description": "seconds, default 170, max 590; dispatch allows 0"},
              "receipt": text("acknowledge previous batch")}, ["target"])),
