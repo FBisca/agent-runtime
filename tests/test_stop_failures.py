@@ -12,6 +12,11 @@ from test_tools import ToolCase
 sys.path.insert(0, str(SERVER.parent))
 from dispatch_store import Store
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 NOT_FOUND = json.dumps({"error": {"hint": "see `hc ls --all`", "kind": "not_found", "message": 'no terminal "w1"'}})
 

@@ -19,22 +19,35 @@ import dispatch_store
 from dispatch_events import endpoints
 from dispatch_store import Store
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 class AsyncRPC:
     def __init__(self, session):
         self.session, self.pending, self.counts = session, {}, {}
         self.replies = queue.Queue()
         self.sequence = 100
-        threading.Thread(target=self.read, daemon=True).start()
+        self.thread = threading.Thread(target=self.read, daemon=True)
+        self.thread.start()
 
     def read(self):
-        for line in self.session.proc.stdout:
-            try:
-                response = json.loads(line)
-                self.counts[response["id"]] = self.counts.get(response["id"], 0) + 1
-                self.replies.put(response)
-            except (ValueError, KeyError) as error:
-                self.replies.put(error)
+        try:
+            for line in self.session.proc.stdout:
+                try:
+                    response = json.loads(line)
+                    self.counts[response["id"]] = self.counts.get(response["id"], 0) + 1
+                    self.replies.put(response)
+                except (ValueError, KeyError) as error:
+                    self.replies.put(error)
+        except (ValueError, OSError):  # the session closed its stdout under this thread
+            return
+
+    def close(self):
+        """Stop the reader before the session closes its streams: a thread on a closed file raises."""
+        self.thread.join(timeout=2)
 
     def send(self, method, params=None, notify=False):
         self.sequence += 1
@@ -80,6 +93,7 @@ class EventWaitTests(ToolCase):
             session.handshake()
             self.workers.append(session)
         self.rpc = AsyncRPC(self.lead)
+        self.addCleanup(self.rpc.close)
 
     def spawn(self, session, name, assignment_id=None):
         arguments = {"kind": "worker", "name": name, "task": "work", "cwd": "/tmp"}
@@ -736,6 +750,7 @@ os._exit(0)
         self.prepare()
         child = self.spawn(self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"])
         worker_rpc = AsyncRPC(self.workers[0])
+        self.addCleanup(worker_rpc.close)
         request_id = self.begin(worker_rpc)
         report_id = worker_rpc.tool("report", {"assignment_id": self.assignments[0]["assignment_id"],
                                               "kind": "complete", "text": "parent report"})

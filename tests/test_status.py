@@ -7,6 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("agent_runtime", HERE.parent / "server" / "agent_runtime.py")
 app = importlib.util.module_from_spec(spec)

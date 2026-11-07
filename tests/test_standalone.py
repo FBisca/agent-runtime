@@ -10,6 +10,11 @@ import tomllib
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "stop", "report", "task"]
 INIT = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}
@@ -190,10 +195,13 @@ class HostsSectionTest(unittest.TestCase):
 
 
 class CiWorkflowTest(unittest.TestCase):
-    def test_S5_ci_runs_the_unittest_suite_on_python_311_and_up(self):
+    def test_S5_ci_runs_the_pytest_suite_on_python_311_and_up(self):
         """agent-runtime-standalone/S5"""
         text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-        self.assertIn("python3 -B -m unittest discover -s tests", text)
+        self.assertIn("astral-sh/setup-uv", text)
+        self.assertIn("uv sync", text)
+        self.assertIn("uv run pytest", text)
+        self.assertNotIn("unittest discover", text)
         for version in ("3.11", "3.12", "3.13"):
             self.assertIn(f'"{version}"', text)
         self.assertIn("shellcheck", text)

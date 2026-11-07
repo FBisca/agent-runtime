@@ -11,6 +11,11 @@ sys.path.insert(0, str(SERVER.parent))
 import hc_tools
 from dispatch_store import Store, StoreError
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 ENV = {"CODEX_THREAD_ID": "lead-session", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
        "AGENT_RUNTIME_DISPATCH": "1"}
 ARGS = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}

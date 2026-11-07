@@ -11,6 +11,11 @@ import dispatch_wait
 import hc_tools
 from dispatch_store import MAX_BASE_BYTES, Store, StoreError
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 
 def canonical(payload):

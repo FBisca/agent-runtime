@@ -14,6 +14,11 @@ from pathlib import Path
 
 from test_mcp_server import SERVER
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 MAX_PERIOD_WAITS = 4
 
 PROFILE_ENV_PROBE = '''import json, os, subprocess, sys, tempfile

@@ -231,11 +231,26 @@ The block registers the MCP server with `AGENT_RUNTIME_DISPATCH=1`, a 600 s tool
 
 ## Tests
 
+[uv](https://docs.astral.sh/uv/) and pytest are the project's testing workflow. A fresh checkout needs
+nothing but uv:
+
 ```sh
-python3 -B -m unittest discover -s tests
+uv sync                 # the test environment (pytest, pytest-xdist)
+uv run pytest           # the fast suite: the unit tests, in process (under 3 seconds)
+uv run pytest -m integration   # the tests that drive a real boundary (a subprocess, a socket)
+uv run pytest -n 4      # the whole suite, in parallel
+uv run pytest --durations=20  # the whole suite, with the slowest tests
 ```
 
-No dependencies. Tests drive the server over stdio against a fake `hc`. The live mixed-CLI acceptance run is opt-in (`AGENT_RUNTIME_LIVE=1`). CI runs the suite on Python 3.11 to 3.13 on Linux and macOS, and runs shellcheck on `install.sh` and `bin/`.
+The tests are `unittest.TestCase` classes, so `python3 -B -m unittest discover -s tests` still works;
+pytest is how they are run. Every test file carries a marker that says what it does: `unit` for the
+in-process, isolated, deterministic tests (no subprocess, no server) and `integration` for the tests
+that drive a real component boundary - a subprocess, an IPC pipe, the filesystem - even when the
+dependency behind that boundary is faked. `uv run pytest` runs the unit tests; the integration tests run
+with `-m integration`, and the whole suite runs with `-n 4` (or any `-n`). The suite drives the server
+over stdio against a fake `hc`. The live mixed-CLI acceptance run is opt-in (`AGENT_RUNTIME_LIVE=1`).
+CI runs the suite on Python 3.11 to 3.13 on Linux and macOS, and runs shellcheck on `install.sh` and
+`bin/`.
 
 ## How it is built
 

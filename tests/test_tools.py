@@ -12,10 +12,15 @@ from pathlib import Path
 
 from test_mcp_server import SERVER, Session
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 sys.path.insert(0, str(SERVER.parent))
 
 FAKE = '''#!%(python)s
-import hashlib, json, os, secrets, subprocess, sys, time
+import json, os, sys, time
 argv = sys.argv[1:]
 with open(%(log)r, "a") as log:
     log.write(json.dumps(argv) + "\\n")
@@ -27,6 +32,7 @@ if replies.get("profile_ready_at") and argv[0] == "read":
         reply = {"out": ""}
 # Execute only opt-in test programs, using a simulated login environment. Log no full environment.
 if argv[0] == "run" and replies.get("execute_profile"):
+    import hashlib, secrets, subprocess
     login = dict(os.environ)
     login.update(replies.get("login_env", {}))
     login["PROFILE_TEST_SECRET"] = secrets.token_hex(24)

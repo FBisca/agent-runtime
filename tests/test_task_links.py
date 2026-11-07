@@ -11,6 +11,11 @@ from test_mcp_server import SERVER
 sys.path.insert(0, str(SERVER.parent))
 from dispatch_store import Store, StoreError
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 ENV = {"CODEX_THREAD_ID": "lead-session", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
        "AGENT_RUNTIME_DISPATCH": "1"}
 SPAWN = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}

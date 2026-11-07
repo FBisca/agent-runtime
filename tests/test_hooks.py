@@ -26,6 +26,11 @@ import dispatch_store  # noqa: E402
 import dispatch_wait  # noqa: E402
 import hc_tools  # noqa: E402
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 def run(script, payload, *args):
     done = subprocess.run([sys.executable, "-B", str(script), *args], input=json.dumps(payload),

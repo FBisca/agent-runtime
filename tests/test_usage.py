@@ -17,6 +17,11 @@ sys.path.insert(0, str(SERVER.parent))
 import usage  # noqa: E402
 from test_tools import ToolCase, raw, unwrap  # noqa: E402
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 class CodexProfileTests(ToolCase):
     ARGS = {"kind": "worker", "task": "do x", "cwd": "/tmp/c"}

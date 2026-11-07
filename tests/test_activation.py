@@ -12,6 +12,11 @@ sys.path.insert(0, str(PLUGIN / "server"))
 import hc_tools  # noqa: E402
 import mcp_server  # noqa: E402
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 MCP_JSON = PLUGIN / ".mcp.json"
 
 

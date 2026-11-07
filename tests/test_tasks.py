@@ -6,6 +6,11 @@ from test_event_wait import Session
 import test_event_wait as event_helpers
 from test_tools import ToolCase
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 
 class TaskTests(ToolCase):
     prepare = event_helpers.EventWaitTests.prepare
