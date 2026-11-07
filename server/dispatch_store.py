@@ -29,6 +29,9 @@ MAX_RESPONSE_BYTES, MAX_BASE_BYTES, MAX_PAGE_BYTES = 196608, 98304, 65536
 STALL_NEXT = ("no progress for 15 minutes: collect it, message it, ask the user, or stop it; "
               "the runtime never stops it or marks it complete")
 STALL_MS = 15 * 60 * 1000
+RESUME_GRACE_MS = 60 * 1000
+NOT_STARTED_NEXT = ("resume has not started: collect the worker's screen or stop it if no longer needed; "
+                    "the runtime never resends the task")
 REPORT_KINDS = ("progress", "complete", "blocked", "decision")
 
 
@@ -160,6 +163,8 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS last_wait (team TEXT PRIMARY KEY, reason TEXT, attention INTEGER, fingerprint TEXT)",
                 # Stall tracking is additive and keyed by assignment, so `assignments` INSERTs stay untouched.
                 "CREATE TABLE IF NOT EXISTS stall_progress (assignment TEXT PRIMARY KEY, last_progress_ms INTEGER, last_turn INTEGER, stall_reported_for INTEGER)",
+                # Side table preserves older servers' positional assignment inserts.
+                "CREATE TABLE IF NOT EXISTS resume_marks (assignment TEXT PRIMARY KEY, dispatched_ms INTEGER, turn INTEGER, mode TEXT)",
                 # v2: shared tasks; rowid order is the durable ID sequence.
                 "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, team TEXT, subject TEXT, status TEXT, owner TEXT, assignment TEXT, deps TEXT)",
                 # D7: hot wait/read lookups; additive, so 0.2.x writers and user_version are untouched.
@@ -238,6 +243,10 @@ class Store:
             raise StoreError("assignment does not belong to this scope")
         if row["state"] != "pending":
             return  # A fast report may already have bound/completed this assignment.
+        resume = db.execute("SELECT turn,mode FROM resume_marks WHERE assignment=?", (assignment,)).fetchone()
+        if resume:
+            # A report can bind before send returns; retain the pre-resume turn in that path too.
+            turn, mode = resume
         # Tables are append-only: registration order and lead-generation order are
         # durable authority, even when a pending launch never finished binding.
         newer_assignment = db.execute(BIND_NEWER_ASSIGNMENT_SQL, (row["worker"], row["sequence"])).fetchone()
@@ -269,6 +278,12 @@ class Store:
                 self.acknowledge(db, *ack)
             self._bind(db, assignment, address, scope, turn, mode)
         dispatch_events.notify(self.directory)
+
+    def mark_resume(self, assignment, turn, mode):
+        """Record dispatch before sending, including when a report races the send response."""
+        with self.transaction() as db:
+            db.execute("INSERT INTO resume_marks VALUES (?,?,?,?)",
+                       (assignment, self.now_ms(), turn, mode))
 
     @staticmethod
     def _release(db, assignment):
@@ -628,7 +643,7 @@ class Store:
             # Worst-case fixed fields (receipt, longest reason, a runtime_state added by wait) are
             # budgeted before selection so the receipt below names exactly what fits.
             fixed = len(json.dumps({"reason": "x" * 9, "messages": [], "assignments": [
-                dict(a, runtime_state="interrupted", attention="stalled", next=max(STALL_NEXT, UNREPORTED_NEXT, ERROR_NEXT, key=len)) for a in assignments], "unfinished": unfinished,
+                dict(a, runtime_state="interrupted", attention="not_started", next=max(STALL_NEXT, NOT_STARTED_NEXT, UNREPORTED_NEXT, ERROR_NEXT, key=len)) for a in assignments], "unfinished": unfinished,
                 "receipt": "0" * 32, "more": False}, separators=(",", ":")).encode())
             if reserve > MAX_BASE_BYTES + len(',"inbox":'):
                 # A base above its cap could leave no room for even one legal message (infinite more=true retries).
@@ -687,6 +702,12 @@ class Store:
                         "SELECT last_progress_ms,stall_reported_for FROM stall_progress WHERE assignment=?",
                         (a["assignment_id"],)).fetchone()
                     a["_stalled"] = bool(row and row[0] is not None and row[0] <= idle_since and row[1] != row[0])
+                    resume = a["state"] == "working" and db.execute(
+                        "SELECT r.turn FROM resume_marks r WHERE r.assignment=? AND r.dispatched_ms<=? "
+                        "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.assignment=r.assignment "
+                        "AND json_extract(m.body,'$.kind') IN ('progress','complete','blocked','decision'))",
+                        (a["assignment_id"], self.now_ms() - RESUME_GRACE_MS)).fetchone()
+                    a["_resume_turn"] = resume[0] if resume else None
             if ready is not None:
                 batch["reason"] = ready(batch)
             for a in assignments:
