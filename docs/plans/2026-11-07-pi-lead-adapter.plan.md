@@ -1,6 +1,6 @@
 # Plan: Pi Lead Support in Agent Runtime
 
-Slug: `pi-lead-adapter`. Living spec: `docs/specs/harness-adapters.md`. Status: **APPROVED — READY FOR EXECUTION**.
+Slug: `pi-lead-adapter`. Living spec: `docs/specs/harness-adapters.md`. Status: **IMPLEMENTED — T1/T2 done, T3 verified by the user; awaiting merge of #39/#45 and the spec archive**.
 
 ## Why now
 
@@ -64,9 +64,9 @@ Pi must be able to delegate to existing Claude/Codex workers through the durable
 
 | # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |
 |---|---|---|---|---|---|---|---|---|
-| T1 | Add Pi lead identification/generation with isolated-session unit tests; preserve existing Claude/Codex behaviour, but reject ambiguous identity instead of defaulting to Claude. | S1, S3, S5 | none | `server/agent_runtime.py`, `tests/` | regular | complex | agent | TO-DO |
-| T2 | Add a bounded Pi MCP lead delegation path to existing worker backends, with real store/IPC tests and an explicit mutation guard. | S2, S4, S5 | T1 | `server/mcp_server.py`, `server/hc_tools.py`, `hooks/`, `tests/` | regular | complex | agent | TO-DO |
-| T3 | Register guarded agent-runtime MCP in Pi configuration, verify Pi lead spawn/wait/collect in an isolated worktree, approve or roll back. | S1, S2, S3, S4 | T2 | `README.md` |  |  | user | TO-DO |
+| T1 | Add Pi lead identification/generation with isolated-session unit tests; preserve existing Claude/Codex behaviour, but reject ambiguous identity instead of defaulting to Claude. | S1, S3, S5 | none | `server/agent_runtime.py`, `tests/` | regular | complex | agent | DONE (`feat/pi-lead-support`) |
+| T2 | Add a bounded Pi MCP lead delegation path to existing worker backends, with real store/IPC tests and an explicit mutation guard. | S2, S4, S5 | T1 | `server/mcp_server.py`, `server/hc_tools.py`, `hooks/`, `tests/` | regular | complex | agent | DONE (`feat/pi-lead-support`); the guard lives in `server/host_policy.py`, the Claude/Codex hooks are untouched |
+| T3 | Register guarded agent-runtime MCP in Pi configuration, verify Pi lead spawn/wait/collect in an isolated worktree, approve or roll back. | S1, S2, S3, S4 | T2 | `README.md` |  |  | user | DONE — registered in `~/.pi/agent/mcp.json`, policy in `~/.config/agent-runtime/hosts.json`, live spawn/message/wait/collect verified on MiniMax |
 
 **Dependency:** Pi bootstrap and skills portability smoke tests. Start this plan after PR #39/#45 have been merged or consciously reconciled and rebase `main` before touching their files.
 
@@ -78,4 +78,6 @@ Pi must be able to delegate to existing Claude/Codex workers through the durable
 - WHEN the MCP connection drops after a worker has been spawned, THEN restart reconciliation cannot duplicate the task, leak another lead's reports or erase partial artifacts.
 - WHEN PR #39/#45 cannot be cleanly reconciled, THEN P2 is **blocked with a documented rebase/merge choice** while P0/P1 remain executable.
 
-**Status: APPROVED — READY FOR EXECUTION. Implementation not yet started.**
+**Status: IMPLEMENTED.** T1 and T2 landed on `feat/pi-lead-support` (branch `main` + commit `bdc5233`): Pi is a harness of its own (`cli_of_args`, `PI_CODING_AGENT`), its lead generation is the Pi process `pid:lstart`, a Pi session without a visible Pi process or with two claimed hosts is refused, and the server authorises Pi mutations through `server/host_policy.py` (`~/.config/agent-runtime/hosts.json`: mutations, authorized backends, path scope). Claude Code and Codex are unchanged.
+
+**Outstanding:** PR #39 merges cleanly; PR #45 conflicts in one hunk of `dispatch_identity` (keep the Pi guard, take `CLAUDE_CODE_SESSION_ID`); the reconciled tree passes 549 tests. The branch still needs a rebase onto main once #39/#45 land, and the plan still needs archiving into the living spec (`docs/specs/harness-adapters.md` does not exist yet; `docs/specs/agent-runtime.md` is the spec that exists).
