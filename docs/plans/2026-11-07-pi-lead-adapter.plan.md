@@ -1,6 +1,6 @@
 # Plan: Pi Lead Support in Agent Runtime
 
-Slug: `pi-lead-adapter`. Living spec: `docs/specs/harness-adapters.md`. Status: **IMPLEMENTED — T1/T2 done, T3 verified by the user; awaiting merge of #39/#45 and the spec archive**.
+Slug: `pi-lead-adapter`. Living spec: `docs/specs/harness-adapters.md`. Status: **IMPLEMENTED — PR #53 open; awaiting merge of #39/#45 and the rebase onto main**.
 
 ## Why now
 
