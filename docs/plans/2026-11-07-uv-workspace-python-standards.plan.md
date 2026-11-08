@@ -106,7 +106,7 @@ The workspace root may use `tool.uv.package = false`; members are each separatel
 
 | # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |
 |---|---|---|---|---|---|---|---|---|
-| T1 | Baseline current entrypoints/import paths, package dependencies and live PR #39/#45 overlap; add red compatibility contract tests. | S2, S3, S7, S8 | Pi P0–P2; repaired workflow | `tests/`, `bin/`, `install.sh`, `hooks/`, `docs/` | regular | complex | agent | TO-DO |
+| T1 | Baseline current entrypoints/import paths, package dependencies and live PR #39/#45 overlap; add red compatibility contract tests. | S2, S3, S7, S8 | Pi P0–P2; repaired workflow | `tests/`, `bin/`, `install.sh`, `hooks/`, `docs/` | regular | complex | agent | COMPLETE 2026-11-08 (PR #56, squash 87de50babb8e3af103a6ec44dcdc0839392665cb) |
 | T2 | Introduce virtual-root uv workspace and package manifests without moving runtime internals; add reproducible lock, Ruff/ty CI and isolated install checks. | S1, S5, S6 | T1 | `pyproject.toml`, `uv.lock`, `packages/*/pyproject.toml`, `.github/workflows/` | regular | complex | agent | TO-DO |
 | T3 | Migrate runtime behind preserved command shims with typed stdlib boundaries and keep PR #39/#45 behaviour. | S2, S5, S7, S8 | T2 | `server/`, `packages/agent-runtime/`, `bin/`, `hooks/`, `tests/` | regular | complex | agent | TO-DO |
 | T4 | Move orchestrator into its own member, preserving the CLI contract; introduce `RuntimeClient` Protocol, Pydantic JSON domain contracts, typed YAML routing and no SQLite imports. | S3, S4, S8 | T3 | `packages/agent-orchestrator/`, `tests/`, `agent-skills/skills/orchestrate/` (separate PR) | large | complex | agent | TO-DO |
