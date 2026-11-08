@@ -321,7 +321,7 @@ class SpawnCleanupTests(ToolCase):
         """agent-runtime/R73"""
         (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()
         lead = self.start({}, ENV)
-        result, _ = self.call(lead, "spawn", dict(ARGS, cli="codex"))
+        result, _ = self.call(lead, "spawn", dict(ARGS, cli="codex", agent="implementer"))
         self.assertTrue(result["isError"])
         self.assertEqual(self.runs("run"), [])
         store = Store({"HOME": str(self.dir / "home")})

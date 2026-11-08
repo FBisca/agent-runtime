@@ -18,6 +18,7 @@ pytestmark = pytest.mark.integration
 
 
 sys.path.insert(0, str(SERVER.parent))
+import hc_tools
 
 FAKE = '''#!%(python)s
 import json, os, sys, time
@@ -193,10 +194,10 @@ class SpawnTests(ToolCase):
         self.assertEqual(argv[:10], ["run", "--bg", "--name", "w1", "--cwd", "/tmp/c", "--parent", "t0", "--json",
                                          "--no-notify"])
         program = unwrap(argv[10:])
-        self.assertEqual(program[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
-        self.assertTrue(program[5].startswith("do x"))
-        self.assertIn("When done or stuck, call the agent-runtime report tool with your result.", program[5])
-        self.assertNotIn("hc send", program[5])
+        self.assertEqual(program[:3], ["claude", "--permission-mode", "auto"])
+        self.assertTrue(program[3].startswith("do x"))
+        self.assertIn("When done or stuck, call the agent-runtime report tool with your result.", program[3])
+        self.assertNotIn("hc send", program[3])
         info = json.loads(text)
         self.assertEqual((info["name"], info["address"], info["parent"]), ("w1", "t9", "t0"))
 
@@ -211,15 +212,18 @@ class SpawnTests(ToolCase):
                 self.assertIn("--no-notify", argv)
                 self.assertLess(argv.index("--no-notify"), argv.index(program))
 
-    def test_S2_codex_worker_is_no_daemon_with_implementer_instructions(self):
-        """agent-runtime-tools/S2"""
+    def test_S1_codex_worker_defaults_to_no_role(self):
+        """codex-default-role/S1"""
+        (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex"))
         self.assertFalse(result["isError"], text)
         (argv,) = self.runs("run")
         program = unwrap(argv[10:])
         self.assertEqual(program[:2], ["codex", "--no-daemon"])
-        self.assertTrue(program[2].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertTrue(program[2].startswith("do x"))
+        self.assertNotIn("CODEX IMPLEMENTER RULES", program[2])
+        self.assertIn("Worker protocol:", program[2])
         self.assertIn("do x", program[2])
         self.assertIn("call the agent-runtime report tool", program[2])
         self.assertNotIn("permission-mode", " ".join(argv))
@@ -233,9 +237,9 @@ class SpawnTests(ToolCase):
     def test_claude_model_flag(self):
         """agent-runtime/R129"""
         argv = self.spawn_argv(cli="claude", model="haiku")
-        self.assertEqual(argv[:6], ["claude", "--agent", "implementer", "--permission-mode", "auto", "--model"])
-        self.assertEqual(argv[6], "haiku")
-        self.assertEqual(len(argv), 8)
+        self.assertEqual(argv[:4], ["claude", "--permission-mode", "auto", "--model"])
+        self.assertEqual(argv[4], "haiku")
+        self.assertEqual(len(argv), 6)
         self.assertTrue(argv[-1].startswith("do x"))
 
     def test_codex_model_flag(self):
@@ -246,14 +250,14 @@ class SpawnTests(ToolCase):
         argv = self.spawn_argv(env={"CODEX_HOME": str(codex_home)}, cli="codex", model="gpt-5.5")
         self.assertEqual(argv[:4], ["codex", "--no-daemon", "--model", "gpt-5.5"])
         self.assertEqual(len(argv), 5)
-        self.assertTrue(argv[-1].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertTrue(argv[-1].startswith("do x"))
         self.assertNotIn("permission-mode", " ".join(argv))
 
     def test_no_model_keeps_argv(self):
         """agent-runtime/R131"""
         claude = self.spawn_argv(cli="claude")
-        self.assertEqual(claude[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
-        self.assertEqual(len(claude), 6)
+        self.assertEqual(claude[:3], ["claude", "--permission-mode", "auto"])
+        self.assertEqual(len(claude), 4)
         codex = self.spawn_argv(cli="codex")
         self.assertEqual(codex[:2], ["codex", "--no-daemon"])
         self.assertEqual(len(codex), 3)
@@ -300,13 +304,18 @@ class SpawnTests(ToolCase):
         self.assertTrue(argv[-1].startswith("REVIEWER RULES\n\ndo x"))
         self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
 
-    def test_no_agent_keeps_implementer(self):
+    def test_default_roles_and_explicit_codex_implementer(self):
         """agent-runtime/R138"""
         claude = self.spawn_argv(cli="claude")
-        self.assertEqual(claude[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
-        self.assertEqual(len(claude), 6)
+        self.assertEqual(claude[:3], ["claude", "--permission-mode", "auto"])
+        self.assertEqual(len(claude), 4)
+        self.assertEqual(claude, self.spawn_argv(cli="claude", agent="none"))
+        self.assertEqual(self.spawn_argv(cli="claude", agent="implementer")[:3], ["claude", "--agent", "implementer"])
         codex = self.spawn_argv(cli="codex")
-        self.assertTrue(codex[-1].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertTrue(codex[-1].startswith("do x"))
+        self.assertEqual(codex, self.spawn_argv(cli="codex", agent="none"))
+        explicit = self.spawn_argv(cli="codex", agent="implementer")
+        self.assertTrue(explicit[-1].startswith("CODEX IMPLEMENTER RULES"))
         self.assertEqual(len(codex), 3)
 
     def test_invalid_agent_is_an_error(self):
@@ -363,8 +372,8 @@ class SpawnTests(ToolCase):
         for cli in ("claude", "codex"):
             with self.subTest(cli=cli):
                 prompt = self.spawn_argv(cli=cli, agent="none")[-1]
-                self.assertIn("report(kind, assignment_id)", prompt)
-                self.assertIn("progress, complete, blocked or decision", prompt)
+                self.assertIn("report(text)", prompt)
+                self.assertNotIn("assignment_id", prompt)
                 self.assertIn("never reaches the parent", prompt)
                 self.assertIn("STATUS: COMPLETE | BLOCKED | PARTIAL", prompt)
 
@@ -392,9 +401,9 @@ class SpawnTests(ToolCase):
     def test_claude_effort_flag(self):
         """agent-runtime/R147"""
         argv = self.spawn_argv(cli="claude", model="haiku", effort="low")
-        self.assertEqual(argv[:9], ["claude", "--agent", "implementer", "--permission-mode", "auto",
+        self.assertEqual(argv[:7], ["claude", "--permission-mode", "auto",
                                     "--model", "haiku", "--effort", "low"])
-        self.assertEqual(len(argv), 10)
+        self.assertEqual(len(argv), 8)
 
     def test_codex_effort_config(self):
         """agent-runtime/R148"""
@@ -457,8 +466,8 @@ class SpawnTests(ToolCase):
 class ProfileTests(ToolCase):
     ARGS = {"kind": "worker", "name": "w1", "task": "profile task", "cwd": "/tmp"}
     PROMPT = "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
-    BUILTIN_PROGRAMS = {"claude": ["claude", "--agent", "implementer", "--permission-mode", "auto", PROMPT],
-                        "codex": ["codex", "--no-daemon", "CODEX IMPLEMENTER RULES\n\n" + PROMPT]}
+    BUILTIN_PROGRAMS = {"claude": ["claude", "--permission-mode", "auto", PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL],
+                        "codex": ["codex", "--no-daemon", PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL]}
 
     def config(self, profiles):
         path = self.dir / "home" / ".config" / "agent-runtime" / "profiles.json"
@@ -660,8 +669,8 @@ class ProfileTests(ToolCase):
         launcher = str(SERVER.parent.parent / "bin" / "agent-runtime-profile")
         builtin = self.BUILTIN_PROGRAMS["claude"]
         expected = {"plain": builtin,
-                    "edits": ["claude", "--agent", "implementer", "--permission-mode", "acceptEdits",
-                              "--settings", str(settings), self.PROMPT]}
+                    "edits": ["claude", "--permission-mode", "acceptEdits",
+                              "--settings", str(settings), self.PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL]}
         for profile, program in expected.items():
             with self.subTest(profile=profile):
                 result, text = self.call(session, "spawn", dict(self.ARGS, cli=profile))
