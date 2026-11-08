@@ -281,6 +281,319 @@ class EventWaitTests(ToolCase):
             self.assertIsNone(dispatch_store.last_wait_state(db, team))
             self.assertFalse(db.in_transaction)
 
+    def resume_rig(self, mode="idle", turn=3, before_resume=0, fast_report=None):
+        now = [1_000_000.0]
+        self.rigs = getattr(self, "rigs", 0) + 1
+        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+               "HOME": str(self.dir / ("resume%d" % self.rigs)), "HC_SCOPE": "events",
+               "HC_TERMINAL_ID": "t0", "AGENT_RUNTIME_DISPATCH": "1"}
+        row = {"name": "w1", "address": "t1", "parent": "t0", "status": mode, "turn": turn}
+        self.start({"get:w1": {"out": json.dumps(row)}}, env)
+        store = Store(env, clock=lambda: now[0])
+        team = store.team("events", "t0", "resume")
+        old = store.register(team, "w1")["assignment_id"]
+        store.bind(old, "t1", "events", turn=turn)
+        store.publish("events", "t1", "t0", old, "previous task done", "complete")
+        receipt = store.read(team, "t0", "all")["receipt"]
+        store.read(team, "t0", "all", receipt=receipt)
+        ctx = hc_tools.Context()
+        ctx.store, ctx.owned_team, ctx.actor, ctx.ack = store, team, {"scope": "events"}, None
+        now[0] += before_resume
+        run_hc = hc_tools.hc
+        def send_with_report(argv, *args, **kwargs):
+            if argv[0] == "send" and fast_report:
+                assignment = argv[2].split("Use assignment_id=", 1)[1].split()[0]
+                store.publish("events", "t1", "t0", assignment, "started during send", fast_report, caller_name="w1")
+            return run_hc(argv, *args, **kwargs)
+        with mock.patch.object(hc_tools, "hc", side_effect=send_with_report):
+            result = hc_tools.resume({"name": "w1", "task": "next task"}, env, ctx)
+        assignment = result["structuredContent"]["assignment_id"]
+        state = {"runtime": mode, "turn": turn}
+        def observe(*_):
+            return {assignment: state["runtime"], (assignment, "turn"): state["turn"]}
+        def wait(reopened=None):
+            return dispatch_wait.wait(reopened or store, team, "t0", "all", 0.05, None, hc_tools.Context(), observe)
+        return store, team, assignment, now, state, wait
+
+    def test_S12_swallowed_resume_returns_not_started_without_resending(self):
+        """S12: an idle worker at the resume turn needs attention after 60 seconds."""
+        store, team, assignment, now, state, wait = self.resume_rig()
+        now[0] += 61
+        batch = wait()
+        self.assertEqual(batch["reason"], "attention")
+        member, = batch["assignments"]
+        self.assertEqual(member["assignment_id"], assignment)
+        self.assertEqual(member["attention"], "not_started")
+        self.assertEqual(member["state"], "working")
+        self.assertEqual(batch["unfinished"], [assignment])
+        for word in ("resume", "collect", "stop", "never resends"):
+            self.assertIn(word, member["next"])
+        self.assertEqual(batch["messages"], [])
+        self.assertEqual(wait()["reason"], "attention")
+        self.assertEqual(len(self.runs("send")), 1)
+        self.assertEqual(store.assignment_state(assignment), "working")
+
+    def test_S13_turn_advance_or_report_suppresses_resume_attention(self):
+        """S13: progress proves the resumed assignment started, including an acked report."""
+        for progress in ("turn", "progress", "complete", "blocked", "decision"):
+            with self.subTest(progress=progress):
+                store, team, assignment, now, state, wait = self.resume_rig()
+                now[0] += 61
+                self.assertEqual(wait()["assignments"][0].get("attention"), "not_started")
+                store, team, assignment, now, state, wait = self.resume_rig()
+                now[0] += 30
+                if progress == "turn":
+                    state["turn"], state["runtime"] = 4, "working"
+                    self.assertEqual(wait()["reason"], "timeout")
+                else:
+                    store.publish("events", "t1", "t0", assignment, "started", progress)
+                    page = store.read(team, "t0", "all")
+                    store.read(team, "t0", "all", receipt=page["receipt"])
+                now[0] += 31
+                self.assertTrue(all(a.get("attention") != "not_started" for a in wait()["assignments"]))
+
+    def test_S13_fast_report_during_resume_send_wins(self):
+        """S13: a report before send returns binds once and suppresses not_started."""
+        for kind in ("progress", "complete"):
+            with self.subTest(kind=kind):
+                store, team, assignment, now, state, wait = self.resume_rig(fast_report=kind)
+                now[0] += 61
+                batch = wait()
+                self.assertEqual([m["kind"] for m in batch["messages"]], [kind])
+                self.assertTrue(all(a.get("attention") != "not_started" for a in batch["assignments"]))
+                self.assertEqual(store.assignment_state(assignment), "working" if kind == "progress" else "complete")
+
+    def test_S12_zero_timeout_observes_overdue_resume_before_returning(self):
+        """S12: an immediate wait still reconciles a resume whose grace elapsed."""
+        store, team, assignment, now, state, wait = self.resume_rig()
+        now[0] += 61
+        observations = []
+        def observe(*_):
+            observations.append(assignment)
+            return {assignment: "idle", (assignment, "turn"): 3}
+        batch = dispatch_wait.wait(store, team, "t0", "all", 0, None, hc_tools.Context(), observe)
+        self.assertEqual(batch["reason"], "attention")
+        self.assertEqual(batch["assignments"][0].get("attention"), "not_started")
+        self.assertEqual(observations, [assignment])
+
+    def test_S13_fast_mid_turn_progress_keeps_the_resume_baseline(self):
+        """S13: progress during send must not turn the pre-existing turn into premature attention."""
+        store, team, assignment, now, state, wait = self.resume_rig(mode="working", fast_report="progress")
+        state["runtime"], state["turn"] = "idle", 4
+        now[0] += 1
+        batch = wait()
+        self.assertEqual(batch["reason"], "messages")
+        store.read(team, "t0", "all", receipt=batch["receipt"])
+        self.assertEqual(wait()["reason"], "timeout")
+        state["turn"] = 5
+        self.assertEqual(wait()["reason"], "attention")
+
+    def test_S14_mid_turn_resume_clock_starts_at_dispatch(self):
+        """S14: a mid-turn resume gets a fresh 60 seconds even after a long old turn."""
+        store, team, assignment, now, state, wait = self.resume_rig(mode="working", before_resume=3600)
+        state["runtime"] = "idle"
+        now[0] += 59
+        self.assertEqual(wait()["reason"], "timeout")
+        now[0] += 2
+        member, = wait()["assignments"]
+        self.assertEqual(member.get("attention"), "not_started")
+        state["turn"] = 4  # The pre-existing turn ended; do not call this a swallowed resume.
+        self.assertNotEqual(wait()["assignments"][0].get("attention"), "not_started")
+
+    def test_S15_resume_grace_boundary_keeps_assignment_working(self):
+        """S15: before the grace boundary there is no attention or assignment mutation."""
+        store, team, assignment, now, state, wait = self.resume_rig()
+        for elapsed in (0, 59.999):
+            now[0] = 1_000_000 + elapsed
+            batch = wait()
+            self.assertEqual(batch["reason"], "timeout")
+            self.assertNotIn("attention", batch["assignments"][0])
+            self.assertEqual(batch["assignments"][0]["state"], "working")
+        now[0] = 1_000_060
+        self.assertEqual(wait()["assignments"][0].get("attention"), "not_started")
+
+    def test_S12_resume_mark_survives_store_restart_and_old_writers(self):
+        """S12: reopening the store preserves the resume clock without changing assignment shape."""
+        store, team, assignment, now, state, wait = self.resume_rig()
+        now[0] += 61
+        reopened = Store({"XDG_STATE_HOME": str(store.directory.parent)}, clock=lambda: now[0])
+        member, = wait(reopened)["assignments"]
+        self.assertEqual(member.get("attention"), "not_started")
+        self.assertFalse(any(key.startswith("_") for key in member))
+        with reopened.transaction() as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
+            db.execute("INSERT INTO assignments VALUES ('old-writer',?,?,'pending',0)",
+                       (team, member["worker_id"]))
+            self.assertEqual(db.execute("SELECT attention FROM last_wait WHERE team=?", (team,)).fetchone()[0], 1)
+
+    def test_S12_failure_precedes_not_started(self):
+        """S12: exit, interruption and replacement keep their durable failure behavior."""
+        for runtime in dispatch_wait.FAILURE_STATES:
+            with self.subTest(runtime=runtime):
+                store, team, assignment, now, state, wait = self.resume_rig()
+                now[0] += 61
+                state["runtime"] = runtime
+                batch = wait()
+                self.assertEqual(batch["reason"], "failed")
+                self.assertNotIn("attention", batch["assignments"][0])
+                self.assertEqual(store.assignment_state(assignment), "failed")
+                self.assertEqual(len(self.runs("send")), self.rigs)
+
+    def test_S13_missing_turn_fails_safe_and_working_recovery_clears_attention(self):
+        """S13: no turn evidence or an actively working worker cannot prove a swallowed resume."""
+        for baseline in (None, 3):
+            with self.subTest(baseline=baseline):
+                store, team, assignment, now, state, wait = self.resume_rig(turn=baseline)
+                now[0] += 61
+                state["turn"] = None
+                self.assertEqual(wait()["reason"], "timeout")
+                state["turn"] = 3
+                if baseline is None:
+                    self.assertNotEqual(wait()["assignments"][0].get("attention"), "not_started")
+                else:
+                    self.assertEqual(wait()["assignments"][0].get("attention"), "not_started")
+                state["runtime"] = "working"
+                self.assertEqual(wait()["reason"], "timeout")
+                self.assertEqual(store.assignment_state(assignment), "working")
+
+    def test_S15_cancelled_wait_keeps_resume_assignment_and_never_resends(self):
+        """S15: cancelling a pending wait changes no resume state and creates no receipt."""
+        store, team, assignment, now, state, wait = self.resume_rig()
+        ctx = hc_tools.Context()
+        def observe(*_):
+            ctx.cancelled.set()
+            return {assignment: "idle", (assignment, "turn"): 3}
+        with self.assertRaises(InterruptedError):
+            dispatch_wait.wait(store, team, "t0", "all", 1, None, ctx, observe)
+        self.assertEqual(store.assignment_state(assignment), "working")
+        self.assertEqual(len(self.runs("send")), 1)
+        now[0] += 61
+        self.assertEqual(wait()["assignments"][0].get("attention"), "not_started")
+
+    def prepare_mcp_resume(self, mode="idle", fast_progress=False):
+        self.prepare()
+        self.rows[0].update(status=mode, turn=3)
+        self.replies["get:w1"] = {"out": json.dumps(self.rows[0])}
+        self.replies["ls"] = {"out": json.dumps({"terminals": self.rows})}
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+        self.publish(0)
+        page = self.batch(self.rpc, self.rpc.tool("wait", {"target": "inbox", "timeout": 0}))
+        if fast_progress:
+            # Hold the external send response until a real worker MCP report binds the pending assignment.
+            script = self.dir / "bin" / "hc"
+            barrier = (
+                "if argv[0] == 'send':\n"
+                "    from pathlib import Path\n"
+                "    root = Path(%r)\n"
+                "    root.joinpath('sending').write_text(argv[2].split('Use assignment_id=', 1)[1].split()[0])\n"
+                "    deadline = time.monotonic() + 5\n"
+                "    while not root.joinpath('release-send').exists() and time.monotonic() < deadline:\n"
+                "        time.sleep(0.005)\n" % str(self.dir))
+            source = script.read_text()
+            script.write_text(source.replace('sys.stdout.write(reply.get("out", ""))',
+                                             barrier + 'sys.stdout.write(reply.get("out", ""))'))
+        request = self.rpc.tool("resume", {
+            "name": "w1", "task": "next task", "receipt": page["receipt"]})
+        if fast_progress:
+            deadline = time.monotonic() + 3
+            while not (self.dir / "sending").exists():
+                self.assertLess(time.monotonic(), deadline, "resume never reached send")
+                threading.Event().wait(0.005)
+            assignment = (self.dir / "sending").read_text()
+            try:
+                result, text = self.call(self.workers[0], "report", {
+                    "assignment_id": assignment, "kind": "progress", "text": "started during send"})
+                self.assertFalse(result["isError"], text)
+            finally:
+                (self.dir / "release-send").touch()
+        resumed = self.batch(self.rpc, request)
+        self.assignments[0] = resumed
+        self.resume_store = Store(self.env)
+        return resumed["assignment_id"]
+
+    def age_mcp_resume(self, assignment, seconds):
+        # Seed persisted dispatch time; server time and the MCP/IPC paths stay real.
+        with self.resume_store.transaction() as db:
+            db.execute("UPDATE resume_marks SET dispatched_ms=? WHERE assignment=?",
+                       (int((time.time() - seconds) * 1000), assignment))
+
+    def test_S12_mcp_zero_timeout_surfaces_overdue_resume(self):
+        """S12: real MCP resume and fake-hc observation expose the swallowed send at timeout zero."""
+        assignment = self.prepare_mcp_resume()
+        self.age_mcp_resume(assignment, 61)
+        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
+        self.assertEqual(batch["reason"], "attention")
+        member = next(a for a in batch["assignments"] if a["assignment_id"] == assignment)
+        self.assertEqual(member.get("attention"), "not_started")
+        self.assertEqual(member["state"], "working")
+        self.assertEqual(len(self.runs("send")), 1)
+
+    def test_S13_mcp_pending_wait_wakes_for_resume_report(self):
+        """S13: a report wakes the real IPC wait and suppresses overdue-resume attention after ack."""
+        assignment = self.prepare_mcp_resume()
+        request = self.begin()
+        self.publish(0, kind="progress", text="new task started")
+        batch = self.batch(self.rpc, request)
+        self.assertEqual(batch["reason"], "messages")
+        self.assertEqual([m["assignment_id"] for m in batch["messages"]], [assignment])
+        self.age_mcp_resume(assignment, 61)
+        after = self.batch(self.rpc, self.rpc.tool("wait", {
+            "target": "all", "timeout": 0, "receipt": batch["receipt"]}))
+        self.assertEqual(after["reason"], "timeout")
+        self.assertTrue(all("attention" not in a for a in after["assignments"]))
+
+    def test_S13_mcp_turn_advance_suppresses_resume_attention(self):
+        """S13: a real runtime observation of the next working turn suppresses not_started."""
+        assignment = self.prepare_mcp_resume()
+        self.rows[0].update(status="working", turn=4)
+        self.replies["ls"] = {"out": json.dumps({"terminals": self.rows})}
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+        self.age_mcp_resume(assignment, 61)
+        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
+        self.assertEqual(batch["reason"], "timeout")
+        self.assertTrue(all("attention" not in a for a in batch["assignments"]))
+        self.assertGreaterEqual(len(self.runs("ls")), 1)
+
+    def test_S13_mcp_fast_report_preserves_mid_turn_baseline(self):
+        """S13: a worker report before the real resume response preserves old-turn suppression."""
+        assignment = self.prepare_mcp_resume(mode="working", fast_progress=True)
+        self.rows[0].update(status="idle", turn=4)
+        self.replies["ls"] = {"out": json.dumps({"terminals": self.rows})}
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+        # The resume response already delivered the fast report in its inbox piggyback.
+        delivery = self.assignments[0]["inbox"]
+        self.assertEqual([m["assignment_id"] for m in delivery["messages"]], [assignment])
+        after = self.batch(self.rpc, self.rpc.tool("wait", {
+            "target": "all", "timeout": 0.2, "receipt": delivery["receipt"]}))
+        self.assertEqual(after["reason"], "timeout")
+        self.assertTrue(all("attention" not in a for a in after["assignments"]))
+
+    def test_S14_mcp_mid_turn_resume_uses_dispatch_clock(self):
+        """S14: a mid-turn resume is quiet within grace and surfaces when the same turn stays idle."""
+        assignment = self.prepare_mcp_resume(mode="working")
+        self.rows[0]["status"] = "idle"
+        self.replies["ls"] = {"out": json.dumps({"terminals": self.rows})}
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+        self.age_mcp_resume(assignment, 59)
+        before = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0.2}))
+        self.assertEqual(before["reason"], "timeout")
+        self.age_mcp_resume(assignment, 61)
+        after = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
+        self.assertEqual(after["reason"], "attention")
+        member = next(a for a in after["assignments"] if a["assignment_id"] == assignment)
+        self.assertEqual(member.get("attention"), "not_started")
+
+    def test_S15_mcp_resume_within_grace_stays_working(self):
+        """S15: real resume/wait keeps an idle worker working before grace elapses."""
+        assignment = self.prepare_mcp_resume()
+        self.age_mcp_resume(assignment, 59)
+        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0.2}))
+        self.assertEqual(batch["reason"], "timeout")
+        member = next(a for a in batch["assignments"] if a["assignment_id"] == assignment)
+        self.assertEqual(member["state"], "working")
+        self.assertNotIn("attention", member)
+        self.assertEqual(len(self.runs("send")), 1)
+
     def stall_rig(self, start=1_000_000.0):
         now = [start]
         self.rigs = getattr(self, "rigs", 0) + 1
