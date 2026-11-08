@@ -585,6 +585,8 @@ def resume(arguments, env, ctx):
         prompt = "%s\n\nUse assignment_id=%s for report(kind=progress|complete|blocked|decision)." % (task, identity["assignment_id"])
         prompt += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         try:
+            mode = "ended" if row_state(raw) in ("done", "idle") else "working"
+            store.mark_resume(identity["assignment_id"], raw.get("turn"), mode)
             out = hc(["send", name, prompt], env, ctx)
             try:
                 sent = json.loads(out)
@@ -594,8 +596,7 @@ def resume(arguments, env, ctx):
                 raise ToolError("resume task was not sent; no blind resend")
             if ctx.cancelled.is_set():
                 raise ToolError("cancelled")
-            store.bind(identity["assignment_id"], raw["address"], ctx.actor["scope"], ctx.ack, raw.get("turn"),
-                       "ended" if row_state(raw) in ("done", "idle") else "working")
+            store.bind(identity["assignment_id"], raw["address"], ctx.actor["scope"], ctx.ack, raw.get("turn"), mode)
         except (ToolError, dispatch.StoreError):
             store.fail(identity["assignment_id"], restore=prior)
             raise
