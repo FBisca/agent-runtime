@@ -52,11 +52,38 @@ class EntrypointProcessTests(unittest.TestCase):
 class PrAncestryTests(unittest.TestCase):
     """S7: the pinned PRs stay in the history of this branch."""
 
+    def _git(self, *args, timeout=300):
+        return subprocess.run(["git", *args], cwd=PLUGIN,
+                              capture_output=True, text=True, timeout=timeout)
+
+    def _ensure_the_history_is_there(self):
+        """Answer the ancestry question in a checkout that has the history.
+
+        A shallow checkout (CI checks out depth 1) does not hold the pinned commits, so
+        `git merge-base` answers "I do not know" instead of the contract's question. The
+        history is fetched first, so the check still runs against the real history.
+        """
+        if self._git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+            done = self._git("fetch", "--unshallow", "--quiet", "origin")
+            if done.returncode != 0:
+                # The checkout may carry a refspec the remote does not have (a pull
+                # request merge ref, say); the branches carry the same history.
+                done = self._git("fetch", "--unshallow", "--quiet", "origin",
+                                 "+refs/heads/*:refs/remotes/origin/*")
+            self.assertEqual(0, done.returncode,
+                             "the checkout is shallow and its history could not be fetched: "
+                             f"{done.stderr.strip()}")
+        for pr, commit in baseline()["pr_pins"].items():
+            present = self._git("cat-file", "-e", commit)
+            self.assertEqual(0, present.returncode,
+                             f"PR #{pr} ({commit}) is not in this checkout's object store; "
+                             "fetch the history (git fetch --unshallow origin) and try again")
+
     def test_S7_the_pinned_pr_commits_are_ancestors_of_this_branch(self):
         """uv-workspace/S7"""
+        self._ensure_the_history_is_there()
         for pr, commit in baseline()["pr_pins"].items():
-            done = subprocess.run(["git", "merge-base", "--is-ancestor", commit, "HEAD"],
-                                  cwd=PLUGIN, capture_output=True, text=True, timeout=30)
+            done = self._git("merge-base", "--is-ancestor", commit, "HEAD", timeout=30)
             self.assertEqual(0, done.returncode, f"PR #{pr} ({commit}) is not in this branch")
 
 
