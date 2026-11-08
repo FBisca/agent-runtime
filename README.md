@@ -264,7 +264,7 @@ The block registers the MCP server with `AGENT_RUNTIME_DISPATCH=1`, a 600 s tool
 nothing but uv:
 
 ```sh
-uv sync                 # the test environment (pytest, pytest-xdist)
+uv sync --frozen --all-packages  # the environment (pytest, pytest-xdist) and both members
 uv run pytest           # the fast suite: the unit tests, in process (under 3 seconds)
 uv run pytest -m integration   # the tests that drive a real boundary (a subprocess, a socket)
 uv run pytest -n 4      # the whole suite, in parallel
@@ -283,7 +283,9 @@ CI runs the suite on Python 3.11 to 3.13 on Linux and macOS, and runs shellcheck
 
 ## How it is built
 
-Spec- and plan-driven. [`docs/specs/agent-runtime.md`](docs/specs/agent-runtime.md) is the living contract: numbered WHEN/THEN requirements, each traced to a scenario and a test (requirements about a consuming repo's config are marked as moved there). [`docs/plans/`](docs/plans/) holds the archived plans that produced it, with their decisions and scenarios. Every behavior change starts as a scenario, is written red first, and lands with its requirement.
+Spec- and plan-driven. [`docs/specs/agent-runtime.md`](docs/specs/agent-runtime.md) is the living contract: numbered WHEN/THEN requirements, each traced to a scenario and a test (requirements about a consuming repo's config are marked as moved there). [`docs/specs/harness-adapters.md`](docs/specs/harness-adapters.md) covers the harnesses, and [`docs/specs/python-workspace-contracts.md`](docs/specs/python-workspace-contracts.md) covers the workspace packaging. [`docs/plans/`](docs/plans/) holds the archived plans that produced them, with their decisions and scenarios. Every behavior change starts as a scenario, is written red first, and lands with its requirement.
+
+The code is one uv workspace with two installable members and one lockfile: `packages/agent-runtime` (the standard-library-only runtime) and `packages/agent-orchestrator` (the typed engine, with Pydantic and PyYAML). The documented commands still live in `server/` and `bin/`, so the plugin, the installer's shims and the hooks are unchanged; `uv sync --frozen --all-packages` installs both members.
 
 ## License
 

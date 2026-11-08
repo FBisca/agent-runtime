@@ -138,6 +138,10 @@
       "test_externally_killed_worker_stops_cleanly"
     ]
   },
+  "rollback": {
+    "pre_workspace_commit": "f65dc36173c0139d293f7141bc8de2fb747c02ba",
+    "note": "The commit before the workspace members landed. A rollback lands here: the flat server/ modules, the bin/ shims and the same durable store format."
+  },
   "runtime_package": {
     "member": "packages/agent-runtime",
     "sources": "packages/agent-runtime/src/agent_runtime",
