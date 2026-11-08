@@ -32,10 +32,10 @@ def baseline():
 
 
 class EntrypointProcessTests(unittest.TestCase):
-    """S2: the shims still answer as processes."""
+    """R199: the shims still answer as processes."""
 
     def test_S2_the_hook_shim_still_fails_open(self):
-        """uv-workspace/S2"""
+        """python-workspace-contracts/R199"""
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
         done = subprocess.run([str(PLUGIN / "bin" / "agent-runtime-hook"), "--cli", "codex"],
                               input=payload, capture_output=True, text=True, timeout=20)
@@ -44,7 +44,7 @@ class EntrypointProcessTests(unittest.TestCase):
             json.loads(done.stdout)  # a hook that answers, answers with JSON
 
     def test_S2_the_cli_bridge_reaches_the_public_tools(self):
-        """uv-workspace/S2"""
+        """python-workspace-contracts/R199"""
         done = subprocess.run([sys.executable, "-B", str(PLUGIN / "server" / "agent_runtime.py"),
                                "call", "no-such-tool"], capture_output=True, text=True, timeout=20)
         self.assertNotEqual(0, done.returncode, done.stdout)
@@ -53,7 +53,7 @@ class EntrypointProcessTests(unittest.TestCase):
 
 
 class PrAncestryTests(unittest.TestCase):
-    """S7: the pinned PRs stay in the history of this branch."""
+    """R205: the pinned PRs stay in the history of this branch."""
 
     def _git(self, *args, timeout=300):
         return subprocess.run(["git", *args], cwd=PLUGIN,
@@ -85,14 +85,14 @@ class PrAncestryTests(unittest.TestCase):
                              "fetch the history (git fetch --unshallow origin) and try again")
 
     def test_S7_the_pinned_pr_commits_are_ancestors_of_this_branch(self):
-        """uv-workspace/S7"""
+        """python-workspace-contracts/R205"""
         self._ensure_the_history_is_there()
         for pr, commit in baseline()["pr_pins"].items():
             done = self._git("merge-base", "--is-ancestor", commit, "HEAD", timeout=30)
             self.assertEqual(0, done.returncode, f"PR #{pr} ({commit}) is not in this branch")
 
     def test_S7_the_pinned_commits_carry_the_semantics_the_baseline_records(self):
-        """uv-workspace/S7
+        """python-workspace-contracts/R205
 
         The pinned commit must be the head that carries the semantics the plan names for
         that PR (#39 resume/undelivered attention, #45 session usage attribution), not an
@@ -115,7 +115,7 @@ class PrAncestryTests(unittest.TestCase):
 
 
 class InstallerProcessTests(unittest.TestCase):
-    """S2: the installer keeps its documented wiring and its refusals."""
+    """R199: the installer keeps its documented wiring and its refusals."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -131,7 +131,7 @@ class InstallerProcessTests(unittest.TestCase):
                               timeout=60, env=environment)
 
     def test_S2_the_installer_links_every_shim(self):
-        """uv-workspace/S2"""
+        """python-workspace-contracts/R199"""
         installer = baseline()["installer"]
         done = self._install()
         self.assertEqual(0, done.returncode, done.stderr)
@@ -142,7 +142,7 @@ class InstallerProcessTests(unittest.TestCase):
         self.assertEqual(sorted(baseline()["entrypoints"]), sorted(installer["shims"]))
 
     def test_S2_the_installer_takes_the_documented_bin_dir(self):
-        """uv-workspace/S2"""
+        """python-workspace-contracts/R199"""
         installer = baseline()["installer"]
         other = Path(self.tmp.name) / "other-bin"
         other.mkdir()
@@ -152,7 +152,7 @@ class InstallerProcessTests(unittest.TestCase):
             self.assertTrue((other / name).is_symlink(), f"{name} was not linked")
 
     def test_S2_the_installer_refuses_to_overwrite_a_non_symlink(self):
-        """uv-workspace/S2"""
+        """python-workspace-contracts/R199"""
         installer = baseline()["installer"]
         (self.bin_dir / "agent-runtime").write_text("not a symlink\n")
         done = self._install()
@@ -162,7 +162,7 @@ class InstallerProcessTests(unittest.TestCase):
 
 
 class StoreFormatTests(unittest.TestCase):
-    """S8: the durable format is stable and no state migration happens."""
+    """R203: the durable format is stable and no state migration happens."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -170,7 +170,7 @@ class StoreFormatTests(unittest.TestCase):
         self.env = {"HOME": self.tmp.name}
 
     def test_S8_the_store_keeps_its_schema_version_and_tables(self):
-        """uv-workspace/S8"""
+        """python-workspace-contracts/R203"""
         store = dispatch_store.Store(self.env)
         with store.transaction() as db:
             self.assertEqual(baseline()["store"]["schema_version"],
@@ -180,7 +180,7 @@ class StoreFormatTests(unittest.TestCase):
             self.assertEqual(sorted(baseline()["store"]["tables"]), tables)
 
     def test_S8_a_legacy_store_opens_without_a_state_migration(self):
-        """uv-workspace/S8"""
+        """python-workspace-contracts/R203"""
         path = Path(self.env["HOME"]) / ".local" / "state" / "agent-runtime" / "dispatch.sqlite3"
         path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(path)

@@ -22,8 +22,8 @@ produced them.
 - Prefer unit tests for fast feedback; use integration tests to verify contracts.
 - Classify tests by behaviour, not filename. Never weaken or reclassify tests just to improve speed.
 
-[uv](https://docs.astral.sh/uv/) and pytest are the testing workflow. `uv sync` sets the environment up
-from a fresh checkout; `uv run pytest` is the canonical command.
+[uv](https://docs.astral.sh/uv/) and pytest are the testing workflow. `uv sync --frozen --all-packages`
+sets the environment up from a fresh checkout; `uv run pytest` is the canonical command.
 
 | Command | What it runs |
 |---|---|

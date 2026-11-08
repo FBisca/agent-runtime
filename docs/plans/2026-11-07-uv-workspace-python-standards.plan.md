@@ -1,6 +1,6 @@
 # Plan: Consolidate Runtime and Orchestration Into a Typed Python uv Workspace
 
-Slug: `uv-workspace-python-standards`. Living spec: `docs/specs/python-workspace-contracts.md`. Status: APPROVED.
+Slug: `uv-workspace-python-standards`. Living spec: `docs/specs/python-workspace-contracts.md`. Status: ARCHIVED 2026-11-08.
 
 ## Why now
 
@@ -117,7 +117,7 @@ The workspace root may use `tool.uv.package = false`; members are each separatel
 | T3 | Migrate runtime behind preserved command shims with typed stdlib boundaries and keep PR #39/#45 behaviour. The worker reports its first status (kind=progress) before it reads anything else. | S2, S5, S7, S8 | T2 | server/, packages/agent-runtime/, bin/, hooks/, tests/ | regular | complex | agent | COMPLETE 2026-11-08 (PR #62, squash d48bb4f) |
 | T4 | Move the orchestrator into its own workspace member, preserving the CLI contract; introduce the `RuntimeClient` Protocol and the Pydantic v2 JSON domain contracts, with no private runtime imports. The worker reports its first status (kind=progress) before it reads anything else. | S3, S4, S8 | T3 | packages/agent-orchestrator/, tests/ | regular | complex | agent | COMPLETE 2026-11-08 (PR #62, squash d48bb4f) |
 | T5 | Type the orchestrator's YAML routing policy and prove the seam carries no SQLite access: the orchestrator reaches the runtime only through the public CLI/API. The worker reports its first status (kind=progress) before it reads anything else. | S4, S8 | T4 | packages/agent-orchestrator/, tests/ | regular | complex | agent | COMPLETE 2026-11-08 (PR #62, squash d48bb4f) |
-| T6 | Run full CI + smoke sessions on Pi/Claude/Codex; verify upgrade/rollback and mark migration ready for explicit approval. | S1–S8 | T5 | tests/, docs/, README.md | regular | complex | user | TO-DO |
+| T6 | Run full CI + smoke sessions on Pi/Claude/Codex; verify upgrade/rollback and mark migration ready for explicit approval. | S1–S8 | T5 | tests/, docs/, README.md, AGENTS.md | regular | complex | user | COMPLETE 2026-11-08 (CI green on the whole matrix; live smoke sessions on Pi, Claude and Codex each reported progress and complete through the migrated runtime; the rollback check is `tests/test_rollback_contract.py`; the scenarios are archived in `docs/specs/python-workspace-contracts.md` as R192-R205) |
 
 **Dependency:** Pi bootstrap → skill compatibility → Pi lead runtime integration (subject to PR reconciliation) → broken-workflow repair / verification → typed route seam → uv packaging / orchestrator extraction → comparative evaluation → optional adaptive graph. The three old repos remain two: `agent-skills` plus `agent-runtime` (and `dotfiles` remains configuration). Owner approval has been granted. Implement only the scheduled phase after its technical preflight and dependency checks.
 
@@ -140,4 +140,4 @@ The workspace root may use `tool.uv.package = false`; members are each separatel
 - The new installer P4c must not be rolled out before published package artifacts and legacy command compatibility are verified.
 - Cross-repository `agent-skills` shim changes must have their own reviewed PR and test evidence, not be silently patched as part of workspace packaging.
 
-**Status: APPROVED. T1 landed as PR #56; T2–T5 run under the orchestrate driver.**
+**Status: ARCHIVED 2026-11-08. T1 landed as PR #56; T2-T5 ran under the orchestrate driver and landed as PRs #61 and #62; T6 completed the full CI, the smoke sessions and the rollback check, and the scenarios are archived as R192-R205 in `docs/specs/python-workspace-contracts.md`.**

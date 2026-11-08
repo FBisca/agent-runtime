@@ -1,5 +1,5 @@
 # Harness adapters
-Paths: server/agent_runtime.py, server/host_policy.py, server/hc_tools.py, hooks/, tests/test_pi_lead.py
+Paths: packages/agent-runtime/src/agent_runtime/agent_runtime.py, packages/agent-runtime/src/agent_runtime/host_policy.py, packages/agent-runtime/src/agent_runtime/hc_tools.py, hooks/, tests/test_pi_lead.py
 
 A harness is the coding agent that owns an MCP session: Claude Code, Codex or Pi. The runtime contract
 (one set of delegation verbs, the dispatch store, the worker lifecycle) lives in
@@ -8,7 +8,7 @@ harness is identified, what binds a session to a team, and what the runtime lets
 
 Claude Code and Codex are gated by their own PreToolUse hooks, which the runtime treats as defence in
 depth and never as the authority. Pi ships no such gate by default, so for a Pi session the server is
-the authority: `server/host_policy.py` decides what the session may mutate, from a local policy file
+the authority: `packages/agent-runtime/src/agent_runtime/host_policy.py` decides what the session may mutate, from a local policy file
 the operator writes.
 
 The MCP server and the dispatch store are host-agnostic. A harness is identified by the process that

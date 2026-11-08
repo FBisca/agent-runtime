@@ -47,9 +47,10 @@ def wheel_metadata(path, name="METADATA"):
 
 
 class WorkspaceTests(unittest.TestCase):
-    """S1: the workspace resolves reproducibly."""
+    """R192, R193: the workspace resolves reproducibly."""
 
     def test_S1_uv_lock_is_current_for_both_members(self):
+        """python-workspace-contracts/R193"""
         result = run(["uv", "lock", "--check"])
         self.assertEqual(result.returncode, 0, f"the lockfile is stale: {result.stderr}")
 
@@ -58,6 +59,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assertIn(f'name = "{member}"', lock)
 
     def test_S1_uv_sync_frozen_installs_both_members(self):
+        """python-workspace-contracts/R192"""
         with tempfile.TemporaryDirectory() as tmp:
             environment = Path(tmp) / "env"
             result = run(
@@ -78,9 +80,10 @@ class WorkspaceTests(unittest.TestCase):
 
 
 class IsolationTests(unittest.TestCase):
-    """S5: the runtime wheel stands alone."""
+    """R194, R195: the runtime wheel stands alone."""
 
     def test_S5_runtime_wheel_works_without_orchestrator_dependencies(self):
+        """python-workspace-contracts/R194"""
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "wheels"
             out_dir.mkdir()
@@ -133,6 +136,7 @@ class IsolationTests(unittest.TestCase):
             self.assertTrue(replies[1]["result"]["tools"], "the MCP server offers no tool")
 
     def test_S5_member_manifests_declare_their_own_dependencies(self):
+        """python-workspace-contracts/R195"""
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "wheels"
             out_dir.mkdir()
@@ -146,9 +150,10 @@ class IsolationTests(unittest.TestCase):
 
 
 class ToolchainTests(unittest.TestCase):
-    """S6: CI runs the tests, the linters and the isolated install checks."""
+    """R196: CI runs the tests, the linters and the isolated install checks."""
 
     def test_S6_workflow_runs_the_toolchain_on_the_matrix(self):
+        """python-workspace-contracts/R196"""
         workflow = WORKFLOW.read_text(encoding="utf-8")
         for command in ("ruff check .", "ruff format --check .", "ty check"):
             self.assertIn(command, workflow)

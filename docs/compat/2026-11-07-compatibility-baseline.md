@@ -117,11 +117,20 @@ suite.
 | `test_S8_the_store_keeps_its_schema_version_and_tables` | S8 | `tests/test_compatibility_contract_integration.py` |
 | `test_S8_a_legacy_store_opens_without_a_state_migration` | S8 | `tests/test_compatibility_contract_integration.py` |
 
-## Red contracts for the tickets that build the workspace
+## The contracts the workspace had to satisfy
 
-Two contracts describe behaviour that does not exist yet and are marked `xfail(strict=True)`: they
-stay red on purpose and go green — and then fail the build until the marker is removed — when the
-workspace lands.
+Two contracts describe behaviour that did not exist before the workspace landed. They were written
+red on purpose and went green with the members; they are green now and stay green.
 
 * `test_S2_the_workspace_packages_exist_beside_the_legacy_shims` (T2/T3).
 * `test_S3_the_orchestrator_talks_to_a_public_runtime_client` (T4).
+
+The rollback itself has its own contract, in `tests/test_rollback_contract.py`: it materialises the
+pre-workspace commit, drives its shims and its MCP server, and opens a store written by either
+tree in the other one.
+
+| Test | Requirement | File |
+|---|---|---|
+| `test_S8_the_legacy_tree_still_answers_through_its_shims` | R203 | `tests/test_rollback_contract.py` |
+| `test_S8_a_store_written_by_the_new_tree_opens_in_the_legacy_tree_without_a_migration` | R203 | `tests/test_rollback_contract.py` |
+| `test_S8_a_store_written_by_the_legacy_tree_opens_in_the_new_tree_without_a_migration` | R203 | `tests/test_rollback_contract.py` |
