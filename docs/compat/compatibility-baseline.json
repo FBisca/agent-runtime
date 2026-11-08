@@ -81,6 +81,7 @@
       "dispatch_turns",
       "last_wait",
       "stall_progress",
+      "resume_marks",
       "tasks"
     ]
   },

@@ -68,7 +68,7 @@ import `server.*` modules and must not read the SQLite tables.
 
 The store is `~/.local/state/agent-runtime/dispatch.sqlite3`, `PRAGMA user_version = 2`, with the
 tables `teams`, `workers`, `assignments`, `messages`, `receipts`, `callers`, `dispatch_turns`,
-`last_wait`, `stall_progress` and `tasks`. Opening an older store is additive: the missing tables
+`last_wait`, `stall_progress`, `resume_marks` and `tasks`. Opening an older store is additive: the missing tables
 and indexes are created, the rows are kept and the version is bumped. **No state migration ever
 runs**, so rolling the packaging change back needs no data work.
 
