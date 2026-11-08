@@ -1,15 +1,24 @@
 [project]
-name = "agent-runtime"
+name = "agent-runtime-workspace"
 version = "0.1.0"
-description = "The local runtime that gives a lead its workers: one team, one lead, many CLIs."
+description = "The virtual root of the uv workspace: the runtime and the orchestrator members, plus the shared toolchain."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
+
+# The root is a workspace, not a distribution: the installable members live under `packages/`.
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/agent-runtime", "packages/agent-orchestrator"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-xdist>=3.6",
+    "ruff>=0.9",
+    "ty>=0.0.1a1",
 ]
 
 [tool.pytest.ini_options]
@@ -23,3 +32,24 @@ markers = [
     "live: touches a real CLI or provider; skipped unless its opt-in variable is set",
 ]
 filterwarnings = ["default::pytest.PytestUnhandledThreadExceptionWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# The legacy tree is not ruff-clean yet; the gate tracks the legacy budget, it does not hide it.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# The legacy tree predates the workspace: keep the gate honest about the members, not about the past.
+"server/*" = ["E402", "F401"]
+"hooks/*" = ["E402", "F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ty.environment]
+python-version = "3.11"
+# Check every platform: the legacy budget must not depend on the runner OS.
+python-platform = "all"
