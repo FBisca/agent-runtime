@@ -77,6 +77,7 @@ class CodexProfileTests(ToolCase):
         self.assertEqual(program[:4], ["codex", "--no-daemon", "-p", "worker"])
         self.assertTrue(program[-1].startswith("do x"))
         self.assertIn("Worker protocol:", program[-1])
+        self.assertIn("report(kind, assignment_id)", program[-1])
         self.assertIn("do x", program[-1])
         with_model = self.spawn_codex(home=home, name="w2", model="gpt-5.5")
         self.assertEqual(with_model[:6], ["codex", "--no-daemon", "-p", "worker", "--model", "gpt-5.5"])

@@ -163,9 +163,8 @@ WORKER_PROTOCOL = (
     "message alone never reaches the parent. Return a compact block: STATUS: COMPLETE | BLOCKED | "
     "PARTIAL, then task id, files changed, checks (command and outcome), decisions, remaining work."
 )
-# Pi reaches the runtime over MCP, so its tool carries the server's prefix.
-PI_WORKER_PROTOCOL = WORKER_PROTOCOL.replace(
-    "the agent-runtime report tool as report(", "the agent-runtime report tool `mcp__agent-runtime__report` as ")
+LEGACY_WORKER_PROTOCOL = WORKER_PROTOCOL.replace(
+    "report(kind, assignment_id), where kind is progress, complete, blocked or decision", "report(text)")
 
 
 def discard(name, env):
@@ -278,7 +277,7 @@ def spawn_agent(arguments, cli):
     """The role the worker runs under: a name, or None for no role at all."""
     agent = arguments.get("agent")
     if agent is None:
-        return None if cli == "codex" else "implementer"
+        return None
     pattern = AGENT_CLAUDE if cli == "claude" else AGENT_CODEX
     if not isinstance(agent, str):
         raise ToolError("agent must match %s" % pattern.pattern)
@@ -398,14 +397,17 @@ def spawn(arguments, env, ctx):
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
     store = None
     message = "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
+    protocol = WORKER_PROTOCOL if dispatch_enabled(env) else LEGACY_WORKER_PROTOCOL
     if cli == "pi":
+        protocol = protocol.replace("the agent-runtime report tool as report(",
+                                    "the agent-runtime report tool `mcp__agent-runtime__report` as ")
         # Pi has no role file: the role and the dispatch contract travel in the task itself.
         if agent:
             message = "Role: %s\n\n%s" % (agent, message)
-        message += "\n\n" + PI_WORKER_PROTOCOL
+        message += "\n\n" + protocol
     elif agent is None or instructions is not None:
         # No role file supplies the dispatch contract, so the runtime states it.
-        message += "\n\n" + WORKER_PROTOCOL
+        message += "\n\n" + protocol
     if dispatch_enabled(env):
         # D4: identity and inputs are resolved before hc run, so nothing is started on an invalid spawn.
         scope, _ = dispatch_identity(env, ctx)

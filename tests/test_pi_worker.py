@@ -59,7 +59,7 @@ class PiSpawnTests(ToolCase):
 
     def test_S1_the_pi_task_carries_the_role_and_the_report_protocol(self):
         """pi-worker/S1: Pi has no role file, so the role and the protocol travel in the task."""
-        task = self.spawn_argv(cli="pi")[-1]
+        task = self.spawn_argv(cli="pi", agent="implementer")[-1]
         self.assertIn("Role: implementer", task)
         self.assertIn("Worker protocol:", task)
         self.assertIn("mcp__agent-runtime__report", task)
@@ -67,7 +67,8 @@ class PiSpawnTests(ToolCase):
 
     def test_S1_a_pi_spawn_with_no_role_states_the_protocol_without_a_role_line(self):
         """pi-worker/S1: agent=none means no role, but the protocol still reaches the worker."""
-        task = self.spawn_argv(cli="pi", agent="none")[-1]
+        task = self.spawn_argv(cli="pi")[-1]
+        self.assertEqual(task, self.spawn_argv(cli="pi", agent="none")[-1])
         self.assertNotIn("Role:", task)
         self.assertIn("Worker protocol:", task)
 
