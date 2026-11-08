@@ -24,7 +24,7 @@
 | ruff / ruff format / ty budgets | 40/45 · 30/31 · 277/285 — all inside budget, `ty check packages/` clean |
 | shellcheck | clean on `install.sh bin/*` |
 | `converge --final --base 7f52364` | coverage, tagged, scope and spec all PASS |
-| CI on the matrix | green on `main` for the merged T1–T5 commits; PR #64's own run was still pending when this was written |
+| CI on the matrix | green on `main` for the merged T1–T5 commits, and green on PR #64 itself (all six matrix entries plus shellcheck) |
 | Live smoke on **Pi, Claude and Codex** | each worker spawned through the migrated runtime's MCP surface, reported `progress` then `complete`, and stopped cleanly |
 | Rollback check | the pre-workspace tree's shims and MCP server answer; a store written by either tree opens in the other with `user_version=2`, the same 11 tables and its rows intact |
 
