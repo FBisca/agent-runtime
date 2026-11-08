@@ -91,12 +91,30 @@
     "server/hc_tools.py"
   ],
   "pr_pins": {
-    "39": "2525170d0982f726353b8961e9646d66aa6f1c7f",
-    "45": "cfe12eb6eb2b4e93bff2080d42c998c820d4f6f4"
+    "39": "90fee0253e1088146ce1e14ac672553bdadc1971",
+    "45": "5a383dd85dbb877e64e4d4a2485a5f5220aad66b"
   },
   "pr_titles": {
-    "39": "fix(runtime): stop vanished workers and persist observed failures (#39)",
-    "45": "test(runtime): live check that externally killed workers stop cleanly (#45)"
+    "39": "fix(resume): surface undelivered worker tasks (#39)",
+    "45": "feat(usage): bind workers to CLI session logs (#45)"
+  },
+  "pr_semantics": {
+    "39": "resume",
+    "45": "usage"
+  },
+  "pr_regression_coverage": {
+    "39": {
+      "tests/test_event_wait.py": [
+        "test_S12_swallowed_resume_returns_not_started_without_resending",
+        "test_S13_mcp_pending_wait_wakes_for_resume_report"
+      ]
+    },
+    "45": {
+      "tests/test_usage.py": [
+        "test_S5_claude_binds_transcript_and_uses_current_session_directly",
+        "test_S5a_identity_fallback_reads_claude_code_session_id"
+      ]
+    }
   },
   "regression_coverage": {
     "tests/test_stop_failures.py": [
@@ -104,13 +122,17 @@
       "test_observed_exit_persists_one_failure_and_ack_clears_it"
     ],
     "tests/test_event_wait.py": [
-      "test_S1_wait_all_returns_the_first_undelivered_report"
+      "test_S1_wait_all_returns_the_first_undelivered_report",
+      "test_S12_swallowed_resume_returns_not_started_without_resending",
+      "test_S13_mcp_pending_wait_wakes_for_resume_report"
     ],
     "tests/test_dispatch.py": [
       "test_resume_then_immediate_wait_ignores_the_old_done_turn"
     ],
     "tests/test_usage.py": [
-      "test_metadata_records_cwd_base_commit_and_spawn_time"
+      "test_metadata_records_cwd_base_commit_and_spawn_time",
+      "test_S5_claude_binds_transcript_and_uses_current_session_directly",
+      "test_S5a_identity_fallback_reads_claude_code_session_id"
     ],
     "tests/test_live_acceptance.py": [
       "test_externally_killed_worker_stops_cleanly"

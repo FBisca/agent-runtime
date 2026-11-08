@@ -76,14 +76,20 @@ runs**, so rolling the packaging change back needs no data work.
 
 | PR | Commit | Semantics | Regression coverage |
 |---|---|---|---|
-| #39 | `2525170d0982f726353b8961e9646d66aa6f1c7f` | vanished workers stop cleanly; observed failures persist and are acknowledged | `tests/test_stop_failures.py` |
-| #45 | `cfe12eb6eb2b4e93bff2080d42c998c820d4f6f4` | a live check that externally killed workers stop cleanly | `tests/test_live_acceptance.py` |
+| #39 | `90fee0253e1088146ce1e14ac672553bdadc1971` (`fix(resume): surface undelivered worker tasks (#39)`) | resume/undelivered attention: a swallowed resume is surfaced, not resent | `tests/test_event_wait.py` (`test_S12_swallowed_resume_returns_not_started_without_resending`, `test_S13_mcp_pending_wait_wakes_for_resume_report`) |
+| #45 | `5a383dd85dbb877e64e4d4a2485a5f5220aad66b` (`feat(usage): bind workers to CLI session logs (#45)`) | session usage attribution: a worker binds to the CLI session log it runs in | `tests/test_usage.py` (`test_S5_claude_binds_transcript_and_uses_current_session_directly`, `test_S5a_identity_fallback_reads_claude_code_session_id`) |
 
-Both commits are ancestors of this branch and the contract test asserts it, so a rebase that drops
-them fails loudly. The contract does **not** re-test their semantics: `tests/test_stop_failures.py`,
+Both commits are the live heads of their pull requests and are ancestors of this branch, and the
+contract test asserts it, so a rebase that drops them fails loudly. The contract also asserts that
+each pinned commit carries the semantics the plan names for that PR (the subject of #39 mentions
+the resume work, the subject of #45 the usage work), so pinning the wrong commit fails too.
+
+The contract does **not** re-test their semantics: `tests/test_stop_failures.py`,
 `tests/test_event_wait.py`, `tests/test_dispatch.py`, `tests/test_usage.py` and
 `tests/test_live_acceptance.py` already own them, and the contract only checks that those tests
-are still there.
+are still there. `pr_regression_coverage` in the baseline records, per PR, the tests that own the
+live semantics, so deleting one of them breaks the contract instead of quietly shrinking the
+suite.
 
 ## The contract tests
 
@@ -102,9 +108,12 @@ are still there.
 | `test_S3_the_public_tool_surface_covers_the_orchestration_verbs` | S3 | `tests/test_compatibility_contract.py` |
 | `test_S3_direct_sqlite_access_stays_inside_the_runtime_store_layer` | S3 | `tests/test_compatibility_contract.py` |
 | `test_S7_the_pr_commits_are_pinned_in_the_baseline` | S7 | `tests/test_compatibility_contract.py` |
+| `test_S7_the_baseline_pins_the_semantics_the_plan_describes_for_each_pr` | S7 | `tests/test_compatibility_contract.py` |
+| `test_S7_each_pr_pins_the_regression_tests_that_own_its_semantics` | S7 | `tests/test_compatibility_contract.py` |
 | `test_S7_resume_and_usage_semantics_keep_their_own_regression_tests` | S7 | `tests/test_compatibility_contract.py` |
 | `test_S7_this_contract_does_not_duplicate_the_existing_test_names` | S7 | `tests/test_compatibility_contract.py` |
 | `test_S7_the_pinned_pr_commits_are_ancestors_of_this_branch` | S7 | `tests/test_compatibility_contract_integration.py` |
+| `test_S7_the_pinned_commits_carry_the_semantics_the_baseline_records` | S7 | `tests/test_compatibility_contract_integration.py` |
 | `test_S8_the_store_keeps_its_schema_version_and_tables` | S8 | `tests/test_compatibility_contract_integration.py` |
 | `test_S8_a_legacy_store_opens_without_a_state_migration` | S8 | `tests/test_compatibility_contract_integration.py` |
 
