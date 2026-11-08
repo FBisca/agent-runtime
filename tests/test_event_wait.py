@@ -24,6 +24,18 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
+# The harness waits for the server's answer, so its budget must outlast the server's own deadline:
+# a wait that runs to its deadline answers after it, and a late reply is still a reply. The old 3s
+# budget gave up before a 5s wait could answer and reported an empty queue for a reply on its way.
+CLIENT_BUDGET = 60
+# A wait that must answer early carries a deadline far away and a bound the machine can still meet:
+# the claim is "the wait answered before its deadline", not "the machine answered within a second".
+EARLY_DEADLINE = 30
+EARLY_BOUND = 15
+# A wait that must take its deadline is bounded by the client's budget, not by a second.
+DEADLINE_BOUND = 30
+
+
 
 class AsyncRPC:
     def __init__(self, session):
@@ -58,7 +70,7 @@ class AsyncRPC:
         self.session.proc.stdin.flush()
         return self.sequence
 
-    def get(self, request_id, timeout=3):
+    def get(self, request_id, timeout=CLIENT_BUDGET):
         deadline = time.monotonic() + timeout
         while request_id not in self.pending:
             response = self.replies.get(timeout=max(0, deadline - time.monotonic()))
@@ -979,14 +991,14 @@ class EventWaitTests(ToolCase):
         self.prepare()
         progress = self.publish(0, "progress")
         started = time.monotonic()
-        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 2}))
-        self.assertLess(time.monotonic() - started, 1)  # the undelivered report returns at once
+        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": EARLY_DEADLINE}))
+        self.assertLess(time.monotonic() - started, EARLY_BOUND)  # the undelivered report returns at once
         self.assertEqual(batch["reason"], "messages")
         self.assertEqual(batch["messages"], [progress])
         started = time.monotonic()
         deadline = self.batch(self.rpc, self.rpc.tool("wait", {"target": "w2", "timeout": 0.2}))
         self.assertGreaterEqual(time.monotonic() - started, 0.18)  # an empty queue takes the deadline
-        self.assertLess(time.monotonic() - started, 1)
+        self.assertLess(time.monotonic() - started, DEADLINE_BOUND)
         self.assertEqual(deadline["reason"], "timeout")
         self.assertEqual(deadline["messages"], [])
         empty = self.batch(self.rpc, self.rpc.tool("wait", {"target": "absent", "timeout": 5}))
@@ -1029,7 +1041,9 @@ os._exit(0)
         started = time.monotonic()
         subprocess.run([sys.executable, "-c", script, str(SERVER.parent), self.env["HOME"], json.dumps(envelope)], check=True)
         batch = self.batch(self.rpc, request_id)
-        self.assertLess(time.monotonic() - started, 1.5)
+        # The recovery is the wait's own 0.5s recheck: ten of them are a finite bound, and the old
+        # one-second bound measured the machine instead of the recovery.
+        self.assertLess(time.monotonic() - started, 5)
         self.assertEqual(batch["reason"], "completed")
         self.assertEqual(batch["messages"], [envelope])
 
@@ -1191,6 +1205,18 @@ os._exit(0)
         complete = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
         self.assertEqual(complete["reason"], "completed")
         self.assertEqual(complete["unfinished"], [])
+
+    def test_a_slow_status_probe_does_not_hide_the_failed_worker(self):
+        """agent-runtime/R166
+        agent-runtime-dispatch/S27: the probe is what sees the exit; a probe that misses its budget
+        would answer with the queued report instead of the failure."""
+        self.prepare()
+        self.rows[0]["status"] = "exited"
+        replies = json.loads((self.dir / "replies").read_text())
+        replies["ls"] = {"out": json.dumps({"terminals": self.rows}), "sleep": 0.5}
+        (self.dir / "replies").write_text(json.dumps(replies))
+        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 5}))
+        self.assertEqual(batch["reason"], "failed")
 
     def test_completion_committed_during_bounded_probe_overrides_observed_exit(self):
         """agent-runtime/R60

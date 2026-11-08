@@ -149,10 +149,10 @@ def dispatch(method, request_id, params, env):
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
-def start_call(message, env, reply, calls):
+def start_call(message, env, reply, calls, session):
     """Run one tools/call on its own thread so waits never block ping or cancellation."""
     request_id = message["id"]
-    ctx = hc_tools.Context()
+    ctx = hc_tools.Context(session)  # the session's state is shared by every call of this process
     calls[request_id] = ctx
 
     def work():
@@ -190,6 +190,7 @@ def serve(stdin=None, stdout=None, env=None):
     stdout = stdout or sys.stdout
     env = dict(os.environ if env is None else env)
     lock, calls, threads = threading.Lock(), {}, []
+    session = {}  # what one server process shares: the session's identity is resolved once
 
     def reply(payload):
         with lock:
@@ -212,7 +213,7 @@ def serve(stdin=None, stdout=None, env=None):
                 ctx.cancel()
             continue
         if isinstance(message, dict) and message.get("method") == "tools/call" and "id" in message:
-            threads.append(start_call(message, env, reply, calls))
+            threads.append(start_call(message, env, reply, calls, session))
             continue
         outcome = handle(message, env)
         if outcome is not None:

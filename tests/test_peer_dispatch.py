@@ -15,6 +15,12 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
+# R45: dispatch returns before the workers finish. A blocking dispatch waits for the turn (170s by
+# default), so a bound far below that still separates the two; the old one-second bound measured
+# the machine, not the dispatch.
+RESUME_BOUND = 10
+
+
 
 class PeerDispatchTests(ToolCase):
     prepare = event_helpers.EventWaitTests.prepare
@@ -102,7 +108,7 @@ class PeerDispatchTests(ToolCase):
                                         task="codex work", cwd="/tmp")["structuredContent"]
         started = time.monotonic()
         resumed = [self.tool("resume", name=name, task="continue")["structuredContent"] for name in ("w1", "w2")]
-        self.assertLess(time.monotonic() - started, 1)
+        self.assertLess(time.monotonic() - started, RESUME_BOUND)
         for before, after in zip(self.assignments, resumed):
             self.assertNotEqual(before["assignment_id"], after["assignment_id"])
             self.assertEqual(before["worker_id"], after["worker_id"])
