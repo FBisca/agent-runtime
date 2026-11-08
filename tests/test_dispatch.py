@@ -519,6 +519,7 @@ class ActivationTests(ToolCase):
                 self.assertEqual(json.loads(text), {"name": "w1", "address": "t9", "parent": "t0"})
                 self.assertNotIn("structuredContent", result)
                 self.assertNotIn("assignment_id", self.runs("run")[-1][-1])
+                self.assertIn("report(text)", self.runs("run")[-1][-1])
                 tools = lead.send("tools/list")["result"]["tools"]
                 report_schema = next(t["inputSchema"] for t in tools if t["name"] == "report")
                 self.assertEqual(report_schema["required"], ["text"])

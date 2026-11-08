@@ -55,8 +55,8 @@ The MCP server and the dispatch store are host-agnostic: any coding agent that s
 | Concern | Where | What a new host provides |
 |---|---|---|
 | Host names | `CLIS` in `server/hc_tools.py`; the `cli` enum in `TOOLS` in `server/mcp_server.py`; the `--cli` choices in `server/agent_runtime.py` | a name |
-| Launching a worker | `spawn` in `server/hc_tools.py` | the argv that starts the CLI non-interactively with the task text (Claude: `--agent implementer`; Codex: `--no-daemon` plus its implementer instructions; an optional `model` adds `--model <model>` before the prompt; an optional `effort` (`low`, `medium`, `high`, `xhigh`, `max`) sets that task's reasoning effort as a launch flag, Claude `--effort <level>` and Codex `-c model_reasoning_effort="<level>"`, so it never changes the CLI's saved default; an optional `agent` replaces `implementer`: Claude `--agent <agent>`, Codex reads `~/.codex/agents/<agent>.toml`; `agent: "none"` runs the worker with no role at all (Claude drops `--agent`, Codex gets no preamble) and the runtime states the worker protocol in the prompt; `instructions_file` (Codex only) takes the role text from that file instead of a toml, and cannot be combined with `agent`. An agent without the `report` tool leaves the lead seeing the worker as unreported or stalled) |
-| Worker instructions | `codex_instructions` in `server/hc_tools.py`; `spawn_instructions` for `instructions_file`; for Claude, the agent file the host loads | where the host reads the implementer role from (Codex: `~/.codex/agents/<agent>.toml`, default `implementer`) |
+| Launching a worker | `spawn` in `server/hc_tools.py` | the argv that starts the CLI non-interactively with the task text (Claude: `--permission-mode auto`; Codex: `--no-daemon`; neither has a default role; an optional `model` adds `--model <model>` before the prompt; an optional `effort` (`low`, `medium`, `high`, `xhigh`, `max`) sets that task's reasoning effort as a launch flag, Claude `--effort <level>` and Codex `-c model_reasoning_effort="<level>"`, so it never changes the CLI's saved default; an optional `agent` selects a role: Claude `--agent <agent>`, Codex reads `~/.codex/agents/<agent>.toml`; `agent: "none"` runs the worker with no role at all (Claude drops `--agent`, Codex gets no preamble) and the runtime states the worker protocol in the prompt; `instructions_file` (Codex only) takes the role text from that file instead of a toml, and cannot be combined with `agent`. An agent without the `report` tool leaves the lead seeing the worker as unreported or stalled) |
+| Worker instructions | `codex_instructions` in `server/hc_tools.py`; `spawn_instructions` for `instructions_file`; for Claude, the agent file the host loads | where the host reads the implementer role from (Codex: `~/.codex/agents/<agent>.toml` when explicitly selected) |
 | Subagent wording | `SUBAGENT_TOOL` in `server/hc_tools.py` | the name of the host's own subagent tool, used in the `lookup` refusal |
 | Detecting the host | `cli_of_args` (process name), `detect_cli` and `CODEX_ENV_MARKERS`/`CLAUDE_ENV_MARKERS`/`PI_ENV_MARKERS` (environment markers), `foreground_cli` (Herdr foreground program), all in `server/agent_runtime.py` | a process basename and/or environment variable that identifies it |
 | Runtime choice | `resolve` in `server/agent_runtime.py` | which runtime (`herdmates` or `native`) the host gets under Herdr |
@@ -122,8 +122,8 @@ required, and the lead needs an `hc` terminal to start workers from.
 The `pi` family is a built-in worker backend, next to `claude` and `codex`. A spawn that names it
 launches `pi --print --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
 runtime's own five levels (`low`, `medium`, `high`, `xhigh`, `max`) and Pi's extra levels (`off`,
-`minimal`) are never sent. Pi has no role files and no `--agent` flag, so the role travels in the task
-(`Role: implementer`) and the runtime states the report protocol there too, naming Pi's own tool
+`minimal`) are never sent. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task
+(for example, `Role: implementer`) and the runtime states the report protocol there too, naming Pi's own tool
 (`mcp__agent-runtime__report`). Pi has no token accounting.
 
 Provider scrubbing is family-aware: a `pi` spawn keeps `MINIMAX_API_KEY` and the Pi provider variables
@@ -179,12 +179,13 @@ Ask in plain words; the lead agent turns it into tool calls.
 
 ### The worker's role
 
-Every worker starts under the `implementer` role: Claude loads `~/.claude/agents/implementer.md` as a subagent, Codex gets the `developer_instructions` of `~/.codex/agents/implementer.toml` in front of the task. Three ways to change that:
+All CLI families and named profiles default to no role and receive the worker protocol in their prompt. Select a role explicitly when needed:
 
 | You say | Lead calls |
 |---|---|
+| "Run it as the implementer" | `spawn(…, agent="implementer")` — select the implementation role explicitly |
 | "Run it as the reviewer" | `spawn(…, agent="reviewer")` — Codex reads `~/.codex/agents/reviewer.toml`, Claude `--agent reviewer` |
-| "No role, the task says it all" | `spawn(…, agent="none")` — no role file, no preamble; the runtime states the worker protocol (report with `report(kind, assignment_id)`, the result block shape) in the prompt instead |
+| "No role, the task says it all" | `spawn(…, agent="none")` — no role file, no preamble; the runtime states the worker protocol (report with `report(kind, assignment_id)` under structured dispatch or `report(text)` otherwise, the result block shape) in the prompt instead |
 | "Use my role file" | `spawn(…, instructions_file="~/roles/researcher.md")` — Codex only; the file's text is the preamble. Not combinable with `agent` |
 
 The role tomls stay in `~/.codex/agents/` either way: Codex reads them itself when it runs outside the runtime.
