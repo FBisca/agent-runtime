@@ -21,7 +21,7 @@ COLLECT_LINES = 200
 HISTORY_LINES = 1000
 SHORT_SECONDS = 30
 # Configured launches get at most one second to expose a diagnostic or terminal exit.
-PROFILE_STARTUP_WINDOW_SECONDS = 1.0
+PROFILE_STARTUP_WINDOW_SECONDS = 3.0
 WAIT_DEFAULT, WAIT_MAX = 170, 590
 KINDS = ("worker", "lookup")
 CLIS = profiles.BUILTINS
@@ -43,12 +43,17 @@ DIAGNOSTICS = ("status", "collect", "list")
 
 
 class Context:
-    """Per-call cancellation: kills the running subprocess when the client cancels."""
+    """Per-call cancellation: kills the running subprocess when the client cancels.
 
-    def __init__(self):
+    `session` is the state one server process shares between its calls: the session's identity is
+    resolved once and kept, so a slow ancestry walk cannot change it between two calls.
+    """
+
+    def __init__(self, session=None):
         self.cancelled = threading.Event()
         self.proc = None
         self.wake = None
+        self.session = session if session is not None else {}
 
     def cancel(self):
         self.cancelled.set()
@@ -194,10 +199,17 @@ def dispatch_identity(env, ctx=None):
 
     The generation is the nearest CLI process PID/start time alone, shared with hooks. Hosts
     without visible CLI ancestry must supply a session ID.
+
+    A session's generation is resolved once and kept: the walk spends a `ps` per hop, and a loaded
+    machine can push a hop past its budget. An identity that changes between two calls of one
+    session forks the team, and the workers of the first team go stale.
     """
     cached = getattr(ctx, "identity", None)
     if cached:
         return cached  # computed once per call
+    session = getattr(ctx, "session", None) if ctx is not None else None
+    if session is not None and session.get("identity"):
+        return session["identity"]  # the session's own identity, resolved when the session started
     scope = hc_server(env)
     generation = lib.cli_generation()
     if not generation:
@@ -213,6 +225,8 @@ def dispatch_identity(env, ctx=None):
         generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_CODE_SESSION_ID")
     if not generation:
         raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
+    if session is not None:
+        session["identity"] = (scope, generation)
     return scope, generation
 
 
@@ -338,13 +352,13 @@ def profile_launch_error(name, env, ctx):
             return ToolError("cancelled")
         exited = False
         try:
-            raw = json.loads(hc(["get", name, "--json"], env, ctx, min(0.2, remaining)))
+            raw = json.loads(hc(["get", name, "--json"], env, ctx, min(1.0, remaining)))
             exited = isinstance(raw, dict) and lib.hc_state(raw) == "exited"
         except (ToolError, ValueError):
             pass
         remaining = deadline - time.monotonic()
         try:
-            screen = hc(["read", name, "--lines", "30"], env, ctx, min(0.2, remaining)) if remaining > 0 else ""
+            screen = hc(["read", name, "--lines", "30"], env, ctx, min(1.0, remaining)) if remaining > 0 else ""
         except ToolError:
             screen = ""
         for line in screen.splitlines():
@@ -932,7 +946,7 @@ def call_dispatch(name, arguments, env, ctx):
             raise DiagnosticUnavailable("hc role lookup failed")
         raise ToolError("cannot establish dispatch caller")
     try:
-        scope, generation = dispatch_identity(env)
+        scope, generation = dispatch_identity(env, ctx)
     except ToolError as error:
         if diagnostic_call:
             raise DiagnosticUnavailable("caller identity unresolved: %s" % error)

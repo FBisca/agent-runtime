@@ -164,6 +164,17 @@ class IdentityTests(ToolCase):
         scope, generation = self.identity(CODEX_THREAD_ID="t", CLAUDE_CODE_SESSION_ID="c", CLAUDE_SESSION_ID="s")
         self.assertEqual(generation, "90:Wed Nov  4 10:00:00 2026")
 
+    def test_the_session_identity_is_resolved_once_and_never_changes(self):
+        """agent-runtime/R165
+        A session's identity is decided once: a walk that misses its budget on a later call must not
+        fork the team, or the workers of the first team go stale."""
+        ctx = hc_tools.Context()
+        with mock.patch.object(hc_tools.lib, "cli_generation", return_value="90:Wed Nov  4 10:00:00 2026"):
+            first = hc_tools.dispatch_identity(self.ENV, ctx)
+        with mock.patch.object(hc_tools.lib, "cli_generation", return_value=None):
+            second = hc_tools.dispatch_identity(self.ENV, ctx)
+        self.assertEqual(first, second)
+
     def test_clear_or_new_in_same_process_keeps_team_and_assignments(self):
         """agent-runtime/R108"""
         import hc_tools

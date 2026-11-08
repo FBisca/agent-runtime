@@ -1,7 +1,7 @@
 """One bounded wait: durable membership/messages, IPC hints, internal reconciliation.
 
 Lost hints recover on a 0.5s recheck interval. Each hc call in an observation
-(`hc ls`, plus `hc get` per silent live member) has a 0.2s budget; SQLite retains its finite 5s busy timeout. No host/model polling is needed.
+(`hc ls`, plus `hc get` per silent live member) has a 1s budget: a probe that misses its budget hides the failure it was sent to see, and the wait answers with the wrong reason. SQLite retains its finite 5s busy timeout. No host/model polling is needed.
 Queued nonterminal any-events require an observation on each call, including
 zero-timeout replay: zero skips waiting for events, not the bounded status probe.
 """
@@ -12,7 +12,7 @@ from dispatch_store import NOT_STARTED_NEXT, STALL_NEXT
 from dispatch_events import Listener
 
 RECONCILE_INTERVAL = 0.5
-OBSERVE_TIMEOUT = 0.2
+OBSERVE_TIMEOUT = 1.0
 
 
 def turn_ended(assignment, observations):

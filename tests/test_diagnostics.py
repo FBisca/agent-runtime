@@ -3,8 +3,9 @@ import json
 import sqlite3
 
 from dispatch_store import Store
-from test_event_wait import EventWaitTests, Session
+from test_event_wait import Session
 from test_tools import ToolCase
+import test_event_wait as event_helpers
 
 import pytest
 
@@ -15,9 +16,11 @@ SCREEN = "screen says finished"
 
 
 class DiagnosticTests(ToolCase):
-    prepare = EventWaitTests.prepare
-    spawn = EventWaitTests.spawn
-    publish = EventWaitTests.publish
+    # The helpers come through the module: binding the class here would collect it a second time in
+    # this file, and the whole class would run twice in every parallel run.
+    prepare = event_helpers.EventWaitTests.prepare
+    spawn = event_helpers.EventWaitTests.spawn
+    publish = event_helpers.EventWaitTests.publish
 
     def setUp(self):
         super().setUp()
@@ -112,9 +115,9 @@ class DiagnosticTests(ToolCase):
 
 
 class ReceiptGatedInboxTests(ToolCase):
-    prepare = EventWaitTests.prepare
-    spawn = EventWaitTests.spawn
-    publish = EventWaitTests.publish
+    prepare = event_helpers.EventWaitTests.prepare
+    spawn = event_helpers.EventWaitTests.spawn
+    publish = event_helpers.EventWaitTests.publish
 
     def read_calls(self):
         return (("status", {"name": "w1"}), ("list", {}), ("collect", {"name": "w1"}),
