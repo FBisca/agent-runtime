@@ -1,8 +1,7 @@
 # Handoff — the uv workspace migration, after the runtime and orchestrator members
 
 **State:** the plan `docs/plans/2026-11-07-uv-workspace-python-standards.plan.md` is APPROVED and in flight.
-T1 and T2 are merged. T3, T4 and T5 are in pull request #62, waiting for CI and a merge.
-T6 is the owner's ticket and has not started.
+T1, T2, T3, T4 and T5 are merged. T6 is the owner's ticket and has not started.
 
 **Read this before touching anything.** The work below was done by hand, in one pass, with the
 `orchestrate` driver retired halfway through (see "The driver is gone" below).
@@ -15,20 +14,21 @@ T6 is the owner's ticket and has not started.
 |---|---|---|
 | T1 | The compatibility baseline and the contract tests | MERGED — PR #56 (`87de50b`) |
 | T2 | The uv workspace, the member manifests, the tracked toolchain budget | MERGED — PR #61 (`25e1658`) |
-| T3 | The runtime moves into its member, the entry points stay | PR #62 (`4838d16`) |
-| T4 | The orchestrator member: typed contracts, the `RuntimeClient` seam | PR #62 (`685e8c4`) |
-| T5 | The typed YAML routing policy, the no-SQLite proof | PR #62 (`685e8c4`) |
+| T3 | The runtime moves into its member, the entry points stay | MERGED — PR #62 (`d48bb4f`) |
+| T4 | The orchestrator member: typed contracts, the `RuntimeClient` seam | MERGED — PR #62 (`d48bb4f`) |
+| T5 | The typed YAML routing policy, the no-SQLite proof | MERGED — PR #62 (`d48bb4f`) |
 | T6 | Full CI + smoke sessions on Pi/Claude/Codex, the rollback check | NOT STARTED (owner) |
 
-PR #62 has two commits plus a plan-status commit:
+PR #62 landed two changes (squashed into `d48bb4f`):
 
 1. `refactor(runtime): the runtime lives in its member; the entry points stay`
 2. `feat(orchestrator): the orchestrator member, with typed contracts and the runtime seam`
-3. `docs(plan): the status cells of the two pull requests`
 
-**Next step for T3-T5:** wait for CI on #62, merge it (squash), then set the three Status cells to
-`COMPLETE <date> (PR #62, squash <sha>)` in the plan and push that as a one-line PR — the same shape
-as PR #59 did for T1.
+and one fix after the first CI run: `fix(ci): the development environment resolves both members`
+(the members' dependencies are in the root's dev group now, so `uv sync --frozen && uv run pytest`
+works from a fresh checkout).
+
+**Next step:** T6 (below). The plan's Status cells for T3, T4 and T5 say COMPLETE (PR #62).
 
 ---
 
