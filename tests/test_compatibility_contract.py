@@ -144,6 +144,40 @@ class PrPinTests(unittest.TestCase):
             for needle in needles:
                 self.assertIn(needle, text, f"{name} lost its {needle} coverage")
 
+    def test_S7_the_baseline_pins_the_semantics_the_plan_describes_for_each_pr(self):
+        """uv-workspace/S7
+
+        The plan's Sources table names PR #39 as the resume/undelivered-attention work and
+        PR #45 as the session-usage attribution work. The baseline must say which semantics
+        each pinned PR carries, so pinning the wrong commit is caught here and not by a
+        reader squinting at the JSON.
+        """
+        data = baseline()
+        semantics = data.get("pr_semantics")
+        self.assertIsNotNone(semantics, "the baseline does not record the semantics per PR")
+        for pr in data["pr_pins"]:
+            self.assertIn(pr, semantics, f"PR #{pr} has no recorded semantics")
+            self.assertTrue(semantics[pr].strip(), f"PR #{pr} has empty semantics")
+
+    def test_S7_each_pr_pins_the_regression_tests_that_own_its_semantics(self):
+        """uv-workspace/S7
+
+        The regression tests that own the live resume/session semantics must be pinned per
+        PR: deleting them must break the contract, not just shrink the suite.
+        """
+        data = baseline()
+        coverage = data.get("pr_regression_coverage")
+        self.assertIsNotNone(coverage, "the baseline does not record the regression tests per PR")
+        for pr in data["pr_pins"]:
+            self.assertIn(pr, coverage, f"PR #{pr} pins no regression test")
+            self.assertTrue(coverage[pr], f"PR #{pr} pins an empty regression test list")
+            for name, needles in coverage[pr].items():
+                path = PLUGIN / name
+                self.assertTrue(path.is_file(), name)
+                text = path.read_text()
+                for needle in needles:
+                    self.assertIn(needle, text, f"{name} lost its {needle} coverage")
+
     def test_S7_this_contract_does_not_duplicate_the_existing_test_names(self):
         """uv-workspace/S7"""
         mine = {name for name in dir(PrPinTests) if name.startswith("test_")}

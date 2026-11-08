@@ -89,6 +89,28 @@ class PrAncestryTests(unittest.TestCase):
             done = self._git("merge-base", "--is-ancestor", commit, "HEAD", timeout=30)
             self.assertEqual(0, done.returncode, f"PR #{pr} ({commit}) is not in this branch")
 
+    def test_S7_the_pinned_commits_carry_the_semantics_the_baseline_records(self):
+        """uv-workspace/S7
+
+        The pinned commit must be the head that carries the semantics the plan names for
+        that PR (#39 resume/undelivered attention, #45 session usage attribution), not an
+        older commit that happens to be in the same branch.
+        """
+        self._ensure_the_history_is_there()
+        data = baseline()
+        for pr, commit in data["pr_pins"].items():
+            subject = self._git("log", "-1", "--format=%s", commit).stdout.strip()
+            self.assertTrue(subject, f"PR #{pr} ({commit}) has no subject")
+            keyword = data["pr_semantics"][pr]
+            self.assertIn(keyword.lower(), subject.lower(),
+                          f"PR #{pr} is pinned to {commit} ({subject!r}), which does not carry "
+                          f"the {keyword!r} semantics the plan describes")
+            title = data["pr_titles"].get(pr)
+            if title is not None:
+                self.assertEqual(title, subject,
+                                 f"PR #{pr} is pinned to {commit}, whose subject is not the "
+                                 "recorded title")
+
 
 class InstallerProcessTests(unittest.TestCase):
     """S2: the installer keeps its documented wiring and its refusals."""
