@@ -2,13 +2,13 @@
 import json
 import stat
 import sys
+
+from test_mcp_server import RUNTIME_SRC
 from test_tools import ToolCase, raw
-from test_mcp_server import SERVER
 
-sys.path.insert(0, str(SERVER.parent))
-from dispatch_store import MAX_BATCH_BYTES, Store, StoreError
-
+sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
+from agent_runtime.dispatch_store import MAX_BATCH_BYTES, Store, StoreError
 
 pytestmark = pytest.mark.integration
 
@@ -463,7 +463,7 @@ class DispatchTests(ToolCase):
 
     def test_messages_without_members_are_not_empty(self):
         """agent-runtime/R65"""
-        import dispatch_wait
+        from agent_runtime import dispatch_wait
         batch = {"assignments": [], "messages": [{"message_id": "m"}], "unfinished": []}
         self.assertEqual(dispatch_wait.reason(batch, "all", {}), "messages")
         self.assertEqual(dispatch_wait.reason(dict(batch, messages=[]), "all", {}), "empty")

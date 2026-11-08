@@ -6,13 +6,12 @@ import unittest
 from pathlib import Path
 
 import test_event_wait as event_helpers
-from test_mcp_server import SERVER
+from test_mcp_server import RUNTIME_SRC, SERVER
 from test_tools import ToolCase
 
-sys.path.insert(0, str(SERVER.parent))
-from dispatch_store import Store
-
+sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
+from agent_runtime.dispatch_store import Store
 
 pytestmark = pytest.mark.integration
 

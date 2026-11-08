@@ -2,11 +2,10 @@
 import json
 import threading
 
-from test_event_wait import Session
-import test_event_wait as event_helpers
-from test_tools import ToolCase
-
 import pytest
+import test_event_wait as event_helpers
+from test_event_wait import Session
+from test_tools import ToolCase
 
 pytestmark = pytest.mark.integration
 
@@ -160,7 +159,7 @@ class TaskTests(ToolCase):
     def test_status_and_collect_report_diagnostics_when_storage_fails_but_auth_errors_stay_errors(self):
         """agent-runtime/R55
         agent-runtime-dispatch/S22"""
-        from dispatch_store import Store
+        from agent_runtime.dispatch_store import Store
         self.prepare()
         self.replies["read"] = {"out": "screen says finished"}
         (self.dir / "replies").write_text(json.dumps(self.replies))
@@ -192,7 +191,8 @@ class TaskTests(ToolCase):
         """agent-runtime/R55
         agent-runtime-dispatch/S22"""
         import sqlite3
-        from dispatch_store import Store
+
+        from agent_runtime.dispatch_store import Store
         self.prepare()
         self.publish(1, kind="complete", text="accepted before failure")
         with sqlite3.connect(Store(self.env).path) as db:  # later inbox query now fails; setup and indexes still exist

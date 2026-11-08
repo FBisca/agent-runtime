@@ -7,18 +7,18 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest import mock
 from pathlib import Path
-
-from test_mcp_server import SERVER, Session
+from unittest import mock
 
 import pytest
+from test_mcp_server import SERVER, Session
 
 pytestmark = pytest.mark.integration
 
 
-sys.path.insert(0, str(SERVER.parent))
-import hc_tools
+RUNTIME_SRC = Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"
+sys.path.insert(0, str(RUNTIME_SRC))
+from agent_runtime import hc_tools  # noqa: E402
 
 FAKE = '''#!%(python)s
 import json, os, sys, time
@@ -153,7 +153,7 @@ class IdentityTests(ToolCase):
     ENV = {"HC_TERMINAL_SOCKET": "/hc/sock"}
 
     def identity(self, **extra):
-        import hc_tools
+        from agent_runtime import hc_tools
         with mock.patch.object(hc_tools.lib, "ps_entry", side_effect={100: (90, "/usr/bin/zsh"), 90: (1, "claude")}.get), \
                 mock.patch.object(hc_tools.lib, "lstart", return_value="Wed Nov  4 10:00:00 2026"), \
                 mock.patch.object(hc_tools.os, "getppid", return_value=100):
@@ -177,8 +177,9 @@ class IdentityTests(ToolCase):
 
     def test_clear_or_new_in_same_process_keeps_team_and_assignments(self):
         """agent-runtime/R108"""
-        import hc_tools
-        from dispatch_store import Store
+        from agent_runtime import dispatch_store as store_module
+        from agent_runtime import hc_tools
+        Store = store_module.Store
         env = {"HOME": str(self.dir / "home")}
         store = Store(env)
         first = self.identity(CODEX_THREAD_ID="thread-a")
@@ -551,7 +552,7 @@ class ProfileTests(ToolCase):
                 self.assertIn("agent-runtime-profile:", text)
                 self.assertIn("MISSING_PROFILE_SECRET", text)
                 self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
-                from dispatch_store import Store
+                from agent_runtime.dispatch_store import Store
                 with Store({"HOME": str(self.dir / "home")}).transaction() as db:
                     self.assertEqual(db.execute("SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1").fetchone()[0], "failed")
                     self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])

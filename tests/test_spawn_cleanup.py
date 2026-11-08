@@ -4,14 +4,13 @@ import sys
 import time
 from unittest import mock
 
+from test_mcp_server import RUNTIME_SRC
 from test_tools import ToolCase, raw
-from test_mcp_server import SERVER
 
-sys.path.insert(0, str(SERVER.parent))
-import hc_tools
-from dispatch_store import Store, StoreError
-
+sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
+from agent_runtime import hc_tools
+from agent_runtime.dispatch_store import Store, StoreError
 
 pytestmark = pytest.mark.integration
 

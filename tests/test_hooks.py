@@ -2,13 +2,13 @@
 
 import json
 import os
-import sqlite3
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
-import tomllib
 import time
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -20,13 +20,14 @@ TOOL = "mcp__plugin_agent-runtime_agent-runtime__"
 DENY_TEXT = "use the agent-runtime tools"
 CONTEXT = HOOKS / "lead_context.py"
 SHIM = PLUGIN / "bin" / "agent-runtime-hook"
-sys.path.insert(0, str(PLUGIN / "server"))
-import agent_runtime as lib  # noqa: E402
-import dispatch_store  # noqa: E402
-import dispatch_wait  # noqa: E402
-import hc_tools  # noqa: E402
-
+sys.path.insert(0, str(PLUGIN / "packages" / "agent-runtime" / "src"))
 import pytest
+from agent_runtime import agent_runtime as lib  # noqa: E402
+from agent_runtime import (
+    dispatch_store,  # noqa: E402
+    dispatch_wait,  # noqa: E402
+    hc_tools,  # noqa: E402
+)
 
 pytestmark = pytest.mark.integration
 
@@ -485,10 +486,11 @@ class LeadContextTests(HookStoreCase):
 
     def test_hook_shaped_process_computes_the_servers_generation(self):
         """agent-runtime/R107"""
-        code = ("import sys; sys.path.insert(0, %r); sys.path.insert(0, %r); import hook_lib, hc_tools; "
+        code = ("import sys; sys.path.insert(0, %r); sys.path.insert(0, %r); import hook_lib; "
+                "from agent_runtime import hc_tools; "
                 "env = {'HC_SCOPE': 's', 'HC_TERMINAL_ID': 't0', 'CODEX_THREAD_ID': 'thread-x'}; "
                 "print(hook_lib.identity(env)[2]); print(hc_tools.dispatch_identity(env)[1])") % (
-            str(HOOKS), str(PLUGIN / "server"))
+            str(HOOKS), str(PLUGIN / "packages" / "agent-runtime" / "src"))
         proc = subprocess.Popen(["codex", "-c", '"$@"; exit $?', "codex", "/bin/sh", "-c",
                                  'python3 -c "$0"', code], executable="/bin/bash",
                                 env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

@@ -19,8 +19,12 @@ DEFAULT_CODEX_PROFILE = "worker"
 PROFILE_VARIABLE = "AGENT_RUNTIME_CODEX_PROFILE"
 # Why the profile was or was not applied: the file is missing, the base config carries a legacy
 # [profiles.*] table, or the environment turned the profile off.
-APPLIED, MISSING_FILE, LEGACY_TABLE, DISABLED_BY_ENV = ("applied", "missing_file", "legacy_table",
-                                                        "disabled_by_env")
+APPLIED, MISSING_FILE, LEGACY_TABLE, DISABLED_BY_ENV = (
+    "applied",
+    "missing_file",
+    "legacy_table",
+    "disabled_by_env",
+)
 # A profile name names a file inside CODEX_HOME: keep it to a plain file name.
 PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 # Worker names are terminal names; this mirrors the runtime's own NAME_RE so a name can never
@@ -125,8 +129,13 @@ def base_commit(cwd, env=None, timeout=5):
     for key in GIT_ENVIRONMENT:
         clean.pop(key, None)  # git's own environment can point the command at another repository
     try:
-        proc = subprocess.run(["git", "-C", cwd, "rev-parse", "HEAD"], capture_output=True, text=True,
-                              timeout=timeout, env=clean)
+        proc = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=clean,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     value = proc.stdout.strip() if proc.returncode == 0 else ""
@@ -199,8 +208,11 @@ def _message_text(content):
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(part["text"] for part in content
-                         if isinstance(part, dict) and isinstance(part.get("text"), str))
+        return "\n".join(
+            part["text"]
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
     return ""
 
 
@@ -226,8 +238,9 @@ def _session_match(path, metadata):
                     session_id = payload.get("session_id") or payload.get("id")
                     session_cwd = payload.get("cwd")
                     continue
-                if (record.get("type") == "response_item" and payload.get("role") == "assistant") or (
-                        record.get("type") == "event_msg" and payload.get("type") == "agent_message"):
+                if (
+                    record.get("type") == "response_item" and payload.get("role") == "assistant"
+                ) or (record.get("type") == "event_msg" and payload.get("type") == "agent_message"):
                     return None
                 if record.get("type") != "response_item" or payload.get("role") != "user":
                     continue
@@ -242,7 +255,9 @@ def _session_match(path, metadata):
             if session_cwd and metadata.get("cwd") and session_cwd != metadata["cwd"]:
                 return None
             assignments = ASSIGNMENT_MARKER_RE.findall(_message_text(content))
-            if not assignments:  # CLI context and literal assignment_id=<id> placeholders are not prompts.
+            if (
+                not assignments
+            ):  # CLI context and literal assignment_id=<id> placeholders are not prompts.
                 continue
             if metadata["assignment_id"] not in assignments:
                 return None

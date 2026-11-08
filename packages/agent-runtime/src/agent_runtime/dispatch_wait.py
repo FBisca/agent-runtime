@@ -5,11 +5,12 @@ Lost hints recover on a 0.5s recheck interval. Each hc call in an observation
 Queued nonterminal any-events require an observation on each call, including
 zero-timeout replay: zero skips waiting for events, not the bounded status probe.
 """
+
 import time
 
-from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
-from dispatch_store import NOT_STARTED_NEXT, STALL_NEXT
-from dispatch_events import Listener
+from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
+from .dispatch_events import Listener
+from .dispatch_store import NOT_STARTED_NEXT, STALL_NEXT
 
 RECONCILE_INTERVAL = 0.5
 OBSERVE_TIMEOUT = 1.0
@@ -22,7 +23,10 @@ def turn_ended(assignment, observations):
     and is not ended. Recorded turn defaults to 0; a resume of a mid-turn worker (mode working) must also
     outlast the turn that was already running. No observed turn fails safe to no attention.
     """
-    if assignment["state"] != "working" or observations.get(assignment["assignment_id"]) not in ("done", "idle"):
+    if assignment["state"] != "working" or observations.get(assignment["assignment_id"]) not in (
+        "done",
+        "idle",
+    ):
         return False
     seen = observations.get((assignment["assignment_id"], "turn"))
     recorded = assignment.get("turn") or 0
@@ -60,28 +64,47 @@ def reason(batch, target, observations):
     for a in batch["assignments"]:
         baseline = a.pop("_resume_turn", None)
         seen = observations.get((a["assignment_id"], "turn"))
-        if (a["state"] == "working" and a.get("runtime_state") in ("idle", "done")
-                and baseline is not None and seen is not None and seen <= baseline):
+        if (
+            a["state"] == "working"
+            and a.get("runtime_state") in ("idle", "done")
+            and baseline is not None
+            and seen is not None
+            and seen <= baseline
+        ):
             not_started.add(a["assignment_id"])
             a["attention"], a["next"] = "not_started", NOT_STARTED_NEXT
         # Idle is reported only after this call saw the runtime state (failure wins), and never over an
         # attention that already carries its own next step (unreported/error/ended turn).
-        if (a["assignment_id"] not in observations or a.get("runtime_state") in NEEDS_PERSON_STATES
-                or a["assignment_id"] in ended or a["assignment_id"] in not_started or a["state"] != "working"):
+        if (
+            a["assignment_id"] not in observations
+            or a.get("runtime_state") in NEEDS_PERSON_STATES
+            or a["assignment_id"] in ended
+            or a["assignment_id"] in not_started
+            or a["state"] != "working"
+        ):
             a["_stalled"] = False
         elif a.get("_stalled"):
             a["attention"], a["next"] = "stalled", STALL_NEXT
-    batch["unfinished"] = [a["assignment_id"] for a in batch["assignments"] if a["state"] != "complete"]
+    batch["unfinished"] = [
+        a["assignment_id"] for a in batch["assignments"] if a["state"] != "complete"
+    ]
     states = {a["state"] for a in batch["assignments"]}
     # D24: the turn ended (done/idle) with no accepted complete/blocked/decision report. A report that
     # committed before this snapshot already made the state complete/blocked/decision, so it wins (`ended` above).
     # Internal metadata consumed by Store.read in the final receipt transaction.
     batch["_attention"] = sum(
-        a["state"] in ("blocked", "decision") or
-        (a["state"] not in ("complete", "failed") and
-         (a.get("runtime_state") in NEEDS_PERSON_STATES or a["assignment_id"] in ended
-          or a["assignment_id"] in not_started or a.get("_stalled")))
-        for a in batch["assignments"])
+        a["state"] in ("blocked", "decision")
+        or (
+            a["state"] not in ("complete", "failed")
+            and (
+                a.get("runtime_state") in NEEDS_PERSON_STATES
+                or a["assignment_id"] in ended
+                or a["assignment_id"] in not_started
+                or a.get("_stalled")
+            )
+        )
+        for a in batch["assignments"]
+    )
     for a in batch["assignments"]:
         a.pop("turn", None)
         a.pop("mode", None)  # internal dispatch marker, not part of the result
@@ -89,8 +112,17 @@ def reason(batch, target, observations):
         return "messages" if batch["messages"] else "empty"
     if "failed" in states:
         return "failed"
-    stuck = any(a.get("runtime_state") in NEEDS_PERSON_STATES and a["state"] != "complete" for a in batch["assignments"])
-    if ended or not_started or stuck or any(a.get("_stalled") for a in batch["assignments"]) or states.intersection(("blocked", "decision")):
+    stuck = any(
+        a.get("runtime_state") in NEEDS_PERSON_STATES and a["state"] != "complete"
+        for a in batch["assignments"]
+    )
+    if (
+        ended
+        or not_started
+        or stuck
+        or any(a.get("_stalled") for a in batch["assignments"])
+        or states.intersection(("blocked", "decision"))
+    ):
         return "attention"
     if not batch["unfinished"]:
         return "completed"
@@ -105,22 +137,31 @@ def reason(batch, target, observations):
 
 def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=False):
     deadline = time.monotonic() + timeout
-    members = store.snapshot(team, recipient, "inbox" if inbox else target, receipt, ack=getattr(ctx, "ack", None))
+    members = store.snapshot(
+        team, recipient, "inbox" if inbox else target, receipt, ack=getattr(ctx, "ack", None)
+    )
     if inbox:
         members = []  # Inbox delivery never waits on teammates' assignment completion.
     assignment_ids = [m["assignment_id"] for m in members]
     observations, reconcile_at = {}, 0
     observed, needs_observation = False, False
+
     def ready(batch):
         nonlocal needs_observation
         resume_due = any(a.get("_resume_turn") is not None for a in batch["assignments"])
-        candidate = ("messages" if batch["messages"] else None) if inbox else reason(batch, target, observations)
+        candidate = (
+            ("messages" if batch["messages"] else None)
+            if inbox
+            else reason(batch, target, observations)
+        )
         needs_observation = not inbox and (
-            (resume_due and not observed) or
-            (candidate == "messages" and (not observed or time.monotonic() >= reconcile_at)))
+            (resume_due and not observed)
+            or (candidate == "messages" and (not observed or time.monotonic() >= reconcile_at))
+        )
         if needs_observation:
             return None  # Reconcile overdue resumes and runtime failure, including at zero timeout.
         return candidate or ("timeout" if time.monotonic() >= deadline else None)
+
     # Register before re-reading: a publication during registration cannot be lost.
     with Listener(store.directory) as listener:
         ctx.wake = listener.wake
@@ -128,7 +169,9 @@ def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=F
             while True:
                 if ctx.cancelled.is_set():
                     raise InterruptedError("cancelled")
-                batch = store.read(team, recipient, target, assignment_ids=assignment_ids, ready=ready, inbox=inbox)
+                batch = store.read(
+                    team, recipient, target, assignment_ids=assignment_ids, ready=ready, inbox=inbox
+                )
                 if batch["reason"] is not None:
                     return batch
                 remaining = deadline - time.monotonic()

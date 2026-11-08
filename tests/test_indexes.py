@@ -5,13 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_mcp_server import SERVER
+from test_mcp_server import RUNTIME_SRC
 
-sys.path.insert(0, str(SERVER.parent))
-import dispatch_store
-from dispatch_store import Store
-
+sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
+from agent_runtime import dispatch_store
+from agent_runtime.dispatch_store import Store
 
 pytestmark = pytest.mark.unit
 

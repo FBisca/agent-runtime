@@ -16,11 +16,11 @@ import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"))
 
-import agent_runtime as lib  # noqa: E402  (no side effects on import)
-import dispatch_store as dispatch  # noqa: E402
-import hc_tools  # noqa: E402
+from agent_runtime import agent_runtime as lib  # noqa: E402  (no side effects on import)
+from agent_runtime import dispatch_store as dispatch  # noqa: E402
+from agent_runtime import hc_tools  # noqa: E402
 
 BUSY_MS = 200
 
@@ -66,8 +66,13 @@ def store_path(env=None):
 def open_readonly(env=None):
     """A read-only connection (never creates or changes a file); raises sqlite3.Error when unavailable."""
     path = store_path(env)
-    db = sqlite3.connect("file:%s?mode=ro" % path.as_posix().replace("%", "%25").replace("?", "%3f").replace("#", "%23"),
-                         uri=True, timeout=BUSY_MS / 1000, isolation_level=None)
+    db = sqlite3.connect(
+        "file:%s?mode=ro"
+        % path.as_posix().replace("%", "%25").replace("?", "%3f").replace("#", "%23"),
+        uri=True,
+        timeout=BUSY_MS / 1000,
+        isolation_level=None,
+    )
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA busy_timeout=%d" % BUSY_MS)
     return db
@@ -76,8 +81,10 @@ def open_readonly(env=None):
 def led_team(db, who):
     """The team id when (scope, lead, generation) is exactly the latest team for (scope, lead), else None."""
     scope, lead, generation = who
-    row = db.execute("SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
-                     (scope, lead)).fetchone()
+    row = db.execute(
+        "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
+        (scope, lead),
+    ).fetchone()
     return row["id"] if row and row["generation"] == generation else None
 
 
@@ -86,34 +93,53 @@ def undelivered(db, team, lead):
     return db.execute(
         "SELECT COUNT(*) FROM messages m WHERE m.team=? AND m.recipient=? AND m.acked=0 AND NOT EXISTS "
         "(SELECT 1 FROM receipts r, json_each(r.ids) j WHERE r.team=m.team AND r.recipient=m.recipient "
-        "AND j.value=m.id)", (team, lead)).fetchone()[0]
+        "AND j.value=m.id)",
+        (team, lead),
+    ).fetchone()[0]
 
 
 def working(db, team):
     """Current assignments of active workers that are pending or working, except those whose stall was
     already reported with no progress since (the lead was told; it must not be nagged about them)."""
-    query = ("SELECT COUNT(*) FROM assignments a JOIN workers w ON w.id=a.worker %s "
-             "WHERE a.team=? AND a.current=1 AND w.active=1 AND a.state IN ('pending','working')%s")
-    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'").fetchone():
-        return db.execute(query % ("LEFT JOIN stall_progress sp ON sp.assignment=a.id",
-                                   " AND NOT (sp.stall_reported_for IS NOT NULL AND sp.stall_reported_for=sp.last_progress_ms)"),
-                          (team,)).fetchone()[0]
+    query = (
+        "SELECT COUNT(*) FROM assignments a JOIN workers w ON w.id=a.worker %s "
+        "WHERE a.team=? AND a.current=1 AND w.active=1 AND a.state IN ('pending','working')%s"
+    )
+    if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'"
+    ).fetchone():
+        return db.execute(
+            query
+            % (
+                "LEFT JOIN stall_progress sp ON sp.assignment=a.id",
+                " AND NOT (sp.stall_reported_for IS NOT NULL AND sp.stall_reported_for=sp.last_progress_ms)",
+            ),
+            (team,),
+        ).fetchone()[0]
     return db.execute(query % ("", ""), (team,)).fetchone()[0]
 
 
 def unfinished(db, team):
     """Same count as Store.unfinished_count (wait(all)'s snapshot), read-only."""
-    return db.execute("SELECT COUNT(*) FROM assignments WHERE state!='complete' AND id IN "
-                      "(SELECT assignment_id FROM (%s))" % dispatch.SNAPSHOT_SQL,
-                      (team, "all", "all", "all", "all", "all", "all")).fetchone()[0]
+    return db.execute(
+        "SELECT COUNT(*) FROM assignments WHERE state!='complete' AND id IN "
+        "(SELECT assignment_id FROM (%s))" % dispatch.SNAPSHOT_SQL,
+        (team, "all", "all", "all", "all", "all", "all"),
+    ).fetchone()[0]
 
 
 def needs(db, team, lead):
     """dict(undelivered, working, unfinished, seen, attention) for one team."""
     last = dispatch.last_wait_state(db, team)
     seen = bool(last and last[0] != "timeout" and last[2] == last[3])
-    return {"undelivered": undelivered(db, team, lead), "working": working(db, team),
-            "unfinished": unfinished(db, team), "seen": seen, "attention": last[1] if seen else 0}
+    attention = last[1] if (last is not None and seen) else 0
+    return {
+        "undelivered": undelivered(db, team, lead),
+        "working": working(db, team),
+        "unfinished": unfinished(db, team),
+        "seen": seen,
+        "attention": attention,
+    }
 
 
 def lead_check(env=None, who=None):
@@ -150,7 +176,12 @@ def state_root(env=None):
 
 def budget_file(env, who):
     key = "\0".join([str(state_root(env)), *who])
-    return state_root(env) / "agent-runtime" / "stop-guard" / hashlib.sha256(key.encode()).hexdigest()[:32]
+    return (
+        state_root(env)
+        / "agent-runtime"
+        / "stop-guard"
+        / hashlib.sha256(key.encode()).hexdigest()[:32]
+    )
 
 
 def update_budget(env, who, change, create=True):
@@ -203,7 +234,7 @@ def prune_budgets(env, now=None):
 
 def reset_budget(env, who):
     prune_budgets(env)
-    update_budget(env, who, lambda n: BUDGET, create=False)  # never creates state for non-leads
+    update_budget(env, who, lambda _n: BUDGET, create=False)  # never creates state for non-leads
 
 
 TERMINAL_STATUSES = ("completed", "failed", "killed", "stopped", "cancelled")
@@ -218,10 +249,18 @@ def running_wait_task(payload):
     if not isinstance(tasks, list):
         return False
     for task in tasks:
-        if not isinstance(task, dict) or task.get("type") != "MCP task" or task.get("status") in TERMINAL_STATUSES:
+        if (
+            not isinstance(task, dict)
+            or task.get("type") != "MCP task"
+            or task.get("status") in TERMINAL_STATUSES
+        ):
             continue
         server, tool = task.get("server"), task.get("tool")
-        if isinstance(server, str) and isinstance(tool, str) and server.rsplit(":", 1)[-1] == "agent-runtime" \
-                and tool.rsplit("__", 1)[-1] == "wait":
+        if (
+            isinstance(server, str)
+            and isinstance(tool, str)
+            and server.rsplit(":", 1)[-1] == "agent-runtime"
+            and tool.rsplit("__", 1)[-1] == "wait"
+        ):
             return True
     return False

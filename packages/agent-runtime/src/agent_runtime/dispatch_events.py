@@ -1,4 +1,5 @@
 """Private per-wait Unix datagram listeners; messages are wake hints only."""
+
 import errno
 import hashlib
 import os
@@ -10,7 +11,9 @@ from pathlib import Path
 
 def endpoints(directory, create=False):
     # macOS Unix paths are short; a private hashed root avoids long HOME/TMPDIR paths.
-    root = Path("/tmp" if Path("/tmp").is_dir() else tempfile.gettempdir()) / ("agent-runtime-%s" % os.getuid())
+    root = Path("/tmp" if Path("/tmp").is_dir() else tempfile.gettempdir()) / (
+        "agent-runtime-%s" % os.getuid()
+    )
     digest = hashlib.sha256(str(Path(directory).resolve()).encode()).hexdigest()[:20]
     target = root / digest
     for path in (root, target):
@@ -61,6 +64,7 @@ class Listener:
 
     def wait(self, seconds):
         import select
+
         if select.select([self.socket], [], [], seconds)[0]:
             try:
                 for _ in range(64):  # A hint flood cannot postpone cancellation indefinitely.

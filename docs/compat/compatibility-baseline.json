@@ -87,8 +87,8 @@
   },
   "runtime_dependencies": [],
   "sqlite_imports": [
-    "server/dispatch_store.py",
-    "server/hc_tools.py"
+    "packages/agent-runtime/src/agent_runtime/dispatch_store.py",
+    "packages/agent-runtime/src/agent_runtime/hc_tools.py"
   ],
   "pr_pins": {
     "39": "90fee0253e1088146ce1e14ac672553bdadc1971",
@@ -137,5 +137,15 @@
     "tests/test_live_acceptance.py": [
       "test_externally_killed_worker_stops_cleanly"
     ]
+  },
+  "runtime_package": {
+    "member": "packages/agent-runtime",
+    "sources": "packages/agent-runtime/src/agent_runtime",
+    "entrypoints": {
+      "agent-runtime": "server/agent_runtime.py",
+      "agent-runtime-mcp": "server/mcp_server.py",
+      "agent-runtime-profile": "server/profiles.py"
+    },
+    "note": "The runtime moved into the member; the files in `server/` are the entry points it keeps."
   }
 }

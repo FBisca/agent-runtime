@@ -2,16 +2,12 @@
 import json
 from pathlib import Path
 
+import pytest
 import test_event_wait as event_helpers
-from dispatch_store import MAX_RESPONSE_BYTES
+from agent_runtime import dispatch_wait, hc_tools
+from agent_runtime.dispatch_store import MAX_BASE_BYTES, MAX_RESPONSE_BYTES, Store, StoreError
 from test_mcp_server import TOOLS
 from test_tools import ToolCase
-
-import dispatch_wait
-import hc_tools
-from dispatch_store import MAX_BASE_BYTES, Store, StoreError
-
-import pytest
 
 pytestmark = pytest.mark.integration
 
@@ -79,7 +75,7 @@ class BudgetTests(ToolCase):
         self.assertGreater(pages, 1)
 
     def store_receipt(self, receipt):
-        from dispatch_store import Store
+        from agent_runtime.dispatch_store import Store
         with Store(self.env).transaction() as db:
             return json.loads(db.execute("SELECT ids FROM receipts WHERE id=?", (receipt,)).fetchone()[0])
 
