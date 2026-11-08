@@ -121,14 +121,23 @@ class EventWaitTests(ToolCase):
             rpc.get(request_id, timeout=0.03)
 
     def begin(self, rpc=None, target="all", timeout=5):
+        """Start a wait and return its request id once the wait is inside its listener.
+
+        The barrier is the wait's own listener socket: the wait registers it after the membership
+        snapshot, so the socket's presence means the wait is watching, whatever the host's speed.
+        The wait is only inside its listener once a socket name that was not there before shows
+        up, so a socket that goes away never satisfies the barrier.
+        The budget is the wait's own timeout: a wait that never listens answers "timeout" instead,
+        which the guard below reports as a wait that returned before entering its listener.
+        """
         rpc = rpc or self.rpc
-        before = len(self.runs("ls"))
+        directory = endpoints(Store(self.env).directory)
+        listening = {path.name for path in directory.glob("*.sock")}
         request_id = rpc.tool("wait", {"target": target, "timeout": timeout})
-        deadline = time.monotonic() + 2
-        # Reconciliation starts only after membership snapshot and listener registration.
-        while len(self.runs("ls")) == before:
+        deadline = time.monotonic() + timeout + 1
+        while not ({path.name for path in directory.glob("*.sock")} - listening):
             self.assertNotIn(request_id, rpc.counts, "wait returned before entering its listener")
-            self.assertLess(time.monotonic(), deadline, "wait never reconciled")
+            self.assertLess(time.monotonic(), deadline, "wait never entered its listener")
             threading.Event().wait(0.005)
         self.pending(rpc, request_id)
         return request_id
