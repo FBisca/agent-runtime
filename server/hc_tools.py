@@ -209,7 +209,8 @@ def dispatch_identity(env, ctx=None):
                                 "one host, so the lead identity is ambiguous")
             raise ToolError("cannot establish a Pi lead session: no Pi process runs above this "
                             "server; start the MCP server from Pi")
-        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_SESSION_ID")
+        # The Claude variable that is actually set is CLAUDE_CODE_SESSION_ID.
+        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_CODE_SESSION_ID")
     if not generation:
         raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
     return scope, generation
@@ -439,8 +440,9 @@ def spawn(arguments, env, ctx):
         suffix = " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
         suffix += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         program[-1] += suffix
-    # The base commit is read before the spawn: a worker that commits right away must not empty the diff.
+    # Capture the checkout and time before startup can create a log or change the commit.
     base = usage.base_commit(cwd, env) if store else None
+    spawned_ms = usage.now_ms() if store else None
 
     def record():
         """The worker's own record: the assignment it belongs to and the profile it ran under."""
@@ -448,7 +450,7 @@ def spawn(arguments, env, ctx):
             return
         usage.write_worker_metadata(env, name,
                                     assignment_id=identity["assignment_id"], cli=cli, cwd=cwd,
-                                    base_commit=base, spawned_ms=usage.now_ms(),
+                                    base_commit=base, spawned_ms=spawned_ms,
                                     profile_applied=None if codex_profile is None else bool(codex_profile.applied),
                                     profile_reason=codex_profile.reason if codex_profile else None,
                                     profile_name=codex_profile.name if codex_profile else None,
