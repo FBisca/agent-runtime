@@ -1,0 +1,106 @@
+{
+  "recorded": "2026-11-07",
+  "plan": "docs/plans/2026-11-07-uv-workspace-python-standards.plan.md",
+  "note": "The compatibility baseline of the pre-workspace tree. A packaging move must not change anything recorded here without changing this file and the contract tests together.",
+  "entrypoints": {
+    "agent-runtime": {
+      "path": "bin/agent-runtime",
+      "python": "server/agent_runtime.py"
+    },
+    "agent-runtime-mcp": {
+      "path": "bin/agent-runtime-mcp",
+      "python": "server/mcp_server.py"
+    },
+    "agent-runtime-hook": {
+      "path": "bin/agent-runtime-hook",
+      "python": "hooks/pre_tool_use.py"
+    },
+    "agent-runtime-profile": {
+      "path": "bin/agent-runtime-profile",
+      "python": "server/profiles.py"
+    }
+  },
+  "hook_scripts": [
+    "hooks/pre_tool_use.py",
+    "hooks/stop_guard.py",
+    "hooks/lead_context.py",
+    "hooks/subagent_start.py"
+  ],
+  "cli_subcommands": [
+    "resolve",
+    "status",
+    "list",
+    "call"
+  ],
+  "mcp_tools": [
+    "spawn",
+    "message",
+    "resume",
+    "wait",
+    "status",
+    "list",
+    "collect",
+    "stop",
+    "report",
+    "task"
+  ],
+  "orchestration_verbs": {
+    "dispatch": "spawn",
+    "resume": "resume",
+    "collect": "collect",
+    "cancel": "stop",
+    "message": "message",
+    "wait": "wait",
+    "status": "status",
+    "list": "list",
+    "report": "report",
+    "task": "task"
+  },
+  "store": {
+    "path": "~/.local/state/agent-runtime/dispatch.sqlite3",
+    "schema_version": 2,
+    "tables": [
+      "teams",
+      "workers",
+      "assignments",
+      "messages",
+      "receipts",
+      "callers",
+      "dispatch_turns",
+      "last_wait",
+      "stall_progress",
+      "tasks"
+    ]
+  },
+  "runtime_dependencies": [],
+  "sqlite_imports": [
+    "server/dispatch_store.py",
+    "server/hc_tools.py"
+  ],
+  "pr_pins": {
+    "39": "2525170d0982f726353b8961e9646d66aa6f1c7f",
+    "45": "cfe12eb6eb2b4e93bff2080d42c998c820d4f6f4"
+  },
+  "pr_titles": {
+    "39": "fix(runtime): stop vanished workers and persist observed failures (#39)",
+    "45": "test(runtime): live check that externally killed workers stop cleanly (#45)"
+  },
+  "regression_coverage": {
+    "tests/test_stop_failures.py": [
+      "test_stop_of_a_vanished_terminal_succeeds_and_later_waits_exclude_it",
+      "test_observed_exit_persists_one_failure_and_ack_clears_it"
+    ],
+    "tests/test_event_wait.py": [
+      "test_S1_wait_all_returns_the_first_undelivered_report"
+    ],
+    "tests/test_dispatch.py": [
+      "test_resume_then_immediate_wait_ignores_the_old_done_turn"
+    ],
+    "tests/test_usage.py": [
+      "test_metadata_records_cwd_base_commit_and_spawn_time"
+    ],
+    "tests/test_live_acceptance.py": [
+      "test_externally_killed_worker_stops_cleanly"
+    ]
+  }
+}
