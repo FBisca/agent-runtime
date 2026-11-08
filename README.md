@@ -120,7 +120,7 @@ required, and the lead needs an `hc` terminal to start workers from.
 ### Pi as a worker
 
 The `pi` family is a built-in worker backend, next to `claude` and `codex`. A spawn that names it
-launches `pi --print --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
+launches `pi --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
 runtime's own five levels (`low`, `medium`, `high`, `xhigh`, `max`) and Pi's extra levels (`off`,
 `minimal`) are never sent. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task
 (for example, `Role: implementer`) and the runtime states the report protocol there too, naming Pi's own tool
@@ -140,7 +140,7 @@ The local configuration, as it stands on this machine:
 | What | Where | Value |
 |---|---|---|
 | The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct` |
-| The host policy | `~/.config/agent-runtime/hosts.json` | the `pi` host: `mutations` on, `backends` `["pi", "minimax", "codex", "claude"]`, `paths` covering the checkouts under the developer's home |
+| The host policy | `~/.config/agent-runtime/hosts.json` | the `pi` host: `mutations` on, `backends` `["pi", "claude-minimax", "codex", "claude"]`, `paths` covering the checkouts under the developer's home |
 
 The `pi` backend in `backends` is what lets a Pi lead start a Pi worker; without it the spawn is
 refused with the policy's reason.

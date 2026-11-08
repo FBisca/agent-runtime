@@ -416,8 +416,8 @@ def spawn(arguments, env, ctx):
     if cli == "claude":
         program = ["claude"] + (["--agent", agent] if agent else []) + launch_args + model + [message]
     elif cli == "pi":
-        # Pi runs non-interactively and takes the task as its only argument; the model names its provider.
-        program = ["pi", "--print"] + model + [message]
+        # Interactive Pi stays available for follow-up assignments.
+        program = ["pi"] + model + [message]
     else:
         # The worker profile names the policy Codex actually runs; without it the worker runs the
         # CLI's defaults, so the profile is only passed when it is usable.
