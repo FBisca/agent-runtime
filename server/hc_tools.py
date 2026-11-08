@@ -278,7 +278,7 @@ def spawn_agent(arguments, cli):
     """The role the worker runs under: a name, or None for no role at all."""
     agent = arguments.get("agent")
     if agent is None:
-        return "implementer"
+        return None if cli == "codex" else "implementer"
     pattern = AGENT_CLAUDE if cli == "claude" else AGENT_CODEX
     if not isinstance(agent, str):
         raise ToolError("agent must match %s" % pattern.pattern)

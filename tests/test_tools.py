@@ -18,6 +18,7 @@ pytestmark = pytest.mark.integration
 
 
 sys.path.insert(0, str(SERVER.parent))
+import hc_tools
 
 FAKE = '''#!%(python)s
 import json, os, sys, time
@@ -211,15 +212,18 @@ class SpawnTests(ToolCase):
                 self.assertIn("--no-notify", argv)
                 self.assertLess(argv.index("--no-notify"), argv.index(program))
 
-    def test_S2_codex_worker_is_no_daemon_with_implementer_instructions(self):
-        """agent-runtime-tools/S2"""
+    def test_S1_codex_worker_defaults_to_no_role(self):
+        """codex-default-role/S1"""
+        (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex"))
         self.assertFalse(result["isError"], text)
         (argv,) = self.runs("run")
         program = unwrap(argv[10:])
         self.assertEqual(program[:2], ["codex", "--no-daemon"])
-        self.assertTrue(program[2].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertTrue(program[2].startswith("do x"))
+        self.assertNotIn("CODEX IMPLEMENTER RULES", program[2])
+        self.assertIn("Worker protocol:", program[2])
         self.assertIn("do x", program[2])
         self.assertIn("call the agent-runtime report tool", program[2])
         self.assertNotIn("permission-mode", " ".join(argv))
@@ -246,7 +250,7 @@ class SpawnTests(ToolCase):
         argv = self.spawn_argv(env={"CODEX_HOME": str(codex_home)}, cli="codex", model="gpt-5.5")
         self.assertEqual(argv[:4], ["codex", "--no-daemon", "--model", "gpt-5.5"])
         self.assertEqual(len(argv), 5)
-        self.assertTrue(argv[-1].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertTrue(argv[-1].startswith("do x"))
         self.assertNotIn("permission-mode", " ".join(argv))
 
     def test_no_model_keeps_argv(self):
@@ -300,13 +304,16 @@ class SpawnTests(ToolCase):
         self.assertTrue(argv[-1].startswith("REVIEWER RULES\n\ndo x"))
         self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
 
-    def test_no_agent_keeps_implementer(self):
+    def test_default_roles_and_explicit_codex_implementer(self):
         """agent-runtime/R138"""
         claude = self.spawn_argv(cli="claude")
         self.assertEqual(claude[:5], ["claude", "--agent", "implementer", "--permission-mode", "auto"])
         self.assertEqual(len(claude), 6)
         codex = self.spawn_argv(cli="codex")
-        self.assertTrue(codex[-1].startswith("CODEX IMPLEMENTER RULES"))
+        self.assertTrue(codex[-1].startswith("do x"))
+        self.assertEqual(codex, self.spawn_argv(cli="codex", agent="none"))
+        explicit = self.spawn_argv(cli="codex", agent="implementer")
+        self.assertTrue(explicit[-1].startswith("CODEX IMPLEMENTER RULES"))
         self.assertEqual(len(codex), 3)
 
     def test_invalid_agent_is_an_error(self):
@@ -458,7 +465,7 @@ class ProfileTests(ToolCase):
     ARGS = {"kind": "worker", "name": "w1", "task": "profile task", "cwd": "/tmp"}
     PROMPT = "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
     BUILTIN_PROGRAMS = {"claude": ["claude", "--agent", "implementer", "--permission-mode", "auto", PROMPT],
-                        "codex": ["codex", "--no-daemon", "CODEX IMPLEMENTER RULES\n\n" + PROMPT]}
+                        "codex": ["codex", "--no-daemon", PROMPT + "\n\n" + hc_tools.WORKER_PROTOCOL]}
 
     def config(self, profiles):
         path = self.dir / "home" / ".config" / "agent-runtime" / "profiles.json"
