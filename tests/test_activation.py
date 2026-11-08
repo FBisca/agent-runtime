@@ -8,11 +8,12 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
 REPO = PLUGIN
-sys.path.insert(0, str(PLUGIN / "server"))
-import hc_tools  # noqa: E402
-import mcp_server  # noqa: E402
-
+sys.path.insert(0, str(PLUGIN / "packages" / "agent-runtime" / "src"))
 import pytest
+from agent_runtime import (
+    hc_tools,  # noqa: E402
+    mcp_server,  # noqa: E402
+)
 
 pytestmark = pytest.mark.unit
 

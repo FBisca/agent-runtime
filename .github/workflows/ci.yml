@@ -25,14 +25,15 @@ jobs:
       # Both workspace members must resolve from the committed lockfile, on every matrix entry.
       - name: resolve the workspace
         run: uv sync --frozen --all-packages --dry-run
-      - run: uv sync --frozen
+      # Both members: the runtime's console scripts and the orchestrator's contracts are installed.
+      - run: uv sync --frozen --all-packages
       # The whole suite, in parallel: the fast suite (`uv run pytest`) is the unit tests alone.
       - run: uv run pytest -n 4
       # The legacy tree is not lint-clean yet. The gate tracks the debt instead of hiding it:
       # a diagnostic above the budget fails the build, a diagnostic below it does not.
       - name: ruff check (legacy budget)
         env:
-          RUFF_CHECK_BUDGET: "60"
+          RUFF_CHECK_BUDGET: "45"
         run: |
           uv run ruff check . --output-format concise > "$RUNNER_TEMP/ruff-check.txt" || true
           found=$(grep -cE '^[^ ]+:[0-9]+:[0-9]+: ' "$RUNNER_TEMP/ruff-check.txt" || true)
@@ -44,7 +45,7 @@ jobs:
           fi
       - name: ruff format (legacy budget)
         env:
-          RUFF_FORMAT_BUDGET: "38"
+          RUFF_FORMAT_BUDGET: "31"
         run: |
           uv run ruff format --check . > "$RUNNER_TEMP/ruff-format.txt" || true
           found=$(grep -oE '^[0-9]+ files would be reformatted' "$RUNNER_TEMP/ruff-format.txt" | grep -oE '^[0-9]+' || echo 0)
@@ -57,7 +58,7 @@ jobs:
       # The new modules are clean by contract; the legacy diagnostics only have to stay under budget.
       - name: ty (new modules clean, legacy budget)
         env:
-          TY_BUDGET: "336"
+          TY_BUDGET: "285"
         run: |
           uv run ty check packages/ tests/test_workspace_isolation.py
           uv run ty check --output-format concise . > "$RUNNER_TEMP/ty.txt" || true
@@ -76,7 +77,7 @@ jobs:
           uv venv "$RUNNER_TEMP/runtime-only"
           uv pip install --python "$RUNNER_TEMP/runtime-only/bin/python" --no-deps \
             "$RUNNER_TEMP"/dist/agent_runtime-*.whl
-          "$RUNNER_TEMP/runtime-only/bin/python" -c "import agent_runtime, mcp_server"
+          "$RUNNER_TEMP/runtime-only/bin/python" -c "import agent_runtime.agent_runtime, agent_runtime.mcp_server"
           if "$RUNNER_TEMP/runtime-only/bin/python" -c "import pydantic"; then
             echo "::error::pydantic leaked into the runtime environment"
             exit 1

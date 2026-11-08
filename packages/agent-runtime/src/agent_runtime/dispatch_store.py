@@ -7,6 +7,7 @@ fails explicitly; reads never truncate or acknowledge implicitly. A receipt name
 exactly the returned IDs; passing it on the next read acknowledges that page.
 Connections/transactions are per operation, allowing separate MCP processes.
 """
+
 import hashlib
 import json
 import os
@@ -17,8 +18,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-import dispatch_events
-from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
+from . import dispatch_events
+from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
 
 MAX_WORKERS = MAX_MESSAGES = 32
 MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
@@ -26,12 +27,16 @@ MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
 # structuredContent copies) stays under MAX_RESPONSE_BYTES. A base payload (tool result before an
 # inbox piggyback) stays under MAX_BASE_BYTES, so a legal 64 KiB report always fits beside it.
 MAX_RESPONSE_BYTES, MAX_BASE_BYTES, MAX_PAGE_BYTES = 196608, 98304, 65536
-STALL_NEXT = ("no progress for 15 minutes: collect it, message it, ask the user, or stop it; "
-              "the runtime never stops it or marks it complete")
+STALL_NEXT = (
+    "no progress for 15 minutes: collect it, message it, ask the user, or stop it; "
+    "the runtime never stops it or marks it complete"
+)
 STALL_MS = 15 * 60 * 1000
 RESUME_GRACE_MS = 60 * 1000
-NOT_STARTED_NEXT = ("resume has not started: collect the worker's screen or stop it if no longer needed; "
-                    "the runtime never resends the task")
+NOT_STARTED_NEXT = (
+    "resume has not started: collect the worker's screen or stop it if no longer needed; "
+    "the runtime never resends the task"
+)
 REPORT_KINDS = ("progress", "complete", "blocked", "decision")
 
 
@@ -73,7 +78,9 @@ ACTOR_SQL = (
     "OR (a.id=? AND a.state='pending' AND w.name=?)) ORDER BY a.rowid DESC LIMIT 1"
 )
 READ_PINNED_CLAUSE = " AND (assignment IN ({ids}) OR assignment IS NULL)"
-TASK_REPORT_SQL = "UPDATE tasks SET status=? WHERE assignment=? AND status IN ('in_progress','blocked')"
+TASK_REPORT_SQL = (
+    "UPDATE tasks SET status=? WHERE assignment=? AND status IN ('in_progress','blocked')"
+)
 TASKS_DONE_SQL = "SELECT id FROM tasks WHERE team=? AND status='complete'"
 TASKS_LIST_SQL = "SELECT rowid AS cursor,* FROM tasks WHERE team=? AND rowid>? ORDER BY rowid"
 TASKS_DEPS_SQL = "SELECT id,deps FROM tasks WHERE team=?"
@@ -100,16 +107,24 @@ def wait_fingerprint(db, team):
     """
     # "Stall reported and unchanged" (R128) is part of the digest so a worker's recovery reads as new work;
     # raw progress times and turns stay out, or every turn would flip "seen". Older stores lack stall_progress.
-    has_stall = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'").fetchone()
+    has_stall = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'"
+    ).fetchone()
     rows = db.execute(
         "SELECT a.id,a.state,a.current,d.turn,d.mode,"
         "(SELECT MAX(seq) FROM messages WHERE team=?1 "
         "AND recipient=(SELECT lead FROM teams WHERE id=?1)),"
-        + ("COALESCE(sp.stall_reported_for IS NOT NULL AND sp.stall_reported_for=sp.last_progress_ms,0)" if has_stall else "0")
+        + (
+            "COALESCE(sp.stall_reported_for IS NOT NULL AND sp.stall_reported_for=sp.last_progress_ms,0)"
+            if has_stall
+            else "0"
+        )
         + " FROM teams t LEFT JOIN assignments a ON a.team=t.id "
         "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
         + ("LEFT JOIN stall_progress sp ON sp.assignment=a.id " if has_stall else "")
-        + "WHERE t.id=?1 ORDER BY a.id", (team,))
+        + "WHERE t.id=?1 ORDER BY a.id",
+        (team,),
+    )
     payload = json.dumps([tuple(row) for row in rows], separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -124,9 +139,13 @@ def last_wait_state(db, team):
     if own_transaction:
         db.execute("BEGIN")
     try:
-        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='last_wait'").fetchone():
+        if not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='last_wait'"
+        ).fetchone():
             return None
-        row = db.execute("SELECT reason,attention,fingerprint FROM last_wait WHERE team=?", (team,)).fetchone()
+        row = db.execute(
+            "SELECT reason,attention,fingerprint FROM last_wait WHERE team=?", (team,)
+        ).fetchone()
         return (*row, wait_fingerprint(db, team)) if row else None
     finally:
         if own_transaction:
@@ -136,7 +155,9 @@ def last_wait_state(db, team):
 class Store:
     def __init__(self, env, clock=time.time):
         self.clock = clock
-        root = Path(env.get("XDG_STATE_HOME") or Path(env.get("HOME") or Path.home()) / ".local/state")
+        root = Path(
+            env.get("XDG_STATE_HOME") or Path(env.get("HOME") or Path.home()) / ".local/state"
+        )
         self.directory = root / "agent-runtime"
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.directory.is_symlink() or self.directory.stat().st_uid != os.getuid():
@@ -196,78 +217,128 @@ class Store:
 
     def team(self, scope, lead, generation):
         with self.transaction() as db:
-            db.execute("INSERT OR IGNORE INTO teams VALUES (?,?,?,?)", (uid(), scope, lead, generation))
-            return db.execute("SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
-                              (scope, lead, generation)).fetchone()[0]
+            db.execute(
+                "INSERT OR IGNORE INTO teams VALUES (?,?,?,?)", (uid(), scope, lead, generation)
+            )
+            return db.execute(
+                "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
+                (scope, lead, generation),
+            ).fetchone()[0]
 
     def _link_task(self, db, team, worker, assignment, task_id, transfer):
         """D8/D11: link a ready task to the new assignment inside the registration transaction."""
         if not isinstance(task_id, str) or not task_id:
             raise StoreError("task_id must be a task ID")
-        row = db.execute("SELECT status,owner,assignment,deps FROM tasks WHERE id=? AND team=?", (task_id, team)).fetchone()
+        row = db.execute(
+            "SELECT status,owner,assignment,deps FROM tasks WHERE id=? AND team=?", (task_id, team)
+        ).fetchone()
         if not row:
             raise StoreError("unknown task for this team")
         done = {r[0] for r in db.execute(TASKS_DONE_SQL, (team,))}
         if row["status"] == "pending":
             if any(d not in done for d in json.loads(row["deps"])):
                 raise StoreError("unsatisfied dependencies")
-        elif not (transfer and row["status"] in ("in_progress", "blocked") and row["owner"] == worker):
+        elif not (
+            transfer and row["status"] in ("in_progress", "blocked") and row["owner"] == worker
+        ):
             raise StoreError("task is not pending (status %s)" % row["status"])
-        changed = db.execute("UPDATE tasks SET status='in_progress',owner=?,assignment=? WHERE id=? AND status=?",
-                             (worker, assignment, task_id, row["status"])).rowcount
+        changed = db.execute(
+            "UPDATE tasks SET status='in_progress',owner=?,assignment=? WHERE id=? AND status=?",
+            (worker, assignment, task_id, row["status"]),
+        ).rowcount
         if not changed:  # lost a concurrent claim
             raise StoreError("task was claimed concurrently")
-        return {"task_id": task_id, "status": row["status"], "owner": row["owner"], "assignment": row["assignment"]}
+        return {
+            "task_id": task_id,
+            "status": row["status"],
+            "owner": row["owner"],
+            "assignment": row["assignment"],
+        }
 
     def register(self, team, name, task_id=None, transfer=False):
         with self.transaction() as db:
-            row = db.execute("SELECT id FROM workers WHERE team=? AND name=?", (team, name)).fetchone()
+            row = db.execute(
+                "SELECT id FROM workers WHERE team=? AND name=?", (team, name)
+            ).fetchone()
             worker = row[0] if row else uid()
             if not row:
-                count = db.execute("SELECT COUNT(*) FROM workers WHERE team=?", (team,)).fetchone()[0]
+                count = db.execute("SELECT COUNT(*) FROM workers WHERE team=?", (team,)).fetchone()[
+                    0
+                ]
                 if count >= MAX_WORKERS:
                     raise StoreError("team limit is 32 registered workers")
                 db.execute("INSERT INTO workers VALUES (?,?,?,NULL,1)", (worker, team, name))
             assignment = uid()
-            db.execute("INSERT INTO assignments VALUES (?,?,?,'pending',0)", (assignment, team, worker))
+            db.execute(
+                "INSERT INTO assignments VALUES (?,?,?,'pending',0)", (assignment, team, worker)
+            )
             identity = {"team_id": team, "worker_id": worker, "assignment_id": assignment}
             if task_id is not None:
-                identity["_prior"] = self._link_task(db, team, worker, assignment, task_id, transfer)
+                identity["_prior"] = self._link_task(
+                    db, team, worker, assignment, task_id, transfer
+                )
                 identity["task_id"] = task_id
             return identity
 
     def _bind(self, db, assignment, address, scope, turn=None, mode="fresh"):
-        row = db.execute("SELECT a.worker,a.state,a.rowid AS sequence,t.rowid AS generation,t.scope,t.lead "
-                         "FROM assignments a JOIN teams t ON t.id=a.team WHERE a.id=?", (assignment,)).fetchone()
+        row = db.execute(
+            "SELECT a.worker,a.state,a.rowid AS sequence,t.rowid AS generation,t.scope,t.lead "
+            "FROM assignments a JOIN teams t ON t.id=a.team WHERE a.id=?",
+            (assignment,),
+        ).fetchone()
         if not row or row["scope"] != scope:
             raise StoreError("assignment does not belong to this scope")
         if row["state"] != "pending":
             return  # A fast report may already have bound/completed this assignment.
-        resume = db.execute("SELECT turn,mode FROM resume_marks WHERE assignment=?", (assignment,)).fetchone()
+        resume = db.execute(
+            "SELECT turn,mode FROM resume_marks WHERE assignment=?", (assignment,)
+        ).fetchone()
         if resume:
             # A report can bind before send returns; retain the pre-resume turn in that path too.
             turn, mode = resume
         # Tables are append-only: registration order and lead-generation order are
         # durable authority, even when a pending launch never finished binding.
-        newer_assignment = db.execute(BIND_NEWER_ASSIGNMENT_SQL, (row["worker"], row["sequence"])).fetchone()
-        newer_generation = db.execute("SELECT 1 FROM teams WHERE scope=? AND lead=? AND rowid>? LIMIT 1",
-                                      (scope, row["lead"], row["generation"])).fetchone()
-        newer_address = db.execute(BIND_NEWER_ADDRESS_SQL, (address, scope, row["sequence"])).fetchone()
+        newer_assignment = db.execute(
+            BIND_NEWER_ASSIGNMENT_SQL, (row["worker"], row["sequence"])
+        ).fetchone()
+        newer_generation = db.execute(
+            "SELECT 1 FROM teams WHERE scope=? AND lead=? AND rowid>? LIMIT 1",
+            (scope, row["lead"], row["generation"]),
+        ).fetchone()
+        newer_address = db.execute(
+            BIND_NEWER_ADDRESS_SQL, (address, scope, row["sequence"])
+        ).fetchone()
         if newer_assignment or newer_generation or newer_address:
             raise StoreError("assignment is stale; newer registration or generation owns binding")
         db.execute("UPDATE assignments SET current=0 WHERE worker=?", (row["worker"],))
         # A reused address means the previous terminal is gone: surface its unfinished work once, to its lead.
         for gone in db.execute(BIND_GONE_SQL, (address, row["worker"], scope)).fetchall():
-            envelope = {"message_id": uid(), "team_id": gone["team"], "worker_id": gone["worker"],
-                        "assignment_id": gone["id"], "sender": gone["worker"], "recipient": gone["lead"],
-                        "kind": "failed", "text": "worker terminal was replaced before completion"}
+            envelope = {
+                "message_id": uid(),
+                "team_id": gone["team"],
+                "worker_id": gone["worker"],
+                "assignment_id": gone["id"],
+                "sender": gone["worker"],
+                "recipient": gone["lead"],
+                "kind": "failed",
+                "text": "worker terminal was replaced before completion",
+            }
             db.execute("UPDATE assignments SET state='failed' WHERE id=?", (gone["id"],))
             self._release(db, gone["id"])
-            db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
-                       (envelope["message_id"], gone["team"], gone["lead"], gone["id"],
-                        json.dumps(envelope, separators=(",", ":"))))
-        db.execute("UPDATE workers SET active=0 WHERE address=? AND team IN (SELECT id FROM teams WHERE scope=?)",
-                   (address, scope))
+            db.execute(
+                "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                (
+                    envelope["message_id"],
+                    gone["team"],
+                    gone["lead"],
+                    gone["id"],
+                    json.dumps(envelope, separators=(",", ":")),
+                ),
+            )
+        db.execute(
+            "UPDATE workers SET active=0 WHERE address=? AND team IN (SELECT id FROM teams WHERE scope=?)",
+            (address, scope),
+        )
         db.execute("UPDATE workers SET address=?,active=1 WHERE id=?", (address, row["worker"]))
         db.execute("UPDATE assignments SET state='working',current=1 WHERE id=?", (assignment,))
         db.execute("INSERT OR REPLACE INTO dispatch_turns VALUES (?,?,?)", (assignment, turn, mode))
@@ -282,18 +353,23 @@ class Store:
     def mark_resume(self, assignment, turn, mode):
         """Record dispatch before sending, including when a report races the send response."""
         with self.transaction() as db:
-            db.execute("INSERT INTO resume_marks VALUES (?,?,?,?)",
-                       (assignment, self.now_ms(), turn, mode))
+            db.execute(
+                "INSERT INTO resume_marks VALUES (?,?,?,?)", (assignment, self.now_ms(), turn, mode)
+            )
 
     @staticmethod
     def _release(db, assignment):
         """D9/D12: a dead assignment never keeps an unfinished task."""
-        db.execute("UPDATE tasks SET status='pending',owner=NULL,assignment=NULL WHERE assignment=? AND status!='complete'",
-                   (assignment,))
+        db.execute(
+            "UPDATE tasks SET status='pending',owner=NULL,assignment=NULL WHERE assignment=? AND status!='complete'",
+            (assignment,),
+        )
 
     def worker_address(self, team, name):
         with self.transaction() as db:
-            row = db.execute("SELECT address FROM workers WHERE team=? AND name=?", (team, name)).fetchone()
+            row = db.execute(
+                "SELECT address FROM workers WHERE team=? AND name=?", (team, name)
+            ).fetchone()
             return row[0] if row else None
 
     def started_by_other(self, assignment, address):
@@ -301,10 +377,13 @@ class Store:
 
         Every bind makes the binding assignment current, so a fast report of ours (current) is never "other"."""
         with self.transaction() as db:
-            return bool(db.execute(
-                "SELECT 1 FROM assignments o JOIN workers w ON w.id=o.worker WHERE w.address=? AND o.current=1 "
-                "AND o.state!='failed' AND o.id!=? AND o.worker=(SELECT worker FROM assignments WHERE id=?)",
-                (address, assignment, assignment)).fetchone())
+            return bool(
+                db.execute(
+                    "SELECT 1 FROM assignments o JOIN workers w ON w.id=o.worker WHERE w.address=? AND o.current=1 "
+                    "AND o.state!='failed' AND o.id!=? AND o.worker=(SELECT worker FROM assignments WHERE id=?)",
+                    (address, assignment, assignment),
+                ).fetchone()
+            )
 
     def assignment_state(self, assignment):
         with self.transaction() as db:
@@ -320,25 +399,44 @@ class Store:
         wrote = False
         with self.transaction() as db:
             for assignment, runtime in failures.items():
-                gone = db.execute("SELECT a.id,a.team,a.worker,a.current,t.lead FROM assignments a JOIN teams t ON t.id=a.team "
-                                  "WHERE a.id=? AND a.state NOT IN ('complete','failed')", (assignment,)).fetchone()
+                gone = db.execute(
+                    "SELECT a.id,a.team,a.worker,a.current,t.lead FROM assignments a JOIN teams t ON t.id=a.team "
+                    "WHERE a.id=? AND a.state NOT IN ('complete','failed')",
+                    (assignment,),
+                ).fetchone()
                 if not gone:
                     continue
                 wrote = True
                 db.execute("UPDATE assignments SET state='failed' WHERE id=?", (gone["id"],))
                 self._release(db, gone["id"])
-                for old in db.execute("SELECT id FROM assignments WHERE worker=? AND id!=? AND state NOT IN ('complete','failed')",
-                                      (gone["worker"], gone["id"])).fetchall():  # superseded by a resume
+                for old in db.execute(
+                    "SELECT id FROM assignments WHERE worker=? AND id!=? AND state NOT IN ('complete','failed')",
+                    (gone["worker"], gone["id"]),
+                ).fetchall():  # superseded by a resume
                     db.execute("UPDATE assignments SET state='failed' WHERE id=?", (old[0],))
                     self._release(db, old[0])
                 if not gone["current"]:
                     continue  # superseded by a resume: failed and released silently, one message per terminal exit
-                envelope = {"message_id": uid(), "team_id": gone["team"], "worker_id": gone["worker"],
-                            "assignment_id": gone["id"], "sender": gone["worker"], "recipient": gone["lead"],
-                            "kind": "failed", "text": "worker terminal %s before completion" % runtime}
-                db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
-                           (envelope["message_id"], gone["team"], gone["lead"], gone["id"],
-                            json.dumps(envelope, separators=(",", ":"))))
+                envelope = {
+                    "message_id": uid(),
+                    "team_id": gone["team"],
+                    "worker_id": gone["worker"],
+                    "assignment_id": gone["id"],
+                    "sender": gone["worker"],
+                    "recipient": gone["lead"],
+                    "kind": "failed",
+                    "text": "worker terminal %s before completion" % runtime,
+                }
+                db.execute(
+                    "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                    (
+                        envelope["message_id"],
+                        gone["team"],
+                        gone["lead"],
+                        gone["id"],
+                        json.dumps(envelope, separators=(",", ":")),
+                    ),
+                )
         if wrote:
             dispatch_events.notify(self.directory)
 
@@ -351,59 +449,134 @@ class Store:
         """
         wrote = False
         with self.transaction() as db:
-            states = "('pending','working','blocked','decision')" if inactive else "('pending','working')"
-            prior = db.execute("SELECT a.state,a.team,a.worker,a.current,t.lead FROM assignments a JOIN teams t ON t.id=a.team "
-                               "WHERE a.id=?", (assignment,)).fetchone()
-            changed = db.execute("UPDATE assignments SET state='failed' WHERE id=? AND state IN " + states,
-                                 (assignment,)).rowcount
+            states = (
+                "('pending','working','blocked','decision')"
+                if inactive
+                else "('pending','working')"
+            )
+            prior = db.execute(
+                "SELECT a.state,a.team,a.worker,a.current,t.lead FROM assignments a JOIN teams t ON t.id=a.team "
+                "WHERE a.id=?",
+                (assignment,),
+            ).fetchone()
+            changed = db.execute(
+                "UPDATE assignments SET state='failed' WHERE id=? AND state IN " + states,
+                (assignment,),
+            ).rowcount
             if changed:
-                live = restore and restore["status"] != "pending" and restore["assignment"] and db.execute(
-                    "SELECT 1 FROM assignments WHERE id=? AND current=1 AND state NOT IN ('complete','failed')",
-                    (restore["assignment"],)).fetchone()
+                live = (
+                    restore
+                    and restore["status"] != "pending"
+                    and restore["assignment"]
+                    and db.execute(
+                        "SELECT 1 FROM assignments WHERE id=? AND current=1 AND state NOT IN ('complete','failed')",
+                        (restore["assignment"],),
+                    ).fetchone()
+                )
                 if live:
-                    db.execute("UPDATE tasks SET status=?,owner=?,assignment=? WHERE id=? AND assignment=?",
-                               (restore["status"], restore["owner"], restore["assignment"], restore["task_id"], assignment))
+                    db.execute(
+                        "UPDATE tasks SET status=?,owner=?,assignment=? WHERE id=? AND assignment=?",
+                        (
+                            restore["status"],
+                            restore["owner"],
+                            restore["assignment"],
+                            restore["task_id"],
+                            assignment,
+                        ),
+                    )
                 else:
                     self._release(db, assignment)
-                if inactive and prior["state"] != "pending":  # the lead already heard from this worker
+                if (
+                    inactive and prior["state"] != "pending"
+                ):  # the lead already heard from this worker
                     wrote = True
-                    envelope = {"message_id": uid(), "team_id": prior["team"], "worker_id": prior["worker"],
-                                "assignment_id": assignment, "sender": prior["worker"], "recipient": prior["lead"],
-                                "kind": "failed", "text": "worker terminal removed before completion"}
-                    db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
-                               (envelope["message_id"], prior["team"], prior["lead"], assignment,
-                                json.dumps(envelope, separators=(",", ":"))))
+                    envelope = {
+                        "message_id": uid(),
+                        "team_id": prior["team"],
+                        "worker_id": prior["worker"],
+                        "assignment_id": assignment,
+                        "sender": prior["worker"],
+                        "recipient": prior["lead"],
+                        "kind": "failed",
+                        "text": "worker terminal removed before completion",
+                    }
+                    db.execute(
+                        "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                        (
+                            envelope["message_id"],
+                            prior["team"],
+                            prior["lead"],
+                            assignment,
+                            json.dumps(envelope, separators=(",", ":")),
+                        ),
+                    )
             # A worker that never bound an address never started: it is not a teammate (D25).
-            db.execute("UPDATE workers SET active=0 WHERE (address IS NULL OR ?) AND id=(SELECT worker FROM assignments WHERE id=?)",
-                       (int(inactive), assignment))
+            db.execute(
+                "UPDATE workers SET active=0 WHERE (address IS NULL OR ?) AND id=(SELECT worker FROM assignments WHERE id=?)",
+                (int(inactive), assignment),
+            )
         if wrote:
             dispatch_events.notify(self.directory)
 
-    def publish(self, scope, address, parent, assignment, text, kind, message_id=None, caller_name=None, ack=None, generation=None):
+    def publish(
+        self,
+        scope,
+        address,
+        parent,
+        assignment,
+        text,
+        kind,
+        message_id=None,
+        caller_name=None,
+        ack=None,
+        generation=None,
+    ):
         if kind not in REPORT_KINDS:
             raise StoreError("kind must be progress, complete, blocked or decision")
         if max(len(text.encode("utf-8")), len(json.dumps(text).encode("utf-8"))) > MAX_TEXT_BYTES:
             raise StoreError("report limit is 65536 bytes; split into progress reports")
-        if message_id is not None and (not isinstance(message_id, str) or not 1 <= len(message_id) <= 128):
+        if message_id is not None and (
+            not isinstance(message_id, str) or not 1 <= len(message_id) <= 128
+        ):
             raise StoreError("message_id must be 1-128 characters")
         message_id = message_id or uid()
         with self.transaction() as db:
             if ack:
                 self.acknowledge(db, *ack)
-            row = db.execute("SELECT a.*,w.address,w.name,w.active,t.scope,t.lead FROM assignments a "
-                             "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team WHERE a.id=?",
-                             (assignment,)).fetchone()
-            if row and row["state"] == "pending" and (row["scope"], row["lead"], row["name"]) == (scope, parent, caller_name):
+            row = db.execute(
+                "SELECT a.*,w.address,w.name,w.active,t.scope,t.lead FROM assignments a "
+                "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team WHERE a.id=?",
+                (assignment,),
+            ).fetchone()
+            if (
+                row
+                and row["state"] == "pending"
+                and (row["scope"], row["lead"], row["name"]) == (scope, parent, caller_name)
+            ):
                 self._bind(db, assignment, address, scope)
-                row = db.execute("SELECT a.*,w.address,w.active,t.scope,t.lead FROM assignments a "
-                                 "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team WHERE a.id=?",
-                                 (assignment,)).fetchone()
-            if not row or not row["current"] or not row["active"] or row["state"] in ("pending", "failed") or (
-                    row["scope"], row["address"], row["lead"]) != (scope, address, parent):
+                row = db.execute(
+                    "SELECT a.*,w.address,w.active,t.scope,t.lead FROM assignments a "
+                    "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team WHERE a.id=?",
+                    (assignment,),
+                ).fetchone()
+            if (
+                not row
+                or not row["current"]
+                or not row["active"]
+                or row["state"] in ("pending", "failed")
+                or (row["scope"], row["address"], row["lead"]) != (scope, address, parent)
+            ):
                 raise StoreError("assignment is stale or does not belong to this caller")
-            envelope = {"message_id": message_id, "team_id": row["team"], "worker_id": row["worker"],
-                        "assignment_id": assignment, "sender": row["worker"], "recipient": row["lead"],
-                        "kind": kind, "text": text}
+            envelope = {
+                "message_id": message_id,
+                "team_id": row["team"],
+                "worker_id": row["worker"],
+                "assignment_id": assignment,
+                "sender": row["worker"],
+                "recipient": row["lead"],
+                "kind": kind,
+                "text": text,
+            }
             body = json.dumps(envelope, separators=(",", ":"))
             previous = db.execute("SELECT body FROM messages WHERE id=?", (message_id,)).fetchone()
             if generation:
@@ -414,15 +587,31 @@ class Store:
                 return envelope
             if row["state"] == "complete":
                 raise StoreError("assignment already complete")
-            db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
-                       (message_id, row["team"], row["lead"], assignment, body))
-            db.execute("UPDATE assignments SET state=? WHERE id=?",
-                       ({"complete": "complete", "blocked": "blocked", "decision": "decision"}.get(kind, "working"), assignment))
-            db.execute("INSERT INTO stall_progress(assignment,last_progress_ms) VALUES (?,?) ON CONFLICT(assignment) "
-                       "DO UPDATE SET last_progress_ms=excluded.last_progress_ms", (assignment, self.now_ms()))
-            if kind in ("complete", "blocked"):  # same transaction as the report; replays returned above
-                db.execute(TASK_REPORT_SQL,
-                           ("complete" if kind == "complete" else "blocked", assignment))
+            db.execute(
+                "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
+                (message_id, row["team"], row["lead"], assignment, body),
+            )
+            db.execute(
+                "UPDATE assignments SET state=? WHERE id=?",
+                (
+                    {"complete": "complete", "blocked": "blocked", "decision": "decision"}.get(
+                        kind, "working"
+                    ),
+                    assignment,
+                ),
+            )
+            db.execute(
+                "INSERT INTO stall_progress(assignment,last_progress_ms) VALUES (?,?) ON CONFLICT(assignment) "
+                "DO UPDATE SET last_progress_ms=excluded.last_progress_ms",
+                (assignment, self.now_ms()),
+            )
+            if kind in (
+                "complete",
+                "blocked",
+            ):  # same transaction as the report; replays returned above
+                db.execute(
+                    TASK_REPORT_SQL, ("complete" if kind == "complete" else "blocked", assignment)
+                )
         dispatch_events.notify(self.directory)
         return envelope
 
@@ -434,15 +623,20 @@ class Store:
 
         A plain read decides first, so polls that change nothing never take the write lock.
         """
-        turns = {k[0]: v for k, v in observations.items() if isinstance(k, tuple) and k[1] == "turn"}
+        turns = {
+            k[0]: v for k, v in observations.items() if isinstance(k, tuple) and k[1] == "turn"
+        }
         if not turns:
             return
+
         def pending(db):
             work = {}
             for assignment, turn in turns.items():
                 if not db.execute("SELECT 1 FROM assignments WHERE id=?", (assignment,)).fetchone():
                     continue
-                row = db.execute("SELECT last_turn FROM stall_progress WHERE assignment=?", (assignment,)).fetchone()
+                row = db.execute(
+                    "SELECT last_turn FROM stall_progress WHERE assignment=?", (assignment,)
+                ).fetchone()
                 if row is None:
                     work[assignment] = ("insert", turn)
                 elif turn is not None and row[0] is None:
@@ -450,6 +644,7 @@ class Store:
                 elif turn is not None and turn != row[0]:
                     work[assignment] = ("progress", turn)
             return work
+
         reader = sqlite3.connect(self.path, timeout=5)
         try:
             if not pending(reader):
@@ -460,29 +655,54 @@ class Store:
             now = self.now_ms()
             for assignment, (action, turn) in pending(db).items():
                 if action == "insert":
-                    db.execute("INSERT INTO stall_progress(assignment,last_progress_ms,last_turn) VALUES (?,?,?)",
-                               (assignment, now, turn))
+                    db.execute(
+                        "INSERT INTO stall_progress(assignment,last_progress_ms,last_turn) VALUES (?,?,?)",
+                        (assignment, now, turn),
+                    )
                 elif action == "adopt":
-                    db.execute("UPDATE stall_progress SET last_turn=? WHERE assignment=?", (turn, assignment))
+                    db.execute(
+                        "UPDATE stall_progress SET last_turn=? WHERE assignment=?",
+                        (turn, assignment),
+                    )
                 else:
-                    db.execute("UPDATE stall_progress SET last_progress_ms=?,last_turn=? WHERE assignment=?",
-                               (now, turn, assignment))
+                    db.execute(
+                        "UPDATE stall_progress SET last_progress_ms=?,last_turn=? WHERE assignment=?",
+                        (now, turn, assignment),
+                    )
 
-    def actor(self, scope, address, parent, generation=None, assignment=None, name=None, defer_pin=False):
+    def actor(
+        self, scope, address, parent, generation=None, assignment=None, name=None, defer_pin=False
+    ):
         team = self.team(scope, address, generation) if parent is None else None
         with self.transaction() as db:
             pending = False
             if parent is None:
-                actor = {"team_id": team, "recipient": address, "worker_id": None, "assignment_id": None,
-                         "scope": scope, "address": address, "parent": None}
+                actor = {
+                    "team_id": team,
+                    "recipient": address,
+                    "worker_id": None,
+                    "assignment_id": None,
+                    "scope": scope,
+                    "address": address,
+                    "parent": None,
+                }
             else:
                 row = db.execute(ACTOR_SQL, (scope, parent, address, assignment, name)).fetchone()
                 if not row or (assignment and row["id"] != assignment):
                     raise StoreError("caller has no matching active assignment")
-                actor = {"team_id": row["team"], "recipient": row["worker"], "worker_id": row["worker"],
-                         "assignment_id": row["id"], "scope": scope, "address": address, "parent": parent}
-                pinned = db.execute("SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
-                                    (scope, address, generation)).fetchone()
+                actor = {
+                    "team_id": row["team"],
+                    "recipient": row["worker"],
+                    "worker_id": row["worker"],
+                    "assignment_id": row["id"],
+                    "scope": scope,
+                    "address": address,
+                    "parent": parent,
+                }
+                pinned = db.execute(
+                    "SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
+                    (scope, address, generation),
+                ).fetchone()
                 if not generation or (not pinned and not assignment):
                     raise StoreError("assignment_id required on first worker call to prove session")
                 if pinned and pinned[0] != row["team"]:
@@ -490,7 +710,9 @@ class Store:
                 pending = row["state"] == "pending"
             self.authorize(db, actor, pending=pending)
             if actor["worker_id"] and not pending:
-                if defer_pin:  # finalized by read(pin=...) in the same transaction as the delivery read
+                if (
+                    defer_pin
+                ):  # finalized by read(pin=...) in the same transaction as the delivery read
                     actor["pin"] = (scope, address, generation, actor["team_id"])
                 else:
                     self._pin(db, scope, address, generation, actor["team_id"])
@@ -503,71 +725,107 @@ class Store:
             self._pin(db, *pin)
 
     def _pin(self, db, scope, address, generation, team):
-        pinned = db.execute("SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
-                            (scope, address, generation)).fetchone()
+        pinned = db.execute(
+            "SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
+            (scope, address, generation),
+        ).fetchone()
         if pinned and pinned[0] != team:
             raise StoreError("stale caller session cannot adopt another team generation")
-        db.execute("INSERT OR IGNORE INTO callers VALUES (?,?,?,?)", (scope, address, generation, team))
+        db.execute(
+            "INSERT OR IGNORE INTO callers VALUES (?,?,?,?)", (scope, address, generation, team)
+        )
 
     def authorize(self, db, actor, pending=False):
-        latest = db.execute("SELECT id FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
-                            (actor["scope"], actor["parent"] or actor["address"])).fetchone()
+        latest = db.execute(
+            "SELECT id FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
+            (actor["scope"], actor["parent"] or actor["address"]),
+        ).fetchone()
         if not latest or latest[0] != actor["team_id"]:
             raise StoreError("stale team generation")
         if actor["worker_id"] and not pending:
-            row = db.execute("SELECT 1 FROM workers w JOIN assignments a ON a.worker=w.id "
-                             "WHERE w.id=? AND w.address=? AND w.active=1 AND a.id=? AND a.current=1",
-                             (actor["worker_id"], actor["address"], actor["assignment_id"])).fetchone()
+            row = db.execute(
+                "SELECT 1 FROM workers w JOIN assignments a ON a.worker=w.id "
+                "WHERE w.id=? AND w.address=? AND w.active=1 AND a.id=? AND a.current=1",
+                (actor["worker_id"], actor["address"], actor["assignment_id"]),
+            ).fetchone()
             if not row:
                 raise StoreError("stale worker assignment")
 
     def receipt_owner(self, receipt):
         with self.transaction() as db:
-            row = db.execute("SELECT team,recipient FROM receipts WHERE id=?", (receipt,)).fetchone()
+            row = db.execute(
+                "SELECT team,recipient FROM receipts WHERE id=?", (receipt,)
+            ).fetchone()
             if not row:
                 raise StoreError("invalid receipt")
             return row["team"], row["recipient"], receipt
 
     def has_worker(self, team, target):
         with self.transaction() as db:
-            return db.execute("SELECT 1 FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
-                              (team, target, target)).fetchone() is not None
+            return (
+                db.execute(
+                    "SELECT 1 FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
+                    (team, target, target),
+                ).fetchone()
+                is not None
+            )
 
     def team_worker(self, team, target):
         """True when the worker belongs to this team, active or not: the ownership scope of a host."""
         with self.transaction() as db:
-            return db.execute("SELECT 1 FROM workers WHERE team=? AND (name=? OR id=?) LIMIT 1",
-                              (team, target, target)).fetchone() is not None
+            return (
+                db.execute(
+                    "SELECT 1 FROM workers WHERE team=? AND (name=? OR id=?) LIMIT 1",
+                    (team, target, target),
+                ).fetchone()
+                is not None
+            )
 
     def peer(self, actor, target, text, message_id=None, ack=None):
         if max(len(text.encode()), len(json.dumps(text).encode())) > MAX_TEXT_BYTES:
             raise StoreError("message limit is 65536 bytes")
-        if message_id is not None and (not isinstance(message_id, str) or not 1 <= len(message_id) <= 128):
+        if message_id is not None and (
+            not isinstance(message_id, str) or not 1 <= len(message_id) <= 128
+        ):
             raise StoreError("message_id must be 1-128 characters")
         with self.transaction() as db:
             self.authorize(db, actor)
             if ack:
                 self.acknowledge(db, *ack)
-            lead = db.execute("SELECT lead FROM teams WHERE id=?", (actor["team_id"],)).fetchone()[0]
+            lead = db.execute("SELECT lead FROM teams WHERE id=?", (actor["team_id"],)).fetchone()[
+                0
+            ]
             recipient = lead if target in ("lead", lead, actor["team_id"]) else None
             if recipient is None:
-                row = db.execute("SELECT id FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
-                                 (actor["team_id"], target, target)).fetchone()
+                row = db.execute(
+                    "SELECT id FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
+                    (actor["team_id"], target, target),
+                ).fetchone()
                 if not row:
                     raise StoreError("recipient is not an active teammate")
                 recipient = row[0]
-            envelope = {"message_id": message_id or uid(), "team_id": actor["team_id"],
-                        "worker_id": actor["worker_id"], "assignment_id": actor["assignment_id"],
-                        "sender": actor["worker_id"] or actor["team_id"], "recipient": recipient,
-                        "kind": "message", "text": text}
+            envelope = {
+                "message_id": message_id or uid(),
+                "team_id": actor["team_id"],
+                "worker_id": actor["worker_id"],
+                "assignment_id": actor["assignment_id"],
+                "sender": actor["worker_id"] or actor["team_id"],
+                "recipient": recipient,
+                "kind": "message",
+                "text": text,
+            }
             body = json.dumps(envelope, separators=(",", ":"))
-            previous = db.execute("SELECT body FROM messages WHERE id=?", (envelope["message_id"],)).fetchone()
+            previous = db.execute(
+                "SELECT body FROM messages WHERE id=?", (envelope["message_id"],)
+            ).fetchone()
             if previous and previous[0] != body:
                 raise StoreError("message_id conflict")
             if not previous:
                 # NULL distinguishes peer data from assignment reports during selection.
-                db.execute("INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,NULL,?)",
-                           (envelope["message_id"], actor["team_id"], recipient, body))
+                db.execute(
+                    "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,NULL,?)",
+                    (envelope["message_id"], actor["team_id"], recipient, body),
+                )
         dispatch_events.notify(self.directory)
         return envelope
 
@@ -575,13 +833,20 @@ class Store:
         with self.transaction() as db:
             if ack:
                 self.acknowledge(db, *ack)
-            worker = db.execute("SELECT id FROM workers WHERE team=? AND name=?", (team, name)).fetchone()
+            worker = db.execute(
+                "SELECT id FROM workers WHERE team=? AND name=?", (team, name)
+            ).fetchone()
             if not worker:
                 raise StoreError("worker is not registered in this team")
             db.execute("UPDATE workers SET active=0 WHERE id=?", (worker[0],))
-            for row in db.execute("SELECT id FROM assignments WHERE worker=? AND state!='complete'", (worker[0],)).fetchall():
+            for row in db.execute(
+                "SELECT id FROM assignments WHERE worker=? AND state!='complete'", (worker[0],)
+            ).fetchall():
                 self._release(db, row[0])
-            db.execute("UPDATE assignments SET state='failed' WHERE worker=? AND state!='complete'", (worker[0],))
+            db.execute(
+                "UPDATE assignments SET state='failed' WHERE worker=? AND state!='complete'",
+                (worker[0],),
+            )
         dispatch_events.notify(self.directory)
 
     def acknowledge(self, db, team, recipient, receipt):
@@ -597,14 +862,20 @@ class Store:
         """Acknowledge the previous result and freeze membership before listening."""
         with self.transaction() as db:
             self.acknowledge(db, *(ack or (team, recipient, receipt)))
-            return [dict(row) for row in db.execute(
-                SNAPSHOT_SQL, (team, target, target, target, target, target, target))]
+            return [
+                dict(row)
+                for row in db.execute(
+                    SNAPSHOT_SQL, (team, target, target, target, target, target, target)
+                )
+            ]
 
     def owned_team(self, scope, lead, generation):
         """The team this caller leads, or None; never creates one."""
         with self.transaction() as db:
-            row = db.execute("SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
-                             (scope, lead, generation)).fetchone()
+            row = db.execute(
+                "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
+                (scope, lead, generation),
+            ).fetchone()
             return row[0] if row else None
 
     def unfinished_count(self, team):
@@ -613,9 +884,23 @@ class Store:
             return db.execute(
                 "SELECT COUNT(*) FROM assignments WHERE state!='complete' AND id IN "
                 "(SELECT assignment_id FROM (%s))" % SNAPSHOT_SQL,
-                (team, "all", "all", "all", "all", "all", "all")).fetchone()[0]
+                (team, "all", "all", "all", "all", "all", "all"),
+            ).fetchone()[0]
 
-    def read(self, team, recipient, target, receipt=None, assignment_ids=None, issue_receipt=True, ready=None, inbox=False, ack=None, pin=None, reserve=0):
+    def read(
+        self,
+        team,
+        recipient,
+        target,
+        receipt=None,
+        assignment_ids=None,
+        issue_receipt=True,
+        ready=None,
+        inbox=False,
+        ack=None,
+        pin=None,
+        reserve=0,
+    ):
         """Optional pure ready(batch) returns a final reason or None under this transaction.
 
         A pending snapshot creates no receipt; a final snapshot and its receipt
@@ -632,15 +917,21 @@ class Store:
             if assignment_ids is not None:
                 selection = "a.id IN (%s)" % (",".join("?" for _ in assignment_ids) or "NULL")
                 selected_params = list(assignment_ids)
-            assignments = [dict(row) for row in db.execute(
-                READ_MEMBERS_SQL.format(selection=selection), [team] + selected_params)]
+            assignments = [
+                dict(row)
+                for row in db.execute(
+                    READ_MEMBERS_SQL.format(selection=selection), [team] + selected_params
+                )
+            ]
             if assignment_ids is None and target not in ("any", "all"):
                 assignments = [a for a in assignments if target in (a["name"], a["assignment_id"])]
             # Historical reports remain readable for all/any; named reads select that worker's history.
             query = READ_MESSAGES_SQL
             params = [team, recipient]
             if assignment_ids is not None and not inbox:
-                query += READ_PINNED_CLAUSE.format(ids=",".join("?" for _ in assignment_ids) or "NULL")
+                query += READ_PINNED_CLAUSE.format(
+                    ids=",".join("?" for _ in assignment_ids) or "NULL"
+                )
                 params.extend(assignment_ids)
             elif assignment_ids is None and not inbox and target not in ("any", "all"):
                 query += READ_NAMED_CLAUSE
@@ -648,9 +939,33 @@ class Store:
             unfinished = [a["assignment_id"] for a in assignments if a["state"] != "complete"]
             # Worst-case fixed fields (receipt, longest reason, a runtime_state added by wait) are
             # budgeted before selection so the receipt below names exactly what fits.
-            fixed = len(json.dumps({"reason": "x" * 9, "messages": [], "assignments": [
-                dict(a, runtime_state="interrupted", attention="not_started", next=max(STALL_NEXT, NOT_STARTED_NEXT, UNREPORTED_NEXT, ERROR_NEXT, key=len)) for a in assignments], "unfinished": unfinished,
-                "receipt": "0" * 32, "more": False}, separators=(",", ":")).encode())
+            fixed = len(
+                json.dumps(
+                    {
+                        "reason": "x" * 9,
+                        "messages": [],
+                        "assignments": [
+                            dict(
+                                a,
+                                runtime_state="interrupted",
+                                attention="not_started",
+                                next=max(
+                                    STALL_NEXT,
+                                    NOT_STARTED_NEXT,
+                                    UNREPORTED_NEXT,
+                                    ERROR_NEXT,
+                                    key=len,
+                                ),
+                            )
+                            for a in assignments
+                        ],
+                        "unfinished": unfinished,
+                        "receipt": "0" * 32,
+                        "more": False,
+                    },
+                    separators=(",", ":"),
+                ).encode()
+            )
             if reserve > MAX_BASE_BYTES + len(',"inbox":'):
                 # A base above its cap could leave no room for even one legal message (infinite more=true retries).
                 raise StoreError("response base exceeds its budget; cannot piggyback inbox")
@@ -678,16 +993,23 @@ class Store:
             undelivered = []
             if ready is not None and not inbox and messages:
                 ids = [m["message_id"] for m in messages]
-                named = {row[0] for row in db.execute(
-                    "SELECT DISTINCT j.value FROM receipts r, json_each(r.ids) j WHERE r.team=? AND r.recipient=? "
-                    "AND j.value IN (%s)" % ",".join("?" for _ in ids), [team, recipient] + ids)}
+                named = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT DISTINCT j.value FROM receipts r, json_each(r.ids) j WHERE r.team=? AND r.recipient=? "
+                        "AND j.value IN (%s)" % ",".join("?" for _ in ids),
+                        [team, recipient] + ids,
+                    )
+                }
                 undelivered = [m["message_id"] for m in messages if m["message_id"] not in named]
                 if target == "all" and more and not undelivered:
                     # A replay-only first page must not hide new reports behind it. Keep
                     # replay rows unacked and select only new rows for this wait page.
-                    unseen = query + (" AND NOT EXISTS (SELECT 1 FROM receipts r, json_each(r.ids) j "
-                                      "WHERE r.team=messages.team AND r.recipient=messages.recipient "
-                                      "AND j.value=messages.id) ORDER BY seq")
+                    unseen = query + (
+                        " AND NOT EXISTS (SELECT 1 FROM receipts r, json_each(r.ids) j "
+                        "WHERE r.team=messages.team AND r.recipient=messages.recipient "
+                        "AND j.value=messages.id) ORDER BY seq"
+                    )
                     fresh, size = [], 2
                     for row in db.execute(unseen, params):
                         body = row[0]
@@ -699,38 +1021,66 @@ class Store:
                     if fresh:
                         messages = fresh
                         undelivered = [m["message_id"] for m in fresh]
-            batch = {"reason": reason, "messages": messages, "assignments": assignments,
-                     "unfinished": unfinished, "receipt": None, "more": more, "_undelivered": undelivered}
+            batch = {
+                "reason": reason,
+                "messages": messages,
+                "assignments": assignments,
+                "unfinished": unfinished,
+                "receipt": None,
+                "more": more,
+                "_undelivered": undelivered,
+            }
             if ready is not None and not inbox:
                 idle_since = self.now_ms() - STALL_MS
                 for a in assignments:
-                    row = a["state"] == "working" and db.execute(
-                        "SELECT last_progress_ms,stall_reported_for FROM stall_progress WHERE assignment=?",
-                        (a["assignment_id"],)).fetchone()
-                    a["_stalled"] = bool(row and row[0] is not None and row[0] <= idle_since and row[1] != row[0])
-                    resume = a["state"] == "working" and db.execute(
-                        "SELECT r.turn FROM resume_marks r WHERE r.assignment=? AND r.dispatched_ms<=? "
-                        "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.assignment=r.assignment "
-                        "AND json_extract(m.body,'$.kind') IN ('progress','complete','blocked','decision'))",
-                        (a["assignment_id"], self.now_ms() - RESUME_GRACE_MS)).fetchone()
+                    row = (
+                        a["state"] == "working"
+                        and db.execute(
+                            "SELECT last_progress_ms,stall_reported_for FROM stall_progress WHERE assignment=?",
+                            (a["assignment_id"],),
+                        ).fetchone()
+                    )
+                    a["_stalled"] = bool(
+                        row and row[0] is not None and row[0] <= idle_since and row[1] != row[0]
+                    )
+                    resume = (
+                        a["state"] == "working"
+                        and db.execute(
+                            "SELECT r.turn FROM resume_marks r WHERE r.assignment=? AND r.dispatched_ms<=? "
+                            "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.assignment=r.assignment "
+                            "AND json_extract(m.body,'$.kind') IN ('progress','complete','blocked','decision'))",
+                            (a["assignment_id"], self.now_ms() - RESUME_GRACE_MS),
+                        ).fetchone()
+                    )
                     a["_resume_turn"] = resume[0] if resume else None
             if ready is not None:
                 batch["reason"] = ready(batch)
             for a in assignments:
                 if a.pop("_stalled", False) and batch["reason"] is not None:
-                    db.execute("UPDATE stall_progress SET stall_reported_for=last_progress_ms WHERE assignment=?",
-                               (a["assignment_id"],))
+                    db.execute(
+                        "UPDATE stall_progress SET stall_reported_for=last_progress_ms WHERE assignment=?",
+                        (a["assignment_id"],),
+                    )
             attention = batch.pop("_attention", 0)
             if messages and issue_receipt and (ready is None or batch["reason"] is not None):
                 token = uid()
-                db.execute("INSERT INTO receipts VALUES (?,?,?,?)",
-                           (token, team, recipient, json.dumps([m["message_id"] for m in messages])))
+                db.execute(
+                    "INSERT INTO receipts VALUES (?,?,?,?)",
+                    (token, team, recipient, json.dumps([m["message_id"] for m in messages])),
+                )
                 batch["receipt"] = token
-            if ready is not None and batch["reason"] is not None and batch["reason"] != "messages" \
-                    and target == "all" and not inbox:
-                db.execute("INSERT INTO last_wait(team,reason,attention,fingerprint) VALUES (?,?,?,?) ON CONFLICT(team) DO UPDATE "
-                           "SET reason=excluded.reason,attention=excluded.attention,fingerprint=excluded.fingerprint",
-                           (team, batch["reason"], attention, wait_fingerprint(db, team)))
+            if (
+                ready is not None
+                and batch["reason"] is not None
+                and batch["reason"] != "messages"
+                and target == "all"
+                and not inbox
+            ):
+                db.execute(
+                    "INSERT INTO last_wait(team,reason,attention,fingerprint) VALUES (?,?,?,?) ON CONFLICT(team) DO UPDATE "
+                    "SET reason=excluded.reason,attention=excluded.attention,fingerprint=excluded.fingerprint",
+                    (team, batch["reason"], attention, wait_fingerprint(db, team)),
+                )
             batch.pop("_undelivered", None)
             return batch
 
@@ -742,9 +1092,15 @@ class Store:
         page, size, last = [], 2, None
         for r in db.execute(TASKS_LIST_SQL, (team, cursor)):
             deps = json.loads(r["deps"])
-            item = {"task_id": r["id"], "subject": r["subject"], "status": r["status"], "owner": r["owner"],
-                    "assignment_id": r["assignment"], "depends_on": deps,
-                    "ready": r["status"] == "pending" and all(d in done for d in deps)}
+            item = {
+                "task_id": r["id"],
+                "subject": r["subject"],
+                "status": r["status"],
+                "owner": r["owner"],
+                "assignment_id": r["assignment"],
+                "depends_on": deps,
+                "ready": r["status"] == "pending" and all(d in done for d in deps),
+            }
             if only is not None and r["id"] != only:
                 continue
             entry = len(json.dumps(item, separators=(",", ":")).encode()) + 1
@@ -755,7 +1111,11 @@ class Store:
         return page, None
 
     def _deps(self, db, team, task, deps):
-        if not isinstance(deps, list) or len(deps) > MAX_WORKERS or not all(isinstance(d, str) and len(d) <= 64 for d in deps):
+        if (
+            not isinstance(deps, list)
+            or len(deps) > MAX_WORKERS
+            or not all(isinstance(d, str) and len(d) <= 64 for d in deps)
+        ):
             raise StoreError("depends_on must be a list of at most 32 task IDs")
         known = {r[0]: json.loads(r[1]) for r in db.execute(TASKS_DEPS_SQL, (team,))}
         for dep in deps:
@@ -779,14 +1139,21 @@ class Store:
             if ack:
                 self.acknowledge(db, *ack)
             team, task = actor["team_id"], arguments.get("task_id")
-            row = db.execute("SELECT * FROM tasks WHERE id=? AND team=?", (task, team)).fetchone() if task else None
+            row = (
+                db.execute("SELECT * FROM tasks WHERE id=? AND team=?", (task, team)).fetchone()
+                if task
+                else None
+            )
             if action == "create":
                 subject = arguments.get("subject")
                 if not isinstance(subject, str) or not subject.strip() or len(subject) > 1000:
                     raise StoreError("subject must be 1-1000 characters")
                 task = uid()
                 deps = self._deps(db, team, task, arguments.get("depends_on") or [])
-                db.execute("INSERT INTO tasks VALUES (?,?,?,'pending',NULL,NULL,?)", (task, team, subject, json.dumps(deps)))
+                db.execute(
+                    "INSERT INTO tasks VALUES (?,?,?,'pending',NULL,NULL,?)",
+                    (task, team, subject, json.dumps(deps)),
+                )
             elif action != "list":
                 if action not in ("claim", "update"):
                     raise StoreError("action must be create, list, claim or update")
@@ -794,27 +1161,39 @@ class Store:
                     raise StoreError("unknown task for this team")
                 if action == "claim":
                     done = {r[0] for r in db.execute(TASKS_DONE_SQL, (team,))}
-                    if actor["worker_id"] and db.execute("SELECT state FROM assignments WHERE id=?",
-                                                         (actor["assignment_id"],)).fetchone()[0] in ("complete", "failed"):
+                    if actor["worker_id"] and db.execute(
+                        "SELECT state FROM assignments WHERE id=?", (actor["assignment_id"],)
+                    ).fetchone()[0] in ("complete", "failed"):
                         raise StoreError("claim requires a current unfinished assignment")
                     if row["status"] != "pending":
                         raise StoreError("task is not pending (status %s)" % row["status"])
                     if any(d not in done for d in json.loads(row["deps"])):
                         raise StoreError("unsatisfied dependencies")
-                    db.execute("UPDATE tasks SET status='in_progress',owner=?,assignment=? WHERE id=?",
-                               (actor["worker_id"] or actor["team_id"], actor["assignment_id"], task))
+                    db.execute(
+                        "UPDATE tasks SET status='in_progress',owner=?,assignment=? WHERE id=?",
+                        (actor["worker_id"] or actor["team_id"], actor["assignment_id"], task),
+                    )
                 else:
                     if actor["worker_id"] and row["assignment"] != actor["assignment_id"]:
-                        raise StoreError("only the lead or the linked assignment can update this task")
+                        raise StoreError(
+                            "only the lead or the linked assignment can update this task"
+                        )
                     status, deps = arguments.get("status"), arguments.get("depends_on")
                     if status is not None:
                         if status not in self.TASK_STATUSES:
-                            raise StoreError("status must be one of %s" % ", ".join(self.TASK_STATUSES))
+                            raise StoreError(
+                                "status must be one of %s" % ", ".join(self.TASK_STATUSES)
+                            )
                         if status == "pending":
-                            db.execute("UPDATE tasks SET owner=NULL,assignment=NULL WHERE id=?", (task,))
+                            db.execute(
+                                "UPDATE tasks SET owner=NULL,assignment=NULL WHERE id=?", (task,)
+                            )
                         db.execute("UPDATE tasks SET status=? WHERE id=?", (status, task))
                     if deps is not None:
-                        db.execute("UPDATE tasks SET deps=? WHERE id=?", (json.dumps(self._deps(db, team, task, deps)), task))
+                        db.execute(
+                            "UPDATE tasks SET deps=? WHERE id=?",
+                            (json.dumps(self._deps(db, team, task, deps)), task),
+                        )
             if action == "list":
                 cursor = arguments.get("cursor") or "0"
                 if not (isinstance(cursor, str) and re.fullmatch("[0-9]{1,18}", cursor)):

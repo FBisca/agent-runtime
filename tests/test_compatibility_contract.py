@@ -31,9 +31,11 @@ import pytest
 PLUGIN = Path(__file__).resolve().parents[1]
 # The runtime modules live in a flat directory and import each other by bare name, so the
 # directory goes on the path before they are imported.
-sys.path.insert(0, str(PLUGIN / "server"))
-import agent_runtime  # noqa: E402  # pyright: ignore[reportMissingImports]
-import mcp_server  # noqa: E402  # pyright: ignore[reportMissingImports]
+sys.path.insert(0, str(PLUGIN / "packages" / "agent-runtime" / "src"))
+from agent_runtime import (
+    agent_runtime,  # noqa: E402  # pyright: ignore[reportMissingImports]
+    mcp_server,  # noqa: E402  # pyright: ignore[reportMissingImports]
+)
 
 pytestmark = pytest.mark.unit
 
@@ -112,7 +114,7 @@ class PublicSurfaceTests(unittest.TestCase):
         """uv-workspace/S3"""
         recorded = sorted(baseline()["sqlite_imports"])
         found = []
-        for path in sorted((PLUGIN / "server").glob("*.py")):
+        for path in sorted((PLUGIN / "packages" / "agent-runtime" / "src").rglob("*.py")):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
@@ -122,7 +124,7 @@ class PublicSurfaceTests(unittest.TestCase):
                 else:
                     continue
                 if any(name == "sqlite3" or name.startswith("sqlite3.") for name in names):
-                    found.append(f"server/{path.name}")
+                    found.append(str(path.relative_to(PLUGIN)))
                     break
         self.assertEqual(recorded, found)
 

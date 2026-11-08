@@ -22,7 +22,7 @@ import json
 import os
 from pathlib import Path
 
-import agent_runtime as lib
+from . import agent_runtime as lib
 
 RESTRICTED_HOSTS = ("pi",)  # hosts the server authorizes itself
 MUTATING_TOOLS = ("spawn", "message", "resume", "stop", "report")
@@ -32,7 +32,13 @@ WORKER_TOOLS = ("report", "message", "wait", "status", "collect", "list")
 # `task` only reads when it lists.
 READ_ONLY_TASK = "list"
 # The tool argument that names the worker a call acts on.
-SCOPED_TOOLS = {"status": "name", "collect": "name", "resume": "name", "stop": "name", "message": "to"}
+SCOPED_TOOLS = {
+    "status": "name",
+    "collect": "name",
+    "resume": "name",
+    "stop": "name",
+    "message": "to",
+}
 # Targets that name a team or the inbox rather than a worker.
 NOT_A_WORKER = ("lead", "all", "any", "inbox")
 
@@ -46,8 +52,12 @@ def config_path(env):
     override = env.get("AGENT_RUNTIME_HOSTS")
     if override == "~" or (override and override.startswith("~/")):
         override = home + override[1:]
-    return Path(override or
-                Path(env.get("XDG_CONFIG_HOME") or Path(home) / ".config") / "agent-runtime" / "hosts.json").absolute()
+    return Path(
+        override
+        or Path(env.get("XDG_CONFIG_HOME") or Path(home) / ".config")
+        / "agent-runtime"
+        / "hosts.json"
+    ).absolute()
 
 
 def load(env):
@@ -60,7 +70,9 @@ def load(env):
         return {}
     except (OSError, ValueError) as error:
         # Do not echo file contents: the file may hold paths and names.
-        raise Refused("invalid host policy %s: cannot read JSON (%s)" % (path, type(error).__name__))
+        raise Refused(
+            "invalid host policy %s: cannot read JSON (%s)" % (path, type(error).__name__)
+        )
     if not isinstance(data, dict) or not isinstance(data.get("hosts", {}), dict):
         raise Refused("invalid host policy %s: expected a hosts object" % path)
     hosts = data.get("hosts", {})
@@ -70,10 +82,14 @@ def load(env):
         if not isinstance(rules.get("mutations", False), bool):
             raise Refused("invalid host policy %s: mutations must be true or false" % path)
         backends = rules.get("backends", [])
-        if not isinstance(backends, list) or not all(isinstance(b, str) and b.strip() for b in backends):
+        if not isinstance(backends, list) or not all(
+            isinstance(b, str) and b.strip() for b in backends
+        ):
             raise Refused("invalid host policy %s: backends must be a list of names" % path)
         paths = rules.get("paths", [])
-        if not isinstance(paths, list) or not all(isinstance(p, str) and os.path.isabs(p) for p in paths):
+        if not isinstance(paths, list) or not all(
+            isinstance(p, str) and os.path.isabs(p) for p in paths
+        ):
             raise Refused("invalid host policy %s: paths must be absolute directories" % path)
     return hosts
 
@@ -137,9 +153,11 @@ def authorize(env, host, role, tool, arguments, ctx):
         check_worker(host, role, tool, arguments)
     rules = rules_for(env, host)
     if mutating(tool, arguments) and not rules.get("mutations"):
-        raise Refused("the %s host is not authorized to mutate: write %s with "
-                      '{"hosts": {"%s": {"mutations": true, "backends": [...], "paths": [...]}}}'
-                      % (host, config_path(env), host))
+        raise Refused(
+            "the %s host is not authorized to mutate: write %s with "
+            '{"hosts": {"%s": {"mutations": true, "backends": [...], "paths": [...]}}}'
+            % (host, config_path(env), host)
+        )
     if tool == "spawn":
         check_spawn(env, host, rules, arguments)
     check_scope(env, host, tool, arguments, ctx)
@@ -154,8 +172,10 @@ def check_worker(host, role, tool, arguments):
         return
     if tool == "task" and arguments.get("action") == READ_ONLY_TASK:
         return
-    raise Refused("a %s worker may only %s: it starts no worker and ends no worker"
-                  % (host, ", ".join(WORKER_TOOLS)))
+    raise Refused(
+        "a %s worker may only %s: it starts no worker and ends no worker"
+        % (host, ", ".join(WORKER_TOOLS))
+    )
 
 
 def check_spawn(env, host, rules, arguments):
@@ -163,18 +183,24 @@ def check_spawn(env, host, rules, arguments):
     backends = rules.get("backends") or []
     backend = arguments.get("cli")
     if not isinstance(backend, str) or not backend.strip():
-        raise Refused("spawn needs an explicit cli for a %s host: the runtime never picks a provider "
-                      "for you (authorized: %s)" % (host, ", ".join(backends) or "none"))
+        raise Refused(
+            "spawn needs an explicit cli for a %s host: the runtime never picks a provider "
+            "for you (authorized: %s)" % (host, ", ".join(backends) or "none")
+        )
     if backend not in backends:
-        raise Refused("worker backend %r is not authorized for a %s host (authorized: %s)"
-                      % (backend, host, ", ".join(backends) or "none"))
+        raise Refused(
+            "worker backend %r is not authorized for a %s host (authorized: %s)"
+            % (backend, host, ", ".join(backends) or "none")
+        )
     cwd = arguments.get("cwd")
     if not isinstance(cwd, str) or not cwd.strip():
         raise Refused("spawn needs a cwd for a %s host" % host)
     roots = allowed_roots(env, rules)
     if not within(cwd, roots):
-        raise Refused("a %s host may not start a worker in %r (authorized: %s)"
-                      % (host, cwd, ", ".join(roots)))
+        raise Refused(
+            "a %s host may not start a worker in %r (authorized: %s)"
+            % (host, cwd, ", ".join(roots))
+        )
 
 
 def check_scope(env, host, tool, arguments, ctx):
@@ -191,5 +217,7 @@ def check_scope(env, host, tool, arguments, ctx):
     if not team or store is None:
         return
     if not store.team_worker(team, target):
-        raise Refused("%s %r is not a worker of your team: a %s host reaches only its own team"
-                      % (tool, target, host))
+        raise Refused(
+            "%s %r is not a worker of your team: a %s host reaches only its own team"
+            % (tool, target, host)
+        )

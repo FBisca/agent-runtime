@@ -3,14 +3,13 @@ import json
 import threading
 import time
 
+import pytest
+import test_event_wait as event_helpers
+from agent_runtime.dispatch_events import endpoints
+from agent_runtime.dispatch_store import Store
 from test_event_wait import AsyncRPC, Session
 from test_mcp_server import FakeCli
-import test_event_wait as event_helpers
 from test_tools import ToolCase
-from dispatch_events import endpoints
-from dispatch_store import Store
-
-import pytest
 
 pytestmark = pytest.mark.integration
 

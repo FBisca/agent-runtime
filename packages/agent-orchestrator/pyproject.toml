@@ -9,11 +9,13 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.scripts]
+agent-orchestrator = "agent_orchestrator.driver:run_cli"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# The engine moves in with the migration ticket; the member exists so the workspace resolves both
-# packages and so the runtime isolation is provable before any orchestrator code ships.
-include = ["src/agent_orchestrator/**/*.py"]
+# The engine lives in the member; the wheel ships it as the `agent_orchestrator` package.
+packages = ["src/agent_orchestrator"]

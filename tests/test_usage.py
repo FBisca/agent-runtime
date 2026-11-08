@@ -15,13 +15,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_mcp_server import SERVER  # noqa: E402
 
-sys.path.insert(0, str(SERVER.parent))
-
-import usage  # noqa: E402
-import hc_tools  # noqa: E402
-from test_tools import ToolCase, raw, unwrap  # noqa: E402
+RUNTIME_SRC = Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"
+sys.path.insert(0, str(RUNTIME_SRC))
 
 import pytest
+from agent_runtime import (
+    hc_tools,  # noqa: E402
+    usage,  # noqa: E402
+)
+from test_tools import ToolCase, raw, unwrap  # noqa: E402
 
 pytestmark = pytest.mark.integration
 

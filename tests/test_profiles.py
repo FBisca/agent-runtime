@@ -10,12 +10,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SERVER = Path(__file__).resolve().parents[1] / "server"
-if str(SERVER) not in sys.path:
-    sys.path.insert(0, str(SERVER))
-import profiles  # noqa: E402
-
+RUNTIME_SRC = Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"
+if str(RUNTIME_SRC) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_SRC))
 import pytest  # noqa: E402
+from agent_runtime import profiles  # noqa: E402
 
 pytestmark = pytest.mark.unit
 

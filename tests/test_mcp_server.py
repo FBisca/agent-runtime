@@ -15,6 +15,8 @@ pytestmark = pytest.mark.integration
 
 
 PLUGIN = Path(__file__).resolve().parents[1]
+# The runtime member holds the sources; the documented entry point stays in `server/`.
+RUNTIME_SRC = PLUGIN / "packages" / "agent-runtime" / "src"
 SERVER = PLUGIN / "server" / "mcp_server.py"
 MARKETPLACE = PLUGIN / ".claude-plugin" / "marketplace.json"
 TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "stop", "report", "task"]

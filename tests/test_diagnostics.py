@@ -2,12 +2,11 @@
 import json
 import sqlite3
 
-from dispatch_store import Store
+import pytest
+import test_event_wait as event_helpers
+from agent_runtime.dispatch_store import Store
 from test_event_wait import Session
 from test_tools import ToolCase
-import test_event_wait as event_helpers
-
-import pytest
 
 pytestmark = pytest.mark.integration
 

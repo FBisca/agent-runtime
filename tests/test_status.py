@@ -1,7 +1,7 @@
 """Status interruption detection and argv trimming; hc is faked, never called."""
 
-import importlib.util
 import json
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -13,9 +13,8 @@ pytestmark = pytest.mark.unit
 
 
 HERE = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location("agent_runtime", HERE.parent / "server" / "agent_runtime.py")
-app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(app)
+sys.path.insert(0, str(HERE.parent / "packages" / "agent-runtime" / "src"))
+from agent_runtime import agent_runtime as app  # noqa: E402
 
 CONTINUE = "continue the task where you stopped"
 
@@ -181,7 +180,7 @@ class InterruptionTests(unittest.TestCase):
 
     def test_markers_live_in_data_table(self):
         """agent-runtime-tools/S11"""
-        table = json.loads((HERE.parent / "server" / "markers.json").read_text(encoding="utf-8"))
+        table = json.loads((HERE.parent / "packages/agent-runtime/src/agent_runtime" / "markers.json").read_text(encoding="utf-8"))
         self.assertEqual(set(table), {"claude-code", "codex"})
 
 

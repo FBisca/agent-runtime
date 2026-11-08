@@ -133,14 +133,14 @@ class InstallWiringTest(unittest.TestCase):
 
 
 class HostsSectionTest(unittest.TestCase):
-    POINTS = {"server/hc_tools.py": ["CLIS", "spawn", "dispatch_identity", "codex_instructions", "SUBAGENT_TOOL"],
-              "server/agent_runtime.py": ["cli_of_args", "detect_cli", "foreground_cli", "hc_app", "CODEX_ENV_MARKERS", "resolve"],
-              "server/mcp_server.py": ["TOOLS"],
-              "server/markers.json": ["claude-code", "codex"],
+    POINTS = {"packages/agent-runtime/src/agent_runtime/hc_tools.py": ["CLIS", "spawn", "dispatch_identity", "codex_instructions", "SUBAGENT_TOOL"],
+              "packages/agent-runtime/src/agent_runtime/agent_runtime.py": ["cli_of_args", "detect_cli", "foreground_cli", "hc_app", "CODEX_ENV_MARKERS", "resolve"],
+              "packages/agent-runtime/src/agent_runtime/mcp_server.py": ["TOOLS"],
+              "packages/agent-runtime/src/agent_runtime/markers.json": ["claude-code", "codex"],
               "hooks/pre_tool_use.py": ["agent_id", "TOOL_NAME"]}
-    SERVER_POINTS = {"server/hc_tools.py": ["hc", "run", "spawn", "hc_server", "me", "collect", "wait", "stop"],
-                     "server/agent_runtime.py": ["hc_get", "run_command", "hc_state", "hc_record"],
-                     "server/markers.json": ["prompt", "interrupt"]}
+    SERVER_POINTS = {"packages/agent-runtime/src/agent_runtime/hc_tools.py": ["hc", "run", "spawn", "hc_server", "me", "collect", "wait", "stop"],
+                     "packages/agent-runtime/src/agent_runtime/agent_runtime.py": ["hc_get", "run_command", "hc_state", "hc_record"],
+                     "packages/agent-runtime/src/agent_runtime/markers.json": ["prompt", "interrupt"]}
 
     def test_S16_readme_says_hosts_are_pluggable_names_the_tested_ones_and_points_to_the_code(self):
         """agent-runtime-standalone/S16"""
@@ -181,17 +181,19 @@ class HostsSectionTest(unittest.TestCase):
                     self.assertIn(symbol, code)
         for call in ("run --bg", "get <id> --json", "send", "read", "wait", "ls --all --json", "kill", "rm"):
             self.assertIn(f"hc {call}", section)
-            self.assertIn(call.split()[0], (ROOT / "server/hc_tools.py").read_text() + (ROOT / "server/agent_runtime.py").read_text())
+            self.assertIn(call.split()[0], (ROOT / "packages/agent-runtime/src/agent_runtime/hc_tools.py").read_text() + (ROOT / "packages/agent-runtime/src/agent_runtime/agent_runtime.py").read_text())
 
     def test_readme_shows_an_architecture_image_that_exists_and_is_small(self):
         readme = (ROOT / "README.md").read_text()
         match = re.search(r"!\[[^\]]*\]\((docs/assets/[^)]+\.png)\)", readme)
-        self.assertIsNotNone(match, "README has no image under docs/assets")
-        image = ROOT / match.group(1)
+        found = match.group(1) if match else ""
+        whole = match.group(0) if match else ""
+        self.assertNotEqual(found, "", "README has no image under docs/assets")
+        image = ROOT / found
         self.assertTrue(image.is_file())
         self.assertLess(image.stat().st_size, 600_000)
         self.assertEqual(image.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertLess(readme.index(match.group(0)), readme.index("## Architecture"), "image sits under the intro")
+        self.assertLess(readme.index(whole), readme.index("## Architecture"), "image sits under the intro")
 
 
 class CiWorkflowTest(unittest.TestCase):

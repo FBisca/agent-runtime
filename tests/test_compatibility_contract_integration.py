@@ -19,8 +19,8 @@ import pytest
 PLUGIN = Path(__file__).resolve().parents[1]
 # The runtime modules live in a flat directory and import each other by bare name, so the
 # directory goes on the path before they are imported.
-sys.path.insert(0, str(PLUGIN / "server"))
-import dispatch_store  # noqa: E402  # pyright: ignore[reportMissingImports]
+sys.path.insert(0, str(PLUGIN / "packages" / "agent-runtime" / "src"))
+from agent_runtime import dispatch_store  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 pytestmark = pytest.mark.integration
 

@@ -8,13 +8,11 @@ import sqlite3
 import subprocess
 import threading
 import time
+from pathlib import Path
 
-import agent_runtime as lib
-import dispatch_store as dispatch
-import dispatch_wait
-import host_policy
-import profiles
-import usage
+from . import agent_runtime as lib
+from . import dispatch_store as dispatch
+from . import dispatch_wait, host_policy, profiles, usage
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 COLLECT_LINES = 200
@@ -26,8 +24,10 @@ WAIT_DEFAULT, WAIT_MAX = 170, 590
 KINDS = ("worker", "lookup")
 CLIS = profiles.BUILTINS
 SUBAGENT_TOOL = {"claude": "Claude's Agent tool", "codex": "Codex's MultiAgent V2 spawn tool"}
-NATIVE_TOOLS = {"herdmates": "SendMessage and the Agent tool (named teammate), the CLI's own subagent tool",
-                "native": "the CLI's own subagent tool (Claude Agent tool, Codex MultiAgent spawn tool)"}
+NATIVE_TOOLS = {
+    "herdmates": "SendMessage and the Agent tool (named teammate), the CLI's own subagent tool",
+    "native": "the CLI's own subagent tool (Claude Agent tool, Codex MultiAgent spawn tool)",
+}
 
 
 class ToolError(Exception):
@@ -84,8 +84,15 @@ def gap(what, command):
 def run(argv, env, ctx, timeout=SHORT_SECONDS):
     """(returncode, stdout, stderr); ToolError on a missing binary, timeout or cancel."""
     try:
-        proc = subprocess.Popen(argv, env=env, text=True, errors="replace", stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(
+            argv,
+            env=env,
+            text=True,
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     except OSError as error:
         raise ToolError("cannot run %s: %s" % (argv[0], error))
     ctx.proc = proc
@@ -124,7 +131,9 @@ def need(arguments, *names):
 
 def worker_name(value):
     if not NAME_RE.match(value):
-        raise ToolError("invalid name %r: use 1-32 of a-z 0-9 - _ , not starting with - or _" % value)
+        raise ToolError(
+            "invalid name %r: use 1-32 of a-z 0-9 - _ , not starting with - or _" % value
+        )
     return value
 
 
@@ -148,6 +157,7 @@ def codex_instructions(agent="implementer"):
             text = handle.read()
         try:
             import tomllib
+
             found = tomllib.loads(text)["developer_instructions"]
         except ImportError:  # Python < 3.11
             match = re.search(r'^developer_instructions\s*=\s*"""(.*?)"""', text, re.S | re.M)
@@ -169,7 +179,9 @@ WORKER_PROTOCOL = (
     "PARTIAL, then task id, files changed, checks (command and outcome), decisions, remaining work."
 )
 LEGACY_WORKER_PROTOCOL = WORKER_PROTOCOL.replace(
-    "report(kind, assignment_id), where kind is progress, complete, blocked or decision", "report(text)")
+    "report(kind, assignment_id), where kind is progress, complete, blocked or decision",
+    "report(text)",
+)
 
 
 def discard(name, env):
@@ -217,14 +229,20 @@ def dispatch_identity(env, ctx=None):
         # for a session, and two hosts claiming the same session are ambiguous, not Claude.
         if lib.pi_marked(env):
             if len(lib.marked_harnesses(env)) > 1:
-                raise ToolError("cannot establish the lead session: the environment claims more than "
-                                "one host, so the lead identity is ambiguous")
-            raise ToolError("cannot establish a Pi lead session: no Pi process runs above this "
-                            "server; start the MCP server from Pi")
+                raise ToolError(
+                    "cannot establish the lead session: the environment claims more than "
+                    "one host, so the lead identity is ambiguous"
+                )
+            raise ToolError(
+                "cannot establish a Pi lead session: no Pi process runs above this "
+                "server; start the MCP server from Pi"
+            )
         # The Claude variable that is actually set is CLAUDE_CODE_SESSION_ID.
         generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_CODE_SESSION_ID")
     if not generation:
-        raise ToolError("cannot establish lead session generation; host must supply a CLI session ID")
+        raise ToolError(
+            "cannot establish lead session generation; host must supply a CLI session ID"
+        )
     if session is not None:
         session["identity"] = (scope, generation)
     return scope, generation
@@ -323,7 +341,9 @@ def spawn_instructions(arguments, env):
         with open(expanded, encoding="utf-8") as handle:
             text = handle.read()
     except OSError as error:
-        raise ToolError("cannot read instructions_file %s: %s" % (path, error.strerror or type(error).__name__))
+        raise ToolError(
+            "cannot read instructions_file %s: %s" % (path, error.strerror or type(error).__name__)
+        )
     if not text.strip():
         raise ToolError("instructions_file is empty: %s" % path)
     return text.strip()
@@ -337,8 +357,13 @@ def owned_orphan(name, caller, env, earlier, other):
         raw = json.loads(hc(["get", name, "--json"], env, Context()))
     except (ToolError, ValueError):
         return False
-    return bool(isinstance(raw, dict) and raw.get("parent") == caller and raw.get("address")
-                and raw.get("address") != earlier and not other(raw["address"]))
+    return bool(
+        isinstance(raw, dict)
+        and raw.get("parent") == caller
+        and raw.get("address")
+        and raw.get("address") != earlier
+        and not other(raw["address"])
+    )
 
 
 def profile_launch_error(name, env, ctx):
@@ -358,7 +383,11 @@ def profile_launch_error(name, env, ctx):
             pass
         remaining = deadline - time.monotonic()
         try:
-            screen = hc(["read", name, "--lines", "30"], env, ctx, min(1.0, remaining)) if remaining > 0 else ""
+            screen = (
+                hc(["read", name, "--lines", "30"], env, ctx, min(1.0, remaining))
+                if remaining > 0
+                else ""
+            )
         except ToolError:
             screen = ""
         for line in screen.splitlines():
@@ -370,12 +399,27 @@ def profile_launch_error(name, env, ctx):
     return None
 
 
+def profile_launcher():
+    """The checkout's profile launcher; an installed runtime falls back to the command on PATH.
+
+    The runtime lives in the member (`packages/agent-runtime/src/agent_runtime`), so the repository root
+    is found by walking up to the directory that carries the launcher, not by assuming a layout.
+    """
+    for parent in Path(__file__).resolve().parents:
+        script = parent / "bin" / "agent-runtime-profile"
+        if script.is_file():
+            return str(script)
+    return "agent-runtime-profile"
+
+
 def spawn(arguments, env, ctx):
     kind = arguments.get("kind")
     cli = arguments.get("cli") or "claude"
     if kind == "lookup":
-        raise ToolError("lookup is the CLI's own subagent tool, not a spawn: use %s (named workers only through spawn kind=worker)"
-                        % SUBAGENT_TOOL.get(cli, "the CLI's subagent tool"))
+        raise ToolError(
+            "lookup is the CLI's own subagent tool, not a spawn: use %s (named workers only through spawn kind=worker)"
+            % SUBAGENT_TOOL.get(cli, "the CLI's subagent tool")
+        )
     if kind != "worker":
         raise gap("spawn kind=%s" % kind, "hc run --bg ...")
     profile = None
@@ -411,11 +455,15 @@ def spawn(arguments, env, ctx):
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
     store = None
-    message = "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
+    message = (
+        "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
+    )
     protocol = WORKER_PROTOCOL if dispatch_enabled(env) else LEGACY_WORKER_PROTOCOL
     if cli == "pi":
-        protocol = protocol.replace("the agent-runtime report tool as report(",
-                                    "the agent-runtime report tool `mcp__agent-runtime__report` as ")
+        protocol = protocol.replace(
+            "the agent-runtime report tool as report(",
+            "the agent-runtime report tool `mcp__agent-runtime__report` as ",
+        )
         # Pi has no role file: the role and the dispatch contract travel in the task itself.
         if agent:
             message = "Role: %s\n\n%s" % (agent, message)
@@ -429,7 +477,9 @@ def spawn(arguments, env, ctx):
         store, team = lead_store(env, ctx)
     codex_profile = None
     if cli == "claude":
-        program = ["claude"] + (["--agent", agent] if agent else []) + launch_args + model + [message]
+        program = (
+            ["claude"] + (["--agent", agent] if agent else []) + launch_args + model + [message]
+        )
     elif cli == "pi":
         # Interactive Pi stays available for follow-up assignments.
         program = ["pi"] + model + [message]
@@ -440,18 +490,26 @@ def spawn(arguments, env, ctx):
         program = ["codex", "--no-daemon"]
         if codex_profile.applied:
             program += ["-p", codex_profile.name]
-        preamble = instructions if instructions is not None else (codex_instructions(agent) if agent else "")
+        preamble = (
+            instructions
+            if instructions is not None
+            else (codex_instructions(agent) if agent else "")
+        )
         program += model + ["%s\n\n%s" % (preamble, message) if preamble else message]
     if profile:
-        launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agent-runtime-profile")
-        program = [os.path.normpath(launcher), profile, str(profiles.config_path(env)), "--"] + program
+        program = [profile_launcher(), profile, str(profiles.config_path(env)), "--"] + program
     else:
         program = profiles.scrub_prefix(env, cli) + program
     if store:
-        earlier = store.worker_address(team, name)  # a fast report may bind the new address before we look
+        earlier = store.worker_address(
+            team, name
+        )  # a fast report may bind the new address before we look
         identity = store.register(team, name, task_id)
         identity.pop("_prior", None)
-        suffix = " Include assignment_id=%s and kind=progress|complete|blocked|decision." % identity["assignment_id"]
+        suffix = (
+            " Include assignment_id=%s and kind=progress|complete|blocked|decision."
+            % identity["assignment_id"]
+        )
         suffix += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         program[-1] += suffix
     # Capture the checkout and time before startup can create a log or change the commit.
@@ -462,18 +520,43 @@ def spawn(arguments, env, ctx):
         """The worker's own record: the assignment it belongs to and the profile it ran under."""
         if not store:
             return
-        usage.write_worker_metadata(env, name,
-                                    assignment_id=identity["assignment_id"], cli=cli, cwd=cwd,
-                                    base_commit=base, spawned_ms=spawned_ms,
-                                    profile_applied=None if codex_profile is None else bool(codex_profile.applied),
-                                    profile_reason=codex_profile.reason if codex_profile else None,
-                                    profile_name=codex_profile.name if codex_profile else None,
-                                    session_id=None)
+        usage.write_worker_metadata(
+            env,
+            name,
+            assignment_id=identity["assignment_id"],
+            cli=cli,
+            cwd=cwd,
+            base_commit=base,
+            spawned_ms=spawned_ms,
+            profile_applied=None if codex_profile is None else bool(codex_profile.applied),
+            profile_reason=codex_profile.reason if codex_profile else None,
+            profile_name=codex_profile.name if codex_profile else None,
+            session_id=None,
+        )
+
     try:
-        code, out, err = run(["hc", "run", "--bg", "--name", name, "--cwd", cwd, "--parent", caller, "--json",
-                              "--no-notify"] + program,
-                             env, ctx, SHORT_SECONDS)
-        if code != 0 and ctx.cancelled.is_set():  # cancel killed hc run mid-flight: not an hc refusal
+        code, out, err = run(
+            [
+                "hc",
+                "run",
+                "--bg",
+                "--name",
+                name,
+                "--cwd",
+                cwd,
+                "--parent",
+                caller,
+                "--json",
+                "--no-notify",
+            ]
+            + program,
+            env,
+            ctx,
+            SHORT_SECONDS,
+        )
+        if (
+            code != 0 and ctx.cancelled.is_set()
+        ):  # cancel killed hc run mid-flight: not an hc refusal
             raise ToolError("cancelled")
     except ToolError as error:
         # Cancel/timeout may leave a terminal behind; a missing binary cannot.
@@ -481,7 +564,12 @@ def spawn(arguments, env, ctx):
             mine = identity["assignment_id"]
             try:
                 orphan = not str(error).startswith("cannot run") and owned_orphan(
-                    name, caller, env, earlier, lambda address: store.started_by_other(mine, address))
+                    name,
+                    caller,
+                    env,
+                    earlier,
+                    lambda address: store.started_by_other(mine, address),
+                )
             except (dispatch.StoreError, sqlite3.Error):
                 orphan = False  # keep the original error; fail below still runs
             # Without an orphan the terminal is not removed (hc get failed, the worker exited, or another spawn owns
@@ -511,7 +599,8 @@ def spawn(arguments, env, ctx):
     def undo(error):
         """Every failure after a successful hc run ends the terminal, fails the assignment, leaves the worker inactive."""
         try:
-            store.fail(identity["assignment_id"], inactive=True)
+            if store:
+                store.fail(identity["assignment_id"], inactive=True)
         finally:
             discard(name, env)
         raise error
@@ -532,10 +621,16 @@ def spawn(arguments, env, ctx):
             raise error
     if sent is False:
         if not store:
-            raise ToolError("worker %s started but its task was not sent: hc read %s; no blind resend" % (name, name))
-        undo(ToolError("worker %s started but its task was not sent and was removed; spawn it again" % name))
+            raise ToolError(
+                "worker %s started but its task was not sent: hc read %s; no blind resend"
+                % (name, name)
+            )
+        undo(
+            ToolError(
+                "worker %s started but its task was not sent and was removed; spawn it again" % name
+            )
+        )
     info = {"name": name, "address": None, "parent": caller}
-    raw = {}
     turn, mode = None, "fresh"
     try:
         raw = json.loads(hc(["get", name, "--json"], env, ctx))
@@ -547,10 +642,11 @@ def spawn(arguments, env, ctx):
         return result(info)
     if ctx.cancelled.is_set():
         undo(ToolError("cancelled"))
-    if not info["address"]:
+    address = info.get("address")
+    if not address:
         undo(ToolError("worker started but address unavailable; assignment cannot accept reports"))
     try:
-        store.bind(identity["assignment_id"], info["address"], scope, getattr(ctx, "ack", None), turn, mode)
+        store.bind(identity["assignment_id"], address, scope, getattr(ctx, "ack", None), turn, mode)
     except (dispatch.StoreError, sqlite3.Error) as error:
         undo(error)
     record()  # the worker is live and bound: only now does its record describe a running worker
@@ -583,7 +679,9 @@ def message(arguments, env, ctx):
             store, own_team = lead_store(env, ctx)
             if store.has_worker(own_team, to):
                 actor = store.actor(actor["scope"], actor["address"], None, ctx.generation)
-        return result(ctx.store.peer(actor, to, text, arguments.get("message_id"), ctx.ack), structured=True)
+        return result(
+            ctx.store.peer(actor, to, text, arguments.get("message_id"), ctx.ack), structured=True
+        )
     return result(send([], to, text, env, ctx) or "sent")
 
 
@@ -598,7 +696,10 @@ def resume(arguments, env, ctx):
         store, team = lead_store(env, ctx)
         identity = store.register(team, name, task_id, transfer=True)
         prior = identity.pop("_prior", None)
-        prompt = "%s\n\nUse assignment_id=%s for report(kind=progress|complete|blocked|decision)." % (task, identity["assignment_id"])
+        prompt = (
+            "%s\n\nUse assignment_id=%s for report(kind=progress|complete|blocked|decision)."
+            % (task, identity["assignment_id"])
+        )
         prompt += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         try:
             mode = "ended" if row_state(raw) in ("done", "idle") else "working"
@@ -608,15 +709,26 @@ def resume(arguments, env, ctx):
                 sent = json.loads(out)
             except ValueError:
                 sent = None
-            if isinstance(sent, dict) and (sent.get("sent") is False or (sent.get("first_message") or {}).get("sent") is False):
+            if isinstance(sent, dict) and (
+                sent.get("sent") is False or (sent.get("first_message") or {}).get("sent") is False
+            ):
                 raise ToolError("resume task was not sent; no blind resend")
             if ctx.cancelled.is_set():
                 raise ToolError("cancelled")
-            store.bind(identity["assignment_id"], raw["address"], ctx.actor["scope"], ctx.ack, raw.get("turn"), mode)
+            store.bind(
+                identity["assignment_id"],
+                raw["address"],
+                ctx.actor["scope"],
+                ctx.ack,
+                raw.get("turn"),
+                mode,
+            )
         except (ToolError, dispatch.StoreError):
             store.fail(identity["assignment_id"], restore=prior)
             raise
-        return result(dict(identity, name=name, address=raw["address"], parent=raw["parent"]), structured=True)
+        return result(
+            dict(identity, name=name, address=raw["address"], parent=raw["parent"]), structured=True
+        )
     out = send(["--wait", "--timeout", str(WAIT_DEFAULT)], name, task, env, ctx, WAIT_DEFAULT + 10)
     return result(out or "turn ended")
 
@@ -631,7 +743,7 @@ def legacy_wait_seconds(arguments):
 def legacy_wait(arguments, env, ctx):
     (target,) = need(arguments, "target")
     seconds = legacy_wait_seconds(arguments)
-    _, caller = require_hc(env)
+    _, _ = require_hc(env)
     if target in ("any", "all"):
         argv = ["wait", "--children", target, "--timeout", str(seconds), "--json"]
     else:
@@ -654,10 +766,13 @@ def legacy_wait(arguments, env, ctx):
     return result({"wait": news, "workers": workers})
 
 
-
 def wait_seconds(arguments):
     value = arguments.get("timeout", WAIT_DEFAULT)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value < float("inf"):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0 <= value < float("inf")
+    ):
         raise ToolError("timeout must be a nonnegative finite number of seconds")
     return min(value, WAIT_MAX)
 
@@ -672,6 +787,7 @@ def wait(arguments, env, ctx):
     store, team = (ctx.store, actor["team_id"]) if inbox and actor else lead_store(env, ctx)
     recipient = actor["recipient"] if inbox and actor else env["HC_TERMINAL_ID"]
     reported = set()  # addresses that ever reported: their null status is never a silent worker
+
     def observe(members, timeout):
         try:
             code, out, _ = run(["hc", "ls", "--all", "--json"], env, ctx, timeout)
@@ -682,7 +798,14 @@ def wait(arguments, env, ctx):
             return {}
         observations = {}
         for member in members:
-            row = next((r for r in raw["terminals"] if isinstance(r, dict) and r.get("address") == member["address"]), None)
+            row = next(
+                (
+                    r
+                    for r in raw["terminals"]
+                    if isinstance(r, dict) and r.get("address") == member["address"]
+                ),
+                None,
+            )
             state = "exited"
             if row:
                 state = row.get("status")
@@ -693,19 +816,38 @@ def wait(arguments, env, ctx):
                     state = "replaced"
             if row and state is not None:
                 reported.add(member["address"])
-            if row and state is None and row.get("state") == "live" and member["address"] not in reported:
+            if (
+                row
+                and state is None
+                and row.get("state") == "live"
+                and member["address"] not in reported
+            ):
                 # ls lacks created_ms/reported: read the one terminal, only for silent live members.
                 try:
-                    code, out, _ = run(["hc", "get", member["address"], "--json"], env, ctx, timeout)
+                    code, out, _ = run(
+                        ["hc", "get", member["address"], "--json"], env, ctx, timeout
+                    )
                     detail = json.loads(out) if code == 0 else None
                 except (ToolError, ValueError):
                     detail = None
                 if isinstance(detail, dict) and lib.never_reported(detail):
                     state = "unreported"
-                elif isinstance(detail, dict) and (detail.get("reported") is True or detail.get("status_ms") is not None):
+                elif isinstance(detail, dict) and (
+                    detail.get("reported") is True or detail.get("status_ms") is not None
+                ):
                     reported.add(member["address"])
-            if state not in ("working", "idle", "done", "blocked", "error", "unreported", "exited", "finished",
-                             "interrupted", "replaced"):
+            if state not in (
+                "working",
+                "idle",
+                "done",
+                "blocked",
+                "error",
+                "unreported",
+                "exited",
+                "finished",
+                "interrupted",
+                "replaced",
+            ):
                 state = "unknown"
             observations[member["assignment_id"]] = state
             if row:
@@ -714,9 +856,22 @@ def wait(arguments, env, ctx):
                 turn = status.get("turn") if turn is None and isinstance(status, dict) else turn
                 observations[(member["assignment_id"], "turn")] = turn
         return observations
+
     try:
-        return result(dispatch_wait.wait(store, team, recipient, target, seconds,
-                      arguments.get("receipt"), ctx, observe, inbox=inbox), structured=True)
+        return result(
+            dispatch_wait.wait(
+                store,
+                team,
+                recipient,
+                target,
+                seconds,
+                arguments.get("receipt"),
+                ctx,
+                observe,
+                inbox=inbox,
+            ),
+            structured=True,
+        )
     except InterruptedError:
         raise ToolError("cancelled")
 
@@ -807,7 +962,6 @@ def legacy_report(arguments, env, ctx):
     return result("reported to %s" % info["parent"])
 
 
-
 def report(arguments, env, ctx):
     if not dispatch_enabled(env):
         return legacy_report(arguments, env, ctx)
@@ -826,9 +980,21 @@ def report(arguments, env, ctx):
         raise ToolError("cannot verify report sender")
     if not isinstance(raw, dict) or raw.get("parent") != info["parent"]:
         raise ToolError("report sender changed during resolution")
-    return result(ctx.store.publish(scope, caller, info["parent"], assignment, text,
-                  arguments.get("kind"), arguments.get("message_id"), caller_name=raw.get("name"), ack=ctx.ack,
-                  generation=ctx.generation), structured=True)
+    return result(
+        ctx.store.publish(
+            scope,
+            caller,
+            info["parent"],
+            assignment,
+            text,
+            arguments.get("kind"),
+            arguments.get("message_id"),
+            caller_name=raw.get("name"),
+            ack=ctx.ack,
+            generation=ctx.generation,
+        ),
+        structured=True,
+    )
 
 
 def task(arguments, env, ctx):
@@ -838,20 +1004,30 @@ def task(arguments, env, ctx):
     return result(ctx.store.task(ctx.actor, action, arguments, ack=ctx.ack), structured=True)
 
 
-def status(arguments, env, ctx):
+def status(arguments, env, _ctx):
     (name,) = need(arguments, "name")
     return result(lib.status(lib.resolve(env)["runtime"], name, env))
 
 
-def list_agents(arguments, env, ctx):
+def list_agents(_arguments, env, _ctx):
     runtime = lib.resolve(env)["runtime"]
     if runtime != "hc":
         raise ToolError("list is hc-only; use the runtime's own tools")
     return result(lib.list_children(runtime, env))
 
 
-HANDLERS = {"spawn": spawn, "message": message, "resume": resume, "wait": wait, "status": status,
-            "list": list_agents, "collect": collect, "stop": stop, "report": report, "task": task}
+HANDLERS = {
+    "spawn": spawn,
+    "message": message,
+    "resume": resume,
+    "wait": wait,
+    "status": status,
+    "list": list_agents,
+    "collect": collect,
+    "stop": stop,
+    "report": report,
+    "task": task,
+}
 
 
 def bounded(out):
@@ -863,11 +1039,18 @@ def bounded(out):
     body = out["content"][0]["text"]
     if len(json.dumps(body)) <= dispatch.MAX_BASE_BYTES // 2:
         return out
-    budget = dispatch.MAX_BASE_BYTES // 2 - 1024  # headroom for the partial/kept/original_bytes fields
-    keep = body[-budget:]  # escaped size is at least the char count; shrink from the head until it fits
+    budget = (
+        dispatch.MAX_BASE_BYTES // 2 - 1024
+    )  # headroom for the partial/kept/original_bytes fields
+    keep = body[
+        -budget:
+    ]  # escaped size is at least the char count; shrink from the head until it fits
     while len(json.dumps(keep)) > budget:
-        keep = keep[max(1, (len(json.dumps(keep)) - budget) // 6):]
-    return result({"result": keep, "partial": True, "kept": "tail", "original_bytes": len(body.encode())}, structured=True)
+        keep = keep[max(1, (len(json.dumps(keep)) - budget) // 6) :]
+    return result(
+        {"result": keep, "partial": True, "kept": "tail", "original_bytes": len(body.encode())},
+        structured=True,
+    )
 
 
 def diagnostic(name, arguments, env, ctx, error):
@@ -889,8 +1072,10 @@ def diagnostic(name, arguments, env, ctx, error):
         payload = {"result": body}
     if not isinstance(payload, dict):
         payload = {"result": payload}
-    payload["delivery_error"] = ("dispatch unavailable (%s); diagnostic only, not an accepted report; "
-                                 "any receipt was not processed" % error)
+    payload["delivery_error"] = (
+        "dispatch unavailable (%s); diagnostic only, not an accepted report; "
+        "any receipt was not processed" % error
+    )
     return result(payload, structured=True)
 
 
@@ -902,7 +1087,9 @@ def lead_unfinished(name, arguments, ctx, scope, generation, caller):
     try:
         if not ctx.actor["worker_id"]:
             return ctx.store.unfinished_count(ctx.actor["team_id"])
-        team = ctx.store.owned_team(scope, caller, generation)  # a worker with children leads its own team
+        team = ctx.store.owned_team(
+            scope, caller, generation
+        )  # a worker with children leads its own team
         if not team or (name == "message" and not ctx.store.has_worker(team, arguments.get("to"))):
             return 0
         return ctx.store.unfinished_count(team)
@@ -915,8 +1102,10 @@ def require_dispatch(env):
     and no scope to check."""
     host = host_policy.host_of(env)
     if host_policy.restricted(host):
-        raise ToolError("the %s host needs the durable dispatch store: start the MCP server with "
-                        "AGENT_RUNTIME_DISPATCH=1" % host)
+        raise ToolError(
+            "the %s host needs the durable dispatch store: start the MCP server with "
+            "AGENT_RUNTIME_DISPATCH=1" % host
+        )
 
 
 def call(name, arguments, env, ctx):
@@ -957,9 +1146,15 @@ def call_dispatch(name, arguments, env, ctx):
     raw_name = None
     if info["role"] == "worker" and name == "report":
         raw_name = json.loads(hc(["get", caller, "--json"], env, ctx)).get("name")
-    ctx.actor = ctx.store.actor(scope, caller, info.get("parent"), generation,
-                               arguments.get("assignment_id"), raw_name,
-                                defer_pin=gated_read)
+    ctx.actor = ctx.store.actor(
+        scope,
+        caller,
+        info.get("parent"),
+        generation,
+        arguments.get("assignment_id"),
+        raw_name,
+        defer_pin=gated_read,
+    )
     if not ctx.actor["worker_id"]:
         ctx.owned_team = ctx.actor["team_id"]
     # The host that owns this session decides what it may mutate; the server is the authority.
@@ -997,8 +1192,16 @@ def call_dispatch(name, arguments, env, ctx):
         return outcome  # no inbox read, ack or receipt row
     # The inbox page budgets against the already-bounded base, then receipt/pin/ack commit together.
     reserve = len(json.dumps(payload, separators=(",", ":")).encode()) + len(',"inbox":')
-    inbox = ctx.store.read(ctx.actor["team_id"], ctx.actor["recipient"], "any", assignment_ids=[],
-                           inbox=True, ack=ctx.ack, pin=ctx.actor.get("pin"), reserve=reserve)
+    inbox = ctx.store.read(
+        ctx.actor["team_id"],
+        ctx.actor["recipient"],
+        "any",
+        assignment_ids=[],
+        inbox=True,
+        ack=ctx.ack,
+        pin=ctx.actor.get("pin"),
+        reserve=reserve,
+    )
     if inbox["messages"] or inbox["more"]:
         return result(dict(payload, inbox=inbox), structured=True)
     return outcome

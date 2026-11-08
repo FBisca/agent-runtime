@@ -9,17 +9,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
-from test_mcp_server import SERVER, Session
+from test_mcp_server import RUNTIME_SRC, Session
 from test_tools import ToolCase
 
-sys.path.insert(0, str(SERVER.parent))
-import hc_tools
-import dispatch_wait
-import dispatch_store
-from dispatch_events import endpoints
-from dispatch_store import Store
-
+sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
+from agent_runtime import dispatch_store, dispatch_wait, hc_tools
+from agent_runtime.dispatch_events import endpoints
+from agent_runtime.dispatch_store import Store
 
 pytestmark = pytest.mark.integration
 
@@ -701,7 +698,7 @@ class EventWaitTests(ToolCase):
 
     def test_needs_person_runtime_keeps_its_own_next_and_is_not_stalled(self):
         """agent-runtime/R111"""
-        from agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
+        from agent_runtime.agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
         for runtime, expected in (("unreported", UNREPORTED_NEXT), ("error", ERROR_NEXT)):
             with self.subTest(runtime=runtime):
                 store, team, assignment, now, state, wait = self.stall_rig()
@@ -1029,7 +1026,7 @@ class EventWaitTests(ToolCase):
                         recipient="t0", kind="complete", text="committed before crash")
         script = '''import json, os, sys
 sys.path.insert(0, sys.argv[1])
-from dispatch_store import Store
+from agent_runtime.dispatch_store import Store
 store = Store({"HOME": sys.argv[2]})
 message = json.loads(sys.argv[3])
 with store.transaction() as db:
@@ -1039,7 +1036,7 @@ with store.transaction() as db:
 os._exit(0)
 '''
         started = time.monotonic()
-        subprocess.run([sys.executable, "-c", script, str(SERVER.parent), self.env["HOME"], json.dumps(envelope)], check=True)
+        subprocess.run([sys.executable, "-c", script, str(RUNTIME_SRC), self.env["HOME"], json.dumps(envelope)], check=True)
         batch = self.batch(self.rpc, request_id)
         # The recovery is the wait's own 0.5s recheck: ten of them are a finite bound, and the old
         # one-second bound measured the machine instead of the recovery.

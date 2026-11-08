@@ -17,13 +17,14 @@ from unittest import mock
 from test_mcp_server import FakeCli, Session
 from test_tools import ToolCase, raw
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import agent_runtime as lib  # noqa: E402
-import hc_tools  # noqa: E402
-import host_policy  # noqa: E402
-from dispatch_store import Store  # noqa: E402
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"))
 import pytest
+from agent_runtime import agent_runtime as lib  # noqa: E402
+from agent_runtime import (
+    hc_tools,  # noqa: E402
+    host_policy,  # noqa: E402
+)
+from agent_runtime.dispatch_store import Store  # noqa: E402
 
 pytestmark = pytest.mark.integration
 

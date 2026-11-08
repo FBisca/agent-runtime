@@ -12,9 +12,8 @@ import time
 import unittest
 from pathlib import Path
 
-from test_mcp_server import SERVER
-
 import pytest
+from test_mcp_server import RUNTIME_SRC, SERVER
 
 pytestmark = pytest.mark.integration
 
@@ -22,8 +21,8 @@ pytestmark = pytest.mark.integration
 MAX_PERIOD_WAITS = 4
 
 PROFILE_ENV_PROBE = '''import json, os, subprocess, sys, tempfile
-sys.path.insert(0, sys.argv[2] + '/server')
-import profiles
+sys.path.insert(0, sys.argv[2] + '/packages/agent-runtime/src')
+from agent_runtime import profiles
 name = sys.argv[1]
 env = dict(os.environ)
 overlay = profiles.load(env, sys.argv[3])[name]['env']
@@ -152,9 +151,8 @@ class LiveProfileTests(unittest.TestCase):
         """S17 S18 S19: real hc preserves the profile env and identifies the exec'd CLI."""
         if not os.environ.get("HC_TERMINAL_ID"):
             self.skipTest("run inside an hc terminal")
-        sys.path.insert(0, str(SERVER.parent))
-        import agent_runtime
-        import profiles
+        sys.path.insert(0, str(RUNTIME_SRC))
+        from agent_runtime import agent_runtime, profiles
 
         selected = os.environ["AGENT_RUNTIME_LIVE_PROFILE"]
         family = profiles.load(os.environ)[selected]["cli"]

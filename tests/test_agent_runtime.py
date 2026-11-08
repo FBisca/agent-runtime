@@ -1,16 +1,15 @@
 """Resolver checks with injected env and hc runner; the real hc is never called."""
 
-import importlib.util
 import io
 import json
-from contextlib import redirect_stdout
-from pathlib import Path
-import sys
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -22,10 +21,10 @@ pytestmark = pytest.mark.integration
 
 SCRIPT = Path(__file__).resolve().parents[1] / "server" / "agent_runtime.py"
 BIN = SCRIPT
-spec = importlib.util.spec_from_file_location("agent_runtime", SCRIPT)
-app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(app)
-app.ps_entry = lambda pid: None  # tests never read the real process tree
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"))
+from agent_runtime import agent_runtime as app  # noqa: E402
+
+app.ps_entry = lambda pid, timeout=0.2: None  # tests never read the real process tree
 
 
 def hc_returning(parent):
@@ -191,7 +190,7 @@ def hc_world(terminals, calls=None):
     return fake
 
 
-def raw(status, parent="t0", state="live", **extra):
+def raw(status, parent: str | None = "t0", state: str = "live", **extra):
     return dict({"address": "t9", "name": "fix", "parent": parent, "state": state, "status": status, "turn": 3}, **extra)
 
 
@@ -557,7 +556,7 @@ class CallTests(unittest.TestCase):
     def hc_calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def call(self, *args, hc_terminal="t0", extra_env=None):
+    def call(self, *args, hc_terminal: str | None = "t0", extra_env=None):
         env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.dir / "home"),
                "XDG_STATE_HOME": str(self.dir / "state"), "XDG_CONFIG_HOME": str(self.dir / "config")}
         if hc_terminal:

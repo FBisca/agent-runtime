@@ -14,9 +14,9 @@ A lead agent calls `spawn`, workers run in their own terminal panes, and every r
 
 ## Architecture
 
-- **MCP server** (`server/mcp_server.py`): serves the ten delegation tools over stdio.
-- **Dispatch store** (`server/dispatch_store.py`): private, versioned SQLite. Holds assignments, reports, peer messages and shared tasks, with idempotent server-attributed events.
-- **Runtime adapters** (`server/agent_runtime.py`): `resolve` picks `herdmates`, `hc` or `native` deterministically from the environment.
+- **MCP server** (`packages/agent-runtime/src/agent_runtime/mcp_server.py`): serves the ten delegation tools over stdio.
+- **Dispatch store** (`packages/agent-runtime/src/agent_runtime/dispatch_store.py`): private, versioned SQLite. Holds assignments, reports, peer messages and shared tasks, with idempotent server-attributed events.
+- **Runtime adapters** (`packages/agent-runtime/src/agent_runtime/agent_runtime.py`): `resolve` picks `herdmates`, `hc` or `native` deterministically from the environment.
 - **Hooks** (`hooks/`): a PreToolUse guard denies raw `hc` mutations and keeps subagents off the mutating tools; a SubagentStart hook tells native subagents what they may call; a context hook (Claude SessionStart `compact`/`clear` and UserPromptSubmit) reminds a lead to call `wait(all)` when it has undelivered messages or unseen working assignments, or to check `status` when delivered attention is unchanged. Lead hooks are read-only and fail open: they open the store `mode=ro`, never write, and print nothing on any error (shared helpers in `hooks/hook_lib.py`). Known limit: UserPromptSubmit may fire while a backgrounded `wait(all)` is in flight, so the reminder can repeat; the Stop guard (below) exempts a running backgrounded `wait`.
 
 ### Stop guard (Claude)
@@ -46,7 +46,7 @@ Two roles are swappable in principle, and neither has an adapter interface: the 
 | Role | Supported today | Where it plugs in |
 |---|---|---|
 | Host | Claude Code, Codex, Pi (lead and worker) | `CLIS`, `spawn`, `cli_of_args`, `detect_cli`, `dispatch_identity` and the hooks (see Hosts) |
-| Server | Herdr `hc` | `hc` and `run` in `server/hc_tools.py`, `hc_get` and `run_command` in `server/agent_runtime.py` (see Servers) |
+| Server | Herdr `hc` | `hc` and `run` in `packages/agent-runtime/src/agent_runtime/hc_tools.py`, `hc_get` and `run_command` in `packages/agent-runtime/src/agent_runtime/agent_runtime.py` (see Servers) |
 
 ### Hosts
 
@@ -54,15 +54,15 @@ The MCP server and the dispatch store are host-agnostic: any coding agent that s
 
 | Concern | Where | What a new host provides |
 |---|---|---|
-| Host names | `CLIS` in `server/hc_tools.py`; the `cli` enum in `TOOLS` in `server/mcp_server.py`; the `--cli` choices in `server/agent_runtime.py` | a name |
-| Launching a worker | `spawn` in `server/hc_tools.py` | the argv that starts the CLI non-interactively with the task text (Claude: `--permission-mode auto`; Codex: `--no-daemon`; neither has a default role; an optional `model` adds `--model <model>` before the prompt; an optional `effort` (`low`, `medium`, `high`, `xhigh`, `max`) sets that task's reasoning effort as a launch flag, Claude `--effort <level>` and Codex `-c model_reasoning_effort="<level>"`, so it never changes the CLI's saved default; an optional `agent` selects a role: Claude `--agent <agent>`, Codex reads `~/.codex/agents/<agent>.toml`; `agent: "none"` runs the worker with no role at all (Claude drops `--agent`, Codex gets no preamble) and the runtime states the worker protocol in the prompt; `instructions_file` (Codex only) takes the role text from that file instead of a toml, and cannot be combined with `agent`. An agent without the `report` tool leaves the lead seeing the worker as unreported or stalled) |
-| Worker instructions | `codex_instructions` in `server/hc_tools.py`; `spawn_instructions` for `instructions_file`; for Claude, the agent file the host loads | where the host reads the implementer role from (Codex: `~/.codex/agents/<agent>.toml` when explicitly selected) |
-| Subagent wording | `SUBAGENT_TOOL` in `server/hc_tools.py` | the name of the host's own subagent tool, used in the `lookup` refusal |
-| Detecting the host | `cli_of_args` (process name), `detect_cli` and `CODEX_ENV_MARKERS`/`CLAUDE_ENV_MARKERS`/`PI_ENV_MARKERS` (environment markers), `foreground_cli` (Herdr foreground program), all in `server/agent_runtime.py` | a process basename and/or environment variable that identifies it |
-| Runtime choice | `resolve` in `server/agent_runtime.py` | which runtime (`herdmates` or `native`) the host gets under Herdr |
-| Session identity | `dispatch_identity` in `server/hc_tools.py` | the lead's generation is `<pid>:<lstart>` of the nearest Claude, Codex or Pi ancestor (`cli_generation` in `server/agent_runtime.py`, shared with hooks), so `/clear` and `/new` stay on one team; a session ID in the environment (`CODEX_THREAD_ID` or `CLAUDE_SESSION_ID`) is used only when no CLI ancestor is visible (a Pi lead never falls back to a session ID: it has no Pi process, so it has no session) |
-| Host authorization | `host_of` and `authorize` in `server/host_policy.py` | for a host whose trust model the runtime cannot inherit (Pi), what the session may mutate, which worker backends it may start and where |
-| Reading its terminal | `hc_app` in `server/agent_runtime.py`, and `server/markers.json` | an app name (`claude-code`, `codex`) plus its prompt glyph, anchor and interrupt text, for `status` and `collect` |
+| Host names | `CLIS` in `packages/agent-runtime/src/agent_runtime/hc_tools.py`; the `cli` enum in `TOOLS` in `packages/agent-runtime/src/agent_runtime/mcp_server.py`; the `--cli` choices in `packages/agent-runtime/src/agent_runtime/agent_runtime.py` | a name |
+| Launching a worker | `spawn` in `packages/agent-runtime/src/agent_runtime/hc_tools.py` | the argv that starts the CLI non-interactively with the task text (Claude: `--permission-mode auto`; Codex: `--no-daemon`; neither has a default role; an optional `model` adds `--model <model>` before the prompt; an optional `effort` (`low`, `medium`, `high`, `xhigh`, `max`) sets that task's reasoning effort as a launch flag, Claude `--effort <level>` and Codex `-c model_reasoning_effort="<level>"`, so it never changes the CLI's saved default; an optional `agent` selects a role: Claude `--agent <agent>`, Codex reads `~/.codex/agents/<agent>.toml`; `agent: "none"` runs the worker with no role at all (Claude drops `--agent`, Codex gets no preamble) and the runtime states the worker protocol in the prompt; `instructions_file` (Codex only) takes the role text from that file instead of a toml, and cannot be combined with `agent`. An agent without the `report` tool leaves the lead seeing the worker as unreported or stalled) |
+| Worker instructions | `codex_instructions` in `packages/agent-runtime/src/agent_runtime/hc_tools.py`; `spawn_instructions` for `instructions_file`; for Claude, the agent file the host loads | where the host reads the implementer role from (Codex: `~/.codex/agents/<agent>.toml` when explicitly selected) |
+| Subagent wording | `SUBAGENT_TOOL` in `packages/agent-runtime/src/agent_runtime/hc_tools.py` | the name of the host's own subagent tool, used in the `lookup` refusal |
+| Detecting the host | `cli_of_args` (process name), `detect_cli` and `CODEX_ENV_MARKERS`/`CLAUDE_ENV_MARKERS`/`PI_ENV_MARKERS` (environment markers), `foreground_cli` (Herdr foreground program), all in `packages/agent-runtime/src/agent_runtime/agent_runtime.py` | a process basename and/or environment variable that identifies it |
+| Runtime choice | `resolve` in `packages/agent-runtime/src/agent_runtime/agent_runtime.py` | which runtime (`herdmates` or `native`) the host gets under Herdr |
+| Session identity | `dispatch_identity` in `packages/agent-runtime/src/agent_runtime/hc_tools.py` | the lead's generation is `<pid>:<lstart>` of the nearest Claude, Codex or Pi ancestor (`cli_generation` in `packages/agent-runtime/src/agent_runtime/agent_runtime.py`, shared with hooks), so `/clear` and `/new` stay on one team; a session ID in the environment (`CODEX_THREAD_ID` or `CLAUDE_SESSION_ID`) is used only when no CLI ancestor is visible (a Pi lead never falls back to a session ID: it has no Pi process, so it has no session) |
+| Host authorization | `host_of` and `authorize` in `packages/agent-runtime/src/agent_runtime/host_policy.py` | for a host whose trust model the runtime cannot inherit (Pi), what the session may mutate, which worker backends it may start and where |
+| Reading its terminal | `hc_app` in `packages/agent-runtime/src/agent_runtime/agent_runtime.py`, and `packages/agent-runtime/src/agent_runtime/markers.json` | an app name (`claude-code`, `codex`) plus its prompt glyph, anchor and interrupt text, for `status` and `collect` |
 | Hook protocol | `hooks/pre_tool_use.py`, `hooks/subagent_start.py` and `hooks/lead_context.py` (helpers in `hooks/hook_lib.py`) | a PreToolUse hook that sends JSON with `tool_name`, `tool_input` and `agent_id` for subagents; `TOOL_NAME` in the hook matches the plugin and plain `mcp__agent-runtime__` tool prefixes (the `--cli codex` argument Codex passes is not branched on) |
 | MCP registration | `.mcp.json` and `hooks/hooks.json` (Claude plugin); the block printed by `install.sh` (Codex) | the host's own config entry for a stdio MCP server |
 
@@ -151,16 +151,16 @@ Worker panes are run by Herdr's [`hc`](https://herdr.dev/core/) CLI. There is no
 
 | Server job | Today's call | Where |
 |---|---|---|
-| Run helpers | every call goes through `hc` and `run` | `server/hc_tools.py` |
-| Start a worker pane | `hc run --bg --name <n> --cwd <dir> --parent <id> --json <argv>` | `spawn` in `server/hc_tools.py` |
-| Terminal state and identity | `hc get <id> --json` (name, parent, status, foreground argv) | `hc_get` in `server/agent_runtime.py`, with `hc_state` and `hc_record` there mapping the reply to a worker state |
-| Send text to a terminal | `hc send [flags] <target> <text>` (prompts, resume, peer messages) | `server/hc_tools.py` |
-| Read a screen | `hc read <n> --lines N` | `collect` in `server/hc_tools.py`; `run_command` in `server/agent_runtime.py` for `status` |
-| Wait for news | `hc wait --children any\|all` or `hc wait <n>`, with `--timeout --json` | `wait` in `server/hc_tools.py` |
-| List terminals | `hc ls --all --json` | `server/hc_tools.py`, `server/agent_runtime.py` |
-| Stop and remove | `hc kill <n>`, `hc rm <n>` | `stop` in `server/hc_tools.py` |
-| Terminal IDs and scope | `HC_TERMINAL_ID` is the caller's terminal; `hc_server` derives the scope from `HC_TERMINAL_SOCKET` (else `HC_SCOPE`) | `me` and `hc_server` in `server/hc_tools.py` |
-| Screen markers | per-app prompt and interrupt text that tell idle from busy in a read screen | `server/markers.json` |
+| Run helpers | every call goes through `hc` and `run` | `packages/agent-runtime/src/agent_runtime/hc_tools.py` |
+| Start a worker pane | `hc run --bg --name <n> --cwd <dir> --parent <id> --json <argv>` | `spawn` in `packages/agent-runtime/src/agent_runtime/hc_tools.py` |
+| Terminal state and identity | `hc get <id> --json` (name, parent, status, foreground argv) | `hc_get` in `packages/agent-runtime/src/agent_runtime/agent_runtime.py`, with `hc_state` and `hc_record` there mapping the reply to a worker state |
+| Send text to a terminal | `hc send [flags] <target> <text>` (prompts, resume, peer messages) | `packages/agent-runtime/src/agent_runtime/hc_tools.py` |
+| Read a screen | `hc read <n> --lines N` | `collect` in `packages/agent-runtime/src/agent_runtime/hc_tools.py`; `run_command` in `packages/agent-runtime/src/agent_runtime/agent_runtime.py` for `status` |
+| Wait for news | `hc wait --children any\|all` or `hc wait <n>`, with `--timeout --json` | `wait` in `packages/agent-runtime/src/agent_runtime/hc_tools.py` |
+| List terminals | `hc ls --all --json` | `packages/agent-runtime/src/agent_runtime/hc_tools.py`, `packages/agent-runtime/src/agent_runtime/agent_runtime.py` |
+| Stop and remove | `hc kill <n>`, `hc rm <n>` | `stop` in `packages/agent-runtime/src/agent_runtime/hc_tools.py` |
+| Terminal IDs and scope | `HC_TERMINAL_ID` is the caller's terminal; `hc_server` derives the scope from `HC_TERMINAL_SOCKET` (else `HC_SCOPE`) | `me` and `hc_server` in `packages/agent-runtime/src/agent_runtime/hc_tools.py` |
+| Screen markers | per-app prompt and interrupt text that tell idle from busy in a read screen | `packages/agent-runtime/src/agent_runtime/markers.json` |
 
 A new backend must provide: start a named background terminal under a parent and return its ID, report a terminal's state and parent, accept text input, return recent screen text, block until a child changes state, list terminals, and stop and remove one. The `hc`-specific reply shapes are parsed where listed above, so those parsers change with the backend. The `herdmates` and `native` runtimes in `resolve` are separate paths without `hc` and only offer status.
 
