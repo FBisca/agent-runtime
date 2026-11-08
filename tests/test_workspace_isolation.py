@@ -141,8 +141,8 @@ class IsolationTests(unittest.TestCase):
             orchestrator = wheel_metadata(next(out_dir.glob("agent_orchestrator-*.whl")))
 
         self.assertNotIn("Requires-Dist:", runtime)
-        self.assertIn("Requires-Dist: pydantic", orchestrator)
-        self.assertIn("Requires-Dist: pyyaml", orchestrator.lower())
+        self.assertIn("requires-dist: pydantic", orchestrator.lower())
+        self.assertIn("requires-dist: pyyaml", orchestrator.lower())
 
 
 class ToolchainTests(unittest.TestCase):

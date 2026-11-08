@@ -221,14 +221,12 @@ class DependencyTests(unittest.TestCase):
 
 
 class NotYetBuiltTests(unittest.TestCase):
-    """Red contracts for the tickets that build the workspace; they fail until then."""
+    """Contracts for the tickets that build the workspace; they hold from the ticket that builds it."""
 
-    @pytest.mark.xfail(strict=True, reason="T2/T3: the workspace packages do not exist yet")
     def test_S2_the_workspace_packages_exist_beside_the_legacy_shims(self):
         """uv-workspace/S2"""
         self.assertTrue((PLUGIN / "packages" / "agent-runtime" / "pyproject.toml").is_file())
 
-    @pytest.mark.xfail(strict=True, reason="T4: the orchestrator has no public runtime client yet")
     def test_S3_the_orchestrator_talks_to_a_public_runtime_client(self):
         """uv-workspace/S3"""
         self.assertTrue((PLUGIN / "packages" / "agent-orchestrator").is_dir())
