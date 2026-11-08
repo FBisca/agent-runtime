@@ -26,6 +26,11 @@ in the repository, so the repository can be cloned anywhere and still serve the 
 Claude marketplace commands and the Codex `config.toml` wiring (`[mcp_servers.agent-runtime]` and the
 `[[hooks.PreToolUse]]` blocks) and refuses to overwrite a non-symlink of the same name.
 
+The installer is part of the contract, not an implementation detail: `tests/test_compatibility_contract_integration.py`
+runs it as a process and pins the shims it links, the environment variable that chooses the target
+directory and the refusal it prints when a name of the same kind is not a symlink. The recorded
+values live under `installer` in `compatibility-baseline.json`.
+
 The CLI keeps four subcommands: `resolve`, `status`, `list` and `call`. `call` is the scripted
 bridge to the MCP tools and lists them in its usage error.
 
@@ -37,6 +42,11 @@ bridge to the MCP tools and lists them in its usage error.
   `import usage`, …) from `server/`; `hooks/` adds `hook_lib` and `lead_context`.
 * Only `server/dispatch_store.py` and `server/hc_tools.py` import `sqlite3`. That is the store
   layer: nothing else may touch the database directly (S3).
+* The agent skills (the `orchestrate` skill and its companions) do not live in this repository: they
+  ship from `agent-skills/skills/`, which the uv-workspace plan wires in T4. This baseline therefore
+  records the runtime they call — the `agent-runtime` shim and the `spawn`, `resume`, `collect` and
+  `stop` tools — and not the skill files themselves; a rollback of the workspace leaves the skills
+  pointing at the same public surface.
 
 ## The public surface orchestration may use (S3)
 
@@ -85,6 +95,9 @@ are still there.
 | `test_S2_the_installer_links_every_entrypoint_and_wires_the_hooks` | S2 | `tests/test_compatibility_contract.py` |
 | `test_S2_the_cli_keeps_its_subcommands` | S2 | `tests/test_compatibility_contract.py` |
 | `test_S2_the_hook_shim_still_fails_open` | S2 | `tests/test_compatibility_contract_integration.py` |
+| `test_S2_the_installer_links_every_shim` | S2 | `tests/test_compatibility_contract_integration.py` |
+| `test_S2_the_installer_takes_the_documented_bin_dir` | S2 | `tests/test_compatibility_contract_integration.py` |
+| `test_S2_the_installer_refuses_to_overwrite_a_non_symlink` | S2 | `tests/test_compatibility_contract_integration.py` |
 | `test_S2_the_cli_bridge_reaches_the_public_tools` | S2 | `tests/test_compatibility_contract_integration.py` |
 | `test_S3_the_public_tool_surface_covers_the_orchestration_verbs` | S3 | `tests/test_compatibility_contract.py` |
 | `test_S3_direct_sqlite_access_stays_inside_the_runtime_store_layer` | S3 | `tests/test_compatibility_contract.py` |

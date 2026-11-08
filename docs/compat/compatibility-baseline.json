@@ -20,6 +20,18 @@
       "python": "server/profiles.py"
     }
   },
+  "installer": {
+    "script": "install.sh",
+    "bin_dir_env": "BIN_DIR",
+    "default_bin_dir": "~/.local/bin",
+    "shims": [
+      "agent-runtime",
+      "agent-runtime-hook",
+      "agent-runtime-mcp",
+      "agent-runtime-profile"
+    ],
+    "refusal_message": "refusing to overwrite"
+  },
   "hook_scripts": [
     "hooks/pre_tool_use.py",
     "hooks/stop_guard.py",
