@@ -44,17 +44,17 @@ class PiSpawnTests(ToolCase):
     def test_S1_a_pi_spawn_builds_the_pi_argv_with_the_task_last(self):
         """pi-worker/S1: the pi family launches Pi itself, not a Claude or Codex shim."""
         argv = self.spawn_argv(cli="pi", model="minimax/MiniMax-M3.1-Flash")
-        self.assertEqual(argv[:4], ["pi", "--print", "--model", "minimax/MiniMax-M3.1-Flash"])
-        self.assertEqual(len(argv), 5)
+        self.assertEqual(argv[:3], ["pi", "--model", "minimax/MiniMax-M3.1-Flash"])
+        self.assertEqual(len(argv), 4)
         self.assertIn("do x", argv[-1])
         self.assertNotIn("claude", argv)
         self.assertNotIn("codex", argv)
 
-    def test_S1_a_pi_spawn_without_a_model_keeps_the_print_flag(self):
-        """pi-worker/S1: Pi runs non-interactively with the task as its only argument."""
+    def test_S1_a_pi_spawn_without_a_model_is_interactive(self):
+        """pi-worker/S1: Pi runs interactively with the task as its only argument."""
         argv = self.spawn_argv(cli="pi")
-        self.assertEqual(argv[:2], ["pi", "--print"])
-        self.assertEqual(len(argv), 3)
+        self.assertEqual(argv[0], "pi")
+        self.assertEqual(len(argv), 2)
         self.assertIn("do x", argv[-1])
 
     def test_S1_the_pi_task_carries_the_role_and_the_report_protocol(self):
@@ -77,8 +77,8 @@ class PiSpawnTests(ToolCase):
         for effort in ("low", "medium", "high", "xhigh", "max"):
             with self.subTest(effort=effort):
                 argv = self.spawn_argv(cli="pi", effort=effort)
-                self.assertEqual(argv[:4], ["pi", "--print", "--thinking", effort])
-                self.assertEqual(len(argv), 5)
+                self.assertEqual(argv[:3], ["pi", "--thinking", effort])
+                self.assertEqual(len(argv), 4)
 
     def test_S6_an_effort_pi_does_not_know_is_refused_before_anything_starts(self):
         """pi-worker/S6: the runtime never sends a level the CLI does not accept."""
