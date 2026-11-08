@@ -25,7 +25,8 @@ jobs:
       # Both workspace members must resolve from the committed lockfile, on every matrix entry.
       - name: resolve the workspace
         run: uv sync --frozen --all-packages --dry-run
-      - run: uv sync --frozen
+      # Both members: the runtime's console scripts and the orchestrator's contracts are installed.
+      - run: uv sync --frozen --all-packages
       # The whole suite, in parallel: the fast suite (`uv run pytest`) is the unit tests alone.
       - run: uv run pytest -n 4
       # The legacy tree is not lint-clean yet. The gate tracks the debt instead of hiding it:

@@ -155,8 +155,9 @@ class CliContractTests(unittest.TestCase):
 
     def test_the_cli_offers_the_documented_commands(self):
         """uv-workspace/S4"""
+        env = dict(os.environ, PYTHONPATH=str(MEMBER.parent))
         result = subprocess.run([sys.executable, "-m", "agent_orchestrator", "--help"], capture_output=True, text=True,
-                                cwd=str(REPO), timeout=60)
+                                cwd=str(REPO), timeout=60, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         for command in ("run", "launch", "decide", "await", "show", "claim", "bind", "checkpoint", "release",
                         "context", "metrics", "evidence", "inspect"):
