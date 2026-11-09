@@ -347,5 +347,42 @@ class ContractTests(unittest.TestCase):
         self.rejects(contracts.validate_request, dict(request, reason=""), "reason")
 
 
+def contract_report_keys(text):
+    """The top-level keys of the example report in the driver's CONTRACT text."""
+    line = next(row.strip() for row in text.splitlines() if row.strip().startswith('{"contract"'))
+    keys, depth, i, previous = [], 0, 0, ""
+    while i < len(line):
+        char = line[i]
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+        elif char == '"':
+            end = line.index('"', i + 1)
+            if depth == 1 and previous in "{,":
+                keys.append(line[i + 1 : end])
+            i, previous = end + 1, '"'
+            continue
+        if not char.isspace():
+            previous = char
+        i += 1
+    return keys
+
+
+class ContractParityTests(unittest.TestCase):
+    def test_S1_report_accepts_the_context_object_workers_write(self):
+        """orchestrator-engine/R12: orchestrator-lead-alerts/S1"""
+        validated = contracts.validate_report(report(context={"status": "unknown"}))
+        self.assertEqual(validated["context"], {"status": "unknown"})
+
+    def test_S2_every_key_the_contract_example_names_is_a_report_field(self):
+        """orchestrator-engine/R12: orchestrator-lead-alerts/S2"""
+        from agent_orchestrator import driver
+
+        keys = contract_report_keys(driver.CONTRACT)
+        self.assertIn("context", keys)
+        self.assertEqual([k for k in keys if k not in contracts.Report.model_fields], [])
+
+
 if __name__ == "__main__":
     unittest.main()

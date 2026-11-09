@@ -139,6 +139,8 @@ class Report(Strict):
     usage: str = "unknown"
     responses: list[Response] = Field(default_factory=list)
     clarifications: list[Clarification] = Field(default_factory=list)
+    # CONTRACT asks for it: the worker's context telemetry, `{"status": "unknown"}` when it has none.
+    context: dict[str, Any] | None = None
 
 
 class Evidence(Strict):

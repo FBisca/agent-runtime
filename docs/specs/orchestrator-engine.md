@@ -23,6 +23,9 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R9** WHEN a step route names a step — `implementer`, `reviewer`, `gaps` or `archive` — THEN that step's spawn carries the step's backend, model and effort; `--brain-cli` still names one backend for every gate step, and a step route overrides it. (from orchestrator-routing-effort-role/S8, S9)
 - **R10** WHEN a step route names an unknown step, backend, model or effort, THEN the run fails before any worker is spawned, naming the value. (from orchestrator-routing-effort-role/S10)
 - **R11** WHEN no step route names a gate, THEN the gate keeps the effort it has always had: the reviewer `high`, the gaps reviewer `medium`, the archive worker the matrix's `low`. (from orchestrator-routing-effort-role/S3)
+- **R12** WHEN a worker writes the report the driver's `CONTRACT` describes, `"context"` included, THEN `Report` accepts it: every top-level key the contract's example names is a `Report` field. (from orchestrator-lead-alerts/S1, S2)
+- **R13** WHEN the driver runs a git call that walks or writes the whole tree (`worktree add`, `status`), THEN that call's timeout is sized for a large repository, not `run()`'s 15-second default. (from orchestrator-lead-alerts/S3)
+- **R14** WHEN `launch` runs inside an hc terminal, THEN the run is given that terminal, and each new wake is sent to it once with `hc send` (never `--force` or `interrupt`); a send that fails is logged as `notify-failed` and the run goes on; a run launched outside a terminal sends nothing. (from orchestrator-lead-alerts/S4–S7)
 
 ## Coverage
 
@@ -70,6 +73,16 @@ suite runs here, against the member, and the member answers the way the engine a
   `test_S10_a_step_override_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned`,
   `test_S3_a_gate_without_a_step_route_keeps_todays_effort`,
   `test_S3_a_step_route_names_the_gates_effort`
+
+### R12, R13, R14 — the report the contract asks for, the tree-sized calls, the Lead's alert
+
+- `packages/agent-orchestrator/tests/test_contracts.py`: `test_S1_report_accepts_the_context_object_workers_write`,
+  `test_S2_every_key_the_contract_example_names_is_a_report_field`
+- `packages/agent-orchestrator/tests/test_gates.py`: `test_S3_worktree_add_gets_a_checkout_sized_timeout`
+- `packages/agent-orchestrator/tests/test_wake.py`: `test_S4_S5_a_new_wake_is_sent_once_to_the_launching_terminal`,
+  `test_S4_a_run_without_a_notify_terminal_sends_nothing`, `test_S6_a_failed_send_is_logged_and_the_run_goes_on`
+- `packages/agent-orchestrator/tests/test_launch.py`: `test_S7_the_run_is_told_the_launching_terminal_to_alert`,
+  `test_S7_a_run_launched_outside_a_terminal_alerts_no_one`
 
 ## The ported suite
 
