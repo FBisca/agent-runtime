@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "record": "attempt",
+  "file": "attempts.jsonl",
+  "written_by": "agent_orchestrator/evidence.py",
+  "note": "One record per attempt of a run. A measurement that was not taken is null, never 0. The run's metrics.json keeps its own shape; this file is written beside it.",
+  "fields": {
+    "schema_version": "the version of this record format",
+    "task_id": "the attempt's task id",
+    "unit": "the logical unit the attempt belongs to",
+    "attempt": "the attempt's number within its unit, from 1",
+    "harness": "the agent harness the attempt ran on (claude, codex or pi)",
+    "provider": "the model the attempt ran on, or null when the run named none",
+    "source_revision": "the commit the attempt reported, or null when it reported none",
+    "started_at": "when the attempt was claimed (ISO 8601)",
+    "finished_at": "when the attempt ended (ISO 8601), or null while it runs",
+    "elapsed_seconds": "the seconds between the two, or null when one of them is missing",
+    "outcome": "the attempt's final status (COMPLETE, RELEASED, BLOCKED, ...)",
+    "verified": "true when the completion was verified, false when it was not, null while it is unknown",
+    "counters": "tool_calls, model_calls, tool_loops, retries, interventions and human_rescues; a count that was not measured is null",
+    "tokens": "the input, output and cached token figures, labelled; a figure nobody reported is null",
+    "gates": "the gates the attempt went through and how each ended",
+    "checks": "the attempt's own checks, with their outcomes"
+  }
+}

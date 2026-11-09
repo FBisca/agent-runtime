@@ -29,6 +29,9 @@ BACKENDS = (
 )  # the worker backends; pi is lead-only until worker launch is enabled
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ROUTE_FIELDS = ("class", "backend", "model", "effort")
+# What a route field may name, and what to call it when it names something else.
+ALLOWED = {"class": CLASSES, "backend": BACKENDS, "effort": EFFORTS}
+NOUNS = {"class": "model class", "backend": "worker backend", "effort": "effort"}
 CONFIG_SUFFIXES = (".json", ".yaml", ".yml")
 REPO_POLICY = ".orchestrate"  # the repository's own policy directory
 USER_POLICY = "~/.config/orchestrate"  # the user's default directory
@@ -89,21 +92,50 @@ class RouteDocument(BaseModel):
     routes: list[RouteEntry] = Field(min_length=1)
 
 
-def _route_problem(error, position):
-    """One deterministic message from a validation failure: the field, then what is wrong with it."""
+def _problem(error, position=None):
+    """One deterministic message from a validation failure: the route, the field, the value it holds.
+
+    A refusal names the reason and the way out: which route, which field, what it named, and what
+    that field may name instead.
+    """
     first = error.errors()[0]
-    field = ".".join(str(part) for part in first.get("loc", ())) or "route"
+    location = first.get("loc", ())
+    field = str(location[-1]) if location else "route"
     kind = first.get("type", "")
+    value = first.get("input")
+    if position is None:
+        indexes = [part for part in location if isinstance(part, int)]
+        position = indexes[0] + 1 if indexes else None
+    where = "route #%d" % position if position is not None else "the route config"
     if kind == "missing":
-        return "route #%d needs a %s" % (position, field)
+        if field == "routes":
+            return "the route config needs a non-empty 'routes' list"
+        return "%s needs a %s" % (where, field)
     if kind == "extra_forbidden":
-        return "route #%d has unknown field(s): %s" % (position, field)
+        return "%s has unknown field(s): %s" % (where, field)
+    if field == "backend" and value == "pi":
+        return (
+            "%s names the backend 'pi', which cannot run a worker yet (pi is lead-only); the worker "
+            "backends are %s" % (where, ", ".join(BACKENDS))
+        )
+    if field in ALLOWED:
+        return "%s names %r, which is not a %s (%s)" % (
+            where,
+            value,
+            NOUNS[field],
+            ", ".join(ALLOWED[field]),
+        )
     message = str(first.get("msg", "is invalid"))
-    return "route #%d %s %s" % (
-        position,
+    return "%s %s %s" % (
+        where,
         field,
         message[0].lower() + message[1:] if message else "is invalid",
     )
+
+
+def _route_problem(error, position):
+    """One deterministic message from a validation failure: the route, the field, the value it holds."""
+    return _problem(error, position)
 
 
 def validate_route(entry, position):
@@ -124,18 +156,7 @@ def validate(data):
     try:
         document = RouteDocument.model_validate(data)
     except ValidationError as error:
-        first = error.errors()[0]
-        field = ".".join(str(part) for part in first.get("loc", ())) or "the route config"
-        kind = first.get("type", "")
-        if kind == "missing":
-            raise RouteError("the route config needs a %s" % field) from None
-        if kind == "extra_forbidden":
-            raise RouteError("the route config has unknown field(s): %s" % field) from None
-        message = str(first.get("msg", "is invalid"))
-        raise RouteError(
-            "the route config %s %s"
-            % (field, message[0].lower() + message[1:] if message else "is invalid")
-        ) from None
+        raise RouteError(_problem(error)) from None
     version = document.version
     routes, seen = [], {}
     for position, entry in enumerate(document.routes, 1):

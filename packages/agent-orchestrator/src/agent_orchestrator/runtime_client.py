@@ -19,6 +19,26 @@ class RuntimeError(RuntimeError):  # noqa: A001 - the name the driver already ca
     """The runtime refused a call or answered with something that is not JSON."""
 
 
+class ProcessResult(Protocol):
+    """What a finished process gives back: its exit code and its two streams."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+class ProcessRunner(Protocol):
+    """One process, run to the end. The seam is the process, not the answer: the tests answer it in process."""
+
+    def __call__(self, argv: list[str], timeout: float | None = None) -> ProcessResult: ...
+
+
+def runtime_process(argv, timeout=None):
+    """One `agent-runtime` process. The tests answer it in process (a fake module), so a driver run starts no
+    process per call: the seam is the process, not the answer."""
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+
+
 class RuntimeClient(Protocol):
     """One dispatch tool call against the runtime, over its public CLI."""
 
@@ -38,15 +58,21 @@ class CliRuntimeClient:
     and never through a private module or a database.
     """
 
-    def __init__(self, lead: str, command: str = "agent-runtime") -> None:
+    def __init__(
+        self,
+        lead: str,
+        command: str = "agent-runtime",
+        process: ProcessRunner | None = None,
+    ) -> None:
         self.lead = lead
         self.command = command
+        self.process: ProcessRunner = process if process is not None else runtime_process
 
     def call(
         self, tool: str, arguments: dict[str, Any], *, timeout: float = DEFAULT_TIMEOUT_SECONDS
     ) -> dict[str, Any]:
         argv = [self.command, "call", tool, "--lead", self.lead, "--json", json.dumps(arguments)]
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        result = self.process(argv, timeout=timeout)
         if result.returncode != 0:
             raise RuntimeError(
                 "agent-runtime %s failed (exit %d): %s"
