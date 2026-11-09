@@ -23,6 +23,10 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R9** WHEN a step route names a step — `implementer`, `reviewer`, `gaps` or `archive` — THEN that step's spawn carries the step's backend, model and effort; `--brain-cli` still names one backend for every gate step, and a step route overrides it. (from orchestrator-routing-effort-role/S8, S9)
 - **R10** WHEN a step route names an unknown step, backend, model or effort, THEN the run fails before any worker is spawned, naming the value. (from orchestrator-routing-effort-role/S10)
 - **R11** WHEN no step route names a gate, THEN the gate keeps the effort it has always had: the reviewer `high`, the gaps reviewer `medium`, the archive worker the matrix's `low`. (from orchestrator-routing-effort-role/S3)
+- **R16** WHEN a worker's report reaches the driver before the file it names is on disk, THEN the driver waits a
+  bounded grace for the file, and a file that never arrives is the sending agent's news before it is the Lead's:
+  that agent is told, twice at most, to write the file and report again, and only then is the Lead asked, with the
+  number of warnings in the reason. An agent that is gone is not warned. (from orchestrator-payload-race/S1, S2, S3)
 
 ## Coverage
 
@@ -35,6 +39,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | S5 | R5 | `packages/agent-orchestrator/tests/test_agents.py`: `test_S33_a_refused_spawn_leaves_no_open_intent`; `packages/agent-orchestrator/tests/test_run.py`: `test_a_refused_spawn_keeps_the_reservation_and_exits_1` |
 | S6 | R6 | `packages/agent-orchestrator/tests/test_launch.py`: `test_S17_starts_run_in_a_named_pane` |
 | S7 | R7 | `packages/agent-orchestrator/tests/test_baselines.py`: `test_S3_a_run_that_stalls_is_terminated_and_recorded_as_a_failure` |
+| S1, S2, S3 | R16 | `packages/agent-orchestrator/tests/test_payload.py`: `test_S1_a_file_that_lands_inside_the_grace_is_read`, `test_S1_a_file_that_never_lands_ends_the_wait_at_the_deadline`; `packages/agent-orchestrator/tests/test_gates.py`: `test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead`, `test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead` |
 
 ### R4 — the route refusals
 

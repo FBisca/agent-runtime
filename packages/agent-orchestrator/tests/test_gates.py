@@ -120,9 +120,13 @@ class GateFixture(RunFixture):
             )
         )
 
-    def reviewer_done(self, review=None):
+    def reviewer_done(self, review=None, write=None):
         step = report_wait("demo-t1-review", "complete")
-        step["write"] = [[str(self.run_dir / "t1" / "review.json"), review or self.review()]]
+        step["write"] = (
+            [[str(self.run_dir / "t1" / "review.json"), review or self.review()]]
+            if write is None
+            else write
+        )
         return step
 
     def task(self, task_id="t1"):
@@ -298,15 +302,27 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])
 
     def test_S6a_a_missing_report_does_not_advance_the_ticket(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
-        self.waits([self.worker_done(report=False), self.skipped()])
+        """orchestrator-engine/R2: code-driven-orchestrator/S6a
+
+        R16: the worker that announced a report without writing it is told once, twice, and only then the Lead is
+        asked. The ticket never advances on a payload that is not there."""
+        self.waits(
+            [
+                self.worker_done(report=False),
+                self.worker_done(report=False),
+                self.worker_done(report=False),
+                self.skipped(),
+            ]
+        )
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1"])
-        self.assertEqual(self.calls("resume"), [])
-        task = self.task()
+        warned = self.calls("resume")
+        self.assertEqual(len(warned), 2, [c["args"]["task"] for c in warned])
+        for call in warned:
+            self.assertIn("report.json", call["args"]["task"])
         self.assertEqual(self.request()["event"], "report")
-        self.assertIn("report.json", self.request()["reason"])
-        self.assertNotIn("report", task)
+        self.assertIn("2 warning(s)", self.request()["reason"])
+        self.assertNotIn("report", self.task())
 
     def test_S6a_an_invalid_report_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
@@ -333,13 +349,64 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertIn("review.json", self.request()["reason"])
 
     def test_S6a_a_missing_review_does_not_advance_the_ticket(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
-        step = self.reviewer_done()
-        step["write"] = []
-        self.waits([self.worker_done(tests=True), step, self.skipped()])
+        """orchestrator-engine/R2: code-driven-orchestrator/S6a
+
+        R16 moved the first answer from the Lead to the agent that sent the report: the gate waits, the reviewer is
+        told its file is not on disk, and the ticket does not advance. The request comes after the warnings."""
+        stale = self.reviewer_done()
+        stale["write"] = []
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                stale,
+                self.reviewer_done(review=None, write=[]),
+                self.reviewer_done(review=None, write=[]),
+                self.skipped(),
+            ]
+        )
         self.run_driver()
-        self.assertEqual(self.calls("resume"), [])
+        warned = self.calls("resume")
+        self.assertEqual(len(warned), 2, [c["args"]["task"] for c in warned])
+        for call in warned:
+            self.assertIn("review.json", call["args"]["task"])
+            self.assertIn("write the file, then report again", call["args"]["task"])
         self.assertEqual(self.request()["event"], "review")
+        self.assertIn("2 warning(s)", self.request()["reason"])
+        self.assertNotIn("reviewed_commit", self.task(), "no verdict was recorded from a missing file")
+
+
+
+class PayloadTests(GateFixture, unittest.TestCase):
+    """R16: a report is the news, the file it names is the payload, and the driver waits for the payload."""
+
+    def test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead(self):
+        """orchestrator-engine/R16: orchestrator-payload-race/S2"""
+        stale = self.reviewer_done(write=[])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                stale,
+                self.reviewer_done(write=[]),
+                self.reviewer_done(write=[]),
+                self.skipped(),
+            ]
+        )
+        self.run_driver()
+        warned = [c["args"] for c in self.calls("resume")]
+        self.assertEqual(len(warned), 2, "one warning per report, capped")
+        self.assertEqual(warned[0]["name"], "demo-t1-review")
+        self.assertIn("The driver reads the file, not the report", warned[0]["task"])
+        self.assertEqual(self.task()["gate"], "skipped")
+
+    def test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead(self):
+        """orchestrator-engine/R16: orchestrator-payload-race/S3"""
+        stale = self.reviewer_done(write=[])
+        self.states({"demo-t1-review": "exited"})
+        self.waits([self.worker_done(tests=True), stale, self.skipped()])
+        self.run_driver()
+        self.assertEqual(self.calls("resume"), [], "a dead reviewer cannot write the file: no warning is sent")
+        self.assertEqual(self.request()["event"], "review")
+        self.assertIn("no agent left to write it", self.request()["reason"])
 
 
 if __name__ == "__main__":

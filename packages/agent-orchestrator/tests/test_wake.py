@@ -82,9 +82,19 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.assertIn(str(self.run_dir / "t1r2" / "report.json"), self.request()["evidence"])
 
     def test_S1_a_worker_that_ends_without_a_valid_report_writes_a_request(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
-        self.waits([report_wait("demo-t1", "complete"), self.decide_step("t1", "skip")])
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1
+
+        R16: the worker that announced a report it never wrote is warned twice before the Lead is asked."""
+        self.waits(
+            [
+                report_wait("demo-t1", "complete"),
+                report_wait("demo-t1", "complete"),
+                report_wait("demo-t1", "complete"),
+                self.decide_step("t1", "skip"),
+            ]
+        )
         self.run_driver()
+        self.assertEqual(len(self.calls("resume")), 2, "two warnings to the worker that announced the file")
         self.assert_request("report", "report.json")
 
     def test_S1_a_worker_whose_turn_ended_without_a_report_writes_a_request(self):
@@ -99,15 +109,21 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.assert_request("exited", "runtime state idle")
 
     def test_S1_a_reviewer_that_ends_without_a_review_writes_a_request(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1
+
+        R16: an idle reviewer is still resumable, so it is warned twice before the Lead is asked."""
+        ended = wait_result([assignment("demo-t1-review", "working", "idle")])
         self.waits(
             [
                 self.worker_done(tests=True),
-                wait_result([assignment("demo-t1-review", "working", "idle")]),
+                ended,
+                ended,
+                ended,
                 self.decide_step("t1", "skip"),
             ]
         )
         self.run_driver()
+        self.assertEqual(len(self.calls("resume")), 2, "two warnings to the reviewer that ended without its file")
         self.assert_request("review", "review.json", spawned=("demo-t1", "demo-t1-review"))
 
     def test_S1_the_unit_waits_for_the_lead_and_the_wake_is_written_once(self):

@@ -380,6 +380,8 @@ class RunFixture(_Case):
         """The fake `gh`'s answer, in process."""
         return fake_gh.process(argv, timeout=timeout)
 
+    payload_grace = 0.05  # the payload wait, shortened so a test does not pay the real grace
+
     def in_process(self, spec, argv, timeout=60):
         """The script run in this process, with the fakes answering in process.
 
@@ -394,6 +396,7 @@ class RunFixture(_Case):
                     redirect_stdout(out),
                     redirect_stderr(err),
                     mock.patch.object(spec, "runtime_process", self.runtime_process),
+                    mock.patch.object(spec, "PAYLOAD_GRACE", self.payload_grace),
                     mock.patch.object(spec, "gh_process", self.gh_process),
                 ):
                     codes.append(spec.run_cli(argv))

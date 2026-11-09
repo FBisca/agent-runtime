@@ -300,8 +300,17 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertIn("decision.json", self.wake_lines("decision")[1])
 
     def test_S12_a_contract_error_raises_a_request_too(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S12"""
-        self.waits([report_wait("demo-t1", "complete"), self.decided("skip")])
+        """orchestrator-engine/R2: code-driven-orchestrator/S12
+
+        R16: a report that names a file nobody wrote is warned about twice before the Lead is asked."""
+        self.waits(
+            [
+                report_wait("demo-t1", "complete"),
+                report_wait("demo-t1", "complete"),
+                report_wait("demo-t1", "complete"),
+                self.decided("skip"),
+            ]
+        )
         self.run_driver()
         self.assert_requested("report.json")
 
