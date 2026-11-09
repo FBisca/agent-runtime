@@ -101,10 +101,10 @@ class AdapterCase(shared.StreamedInstallCase):
 
 
 class PiPrerequisiteTests(AdapterCase):
-    """S9: Pi is a prerequisite the installer reports and never provides."""
+    """installer-contract/R9: Pi is a prerequisite the installer reports and never provides."""
 
     def test_s9_a_missing_pi_is_reported_with_the_official_way_to_install_it(self):
-        """S9: the adapter installs, the missing prerequisite is named, and Pi is not installed."""
+        """installer-contract/R9: the adapter installs, the missing prerequisite is named, and Pi is not installed."""
         calls = self.root / "calls.log"
         fake = self.root / "fake-bin"
         fake.mkdir()
@@ -129,7 +129,7 @@ class PiPrerequisiteTests(AdapterCase):
         self.assertIn("~/.pi/agent/mcp.json", result.stdout)
 
     def test_s9_a_present_pi_is_found_and_never_run(self):
-        """S9: with Pi on the PATH the notice is gone, and Pi is not invoked, not even for its version."""
+        """installer-contract/R9: with Pi on the PATH the notice is gone, and Pi is not invoked, not even for its version."""
         path = self.fake_tools(("pi",))
         result = self.run_installer("--components", "runtime,pi", path=path)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -138,7 +138,7 @@ class PiPrerequisiteTests(AdapterCase):
         self.assertFalse(self.calls.exists())
 
     def test_s9_the_prerequisite_is_reported_by_a_dry_run_and_by_a_streamed_run(self):
-        """S9: the preview says it too, and an adapter that is not selected says nothing about Pi."""
+        """installer-contract/R9: the preview says it too, and an adapter that is not selected says nothing about Pi."""
         path = self.pi_less_path()
         dry = self.run_installer("--components", "runtime,pi", "--dry-run", path=path)
         self.assertEqual(dry.returncode, 0, dry.stderr)
@@ -156,17 +156,17 @@ class PiPrerequisiteTests(AdapterCase):
         self.assertIn(PI_METHOD, streamed.stdout)
 
     def test_s9_a_pi_that_cannot_be_found_is_a_notice_not_a_refusal(self):
-        """S9: the exit code stays 0, so a headless run does not stop on a tool the user adds later."""
+        """installer-contract/R9: the exit code stays 0, so a headless run does not stop on a tool the user adds later."""
         result = self.run_installer("--components", "pi", "--yes", path=self.pi_less_path())
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
 
 
 class ExistingConfigurationTests(AdapterCase):
-    """S4: what is already configured is kept, named in the preview, and never read for its secrets."""
+    """installer-contract/R4: what is already configured is kept, named in the preview, and never read for its secrets."""
 
     def test_s4_the_configuration_and_the_credentials_of_the_harnesses_are_left_alone(self):
-        """S4: no config is rewritten, no credential is opened, and no secret is printed."""
+        """installer-contract/R4: no config is rewritten, no credential is opened, and no secret is printed."""
         self.seed()
         before = snapshot(self.home)
         path = self.fake_tools()
@@ -190,7 +190,7 @@ class ExistingConfigurationTests(AdapterCase):
         )
 
     def test_s4_an_existing_config_is_named_and_the_block_to_add_is_still_printed(self):
-        """S4: the preview says the file exists and is left as it is, and what to add by hand."""
+        """installer-contract/R4: the preview says the file exists and is left as it is, and what to add by hand."""
         self.seed()
         result = self.run_installer("--components", "runtime,claude,codex,pi")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -200,7 +200,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertIn('"agent-runtime": {', result.stdout)
 
     def test_s4_a_partial_config_that_names_this_install_still_gets_the_whole_block(self):
-        """S4: naming the install is not the whole wiring: what is missing is printed, never hidden."""
+        """installer-contract/R4: naming the install is not the whole wiring: what is missing is printed, never hidden."""
         first = self.run_installer("--components", "runtime,codex,pi")
         self.assertEqual(first.returncode, 0, first.stderr)
         bin_dir = self.home / ".local" / "bin"
@@ -249,7 +249,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertEqual(pi.read_text(encoding="utf-8"), pi_partial)
 
     def test_s4_a_complete_config_is_kept_and_the_block_is_still_there_to_compare(self):
-        """S4: the block is printed every time, so a line a newer release adds is never lost."""
+        """installer-contract/R4: the block is printed every time, so a line a newer release adds is never lost."""
         first = self.run_installer("--components", "runtime,codex")
         self.assertEqual(first.returncode, 0, first.stderr)
         codex = self.home / ".codex" / "config.toml"
@@ -264,7 +264,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertEqual(codex.read_text(encoding="utf-8"), complete)
 
     def test_s4_an_entry_that_points_somewhere_else_is_a_conflict_and_is_not_rewritten(self):
-        """S4: a wired entry for another install is named as a conflict, with the way out, and kept."""
+        """installer-contract/R4: a wired entry for another install is named as a conflict, with the way out, and kept."""
         codex = self.home / ".codex" / "config.toml"
         codex.parent.mkdir(parents=True)
         original = '[mcp_servers.agent-runtime]\ncommand = "/somewhere/else/agent-runtime-mcp"\n'
@@ -278,7 +278,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertEqual(codex.read_text(encoding="utf-8"), original)
 
     def test_s4_the_dry_run_previews_the_conflicts_and_changes_nothing(self):
-        """S4: the preview names each existing config and the prerequisite, and writes nothing."""
+        """installer-contract/R4: the preview names each existing config and the prerequisite, and writes nothing."""
         self.seed()
         before = snapshot(self.home)
         result = self.run_installer("--components", "claude,codex,pi", "--dry-run")
@@ -290,7 +290,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertEqual(snapshot(self.home), before)
 
     def test_s4_the_pi_host_policy_of_the_user_is_kept(self):
-        """S4: an existing hosts.json is the user's; a Pi lead is told what to add and nothing is merged."""
+        """installer-contract/R4: an existing hosts.json is the user's; a Pi lead is told what to add and nothing is merged."""
         hosts = self.home / ".config" / "agent-runtime" / "hosts.json"
         hosts.parent.mkdir(parents=True)
         original = '{"hosts": {"codex": {"mutations": false}}}\n'
@@ -303,7 +303,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertEqual(hosts.read_text(encoding="utf-8"), original)
 
     def test_s4_a_config_that_cannot_be_read_is_left_as_it_is(self):
-        """S4: an unreadable config is no reason to fail, and no reason to guess: it is kept, said so."""
+        """installer-contract/R4: an unreadable config is no reason to fail, and no reason to guess: it is kept, said so."""
         codex = self.home / ".codex" / "config.toml"
         codex.parent.mkdir(parents=True)
         codex.write_text("mine\n", encoding="utf-8")
@@ -315,7 +315,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertEqual(result.stderr, "")
 
     def test_s4_the_same_install_twice_prints_the_same_and_changes_nothing(self):
-        """S4: idempotent: the second run leaves the filesystem and the output as the first did."""
+        """installer-contract/R4: idempotent: the second run leaves the filesystem and the output as the first did."""
         self.seed()
         first = self.run_installer("--components", "runtime,claude,codex,pi")
         before = snapshot(self.home)
@@ -332,7 +332,7 @@ class ExistingConfigurationTests(AdapterCase):
                 self.assertEqual(entry, before[name], name)
 
     def test_s4_a_shim_of_the_user_is_refused_with_a_preview_that_says_so(self):
-        """S4: the dry run refuses the same shim conflict the install would, and names the way out."""
+        """installer-contract/R4: the dry run refuses the same shim conflict the install would, and names the way out."""
         bin_dir = self.home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
         (bin_dir / "agent-runtime-hook").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -345,10 +345,10 @@ class ExistingConfigurationTests(AdapterCase):
 
 
 class SelectiveLifecycleTests(AdapterCase):
-    """S7: an adapter comes and goes without moving the runtime, another adapter, or the user's data."""
+    """installer-contract/R7: an adapter comes and goes without moving the runtime, another adapter, or the user's data."""
 
     def test_s7_an_adapter_is_uninstalled_alone_and_the_others_and_the_shims_stay(self):
-        """S7: each adapter can leave by itself; the runtime and the other adapters are as they were."""
+        """installer-contract/R7: each adapter can leave by itself; the runtime and the other adapters are as they were."""
         self.seed()
         installed = self.run_installer("--components", "runtime,orchestrator,claude,codex,pi")
         self.assertEqual(installed.returncode, 0, installed.stderr)
@@ -366,7 +366,7 @@ class SelectiveLifecycleTests(AdapterCase):
             self.assertEqual(snapshot(self.home)[name], before[name], name)
 
     def test_s7_the_shims_of_the_runtime_work_after_install_and_after_an_upgrade(self):
-        """S7: the documented shims are the entry points, before and after the upgrade."""
+        """installer-contract/R7: the documented shims are the entry points, before and after the upgrade."""
         first = self.run_installer("--components", "runtime,pi")
         self.assertEqual(first.returncode, 0, first.stderr)
         newer = self.checkout("newer", version="0.2.0")
@@ -399,7 +399,7 @@ class SelectiveLifecycleTests(AdapterCase):
         self.assertEqual(shown.returncode, 0, shown.stderr)
 
     def test_s7_a_shim_the_user_replaced_since_is_kept_by_the_uninstall(self):
-        """S7: the uninstall removes the shims it made and keeps the file the user put in their place."""
+        """installer-contract/R7: the uninstall removes the shims it made and keeps the file the user put in their place."""
         installed = self.run_installer("--components", "runtime")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         mine = self.shim("agent-runtime-profile")
@@ -421,7 +421,7 @@ class SelectiveLifecycleTests(AdapterCase):
         self.assertNotIn("runtime", self.manifest()["components"])
 
     def test_s7_the_data_of_the_user_survives_an_uninstall_of_everything(self):
-        """S7: the runtime's state, the host policy and the harness dotfiles are not the installer's."""
+        """installer-contract/R7: the runtime's state, the host policy and the harness dotfiles are not the installer's."""
         self.seed()
         data = self.home / ".local" / "share" / "agent-runtime"
         data.mkdir(parents=True)
@@ -453,10 +453,10 @@ class SelectiveLifecycleTests(AdapterCase):
 
 
 class StreamedLifecycleTests(release.ReleaseCase, AdapterCase):
-    """S7 for a streamed install: the release it staged is the installer's, and nothing else is."""
+    """installer-contract/R7 for a streamed install: the release it staged is the installer's, and nothing else is."""
 
     def test_s7_an_uninstall_removes_the_release_it_staged_and_nothing_the_user_kept(self):
-        """S7: the staged payload is the installer's own, so it goes with the runtime; user data stays."""
+        """installer-contract/R7: the staged payload is the installer's own, so it goes with the runtime; user data stays."""
         self.release("0.1.0")
         installed = self.bootstrap("--components", "runtime,pi", "--release", "v0.1.0", "--yes")
         self.assertEqual(installed.returncode, 0, installed.stderr)
@@ -479,7 +479,7 @@ class StreamedLifecycleTests(release.ReleaseCase, AdapterCase):
         self.assertEqual((home / "state.db").read_text(encoding="utf-8"), "the durable store\n")
 
     def test_s7_an_uninstall_never_removes_a_directory_it_did_not_stage(self):
-        """S7: a source the manifest names that is not a staged release is a checkout, and it stays."""
+        """installer-contract/R7: a source the manifest names that is not a staged release is a checkout, and it stays."""
         installed = self.run_installer("--components", "runtime")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         removed = self.run_installer("uninstall", "--components", "runtime")

@@ -125,7 +125,7 @@ class ActivationRollbackTests(TransactionCase):
     """A failure after the payload verified: the activation is undone, whole."""
 
     def test_s6_a_failure_while_activating_restores_the_prior_version(self):
-        """S6: the second component fails to record: shims, manifest and staging are as they were."""
+        """installer-contract/R6: the second component fails to record: shims, manifest and staging are as they were."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -140,7 +140,7 @@ class ActivationRollbackTests(TransactionCase):
         self.assertIn("previous installation is as it was", result.stderr)
 
     def test_s6_a_failure_while_linking_leaves_no_mixture_of_old_and_new_shims(self):
-        """S6: the third shim cannot be swapped: the two already swapped go back to the prior ones."""
+        """installer-contract/R6: the third shim cannot be swapped: the two already swapped go back to the prior ones."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -152,21 +152,21 @@ class ActivationRollbackTests(TransactionCase):
         self.assert_prior_usable(prior)
 
     def test_s6_a_failed_first_install_leaves_a_clean_home(self):
-        """S6: nothing was installed before: nothing is left, not even the directories made for it."""
+        """installer-contract/R6: nothing was installed before: nothing is left, not even the directories made for it."""
         self.release("0.1.0")
         result = self.move_to_release(env=self.fault("add:runtime"))
         self.assertEqual(result.returncode, 1, result.stderr)
         self.clean(result)
 
     def test_s6_a_failure_after_the_shims_were_linked_leaves_a_clean_home(self):
-        """S6: the shims go in before the manifest: when the manifest fails they go out again."""
+        """installer-contract/R6: the shims go in before the manifest: when the manifest fails they go out again."""
         self.release("0.1.0")
         result = self.move_to_release(components="runtime", env=self.fault("add:runtime"))
         self.assertEqual(result.returncode, 1, result.stderr)
         self.clean(result)
 
     def test_s6_a_signal_while_activating_restores_the_prior_version(self):
-        """S6: the installer is killed after the shims moved: the prior version is back."""
+        """installer-contract/R6: the installer is killed after the shims moved: the prior version is back."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -178,7 +178,7 @@ class ActivationRollbackTests(TransactionCase):
         self.assert_prior_usable(prior)
 
     def test_s6_a_signal_to_the_bootstrap_is_passed_on_and_the_prior_version_is_kept(self):
-        """S6: the bootstrap is killed while the installer inside it works: that one rolls back too."""
+        """installer-contract/R6: the bootstrap is killed while the installer inside it works: that one rolls back too."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -190,7 +190,7 @@ class ActivationRollbackTests(TransactionCase):
         self.assert_prior_usable(prior)
 
     def test_s6_a_second_signal_during_the_rollback_does_not_interrupt_it(self):
-        """S6: the rollback runs to the end: a signal that arrives in it leaves no mixture of shims."""
+        """installer-contract/R6: the rollback runs to the end: a signal that arrives in it leaves no mixture of shims."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -204,7 +204,7 @@ class ActivationRollbackTests(TransactionCase):
         self.assert_prior_usable(prior)
 
     def test_s6_a_staged_release_that_was_already_there_is_kept_when_the_install_fails(self):
-        """S6: only what this run staged is removed: a release staged earlier stays staged."""
+        """installer-contract/R6: only what this run staged is removed: a release staged earlier stays staged."""
         self.release("0.1.0")
         staged = self.move_to_release(components="runtime")
         self.assertEqual(staged.returncode, 0, staged.stderr)
@@ -217,7 +217,7 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(self.manifest()["components"]["runtime"]["release"], "v0.1.0")
 
     def test_s6_a_manifest_that_cannot_be_written_leaves_the_user_state_and_no_temporary_file(self):
-        """S6: a manifest path that is a directory is the user's: it stays, and nothing is left."""
+        """installer-contract/R6: a manifest path that is a directory is the user's: it stays, and nothing is left."""
         self.release("0.1.0")
         directory = self.install_home() / "install-manifest.json"
         directory.mkdir(parents=True)
@@ -230,7 +230,7 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
 
     def test_s6_a_successful_activation_replaces_every_shim_and_leaves_no_temporary_link(self):
-        """S6: the swap is a rename: the new shims are in, and no half-made link is left beside them."""
+        """installer-contract/R6: the swap is a rename: the new shims are in, and no half-made link is left beside them."""
         self.install_prior()
         self.release("0.1.0")
         result = self.move_to_release()
@@ -247,7 +247,7 @@ class CheckoutTransactionTests(TransactionCase):
     """A local checkout install is activated the same way: whole, or not at all."""
 
     def test_s6_a_failed_checkout_upgrade_restores_the_prior_version(self):
-        """S6: a checkout install that fails after linking puts the prior one back."""
+        """installer-contract/R6: a checkout install that fails after linking puts the prior one back."""
         prior = self.install_prior()
         newer = self.checkout("newer", version="0.2.0")
         before = shared.snapshot(self.home)
@@ -269,7 +269,7 @@ class CheckoutTransactionTests(TransactionCase):
         self.assert_prior_usable(prior)
 
     def test_s6_a_second_signal_during_a_checkout_rollback_does_not_interrupt_it(self):
-        """S6: the same for a checkout install: the prior shims all come back, none dangles."""
+        """installer-contract/R6: the same for a checkout install: the prior shims all come back, none dangles."""
         prior = self.install_prior()
         newer = self.checkout("newer", version="0.2.0")
         before = shared.snapshot(self.home)
@@ -292,7 +292,7 @@ class CheckoutTransactionTests(TransactionCase):
         self.assert_prior_usable(prior)
 
     def test_s6_a_failed_legacy_install_restores_the_shims_it_replaced(self):
-        """S6: the original no-argument install is activated whole too."""
+        """installer-contract/R6: the original no-argument install is activated whole too."""
         prior = self.install_prior(components="runtime")
         newer = self.checkout("newer", version="0.2.0")
         before = shared.snapshot(self.home)
@@ -308,7 +308,7 @@ class CheckoutTransactionTests(TransactionCase):
         self.assert_prior_usable(prior)
 
     def test_s6_a_refused_conflict_changes_nothing(self):
-        """S6: a refusal is a rolled-back run: nothing moved, and the user's file is where it was."""
+        """installer-contract/R6: a refusal is a rolled-back run: nothing moved, and the user's file is where it was."""
         bin_dir = self.home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
         (bin_dir / "agent-runtime-profile").write_text("mine\n", encoding="utf-8")
@@ -321,7 +321,7 @@ class CheckoutTransactionTests(TransactionCase):
 
 
 class FailurePathMatrixTests(TransactionCase):
-    """S8: the failure paths under clean and existing HOME values, no network, no credentials."""
+    """installer-contract/R8: the failure paths under clean and existing HOME values, no network, no credentials."""
 
     def dotfiles(self, home):
         for name in (".claude/settings.json", ".codex/config.toml", ".pi/agent/mcp.json", ".zshrc"):
@@ -330,7 +330,7 @@ class FailurePathMatrixTests(TransactionCase):
             target.write_text("export KEY=the-user-key\n", encoding="utf-8")
 
     def test_s8_a_failed_install_changes_nothing_in_a_clean_and_an_existing_home(self):
-        """S8: every injected fault is rolled back, in both homes, and nothing reaches out."""
+        """installer-contract/R8: every injected fault is rolled back, in both homes, and nothing reaches out."""
         self.release("0.1.0")
         clean = self.root / "clean home"
         clean.mkdir()
@@ -353,7 +353,7 @@ class FailurePathMatrixTests(TransactionCase):
         self.assert_no_network_or_provider()
 
     def test_s8_a_rolled_back_install_can_be_run_again(self):
-        """S8: the rollback leaves a state the next run installs from, and it succeeds."""
+        """installer-contract/R8: the rollback leaves a state the next run installs from, and it succeeds."""
         self.release("0.1.0")
         failed = self.move_to_release(components="runtime", env=self.fault("add:runtime"))
         self.assertEqual(failed.returncode, 1, failed.stderr)
@@ -364,7 +364,7 @@ class FailurePathMatrixTests(TransactionCase):
         self.assertEqual(self.manifest()["components"]["runtime"]["release"], "v0.1.0")
 
     def test_s8_the_installer_stays_shellcheck_clean(self):
-        """S8: the rollback code is shellcheck clean with the rest of the installer."""
+        """installer-contract/R8: the rollback code is shellcheck clean with the rest of the installer."""
         if shutil.which("shellcheck") is None:
             self.skipTest("shellcheck is not installed")
         result = subprocess.run(
