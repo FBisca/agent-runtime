@@ -342,5 +342,22 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "review")
 
 
+class CheckoutTimeoutTests(GateFixture, unittest.TestCase):
+    def test_S3_worktree_add_gets_a_checkout_sized_timeout(self):
+        """orchestrator-engine/R13: orchestrator-lead-alerts/S3"""
+        from unittest import mock
+
+        from fixtures import load_script
+
+        driver = load_script()
+        with mock.patch.object(driver, "run", wraps=driver.run) as spy:
+            self.waits([self.worker_done()])
+            self.run_driver()
+        adds = [c for c in spy.call_args_list if c.args[0][3:5] == ["worktree", "add"]]
+        self.assertTrue(adds, "no worktree was added")
+        for call in adds:
+            self.assertGreaterEqual(call.kwargs.get("timeout", 15), 300)
+
+
 if __name__ == "__main__":
     unittest.main()
