@@ -33,8 +33,15 @@ case $2 in
   swap) step="swap:${4##*/}" ;;
   *) step="$3:$4" ;;
 esac
+# A second signal, on the first link the rollback restores: it arrives while the rollback runs.
+if [ -n "${FAKE_PYTHON_AGAIN:-}" ] && [ -f "$FAKE_MARK" ] && [ ! -f "$FAKE_MARK.again" ] && [ "$2" = swap ]; then
+  : > "$FAKE_MARK.again"
+  kill -TERM "$PPID"
+  sleep 1
+fi
 if [ -n "${FAKE_PYTHON_STEP:-}" ] && [ "$step" = "$FAKE_PYTHON_STEP" ]; then
   echo "python3 $step" >> "$FAKE_CALLS"
+  : > "$FAKE_MARK"
   case ${FAKE_PYTHON_MODE:-fail} in
     fail) exit 1 ;;
     term) kill -TERM "$PPID"; sleep 1; exit 1 ;;
@@ -66,6 +73,7 @@ class TransactionCase(release.ReleaseCase):
             tool.chmod(0o755)
         self.environment["FAKE_REAL_PYTHON"] = real
         self.environment["FAKE_RUNNER_PID"] = str(os.getpid())
+        self.environment["FAKE_MARK"] = str(self.root / "fault-fired")
 
     def fault(self, step, mode="fail"):
         return {"FAKE_PYTHON_STEP": step, "FAKE_PYTHON_MODE": mode}
@@ -181,6 +189,20 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    def test_s6_a_second_signal_during_the_rollback_does_not_interrupt_it(self):
+        """S6: the rollback runs to the end: a signal that arrives in it leaves no mixture of shims."""
+        prior = self.install_prior()
+        self.release("0.1.0")
+        before = shared.snapshot(self.home)
+
+        result = self.move_to_release(
+            env={**self.fault("add:orchestrator", "term"), "FAKE_PYTHON_AGAIN": "1"}
+        )
+
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr)
+        self.assertEqual(shared.snapshot(self.home), before)
+        self.assert_prior_usable(prior)
+
     def test_s6_a_staged_release_that_was_already_there_is_kept_when_the_install_fails(self):
         """S6: only what this run staged is removed: a release staged earlier stays staged."""
         self.release("0.1.0")
@@ -243,6 +265,29 @@ class CheckoutTransactionTests(TransactionCase):
         )
 
         self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(shared.snapshot(self.home), before)
+        self.assert_prior_usable(prior)
+
+    def test_s6_a_second_signal_during_a_checkout_rollback_does_not_interrupt_it(self):
+        """S6: the same for a checkout install: the prior shims all come back, none dangles."""
+        prior = self.install_prior()
+        newer = self.checkout("newer", version="0.2.0")
+        before = shared.snapshot(self.home)
+
+        result = self.run_installer(
+            "--components",
+            "runtime,orchestrator",
+            script=newer / "install.sh",
+            env={
+                **self.environment,
+                "AGENT_RUNTIME_RELEASE": "",
+                **self.fault("add:orchestrator", "term"),
+                "FAKE_PYTHON_AGAIN": "1",
+            },
+            path=self.path,
+        )
+
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr)
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 

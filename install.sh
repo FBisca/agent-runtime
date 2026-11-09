@@ -417,7 +417,9 @@ begin_transaction() {
 # reverse of what was done, and keep going when one step cannot be undone so the rest still is.
 rollback_transaction() {
   status=$?
-  trap - EXIT HUP INT TERM
+  # Ignored, not reset: a signal in the middle would leave the shims half restored.
+  trap - EXIT
+  trap '' HUP INT TERM
   set +e
   for shim in $shims; do
     rm -f "$bin_dir"/."$shim".new.*
@@ -1235,7 +1237,10 @@ fetch_release() {
     staged_new=0
     home_uncreated=
   fi
-  trap - EXIT HUP INT TERM
+  # Ignored once the child is done: this cleanup must run to the end, or the release it removes
+  # and the shims the child restored would disagree.
+  trap - EXIT
+  trap '' HUP INT TERM
   [ "$status" -eq 0 ] || cleanup_stage
   exit "$status"
 }
