@@ -1,104 +1,116 @@
 # Handoff — after the engine's suite moved into the member
 
-**State:** the action plan `docs/plans/2026-11-08-remaining-work.action-plan.md` is in flight. Its
-**W1/PR-1** is done and open as **PR #65** (`feat/orchestrator-engine-suite`, commit `03e5e62`).
-W1/PR-2, W2, W3 and W4 are untouched.
+**State:** the action plan `docs/plans/2026-11-08-remaining-work.action-plan.md` is still in flight. Its
+**W1** is done on both sides: **PR #65 is merged** (`main` = `d834c7c`), and the cross-repository pull
+request that ends the duplication is open as **agent-skills PR #53**. The pre-flights for **W2** and **W3**
+are open as **agent-runtime PR #66** and **agent-skills PR #54**. The runs themselves (W2, W3, W4) are
+untouched.
 
-**Read this before touching anything.** The engine now exists twice still, but only one copy is
-canonical: this repository holds the engine and its suite; `agent-skills` holds a stale copy of the
-engine and a copy of the tests that were moved.
+**Read this before touching anything.** The engine now exists once: this repository holds the engine and its
+suite; `agent-skills` holds a shim that hands the command to the member, and the copy that used to live
+there is gone.
 
 ---
 
-## 1. What landed (PR #65)
+## 1. What landed
 
-| Piece | Where |
-|---|---|
-| The engine's own suite (32 files, ~5.2k lines) | `packages/agent-orchestrator/tests/` |
-| The runtime seam is the process the client speaks through | `packages/agent-orchestrator/src/agent_orchestrator/runtime_client.py` |
-| A refusal reaches the driver as a `ValueError` | `packages/agent-orchestrator/src/agent_orchestrator/driver.py` (`runtime_call`) |
-| A route refusal names the value and the way out | `packages/agent-orchestrator/src/agent_orchestrator/routes.py` (`_problem`) |
-| The ledger: what this repo guarantees about the engine | `docs/specs/orchestrator-engine.md` (R1–R6) |
-| The plan of record for the move | `docs/plans/2026-11-08-orchestrator-engine-suite.plan.md` |
+| Piece | Where | State |
+|---|---|---|
+| The engine's own suite (32 files, ~5.2k lines) | `packages/agent-orchestrator/tests/` | merged (#65) |
+| The benchmark waits for the tree it killed | `packages/agent-orchestrator/tests/bench.py` | merged (#65) |
+| The ledger: what this repo guarantees about the engine | `docs/specs/orchestrator-engine.md` (R1–R7) | merged (#65) |
+| The skill's engine copy, gone; the script is a shim | `agent-skills`: `skills/orchestrate/scripts/orchestrate.py` | **PR #53** |
+| The guard: no copy of the engine under `skills/` | `agent-skills`: `skills/orchestrate/tests/test_engine_home.py` | **PR #53** |
+| The seam's own ledger | `agent-skills`: `docs/specs/orchestrator-single-engine.md` | **PR #53** |
+| P4c's plan, runnable by the driver | `docs/plans/2026-11-07-selective-remote-installer.plan.md` | **PR #66** |
+| The routing plan, runnable by the driver | `agent-skills`: `docs/plans/2026-11-07-orchestrator-routing-decoupling.plan.md` | **PR #54** |
 
-The port was **red against the member** until the member spoke like the engine. Three real gaps, all
-now fixed and all now pinned by the suite: the runtime seam was not injectable, a refused runtime call
-crashed the run, and a route refusal did not name the offending value.
+**The three gaps the port found** are fixed and pinned by the suite: the runtime seam was not injectable, a
+refused runtime call crashed the run, and a route refusal did not name the offending value.
+
+**The seam, as it now stands.** The skill's script resolves the member's CLI in this order:
+`$AGENT_RUNTIME_HOME` (the checkout of agent-runtime: its `.venv/bin/agent-orchestrator` when the environment
+is synced, else `uv run` inside that checkout) → `agent-orchestrator` on `PATH`. When neither answers it
+refuses, names the way out and exits 2. It never falls back to a second engine.
 
 ## 2. The evidence
 
 | Check | Result |
 |---|---|
-| `uv run pytest -n 4` | **899 passed**, 4 skipped, 282 subtests (146 s) |
-| `uv run pytest -m integration -n 4` | the integration half of the same suite |
+| `uv run pytest -n 4` (agent-runtime) | **899 passed**, 4 skipped, 282 subtests (143 s) |
 | `uv run ruff check .` | 40 (budget 45) — unchanged |
 | `uv run ruff format --check .` | 30 files (budget 31) — unchanged |
 | `uv run ty check packages/ tests/test_workspace_isolation.py` | clean |
 | `uv run ty check .` | 277 (budget 285) — unchanged |
 | `shellcheck install.sh bin/*` | clean |
-| `converge.py --final --base main` | coverage, tagged, scope, spec — all **PASS** |
+| `converge.py --final --base main` (the engine-suite plan) | coverage, tagged, scope, spec — all **PASS** (on PR #65, before the merge) |
+| `uv run pytest -m "" -n 4` (agent-skills) | **212 passed** |
+| `scripts/checks.sh` (agent-skills) | lint, frontmatter, whole suite — green |
+| `converge.py --final --base main` (the single-engine plan) | coverage, tagged, scope, spec — all **PASS** |
+| `parse_plan` + `check_plan` on the P4c and routing plans | no problem reported — both can be launched |
 
 ## 3. What is still open, in order
 
-1. **Merge PR #65** (CI green, then merge). The plan's tickets are already `COMPLETE`.
-2. **W1/PR-2 — the cross-repository pull request, in `agent-skills`.** This is the one that ends the
-   duplication:
-   - the skill's `skills/orchestrate/scripts/*.py` copy of the engine is deleted;
-   - `skills/orchestrate/scripts/orchestrate.py` becomes a thin delegating shim to the member's CLI
-     (`agent-orchestrator`, resolved through `AGENT_RUNTIME_HOME` → the checkout's
-     `uv run --package agent-orchestrator agent-orchestrator`, or the `agent-orchestrator` shim on PATH);
-   - the engine's internal tests leave the skill's suite — they moved in PR #65;
-   - the skill's own suite (frontmatter, portability, repository checks) stays;
-   - a guard test fails if a copy of the engine reappears under `skills/`;
-   - the skill's `SKILL.md` and `references/` document the seam, the resolution order and the way out
-     when the member is not installed (**decision A3: fail closed**, never fall back to a second engine).
-   - The agent-skills plans that still describe the engine (`code-driven-orchestrator`,
-     `orchestrate-lean-loop`) should archive against the engine's new home; their scenarios now live in
-     `agent-runtime`'s `docs/specs/orchestrator-engine.md`.
-3. **W2 — P4c, the selective remote installer** (`agent-runtime`,
-   `docs/plans/2026-11-07-selective-remote-installer.plan.md`). The plan is approved but **not runnable
-   by the driver**: its header is `Status: **APPROVED — READY FOR EXECUTION**` (the driver reads `Status:`
-   as missing) and its Tickets table uses `ID | Vertical deliverable | Scenarios | Depends | …` instead of
-   the fixed `# | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status`
-   columns. Its `T3` is `large`, which the driver refuses (`big`/`large` need chunked dispatch) — split
-   it in two. Its living spec `docs/specs/installer-contract.md` does not exist yet.
-4. **W3 — `orchestrator-routing-decoupling` (`agent-skills`)**: one owner ticket (T3, "approve
-   fail-closed routing compatibility"). Its header has the same `Status:` problem; the driver cannot run
-   it until that is fixed.
-5. **W4 — `orchestration-baselines` T4 (`agent-skills`)**: the comparative benchmark. The plan's own
-   seam says the task corpus does not exist yet — only `benchmarks/evidence-manifest.json` (T3's schema).
-   Split it into corpus, harness and runs before giving it to a worker.
+1. **Merge agent-skills PR #53** (the seam), then **agent-runtime PR #66** and **agent-skills PR #54**.
+   The skill is symlinked into `~/.agents/skills`, so this machine already runs the shim; what the merge
+   changes is what everyone else gets.
+2. **W2 — P4c, the selective remote installer** (`agent-runtime`,
+   `docs/plans/2026-11-07-selective-remote-installer.plan.md`). The pre-flight is done in PR #66: the plan
+   parses, `check_plan` passes, and the tickets are T1–T5 with the fixed columns. The run is the owner's:
+   `launch` the plan, the driver dispatches, the owner merges each ticket's PR. Five sequential tickets
+   touch `install.sh`, and the format budget sits one file below its limit — run `uv run ruff format` on
+   whatever a ticket adds, before it reports.
+3. **W3 — `orchestrator-routing-decoupling` (`agent-skills`)**: one owner ticket (T3, "approve fail-closed
+   routing compatibility"). The pre-flight is done in PR #54; the driver can launch the plan. The owner
+   answers T3 in the plan (`COMPLETE <date>`), and the driver archives the plan. Whether the archive still
+   belongs in `agent-skills` is the owner's call: the plan's scenarios are already answered by the member's
+   suite, under `agent-runtime`'s `docs/specs/orchestrator-engine.md`.
+4. **W4 — `orchestration-baselines` T4 (`agent-skills`)**: the comparative benchmark, still one
+   `regular/complex` ticket. The action plan proposes the split (corpus, harness, runs), and the split is
+   still to be edited into the plan's ledger. One question is open before that edit: **where the corpus and
+   the harness live now that the engine moved.** The action plan's proposed T5 still names
+   `skills/orchestrate/scripts/`, which now holds only the shim — the benchmark harness the suite used is
+   in the member (`packages/agent-orchestrator/tests/bench.py`). The corpus does not exist yet: only
+   `benchmarks/evidence-manifest.json` (T3's schema) is there.
 
-## 4. Decisions taken (from the action plan)
+## 4. Decisions taken
 
 | # | Decision | State |
 |---|---|---|
 | A1 | The order: D8 → P4c → routing → baselines | applied |
-| A2 | Which engine drives the runs | the skill's copy until PR #65 merges; the member afterwards (the member's suite is now its proof) |
+| A2 | Which engine drives the runs | the member, everywhere (its suite is its proof) |
 | A3 | What the skill does when the member is missing | **fail closed**, with the install command and `AGENT_RUNTIME_HOME` as the way out |
-| A4 | The release artifact contract P4c's T3 verifies against | a GitHub Release with per-asset SHA-256 from CI; the bootstrap refuses a moving `main`; CI tests run against a local fixture, so no real release is needed to pass |
-| A5 | Where the baselines runs happen | corpus and harness in the driver, the runs by hand |
-| A6 | The 30-second rule | the worker's first act is a one-line progress report, written into the first ticket's "What it delivers" cell, which is copied into the worker's `task.md` |
+| A4 | The release artifact contract | a GitHub Release with per-asset SHA-256 from CI; the bootstrap refuses a moving `main`; CI tests run against a local fixture — now decision D7 of the P4c plan |
+| A5 | Where the baselines runs happen | corpus and harness in the driver, the runs by hand (W4 still to be split) |
+| A6 | The 30-second rule | the worker's first act is a one-line progress report, written into the first ticket's "What it delivers" cell |
+| A7 | The seam's resolution order: `$AGENT_RUNTIME_HOME` first, then `PATH` | applied (the checkout the user named is never shadowed by an older install) |
+| A8 | The plans that describe the engine keep their scenarios and say where they live; their open tickets stay open | applied to `code-driven-orchestrator`, `orchestrate-lean-loop` and `orchestrator-routing-decoupling` |
 
 ## 5. Traps on this machine
 
-- **The 30 s window.** `UNREPORTED_GRACE_SECONDS = 30` (R100, hard-coded). A worker that has not
-  reported within 30 s is flagged `unreported`, and the driver parks the ticket on a person. It has
-  already fired once (`escalation … ended without a report: runtime state idle`, 2026-11-07). The run
-  parks rather than dies: `<run>/attention.md` names what waits, and the answer goes through the plan's
-  Status cell.
+- **The driver reads `Status:` more strictly than `converge` does.** `Status: **APPROVED**` — this
+  repository's own plan style, as in `docs/plans/2026-11-08-orchestrator-engine-suite.plan.md` — reads as
+  *missing*, so the driver cannot launch that plan. `converge.py` accepts it. One regex, one test and one
+  requirement would close the class; it is not fixed.
+- **The 30 s window.** `UNREPORTED_GRACE_SECONDS = 30` (R100, hard-coded). A worker that has not reported
+  within 30 s is flagged `unreported`, and the driver parks the ticket on a person. The run parks rather than
+  dies: `<run>/attention.md` names what waits, and the answer goes through the plan's Status cell.
 - **Pi's trust prompt** blocks a worker in a directory Pi does not trust:
   `~/.pi/agent/trust.json` must carry the parent of `~/developer/agent-runtime.worktrees/`.
 - **`~/.pi/agent/mcp.json`** must keep its `agent-runtime` entry; without it a pi worker cannot call
   `report` and the runtime never sees it finish. It was restored once already.
 - **Converge reads a test's id from the docstring's first line**, and it only looks at the line after the
   `def`. A test whose signature is split over several lines (`def test_x(\n    self,\n):`) hides its
-  docstring from the gate. Six ported tests were renamed and joined for that reason; keep the
-  signatures on one line.
+  docstring from the gate. Six ported tests were renamed and joined for that reason; keep the signatures on
+  one line.
 - **The budgets are measured debt**: ruff 40/45, ruff format 30/31, ty 277/285. A change that pushes a
   count over its budget fails CI on purpose. The format budget sits one file below its limit.
-- **The suite is load-flaky** in two files (`tests/test_event_wait.py`, `tests/test_stop_failures.py`);
-  run the failing test alone before believing it.
+- **The suite is load-flaky** in two files (`tests/test_event_wait.py`, `tests/test_stop_failures.py`); run
+  the failing test alone before believing it. One more flake was in the member's benchmark harness and is
+  fixed (#65): the tree check gave the system two seconds to reap a tree it had just killed, and the
+  member's CI runs the suite in parallel on two-core runners.
+- **The driver does not strip backticks from a ticket's `Paths`**, so a backticked path reaches the worker
+  as `` `install.sh` ``. The plans the driver runs write their paths plain.
 
 ## 6. What not to redo
 
@@ -120,9 +132,24 @@ uv run pytest -n 4
 uv run pytest -m integration -n 4
 uv run ruff check . && uv run ruff format --check . && uv run ty check
 shellcheck install.sh bin/*
-python3 ~/.agents/skills/converge/scripts/converge.py \
-  docs/plans/2026-11-08-orchestrator-engine-suite.plan.md --final --base main
 
 cd ~/developer/agent-skills
 uv sync && uv run pytest -m "" -n 4 && scripts/checks.sh
+python3 skills/converge/scripts/converge.py \
+  docs/plans/2026-11-08-orchestrator-single-engine.plan.md --final --base main
+```
+
+**The engine-suite plan's converge gate ran on PR #65, before the merge.** After the merge it reports the
+coverage of a diff that no longer exists (the suite is in `main`, so no test file changed since the base) and
+the coverage check fails on that alone. That is the end state of a landed plan, not a regression: the plan's
+scenarios live in `docs/specs/orchestrator-engine.md`, next to the tests that answer them. The P4c plan's
+gate fails the same way until the installer lands — it has no test yet, because the installer does not
+exist.
+
+The driver runs one plan at a time, in the repository that owns it:
+
+```bash
+cd ~/developer/agent-runtime
+uv run --package agent-orchestrator agent-orchestrator launch \
+  docs/plans/2026-11-07-selective-remote-installer.plan.md
 ```
