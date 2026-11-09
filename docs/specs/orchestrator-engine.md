@@ -26,6 +26,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R12** WHEN a worker writes the report the driver's `CONTRACT` describes, `"context"` included, THEN `Report` accepts it: every top-level key the contract's example names is a `Report` field. (from orchestrator-lead-alerts/S1, S2)
 - **R13** WHEN the driver runs a git call that walks or writes the whole tree (`worktree add`, `status`), THEN that call's timeout is sized for a large repository, not `run()`'s 15-second default. (from orchestrator-lead-alerts/S3)
 - **R14** WHEN `launch` runs inside an hc terminal, THEN the run is given that terminal, and each new wake is sent to it once with `hc send` (never `--force` or `interrupt`); a send that fails is logged as `notify-failed` and the run goes on; a run launched outside a terminal sends nothing. (from orchestrator-lead-alerts/S4–S7)
+- **R15** WHEN a unit is at `awaiting-merge`, THEN the idle ticks skip it: no idle event, no `idle` request. The merge is a person's step, and the `pr-ready` wake already asked for it. (from orchestrator-lead-alerts/S8)
 
 ## Coverage
 
@@ -74,7 +75,7 @@ suite runs here, against the member, and the member answers the way the engine a
   `test_S3_a_gate_without_a_step_route_keeps_todays_effort`,
   `test_S3_a_step_route_names_the_gates_effort`
 
-### R12, R13, R14 — the report the contract asks for, the tree-sized calls, the Lead's alert
+### R12, R13, R14, R15 — the report the contract asks for, the tree-sized calls, the Lead's alert, the merge wait
 
 - `packages/agent-orchestrator/tests/test_contracts.py`: `test_S1_report_accepts_the_context_object_workers_write`,
   `test_S2_every_key_the_contract_example_names_is_a_report_field`
@@ -83,6 +84,7 @@ suite runs here, against the member, and the member answers the way the engine a
   `test_S4_a_run_without_a_notify_terminal_sends_nothing`, `test_S6_a_failed_send_is_logged_and_the_run_goes_on`
 - `packages/agent-orchestrator/tests/test_launch.py`: `test_S7_the_run_is_told_the_launching_terminal_to_alert`,
   `test_S7_a_run_launched_outside_a_terminal_alerts_no_one`
+- `packages/agent-orchestrator/tests/test_pr.py`: `test_S8_a_unit_waiting_for_its_merge_is_never_idle`
 
 ## The ported suite
 

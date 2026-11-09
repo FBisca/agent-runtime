@@ -35,9 +35,10 @@ A live run (`org-chart-custodian-leaves`) stopped three times for reasons the Le
 - **S5** WHEN the same wake is written again, THEN no second send happens.
 - **S6** WHEN `hc send` fails, THEN the run logs `notify-failed` and finishes as it would have.
 - **S7** WHEN `launch` runs under `HC_TERMINAL_ID=t175`, THEN the `run` argv carries `--notify-terminal t175`; WHEN there is no `HC_TERMINAL_ID`, THEN it carries none.
+- **S8** WHEN a unit sits at `awaiting-merge` with nothing new across idle ticks, THEN no idle event and no `idle` request are written: the merge is a person's step, and the `pr-ready` wake already asked for it. (Found live: the unit went to `requested` 20 minutes after its `pr-ready` wake.)
 
 ## Tickets
 
 | # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |
 |---|---|---|---|---|---|---|---|---|
-| T1 | Report `context`, contract parity test, checkout timeouts, wake alerts | S1–S7 | none | packages/agent-orchestrator/, docs/specs/orchestrator-engine.md | small | simple | agent | COMPLETE |
+| T1 | Report `context`, contract parity test, checkout timeouts, wake alerts, no idle tick on a merge wait | S1–S8 | none | packages/agent-orchestrator/, docs/specs/orchestrator-engine.md | small | simple | agent | COMPLETE |

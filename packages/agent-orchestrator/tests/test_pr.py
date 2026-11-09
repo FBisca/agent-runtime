@@ -379,6 +379,26 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([(e["waiting"], e["ticks"]) for e in rows], [("ci", 1), ("ci", 2)])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
+    def test_S8_a_unit_waiting_for_its_merge_is_never_idle(self):
+        """orchestrator-engine/R15: orchestrator-lead-alerts/S8"""
+        self.prs(["OPEN"])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.working(),
+                self.working(),
+                self.working(),
+                self.flip(self.working(), "prs.json", ["MERGED"]),
+            ]
+        )
+        self.run_driver("--idle-minutes", "0")
+        gates = [e["gate"][1] for e in self.events("state") if e["task"] == "t1"]
+        self.assertIn("awaiting-merge", gates)
+        self.assertEqual(self.idle_events(), [])
+        self.assertEqual(self.wake_lines("decision"), [])
+        self.assertEqual(self.task("t1")["status"], "COMPLETE")
+
     def test_S6_the_default_tick_is_ten_minutes(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S6"""
         self.waits([self.working(), self.working(), self.working()])

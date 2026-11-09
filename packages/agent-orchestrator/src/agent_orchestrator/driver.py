@@ -1185,6 +1185,8 @@ class Driver:
                 continue
             if task.get("gate") == "requested":
                 continue  # the Lead already has it
+            if task.get("gate") == "awaiting-merge":
+                continue  # the merge is a person's step, and the pr-ready wake already asked for it
             signature = self.idle_signature(task_id, assignments)
             previous = self.ticks.get(task_id)
             if previous is None or previous[0] != signature:
@@ -1192,7 +1194,7 @@ class Driver:
                 continue
             streak = previous[1] + 1
             self.ticks[task_id] = [signature, streak]
-            waiting = "ci" if task.get("gate") in ("ready-for-ci", "awaiting-merge") else "agent"
+            waiting = "ci" if task.get("gate") == "ready-for-ci" else "agent"
             self.log("idle", unit=unit, task=task_id, waiting=waiting, ticks=streak)
             if streak >= 2:
                 self.request(
