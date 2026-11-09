@@ -1084,6 +1084,9 @@ fetch_release() {
   # release, so the runtime and the orchestrator never come from two different ones.
   AGENT_RUNTIME_RELEASE=$release
   export AGENT_RUNTIME_RELEASE
+  # What only the bootstrap reads stays behind: the inner run is a checkout install that downloads
+  # nothing, and it refuses a checksum to verify as a usage error.
+  unset AGENT_RUNTIME_SHA256 AGENT_RUNTIME_RELEASE_URL
   exec sh "$staged/install.sh" "$command" --components "$components" </dev/null
 }
 

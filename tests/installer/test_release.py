@@ -644,6 +644,17 @@ class VerificationTests(ReleaseCase):
         self.assertIn("published with the release", convenience.stdout)
         self.assertIn("--sha256", convenience.stdout)
 
+    def test_s6_the_checksum_in_the_environment_installs_like_the_flag(self):
+        """S6: AGENT_RUNTIME_SHA256 is the same as --sha256: it must not break the hand-over."""
+        out = self.release("0.1.0")
+        trusted = sha256(self.tarball(out))
+        result = self.refused(extra={"AGENT_RUNTIME_SHA256": trusted})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checksum you gave", result.stdout)
+        for shim in SHIMS:
+            self.assertTrue(self.shim(shim).is_symlink(), shim)
+        self.assertEqual(self.manifest()["components"]["runtime"]["release"], "v0.1.0")
+
     def test_s6_a_release_manifest_for_another_release_or_platform_is_refused(self):
         """S6: a manifest that names another release, payload or platform is a mismatch."""
         out = self.release("0.1.0")
