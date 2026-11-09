@@ -3296,6 +3296,8 @@ class Driver:
         if finished and self.report_is_valid(task_id):
             self.log("held-acted", unit=unit, task=task_id, held="complete", acted="reported")
             return self.mark(task_id, gate="reported", held=[])
+        if action == "answer":
+            return self.step_answer(task_id, decision)
         flags = {
             "fresh": action == "fresh worker",
             "up": action == "retry one class up",
@@ -3304,6 +3306,75 @@ class Driver:
         if task.get("fix"):
             return self.mark(task_id, gate="fix-pending", fix=dict(task["fix"], **flags))
         self.mark(task_id, gate="redo-pending", redo=dict(flags, reason=reason))
+
+    def step_answer(self, task_id, decision):
+        """The Lead's `answer`: the unit's worker goes on under the same task id, so the id the brief names is the id
+        its report must carry. Only `retry`, `fresh worker` and `retry one class up` start a new attempt."""
+        task = self.task(task_id)
+        packet, unit = task["packet"], task["packet"]["unit"]
+        task_dir = self.run_dir / task_id
+        task_dir.mkdir(exist_ok=True, mode=0o700)
+        # named after the decision file, so a driver that died after the resume writes nothing twice
+        suffix = Path(task["decision"]["path"]).name.removeprefix("decision").removesuffix(".json")
+        brief = task_dir / ("answer%s.md" % suffix)
+        if not brief.exists():
+            brief.write_text(self.answer_text(task, decision), encoding="utf-8")
+        text = (
+            "Read %s and follow it. This is the task you were working on, answered by the Lead: it keeps its "
+            "task id `%s`; the unit's brief is %s."
+            % (brief, task_id, self.run_dir / unit / "task.md")
+        )
+        address, assignment_id = self.hand_over(
+            task, packet, brief, text, answer=decision["answer"]
+        )
+        with self.book() as data:
+            data["tasks"][task_id].update(
+                runtime_id=str(address or task["runtime_id"]),
+                assignment_id=assignment_id,
+                status="ACTIVE",  # a report that failed its gate left PARTIAL; the worker is working again
+                gate=None,
+                held=[],
+                answered_at=now(),
+                updated_at=now(),
+            )
+        self.replay_held(task, task_id)
+        event("answer for %s: %s resumed on the same task id" % (task_id, packet["worker"]))
+
+    def answer_text(self, task, decision):
+        packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
+        report = next_path(self.run_dir / task_id, "report", ".json")[0]
+        items = (task.get("fix") or {}).get("items") or []
+        return "\n".join(
+            [
+                "Contract: %s" % (self.run_dir / "contract.md"),
+                "Report: %s" % report,
+                "",
+                "# Answer to %s (task %s)" % (unit.upper(), task_id),
+                "",
+                "What happened: %s" % task["event"]["reason"],
+                "The Lead's instruction: %s" % decision["reason"],
+                "The Lead's answer: %s" % decision["answer"],
+                *(
+                    ["", "Findings still open:", *["- " + describe(item) for item in items], ""]
+                    if items
+                    else []
+                ),
+                "This is the same attempt, not a new one: keep using task_id `%s` in your report, and write it to "
+                "the path above (files are write-once; an earlier report stays where it is)."
+                % task_id,
+                "Original task: %s. Same checkout and branch: %s on %s. Work only here; edit only: %s."
+                % (
+                    self.run_dir / unit / "task.md",
+                    packet["checkout"],
+                    task["checkout_at_claim"]["branch"],
+                    ", ".join(packet["owns"]),
+                ),
+                "Commit and push to the same branch. Run before you report COMPLETE: %s."
+                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
+                "Report review_rounds 0: the driver counts failed rounds.",
+                "",
+            ]
+        )
 
     def report_landed(self, task_id):
         """The worker's report is on disk, it names this task, it says it finished and it belongs to this attempt:
@@ -3323,7 +3394,7 @@ class Driver:
     def belongs_to_attempt(self, task, path):
         """The report was written after the task was claimed: a report left over from an earlier attempt is not this
         worker's news."""
-        claimed = task.get("started_at")
+        claimed = max(filter(None, (task.get("started_at"), task.get("answered_at"))), default=None)
         if not claimed:
             return True
         try:
@@ -4143,6 +4214,14 @@ def numbered(directory, stem, suffix):
     return found
 
 
+def foreign_attempt(text, unit, expected):
+    """The first attempt id of `unit` that `text` names and that is not `expected`, else None. An attempt id is the
+    unit's own id or the unit followed by a round letter (fix `r`, retry `d`, orphan `o`) and a number; the worker
+    name (`demo-t1`) and any longer word are not ids."""
+    pattern = r"(?<![\w-])%s(?:[rdo]\d+)?(?!\w)" % re.escape(unit)
+    return next((m for m in re.findall(pattern, text) if m != expected), None)
+
+
 def decide(args):
     """`decide <plan> <unit> <action> --reason R [--answer A]`: answer the unit's open request. The decision file is
     written and validated first; only then is the request marked resolved, so the driver never sees a resolved request
@@ -4164,6 +4243,14 @@ def decide(args):
             raise Refused(
                 "action %r is not on the menu: %s" % (args.action, ", ".join(request["menu"]))
             )
+        if args.action == "answer" and args.answer:
+            wrong = foreign_attempt(args.answer, unit, request["task"])
+            if wrong:
+                raise Refused(
+                    "the answer names attempt %r, but the request is for %r and the worker resumes on %r: "
+                    "name %r, or leave the id out"
+                    % (wrong, request["task"], request["task"], request["task"])
+                )
         try:
             decision = contracts.validate_decision(
                 dict(
