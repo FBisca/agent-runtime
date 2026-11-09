@@ -1,6 +1,5 @@
 """The gates after a worker reports: converge, a fresh reviewer, fix rounds, a fresh worker for a dead pane."""
 
-import copy
 import json
 import unittest
 
