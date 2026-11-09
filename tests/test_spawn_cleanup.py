@@ -290,7 +290,7 @@ class SpawnCleanupTests(ToolCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
     def test_instructions_file_is_refused_for_a_family_that_loads_the_role_itself(self):
-        """agent-runtime/R162"""
+        """agent-runtime/R162: orchestrator-routing-effort-role/S6 — the family that loads the role itself takes no instructions_file."""
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
         lead = self.start({}, ENV)
