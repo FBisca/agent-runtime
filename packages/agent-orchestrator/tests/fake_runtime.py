@@ -5,7 +5,9 @@ instead of starting a process per call. The executable the fixture puts on PATH 
 contract, two ways to reach it.
 
 The state lives in files under `FAKE_RUNTIME_HOME`, so a run can be scripted before it starts and read after it ends:
-`calls.jsonl` (every call), `waits.json` (the scripted wait steps), `states.json` (the agents' states), `refuse.json`
+`calls.jsonl` (every call), `waits.json` (the scripted wait steps), `states.json` (the agents' states: a name's state is what `status` answers, `error` makes the call fail, `not_found`
+answers `unknown` the way hc does for a terminal it has none of, and `unreadable` answers `unknown` for a failed
+read), `refuse.json`
 (the names the runtime refuses to spawn), `stopped.json` (the names the driver stopped) and `assignments.json` (the
 assignment ids each agent was given).
 
@@ -100,14 +102,13 @@ def process(argv, timeout=None):
                 1,
                 json.dumps({"content": [{"type": "text", "text": "name_taken"}], "isError": True}),
             )
-        stopped_path = os.path.join(
-            home, "stopped.json"
-        )  # a name the driver stopped is live again once it is spawned
+        # A name spawned again has a new, live terminal. The first spawn keeps the state a test scripted for the name.
+        states = read_json(os.path.join(home, "states.json"))
+        if nth > 1 and states.pop(args["name"], None) is not None:
+            write_json(os.path.join(home, "states.json"), states)
+        stopped_path = os.path.join(home, "stopped.json")
         stopped = read_json(stopped_path)
         if args["name"] in stopped:
-            states = read_json(os.path.join(home, "states.json"))
-            states.pop(args["name"], None)
-            write_json(os.path.join(home, "states.json"), states)
             write_json(stopped_path, [n for n in stopped if n != args["name"]])
         assignment = answer(
             args["name"], "a-%s%s" % (args["name"], "" if nth == 1 else "-%d" % nth)
@@ -148,6 +149,21 @@ def process(argv, timeout=None):
         state = states.get(args["name"], "idle")
         if state == "error":
             return Completed(argv, 1, "", "the runtime does not know this agent")
+        if state in ("not_found", "unreadable"):
+            # what the real `status` answers when hc cannot read the terminal: `unknown`, with the reason in
+            # `native.error`. hc's own "no such terminal" is `not_found`; anything else is a failed read.
+            reason = (
+                json.dumps(
+                    {"error": {"kind": "not_found", "message": 'no terminal "%s"' % args["name"]}}
+                )
+                if state == "not_found"
+                else "hc get timed out"
+            )
+            return Completed(
+                argv,
+                0,
+                json.dumps({"name": args["name"], "state": "unknown", "native": {"error": reason}}),
+            )
         return Completed(argv, 0, json.dumps({"name": args["name"], "state": state}))
     if tool == "stop":
         states = read_json(os.path.join(home, "states.json"))

@@ -348,6 +348,18 @@ class RunFixture(_Case):
     def states(self, mapping):
         (self.home / "states.json").write_text(json.dumps(mapping), encoding="utf-8")
 
+    def gone(self, name, state="exited"):
+        """`name` has no live terminal when the run starts, and is live again once the driver spawns it."""
+        self.states({name: state})
+        (self.home / "stopped.json").write_text(json.dumps([name]), encoding="utf-8")
+
+    def goes(self, name, state="exited"):
+        """The `write` entries of a wait step during which `name` is lost (see `gone`)."""
+        return [
+            [str(self.home / "states.json"), json.dumps({name: state})],
+            [str(self.home / "stopped.json"), json.dumps([name])],
+        ]
+
     def waits(self, steps):
         (self.home / "waits.json").write_text(json.dumps(steps), encoding="utf-8")
 
