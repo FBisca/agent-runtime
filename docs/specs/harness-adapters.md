@@ -57,7 +57,7 @@ never the authority.
 - **R187** WHEN the operator writes the host policy, THEN it can grant mutations, worker backends and directories and nothing else: it never grants a harness a role. (from pi-lead-adapter/S4)
 - **R188** WHEN a Pi worker calls `report`, `message`, `wait`, `status`, `collect`, `list` or a read-only `task list` inside its own team, THEN the runtime accepts the call instead of refusing the session. (from pi-worker/S3, pi-worker/S5)
 - **R189** WHEN a Pi worker calls `spawn`, `stop` or `resume`, THEN the runtime refuses the call with a reason that names the host policy: a Pi worker starts no worker and ends no worker. (from pi-worker/S4)
-- **R190** WHEN a spawn names the `pi` family, THEN the runtime launches interactive `pi --model <model> --thinking <effort>` without `--print`, with the task last, and the task carries the role line and the report protocol; an effort Pi does not know is refused before anything starts. (from pi-worker/S1, pi-worker/S6)
+- **R190** WHEN a spawn names the `pi` family, THEN the runtime launches interactive `pi --approve --model <model> --thinking <effort>` without `--print`, with the task last, and the task carries the role's content and the report protocol; an effort Pi does not know is refused before anything starts. (from pi-worker/S1, pi-worker/S6; orchestrator-routing-effort-role/S5, S12)
 - **R191** WHEN a spawn names the `pi` family, THEN the worker keeps `MINIMAX_API_KEY` and the Pi provider variables, and a claude or codex spawn carries neither; the authorised-directory guarantee is unchanged for a Pi spawn. (from pi-worker/S2, pi-worker/S7, pi-worker/S8)
 
 ## Operator policy
