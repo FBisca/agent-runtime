@@ -46,8 +46,8 @@ skill's copy — that is the cross-repository pull request, a separate change in
   refusal instead of crashing.
 - **S6** WHEN `launch` starts a run, THEN the pane runs the member's CLI.
 - **S7** WHEN a run is terminated for exceeding its budget, THEN the harness waits, within a bounded
-  window, for the process group to empty before it decides the tree survived, and a tree that really
-  outlived the run still fails the check.
+  window, for the tree it killed to stop running before it decides the tree survived — a process the
+  system has not reaped yet has exited — and a tree that really outlived the run still fails the check.
 
 ## Tickets
 
@@ -56,7 +56,7 @@ skill's copy — that is the cross-repository pull request, a separate change in
 | T1 | The engine's suite lands in the member, re-pointed at the member's driver and CLI, with the runtime seam the suite patches being the member's seam. | S1, S2 | none | `packages/agent-orchestrator/tests/`, `packages/agent-orchestrator/src/agent_orchestrator/runtime_client.py`, `packages/agent-orchestrator/src/agent_orchestrator/driver.py`, `pyproject.toml` | regular | complex | agent | COMPLETE 2026-11-08 |
 | T2 | The member keeps the driver's own words: a refusal is a `ValueError`, a route refusal names the value, and `launch` runs the member's CLI. | S2, S4, S5, S6 | T1 | `packages/agent-orchestrator/src/agent_orchestrator/routes.py`, `packages/agent-orchestrator/src/agent_orchestrator/driver.py`, `packages/agent-orchestrator/tests/` | regular | complex | agent | COMPLETE 2026-11-08 |
 | T3 | The suite is green against the member, the tracked budgets do not grow, and the member's behaviour is the ledger: the local spec names what the move established. | S2, S3 | T2 | `packages/agent-orchestrator/tests/`, `docs/specs/orchestrator-engine.md`, `docs/specs/python-workspace-contracts.md`, `docs/plans/` | regular | simple | agent | COMPLETE 2026-11-08 |
-| T4 | The benchmark harness the port brought waits for the tree it killed, bounded, so the member's CI stops measuring the machine's reaping speed. | S7 | T1 | `packages/agent-orchestrator/tests/bench.py`, `packages/agent-orchestrator/tests/test_baselines.py`, `docs/specs/orchestrator-engine.md` | small | simple | agent | COMPLETE 2026-11-09 |
+| T4 | The benchmark harness the port brought waits for the tree it killed to stop running, bounded, so the member's CI stops measuring the machine's reaping speed. | S7 | T1 | `packages/agent-orchestrator/tests/bench.py`, `packages/agent-orchestrator/tests/test_baselines.py`, `docs/specs/orchestrator-engine.md` | small | simple | agent | COMPLETE 2026-11-09 |
 
 ## Out of scope
 

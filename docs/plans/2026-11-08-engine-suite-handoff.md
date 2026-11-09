@@ -43,7 +43,7 @@ refuses, names the way out and exits 2. It never falls back to a second engine.
 | `uv run ty check packages/ tests/test_workspace_isolation.py` | clean |
 | `uv run ty check .` | 277 (budget 285) — unchanged |
 | `shellcheck install.sh bin/*` | clean |
-| `converge.py --final --base main` (the engine-suite plan) | coverage, tagged, scope, spec — all **PASS** (on PR #65, before the merge) |
+| `converge.py --final --base main` (the engine-suite plan) | coverage, tagged, scope, spec — all **PASS** (on PR #65, before the merge, and again after it: the coverage runs off the provenance) |
 | `uv run pytest -m "" -n 4` (agent-skills) | **212 passed** |
 | `scripts/checks.sh` (agent-skills) | lint, frontmatter, whole suite — green |
 | `converge.py --final --base main` (the single-engine plan) | coverage, tagged, scope, spec — all **PASS** |
@@ -106,9 +106,11 @@ refuses, names the way out and exits 2. It never falls back to a second engine.
 - **The budgets are measured debt**: ruff 40/45, ruff format 30/31, ty 277/285. A change that pushes a
   count over its budget fails CI on purpose. The format budget sits one file below its limit.
 - **The suite is load-flaky** in two files (`tests/test_event_wait.py`, `tests/test_stop_failures.py`); run
-  the failing test alone before believing it. One more flake was in the member's benchmark harness and is
-  fixed (#65): the tree check gave the system two seconds to reap a tree it had just killed, and the
-  member's CI runs the suite in parallel on two-core runners.
+  the failing test alone before believing it. One more flake was in the member's benchmark harness: the
+  tree check gave the system two seconds to reap a tree it had just killed, and on the CI's two-core
+  runners the reaping takes longer — it fired again on the pull request that carried the first repair.
+  The check now waits, bounded, for the tree to stop running, and a process the system has not reaped yet
+  counts as exited.
 - **The driver does not strip backticks from a ticket's `Paths`**, so a backticked path reaches the worker
   as `` `install.sh` ``. The plans the driver runs write their paths plain.
 
@@ -139,12 +141,10 @@ python3 skills/converge/scripts/converge.py \
   docs/plans/2026-11-08-orchestrator-single-engine.plan.md --final --base main
 ```
 
-**The engine-suite plan's converge gate ran on PR #65, before the merge.** After the merge it reports the
-coverage of a diff that no longer exists (the suite is in `main`, so no test file changed since the base) and
-the coverage check fails on that alone. That is the end state of a landed plan, not a regression: the plan's
-scenarios live in `docs/specs/orchestrator-engine.md`, next to the tests that answer them. The P4c plan's
-gate fails the same way until the installer lands — it has no test yet, because the installer does not
-exist.
+**The engine-suite plan's converge gate runs off the provenance, not off the diff.** Its scenarios are covered
+by the requirements in `docs/specs/orchestrator-engine.md` and the tests that carry those requirement ids, so
+the gate is green whether the suite is in the diff or already in `main`. The P4c plan's gate fails until the
+installer lands: it has no test yet, because the installer does not exist.
 
 The driver runs one plan at a time, in the repository that owns it:
 

@@ -34,24 +34,57 @@ def kill_tree(proc):
     proc.wait(timeout=10)
 
 
+def group_exists(pgid):
+    """Whether the process group still holds a process."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def group_states(pgid):
+    """The state of every process in a group, or None when the machine cannot say.
+
+    'Z' is a zombie: the process has exited and it will not run again, but the system has not reaped
+    its entry yet. `ps` is the only portable way to tell a zombie from a running process.
+    """
+    try:
+        listed = subprocess.run(
+            ["ps", "-eo", "pid=,pgid=,stat="], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listed.returncode != 0:
+        return None
+    states = []
+    for line in listed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] == str(pgid):
+            states.append(parts[2])
+    return states
+
+
 def tree_gone(pgid, timeout=10.0):
-    """Whether the process group is empty: nothing the run started outlived it.
+    """Whether the tree the run started is gone: nothing it started is still running.
 
     A killed tree is not gone the instant the signal lands: the processes stay in the group as zombies
-    until the system reaps them, and under load that takes longer than a moment. The wait is bounded,
-    so a tree that really outlived the run still fails the check.
+    until the system reaps them, and under load that takes longer than a moment — long enough that the
+    check called a dead tree alive. So the wait is bounded, and a group that holds nothing but zombies
+    counts as gone: a zombie has exited. A tree that really outlived the run still fails the check.
     """
     deadline = time.monotonic() + timeout
     while True:
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
+        if not group_exists(pgid):
             return True
-        except PermissionError:
-            return False
+        states = group_states(pgid)
+        if states is not None and all(state.startswith("Z") for state in states):
+            return True
         if time.monotonic() >= deadline:
             return False
-        time.sleep(0.1)
+        time.sleep(0.2)
 
 
 def run_budgeted(
