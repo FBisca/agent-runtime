@@ -100,6 +100,44 @@ class PiSpawnTests(ToolCase):
         tools = session.send("tools/list")["result"]["tools"]
         self.assertIn("pi", tools[0]["inputSchema"]["properties"]["cli"]["enum"])
 
+    def mcp_file(self):
+        return self.dir / "home" / ".pi" / "agent" / "mcp.json"
+
+    def test_S13_a_pi_spawn_registers_the_runtime_mcp_server(self):
+        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — the worker finds the report tool: Pi's own configuration carries this runtime's server."""
+        self.spawn_argv(cli="pi")
+        data = json.loads(self.mcp_file().read_text(encoding="utf-8"))
+        server = data["mcpServers"]["agent-runtime"]
+        self.assertEqual(server["env"], {"AGENT_RUNTIME_DISPATCH": "1"})
+        self.assertEqual(server["exposure"], "direct")
+        self.assertTrue(server["args"][0].endswith("server/mcp_server.py"))
+        self.assertTrue(Path(server["args"][0]).is_absolute())
+        self.assertTrue(Path(server["args"][0]).is_file())
+
+    def test_S13_the_registration_keeps_the_other_servers(self):
+        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — the file is the operator's: the other servers stay as they are."""
+        path = self.mcp_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"mcpServers": {"other": {"command": "other-server"}}}),
+            encoding="utf-8",
+        )
+        self.spawn_argv(cli="pi")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["mcpServers"]["other"], {"command": "other-server"})
+        self.assertIn("agent-runtime", data["mcpServers"])
+
+    def test_S13_a_broken_pi_configuration_is_refused_and_nothing_starts(self):
+        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — a configuration the runtime cannot read is a refusal, not a silent worker without a report tool."""
+        path = self.mcp_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ not json", encoding="utf-8")
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="pi"))
+        self.assertTrue(result["isError"])
+        self.assertIn("mcp.json", text)
+        self.assertEqual(self.runs("run"), [])
+
 
 class PiProviderTests(ToolCase):
     """T2: the provider environment follows the family."""

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import agent_runtime as lib
 from . import dispatch_store as dispatch
-from . import dispatch_wait, host_policy, profiles, usage
+from . import dispatch_wait, host_policy, pi_mcp, profiles, usage
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 COLLECT_LINES = 200
@@ -533,6 +533,12 @@ def spawn(arguments, env, ctx):
             ["claude"] + (["--agent", agent] if agent else []) + launch_args + model + [message]
         )
     elif cli == "pi":
+        # A Pi worker finds the report tool in Pi's own configuration: the runtime owns that entry,
+        # so the path in it is the running runtime's and a moved checkout does not leave it quiet.
+        try:
+            pi_mcp.ensure(env)
+        except pi_mcp.PiMcpError as error:
+            raise ToolError(str(error)) from None
         # Interactive Pi stays available for follow-up assignments, and --approve keeps the worker
         # from stopping at a trust prompt in a folder nobody can answer in.
         program = ["pi", "--approve"] + model + [message]

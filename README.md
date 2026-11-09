@@ -144,7 +144,7 @@ The local configuration, as it stands on this machine:
 
 | What | Where | Value |
 |---|---|---|
-| The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct` |
+| The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 <checkout>/server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct`, a 600 s timeout. The runtime writes this entry itself before it starts a Pi worker, so the path always points at the running runtime; the other servers in that file are left alone |
 | The host policy | `~/.config/agent-runtime/hosts.json` | the `pi` host: `mutations` on, `backends` `["pi", "claude-minimax", "codex", "claude"]`, `paths` covering the checkouts under the developer's home |
 
 The `pi` backend in `backends` is what lets a Pi lead start a Pi worker; without it the spawn is
