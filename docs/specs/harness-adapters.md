@@ -100,4 +100,4 @@ directory is allowed. The file is read on every mutating call, so a change needs
 | pi-worker/S6 | R190 | `tests/test_pi_worker.py`: `test_S6_the_effort_maps_onto_pi_thinking`, `test_S6_an_effort_pi_does_not_know_is_refused_before_anything_starts` |
 | pi-worker/S7 | R191 | `tests/test_pi_worker.py`: `test_S7_a_pi_spawn_outside_the_authorized_directory_is_refused`, `test_S7_a_pi_spawn_needs_an_authorized_backend` |
 | pi-worker/S8 | R191 | `tests/test_pi_worker.py`: `test_S8_a_pi_worker_reports_once_and_the_lead_team_receives_it` |
-| pi-worker/S9 | R191 | `README.md` (the local configuration) and `~/.pi/agent/mcp.json` (the registration) |
+| pi-worker/S9 | R191 | `docs/pi.md` (the local configuration) and `~/.pi/agent/mcp.json` (the registration) |
