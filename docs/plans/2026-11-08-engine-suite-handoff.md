@@ -43,7 +43,7 @@ refuses, names the way out and exits 2. It never falls back to a second engine.
 | `uv run ty check packages/ tests/test_workspace_isolation.py` | clean |
 | `uv run ty check .` | 277 (budget 285) — unchanged |
 | `shellcheck install.sh bin/*` | clean |
-| `converge.py --final --base main` (the engine-suite plan) | coverage, tagged, scope, spec — all **PASS** (on PR #65, before the merge) |
+| `converge.py --final --base main` (the engine-suite plan) | coverage, tagged, scope, spec — all **PASS** (on PR #65, before the merge, and again after it: the coverage runs off the provenance) |
 | `uv run pytest -m "" -n 4` (agent-skills) | **212 passed** |
 | `scripts/checks.sh` (agent-skills) | lint, frontmatter, whole suite — green |
 | `converge.py --final --base main` (the single-engine plan) | coverage, tagged, scope, spec — all **PASS** |
@@ -141,12 +141,10 @@ python3 skills/converge/scripts/converge.py \
   docs/plans/2026-11-08-orchestrator-single-engine.plan.md --final --base main
 ```
 
-**The engine-suite plan's converge gate ran on PR #65, before the merge.** After the merge it reports the
-coverage of a diff that no longer exists (the suite is in `main`, so no test file changed since the base) and
-the coverage check fails on that alone. That is the end state of a landed plan, not a regression: the plan's
-scenarios live in `docs/specs/orchestrator-engine.md`, next to the tests that answer them. The P4c plan's
-gate fails the same way until the installer lands — it has no test yet, because the installer does not
-exist.
+**The engine-suite plan's converge gate runs off the provenance, not off the diff.** Its scenarios are covered
+by the requirements in `docs/specs/orchestrator-engine.md` and the tests that carry those requirement ids, so
+the gate is green whether the suite is in the diff or already in `main`. The P4c plan's gate fails until the
+installer lands: it has no test yet, because the installer does not exist.
 
 The driver runs one plan at a time, in the repository that owns it:
 

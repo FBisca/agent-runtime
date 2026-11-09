@@ -12,25 +12,13 @@ suite runs here, against the member, and the member answers the way the engine a
 
 ## Requirements
 
-- **R1** WHEN the engine's own test suite runs, THEN it exercises the member's driver, and the
-  repository holds exactly one copy of the engine. (from orchestrator-engine-suite/S1)
-- **R2** WHEN the member's driver is exercised by the ported suite, THEN the suite's behaviour is the
-  member's behaviour: a test that would pass only against the old copy fails here. (from
-  orchestrator-engine-suite/S2)
-- **R3** WHEN the repository's CI runs, THEN it resolves the workspace, runs the whole suite — the
-  member's own suite included — and fails the build when the tracked lint or type diagnostics grow.
-  (from orchestrator-engine-suite/S3)
-- **R4** WHEN a route names a class, a backend or an effort the driver cannot run, THEN the refusal
-  names the value it named and the way out, and no worker is spawned. (from
-  orchestrator-engine-suite/S4)
-- **R5** WHEN the runtime refuses a call, THEN the driver sees a `ValueError` and the run reports the
-  refusal instead of crashing. (from orchestrator-engine-suite/S5)
-- **R6** WHEN `launch` starts a run, THEN the pane runs the member's CLI. (from
-  orchestrator-engine-suite/S6)
-- **R7** WHEN a run is terminated for exceeding its budget, THEN the harness waits, within a bounded
-  window, for the tree it killed to stop running before it decides the tree survived — a process the
-  system has not reaped yet has exited — and a tree that really outlived the run still fails the check.
-  (from orchestrator-engine-suite/S7)
+- **R1** WHEN the engine's own test suite runs, THEN it exercises the member's driver, and the repository holds exactly one copy of the engine. (from orchestrator-engine-suite/S1)
+- **R2** WHEN the member's driver is exercised by the ported suite, THEN the suite's behaviour is the member's behaviour: a test that would pass only against the old copy fails here. (from orchestrator-engine-suite/S2)
+- **R3** WHEN the repository's CI runs, THEN it resolves the workspace, runs the whole suite — the member's own suite included — and fails the build when the tracked lint or type diagnostics grow. (from orchestrator-engine-suite/S3)
+- **R4** WHEN a route names a class, a backend or an effort the driver cannot run, THEN the refusal names the value it named and the way out, and no worker is spawned. (from orchestrator-engine-suite/S4)
+- **R5** WHEN the runtime refuses a call, THEN the driver sees a `ValueError` and the run reports the refusal instead of crashing. (from orchestrator-engine-suite/S5)
+- **R6** WHEN `launch` starts a run, THEN the pane runs the member's CLI. (from orchestrator-engine-suite/S6)
+- **R7** WHEN a run is terminated for exceeding its budget, THEN the harness waits, within a bounded window, for the tree it killed to stop running before it decides the tree survived — a process the system has not reaped yet has exited — and a tree that really outlived the run still fails the check. (from orchestrator-engine-suite/S7)
 
 ## Coverage
 
