@@ -28,6 +28,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R14** WHEN `launch` runs inside an hc terminal, THEN the run is given that terminal, and each new wake is sent to it once with `hc send` (never `--force` or `interrupt`); a send that fails is logged as `notify-failed` and the run goes on; a run launched outside a terminal sends nothing. (from orchestrator-lead-alerts/S4–S7)
 - **R15** WHEN a unit is at `awaiting-merge`, THEN the idle ticks skip it: no idle event, no `idle` request. The merge is a person's step, and the `pr-ready` wake already asked for it. (from orchestrator-lead-alerts/S8)
 - **R16** WHEN a unit's brief is written, THEN it names the `task_id` its report must carry, so a worker that reads the brief writes the id the driver checks. (from orchestrator-report-task-id/S1)
+- **R17** WHEN a `run` starts on a plan another live driver is running in the same repository, whatever `--state-dir` either names, THEN it is refused before any worker is spawned, naming the holder's pid and start time and the way out (`await` the plan, or stop that driver); a run of another plan in the same repository is not held up, and a run that ends — or crashes — leaves no lock behind. (from orchestrator-run-lock/S1, S2)
 
 ## Coverage
 
@@ -41,6 +42,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | S6 | R6 | `packages/agent-orchestrator/tests/test_launch.py`: `test_S17_starts_run_in_a_named_pane` |
 | S7 | R7 | `packages/agent-orchestrator/tests/test_baselines.py`: `test_S3_a_run_that_stalls_is_terminated_and_recorded_as_a_failure` |
 | S1 | R15 | `packages/agent-orchestrator/tests/test_run.py`: `test_S1_the_unit_brief_names_the_task_id_the_report_must_carry` |
+| S1, S2 | R17 | `packages/agent-orchestrator/tests/test_run_lock.py`: `test_S1_a_second_driver_of_the_same_plan_is_refused`, `test_S1_the_lock_holds_whatever_the_state_dir`, `test_S2_another_plan_in_the_same_repository_runs`, `test_S2_a_finished_run_releases_the_lock_and_names_itself` |
 
 ### R4 — the route refusals
 
@@ -120,6 +122,7 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | `test_routes.py` | R2, R4 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3` — the typed route schema |
 | `test_routes_driver.py` | R2, R4 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3` — the route config a run reads |
 | `test_step_routes.py` | R2, R8–R11 | `orchestrator-routing-effort-role/S3`, `S8`–`S10` — the step routes |
+| `test_run_lock.py` | R17 | `orchestrator-run-lock/S1`, `S2` — one driver per plan and repository |
 | `test_run.py` | R2, R5 | `code-driven-orchestrator/S1`–`S4`, `code-driven-orchestrator/S14` — the dispatch loop and its restart |
 | `test_swap.py` | R2 | `orchestrate-lean-loop/S19` — the agent below the context reserve |
 | `test_wait_checks.py` | R2 | the CI gate's wait |

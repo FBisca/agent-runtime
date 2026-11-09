@@ -4113,12 +4113,50 @@ def await_wake(args):
         time.sleep(args.poll_seconds)
 
 
+@contextmanager
+def run_lock(repo, slug, plan_path):
+    """Hold the plan's lock for the whole run: one driver per plan and repository.
+
+    It lives in the git common dir, not the state dir: two drivers of one plan collide on its worktrees, branches
+    and plan file whatever `--state-dir` each names. `flock` dies with the process, so a crash leaves no stale lock.
+    """
+    common = Path(
+        run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    )
+    directory = common / "agent-orchestrator"
+    directory.mkdir(exist_ok=True, mode=0o700)
+    fd = os.open(directory / (slug + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = lock.read().strip() or "another driver"
+            raise PlanError(
+                "plan '%s' is already being driven by %s in %s; follow it with `await %s`, "
+                "or stop that driver before starting another" % (slug, holder, repo, plan_path)
+            ) from None
+        lock.seek(0)
+        lock.truncate()
+        lock.write(
+            "pid %d since %s\n"
+            % (os.getpid(), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        )
+        lock.flush()
+        yield
+
+
 def drive(args):
     require(args.max_workers >= 1, "--max-workers must be at least 1")
     require(args.max_fix_rounds >= 0, "--max-fix-rounds must not be negative")
     require(args.context_reserve >= 0, "--context-reserve must not be negative")
     require(args.idle_minutes >= 0, "--idle-minutes must not be negative")
     driver = Driver(args)
+    slug = parse_plan(driver.plan_path.read_text(encoding="utf-8"))["slug"]
+    with run_lock(driver.repo, slug, driver.plan_path):
+        return drive_locked(driver)
+
+
+def drive_locked(driver):
     driver.start()
     try:
         driver.loop()

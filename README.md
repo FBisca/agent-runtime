@@ -135,6 +135,25 @@ Provider scrubbing is family-aware: a `pi` spawn keeps `MINIMAX_API_KEY` and the
 (`PI_API_KEY`, `PI_PROVIDER`, `PI_MODEL`), and a `claude` or `codex` spawn loses all of them, so a
 Claude or Codex worker never holds a MiniMax or Pi credential.
 
+A Pi model is `provider/model`, so one run can mix providers. Pi resolves each provider's key itself
+(`~/.pi/agent/auth.json`, or a Pi package such as `pi-ollama-cloud`), so the runtime needs no variable per
+provider. The orchestrator's driver routes each class or step to a provider:
+
+```sh
+python3 -m agent_orchestrator run <plan> --cli pi \
+  --route small=pi/minimax/MiniMax-M3.1-Flash@low \
+  --route large=pi/ollama-cloud/kimi-k3.1-pro@high \
+  --step reviewer=pi/ollama-cloud/glm-5.3@high
+```
+
+`--step` beats `--route`, which beats `--routes-file`, which beats the `Pi` column of the `## Model classes`
+table in `--models-file`; the driver's own `models.md` answers a class none of them names.
+
+Drives run in parallel per plan: two plans in one repository each run on their own models, each in its own
+worktrees. A second `run` of a plan that is already being driven is refused, whatever `--state-dir` it names:
+the lock is `<git-common-dir>/agent-orchestrator/<slug>.lock`, held for the run's life and released when the
+process exits, so a crash leaves nothing to clean up.
+
 A Pi worker is a host the server authorizes itself (Pi ships no PreToolUse hook). Inside its own team
 it may `report`, `message`, `wait`, `status`, `collect`, `list` and read a task list; it may not
 `spawn`, `stop` or `resume`, and it reaches no worker outside its team. The authorised-directory
