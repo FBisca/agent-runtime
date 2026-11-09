@@ -48,19 +48,26 @@ class RouteSchemaTests(unittest.TestCase):
     def test_S1_a_route_may_name_the_pi_backend(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi runs workers, so the schema may name it."""
         resolved = routes.validate(config(route("small", "pi", "minimax/MiniMax-M3.1-Flash")))
-        self.assertEqual((resolved.routes[0].backend, resolved.routes[0].model), ("pi", "minimax/MiniMax-M3.1-Flash"))
+        self.assertEqual(
+            (resolved.routes[0].backend, resolved.routes[0].model),
+            ("pi", "minimax/MiniMax-M3.1-Flash"),
+        )
 
     def test_S1_the_efforts_above_high_are_valid_efforts(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — the runtime speaks five efforts; the schema does too."""
         for effort in ("xhigh", "max"):
             with self.subTest(effort=effort):
-                resolved = routes.validate(config(route("small", "pi", "some-model", effort=effort)))
+                resolved = routes.validate(
+                    config(route("small", "pi", "some-model", effort=effort))
+                )
                 self.assertEqual(resolved.routes[0].effort, effort)
 
     def test_S8_a_step_route_answers_its_own_step(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — a config may name a step's backend, model and effort."""
         data = config(route("small", "claude", "haiku"))
-        data["steps"] = [{"step": "reviewer", "backend": "codex", "model": "gpt-l", "effort": "xhigh"}]
+        data["steps"] = [
+            {"step": "reviewer", "backend": "codex", "model": "gpt-l", "effort": "xhigh"}
+        ]
         resolved = routes.validate(data)
         self.assertEqual(len(resolved.steps), 1)
         step = resolved.steps[0]

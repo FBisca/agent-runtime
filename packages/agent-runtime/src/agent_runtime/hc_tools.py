@@ -171,6 +171,53 @@ def codex_instructions(agent="implementer"):
         raise ToolError("cannot read Codex %s instructions from %s: %s" % (agent, path, error))
 
 
+# The CLIs that load a role file themselves: Claude reads ~/.claude/agents/<agent>.md on its own, so the
+# runtime never injects the role's text for it and never takes an instructions_file for it.
+ROLE_FILE_CLIS = ("claude",)
+
+
+def role_path(agent, env):
+    """Where a role's own file lives: the user's Claude roles, unless the operator moved them."""
+    home = env.get("HOME") or os.path.expanduser("~")
+    directory = env.get("AGENT_RUNTIME_ROLE_DIR") or os.path.join(home, ".claude", "agents")
+    return os.path.join(directory, "%s.md" % agent)
+
+
+def role_body(text):
+    """The role's content, without the metadata its file carries for the CLI that loads it.
+
+    Claude's role files open with a front matter block naming that CLI's tools, model and
+    permissions. A backend that does not load the file itself has no use for the block, and the
+    tools it names are not the tools that backend has."""
+    stripped = text.strip()
+    if stripped.startswith("---"):
+        end = stripped.find("\n---", 3)
+        if end != -1:
+            return stripped[end + 4 :].strip()
+    return stripped
+
+
+def role_text(agent, env):
+    """The role's content for a backend with no role file of its own.
+
+    The user's Claude roles are the roles this machine has, so they are what such a backend reads:
+    the same discipline Claude would have loaded, without the metadata Claude reads it with. A role
+    file that is missing, empty or unreadable is a refusal: nothing is launched."""
+    path = role_path(agent, env)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as error:
+        raise ToolError(
+            "cannot read the %s role file %s: %s"
+            % (agent, path, error.strerror or type(error).__name__)
+        ) from None
+    body = role_body(text)
+    if not body:
+        raise ToolError("the %s role file %s is empty" % (agent, path))
+    return body
+
+
 # The dispatch contract, for a worker whose role file does not carry it: how to report, and what a result is.
 WORKER_PROTOCOL = (
     "Worker protocol: send your result with the agent-runtime report tool as "
@@ -441,8 +488,11 @@ def spawn(arguments, env, ctx):
     agent = spawn_agent(arguments, cli)
     instructions = spawn_instructions(arguments, env)
     if instructions is not None:
-        if cli != "codex":
-            raise ToolError("instructions_file applies to the codex family only")
+        if cli in ROLE_FILE_CLIS:
+            raise ToolError(
+                "instructions_file applies to a backend with no role file of its own; the %s family "
+                "loads the role itself" % cli
+            )
         if arguments.get("agent") is not None:
             raise ToolError("agent and instructions_file are mutually exclusive")
     launch_args = []
@@ -464,9 +514,11 @@ def spawn(arguments, env, ctx):
             "the agent-runtime report tool as report(",
             "the agent-runtime report tool `mcp__agent-runtime__report` as ",
         )
-        # Pi has no role file: the role and the dispatch contract travel in the task itself.
-        if agent:
-            message = "Role: %s\n\n%s" % (agent, message)
+        # Pi has no role file: the role's content and the dispatch contract travel in the task itself.
+        if instructions is not None:
+            message = "%s\n\n%s" % (instructions, message)
+        elif agent:
+            message = "Role: %s\n\n%s\n\n%s" % (agent, role_text(agent, env), message)
         message += "\n\n" + protocol
     elif agent is None or instructions is not None:
         # No role file supplies the dispatch contract, so the runtime states it.

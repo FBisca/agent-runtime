@@ -122,9 +122,12 @@ required, and the lead needs an `hc` terminal to start workers from.
 The `pi` family is a built-in worker backend, next to `claude` and `codex`. A spawn that names it
 launches `pi --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
 runtime's own five levels (`low`, `medium`, `high`, `xhigh`, `max`) and Pi's extra levels (`off`,
-`minimal`) are never sent. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task
-(for example, `Role: implementer`) and the runtime states the report protocol there too, naming Pi's own tool
-(`mcp__agent-runtime__report`). Pi has no token accounting.
+`minimal`) are never sent. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task:
+the runtime reads the user's own Claude role file (`~/.claude/agents/<agent>.md`, front matter aside — set
+`AGENT_RUNTIME_ROLE_DIR` to another directory) and puts the role's content in the task, under the role's
+name and ahead of the task itself; the runtime states the report protocol there too, naming Pi's own tool
+(`mcp__agent-runtime__report`). A role file that is missing, empty or unreadable is a refusal: nothing is
+launched. Pi has no token accounting.
 
 Provider scrubbing is family-aware: a `pi` spawn keeps `MINIMAX_API_KEY` and the Pi provider variables
 (`PI_API_KEY`, `PI_PROVIDER`, `PI_MODEL`), and a `claude` or `codex` spawn loses all of them, so a

@@ -5,7 +5,7 @@ import time
 from unittest import mock
 
 from test_mcp_server import RUNTIME_SRC
-from test_tools import ToolCase, raw
+from test_tools import ToolCase, raw, unwrap
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
@@ -289,7 +289,7 @@ class SpawnCleanupTests(ToolCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
-    def test_instructions_file_is_codex_only(self):
+    def test_instructions_file_is_refused_for_a_family_that_loads_the_role_itself(self):
         """agent-runtime/R162"""
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
@@ -301,17 +301,29 @@ class SpawnCleanupTests(ToolCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    def test_S6_instructions_file_applies_to_a_backend_with_no_role_file(self):
+        """agent-runtime/R168: orchestrator-routing-effort-role/S6 — a Pi worker reads the file the caller names."""
+        home = self.dir / "home"
+        (home / "role.md").write_text("ROLE FILE RULES\n")
+        lead = self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
+        result, text = self.call(lead, "spawn", dict(ARGS, cli="pi", instructions_file=str(home / "role.md")))
+        self.assertFalse(result["isError"], text)
+        program = unwrap(self.runs("run")[-1][10:])
+        self.assertTrue(program[-1].startswith("ROLE FILE RULES"))
+        self.assertIn("Worker protocol:", program[-1])
+
     def test_agent_and_instructions_file_are_mutually_exclusive(self):
         """agent-runtime/R163"""
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
         lead = self.start({}, ENV)
-        for agent in ("none", "reviewer"):
-            with self.subTest(agent=agent):
-                result, text = self.call(lead, "spawn", dict(ARGS, cli="codex", agent=agent,
-                                                             instructions_file=str(home / "role.md")))
-                self.assertTrue(result["isError"])
-                self.assertIn("instructions_file", text)
+        for cli in ("codex", "pi"):
+            for agent in ("none", "reviewer"):
+                with self.subTest(cli=cli, agent=agent):
+                    result, text = self.call(lead, "spawn", dict(ARGS, cli=cli, agent=agent,
+                                                                 instructions_file=str(home / "role.md")))
+                    self.assertTrue(result["isError"])
+                    self.assertIn("instructions_file", text)
         self.assertEqual(self.runs("run"), [])
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)

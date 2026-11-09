@@ -51,8 +51,11 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
         return entry
 
     def classes(self):
-        return (self.route("small", "claude", "haiku"), self.route("medium", "claude", "sonnet"),
-                self.route("large", "claude", "opus"))
+        return (
+            self.route("small", "claude", "haiku"),
+            self.route("medium", "claude", "sonnet"),
+            self.route("large", "claude", "opus"),
+        )
 
     def test_S8_each_step_names_its_own_backend_model_and_effort(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the reviewer and the gaps reviewer sit where their own step says."""
@@ -147,7 +150,9 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
         )
         self.assertEqual((spawns[GAPS]["cli"], spawns[GAPS]["model"]), ("codex", "gpt-m"))
 
-    def test_S10_a_step_route_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned(self):
+    def test_S10_a_step_route_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned(
+        self,
+    ):
         """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — the run stops with an explanation, and nothing is spawned."""
         path = self.routes_file(
             self.config(*self.classes(), steps=[self.step("janitor", "codex", "gpt-l")])
@@ -156,7 +161,9 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
         self.assertIn("janitor", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
-    def test_S10_a_step_route_naming_an_unknown_backend_fails_the_run_before_any_worker_is_spawned(self):
+    def test_S10_a_step_route_naming_an_unknown_backend_fails_the_run_before_any_worker_is_spawned(
+        self,
+    ):
         """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a backend the driver cannot run is an error, not a fall back."""
         path = self.routes_file(
             self.config(*self.classes(), steps=[self.step("reviewer", "gemini", "gpt-l")])
@@ -165,7 +172,9 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
         self.assertIn("gemini", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
-    def test_S10_a_step_override_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned(self):
+    def test_S10_a_step_override_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned(
+        self,
+    ):
         """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — the same for the command line."""
         result = self.run_driver("--step", "janitor=codex/gpt-l", expect=2)
         self.assertIn("janitor", result.stderr)

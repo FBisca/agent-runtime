@@ -1899,8 +1899,7 @@ class Driver:
         )
         self.mark(task_id, gate="reviewing", review=dict(review, assignment_id=assignment_id))
         event(
-            "spawned %s (%s, %s, %s)"
-            % (name, self.gate_label("reviewer", "large"), model, effort)
+            "spawned %s (%s, %s, %s)" % (name, self.gate_label("reviewer", "large"), model, effort)
         )
 
     def review_text(self, packet, review_path, delta=None):
@@ -3549,8 +3548,7 @@ class Driver:
         else:
             gaps = {"name": name, "path": str(path), "assignment_id": assignment_id, "ended": False}
             event(
-                "spawned %s (%s, %s, %s)"
-                % (name, self.gate_label("gaps", "medium"), model, effort)
+                "spawned %s (%s, %s, %s)" % (name, self.gate_label("gaps", "medium"), model, effort)
             )
         with self.book() as data:
             data["gaps"] = gaps
