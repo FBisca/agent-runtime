@@ -1050,7 +1050,7 @@ class Driver:
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
-        self.last_tick = time.monotonic()
+        self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
 
     # ---- the event log: every state change is on disk before the next step -----------------------------------
@@ -1190,10 +1190,12 @@ class Driver:
         self.log("idle", interval=self.args.idle_interval)
         self.sleep(self.args.idle_interval)
 
+    clock = staticmethod(time.monotonic)  # a seam: the idle tick's tests move time without patching `time`
+
     def idle_ticks(self, assignments):
         """Every `--idle-minutes`, look at each unit: did its agent show anything new, did its CI move? A unit that
         shows nothing at two consecutive ticks needs the Lead."""
-        moment = time.monotonic()
+        moment = self.clock()
         if moment - self.last_tick < self.args.idle_minutes * 60:
             return
         self.last_tick = moment
