@@ -567,6 +567,26 @@ if [ -n "${AGENT_RUNTIME_RELEASE:-}" ]; then
 fi
 
 if [ "$command" = uninstall ]; then
+  # A component that needs another cannot be left behind without it: the runtime is the base,
+  # so removing it alone would leave the orchestrator and the adapters without their runtime.
+  orphans=
+  orphan_dependency=
+  for component in $component_order; do
+    case " $requested " in
+      *" $component "*) continue ;;
+    esac
+    [ -n "$(installed_component "$component")" ] || continue
+    for need in $(component_dependencies "$component"); do
+      case " $requested " in
+        *" $need "*) orphans="$orphans $component"; orphan_dependency=$need ;;
+      esac
+    done
+  done
+  if [ -n "$orphans" ]; then
+    echo "refusing to uninstall $orphan_dependency: it is needed by $(comma_list "$orphans")" >&2
+    echo "  uninstall them together: --components $(comma_list "$requested $orphans")" >&2
+    exit 1
+  fi
   for component in $(canonical_components "$requested"); do
     uninstall_component "$component"
   done

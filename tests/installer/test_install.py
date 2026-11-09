@@ -304,13 +304,45 @@ class LifecycleTests(InstallerCase):
             self.assertTrue(self.shim(shim).is_symlink(), shim)
         self.assertEqual((user_file / "config.toml").read_text(encoding="utf-8"), "mine\n")
 
-        # Uninstalling the runtime takes the shims it linked, and leaves the rest.
-        gone = self.run_installer("uninstall", "--components", "runtime")
+        # Uninstalling the runtime while a component needs it is refused, with the way out.
+        refused = self.run_installer("uninstall", "--components", "runtime")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("refusing to uninstall runtime", refused.stderr)
+        self.assertIn("needed by claude", refused.stderr)
+        self.assertIn("--components runtime, claude", refused.stderr)
+        for shim in SHIMS:
+            self.assertTrue(self.shim(shim).is_symlink(), shim)
+        self.assertIn("claude", self.manifest()["components"])
+
+        # Uninstalling them together takes the shims the runtime linked, and leaves the rest.
+        gone = self.run_installer("uninstall", "--components", "runtime,claude")
         self.assertEqual(gone.returncode, 0, gone.stderr)
         for shim in SHIMS:
             self.assertFalse(self.shim(shim).exists(), shim)
-        self.assertIn("claude", self.manifest()["components"])
+        self.assertNotIn("claude", self.manifest()["components"])
         self.assertEqual((user_file / "config.toml").read_text(encoding="utf-8"), "mine\n")
+
+    def test_s7_a_component_is_not_orphaned_by_the_uninstall_of_what_it_needs(self):
+        """S7: the runtime stays while a component needs it, and the way out is named."""
+        installed = self.run_installer("--components", "runtime,orchestrator,pi")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+
+        refused = self.run_installer("uninstall", "--components", "runtime")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("refusing to uninstall runtime", refused.stderr)
+        self.assertIn("needed by orchestrator, pi", refused.stderr)
+        self.assertIn("--components runtime, orchestrator, pi", refused.stderr)
+        # Nothing moved: the runtime and its dependents are still installed.
+        for shim in SHIMS:
+            self.assertTrue(self.shim(shim).is_symlink(), shim)
+        self.assertEqual(sorted(self.manifest()["components"]), ["orchestrator", "pi", "runtime"])
+
+        # Naming the dependents in the same call removes the whole set.
+        gone = self.run_installer("uninstall", "--components", "runtime,orchestrator,pi")
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        for shim in SHIMS:
+            self.assertFalse(self.shim(shim).exists(), shim)
+        self.assertEqual(self.manifest()["components"], {})
 
     def test_an_upgrade_that_would_leave_a_component_behind_is_refused(self):
         """S7: an upgrade that would strand a component at another release is refused."""
