@@ -1,0 +1,28 @@
+name: release
+
+# A version tag publishes a release: the payload, its manifest, the stamped installer and a SHA-256
+# checksum for every asset. The bootstrap in install.sh downloads exactly these, from exactly one tag.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck install.sh scripts/*.sh bin/*
+      # The build refuses a tag that is not the version the checkout ships, so a mistyped tag
+      # publishes nothing.
+      - name: build the release assets
+        run: sh scripts/build-release.sh --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/release"
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat "$RUNNER_TEMP/release/SHA256SUMS"
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/* \
+            --verify-tag --title "$GITHUB_REF_NAME" --generate-notes

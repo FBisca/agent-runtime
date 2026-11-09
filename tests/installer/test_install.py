@@ -478,7 +478,7 @@ class StreamedInstallCase(InstallerCase):
             tool.chmod(0o755)
         return f"{fake}:{os.environ.get('PATH', '/usr/bin:/bin')}"
 
-    def stream(self, *args, answers=None, env=None, path=None):
+    def stream(self, *args, answers=None, env=None, path=None, script=None):
         """Pipe the installer into `sh -s`, with a terminal that is answered line by line, or none.
 
         The terminal is a pseudo-terminal, and an answer is typed only once the prompt it answers
@@ -509,7 +509,7 @@ class StreamedInstallCase(InstallerCase):
             collected = {}
             worker = threading.Thread(
                 target=lambda: collected.update(
-                    zip(("out", "err"), process.communicate(INSTALLER.read_bytes()))
+                    zip(("out", "err"), process.communicate(Path(script or INSTALLER).read_bytes()))
                 )
             )
             worker.start()
@@ -612,12 +612,12 @@ class ComponentMenuTests(StreamedInstallCase):
         self.assertIn("components: runtime, pi", result.stdout)
         self.assertNotIn("1) runtime", result.terminal)
 
-    def test_s2_a_streamed_bootstrap_has_no_payload_to_install_from_yet(self):
-        """S2: nothing in a stream to link, so an install is refused with the way out."""
+    def test_s2_a_streamed_bootstrap_without_a_release_is_refused_as_a_usage_error(self):
+        """S2: a stream names no checkout and no release: the way out is to pin one."""
         result = self.stream("--components", "runtime", "--yes")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("no release payload", result.stderr)
-        self.assertIn("checkout", result.stderr)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("names no release", result.stderr)
+        self.assertIn("--release vX.Y.Z", result.stderr)
         self.assertEqual(snapshot(self.home), {})
 
     def test_s2_a_local_checkout_run_without_components_never_asks(self):
