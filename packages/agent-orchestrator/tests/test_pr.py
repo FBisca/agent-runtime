@@ -7,7 +7,15 @@ import unittest
 from unittest import mock
 
 import pytest
-from fixtures import assignment, load_script, plan_text, report_wait, resume_id, spawn_id, wait_result
+from fixtures import (
+    assignment,
+    load_script,
+    plan_text,
+    report_wait,
+    resume_id,
+    spawn_id,
+    wait_result,
+)
 from test_gates import MAJOR, GateFixture
 
 pytestmark = pytest.mark.integration
@@ -358,9 +366,7 @@ class IdleTests(PrFixture, unittest.TestCase):
 
     def test_S8_a_unit_working_past_working_minutes_is_asked_with_how_long(self):
         """orchestrator-engine/R2: drive-restart-recovery/S8"""
-        self.waits(
-            [self.working(runtime_state="working")] * 4 + [self.decide_step("t1", "skip")]
-        )
+        self.waits([self.working(runtime_state="working")] * 4 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0", "--working-minutes", "0")
         self.assertEqual(self.request()["event"], "idle")
         self.assertIn("working for", self.wake_lines("decision")[0])
@@ -379,9 +385,7 @@ class IdleTests(PrFixture, unittest.TestCase):
 
     def test_S8a_an_agent_not_reported_working_is_asked_at_two_ticks_as_today(self):
         """orchestrator-engine/R2: drive-restart-recovery/S8a"""
-        self.waits(
-            [self.working()] * 3 + [self.decide_step("t1", "skip")]
-        )
+        self.waits([self.working()] * 3 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0")
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
         self.assertEqual(self.request()["event"], "idle")

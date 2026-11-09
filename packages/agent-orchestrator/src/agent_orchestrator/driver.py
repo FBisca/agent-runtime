@@ -1190,7 +1190,9 @@ class Driver:
         self.log("idle", interval=self.args.idle_interval)
         self.sleep(self.args.idle_interval)
 
-    clock = staticmethod(time.monotonic)  # a seam: the idle tick's tests move time without patching `time`
+    clock = staticmethod(
+        time.monotonic
+    )  # a seam: the idle tick's tests move time without patching `time`
 
     def idle_ticks(self, assignments):
         """Every `--idle-minutes`, look at each unit: did its agent show anything new, did its CI move? A unit that
@@ -1226,11 +1228,7 @@ class Driver:
                     task_id,
                     "idle",
                     "idle: %s showed no new state or report for %d ticks" % (unit, streak)
-                    + (
-                        ", working for %d minutes" % working
-                        if working is not None
-                        else ""
-                    ),
+                    + (", working for %d minutes" % working if working is not None else ""),
                 )
 
     def working_minutes(self, task_id, assignments, moment):
@@ -1243,7 +1241,8 @@ class Driver:
                 if a.get("unit") == unit
             }
         if not any(
-            a.get("assignment_id") in mine and a.get("runtime_state") == "working" for a in assignments
+            a.get("assignment_id") in mine and a.get("runtime_state") == "working"
+            for a in assignments
         ):
             self.working_since.pop(task_id, None)
             return None
