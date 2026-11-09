@@ -302,7 +302,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
     def test_S12_a_contract_error_raises_a_request_too(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S12
 
-        R16: a report that names a file nobody wrote is warned about twice before the Lead is asked."""
+        R18: a report that names a file nobody wrote is warned about twice before the Lead is asked."""
         self.waits(
             [
                 *self.repeated(report_wait("demo-t1", "complete")),

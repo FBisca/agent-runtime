@@ -84,7 +84,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
     def test_S1_a_worker_that_ends_without_a_valid_report_writes_a_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1
 
-        R16: the worker that announced a report it never wrote is warned twice before the Lead is asked."""
+        R18: the worker that announced a report it never wrote is warned twice before the Lead is asked."""
         self.waits(
             [
                 *self.repeated(report_wait("demo-t1", "complete")),
@@ -109,7 +109,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
     def test_S1_a_reviewer_that_ends_without_a_review_writes_a_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1
 
-        R16: an idle reviewer is still resumable, so it is warned twice before the Lead is asked."""
+        R18: an idle reviewer is still resumable, so it is warned twice before the Lead is asked."""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -546,6 +546,62 @@ class PlanInvalidTests(WakeFixture, unittest.TestCase):
         self.plan.write_text(plan_text(status="DRAFT"), encoding="utf-8")
         self.assertEqual(self.run_driver(expect=2).returncode, 2)
         self.assertEqual(self.wakes(), [])
+
+
+FAKE_HC = """#!/usr/bin/env python3
+import json, os, sys
+home = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(home, "hc.log"), "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1] == "send" and os.path.exists(os.path.join(home, "hc.fail")):
+    print("no such terminal", file=sys.stderr)
+    sys.exit(1)
+print("{}")
+"""
+
+
+class AlertTests(WakeFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        hc = self.home / "hc"
+        hc.write_text(FAKE_HC, encoding="utf-8")
+        hc.chmod(0o755)
+
+    def sends(self):
+        path = self.home / "hc.log"
+        rows = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        return [argv for argv in map(json.loads, rows) if argv[0] == "send"]
+
+    def test_S4_S5_a_new_wake_is_sent_once_to_the_launching_terminal(self):
+        """orchestrator-engine/R14: orchestrator-lead-alerts/S4, orchestrator-lead-alerts/S5"""
+        self.waits([self.blocked(), self.decide_step("t1", "skip")])
+        self.run_driver("--notify-terminal", "t175")
+        sends = self.sends()
+        self.assertEqual(len(sends), 1, sends)
+        self.assertEqual(sends[0][:2], ["send", "t175"])
+        self.assertIn("orchestrate-demo needs you", sends[0][2])
+        self.assertIn(self.wake_lines("decision")[0], sends[0][2])
+        self.assertNotIn("\n", sends[0][2])
+
+    def test_S4_a_run_without_a_notify_terminal_sends_nothing(self):
+        """orchestrator-engine/R14: orchestrator-lead-alerts/S4"""
+        self.waits([self.blocked(), self.decide_step("t1", "skip")])
+        self.run_driver()
+        self.assertEqual(self.sends(), [])
+
+    def test_S6_a_failed_send_is_logged_and_the_run_goes_on(self):
+        """orchestrator-engine/R14: orchestrator-lead-alerts/S6"""
+        (self.home / "hc.fail").write_text("", encoding="utf-8")
+        self.waits([self.blocked(), self.decide_step("t1", "skip")])
+        self.run_driver("--notify-terminal", "t175")
+        self.assertEqual(len(self.sends()), 1)
+        failed = self.events("notify-failed")
+        self.assertEqual(len(failed), 1)
+        self.assertIn("no such terminal", failed[0]["error"])
+        self.assert_request_skipped()
+
+    def assert_request_skipped(self):
+        self.assertEqual(self.request()["status"], "resolved")
 
 
 if __name__ == "__main__":

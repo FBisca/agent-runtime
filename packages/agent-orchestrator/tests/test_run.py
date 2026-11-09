@@ -50,6 +50,12 @@ class RunTests(RunFixture, unittest.TestCase):
         for spawn in spawns:
             self.assertEqual(spawn["args"]["cli"], "claude")
 
+    def test_S1_the_unit_brief_names_the_task_id_the_report_must_carry(self):
+        """orchestrator-engine/R15: orchestrator-report-task-id/S1"""
+        self.run_driver()
+        brief = (self.state_dir / "demo" / "t1" / "task.md").read_text(encoding="utf-8")
+        self.assertIn("task_id `t1`", brief)
+
     def test_S1_dispatches_ready_agent_tickets_up_to_the_cap(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S1"""
         self.run_driver("--max-workers", "2")

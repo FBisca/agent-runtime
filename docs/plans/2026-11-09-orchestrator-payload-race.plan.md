@@ -15,7 +15,7 @@ no part of the run could read it. The unit was stuck, and the same race can hit 
 
 - `packages/agent-orchestrator/src/agent_orchestrator/driver.py` — `step_reviewed`, `step_reported`,
   `contract_error`, `note_agent` and the gate table.
-- `docs/specs/orchestrator-engine.md` — R1–R15.
+- `docs/specs/orchestrator-engine.md` — R1–R17.
 - The run that lost the review: `~/.local/state/orchestrate/test-suite/` (`t6`), and its file times.
 
 ## Decisions

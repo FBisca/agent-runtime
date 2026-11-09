@@ -142,13 +142,15 @@ class HostsSectionTest(unittest.TestCase):
                      "packages/agent-runtime/src/agent_runtime/agent_runtime.py": ["hc_get", "run_command", "hc_state", "hc_record"],
                      "packages/agent-runtime/src/agent_runtime/markers.json": ["prompt", "interrupt"]}
 
-    def test_S16_readme_says_hosts_are_pluggable_names_the_tested_ones_and_points_to_the_code(self):
+    def test_S16_docs_say_hosts_are_pluggable_names_the_tested_ones_and_points_to_the_code(self):
         """agent-runtime-standalone/S16"""
         readme = (ROOT / "README.md").read_text()
-        self.assertIn("Works with any coding agent that speaks MCP; tested with Claude Code and Codex.", readme)
-        start = readme.index("## Hosts")
-        end = readme.find("\n## ", start + 1)
-        section = readme[start:end if end > 0 else None]
+        self.assertIn("Works with any coding agent that speaks MCP; tested with Claude Code, Codex and Pi.", readme)
+        self.assertIn("(docs/architecture.md)", readme)
+        doc = (ROOT / "docs/architecture.md").read_text()
+        start = doc.index("## Hosts")
+        end = doc.find("\n## ", start + 1)
+        section = doc[start:end if end > 0 else None]
         self.assertRegex(section, r"(?i)pluggable")
         self.assertIn("Claude Code", section)
         self.assertIn("Codex", section)
@@ -158,15 +160,15 @@ class HostsSectionTest(unittest.TestCase):
             code = (ROOT / path).read_text()
             for symbol in symbols:
                 self.assertIn(symbol, code, f"{symbol} missing from {path}")
-                self.assertIn(f"`{symbol}`", section, f"README does not point to {symbol}")
+                self.assertIn(f"`{symbol}`", section, f"docs/architecture.md does not point to {symbol}")
 
 
-    def test_S16_readme_names_herdr_hc_as_the_server_and_points_to_its_integration_points(self):
+    def test_S16_docs_name_herdr_hc_as_the_server_and_points_to_its_integration_points(self):
         """agent-runtime-standalone/S16"""
-        readme = (ROOT / "README.md").read_text()
-        start = readme.index("### Servers")
-        end = readme.find("\n## ", start + 1)
-        section = readme[start:end if end > 0 else None]
+        doc = (ROOT / "docs/architecture.md").read_text()
+        start = doc.index("### Servers")
+        end = doc.find("\n## ", start + 1)
+        section = doc[start:end if end > 0 else None]
         self.assertIn("(https://herdr.dev/core/)", section)
         self.assertIn("`hc`", section)
         self.assertRegex(section, r"(?i)no backend interface")
@@ -176,7 +178,7 @@ class HostsSectionTest(unittest.TestCase):
             for symbol in symbols:
                 if path.endswith(".py"):
                     self.assertRegex(code, r"(?m)^def %s\(" % symbol, f"{symbol} missing from {path}")
-                    self.assertIn(f"`{symbol}`", section, f"README does not point to {symbol}")
+                    self.assertIn(f"`{symbol}`", section, f"docs/architecture.md does not point to {symbol}")
                 else:
                     self.assertIn(symbol, code)
         for call in ("run --bg", "get <id> --json", "send", "read", "wait", "ls --all --json", "kill", "rm"):
@@ -193,7 +195,7 @@ class HostsSectionTest(unittest.TestCase):
         self.assertTrue(image.is_file())
         self.assertLess(image.stat().st_size, 600_000)
         self.assertEqual(image.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertLess(readme.index(whole), readme.index("## Architecture"), "image sits under the intro")
+        self.assertLess(readme.index(whole), readme.index("## Quick start"), "image sits on the first screen, before the setup")
 
 
 class CiWorkflowTest(unittest.TestCase):

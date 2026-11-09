@@ -86,6 +86,19 @@ class LaunchTests(RunFixture, unittest.TestCase):
         argv = [c for c in self.hc_calls() if c[0] == "run"][0]
         self.assertEqual(argv[argv.index("--parent") + 1], "t175")
 
+    def test_S7_the_run_is_told_the_launching_terminal_to_alert(self):
+        """orchestrator-engine/R14: orchestrator-lead-alerts/S7"""
+        self.launch(parent="t175")
+        argv = [c for c in self.hc_calls() if c[0] == "run"][0]
+        tail = argv[argv.index("--") + 1 :]
+        self.assertEqual(tail[tail.index("--notify-terminal") + 1], "t175")
+
+    def test_S7_a_run_launched_outside_a_terminal_alerts_no_one(self):
+        """orchestrator-engine/R14: orchestrator-lead-alerts/S7"""
+        self.launch()
+        argv = [c for c in self.hc_calls() if c[0] == "run"][0]
+        self.assertNotIn("--notify-terminal", argv)
+
     def test_S50_starts_top_level_outside_terminal(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S50"""
         self.launch()

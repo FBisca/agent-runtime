@@ -304,7 +304,7 @@ class GateTests(GateFixture, unittest.TestCase):
     def test_S6a_a_missing_report_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a
 
-        R16: the worker that announced a report without writing it is told once, twice, and only then the Lead is
+        R18: the worker that announced a report without writing it is told once, twice, and only then the Lead is
         asked. The ticket never advances on a payload that is not there."""
         self.waits(
             [
@@ -351,7 +351,7 @@ class GateTests(GateFixture, unittest.TestCase):
     def test_S6a_a_missing_review_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a
 
-        R16 moved the first answer from the Lead to the agent that sent the report: the gate waits, the reviewer is
+        R18 moved the first answer from the Lead to the agent that sent the report: the gate waits, the reviewer is
         told its file is not on disk, and the ticket does not advance. The request comes after the warnings."""
         self.waits(
             [
@@ -373,10 +373,10 @@ class GateTests(GateFixture, unittest.TestCase):
 
 
 class PayloadTests(GateFixture, unittest.TestCase):
-    """R16: a report is the news, the file it names is the payload, and the driver waits for the payload."""
+    """R18: a report is the news, the file it names is the payload, and the driver waits for the payload."""
 
     def test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead(self):
-        """orchestrator-engine/R16: orchestrator-payload-race/S2"""
+        """orchestrator-engine/R18: orchestrator-payload-race/S2"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -392,13 +392,30 @@ class PayloadTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "skipped")
 
     def test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead(self):
-        """orchestrator-engine/R16: orchestrator-payload-race/S3"""
+        """orchestrator-engine/R18: orchestrator-payload-race/S3"""
         self.states({"demo-t1-review": "exited"})
         self.waits([self.worker_done(tests=True), self.reviewer_done(write=[]), self.skipped()])
         self.run_driver()
         self.assertEqual(self.calls("resume"), [], "a dead reviewer cannot write the file: no warning is sent")
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("no agent left to write it", self.request()["reason"])
+
+
+class CheckoutTimeoutTests(GateFixture, unittest.TestCase):
+    def test_S3_worktree_add_gets_a_checkout_sized_timeout(self):
+        """orchestrator-engine/R13: orchestrator-lead-alerts/S3"""
+        from unittest import mock
+
+        from fixtures import load_script
+
+        driver = load_script()
+        with mock.patch.object(driver, "run", wraps=driver.run) as spy:
+            self.waits([self.worker_done()])
+            self.run_driver()
+        adds = [c for c in spy.call_args_list if c.args[0][3:5] == ["worktree", "add"]]
+        self.assertTrue(adds, "no worktree was added")
+        for call in adds:
+            self.assertGreaterEqual(call.kwargs.get("timeout", 15), 300)
 
 
 if __name__ == "__main__":

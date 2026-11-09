@@ -1,0 +1,81 @@
+linked <HOME>/.local/bin/agent-runtime
+linked <HOME>/.local/bin/agent-runtime-hook
+linked <HOME>/.local/bin/agent-runtime-mcp
+linked <HOME>/.local/bin/agent-runtime-profile
+note: <HOME>/.local/bin is not on PATH
+
+Claude Code (public marketplace):
+  /plugin marketplace add FBisca/agent-runtime
+  /plugin install agent-runtime@agent-runtime
+
+Claude Code (this clone, edits load in place):
+  /plugin marketplace add <ROOT>
+  /plugin install agent-runtime@agent-runtime
+
+Codex, add to ~/.codex/config.toml:
+
+[mcp_servers.agent-runtime]
+command = "<HOME>/.local/bin/agent-runtime-mcp"
+env_vars = ["HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_SESSION"]
+default_tools_approval_mode = "auto"
+tool_timeout_sec = 600
+
+[mcp_servers.agent-runtime.env]
+AGENT_RUNTIME_DISPATCH = "1"
+
+[mcp_servers.agent-runtime.tools.spawn]
+output_token_limit = 524288
+approval_mode = "approve"
+
+[mcp_servers.agent-runtime.tools.message]
+output_token_limit = 524288
+approval_mode = "approve"
+
+[mcp_servers.agent-runtime.tools.resume]
+output_token_limit = 524288
+approval_mode = "approve"
+
+[mcp_servers.agent-runtime.tools.stop]
+output_token_limit = 524288
+approval_mode = "approve"
+
+[mcp_servers.agent-runtime.tools.report]
+output_token_limit = 524288
+approval_mode = "approve"
+
+[mcp_servers.agent-runtime.tools.wait]
+output_token_limit = 524288
+
+[mcp_servers.agent-runtime.tools.status]
+output_token_limit = 524288
+
+[mcp_servers.agent-runtime.tools.list]
+output_token_limit = 524288
+
+[mcp_servers.agent-runtime.tools.collect]
+output_token_limit = 524288
+
+[mcp_servers.agent-runtime.tools.task]
+output_token_limit = 524288
+approval_mode = "approve"
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "\"<HOME>/.local/bin/agent-runtime-hook\" --cli codex"
+timeout = 5
+statusMessage = "Checking hc command"
+
+[[hooks.PreToolUse]]
+matcher = "^mcp__agent-runtime__.*$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "\"<HOME>/.local/bin/agent-runtime-hook\" --cli codex"
+timeout = 5
+statusMessage = "Checking agent-runtime caller"
+
+# Optional lead hooks for Codex: re-run with CODEX_LEAD_HOOKS=1 to print the Stop, SessionStart and
+# UserPromptSubmit blocks.
