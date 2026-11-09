@@ -15,7 +15,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R1** WHEN the engine's own test suite runs, THEN it exercises the member's driver, and the repository holds exactly one copy of the engine. (from orchestrator-engine-suite/S1)
 - **R2** WHEN the member's driver is exercised by the ported suite, THEN the suite's behaviour is the member's behaviour: a test that would pass only against the old copy fails here. (from orchestrator-engine-suite/S2)
 - **R3** WHEN the repository's CI runs, THEN it resolves the workspace, runs the whole suite — the member's own suite included — and fails the build when the tracked lint or type diagnostics grow. (from orchestrator-engine-suite/S3)
-- **R4** WHEN a route names a class, a backend or an effort the driver cannot run, THEN the refusal names the value it named and the way out, and no worker is spawned. (from orchestrator-engine-suite/S4)
+- **R4** WHEN a route names a class, a backend or an effort the driver cannot run, THEN the refusal names the value it named and the way out, and no worker is spawned. (from orchestrator-engine-suite/S4, orchestrator-routing-decoupling/S3)
 - **R5** WHEN the runtime refuses a call, THEN the driver sees a `ValueError` and the run reports the refusal instead of crashing. (from orchestrator-engine-suite/S5)
 - **R6** WHEN `launch` starts a run, THEN the pane runs the member's CLI. (from orchestrator-engine-suite/S6)
 - **R7** WHEN a run is terminated for exceeding its budget, THEN the harness waits, within a bounded window, for the tree it killed to stop running before it decides the tree survived — a process the system has not reaped yet has exited — and a tree that really outlived the run still fails the check. (from orchestrator-engine-suite/S7)
@@ -34,6 +34,9 @@ suite runs here, against the member, and the member answers the way the engine a
   read is the sending agent's news before it is the Lead's: that agent is told what the driver needs, twice at most,
   with the gate kept open, and only then is the Lead asked, naming the warnings. An agent that is gone is not
   warned. (from orchestrator-payload-race/S1, S2, S3)
+- **R19** WHEN a run finds no route config, THEN the 'Model classes' table answers with the model classes it always answered, and the run says that table is deprecated. (from orchestrator-routing-decoupling/S1)
+- **R20** WHEN a route names a backend, model and effort the driver can run, THEN dispatch chooses that combination — a command-line override first, then the named file, the repository's `.orchestrate/routes.*`, the user's `~/.config/orchestrate/routes.*` — and logs the chosen route in the route ledger and the event log. (from orchestrator-routing-decoupling/S2)
+- **R21** WHEN the provider or step routing changes, THEN the plan schema and the gate, review and pull-request state machine stay as they were. (from orchestrator-routing-decoupling/S4)
 
 ## Coverage
 
@@ -49,6 +52,10 @@ suite runs here, against the member, and the member answers the way the engine a
 | S1 | R15 | `packages/agent-orchestrator/tests/test_run.py`: `test_S1_the_unit_brief_names_the_task_id_the_report_must_carry` |
 | S1, S2 | R17 | `packages/agent-orchestrator/tests/test_run_lock.py`: `test_S1_a_second_driver_of_the_same_plan_is_refused`, `test_S1_the_lock_holds_whatever_the_state_dir`, `test_S2_another_plan_in_the_same_repository_runs`, `test_S2_a_finished_run_releases_the_lock_and_names_itself` |
 | S1, S2, S3 | R18 | `packages/agent-orchestrator/tests/test_payload.py`: `test_S1_a_file_that_lands_inside_the_grace_is_read`, `test_S1_a_file_that_never_lands_ends_the_wait_at_the_deadline`; `packages/agent-orchestrator/tests/test_gates.py`: `test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead`, `test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead` |
+| S1 | R19 | `packages/agent-orchestrator/tests/test_routes_driver.py`: `test_S1_a_run_with_no_route_config_keeps_the_legacy_model_decisions`, `test_S1_a_legacy_run_says_the_legacy_config_is_deprecated`; `packages/agent-orchestrator/tests/test_routes.py`: `test_S1_the_legacy_table_answers_the_same_models_as_before` |
+| S2 | R20 | `packages/agent-orchestrator/tests/test_route_selection_run.py`: `test_S2_the_configured_backend_model_and_effort_are_chosen`, `test_S2_the_selected_route_is_logged_in_the_route_ledger`, `test_S2_the_selected_route_is_logged_in_the_event_log`, `test_S2_the_repository_policy_config_answers_when_no_file_is_named`, `test_S2_the_user_default_config_answers_when_no_other_config_is_named`, `test_S2_the_named_config_wins_over_the_repository_policy`, `test_S2_an_explicit_override_wins_over_the_config` |
+| S3 | R4 | the route refusal tests, listed under R4 below |
+| S4 | R21 | `packages/agent-orchestrator/tests/test_route_selection_run.py`: `test_S4_the_gate_review_and_pr_state_machine_stays_stable_under_a_new_provider_route`, `test_S4_the_routed_run_really_dispatched_on_the_new_provider` |
 
 ### R4 — the route refusals
 
