@@ -232,7 +232,13 @@ class PaneStopTests(ReuseFixture, unittest.TestCase):
     def test_S11_a_unit_waiting_for_the_lead_keeps_its_panes_for_the_decision(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S11"""
         broken = self.review2(verdict="pass", items=[BLOCKING])
-        self.waits([self.worker_done(tests=True), *self.repeated(self.reviewer_done(broken)), self.skipped()])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                *self.repeated(self.reviewer_done(broken)),
+                self.skipped(),
+            ]
+        )
         self.run_driver()
         self.assertEqual(self.request()["event"], "review")
         kinds = [e["kind"] for e in self.events("decision", "stop")]

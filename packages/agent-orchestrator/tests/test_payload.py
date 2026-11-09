@@ -35,7 +35,9 @@ class PayloadWaitTests(unittest.TestCase):
         """orchestrator-engine/R18: orchestrator-payload-race/S1"""
         started = time.monotonic()
         self.assertFalse(self.driver.payload_waits(self.dir / "absent.json", grace=0.2))
-        self.assertLess(time.monotonic() - started, 2.0, "the wait is bounded, not a poll that never ends")
+        self.assertLess(
+            time.monotonic() - started, 2.0, "the wait is bounded, not a poll that never ends"
+        )
 
 
 if __name__ == "__main__":

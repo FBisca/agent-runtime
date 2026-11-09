@@ -92,7 +92,9 @@ class RequestTests(WakeFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assertEqual(len(self.calls("resume")), 2, "two warnings to the worker that announced the file")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "two warnings to the worker that announced the file"
+        )
         self.assert_request("report", "report.json")
 
     def test_S1_a_worker_whose_turn_ended_without_a_report_writes_a_request(self):
@@ -118,7 +120,9 @@ class RequestTests(WakeFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assertEqual(len(self.calls("resume")), 2, "two warnings to the reviewer that ended without its file")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "two warnings to the reviewer that ended without its file"
+        )
         self.assert_request("review", "review.json", spawned=("demo-t1", "demo-t1-review"))
 
     def test_S1_the_unit_waits_for_the_lead_and_the_wake_is_written_once(self):

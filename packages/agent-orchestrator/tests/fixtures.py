@@ -396,7 +396,9 @@ class RunFixture(_Case):
                 for entry in copy_of.get("assignments") or []:
                     name = entry.get("worker_id", "")[2:]
                     entry["assignment_id"] = resume_id(name, nth - 1)
-                for message in copy_of.get("messages") or []:  # the envelope names the assignment too
+                for message in (
+                    copy_of.get("messages") or []
+                ):  # the envelope names the assignment too
                     name = message.get("worker_id", "")[2:]
                     message["assignment_id"] = resume_id(name, nth - 1)
             steps.append(copy_of)

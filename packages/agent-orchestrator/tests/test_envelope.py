@@ -49,10 +49,18 @@ class EnvelopeFixture(GateFixture):
 
 class CommitTests(EnvelopeFixture, unittest.TestCase):
     def rejected(self, review):
-        self.waits([self.worker_done(tests=True), *self.repeated(self.reviewer_done(review)), self.skipped()])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                *self.repeated(self.reviewer_done(review)),
+                self.skipped(),
+            ]
+        )
         self.run_driver()
         self.assertEqual(self.request()["event"], "review")
-        self.assertEqual(len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead"
+        )
         self.assertTrue(self.events("contract-error"))
         return self.request()["reason"]
 
@@ -106,7 +114,9 @@ class ItemTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("item Q1", self.request()["reason"])
         self.assertIn("summary", self.request()["reason"])
-        self.assertEqual(len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead"
+        )
 
     def test_S12_a_blocking_item_without_evidence_is_a_request_that_names_the_item_and_field(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S12"""
@@ -153,7 +163,9 @@ class ItemTests(EnvelopeFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("block", self.request()["reason"])
-        self.assertEqual(len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead"
+        )
 
     def test_S13_a_pass_with_a_blocking_item_is_a_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S13"""

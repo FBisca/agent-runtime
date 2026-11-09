@@ -1706,11 +1706,15 @@ class Driver:
         """
         task, unit = self.task(task_id), self.unit_of(task_id)
         record = task.get(where) or {}
-        sender = record if where == "review" else dict(
-            task["packet"],
-            name=task["packet"]["worker"],
-            role="worker",
-            assignment_id=task.get("assignment_id"),
+        sender = (
+            record
+            if where == "review"
+            else dict(
+                task["packet"],
+                name=task["packet"]["worker"],
+                role="worker",
+                assignment_id=task.get("assignment_id"),
+            )
         )
         warned = int((task.get("payload_warnings") or {}).get(where) or 0)
         if warned >= PAYLOAD_WARNINGS or not sender.get("assignment_id"):
@@ -1756,7 +1760,14 @@ class Driver:
             payload_warnings=dict(task.get("payload_warnings") or {}, **{where: warned + 1}),
         )
         self.mark(task_id, gate="reviewing" if where == "review" else None)
-        self.log("payload-warning", unit=unit, task=task_id, where=where, warnings=warned + 1, reason=reason[:200])
+        self.log(
+            "payload-warning",
+            unit=unit,
+            task=task_id,
+            where=where,
+            warnings=warned + 1,
+            reason=reason[:200],
+        )
         event("%s: warned %s that %s is not readable yet (%s)" % (unit, name, path, reason[:120]))
         return True
 
@@ -1815,6 +1826,7 @@ class Driver:
     def step_reported(self, task_id):
         task = self.task(task_id)
         path = self.report_file(task_id)
+
         def read_report():
             report = contracts.load(path, contracts.validate_report)
             contracts.need(
@@ -2118,6 +2130,7 @@ class Driver:
     def step_reviewed(self, task_id):
         task = self.task(task_id)
         packet = task["packet"]
+
         def read_review():
             review = contracts.load(task["review"]["path"], contracts.validate_review)
             report = contracts.load(task["report_path"], contracts.validate_report)

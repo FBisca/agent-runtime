@@ -324,12 +324,16 @@ class GateTests(GateFixture, unittest.TestCase):
 
     def test_S6a_an_invalid_report_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
-        self.waits([*self.repeated(self.worker_done(report=self.report("t1", contract=3))), self.skipped()])
+        self.waits(
+            [*self.repeated(self.worker_done(report=self.report("t1", contract=3))), self.skipped()]
+        )
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.request()["event"], "report")
         self.assertIn("contract", self.request()["reason"])
-        self.assertEqual(len(self.calls("resume")), 2, "the worker was warned twice before the Lead was asked")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "the worker was warned twice before the Lead was asked"
+        )
 
     def test_S6a_a_report_for_another_task_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
@@ -337,14 +341,24 @@ class GateTests(GateFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.request()["event"], "report")
         self.assertIn("t9", self.request()["reason"])
-        self.assertEqual(len(self.calls("resume")), 2, "the worker that misnamed its report was warned twice")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "the worker that misnamed its report was warned twice"
+        )
 
     def test_S6a_an_invalid_review_does_not_start_a_fix_round(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
         broken = self.review(verdict="pass", major=[MAJOR])
-        self.waits([self.worker_done(tests=True), *self.repeated(self.reviewer_done(broken)), self.skipped()])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                *self.repeated(self.reviewer_done(broken)),
+                self.skipped(),
+            ]
+        )
         self.run_driver()
-        self.assertEqual(len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead was asked")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead was asked"
+        )
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("review.json", self.request()["reason"])
 
@@ -368,8 +382,9 @@ class GateTests(GateFixture, unittest.TestCase):
             self.assertIn("write it again, then report again", call["args"]["task"])
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("2 warning(s)", self.request()["reason"])
-        self.assertNotIn("reviewed_commit", self.task(), "no verdict was recorded from a missing file")
-
+        self.assertNotIn(
+            "reviewed_commit", self.task(), "no verdict was recorded from a missing file"
+        )
 
 
 class PayloadTests(GateFixture, unittest.TestCase):
@@ -396,7 +411,9 @@ class PayloadTests(GateFixture, unittest.TestCase):
         self.states({"demo-t1-review": "exited"})
         self.waits([self.worker_done(tests=True), self.reviewer_done(write=[]), self.skipped()])
         self.run_driver()
-        self.assertEqual(self.calls("resume"), [], "a dead reviewer cannot write the file: no warning is sent")
+        self.assertEqual(
+            self.calls("resume"), [], "a dead reviewer cannot write the file: no warning is sent"
+        )
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("no agent left to write it", self.request()["reason"])
 
