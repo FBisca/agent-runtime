@@ -10,7 +10,17 @@
 # they need. Streamed through a shell (`curl ... | sh -s -- ...`) the script is stdin and there is no
 # checkout: it asks for the components on the terminal when there is one, and otherwise needs them
 # named with --components.
+#
+# A streamed run installs one pinned release. It downloads the release's payload over https, checks
+# it against its SHA-256 checksum before anything in it runs, stages it under the install directory
+# and hands over to the installer inside it. A moving ref (main, a branch, latest) is refused: only
+# a version tag names something that cannot change under the installer. The assets and their
+# checksums are built by scripts/build-release.sh.
 set -eu
+
+# The release this installer belongs to. scripts/build-release.sh stamps it into the published
+# installer asset; the source installer leaves it empty.
+release_pin=
 
 self=$0
 while [ -L "$self" ]; do
@@ -35,6 +45,7 @@ if [ -z "${HOME:-}" ]; then
   exit 1
 fi
 bin_dir=${BIN_DIR:-$HOME/.local/bin}
+release_base=${AGENT_RUNTIME_RELEASE_URL:-https://github.com/FBisca/agent-runtime/releases/download}
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 (3.11+) is required" >&2; exit 1; }
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || { echo "Python 3.11+ is required" >&2; exit 1; }
@@ -50,7 +61,7 @@ tab=$(printf '\t')
 
 usage() {
   cat <<EOT
-usage: install.sh [install|upgrade|uninstall] [--components <list>] [--yes] [--dry-run]
+usage: install.sh [install|upgrade|uninstall] [--components <list>] [--release <tag>] [--yes] [--dry-run]
 
 commands:
   install     link and configure the named components, and what they need (the default)
@@ -68,6 +79,10 @@ options:
   --components <list>  the components to install, comma separated (the runtime comes with them)
   --yes                do not ask for confirmation: the headless run
   --dry-run            print what would be done, with the versions and paths, and change nothing
+  --release <tag>      the release a streamed run installs, a version tag like v1.2.3 (a published
+                       installer already names its release); a moving ref is refused
+  --sha256 <hex>       the SHA-256 of the release payload, taken from somewhere other than the
+                       download itself; the payload is installed only if it matches
   --version            print the release of this installer
 
 The orchestrator and every harness adapter need the runtime, so it is installed with them.
@@ -76,14 +91,20 @@ the Claude and Codex wiring. Streamed through a shell there is no checkout: the 
 for the components on the terminal (/dev/tty) when there is one, and otherwise needs
 --components, for example:
   curl -fsSL <installer url> | sh -s -- --components runtime,pi --yes
+A pipe runs what the server sends before anything can check it. To verify first, download the
+release's install.sh and SHA256SUMS, check them against a checksum you got elsewhere, then run
+sh install.sh --components ... from the file.
 
 environment:
   BIN_DIR                    where the shims are linked (default ~/.local/bin)
   AGENT_RUNTIME_INSTALL_DIR  where the install manifest lives (default ~/.local/share)
-  AGENT_RUNTIME_RELEASE      the release this install must be; the checkout's own version
+  AGENT_RUNTIME_RELEASE      the release this install must be (same as --release)
+  AGENT_RUNTIME_SHA256       the trusted payload checksum (same as --sha256)
+  AGENT_RUNTIME_RELEASE_URL  where releases are downloaded from, https only
+                             (default https://github.com/FBisca/agent-runtime/releases/download)
   AGENT_RUNTIME_TTY          the terminal the menu is asked on (default /dev/tty)
 
-exit codes: 0 done, 1 refused or declined, 2 the command line was wrong
+exit codes: 0 done, 1 refused or declined (a failed download or check included), 2 the command line was wrong
 EOT
 }
 
@@ -172,6 +193,10 @@ checkout_version() {
 
 # The release this checkout is: what every component of an install comes from.
 checkout_release() {
+  if [ -z "$root" ] && [ -n "$release_pin" ]; then
+    printf '%s\n' "$release_pin"
+    return 0
+  fi
   version=$(checkout_version)
   if [ -n "$version" ]; then printf 'v%s\n' "$version"; else printf 'local\n'; fi
 }
@@ -664,7 +689,9 @@ print_plan() {
   print_dry_run_header
   printf 'command: %s\n' "$command"
   print_selection
-  if [ -n "$runtime_version" ]; then
+  if [ "$streamed" -eq 1 ] && [ "$release" != unresolved ]; then
+    printf 'versions: runtime and orchestrator as the release manifest of %s says, checked after the download\n' "$release"
+  elif [ -n "$runtime_version" ]; then
     versions="runtime $runtime_version"
     case " $selection " in
       *" orchestrator "*) versions="$versions, orchestrator $orchestrator_version" ;;
@@ -674,11 +701,18 @@ print_plan() {
     printf 'versions: unresolved until a release payload is fetched\n'
   fi
   print_paths
+  if [ "$streamed" -eq 1 ] && [ "$release" != unresolved ]; then print_fetch_plan; fi
   for component in $selection; do
     case $component in
       runtime)
         for shim in $shims; do
-          if [ -n "$root" ]; then target=$root/bin/$shim; else target='the payload, pinned by the release'; fi
+          if [ -n "$root" ]; then
+            target=$root/bin/$shim
+          elif [ "$release" != unresolved ]; then
+            target=$install_home/releases/$release/bin/$shim
+          else
+            target='the payload, pinned by the release'
+          fi
           printf 'runtime: link %s -> %s\n' "$bin_dir/$shim" "$target"
         done
         ;;
@@ -713,14 +747,13 @@ resolve_release() {
   else
     release=local
   fi
-  if [ -n "${AGENT_RUNTIME_RELEASE:-}" ]; then
-    wanted=${AGENT_RUNTIME_RELEASE#v}
+  if [ -n "$pinned" ]; then
     if [ -z "$runtime_version" ]; then
-      echo "refusing to install: this checkout has no version to check against $AGENT_RUNTIME_RELEASE" >&2
+      echo "refusing to install: this checkout has no version to check against $pinned" >&2
       exit 1
     fi
-    if [ "$wanted" != "$runtime_version" ]; then
-      echo "refusing to install: this checkout is v$runtime_version, not the requested $AGENT_RUNTIME_RELEASE" >&2
+    if [ "$pinned" != "v$runtime_version" ]; then
+      echo "refusing to install: this checkout is v$runtime_version, not the requested $pinned" >&2
       exit 1
     fi
   fi
@@ -754,9 +787,325 @@ EOF
   fi
 }
 
+# What a release is called. Only a version tag names something that cannot change under the
+# installer: a branch, HEAD or `latest` is a moving ref, and is refused with the way out.
+normalise_release() {
+  want=${1#v}
+  case $want in
+    *[!0-9A-Za-z.-]*) want= ;;
+  esac
+  if [ -n "$want" ] && printf '%s\n' "$want" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'; then
+    printf 'v%s\n' "$want"
+    return 0
+  fi
+  echo "refusing release '$1': a release is a version tag like vX.Y.Z, and a moving ref (main, a branch, HEAD, latest) can change under the installer" >&2
+  echo "  pin a version: --release v1.2.3" >&2
+  return 1
+}
+
+# The one release this run names: the one stamped into a published installer, --release and
+# AGENT_RUNTIME_RELEASE. They may be spelled differently but must be the same release.
+note_release() {
+  value=$(normalise_release "$2") || exit 1
+  if [ -n "$pinned" ] && [ "$pinned" != "$value" ]; then
+    echo "refusing to install: two releases named: $pinned (from $pinned_from) and $value (from $1)" >&2
+    echo "  name one release" >&2
+    exit 1
+  fi
+  pinned=$value
+  pinned_from=$1
+}
+
+resolve_pin() {
+  pinned=
+  pinned_from=
+  if [ -n "$release_pin" ]; then note_release "this installer" "$release_pin"; fi
+  if [ -n "${AGENT_RUNTIME_RELEASE:-}" ]; then note_release AGENT_RUNTIME_RELEASE "$AGENT_RUNTIME_RELEASE"; fi
+  if [ -n "$release_flag" ]; then note_release --release "$release_flag"; fi
+}
+
+# The release is fetched over https and nothing else: a plain http or file URL can be rewritten.
+check_release_base() {
+  release_base=${release_base%/}
+  case $release_base in
+    https://*[!A-Za-z0-9._~:/@%+=,-]*|https://) bad_base=1 ;;
+    https://*) bad_base=0 ;;
+    *) bad_base=1 ;;
+  esac
+  if [ "$bad_base" -eq 1 ]; then
+    echo "refusing the release URL '$release_base': releases are downloaded over https only" >&2
+    echo "  unset AGENT_RUNTIME_RELEASE_URL to use the default" >&2
+    exit 1
+  fi
+}
+
+# The checks and the unpacking of a release. Every refusal names what failed and exits 1; nothing
+# here writes outside the directory it is given.
+artifact() {
+  python3 - "$@" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+import tarfile
+
+
+def refuse(message):
+    sys.stderr.write("%s\n" % message)
+    sys.exit(1)
+
+
+def digest(path):
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def expected(sums, name):
+    found = set()
+    try:
+        with open(sums, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except (OSError, ValueError):
+        refuse("refusing to install: SHA256SUMS cannot be read")
+    for line in lines:
+        if not line.strip():
+            continue
+        match = re.fullmatch(r"([0-9a-f]{64}) [ *]([^ /]+)", line)
+        if match is None:
+            refuse("refusing to install: SHA256SUMS is malformed, so no checksum can be trusted")
+        if match.group(2) == name:
+            found.add(match.group(1))
+    if not found:
+        refuse("refusing to install: there is no checksum for %s in SHA256SUMS" % name)
+    if len(found) > 1:
+        refuse("refusing to install: SHA256SUMS gives %s more than one checksum" % name)
+    return found.pop()
+
+
+def check_manifest(path, release, payload):
+    def wrong(field, value, wanted):
+        refuse(
+            "refusing to install: the release manifest (release.json) names %s %s, not %s"
+            % (field, value, wanted)
+        )
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError):
+        refuse("refusing to install: the release manifest (release.json) is not valid JSON")
+    if not isinstance(manifest, dict):
+        refuse("refusing to install: the release manifest (release.json) is not an object")
+    prefix = payload[: -len(".tar.gz")]
+    for field, wanted in (
+        ("contract", 1),
+        ("release", release),
+        ("platform", "any"),
+        ("payload", payload),
+        ("prefix", prefix),
+    ):
+        if manifest.get(field) != wanted:
+            wrong(field, json.dumps(manifest.get(field)), json.dumps(wanted))
+    components = manifest.get("components")
+    if not isinstance(components, dict):
+        refuse("refusing to install: the release manifest (release.json) lists no components")
+    versions = {name: components.get(name) for name in ("runtime", "orchestrator")}
+    version = release[1:]
+    if any(value != version for value in versions.values()):
+        refuse(
+            "refusing to mix releases: the release manifest says the runtime is v%s and the "
+            "orchestrator is v%s, and this is release %s" % (versions["runtime"], versions["orchestrator"], release)
+        )
+
+
+def extract(tarball, destination, prefix):
+    try:
+        archive = tarfile.open(tarball, "r:gz")
+    except (OSError, tarfile.TarError):
+        refuse("refusing to install: the payload is not a readable archive")
+    with archive:
+        try:
+            members = archive.getmembers()
+        except (OSError, EOFError, tarfile.TarError):
+            refuse("refusing to install: the payload is not a readable archive")
+        total = 0
+        for member in members:
+            parts = member.name.split("/")
+            unsafe = None
+            if member.name.startswith("/") or ".." in parts or parts[0] != prefix:
+                unsafe = "its path leaves %s/" % prefix
+            elif member.issym():
+                target = os.path.normpath(os.path.join(os.path.dirname(member.name), member.linkname))
+                if member.linkname.startswith("/") or not (target == prefix or target.startswith(prefix + "/")):
+                    unsafe = "it links outside %s/" % prefix
+            elif not (member.isreg() or member.isdir()):
+                unsafe = "it is not a plain file, directory or link"
+            total += max(member.size, 0)
+            if total > 512 * 1024 * 1024:
+                unsafe = "the payload is larger than a release can be"
+            if unsafe:
+                refuse("refusing to install: the payload holds an unsafe member, %s: %s" % (member.name, unsafe))
+        if hasattr(tarfile, "data_filter"):
+            archive.extractall(destination, members=members, filter="data")
+        else:
+            archive.extractall(destination, members=members)
+
+
+command = sys.argv[1]
+arguments = sys.argv[2:]
+if command == "sum":
+    print(digest(arguments[0]))
+elif command == "verify":
+    path, name, sums = arguments
+    want = expected(sums, name)
+    got = digest(path)
+    if got != want:
+        refuse(
+            "refusing to install: the checksum of %s is %s, but SHA256SUMS says %s: the download is not what was published"
+            % (name, got, want)
+        )
+elif command == "manifest":
+    check_manifest(*arguments)
+elif command == "extract":
+    extract(*arguments)
+PY
+}
+
+# One asset of the release, downloaded over https into the staging area. The tools see no stdin: a
+# streamed script is stdin, and a program that reads it would eat the rest of the installer.
+download_asset() {
+  name=$1
+  url=$release_base/$release/$name
+  if ! curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --connect-timeout 30 --max-time 600 --output "$stage/download/$name" "$url" </dev/null; then
+    echo "refusing to $command: the download of $name did not finish ($url)" >&2
+    echo "  nothing was installed and any installed version is unchanged; check the connection and run it again" >&2
+    exit 1
+  fi
+}
+
+# The staging directory and whatever this run created to hold it, removed when the run ends for
+# any reason but a hand-over: an interrupted or refused download leaves nothing behind.
+stage=
+home_uncreated=
+cleanup_stage() {
+  if [ -n "$stage" ]; then
+    rm -rf "$stage"
+    stage=
+  fi
+  if [ -n "$home_uncreated" ]; then
+    leftover=$install_home
+    while :; do
+      rmdir "$leftover" 2>/dev/null || break
+      [ "$leftover" != "$home_uncreated" ] || break
+      leftover=$(dirname "$leftover")
+    done
+  fi
+  return 0
+}
+
+# Download the pinned release, verify it, stage its payload and hand over to the installer inside
+# it. Nothing in the payload runs before its checksum matched, and nothing is activated here: the
+# payload only becomes a release directory once it is verified and complete.
+fetch_release() {
+  check_release_base
+  command -v curl >/dev/null 2>&1 || { echo "curl is required to download the release; install it, or run install.sh from a checkout" >&2; exit 1; }
+  payload_name=agent-runtime-$release.tar.gz
+  prefix=agent-runtime-$release
+  releases_dir=$install_home/releases
+  staged=$releases_dir/$release
+  if [ -L "$releases_dir" ] || [ -L "$staged" ]; then
+    echo "refusing to stage the release: $releases_dir is a symlink, and the payload is not written through a link" >&2
+    echo "  replace it with a directory, or install into another directory with AGENT_RUNTIME_INSTALL_DIR" >&2
+    exit 1
+  fi
+
+  trap cleanup_stage EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [ ! -d "$install_home" ]; then
+    home_uncreated=$install_home
+    parent=$(dirname "$install_home")
+    while [ ! -d "$parent" ]; do
+      home_uncreated=$parent
+      parent=$(dirname "$parent")
+    done
+  fi
+  mkdir -p "$install_home"
+  stage=$(mktemp -d "$install_home/.staging.XXXXXX")
+  mkdir "$stage/download" "$stage/payload"
+
+  printf 'downloading release %s\n' "$release"
+  download_asset SHA256SUMS
+  download_asset release.json
+  download_asset "$payload_name"
+
+  artifact verify "$stage/download/release.json" release.json "$stage/download/SHA256SUMS" || exit 1
+  artifact verify "$stage/download/$payload_name" "$payload_name" "$stage/download/SHA256SUMS" || exit 1
+  payload_sha=$(artifact sum "$stage/download/$payload_name") || exit 1
+  if [ -n "$trusted_sha" ]; then
+    if [ "$payload_sha" != "$trusted_sha" ]; then
+      echo "refusing to install: the checksum of $payload_name is $payload_sha, which does not match the checksum you gave ($trusted_sha)" >&2
+      echo "  the download is not the payload you meant to install; nothing was installed" >&2
+      exit 1
+    fi
+    printf 'verified: the payload sha256 matches the checksum you gave\n'
+  else
+    printf 'verified: the payload sha256 matches the checksum published with the release (SHA256SUMS)\n'
+    printf 'note: that checksum comes from the same place as the payload; for full assurance take one from somewhere else and pass --sha256\n'
+  fi
+  artifact manifest "$stage/download/release.json" "$release" "$payload_name" || exit 1
+  artifact extract "$stage/download/$payload_name" "$stage/payload" "$prefix" || exit 1
+  if [ ! -f "$stage/payload/$prefix/install.sh" ] || [ ! -f "$stage/payload/$prefix/bin/agent-runtime" ]; then
+    echo "refusing to install: the verified archive is not a release payload (no install.sh and bin/agent-runtime in $prefix/)" >&2
+    exit 1
+  fi
+  printf '%s\n' "$payload_sha" >"$stage/payload/$prefix/.payload-sha256"
+
+  mkdir -p "$releases_dir"
+  if [ -e "$staged" ]; then
+    if [ "$(cat "$staged/.payload-sha256" 2>/dev/null)" != "$payload_sha" ]; then
+      echo "refusing to stage the release: $release is already staged with a different payload" >&2
+      echo "  the staged one stays as it is; remove $staged to stage this one, or install another release" >&2
+      exit 1
+    fi
+    printf 'release %s is already staged: reusing %s\n' "$release" "$staged"
+  else
+    mv "$stage/payload/$prefix" "$staged"
+    printf 'staged %s\n' "$staged"
+  fi
+  rm -rf "$stage"
+  stage=
+  trap - EXIT HUP INT TERM
+
+  # The payload is a checkout of the release: its own installer does the install, against the same
+  # release, so the runtime and the orchestrator never come from two different ones.
+  AGENT_RUNTIME_RELEASE=$release
+  export AGENT_RUNTIME_RELEASE
+  exec sh "$staged/install.sh" "$command" --components "$components" </dev/null
+}
+
+# What a streamed run would fetch, check and stage: the dry run's part of the download.
+print_fetch_plan() {
+  for asset in SHA256SUMS release.json "agent-runtime-$release.tar.gz"; do
+    printf 'fetch: %s/%s/%s\n' "$release_base" "$release" "$asset"
+  done
+  printf 'verify: sha256 of every asset against SHA256SUMS, published with the release\n'
+  if [ -n "$trusted_sha" ]; then
+    printf 'verify: sha256 of the payload against the checksum you gave\n'
+  else
+    printf 'note: no --sha256 given: the checksums come from the release itself; pass --sha256 for an independent check\n'
+  fi
+  printf 'stage: %s/releases/%s\n' "$install_home" "$release"
+}
+
 command=install
 components=
 components_given=0
+release_flag=
+trusted_sha=${AGENT_RUNTIME_SHA256:-}
 assume_yes=0
 dry_run=0
 menu_used=0
@@ -770,6 +1119,18 @@ while [ $# -gt 0 ]; do
       components_given=1
       ;;
     --components=*) components=${1#--components=}; components_given=1 ;;
+    --release)
+      shift
+      [ $# -gt 0 ] || { echo "--release needs a version tag like v1.2.3" >&2; usage >&2; exit 2; }
+      release_flag=$1
+      ;;
+    --release=*) release_flag=${1#--release=} ;;
+    --sha256)
+      shift
+      [ $# -gt 0 ] || { echo "--sha256 needs the SHA-256 checksum of the payload" >&2; usage >&2; exit 2; }
+      trusted_sha=$1
+      ;;
+    --sha256=*) trusted_sha=${1#--sha256=} ;;
     --yes|-y) assume_yes=1 ;;
     --dry-run|-n) dry_run=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -778,6 +1139,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -n "$trusted_sha" ]; then
+  trusted_sha=$(printf '%s' "$trusted_sha" | tr 'A-F' 'a-f')
+  if ! printf '%s\n' "$trusted_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+    echo "the checksum must be 64 hexadecimal digits (a SHA-256), not '$trusted_sha'" >&2
+    usage >&2
+    exit 2
+  fi
+fi
 
 if [ "$components_given" -eq 0 ]; then
   if [ "$streamed" -eq 1 ]; then
@@ -806,19 +1176,38 @@ requested=$(parse_components "$components")
 selected=$(resolve_closure "$requested")
 selection=$(canonical_components "$selected")
 
-if [ "$streamed" -eq 1 ]; then
-  # A stream carries no payload: there is nothing to link and no version to check. The release a
-  # bootstrap installs is pinned by the payload it fetches, which this script does not do yet.
+if [ "$streamed" -eq 1 ] && [ "$command" != uninstall ]; then
+  # A stream carries no payload: the release it installs is the one it is pinned to, and the
+  # payload is fetched and verified once the run is confirmed. The versions come with the payload.
   runtime_version=
   orchestrator_version=
-  release=${AGENT_RUNTIME_RELEASE:-unresolved}
-  if [ "$command" != uninstall ] && [ "$dry_run" -eq 0 ]; then
-    echo "refusing to $command: this run was streamed through a shell, and it carries no release payload to install from" >&2
-    echo "  run install.sh from a checkout of the release, or add --dry-run to see the plan" >&2
-    exit 1
+  resolve_pin
+  if [ -z "$pinned" ]; then
+    release=unresolved
+    if [ "$dry_run" -eq 0 ]; then
+      echo "cannot $command: this run names no release to install, and the installer does not guess one or follow a moving main" >&2
+      echo "  pin a version: curl -fsSL <installer url> | sh -s -- --components runtime,pi --release vX.Y.Z --yes" >&2
+      echo "  (the installer published with a release already names it)" >&2
+      usage >&2
+      exit 2
+    fi
+  else
+    release=$pinned
+    check_release_base
   fi
+elif [ "$streamed" -eq 1 ]; then
+  runtime_version=
+  orchestrator_version=
+  release=unresolved
 else
+  resolve_pin
   resolve_release
+fi
+
+if [ -n "$trusted_sha" ] && { [ "$streamed" -eq 0 ] || [ "$command" = uninstall ]; }; then
+  echo "--sha256 checks a download, and this run downloads nothing" >&2
+  echo "  it applies to a streamed install or upgrade of a release" >&2
+  exit 2
 fi
 
 if [ "$command" = uninstall ]; then
@@ -853,7 +1242,7 @@ if [ "$command" = uninstall ]; then
   exit 0
 fi
 
-[ "$streamed" -eq 1 ] || refuse_a_mixed_set
+[ "$release" = unresolved ] || refuse_a_mixed_set
 
 if [ "$dry_run" -eq 1 ]; then
   # The preview asks the refusing questions too, so it never promises what the install would not do.
@@ -866,6 +1255,10 @@ fi
 
 confirm_choice
 print_selection
+
+if [ "$streamed" -eq 1 ]; then
+  fetch_release
+fi
 
 for component in $selection; do
   install_component "$component"
