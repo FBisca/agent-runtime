@@ -26,7 +26,8 @@ CLASSES = ("small", "medium", "large")
 BACKENDS = (
     "claude",
     "codex",
-)  # the worker backends; pi is lead-only until worker launch is enabled
+    "pi",
+)  # the worker backends; each of them runs a worker, so each of them may be routed to
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ROUTE_FIELDS = ("class", "backend", "model", "effort")
 # What a route field may name, and what to call it when it names something else.
@@ -78,7 +79,7 @@ class RouteEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     klass: Literal["small", "medium", "large"] = Field(alias="class")
-    backend: Literal["claude", "codex"]
+    backend: Literal["claude", "codex", "pi"]
     model: str = Field(min_length=1)
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
 
@@ -113,11 +114,6 @@ def _problem(error, position=None):
         return "%s needs a %s" % (where, field)
     if kind == "extra_forbidden":
         return "%s has unknown field(s): %s" % (where, field)
-    if field == "backend" and value == "pi":
-        return (
-            "%s names the backend 'pi', which cannot run a worker yet (pi is lead-only); the worker "
-            "backends are %s" % (where, ", ".join(BACKENDS))
-        )
     if field in ALLOWED:
         return "%s names %r, which is not a %s (%s)" % (
             where,
@@ -254,11 +250,6 @@ def override(text):
     if not slash or not model:
         raise RouteError(
             "the route override %r names no model; it reads 'class=backend/model[@effort]'" % text
-        )
-    if backend == "pi":
-        raise RouteError(
-            "the route override %r names the backend 'pi', which cannot run a worker yet (pi is "
-            "lead-only); the worker backends are %s" % (text, ", ".join(BACKENDS))
         )
     if backend not in BACKENDS:
         raise RouteError(

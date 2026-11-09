@@ -177,12 +177,45 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
         )
         self.assertEqual(self.ledger()["routes"]["source"], "legacy")
 
-    def test_S3_an_override_on_a_lead_only_backend_fails_before_any_worker_is_spawned(self):
-        """orchestrator-engine/R2: P4/S3 — a pi worker route is refused, and neither codex nor claude launches in its place."""
-        result = self.run_driver("--route", "small=pi/some-model", expect=2)
-        self.assertIn("route override", result.stderr)
-        self.assertIn("lead-only", result.stderr)
-        self.assertEqual(self.calls("spawn"), [])
+    def test_S1_a_route_naming_pi_and_the_top_effort_reaches_the_worker_spawn(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi and max are expressible, and the spawn carries both."""
+        path = self.routes_file(
+            config(
+                route("small", "pi", "minimax/MiniMax-M3.1-Flash", effort="max"),
+                route("medium", "claude", "sonnet"),
+                route("large", "claude", "opus"),
+            )
+        )
+        self.run_driver("--routes-file", path)
+        worker = self.workers()["demo-t1"]
+        self.assertEqual(
+            (worker["cli"], worker["model"], worker["effort"]),
+            ("pi", "minimax/MiniMax-M3.1-Flash", "max"),
+        )
+
+    def test_S4_the_matrix_answers_the_effort_when_no_route_names_one(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S4 — a route that names no effort leaves the size/difficulty matrix in charge."""
+        path = self.routes_file(
+            config(
+                route("small", "codex", "gpt-s"),
+                route("medium", "claude", "sonnet"),
+                route("large", "claude", "opus"),
+            )
+        )
+        self.run_driver("--routes-file", path)
+        worker = self.workers()["demo-t1"]
+        self.assertEqual(
+            (worker["cli"], worker["model"], worker["effort"]), ("codex", "gpt-s", "low")
+        )
+
+    def test_S1_an_override_naming_pi_dispatches_a_pi_worker(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — an override may name pi, and the run spawns it."""
+        self.run_driver("--route", "small=pi/minimax/MiniMax-M3.1-Flash@xhigh")
+        worker = self.workers()["demo-t1"]
+        self.assertEqual(
+            (worker["cli"], worker["model"], worker["effort"]),
+            ("pi", "minimax/MiniMax-M3.1-Flash", "xhigh"),
+        )
 
     def test_S3_an_override_for_an_unknown_class_fails_before_any_worker_is_spawned(self):
         """orchestrator-engine/R2: P4/S3 — an override for a class the driver does not know stops the run."""

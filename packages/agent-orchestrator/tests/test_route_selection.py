@@ -62,11 +62,13 @@ class RouteSelectionTests(unittest.TestCase):
             routes.override("tiny=codex/gpt-s")
         self.assertIn("tiny", str(caught.exception))
 
-    def test_S3_an_override_on_a_lead_only_backend_is_refused(self):
-        """orchestrator-engine/R2: P4/S3 — pi is lead-only; a pi worker route fails loudly."""
-        with self.assertRaises(routes.RouteError) as caught:
-            routes.override("small=pi/some-model")
-        self.assertIn("lead-only", str(caught.exception))
+    def test_S1_an_override_may_name_the_pi_backend(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi runs workers, so an override may name it."""
+        selected = routes.override("small=pi/minimax/MiniMax-M3.1-Flash@max")
+        self.assertEqual(
+            (selected.klass, selected.backend, selected.model, selected.effort),
+            ("small", "pi", "minimax/MiniMax-M3.1-Flash", "max"),
+        )
 
     def test_S3_an_override_on_an_unknown_backend_is_refused(self):
         """orchestrator-engine/R2: P4/S3 — a backend the driver cannot run is an error, not a fall back."""

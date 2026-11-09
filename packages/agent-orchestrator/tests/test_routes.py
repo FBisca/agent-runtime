@@ -40,10 +40,22 @@ class RouteSchemaTests(unittest.TestCase):
             routes.validate(data)
         self.assertIn(needle, str(caught.exception))
 
-    def test_S3_an_unsupported_backend_is_refused_with_an_explanation(self):
-        """orchestrator-engine/R4: P4/S3 — a route on a backend the driver cannot run is an error, not a fall back."""
+    def test_S2_an_unsupported_backend_is_refused_with_an_explanation(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S2 — a route on a backend the driver cannot run is an error, not a fall back."""
         self.rejects(config(route(backend="gemini")), "gemini")
-        self.rejects(config(route(backend="pi")), "lead-only")
+        self.rejects(config(route(backend="gemini")), "claude, codex, pi")
+
+    def test_S1_a_route_may_name_the_pi_backend(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi runs workers, so the schema may name it."""
+        resolved = routes.validate(config(route("small", "pi", "minimax/MiniMax-M3.1-Flash")))
+        self.assertEqual((resolved.routes[0].backend, resolved.routes[0].model), ("pi", "minimax/MiniMax-M3.1-Flash"))
+
+    def test_S1_the_efforts_above_high_are_valid_efforts(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — the runtime speaks five efforts; the schema does too."""
+        for effort in ("xhigh", "max"):
+            with self.subTest(effort=effort):
+                resolved = routes.validate(config(route("small", "pi", "some-model", effort=effort)))
+                self.assertEqual(resolved.routes[0].effort, effort)
 
     def test_S3_a_route_for_an_unknown_class_is_refused(self):
         """orchestrator-engine/R4: P4/S3 — a route for a class the driver does not know is an error."""
