@@ -48,6 +48,11 @@ def read_json(path):
         raise ValueError("%s is not valid JSON: %s" % (path, error)) from None
 
 
+# A call that walks or writes the whole tree (`worktree add`, `status`) scales with the repository: a large one
+# outruns `run()`'s default, which stays short so the small calls still fail fast.
+TREE_TIMEOUT = 600
+
+
 def run(argv, timeout=15):
     result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     require(result.returncode == 0, result.stderr.strip() or "Command failed: " + argv[0])
@@ -68,7 +73,9 @@ def checkout_snapshot(path):
         "head": identity[1],
         "branch": identity[2],
         # This is an inventory, NOT a content fingerprint. Re-read affected source.
-        "worktree_status": run(["git", "-C", str(root), "status", "--porcelain=v1"]),
+        "worktree_status": run(
+            ["git", "-C", str(root), "status", "--porcelain=v1"], timeout=TREE_TIMEOUT
+        ),
     }
 
 
@@ -1178,6 +1185,8 @@ class Driver:
                 continue
             if task.get("gate") == "requested":
                 continue  # the Lead already has it
+            if task.get("gate") == "awaiting-merge":
+                continue  # the merge is a person's step, and the pr-ready wake already asked for it
             signature = self.idle_signature(task_id, assignments)
             previous = self.ticks.get(task_id)
             if previous is None or previous[0] != signature:
@@ -1185,7 +1194,7 @@ class Driver:
                 continue
             streak = previous[1] + 1
             self.ticks[task_id] = [signature, streak]
-            waiting = "ci" if task.get("gate") in ("ready-for-ci", "awaiting-merge") else "agent"
+            waiting = "ci" if task.get("gate") == "ready-for-ci" else "agent"
             self.log("idle", unit=unit, task=task_id, waiting=waiting, ticks=streak)
             if streak >= 2:
                 self.request(
@@ -1461,7 +1470,31 @@ class Driver:
             return False
         events.append(path, kind, unit=unit, text=text, key=key)
         self.log("wake", wake=kind, unit=unit, text=text)
+        self.alert(text)
         return True
+
+    def alert(self, text):
+        """Tell the terminal that launched the run about a new wake, so a Lead that ended its turn hears of it.
+        `hc send`, never `--force` or `interrupt`: the notice queues behind the Lead's turn instead of ending it.
+        The wake is already on disk, so a send that fails is logged and the run goes on."""
+        # A driver built for one call (the wake tests) has no parsed args, and so no terminal to tell.
+        terminal = getattr(getattr(self, "args", None), "notify_terminal", None)
+        if not terminal:
+            return
+        line = "%s needs you: %s" % (pane_name(self.slug), " ".join(str(text).split()))
+        try:
+            result = subprocess.run(
+                ["hc", "send", terminal, line[:1000]],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            error = None if result.returncode == 0 else (result.stderr or result.stdout).strip()
+        except (OSError, subprocess.TimeoutExpired) as caught:
+            error = str(caught)
+        if error is not None:
+            event("could not alert %s: %s" % (terminal, error))
+            self.log("notify-failed", terminal=terminal, error=error[:500])
 
     def request(self, task_id, kind, reason, fix=None):
         """The unit needs the Lead. A unit that already has an open request keeps it."""
@@ -3800,7 +3833,8 @@ class Driver:
                     *([] if exists else ["-b", branch]),
                     str(path),
                     *([branch] if exists else [self.args.base]),
-                ]
+                ],
+                timeout=TREE_TIMEOUT,
             )
         return path
 
@@ -3849,10 +3883,13 @@ def live_terminals():
     }
 
 
-def launch(args, run_args):
-    """Check the plan, then start `run` in a new Herdr terminal. A live driver of the same name is left alone.
+def pane_name(slug):
+    """hc names allow a-z 0-9 - _ (1-32), so the pane is `orchestrate-<slug>`, not `orchestrate:<slug>`."""
+    return ("orchestrate-" + slug)[:32].rstrip("-")
 
-    hc names allow a-z 0-9 - _ (1-32), so the pane is `orchestrate-<slug>`, not `orchestrate:<slug>`."""
+
+def launch(args, run_args):
+    """Check the plan, then start `run` in a new Herdr terminal. A live driver of the same name is left alone."""
     plan_path = Path(args.plan).resolve(strict=True)
     plan = parse_plan(plan_path.read_text(encoding="utf-8"))
     check_plan(plan)
@@ -3863,7 +3900,7 @@ def launch(args, run_args):
             run(["git", "-C", str(plan_path.parent), "rev-parse", "--show-toplevel"])
         ).resolve()
     )
-    name = ("orchestrate-" + plan["slug"])[:32].rstrip("-")
+    name = pane_name(plan["slug"])
     if name in live_terminals():
         return {"pane": name, "started": False}
     argv = [
@@ -3886,6 +3923,9 @@ def launch(args, run_args):
         *run_args,
     ]
     parent = os.environ.get("HC_TERMINAL_ID")
+    # The run's own HC_TERMINAL_ID is its pane: the Lead's terminal has to be handed over.
+    if parent:
+        argv += ["--notify-terminal", parent]
     result = subprocess.run(
         argv[:3] + ["--parent", parent] + argv[3:] if parent else argv,
         capture_output=True,
@@ -4225,6 +4265,11 @@ def main(argv=None):
     )
     sub.add_argument(
         "--converge", default=str(CONVERGE), help="converge.py used to gate each report"
+    )
+    sub.add_argument(
+        "--notify-terminal",
+        default=None,
+        help="hc terminal told about each new wake (`launch` passes its own); unset: wakes.jsonl only",
     )
     sub.add_argument(
         "--wait-seconds",
