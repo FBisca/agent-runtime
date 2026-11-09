@@ -258,21 +258,25 @@ def bind(data, task_id, runtime_id):
 
 # Launcher words a worker may put in front of a gate command. Closed on purpose: an
 # `endswith` match would let `echo scripts/checks.sh` pass as the gate.
-CHECK_PREFIXES = frozenset({"bash", "sh", "uv", "run", "python", "python3", "-m"})
+# Whole prefix sequences, never single words: `python` alone is not a launcher of the gate.
+CHECK_PREFIXES = (("bash",), ("sh",), ("uv", "run"), ("python", "-m"), ("python3", "-m"))
 
 
 def normalise_check(command):
-    """The gate command, with launcher words and `./` removed, so `bash scripts/checks.sh` matches `scripts/checks.sh`."""
+    """The gate command, with launcher prefixes and a leading `./` removed, so `bash scripts/checks.sh` matches `scripts/checks.sh`."""
     tokens = command.split()
     changed = True
     while changed and tokens:
         changed = False
-        if tokens[0] in CHECK_PREFIXES:
-            tokens.pop(0)
-            changed = True
-        elif tokens[0].startswith("./"):
-            tokens[0] = tokens[0][2:]
-            changed = True
+        for prefix in CHECK_PREFIXES:
+            if tuple(tokens[: len(prefix)]) == prefix:
+                del tokens[: len(prefix)]
+                changed = True
+                break
+        else:
+            if tokens[0].startswith("./"):
+                tokens[0] = tokens[0][2:]
+                changed = True
     return " ".join(tokens)
 
 

@@ -74,6 +74,10 @@ class CheckpointRulesTests(unittest.TestCase):
         """orchestrator-engine/R2"""
         for checks in (
             [self.passed("echo scripts/checks.sh")],
+            [self.passed("python scripts/checks.sh")],
+            [self.passed("run scripts/checks.sh")],
+            [self.passed("-m scripts/checks.sh")],
+            [self.passed("uv scripts/checks.sh")],
             [],
         ):
             with self.subTest(checks=checks):
