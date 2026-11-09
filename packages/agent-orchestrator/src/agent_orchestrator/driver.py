@@ -1086,7 +1086,7 @@ class Driver:
                 if self.brain_cli
                 else self.models
             )
-        self.routes = self.load_routes()
+        self.routes, self.step_routes = self.load_routes()
         state_dir = Path(self.args.state_dir).expanduser()
         state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.ledger_path = state_dir / (self.slug + ".json")
@@ -1098,7 +1098,7 @@ class Driver:
         with ledger(self.ledger_path) as data:
             self.lead = data.setdefault("lead", "orchestrate:" + self.slug)
             data["routes"] = routes.record(
-                self.routes, self.route_source or "legacy", self.routes_file
+                self.routes, self.route_source or "legacy", self.routes_file, self.step_routes
             )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
         for row in legacy:  # a run dir written before events.jsonl: its history enters the log once
@@ -1881,6 +1881,8 @@ class Driver:
             task_md.write_text(
                 self.review_text(packet, review["path"], task.get("delta")), encoding="utf-8"
             )
+        backend, model = self.gate_step("reviewer", "large")
+        effort = self.step_effort("reviewer", "high")
         _, assignment_id = self.ensure_agent(
             name,
             "reviewer",
@@ -1890,14 +1892,14 @@ class Driver:
                 "name": name,
                 "task": "Read %s and follow it." % task_md,
                 "cwd": packet["checkout"],
-                "cli": self.gate_cli(),
-                "model": self.gate_model("large"),
-                "effort": "high",
+                "cli": backend,
+                "model": model,
+                "effort": effort,
             },
         )
         self.mark(task_id, gate="reviewing", review=dict(review, assignment_id=assignment_id))
         event(
-            "spawned %s (%s, %s, high)" % (name, self.gate_label("large"), self.gate_model("large"))
+            "spawned %s (%s, %s, %s)" % (name, self.gate_label("reviewer", "large"), model, effort)
         )
 
     def review_text(self, packet, review_path, delta=None):
@@ -2746,14 +2748,18 @@ class Driver:
         """The class -> route map this run uses: the typed route config when one was found, the legacy
         'Model classes' table otherwise. An invalid route config stops the run here, before any worker.
 
-        The command line's own overrides sit on top of both: they replace the class they name."""
+        The step routes come with it: the config's own `steps` list, then the command line's overrides,
+        which replace the class or the step they name."""
         path = self.routes_file
+        steps = {}
         if not path:
             event(routes.legacy_warning(self.args.models_file))
             resolved = routes.legacy(self.args.cli, self.models)
         else:
             try:
-                resolved = routes.resolve(routes.load(path), self.args.cli, self.models)
+                config = routes.load(path)
+                resolved = routes.resolve(config, self.args.cli, self.models)
+                steps = {step.step: step for step in config.steps}
             except routes.RouteError as error:
                 raise PlanError("invalid route config %s: %s" % (path, error)) from None
         try:
@@ -2762,7 +2768,32 @@ class Driver:
             )
         except routes.RouteError as error:
             raise PlanError("invalid route override: %s" % error) from None
-        return resolved
+        try:
+            steps = routes.apply_step_overrides(
+                steps, routes.step_overrides(getattr(self.args, "step", None))
+            )
+        except routes.RouteError as error:
+            raise PlanError("invalid step override: %s" % error) from None
+        return resolved, steps
+
+    def step_route(self, step):
+        """The step's own route, when the run names one."""
+        return (getattr(self, "step_routes", None) or {}).get(step)
+
+    def step_backend(self, step, default):
+        """The backend one step spawns on: its own route, or the run's answer."""
+        route = self.step_route(step)
+        return route.backend if route else default
+
+    def step_model(self, step, default):
+        """The model one step spawns on: its own route, or the run's answer."""
+        route = self.step_route(step)
+        return route.model if route else default
+
+    def step_effort(self, step, default):
+        """The effort one step spawns on: its own route, or the run's answer."""
+        route = self.step_route(step)
+        return (route.effort or default) if route else default
 
     def gate_model(self, klass):
         """The model a review gate spawns on: the brain's medium model when a brain backend was named.
@@ -2781,8 +2812,20 @@ class Driver:
             return route.model
         return self.brain_models["medium"]
 
-    def gate_label(self, klass):
-        """The class a review gate runs on, for the event line."""
+    def gate_step(self, step, klass):
+        """The backend and model one gate spawns on: the step's own route, or the brain's answer.
+
+        A step route wins over the brain: the reviewer may sit on another backend, and on another
+        model, than the gaps reviewer."""
+        route = self.step_route(step)
+        if route:
+            return route.backend, route.model
+        return self.gate_cli(), self.gate_model(klass)
+
+    def gate_label(self, step, klass):
+        """The class a review gate runs on, for the event line: the step's own name when a step route names it."""
+        if self.step_route(step):
+            return step
         return "medium" if getattr(self, "brain_cli", None) else klass
 
     def ensure_agent(self, name, role, unit, spawn, fresh=False):
@@ -3347,6 +3390,9 @@ class Driver:
     def dispatch_archive(self, plan, agents):
         name = self.slug[: 32 - len("-archive")].rstrip("-_") + "-archive"
         klass, effort = MATRIX[("small", "simple")]
+        backend = self.step_backend("archive", self.args.cli)
+        model = self.step_model("archive", self.routes[klass].model)
+        effort = self.step_effort("archive", effort)
         checkout = self.worktree(name, "feat/" + name)
         owns = ["docs/specs/", "docs/plans/"]
         for ticket in agents:
@@ -3359,7 +3405,7 @@ class Driver:
             "plan": str(self.plan_path),
             "objective": "Archive the plan into the living spec",
             "checkout": str(checkout),
-            "backend": self.args.cli,
+            "backend": backend,
             "owns": owns,
             "acceptance": ARCHIVE_ACCEPTANCE,
             "checks": list(self.args.gate),
@@ -3369,7 +3415,7 @@ class Driver:
             "difficulty": "simple",
             "class": klass,
             "effort": effort,
-            "model": self.routes[klass].model,
+            "model": model,
         }
         with self.book() as data:
             claim(data, packet)
@@ -3387,8 +3433,8 @@ class Driver:
                 "name": name,
                 "task": "Read %s and follow it." % task_md,
                 "cwd": str(checkout),
-                "cli": self.args.cli,
-                "model": packet["model"],
+                "cli": backend,
+                "model": model,
                 "effort": effort,
             },
         )
@@ -3396,7 +3442,7 @@ class Driver:
             bind(data, ARCHIVE, str(address))
             data["tasks"][ARCHIVE]["assignment_id"] = assignment_id
         self.spawned.append(name)
-        event("spawned %s (%s, %s, %s)" % (name, klass, packet["model"], effort))
+        event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
 
     def archive_text(self, plan, packet, task_dir):
         text = self.plan_path.read_text(encoding="utf-8")
@@ -3480,6 +3526,8 @@ class Driver:
             encoding="utf-8",
         )
         try:
+            backend, model = self.gate_step("gaps", "medium")
+            effort = self.step_effort("gaps", "medium")
             _, assignment_id = self.ensure_agent(
                 name,
                 "gaps",
@@ -3489,9 +3537,9 @@ class Driver:
                     "name": name,
                     "task": "Read %s and follow it." % task_md,
                     "cwd": str(self.repo),
-                    "cli": self.gate_cli(),
-                    "model": self.gate_model("medium"),
-                    "effort": "medium",
+                    "cli": backend,
+                    "model": model,
+                    "effort": effort,
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
@@ -3500,8 +3548,7 @@ class Driver:
         else:
             gaps = {"name": name, "path": str(path), "assignment_id": assignment_id, "ended": False}
             event(
-                "spawned %s (%s, %s, medium)"
-                % (name, self.gate_label("medium"), self.gate_model("medium"))
+                "spawned %s (%s, %s, %s)" % (name, self.gate_label("gaps", "medium"), model, effort)
             )
         with self.book() as data:
             data["gaps"] = gaps
@@ -3651,9 +3698,11 @@ class Driver:
         name = worker_name(plan["slug"], number)
         task_id = task_id or "t" + number
         size, difficulty = ticket["Size"].strip(), ticket["Difficulty"].strip()
-        klass, effort = MATRIX[(size, difficulty)]
+        klass, matrix_effort = MATRIX[(size, difficulty)]
         route = self.routes[klass]
-        effort = route.effort or effort
+        backend = self.step_backend("implementer", route.backend)
+        model = self.step_model("implementer", route.model)
+        effort = self.step_effort("implementer", route.effort or matrix_effort)
         checkout = self.worktree(name, "feat/" + name)
         scenarios = [plan["scenarios"][sid] for sid in satisfied(ticket, plan["scenarios"])[0]]
         packet = {
@@ -3662,7 +3711,7 @@ class Driver:
             "plan": str(self.plan_path),
             "objective": ticket["What it delivers"],
             "checkout": str(checkout),
-            "backend": route.backend,
+            "backend": backend,
             "owns": [p.strip() for p in ticket["Paths"].split(",") if p.strip()],
             "acceptance": [re.sub(r"^- \*\*(S\d+[a-z]?)\*\*", r"\1:", s) for s in scenarios],
             "checks": list(self.args.gate),
@@ -3672,20 +3721,23 @@ class Driver:
             "difficulty": difficulty,
             "class": klass,
             "effort": effort,
-            "model": route.model,
+            "model": model,
         }
         with self.book() as data:
             claim(data, packet)
+        step = self.step_route("implementer")
         self.log(
             "route",
             unit=packet["unit"],
             task=task_id,
             **{
                 "class": klass,
-                "backend": route.backend,
-                "model": route.model,
+                "backend": backend,
+                "model": model,
                 "effort": effort,
-                "effort_source": "config" if route.effort else "matrix",
+                "effort_source": "step"
+                if (step and step.effort)
+                else ("config" if route.effort else "matrix"),
                 "source": self.route_source or "legacy",
             },
         )
@@ -3705,8 +3757,8 @@ class Driver:
                 "name": name,
                 "task": "Read %s and follow it." % task_md,
                 "cwd": str(checkout),
-                "cli": route.backend,
-                "model": packet["model"],
+                "cli": backend,
+                "model": model,
                 "effort": effort,
             },
         )
@@ -4162,6 +4214,14 @@ def main(argv=None):
         metavar="CLASS=BACKEND/MODEL[@EFFORT]",
         help="An explicit route for one model class: 'small=codex/gpt-s@high'. It wins over the route "
         "config, which wins over the legacy 'Model classes' table",
+    )
+    sub.add_argument(
+        "--step",
+        action="append",
+        default=[],
+        metavar="STEP=BACKEND/MODEL[@EFFORT]",
+        help="An explicit route for one step of the run: 'reviewer=codex/gpt-l@xhigh'. The steps are "
+        "implementer, reviewer, gaps and archive. It wins over the route config and over --brain-cli",
     )
     sub.add_argument(
         "--converge", default=str(CONVERGE), help="converge.py used to gate each report"

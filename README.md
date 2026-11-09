@@ -120,11 +120,16 @@ required, and the lead needs an `hc` terminal to start workers from.
 ### Pi as a worker
 
 The `pi` family is a built-in worker backend, next to `claude` and `codex`. A spawn that names it
-launches `pi --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
+launches `pi --approve --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
 runtime's own five levels (`low`, `medium`, `high`, `xhigh`, `max`) and Pi's extra levels (`off`,
-`minimal`) are never sent. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task
-(for example, `Role: implementer`) and the runtime states the report protocol there too, naming Pi's own tool
-(`mcp__agent-runtime__report`). Pi has no token accounting.
+`minimal`) are never sent. `--approve` is what keeps the worker from stopping at a trust prompt in a
+folder Pi does not know: the worktree is a sibling of the repository, so the repository's trust entry does
+not cover it, and nobody answers a prompt in a pane nobody is watching. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task:
+the runtime reads the user's own Claude role file (`~/.claude/agents/<agent>.md`, front matter aside — set
+`AGENT_RUNTIME_ROLE_DIR` to another directory) and puts the role's content in the task, under the role's
+name and ahead of the task itself; the runtime states the report protocol there too, naming Pi's own tool
+(`mcp__agent-runtime__report`). A role file that is missing, empty or unreadable is a refusal: nothing is
+launched. Pi has no token accounting.
 
 Provider scrubbing is family-aware: a `pi` spawn keeps `MINIMAX_API_KEY` and the Pi provider variables
 (`PI_API_KEY`, `PI_PROVIDER`, `PI_MODEL`), and a `claude` or `codex` spawn loses all of them, so a
@@ -139,11 +144,16 @@ The local configuration, as it stands on this machine:
 
 | What | Where | Value |
 |---|---|---|
-| The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct` |
+| The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 <checkout>/server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct`, a 600 s timeout. The runtime writes this entry itself before it starts a Pi worker, so the path always points at the running runtime; the other servers in that file are left alone |
 | The host policy | `~/.config/agent-runtime/hosts.json` | the `pi` host: `mutations` on, `backends` `["pi", "claude-minimax", "codex", "claude"]`, `paths` covering the checkouts under the developer's home |
 
 The `pi` backend in `backends` is what lets a Pi lead start a Pi worker; without it the spawn is
 refused with the policy's reason.
+
+Every worker stays interactive: no backend is spawned one-shot (`--print`, `-p`, `exec`), because the
+runtime resumes a live pane (`hc send` into the running terminal) and the driver resumes the same pane
+for a fix round. A one-shot worker cannot be sent to, so every fix round would restart from zero
+context. The suite fails if a backend is ever spawned headless.
 
 ### Servers
 

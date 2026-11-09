@@ -45,8 +45,8 @@ class PiSpawnTests(ToolCase):
     def test_S1_a_pi_spawn_builds_the_pi_argv_with_the_task_last(self):
         """pi-worker/S1: the pi family launches Pi itself, not a Claude or Codex shim."""
         argv = self.spawn_argv(cli="pi", model="minimax/MiniMax-M3.1-Flash")
-        self.assertEqual(argv[:3], ["pi", "--model", "minimax/MiniMax-M3.1-Flash"])
-        self.assertEqual(len(argv), 4)
+        self.assertEqual(argv[:4], ["pi", "--approve", "--model", "minimax/MiniMax-M3.1-Flash"])
+        self.assertEqual(len(argv), 5)
         self.assertIn("do x", argv[-1])
         self.assertNotIn("claude", argv)
         self.assertNotIn("codex", argv)
@@ -55,13 +55,17 @@ class PiSpawnTests(ToolCase):
         """pi-worker/S1: Pi runs interactively with the task as its only argument."""
         argv = self.spawn_argv(cli="pi")
         self.assertEqual(argv[0], "pi")
-        self.assertEqual(len(argv), 2)
+        self.assertEqual(len(argv), 3)
         self.assertIn("do x", argv[-1])
 
     def test_S1_the_pi_task_carries_the_role_and_the_report_protocol(self):
-        """pi-worker/S1: Pi has no role file, so the role and the protocol travel in the task."""
+        """pi-worker/S1: Pi has no role file, so the role's content and the protocol travel in the task."""
+        roles = self.dir / "home" / ".claude" / "agents"
+        roles.mkdir(parents=True, exist_ok=True)
+        (roles / "implementer.md").write_text("OWN THE WORK\n", encoding="utf-8")
         task = self.spawn_argv(cli="pi", agent="implementer")[-1]
         self.assertIn("Role: implementer", task)
+        self.assertIn("OWN THE WORK", task)
         self.assertIn("Worker protocol:", task)
         self.assertIn("mcp__agent-runtime__report", task)
         self.assertIn("do x", task)
@@ -78,8 +82,8 @@ class PiSpawnTests(ToolCase):
         for effort in ("low", "medium", "high", "xhigh", "max"):
             with self.subTest(effort=effort):
                 argv = self.spawn_argv(cli="pi", effort=effort)
-                self.assertEqual(argv[:3], ["pi", "--thinking", effort])
-                self.assertEqual(len(argv), 4)
+                self.assertEqual(argv[:4], ["pi", "--approve", "--thinking", effort])
+                self.assertEqual(len(argv), 5)
 
     def test_S6_an_effort_pi_does_not_know_is_refused_before_anything_starts(self):
         """pi-worker/S6: the runtime never sends a level the CLI does not accept."""
@@ -95,6 +99,44 @@ class PiSpawnTests(ToolCase):
         session = self.start()
         tools = session.send("tools/list")["result"]["tools"]
         self.assertIn("pi", tools[0]["inputSchema"]["properties"]["cli"]["enum"])
+
+    def mcp_file(self):
+        return self.dir / "home" / ".pi" / "agent" / "mcp.json"
+
+    def test_S13_a_pi_spawn_registers_the_runtime_mcp_server(self):
+        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — the worker finds the report tool: Pi's own configuration carries this runtime's server."""
+        self.spawn_argv(cli="pi")
+        data = json.loads(self.mcp_file().read_text(encoding="utf-8"))
+        server = data["mcpServers"]["agent-runtime"]
+        self.assertEqual(server["env"], {"AGENT_RUNTIME_DISPATCH": "1"})
+        self.assertEqual(server["exposure"], "direct")
+        self.assertTrue(server["args"][0].endswith("server/mcp_server.py"))
+        self.assertTrue(Path(server["args"][0]).is_absolute())
+        self.assertTrue(Path(server["args"][0]).is_file())
+
+    def test_S13_the_registration_keeps_the_other_servers(self):
+        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — the file is the operator's: the other servers stay as they are."""
+        path = self.mcp_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"mcpServers": {"other": {"command": "other-server"}}}),
+            encoding="utf-8",
+        )
+        self.spawn_argv(cli="pi")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["mcpServers"]["other"], {"command": "other-server"})
+        self.assertIn("agent-runtime", data["mcpServers"])
+
+    def test_S13_a_broken_pi_configuration_is_refused_and_nothing_starts(self):
+        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — a configuration the runtime cannot read is a refusal, not a silent worker without a report tool."""
+        path = self.mcp_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ not json", encoding="utf-8")
+        session = self.start({"get:w1": {"out": raw("w1", "t0")}})
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="pi"))
+        self.assertTrue(result["isError"])
+        self.assertIn("mcp.json", text)
+        self.assertEqual(self.runs("run"), [])
 
 
 class PiProviderTests(ToolCase):

@@ -40,10 +40,65 @@ class RouteSchemaTests(unittest.TestCase):
             routes.validate(data)
         self.assertIn(needle, str(caught.exception))
 
-    def test_S3_an_unsupported_backend_is_refused_with_an_explanation(self):
-        """orchestrator-engine/R4: P4/S3 — a route on a backend the driver cannot run is an error, not a fall back."""
+    def test_S2_an_unsupported_backend_is_refused_with_an_explanation(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S2 — a route on a backend the driver cannot run is an error, not a fall back."""
         self.rejects(config(route(backend="gemini")), "gemini")
-        self.rejects(config(route(backend="pi")), "lead-only")
+        self.rejects(config(route(backend="gemini")), "claude, codex, pi")
+
+    def test_S1_a_route_may_name_the_pi_backend(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi runs workers, so the schema may name it."""
+        resolved = routes.validate(config(route("small", "pi", "minimax/MiniMax-M3.1-Flash")))
+        self.assertEqual(
+            (resolved.routes[0].backend, resolved.routes[0].model),
+            ("pi", "minimax/MiniMax-M3.1-Flash"),
+        )
+
+    def test_S1_the_efforts_above_high_are_valid_efforts(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — the runtime speaks five efforts; the schema does too."""
+        for effort in ("xhigh", "max"):
+            with self.subTest(effort=effort):
+                resolved = routes.validate(
+                    config(route("small", "pi", "some-model", effort=effort))
+                )
+                self.assertEqual(resolved.routes[0].effort, effort)
+
+    def test_S8_a_step_route_answers_its_own_step(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — a config may name a step's backend, model and effort."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [
+            {"step": "reviewer", "backend": "codex", "model": "gpt-l", "effort": "xhigh"}
+        ]
+        resolved = routes.validate(data)
+        self.assertEqual(len(resolved.steps), 1)
+        step = resolved.steps[0]
+        self.assertEqual(
+            (step.step, step.backend, step.model, step.effort),
+            ("reviewer", "codex", "gpt-l", "xhigh"),
+        )
+
+    def test_S10_a_step_route_naming_an_unknown_step_is_refused_by_name(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — the refusal names the step it named."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [{"step": "janitor", "backend": "codex", "model": "gpt-l"}]
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.validate(data)
+        self.assertIn("janitor", str(caught.exception))
+
+    def test_S10_a_step_route_naming_an_unknown_backend_is_refused_by_name(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a backend the driver cannot run is an error, not a fall back."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [{"step": "reviewer", "backend": "gemini", "model": "gpt-l"}]
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.validate(data)
+        self.assertIn("gemini", str(caught.exception))
+
+    def test_S10_a_step_route_naming_no_model_is_refused(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a step route without a model is an error."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [{"step": "reviewer", "backend": "codex"}]
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.validate(data)
+        self.assertIn("model", str(caught.exception))
 
     def test_S3_a_route_for_an_unknown_class_is_refused(self):
         """orchestrator-engine/R4: P4/S3 — a route for a class the driver does not know is an error."""

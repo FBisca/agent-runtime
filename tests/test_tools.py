@@ -401,6 +401,90 @@ class SpawnTests(ToolCase):
                 self.assertIn("do x", argv[-1])
                 self.assertNotIn("CODEX IMPLEMENTER RULES", argv[-1])
 
+    def write_role(self, name="implementer", body="OWN THE WORK\n"):
+        """A Claude role file: the user's own roles live there, front matter and all."""
+        roles = self.dir / "home" / ".claude" / "agents"
+        roles.mkdir(parents=True, exist_ok=True)
+        path = roles / ("%s.md" % name)
+        path.write_text(
+            "---\nname: %s\ntools: [Read, Write]\n---\n\n# %s\n\n%s" % (name, name, body),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_S5_a_pi_worker_receives_the_role_content(self):
+        """agent-runtime/R167: orchestrator-routing-effort-role/S5 — Pi has no role file, so the role's content travels in the task."""
+        self.write_role()
+        prompt = self.spawn_argv(cli="pi", agent="implementer")[-1]
+        self.assertIn("OWN THE WORK", prompt)
+        self.assertIn("Role: implementer", prompt)
+        self.assertIn("do x", prompt)
+        self.assertIn("Worker protocol:", prompt)
+        self.assertNotIn("tools: [Read, Write]", prompt)
+
+    def test_S5_a_pi_worker_without_a_role_gets_no_role_text(self):
+        """agent-runtime/R167: orchestrator-routing-effort-role/S5 — no role, no role text: only the protocol travels."""
+        self.write_role()
+        prompt = self.spawn_argv(cli="pi", agent="none")[-1]
+        self.assertNotIn("OWN THE WORK", prompt)
+        self.assertNotIn("Role:", prompt)
+        self.assertIn("Worker protocol:", prompt)
+
+    def test_S7_a_missing_role_file_is_refused_and_nothing_starts(self):
+        """agent-runtime/R169: orchestrator-routing-effort-role/S7 — the refusal names the file, and no worker is launched."""
+        session = self.start()
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="pi", agent="implementer"))
+        self.assertTrue(result["isError"])
+        self.assertIn("implementer.md", text)
+        self.assertEqual(self.runs("run"), [])
+
+    def test_S7_an_empty_role_file_is_refused_and_nothing_starts(self):
+        """agent-runtime/R169: orchestrator-routing-effort-role/S7 — a role file with no content is a refusal too."""
+        roles = self.dir / "home" / ".claude" / "agents"
+        roles.mkdir(parents=True, exist_ok=True)
+        (roles / "implementer.md").write_text("---\nname: implementer\n---\n", encoding="utf-8")
+        session = self.start()
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="pi", agent="implementer"))
+        self.assertTrue(result["isError"])
+        self.assertIn("implementer.md", text)
+        self.assertEqual(self.runs("run"), [])
+
+    def test_S7_an_unreadable_role_file_is_refused_and_nothing_starts(self):
+        """agent-runtime/R169: orchestrator-routing-effort-role/S7 — a role file that cannot be read is a refusal, named."""
+        roles = self.dir / "home" / ".claude" / "agents"
+        roles.mkdir(parents=True, exist_ok=True)
+        (roles / "implementer.md").mkdir()
+        session = self.start()
+        result, text = self.call(session, "spawn", dict(self.ARGS, cli="pi", agent="implementer"))
+        self.assertTrue(result["isError"])
+        self.assertIn("implementer.md", text)
+        self.assertEqual(self.runs("run"), [])
+
+    def test_S6_a_pi_worker_reads_the_instructions_file_it_is_given(self):
+        """agent-runtime/R168: orchestrator-routing-effort-role/S6 — a backend with no role file of its own reads the file the caller names."""
+        home = self.dir / "home"
+        (home / "role.md").write_text("ROLE FILE RULES\n")
+        argv = self.spawn_argv(cli="pi", instructions_file=str(home / "role.md"))
+        self.assertTrue(argv[-1].startswith("ROLE FILE RULES"))
+        self.assertIn("do x", argv[-1])
+        self.assertIn("Worker protocol:", argv[-1])
+
+    def test_S11_every_worker_is_spawned_interactive(self):
+        """agent-runtime/R170: orchestrator-routing-effort-role/S11 — the worker stays in its pane: the runtime resumes that pane for the next round."""
+        forbidden = {"claude": ("-p", "--print"), "codex": ("exec",), "pi": ("--print", "-p")}
+        for cli, flags in forbidden.items():
+            with self.subTest(cli=cli):
+                argv = self.spawn_argv(cli=cli, agent="none")
+                for flag in flags:
+                    self.assertNotIn(flag, argv[:-1])
+
+    def test_S12_a_pi_worker_is_launched_with_approve(self):
+        """agent-runtime/R171: orchestrator-routing-effort-role/S12 — Pi asks for trust in a folder it does not know, and nobody answers in a pane nobody watches."""
+        argv = self.spawn_argv(cli="pi", agent="none")
+        self.assertEqual(argv[0], "pi")
+        self.assertIn("--approve", argv)
+        self.assertNotIn("--approve", argv[-1])
+
     def test_dash_model_is_an_error(self):
         """agent-runtime/R134"""
         for cli in ("claude", "codex"):

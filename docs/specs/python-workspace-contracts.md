@@ -7,6 +7,11 @@ standard-library only in production; the orchestrator owns the typed, Pydantic-b
 YAML route policy. The runtime's behaviour itself lives in [agent-runtime.md](agent-runtime.md), and the
 harnesses in [harness-adapters.md](harness-adapters.md); this spec covers the packaging that carries them.
 
+The runtime's own modules carry its contracts and stay inside its member, on the standard library alone:
+`hc_tools.py` is the spawn and delegation surface, `pi_mcp.py` owns the registration a Pi worker needs to
+reach the parent. A module added for one backend's wiring never pulls a dependency into the runtime
+wheel.
+
 The workspace is a packaging change, not a rewrite: the entrypoints, the CLI subcommands, the MCP tool
 surface, the durable store format and the permissions of every harness are unchanged. The requirements
 below are what the packaging must keep.

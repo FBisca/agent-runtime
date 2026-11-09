@@ -30,12 +30,12 @@ class RouteDriverTests(RunFixture, unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         return str(path)
 
-    def test_S3_an_invalid_route_config_fails_the_run_before_any_worker_is_spawned(self):
-        """orchestrator-engine/R4: P4/S3 — the run stops with an explanation, and nothing is spawned."""
-        path = self.routes_file(config(route(backend="pi")))
+    def test_S2_an_invalid_route_config_fails_the_run_before_any_worker_is_spawned(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S2 — the run stops with an explanation, and nothing is spawned."""
+        path = self.routes_file(config(route(backend="gemini")))
         result = self.run_driver("--routes-file", path, expect=2)
         self.assertIn("route config", result.stderr)
-        self.assertIn("lead-only", result.stderr)
+        self.assertIn("gemini", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
     def test_S3_a_route_for_an_unknown_class_fails_the_run_before_any_worker_is_spawned(self):
