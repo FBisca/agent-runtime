@@ -491,8 +491,8 @@ config_state() {
 # One line of the dry run for a config that is already there ($2 is its path under the home): what is kept, and what is printed.
 plan_config() {
   case $3 in
-    wired) printf '%s: ~/%s already wires agent-runtime: nothing to add\n' "$1" "$2" ;;
-    elsewhere) printf '%s: ~/%s has an agent-runtime entry that points elsewhere: it is left as it is, the change is printed\n' "$1" "$2" ;;
+    wired) printf '%s: ~/%s already names this install: it is left as it is, the full block is printed to check it against\n' "$1" "$2" ;;
+    elsewhere) printf '%s: ~/%s has an agent-runtime entry that points elsewhere: it is left as it is, the full block is printed\n' "$1" "$2" ;;
     *) printf '%s: ~/%s exists and is left as it is: what to add is printed\n' "$1" "$2" ;;
   esac
 }
@@ -516,12 +516,11 @@ EOT
 
 print_claude_wiring() {
   state=$(config_state "$claude_settings" agent-runtime@agent-runtime agent-runtime@agent-runtime)
+  # A name in the settings is not the whole wiring (a plugin can be listed and switched off), so
+  # the commands are printed whatever the file says.
   case $state in
-    wired)
-      printf '\n~/.claude/settings.json already wires agent-runtime: nothing to add\n'
-      return 0
-      ;;
-    kept) printf '\n~/.claude/settings.json exists and is left as it is: run these in Claude Code, which adds the plugin itself\n' ;;
+    wired) printf '\n~/.claude/settings.json already names agent-runtime: it is left as it is. The commands are below; run them if the plugin is not enabled\n' ;;
+    elsewhere|kept) printf '\n~/.claude/settings.json exists and is left as it is: run these in Claude Code, which adds the plugin itself\n' ;;
   esac
   cat <<EOT
 
@@ -542,18 +541,15 @@ print_codex_wiring() {
   state=$(config_state "$codex_config" mcp_servers.agent-runtime "$bin_dir/agent-runtime-mcp")
   case $state in
     wired)
-      printf '\n~/.codex/config.toml already wires agent-runtime: nothing to add\n'
+      printf '\n~/.codex/config.toml already names this install: it is left as it is.\nThe full block for this release is below; check it against yours, a line may be missing:\n\n'
       ;;
     elsewhere)
-      printf '\n~/.codex/config.toml has an agent-runtime entry that points elsewhere: it is left as it is\n'
-      printf '  change its command to "%s" if this is the install to use\n' "$mcp"
+      printf '\n~/.codex/config.toml has an agent-runtime entry that points elsewhere: it is left as it is.\nThe block for this install is below; change your entry to match it (its command is "%s"):\n\n' "$mcp"
       ;;
     kept) printf '\nCodex: ~/.codex/config.toml exists and is left as it is: add this by hand:\n\n' ;;
     *) printf '\nCodex, add to ~/.codex/config.toml:\n\n' ;;
   esac
-  case $state in
-    absent|kept) print_codex_block ;;
-  esac
+  print_codex_block
 
   # Lead-liveness hooks (Stop guard, SessionStart and UserPromptSubmit context). Opt-in: Codex runs a hook only
   # after it is trusted, and an untrusted one raises a "Hooks need review" prompt, so print them on request,
@@ -561,9 +557,7 @@ print_codex_wiring() {
   if [ "${CODEX_LEAD_HOOKS:-}" = 1 ]; then
     print_codex_lead_hooks
   else
-    case $state in
-      absent|kept) printf '\n# Optional lead hooks for Codex: re-run with CODEX_LEAD_HOOKS=1 to print the Stop, SessionStart and\n# UserPromptSubmit blocks.\n' ;;
-    esac
+    printf '\n# Optional lead hooks for Codex: re-run with CODEX_LEAD_HOOKS=1 to print the Stop, SessionStart and\n# UserPromptSubmit blocks.\n'
   fi
 }
 
@@ -650,20 +644,12 @@ print_pi_wiring() {
   [ -z "$root" ] || wire=$root/server/mcp_server.py
   state=$(config_state "$pi_config" '"agent-runtime"' "$wire")
   case $state in
-    wired)
-      printf '\n~/.pi/agent/mcp.json already wires agent-runtime: nothing to add\n'
-      ;;
-    elsewhere)
-      printf '\n~/.pi/agent/mcp.json has an agent-runtime entry that points elsewhere: it is left as it is\n'
-      printf '  change its args to ["%s"] if this is the install to use\n' "$server"
-      ;;
-    *)
-      if [ "$state" = kept ]; then
-        printf '\nPi (agent-runtime integration): ~/.pi/agent/mcp.json exists and is left as it is: add this by hand:\n\n'
-      else
-        printf '\nPi (agent-runtime integration), add to ~/.pi/agent/mcp.json:\n\n'
-      fi
-      cat <<EOT
+    wired) printf '\n~/.pi/agent/mcp.json already names this install: it is left as it is.\nThe full block for this release is below; check it against yours, a line may be missing:\n\n' ;;
+    elsewhere) printf '\n~/.pi/agent/mcp.json has an agent-runtime entry that points elsewhere: it is left as it is.\nThe block for this install is below; change your entry to match it:\n\n' ;;
+    kept) printf '\nPi (agent-runtime integration): ~/.pi/agent/mcp.json exists and is left as it is: add this by hand:\n\n' ;;
+    *) printf '\nPi (agent-runtime integration), add to ~/.pi/agent/mcp.json:\n\n' ;;
+  esac
+  cat <<EOT
 {
   "mcpServers": {
     "agent-runtime": {
@@ -675,24 +661,18 @@ print_pi_wiring() {
   }
 }
 EOT
-      ;;
-  esac
 
   wire=
   [ -z "$root" ] || wire=$root
   state=$(config_state "$pi_hosts" '"pi"' "$wire")
-  if [ "$state" = wired ]; then
-    printf '\n~/.config/agent-runtime/hosts.json already names a pi host for this install: nothing to add\n'
-  else
-    if [ "$state" = absent ]; then
-      printf '\nA Pi lead needs the host policy too, in ~/.config/agent-runtime/hosts.json:\n'
-    else
-      printf '\nA Pi lead needs the host policy too: ~/.config/agent-runtime/hosts.json exists and is left as it is, add the pi host to it by hand:\n'
-    fi
-    cat <<EOT
+  case $state in
+    wired) printf '\nA Pi lead needs the host policy too: ~/.config/agent-runtime/hosts.json already names a pi host for this install and is left as it is. The full entry is below; check it against yours:\n' ;;
+    absent) printf '\nA Pi lead needs the host policy too, in ~/.config/agent-runtime/hosts.json:\n' ;;
+    *) printf '\nA Pi lead needs the host policy too: ~/.config/agent-runtime/hosts.json exists and is left as it is, add the pi host to it by hand:\n' ;;
+  esac
+  cat <<EOT
 {"hosts": {"pi": {"mutations": true, "backends": ["codex"], "paths": ["$root"]}}}
 EOT
-  fi
 }
 
 # The components, one by one. Each action installs what it owns and records it in the manifest.

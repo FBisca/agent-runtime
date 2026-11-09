@@ -199,34 +199,69 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertIn("[mcp_servers.agent-runtime]", result.stdout)
         self.assertIn('"agent-runtime": {', result.stdout)
 
-    def test_s4_a_config_that_already_names_this_install_is_reported_as_wired(self):
-        """S4: the second time round the block is not printed again, because it is already there."""
+    def test_s4_a_partial_config_that_names_this_install_still_gets_the_whole_block(self):
+        """S4: naming the install is not the whole wiring: what is missing is printed, never hidden."""
         first = self.run_installer("--components", "runtime,codex,pi")
         self.assertEqual(first.returncode, 0, first.stderr)
         bin_dir = self.home / ".local" / "bin"
+        # Only the server entry: none of the hooks, the env, or the per-tool approvals.
         codex = self.home / ".codex" / "config.toml"
         codex.parent.mkdir(parents=True)
-        codex.write_text(
-            f'[mcp_servers.agent-runtime]\ncommand = "{bin_dir / "agent-runtime-mcp"}"\n',
-            encoding="utf-8",
-        )
+        partial = f'[mcp_servers.agent-runtime]\ncommand = "{bin_dir / "agent-runtime-mcp"}"\n'
+        codex.write_text(partial, encoding="utf-8")
         pi = self.home / ".pi" / "agent" / "mcp.json"
         pi.parent.mkdir(parents=True)
-        pi.write_text(
+        pi_partial = (
             '{"mcpServers": {"agent-runtime": {"command": "python3", "args": ["%s"]}}}\n'
-            % (REPO / "server" / "mcp_server.py"),
-            encoding="utf-8",
+            % (REPO / "server" / "mcp_server.py")
         )
-        again = self.run_installer("--components", "runtime,codex,pi")
+        pi.write_text(pi_partial, encoding="utf-8")
+        # A plugin that is listed and switched off is not enabled either.
+        claude = self.home / ".claude" / "settings.json"
+        claude.parent.mkdir(parents=True)
+        claude.write_text(
+            '{"enabledPlugins": {"agent-runtime@agent-runtime": false}}\n', encoding="utf-8"
+        )
+
+        again = self.run_installer("--components", "runtime,claude,codex,pi")
         self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertNotIn("nothing to add", again.stdout)
         self.assertIn(
-            "~/.codex/config.toml already wires agent-runtime: nothing to add", again.stdout
+            "~/.codex/config.toml already names this install: it is left as it is", again.stdout
         )
+        self.assertIn("check it against yours", again.stdout)
+        # What the partial config lacks is shown: the hook guards, the env and the approvals.
+        for missing in (
+            "[[hooks.PreToolUse]]",
+            "--cli codex",
+            "env_vars = [",
+            'AGENT_RUNTIME_DISPATCH = "1"',
+            'approval_mode = "approve"',
+        ):
+            self.assertIn(missing, again.stdout)
         self.assertIn(
-            "~/.pi/agent/mcp.json already wires agent-runtime: nothing to add", again.stdout
+            "~/.pi/agent/mcp.json already names this install: it is left as it is", again.stdout
         )
-        self.assertNotIn("[mcp_servers.agent-runtime]", again.stdout)
-        self.assertNotIn('"mcpServers"', again.stdout)
+        self.assertIn('"env": { "AGENT_RUNTIME_DISPATCH": "1" }', again.stdout)
+        self.assertIn("/plugin install agent-runtime@agent-runtime", again.stdout)
+        # Nothing the user wrote was touched.
+        self.assertEqual(codex.read_text(encoding="utf-8"), partial)
+        self.assertEqual(pi.read_text(encoding="utf-8"), pi_partial)
+
+    def test_s4_a_complete_config_is_kept_and_the_block_is_still_there_to_compare(self):
+        """S4: the block is printed every time, so a line a newer release adds is never lost."""
+        first = self.run_installer("--components", "runtime,codex")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        codex = self.home / ".codex" / "config.toml"
+        codex.parent.mkdir(parents=True)
+        start = first.stdout.index("[mcp_servers.agent-runtime]")
+        stop = first.stdout.index("# Optional lead hooks")
+        complete = first.stdout[start:stop]
+        codex.write_text(complete, encoding="utf-8")
+        again = self.run_installer("--components", "runtime,codex")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn(complete, again.stdout)
+        self.assertEqual(codex.read_text(encoding="utf-8"), complete)
 
     def test_s4_an_entry_that_points_somewhere_else_is_a_conflict_and_is_not_rewritten(self):
         """S4: a wired entry for another install is named as a conflict, with the way out, and kept."""
@@ -239,7 +274,7 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertIn(
             "~/.codex/config.toml has an agent-runtime entry that points elsewhere", result.stdout
         )
-        self.assertIn("change its command to", result.stdout)
+        self.assertIn("change your entry to match it", result.stdout)
         self.assertEqual(codex.read_text(encoding="utf-8"), original)
 
     def test_s4_the_dry_run_previews_the_conflicts_and_changes_nothing(self):
