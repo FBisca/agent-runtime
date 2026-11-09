@@ -4,6 +4,7 @@
 No model calls and no shell evaluation. Only `run` starts workers, and only through `agent-runtime call`."""
 
 import argparse
+import copy
 import fcntl
 import json
 import math
@@ -18,9 +19,11 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from . import contracts, events, evidence, routes
 from .runtime_client import CliRuntimeClient
+from .runtime_client import RuntimeError as RuntimeCallError
 
 
 def now():
@@ -33,10 +36,16 @@ def require(condition, message):
 
 
 def read_json(path):
-    with open(path, encoding="utf-8") as stream:
-        raw = stream.read(65537)
+    try:
+        with open(path, encoding="utf-8") as stream:
+            raw = stream.read(65537)
+    except OSError as error:
+        raise ValueError("cannot read %s: %s" % (path, error)) from None
     require(len(raw) <= 65536, "Input exceeds 64 KiB; provide a compact record, not a transcript")
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except ValueError as error:
+        raise ValueError("%s is not valid JSON: %s" % (path, error)) from None
 
 
 def run(argv, timeout=15):
@@ -97,7 +106,12 @@ def ledger(path):
             raise ValueError("ledger busy; inspect or retry after the other update") from None
         if path.exists():
             with path.open(encoding="utf-8") as stream:
-                data = json.load(stream)
+                try:
+                    data = json.load(stream)
+                except ValueError as error:
+                    raise ValueError(
+                        "the ledger %s is not valid JSON: %s" % (path, error)
+                    ) from None
         else:
             data = {"version": 1, "tasks": {}}
         require(data.get("version") == 1 and isinstance(data.get("tasks"), dict), "invalid ledger")
@@ -769,9 +783,15 @@ def runtime_call(lead, tool, arguments, timeout=120):
     """One dispatch tool call, through the runtime's public CLI.
 
     The seam is the `RuntimeClient` protocol: the driver never imports the runtime's modules and
-    never reads its store. The CLI implementation is the one the run uses.
+    never reads its store. The process the client speaks through is the seam the tests answer, so a
+    driver run starts no process per call. A refusal is a `ValueError`, the driver's word for it.
     """
-    return CliRuntimeClient(lead).call(tool, arguments, timeout=timeout)
+    try:
+        return CliRuntimeClient(lead, process=runtime_process).call(
+            tool, arguments, timeout=timeout
+        )
+    except RuntimeCallError as error:
+        raise ValueError(str(error)) from None
 
 
 def assignment_of(result):
@@ -1415,7 +1435,7 @@ class Driver:
 
     def task(self, task_id):
         with self.book() as data:
-            return json.loads(json.dumps(data["tasks"][task_id]))
+            return copy.deepcopy(data["tasks"][task_id])
 
     def unit_of(self, task_id):
         with self.book() as data:
@@ -2271,7 +2291,7 @@ class Driver:
         except (contracts.ContractError, ValueError):
             return None
 
-    def pr_view(self, url):
+    def pr_view(self, url) -> dict[str, Any]:
         """The pull request as `gh` sees it: {state, isDraft, mergeStateStatus, mergeable}. A `gh` that fails is no
         state at all: the driver polls again rather than guessing."""
         code, out, err = self.gh(
@@ -2288,7 +2308,7 @@ class Driver:
     def pr_checks(self, url):
         """The pull request's checks as (state, rows): green, pending, none or failed. `gh` prints one JSON row per
         check; a bucket says how it went. An exit code `gh` does not use for checks is an error, not a state."""
-        code, out, err = self.gh(["pr", "checks", url, "--json", "name,bucket,link,description"])
+        code, out, _err = self.gh(["pr", "checks", url, "--json", "name,bucket,link,description"])
         try:
             rows = json.loads(out or "[]")
         except ValueError:
@@ -2310,7 +2330,7 @@ class Driver:
     def units(self):
         """Every unit of the run with the task that is still open for it."""
         with self.book() as data:
-            tasks = [json.loads(json.dumps(t)) for t in data["tasks"].values()]
+            tasks = [copy.deepcopy(t) for t in data["tasks"].values()]
         units = {}
         for task in tasks:
             unit = task["packet"].get("unit") or task["packet"]["task_id"]
@@ -2360,7 +2380,7 @@ class Driver:
         if self.unit_flag(unit, "draft_done"):
             return
         if not state.get("isDraft"):
-            code, out, err = self.gh(["pr", "ready", url, "--undo"])
+            code, _out, _err = self.gh(["pr", "ready", url, "--undo"])
             self.log(
                 "draft", unit=unit, task=task_id, pr=url, outcome="draft" if code == 0 else "failed"
             )
@@ -2465,7 +2485,7 @@ class Driver:
             excerpt = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
+                _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
                 excerpt = (out or err).strip() or excerpt
             items.append(
                 {
@@ -3419,7 +3439,7 @@ class Driver:
             ]
         )
 
-    def start_gaps(self, plan):
+    def start_gaps(self, _plan):
         """Spawn the advisory gaps reviewer once. Its failure never blocks anything."""
         with self.book() as data:
             if data.get("gaps"):
@@ -3581,7 +3601,7 @@ class Driver:
         by_id = {t["#"].lower(): t for t in plan["tickets"]}
         with self.book() as data:
             parked = [
-                (task_id, json.loads(json.dumps(task)))
+                (task_id, copy.deepcopy(task))
                 for task_id, task in data["tasks"].items()
                 if task.get("gate") in PARKED and task["status"] not in ("COMPLETE", "RELEASED")
             ]
@@ -3732,7 +3752,7 @@ class Driver:
             )
         return path
 
-    def task_text(self, plan, ticket, packet, scenarios, task_dir):
+    def task_text(self, _plan, ticket, packet, scenarios, task_dir):
         gate = self.args.gate or ["the repository's full CI gate (see its AGENTS.md / CLAUDE.md)"]
         return "\n".join(
             [
@@ -3766,7 +3786,10 @@ def live_terminals():
             "hc ls failed (exit %d): %s"
             % (result.returncode, (result.stderr or result.stdout).strip())
         )
-    rows = json.loads(result.stdout or "{}").get("terminals", [])
+    try:
+        rows = json.loads(result.stdout or "{}").get("terminals", [])
+    except ValueError as error:
+        raise ValueError("hc ls printed no JSON: %s" % error) from None
     return {
         row["name"]
         for row in rows

@@ -27,7 +27,7 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests"]
+testpaths = ["tests", "packages/agent-orchestrator/tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
 markers = [

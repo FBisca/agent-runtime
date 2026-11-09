@@ -1,6 +1,6 @@
 # Python workspace contracts
 
-Paths: pyproject.toml, uv.lock, packages/agent-runtime/, packages/agent-orchestrator/, .github/workflows/ci.yml, tests/test_workspace_isolation.py, tests/test_orchestrator_contract.py, tests/test_rollback_contract.py
+Paths: pyproject.toml, uv.lock, packages/agent-runtime/, packages/agent-orchestrator/, packages/agent-orchestrator/tests/, .github/workflows/ci.yml, tests/test_workspace_isolation.py, tests/test_orchestrator_contract.py, tests/test_rollback_contract.py
 
 The runtime and the orchestrator are two installable members of one uv workspace. The runtime stays
 standard-library only in production; the orchestrator owns the typed, Pydantic-backed contracts and the
@@ -31,6 +31,7 @@ the suite before a reviewer notices it in a diff.
 - **R203** WHEN the workspace change is rolled back, THEN the legacy CLI shims and the legacy MCP server still answer, and the durable store opens in both the old and the new tree with the same schema version, the same tables and its rows intact: no state migration ever runs. (from uv-workspace-python-standards/S8)
 - **R204** WHEN the orchestrator member runs, THEN it keeps no state of its own: it writes nothing into the runtime's store and its wheel needs neither the runtime member nor the orchestrator's dependencies. (from uv-workspace-python-standards/S8)
 - **R205** WHEN the PRs that carry the session, resume and usage semantics merge or change, THEN those semantics stay pinned to their commits and keep their own regression tests, and the workspace contract does not duplicate them. (from uv-workspace-python-standards/S7)
+- **R206** WHEN the orchestrator member's own suite runs, THEN the workspace's pytest run collects it, and the member's tests and sources stay type-clean by contract. (from orchestrator-engine-suite/S3)
 
 ## Coverage
 
@@ -39,6 +40,7 @@ the suite before a reviewer notices it in a diff.
 | S1 | R192, R193 | `tests/test_workspace_isolation.py`: `test_S1_uv_lock_is_current_for_both_members`, `test_S1_uv_sync_frozen_installs_both_members` |
 | S2 | R199 | `tests/test_compatibility_contract.py`: `test_S2_entrypoint_shims_are_present_and_executable`, `test_S2_entrypoint_shims_resolve_to_their_python_entrypoints`, `test_S2_recorded_entrypoints_match_the_bin_directory`, `test_S2_the_installer_links_every_entrypoint_and_wires_the_hooks`, `test_S2_the_cli_keeps_its_subcommands`; `tests/test_compatibility_contract_integration.py`: `test_S2_the_hook_shim_still_fails_open`, `test_S2_the_cli_bridge_reaches_the_public_tools`, `test_S2_the_installer_links_every_shim`, `test_S2_the_installer_takes_the_documented_bin_dir`, `test_S2_the_installer_refuses_to_overwrite_a_non_symlink` |
 | S3 | R200 | `tests/test_compatibility_contract.py`: `test_S3_the_public_tool_surface_covers_the_orchestration_verbs`, `test_S3_direct_sqlite_access_stays_inside_the_runtime_store_layer`; `tests/test_orchestrator_contract.py`: `test_S3_no_source_of_the_member_touches_the_runtime_store`, `test_S3_the_client_calls_the_runtime_cli_and_returns_its_answer`, `test_S3_a_failing_runtime_is_reported_not_swallowed` |
+| S3 | R206 | `packages/agent-orchestrator/tests/test_engine_home.py`: `test_S3_ci_runs_the_member_suite_and_the_tracked_budgets` |
 | S4 | R201, R202 | `tests/test_orchestrator_contract.py`: `test_S4_a_report_without_a_task_id_is_refused`, `test_S4_a_report_with_an_unknown_field_is_refused`, `test_S4_the_error_is_the_same_every_time`, `test_S4_a_route_policy_naming_an_unknown_class_is_refused`, `test_S4_a_yaml_route_policy_loads_and_its_unknown_field_is_refused` |
 | S5 | R194, R195 | `tests/test_workspace_isolation.py`: `test_S5_runtime_wheel_works_without_orchestrator_dependencies`, `test_S5_member_manifests_declare_their_own_dependencies` |
 | S6 | R196, R197, R198 | `tests/test_workspace_isolation.py`: `test_S6_workflow_runs_the_toolchain_on_the_matrix` |

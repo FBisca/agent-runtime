@@ -1,0 +1,541 @@
+"""The Lead's channel: requests and wakes, `await`, `decide`, the wake queue, held messages, pr-ready, plan-invalid."""
+
+import json
+import subprocess
+import sys
+import time
+import unittest
+
+import pytest
+from agent_orchestrator import contracts
+from fixtures import DRIVER, assignment, load_script, plan_text, report_wait, resume_id, wait_result
+from test_gates import GateFixture
+
+pytestmark = pytest.mark.integration
+
+PR = "https://github.com/o/r/pull/7"
+MENU = ["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]
+
+
+class WakeFixture(GateFixture):
+    def blocked(self, kind="blocked", text="cannot reach the database", name="demo-t1", id=None):
+        return report_wait(name, kind, text, id=id)
+
+    def request(self, unit="t1", nth=1):
+        name = "request.json" if nth == 1 else "request.%d.json" % nth
+        return json.loads((self.run_dir / unit / name).read_text(encoding="utf-8"))
+
+    def write_open_request(self, unit="t1", task="t1"):
+        """An open request on disk, as the driver leaves it, for tests of `decide` alone."""
+        path = self.run_dir / unit / "request.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                contracts.make_request(
+                    unit,
+                    task,
+                    "blocked",
+                    "cannot reach the database",
+                    [str(self.run_dir / unit / "task.md")],
+                )
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+
+class RequestTests(WakeFixture, unittest.TestCase):
+    def assert_request(self, event, needle, spawned=("demo-t1",)):
+        request = self.request()
+        wake = "decision t1: %s -> %s" % (request["reason"], self.run_dir / "t1" / "request.json")
+        self.assertEqual(self.wake_lines("decision"), [wake])
+        self.assertEqual((request["event"], request["unit"], request["menu"]), (event, "t1", MENU))
+        self.assertIn(needle, request["reason"])
+        self.assertIn(str(self.run_dir / "t1" / "task.md"), request["evidence"])
+        self.assertEqual(self.spawned(), list(spawned))  # no decider is spawned
+
+    def test_S1_a_blocked_worker_writes_a_request_and_one_wake_without_a_decider(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        self.waits([self.blocked(), self.decide_step("t1", "skip")])
+        self.run_driver()
+        self.assert_request("blocked", "cannot reach the database")
+
+    def test_S1_a_worker_asking_for_a_decision_writes_a_request(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        self.waits([self.blocked("decision", "two ways to do it"), self.decide_step("t1", "skip")])
+        self.run_driver()
+        self.assert_request("decision", "two ways to do it")
+
+    def test_S1_a_unit_that_fails_more_gates_than_the_cap_allows_writes_a_request(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        self.waits(
+            [
+                self.worker_done(),
+                self.worker_done("t1r1"),
+                self.worker_done("t1r2"),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        self.assert_request("gate", "failed its gates 3 times")
+        self.assertEqual(len(self.calls("resume")), 2)  # two fix rounds, no third
+        self.assertIn(str(self.run_dir / "t1r2" / "report.json"), self.request()["evidence"])
+
+    def test_S1_a_worker_that_ends_without_a_valid_report_writes_a_request(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        self.waits([report_wait("demo-t1", "complete"), self.decide_step("t1", "skip")])
+        self.run_driver()
+        self.assert_request("report", "report.json")
+
+    def test_S1_a_worker_whose_turn_ended_without_a_report_writes_a_request(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        self.waits(
+            [
+                wait_result([assignment("demo-t1", "working", "idle")]),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        self.assert_request("exited", "runtime state idle")
+
+    def test_S1_a_reviewer_that_ends_without_a_review_writes_a_request(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                wait_result([assignment("demo-t1-review", "working", "idle")]),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        self.assert_request("review", "review.json", spawned=("demo-t1", "demo-t1-review"))
+
+    def test_S1_the_unit_waits_for_the_lead_and_the_wake_is_written_once(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        probe = wait_result(
+            run=[
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys,shutil;shutil.copy(sys.argv[1], sys.argv[2])",
+                    str(self.plan),
+                    str(self.root / "plan-while-open.md"),
+                ]
+            ]
+        )
+        self.waits([self.blocked(), probe, wait_result(), self.decide_step("t1", "skip")])
+        self.run_driver()
+        self.assertEqual(len(self.wake_lines("decision")), 1)  # polled again, still one wake
+        self.assertIn(
+            "decision pending", (self.root / "plan-while-open.md").read_text(encoding="utf-8")
+        )
+
+
+class AwaitTests(WakeFixture, unittest.TestCase):
+    def finished_run(self):
+        self.waits([self.blocked(), self.decide_step("t1", "skip")])
+        self.run_driver()
+
+    def test_S2_await_prints_the_oldest_unprinted_wake_and_exits_0(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S2"""
+        self.finished_run()
+        first = self.cli("await", str(self.plan), "--state-dir", str(self.state_dir))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(first.stdout, self.wake_lines()[0] + "\n")
+        self.assertTrue(first.stdout.startswith("decision t1: "))
+
+    def test_S2_a_run_that_ended_with_nothing_left_prints_finished_and_exits_0(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S2"""
+        self.finished_run()
+        self.cli("await", str(self.plan), "--state-dir", str(self.state_dir))
+        for _ in range(2):  # finished is not consumed
+            again = self.cli("await", str(self.plan), "--state-dir", str(self.state_dir))
+            self.assertEqual(
+                (again.returncode, again.stdout),
+                (0, "finished -> %s\n" % (self.run_dir / "retro.md")),
+            )
+
+    def test_S2_await_waits_for_a_wake_that_arrives_later(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S2"""
+        (self.run_dir).mkdir(parents=True)
+        waiting = subprocess.Popen(
+            [
+                *DRIVER,
+                "await",
+                str(self.plan),
+                "--state-dir",
+                str(self.state_dir),
+                "--poll-seconds",
+                "0.1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            time.sleep(0.5)
+            self.assertIsNone(waiting.poll())
+            (self.run_dir / "wakes.jsonl").write_text(
+                json.dumps({"kind": "decision", "unit": "t1", "text": "decision t1: x -> /p"})
+                + "\n"
+            )
+            out, err = waiting.communicate(timeout=20)
+        finally:
+            waiting.kill()
+        self.assertEqual((waiting.returncode, out), (0, "decision t1: x -> /p\n"), err)
+
+    def test_S2_an_unfinished_run_with_nothing_to_print_does_not_say_finished(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S2"""
+        self.run_dir.mkdir(parents=True)
+        (self.run_dir / "events.jsonl").write_text(json.dumps({"kind": "start"}) + "\n")
+        with self.assertRaises(subprocess.TimeoutExpired):
+            subprocess.run(
+                [
+                    *DRIVER,
+                    "await",
+                    str(self.plan),
+                    "--state-dir",
+                    str(self.state_dir),
+                    "--poll-seconds",
+                    "0.1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+
+
+class DecideTests(WakeFixture, unittest.TestCase):
+    def decide(self, *args):
+        return self.cli("decide", str(self.plan), *args, "--state-dir", str(self.state_dir))
+
+    def test_S3_a_menu_action_writes_a_valid_decision_and_marks_the_request_resolved(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.write_open_request()
+        result = self.decide("t1", "retry", "--reason", "the database is back")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        decision = contracts.load(
+            self.run_dir / "t1" / "decision.json", contracts.validate_decision
+        )
+        self.assertEqual(
+            (decision["action"], decision["reason"]), ("retry", "the database is back")
+        )
+        request = self.request()
+        self.assertEqual(
+            (request["status"], request["decision"]),
+            ("resolved", str(self.run_dir / "t1" / "decision.json")),
+        )
+        contracts.validate_request(request)
+
+    def test_S3_the_unit_name_is_case_insensitive(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.write_open_request()
+        self.assertEqual(self.decide("T1", "skip", "--reason", "x").returncode, 0)
+
+    def test_S3_an_action_off_the_menu_exits_2_and_writes_nothing(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        path = self.write_open_request()
+        before = path.read_text(encoding="utf-8")
+        for action in ("ask user", "delete everything"):
+            result = self.decide("t1", action, "--reason", "x")
+            self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_S3_a_unit_without_an_open_request_exits_2_and_writes_nothing(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        result = self.decide("t1", "retry", "--reason", "x")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
+
+    def test_S3_a_second_decision_for_one_request_exits_2(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.write_open_request()
+        self.assertEqual(self.decide("t1", "retry", "--reason", "x").returncode, 0)
+        before = (self.run_dir / "t1" / "decision.json").read_text(encoding="utf-8")
+        self.assertEqual(self.decide("t1", "skip", "--reason", "y").returncode, 2)
+        self.assertEqual(
+            (self.run_dir / "t1" / "decision.json").read_text(encoding="utf-8"), before
+        )
+
+    def test_S3_answer_needs_the_answer_text_and_the_other_actions_ignore_it(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.write_open_request()
+        self.assertEqual(self.decide("t1", "answer", "--reason", "x").returncode, 2)
+        self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
+        self.assertEqual(
+            self.decide("t1", "answer", "--reason", "x", "--answer", "use port 5432").returncode, 0
+        )
+        self.assertEqual(
+            json.loads((self.run_dir / "t1" / "decision.json").read_text(encoding="utf-8"))[
+                "answer"
+            ],
+            "use port 5432",
+        )
+
+    def test_S3_a_reason_is_required(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.write_open_request()
+        self.assertNotEqual(self.decide("t1", "retry").returncode, 0)
+        self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
+
+    def test_S3_the_driver_applies_retry_on_its_next_round(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.waits([self.blocked(), self.decide_step("t1", "retry", "the database is back")])
+        self.run_driver(expect=0)
+        resumes = self.calls("resume")
+        self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
+        self.assertEqual(
+            resumes[0]["args"]["task"],
+            "Read %s and follow it." % (self.run_dir / "t1d1" / "task.md"),
+        )
+        self.assertIn(
+            "the database is back", (self.run_dir / "t1d1" / "task.md").read_text(encoding="utf-8")
+        )
+        self.assertEqual(self.spawned(), ["demo-t1"])
+
+    def test_S3_answer_resumes_the_worker_with_the_answer_text(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.waits(
+            [
+                self.blocked(),
+                self.decide_step("t1", "answer", "the port is known", answer="use port 5432"),
+            ]
+        )
+        self.run_driver()
+        resumes = self.calls("resume")
+        self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
+        self.assertIn("use port 5432", resumes[0]["args"]["task"])
+        self.assertIn(
+            "use port 5432", (self.run_dir / "t1d1" / "task.md").read_text(encoding="utf-8")
+        )
+
+    def test_S3_answer_to_a_gate_failure_reaches_the_next_fix_round(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.waits(
+            [
+                self.worker_done(),
+                self.worker_done("t1r1"),
+                self.worker_done("t1r2"),
+                self.decide_step("t1", "answer", "cover S1", answer="name the test S1"),
+            ]
+        )
+        self.run_driver()
+        self.assertIn("name the test S1", self.calls("resume")[2]["args"]["task"])
+        self.assertIn(
+            "name the test S1", (self.run_dir / "t1r3" / "task.md").read_text(encoding="utf-8")
+        )
+
+    def test_S3_skip_and_mark_blocked_close_the_unit(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        for action, status in (("mark blocked", "BLOCKED"), ("skip", "SKIPPED")):
+            with self.subTest(action=action):
+                self.setUp()
+                self.waits([self.blocked(), self.decide_step("t1", action, "not needed")])
+                self.run_driver()
+                self.assertEqual(self.task()["gate"], status.lower())
+                self.assertEqual(self.calls("resume"), [])
+
+    def test_S3_a_second_request_for_a_unit_gets_its_own_file(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+        self.waits(
+            [
+                self.blocked(),
+                self.decide_step("t1", "retry"),
+                self.blocked(text="still stuck", id=resume_id("demo-t1", 1)),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.request(nth=2)["reason"].count("still stuck"), 1)
+        self.assertEqual(len(self.wake_lines("decision")), 2)
+        self.assertIn("request.2.json", self.wake_lines("decision")[1])
+
+
+class QueueTests(WakeFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.plan.write_text(plan_text(rows=("T1", "T3")), encoding="utf-8")
+
+    def test_S4_other_units_keep_dispatching_and_gating_while_one_request_is_open(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S4"""
+        third = self.worker_done("t3", name="demo-t3")
+        third["write"] = [[str(self.run_dir / "t3" / "report.json"), self.report("t3")]]
+        self.waits([self.blocked(), third, self.decide_step("t1", "skip")])
+        self.run_driver()
+        self.assertEqual(self.spawned(), ["demo-t1", "demo-t3"])
+        # t3 failed converge while t1's request was open, and got its fix round
+        self.assertEqual([c["args"]["name"] for c in self.calls("resume")], ["demo-t3"])
+        self.assertEqual(len(self.wake_lines("decision")), 1)
+
+    def test_S4_later_wakes_come_out_of_await_one_at_a_time_in_the_order_written(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S4"""
+        self.waits(
+            [
+                self.blocked(),
+                self.blocked(name="demo-t3", text="no disk space"),
+                self.decide_step("t1", "skip"),
+                self.decide_step("t3", "skip"),
+            ]
+        )
+        self.run_driver()
+        lines = self.wake_lines("decision")
+        self.assertEqual([line.split(":")[0] for line in lines], ["decision t1", "decision t3"])
+        printed = [
+            self.cli("await", str(self.plan), "--state-dir", str(self.state_dir)).stdout
+            for _ in range(3)
+        ]
+        self.assertEqual(
+            printed,
+            [lines[0] + "\n", lines[1] + "\n", "finished -> %s\n" % (self.run_dir / "retro.md")],
+        )
+
+
+class HeldMessageTests(WakeFixture, unittest.TestCase):
+    def test_S7_a_complete_that_arrives_during_a_request_is_acted_on_after_the_decision(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S7"""
+        self.waits(
+            [
+                self.blocked(),
+                self.worker_done(tests=True),
+                self.decide_step("t1", "retry", "carry on"),
+                self.reviewer_done(),
+            ]
+        )
+        self.run_driver()
+        # the held report went through converge and review instead of being dropped
+        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
+        self.assertEqual(self.task()["status"], "COMPLETE")
+        self.assertEqual([e["held"] for e in self.events("held")], ["complete"])
+        self.assertEqual(
+            self.calls("resume"), []
+        )  # the worker had already finished: nothing to hand over again
+
+    def test_S7_a_blocked_during_a_request_raises_a_new_request_after(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S7"""
+        self.waits(
+            [
+                self.blocked(),
+                self.blocked("decision", "also need the schema"),
+                self.decide_step("t1", "retry", "carry on"),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        lines = self.wake_lines("decision")
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn("also need the schema", lines[1])
+        self.assertEqual(self.request(nth=2)["event"], "decision")
+        self.assertEqual([e["held"] for e in self.events("held")], ["decision"])
+
+    def test_S7_the_event_that_caused_the_request_is_not_held_again(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S7"""
+        self.waits(
+            [
+                self.blocked(),
+                wait_result([assignment("demo-t1", "blocked")]),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.events("held"), [])
+        self.assertEqual(len(self.wake_lines("decision")), 1)
+
+
+class PrReadyTests(WakeFixture, unittest.TestCase):
+    def test_S5_a_reviewed_green_unit_writes_exactly_one_pr_ready_wake(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S5"""
+        self.waits([self.worker_done(tests=True), self.reviewer_done()])
+        self.run_driver()
+        self.assertEqual(self.wake_lines("pr-ready"), ["pr-ready t1: " + PR])
+        self.assertEqual(self.wakes()[0]["key"], "t1:abc1234")
+
+    def test_S5_a_failing_check_then_a_green_one_still_writes_one_wake(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S5"""
+        self.checks([("fail", "unit tests"), "green"])
+        again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
+        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.worker_done("t1r1", tests=True),
+                again,
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.wake_lines("pr-ready"), ["pr-ready t1: " + PR])
+
+    def test_S5_the_same_unit_and_head_is_never_woken_twice(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S5"""
+        spec = load_script()
+        self.run_dir.mkdir(parents=True)
+        driver = spec.Driver.__new__(spec.Driver)
+        driver.run_dir = self.run_dir
+        self.assertTrue(driver.wake("pr-ready", "t1", "pr-ready t1: " + PR, key="t1:abc1234"))
+        self.assertFalse(driver.wake("pr-ready", "t1", "pr-ready t1: " + PR, key="t1:abc1234"))
+        self.assertTrue(driver.wake("pr-ready", "t1", "pr-ready t1: " + PR, key="t1:def5678"))
+        self.assertEqual(len(self.wake_lines("pr-ready")), 2)
+
+    def test_S5_a_unit_that_fails_review_gets_no_pr_ready_wake(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S5"""
+        review = self.review(
+            verdict="block",
+            major=[{"id": "M1", "file": "a", "line": 1, "problem": "p", "fix": "f"}],
+        )
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(review),
+                self.blocked(id=resume_id("demo-t1", 1)),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.wake_lines("pr-ready"), [])
+        self.assertEqual(len(self.wake_lines("decision")), 1)
+
+
+class PlanInvalidTests(WakeFixture, unittest.TestCase):
+    def test_S31_a_broken_plan_wakes_the_lead_once_per_distinct_error(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S31"""
+        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
+        first = self.worker_done(tests=True)
+        first["replace"] = [[str(self.plan), "| S2 | T1 |", "| S2 | T98 |"]]
+        second = self.reviewer_done()
+        second["replace"] = [[str(self.plan), "| S2 | T98 |", "| S2 | T99 |"]]
+        self.waits([first, second])
+        self.run_driver()
+        lines = self.wake_lines("plan-invalid")
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn("T98", lines[0])
+        self.assertIn("T99", lines[1])
+        for line in lines:
+            self.assertTrue(line.startswith("plan-invalid plan: "), line)
+            self.assertTrue(line.endswith(" -> %s" % self.plan), line)
+        self.assertEqual(
+            self.task()["status"], "COMPLETE"
+        )  # the unit went on to merge on the last valid plan
+
+    def test_S31_a_cycle_in_blocked_by_is_a_plan_error(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S31"""
+        spec = load_script()
+        text = (
+            plan_text(rows=("T1", "T3"))
+            .replace("| S1 | none |", "| S1 | T3 |", 1)
+            .replace("| S3 | none |", "| S3 | T1 |", 1)
+        )
+        with self.assertRaises(spec.PlanError) as caught:
+            spec.check_plan(spec.parse_plan(text))
+        self.assertIn("cycle", str(caught.exception))
+        self.assertIn("T1", str(caught.exception))
+
+    def test_S31_a_plan_that_is_invalid_before_the_run_starts_still_exits_2(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S31"""
+        self.plan.write_text(plan_text(status="DRAFT"), encoding="utf-8")
+        self.assertEqual(self.run_driver(expect=2).returncode, 2)
+        self.assertEqual(self.wakes(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
