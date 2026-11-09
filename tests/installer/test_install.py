@@ -88,6 +88,7 @@ class LegacyInstallSnapshotTests(InstallerCase):
     """The original behaviour, snapshotted: the component work may not change it."""
 
     def test_the_legacy_install_still_prints_what_it_printed(self):
+        """S1: the original install still prints the Claude and Codex wiring, and nothing else."""
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         expected = GOLDEN.read_text(encoding="utf-8")
@@ -95,6 +96,7 @@ class LegacyInstallSnapshotTests(InstallerCase):
         self.assertEqual(result.stderr, "")
 
     def test_the_legacy_install_still_links_the_four_shims(self):
+        """S7: the documented agent-runtime* shims are still what the legacy install links."""
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         for shim in SHIMS:
@@ -103,6 +105,7 @@ class LegacyInstallSnapshotTests(InstallerCase):
             self.assertEqual(os.readlink(link), str(REPO / "bin" / shim))
 
     def test_the_legacy_install_still_refuses_a_file_it_does_not_own(self):
+        """S4: the original install still refuses a file it does not own."""
         bin_dir = self.home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
         (bin_dir / "agent-runtime").write_text("mine\n", encoding="utf-8")
@@ -150,6 +153,7 @@ class SelectiveInstallTests(InstallerCase):
         self.assertEqual(sorted(self.manifest()["components"]), ["pi", "runtime"])
 
     def test_an_unknown_component_is_refused_with_the_known_ones(self):
+        """S1: a name that is not a component is refused, and the known ones are named."""
         result = self.run_installer("--components", "runtime,nope")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown component: nope", result.stderr)
@@ -173,6 +177,7 @@ class ReleaseTests(InstallerCase):
         self.assertTrue(self.shim("agent-runtime").is_symlink())
 
     def test_a_checkout_that_mixes_releases_is_refused(self):
+        """S3: a checkout whose members disagree is a mixture, and it is refused."""
         mixed = self.checkout("mixed", version="0.1.0", orchestrator_version="0.2.0")
         result = self.run_installer("--components", "orchestrator", script=mixed / "install.sh")
         self.assertEqual(result.returncode, 1)
@@ -182,6 +187,7 @@ class ReleaseTests(InstallerCase):
         self.assertFalse(self.shim("agent-runtime").exists())
 
     def test_an_install_that_would_mix_releases_is_refused(self):
+        """S3: an install that would leave a component at another release is refused."""
         first = self.run_installer("--components", "claude")
         self.assertEqual(first.returncode, 0, first.stderr)
         newer = self.checkout("newer", version="0.2.0")
@@ -307,6 +313,7 @@ class LifecycleTests(InstallerCase):
         self.assertEqual((user_file / "config.toml").read_text(encoding="utf-8"), "mine\n")
 
     def test_an_upgrade_that_would_leave_a_component_behind_is_refused(self):
+        """S7: an upgrade that would strand a component at another release is refused."""
         installed = self.run_installer("--components", "runtime,pi")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         newer = self.checkout("newer", version="0.2.0")
