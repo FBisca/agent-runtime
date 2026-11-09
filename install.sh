@@ -459,7 +459,70 @@ note_path() {
 # TOML basic-string escaping for paths.
 toml_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
+# The files the harnesses keep their configuration in. The installer never writes one: what it
+# prints is the block to add. It asks of each only whether agent-runtime is already in it. The
+# credential files beside them (auth.json, .credentials.json) are never opened, and no line of a
+# config reaches the output: a config can hold a key, and a key must never be printed.
+codex_config=$HOME/.codex/config.toml
+pi_config=$HOME/.pi/agent/mcp.json
+pi_hosts=$HOME/.config/agent-runtime/hosts.json
+claude_settings=$HOME/.claude/settings.json
+
+# What a config says about agent-runtime: absent (no such file), wired (it names this install),
+# elsewhere (it names agent-runtime and another install) or kept (it is there and nothing more is
+# known). A file that cannot be read is kept: the answer is never a guess. An empty $3 is a
+# location the run does not know yet (a streamed dry run), so nothing can be wired.
+config_state() {
+  if [ ! -e "$1" ]; then
+    printf 'absent\n'
+  elif [ ! -f "$1" ] || [ ! -r "$1" ]; then
+    printf 'kept\n'
+  elif ! grep -qF -e "$2" "$1" 2>/dev/null; then
+    printf 'kept\n'
+  elif [ -z "$3" ]; then
+    printf 'kept\n'
+  elif grep -qF -e "$3" "$1" 2>/dev/null; then
+    printf 'wired\n'
+  else
+    printf 'elsewhere\n'
+  fi
+}
+
+# One line of the dry run for a config that is already there ($2 is its path under the home): what is kept, and what is printed.
+plan_config() {
+  case $3 in
+    wired) printf '%s: ~/%s already wires agent-runtime: nothing to add\n' "$1" "$2" ;;
+    elsewhere) printf '%s: ~/%s has an agent-runtime entry that points elsewhere: it is left as it is, the change is printed\n' "$1" "$2" ;;
+    *) printf '%s: ~/%s exists and is left as it is: what to add is printed\n' "$1" "$2" ;;
+  esac
+}
+
+# Pi comes from its own installer. The installer looks for it on the PATH and nothing more: Pi is
+# never run, not even for its version, and never installed or signed in.
+pi_found() {
+  command -v pi >/dev/null 2>&1
+}
+
+print_pi_prerequisite() {
+  cat <<EOT
+
+pi: not found on PATH. Pi comes from its official installer, and this installer does not install or sign in to Pi:
+  curl -fsSL https://pi.dev/install.sh | sh
+  or, with Node.js 22.19 or newer: npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+  https://pi.dev/docs/latest/quickstart
+The integration below works once Pi is installed and you have signed in to a model provider yourself.
+EOT
+}
+
 print_claude_wiring() {
+  state=$(config_state "$claude_settings" agent-runtime@agent-runtime agent-runtime@agent-runtime)
+  case $state in
+    wired)
+      printf '\n~/.claude/settings.json already wires agent-runtime: nothing to add\n'
+      return 0
+      ;;
+    kept) printf '\n~/.claude/settings.json exists and is left as it is: run these in Claude Code, which adds the plugin itself\n' ;;
+  esac
   cat <<EOT
 
 Claude Code (public marketplace):
@@ -476,10 +539,39 @@ print_codex_wiring() {
   mcp=$(toml_escape "$bin_dir/agent-runtime-mcp")
   hook=$(toml_escape "$bin_dir/agent-runtime-hook")
 
+  state=$(config_state "$codex_config" mcp_servers.agent-runtime "$bin_dir/agent-runtime-mcp")
+  case $state in
+    wired)
+      printf '\n~/.codex/config.toml already wires agent-runtime: nothing to add\n'
+      ;;
+    elsewhere)
+      printf '\n~/.codex/config.toml has an agent-runtime entry that points elsewhere: it is left as it is\n'
+      printf '  change its command to "%s" if this is the install to use\n' "$mcp"
+      ;;
+    kept) printf '\nCodex: ~/.codex/config.toml exists and is left as it is: add this by hand:\n\n' ;;
+    *) printf '\nCodex, add to ~/.codex/config.toml:\n\n' ;;
+  esac
+  case $state in
+    absent|kept) print_codex_block ;;
+  esac
+
+  # Lead-liveness hooks (Stop guard, SessionStart and UserPromptSubmit context). Opt-in: Codex runs a hook only
+  # after it is trusted, and an untrusted one raises a "Hooks need review" prompt, so print them on request,
+  # then approve them with /hooks (see docs/verification/codex-hooks.md).
+  if [ "${CODEX_LEAD_HOOKS:-}" = 1 ]; then
+    print_codex_lead_hooks
+  else
+    case $state in
+      absent|kept) printf '\n# Optional lead hooks for Codex: re-run with CODEX_LEAD_HOOKS=1 to print the Stop, SessionStart and\n# UserPromptSubmit blocks.\n' ;;
+    esac
+  fi
+}
+
+print_codex_block() {
+  mcp=$(toml_escape "$bin_dir/agent-runtime-mcp")
+  hook=$(toml_escape "$bin_dir/agent-runtime-hook")
+
   cat <<EOT
-
-Codex, add to ~/.codex/config.toml:
-
 [mcp_servers.agent-runtime]
 command = "$mcp"
 env_vars = ["HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_SESSION"]
@@ -518,11 +610,12 @@ timeout = 5
 statusMessage = "Checking agent-runtime caller"
 EOT
 
-  # Lead-liveness hooks (Stop guard, SessionStart and UserPromptSubmit context). Opt-in: Codex runs a hook only
-  # after it is trusted, and an untrusted one raises a "Hooks need review" prompt, so print them on request,
-  # then approve them with /hooks (see docs/verification/codex-hooks.md).
-  if [ "${CODEX_LEAD_HOOKS:-}" = 1 ]; then
-    cat <<EOT
+}
+
+# Lead-liveness hooks (Stop guard, SessionStart and UserPromptSubmit context).
+print_codex_lead_hooks() {
+  hook=$(toml_escape "$bin_dir/agent-runtime-hook")
+  cat <<EOT
 
 [[hooks.Stop]]
 
@@ -546,17 +639,31 @@ type = "command"
 command = "\\"$hook\\" context --cli codex"
 timeout = 5
 EOT
-  else
-    printf '\n# Optional lead hooks for Codex: re-run with CODEX_LEAD_HOOKS=1 to print the Stop, SessionStart and\n# UserPromptSubmit blocks.\n'
-  fi
 }
 
 print_pi_wiring() {
   server=$(toml_escape "$root/server/mcp_server.py")
-  cat <<EOT
+  if ! pi_found; then print_pi_prerequisite; fi
 
-Pi (agent-runtime integration), add to ~/.pi/agent/mcp.json:
-
+  # Where this install's server is, unless this run has no checkout yet to say.
+  wire=
+  [ -z "$root" ] || wire=$root/server/mcp_server.py
+  state=$(config_state "$pi_config" '"agent-runtime"' "$wire")
+  case $state in
+    wired)
+      printf '\n~/.pi/agent/mcp.json already wires agent-runtime: nothing to add\n'
+      ;;
+    elsewhere)
+      printf '\n~/.pi/agent/mcp.json has an agent-runtime entry that points elsewhere: it is left as it is\n'
+      printf '  change its args to ["%s"] if this is the install to use\n' "$server"
+      ;;
+    *)
+      if [ "$state" = kept ]; then
+        printf '\nPi (agent-runtime integration): ~/.pi/agent/mcp.json exists and is left as it is: add this by hand:\n\n'
+      else
+        printf '\nPi (agent-runtime integration), add to ~/.pi/agent/mcp.json:\n\n'
+      fi
+      cat <<EOT
 {
   "mcpServers": {
     "agent-runtime": {
@@ -567,10 +674,25 @@ Pi (agent-runtime integration), add to ~/.pi/agent/mcp.json:
     }
   }
 }
+EOT
+      ;;
+  esac
 
-A Pi lead needs the host policy too, in ~/.config/agent-runtime/hosts.json:
+  wire=
+  [ -z "$root" ] || wire=$root
+  state=$(config_state "$pi_hosts" '"pi"' "$wire")
+  if [ "$state" = wired ]; then
+    printf '\n~/.config/agent-runtime/hosts.json already names a pi host for this install: nothing to add\n'
+  else
+    if [ "$state" = absent ]; then
+      printf '\nA Pi lead needs the host policy too, in ~/.config/agent-runtime/hosts.json:\n'
+    else
+      printf '\nA Pi lead needs the host policy too: ~/.config/agent-runtime/hosts.json exists and is left as it is, add the pi host to it by hand:\n'
+    fi
+    cat <<EOT
 {"hosts": {"pi": {"mutations": true, "backends": ["codex"], "paths": ["$root"]}}}
 EOT
+  fi
 }
 
 # The components, one by one. Each action installs what it owns and records it in the manifest.
@@ -645,11 +767,33 @@ uninstall_component() {
 $(manifest files "$component")
 EOF
   if [ "$dry_run" -eq 1 ]; then
+    if [ "$component" = runtime ] && staged_release "$source"; then printf 'would remove the staged release %s\n' "$source"; fi
     printf 'would uninstall %s\n' "$component"
     return 0
   fi
   manifest remove "$component"
+  if [ "$component" = runtime ] && staged_release "$source"; then
+    rm -rf "$source"
+    rmdir "$install_home/releases" 2>/dev/null || true
+    printf 'removed the staged release %s\n' "$source"
+  fi
   printf 'uninstalled %s\n' "$component"
+}
+
+# A release this installer staged: a directory of its own under releases/, never a link, never a
+# checkout. The runtime is what runs from it, and every component that needs the runtime leaves in
+# the same call or first, so nothing is left running from it when the runtime goes.
+staged_release() {
+  [ -n "$1" ] || return 1
+  [ -n "$install_home" ] || return 1
+  case ${1#"$install_home"/releases/} in
+    ""|*/*|.|..) return 1 ;;
+  esac
+  case $1 in
+    "$install_home"/releases/*) ;;
+    *) return 1 ;;
+  esac
+  [ -d "$1" ] && [ ! -L "$1" ]
 }
 
 # The original behaviour: link the shims and print the Claude and Codex wiring.
@@ -802,6 +946,17 @@ print_selection() {
   printf 'release: %s\n' "$release"
 }
 
+# One adapter's line in the dry run: what is printed for a config that is not there yet, and what
+# is kept, and said, for one that is.
+plan_adapter() {
+  state=$(config_state "$3" "$4" "$5")
+  if [ "$state" = absent ]; then
+    printf '%s: %s\n' "$1" "$6"
+  else
+    plan_config "$1" "$2" "$state"
+  fi
+}
+
 # The plan of an install or an upgrade: every action, the versions and the paths, as a preview.
 print_plan() {
   print_dry_run_header
@@ -835,10 +990,16 @@ print_plan() {
         done
         ;;
       orchestrator) printf 'orchestrator: the engine ships with the release, nothing is linked\n' ;;
-      claude) printf 'claude: print the Claude Code plugin commands, no Claude config is written\n' ;;
-      codex) printf 'codex: print the config for ~/.codex/config.toml, no Codex config is written\n' ;;
+      claude) plan_adapter claude '.claude/settings.json' "$claude_settings" agent-runtime@agent-runtime agent-runtime@agent-runtime 'print the Claude Code plugin commands, no Claude config is written' ;;
+      codex) plan_adapter codex '.codex/config.toml' "$codex_config" mcp_servers.agent-runtime "$bin_dir/agent-runtime-mcp" 'print the config for ~/.codex/config.toml, no Codex config is written' ;;
       pi)
-        printf 'pi: print the config for ~/.pi/agent/mcp.json, no Pi config is written\n'
+        if ! pi_found; then print_pi_prerequisite; fi
+        wire=
+        [ -z "$root" ] || wire=$root/server/mcp_server.py
+        plan_adapter pi '.pi/agent/mcp.json' "$pi_config" '"agent-runtime"' "$wire" 'print the config for ~/.pi/agent/mcp.json, no Pi config is written'
+        wire=
+        [ -z "$root" ] || wire=$root
+        plan_adapter pi '.config/agent-runtime/hosts.json' "$pi_hosts" '"pi"' "$wire" 'print the Pi host policy for ~/.config/agent-runtime/hosts.json, no config is written'
         printf 'pi: Pi itself comes from its official installer; this one does not run it\n'
         ;;
     esac

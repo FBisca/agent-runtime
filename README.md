@@ -55,7 +55,13 @@ git clone https://github.com/FBisca/agent-runtime.git
 cd agent-runtime && ./install.sh   # prints the block to paste into ~/.codex/config.toml
 ```
 
-**Pi:** see [Pi](docs/pi.md).
+**Pi:** see [Pi](docs/pi.md). `./install.sh --components runtime,pi` links the shims and prints the Pi
+wiring; Pi itself comes from its [official installer](https://pi.dev/docs/latest/quickstart), which the
+installer names when it cannot find `pi` and never runs.
+
+The installer never writes, reads or prints a harness's configuration or credentials: it prints the
+block to add, says when a config is already there (and leaves it), and `./install.sh uninstall
+--components <list>` removes only the shims and release it made, keeping the rest.
 
 Then ask in plain words, from inside an `hc` terminal:
 
