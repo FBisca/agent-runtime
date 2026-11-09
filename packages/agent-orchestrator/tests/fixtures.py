@@ -4,6 +4,7 @@ The fakes are modules (`fake_runtime`, `fake_gh`): the driver asks the runtime a
 wrappers for the same modules on PATH, for a driver run outside the tests.
 """
 
+import copy
 import io
 import json
 import os
@@ -380,6 +381,29 @@ class RunFixture(_Case):
         """The fake `gh`'s answer, in process."""
         return fake_gh.process(argv, timeout=timeout)
 
+    payload_grace = 0.05  # the payload wait, shortened so a test does not pay the real grace
+
+    def repeated(self, step, times=3):
+        """The same agent reporting again, `times` times, each under the assignment the previous warning resumed.
+
+        R16 asks the sender before the Lead, so a bad payload is read twice; the agent it warns comes back as a new
+        assignment, and a report under the old one would land on no gate at all.
+        """
+        steps = []
+        for nth in range(1, times + 1):
+            copy_of = copy.deepcopy(step)
+            if nth > 1:
+                for entry in copy_of.get("assignments") or []:
+                    name = entry.get("worker_id", "")[2:]
+                    entry["assignment_id"] = resume_id(name, nth - 1)
+                for message in (
+                    copy_of.get("messages") or []
+                ):  # the envelope names the assignment too
+                    name = message.get("worker_id", "")[2:]
+                    message["assignment_id"] = resume_id(name, nth - 1)
+            steps.append(copy_of)
+        return steps
+
     def in_process(self, spec, argv, timeout=60):
         """The script run in this process, with the fakes answering in process.
 
@@ -394,6 +418,7 @@ class RunFixture(_Case):
                     redirect_stdout(out),
                     redirect_stderr(err),
                     mock.patch.object(spec, "runtime_process", self.runtime_process),
+                    mock.patch.object(spec, "PAYLOAD_GRACE", self.payload_grace),
                     mock.patch.object(spec, "gh_process", self.gh_process),
                 ):
                     codes.append(spec.run_cli(argv))

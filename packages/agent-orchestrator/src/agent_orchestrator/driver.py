@@ -48,6 +48,23 @@ def read_json(path):
         raise ValueError("%s is not valid JSON: %s" % (path, error)) from None
 
 
+# A worker reports when its turn ends; the file the report names may land a moment later. A report is the news,
+# the file is the payload, and the driver waits for the payload for this long before it believes it missing.
+PAYLOAD_GRACE = 5.0
+# Warnings one agent gets about a payload it announced and did not write; past this the Lead is asked instead.
+PAYLOAD_WARNINGS = 2
+
+
+def payload_waits(path, grace=None):
+    """Wait, bounded, for the file a report names; True when it is there."""
+    deadline = time.monotonic() + (PAYLOAD_GRACE if grace is None else grace)
+    while not Path(path).exists():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 # A call that walks or writes the whole tree (`worktree add`, `status`) scales with the repository: a large one
 # outruns `run()`'s default, which stays short so the small calls still fail fast.
 TREE_TIMEOUT = 600
@@ -1664,6 +1681,96 @@ class Driver:
             newest = "report.%d.json" % index
         return directory / newest
 
+    def read_payload(self, task_id, where, path, load):
+        """The payload a report named, read and validated; None when the agent that sent it still owes it.
+
+        A worker's report can reach the driver before the file it announces, and a file can be half written when
+        it does. The report is the news and the file is the payload, so a payload that is missing or unusable is
+        not a verdict: the sending agent is told once or twice, and only then the Lead is asked. A file that never
+        arrives while nobody is left to write it goes straight to the Lead: warning a dead agent buys nothing.
+        """
+        if not payload_waits(path):
+            self.warn_sender(task_id, where, path, "the file is not on disk")
+            return None
+        try:
+            return load()
+        except (contracts.ContractError, ValueError) as error:
+            self.warn_sender(task_id, where, path, str(error))
+            return None
+
+    def warn_sender(self, task_id, where, path, reason):
+        """Tell the agent that sent the report what the driver still needs from it. False when the Lead must ask.
+
+        A payload that agent can still fix is its own news; a payload from an agent that is gone, or one it was
+        already warned about `PAYLOAD_WARNINGS` times, belongs to the Lead.
+        """
+        task, unit = self.task(task_id), self.unit_of(task_id)
+        record = task.get(where) or {}
+        sender = (
+            record
+            if where == "review"
+            else dict(
+                task["packet"],
+                name=task["packet"]["worker"],
+                role="worker",
+                assignment_id=task.get("assignment_id"),
+            )
+        )
+        warned = int((task.get("payload_warnings") or {}).get(where) or 0)
+        if warned >= PAYLOAD_WARNINGS or not sender.get("assignment_id"):
+            self.contract_error(
+                task_id,
+                where,
+                "cannot read %s: %s, after %d warning(s) to the agent that sent the report"
+                % (path, reason, warned),
+            )
+            return False
+        name = sender.get("name") or sender.get("worker")
+        if not name or not self.agent_live(name):
+            self.contract_error(
+                task_id, where, "cannot read %s: %s, and no agent left to write it" % (path, reason)
+            )
+            return False
+        text = (
+            "Your report reached the driver, but %s is not a payload it can read: %s. The driver reads the file, "
+            "not the report: write it again, then report again." % (path, reason)
+        )
+        _, assignment_id = self.ensure_agent(
+            name,
+            sender.get("role") or ("reviewer" if where == "review" else "worker"),
+            unit,
+            {
+                "kind": "worker",
+                "name": name,
+                "task": text,
+                "cwd": sender.get("checkout") or task["packet"]["checkout"],
+                "cli": sender.get("backend") or self.args.cli,
+                "model": sender.get("model") or task["packet"].get("model"),
+                "effort": sender.get("effort") or task["packet"].get("effort"),
+            },
+        )
+        # The warned agent comes back as a new assignment: the record the next report is matched against must be
+        # the one that will speak, or the report lands on no gate at all.
+        if where == "review" and assignment_id:
+            self.mark(task_id, review=dict(task["review"], assignment_id=assignment_id))
+        elif assignment_id:
+            self.mark(task_id, assignment_id=assignment_id)
+        self.mark(
+            task_id,
+            payload_warnings=dict(task.get("payload_warnings") or {}, **{where: warned + 1}),
+        )
+        self.mark(task_id, gate="reviewing" if where == "review" else None)
+        self.log(
+            "payload-warning",
+            unit=unit,
+            task=task_id,
+            where=where,
+            warnings=warned + 1,
+            reason=reason[:200],
+        )
+        event("%s: warned %s that %s is not readable yet (%s)" % (unit, name, path, reason[:120]))
+        return True
+
     def contract_error(self, task_id, where, error):
         """A handoff file broke its contract: log it, and the Lead decides."""
         self.log(
@@ -1719,7 +1826,8 @@ class Driver:
     def step_reported(self, task_id):
         task = self.task(task_id)
         path = self.report_file(task_id)
-        try:
+
+        def read_report():
             report = contracts.load(path, contracts.validate_report)
             contracts.need(
                 report["task_id"] == task_id,
@@ -1729,8 +1837,11 @@ class Driver:
                 report["status"] == "COMPLETE" and report["acceptance_met"],
                 "the worker said complete but report.json says %s" % report["status"],
             )
-        except contracts.ContractError as error:
-            return self.contract_error(task_id, "report", error)
+            return report
+
+        report = self.read_payload(task_id, "report", path, read_report)
+        if report is None:
+            return  # the gate keeps waiting: the worker was warned, or the Lead is asked
         self.log_clarifications(task_id, "report", report, path)
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
@@ -2019,13 +2130,18 @@ class Driver:
     def step_reviewed(self, task_id):
         task = self.task(task_id)
         packet = task["packet"]
-        try:
+
+        def read_review():
             review = contracts.load(task["review"]["path"], contracts.validate_review)
             report = contracts.load(task["report_path"], contracts.validate_report)
-            head = head_of(packet["checkout"])
-            check_commit(review["commit"], head, task["review"]["path"])
-        except contracts.ContractError as error:
-            return self.contract_error(task_id, "review", error)
+            check_commit(review["commit"], head_of(packet["checkout"]), task["review"]["path"])
+            return review, report
+
+        loaded = self.read_payload(task_id, "review", task["review"]["path"], read_review)
+        if loaded is None:
+            return  # the gate keeps waiting: the reviewer was warned, or the Lead is asked
+        review, report = loaded
+        head = head_of(packet["checkout"])
         self.log_clarifications(task_id, "review", review, task["review"]["path"])
         self.mark(
             task_id, reviewed_commit=head

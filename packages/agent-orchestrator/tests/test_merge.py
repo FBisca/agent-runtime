@@ -174,7 +174,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.waits(
             [
                 self.worker_done(tests=True),
-                self.reviewer_done(self.review(commit="deadbee")),
+                *self.repeated(self.reviewer_done(self.review(commit="deadbee"))),
                 self.skipped(),
             ]
         )
