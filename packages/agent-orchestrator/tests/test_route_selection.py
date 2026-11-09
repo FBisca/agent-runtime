@@ -56,6 +56,26 @@ class RouteSelectionTests(unittest.TestCase):
             {"class": "small", "backend": "codex", "model": "gpt-s", "effort": "high"},
         )
 
+    def test_S9_a_step_override_names_the_backend_model_and_effort(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — a step override reads 'step=backend/model[@effort]'."""
+        selected = routes.step_override("reviewer=codex/gpt-l@xhigh")
+        self.assertEqual(
+            (selected.step, selected.backend, selected.model, selected.effort),
+            ("reviewer", "codex", "gpt-l", "xhigh"),
+        )
+
+    def test_S10_a_step_override_for_an_unknown_step_is_refused(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a step the driver does not know is an error."""
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.step_override("janitor=codex/gpt-l")
+        self.assertIn("janitor", str(caught.exception))
+
+    def test_S10_a_step_override_on_an_unknown_backend_is_refused(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a backend the driver cannot run is an error."""
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.step_override("reviewer=gemini/gpt-l")
+        self.assertIn("gemini", str(caught.exception))
+
     def test_S3_an_override_for_an_unknown_class_is_refused(self):
         """orchestrator-engine/R2: P4/S3 — an override for a class the driver does not know is an error."""
         with self.assertRaises(routes.RouteError) as caught:

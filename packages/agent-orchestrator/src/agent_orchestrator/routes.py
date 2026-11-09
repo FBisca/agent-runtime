@@ -29,10 +29,11 @@ BACKENDS = (
     "pi",
 )  # the worker backends; each of them runs a worker, so each of them may be routed to
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+STEPS = ("implementer", "reviewer", "gaps", "archive")
 ROUTE_FIELDS = ("class", "backend", "model", "effort")
 # What a route field may name, and what to call it when it names something else.
-ALLOWED = {"class": CLASSES, "backend": BACKENDS, "effort": EFFORTS}
-NOUNS = {"class": "model class", "backend": "worker backend", "effort": "effort"}
+ALLOWED = {"class": CLASSES, "backend": BACKENDS, "effort": EFFORTS, "step": STEPS}
+NOUNS = {"class": "model class", "backend": "worker backend", "effort": "effort", "step": "step"}
 CONFIG_SUFFIXES = (".json", ".yaml", ".yml")
 REPO_POLICY = ".orchestrate"  # the repository's own policy directory
 USER_POLICY = "~/.config/orchestrate"  # the user's default directory
@@ -57,11 +58,25 @@ class Route:
 
 
 @dataclass(frozen=True)
+class StepRoute:
+    """One step of a run on one backend: the step's own backend, model and effort.
+
+    The effort is None when the step's own default answers it (the matrix for a worker, the
+    gate's constant for a gate)."""
+
+    step: str
+    backend: str
+    model: str
+    effort: str | None = None
+
+
+@dataclass(frozen=True)
 class RouteConfig:
-    """A validated route config: its version and the routes it names."""
+    """A validated route config: its version, the routes it names and the steps it names."""
 
     version: int
     routes: tuple
+    steps: tuple = ()
 
 
 def text(value):
@@ -84,16 +99,31 @@ class RouteEntry(BaseModel):
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
 
 
+class StepEntry(BaseModel):
+    """One step of a config: the step, the backend it runs on, the model and the effort.
+
+    A step is one spawn site of a run: the implementer, the reviewer, the gaps reviewer or the
+    archive worker. A step route is the run's answer for that step, whatever the class routes say."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: Literal["implementer", "reviewer", "gaps", "archive"]
+    backend: Literal["claude", "codex", "pi"]
+    model: str = Field(min_length=1)
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+
+
 class RouteDocument(BaseModel):
-    """The typed route config: its version and the routes it names."""
+    """The typed route config: its version, the routes it names and the steps it names."""
 
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[1]
     routes: list[RouteEntry] = Field(min_length=1)
+    steps: list[StepEntry] = Field(default_factory=list)
 
 
-def _problem(error, position=None):
+def _problem(error, position=None, kind="route"):
     """One deterministic message from a validation failure: the route, the field, the value it holds.
 
     A refusal names the reason and the way out: which route, which field, what it named, and what
@@ -102,17 +132,17 @@ def _problem(error, position=None):
     first = error.errors()[0]
     location = first.get("loc", ())
     field = str(location[-1]) if location else "route"
-    kind = first.get("type", "")
+    kind_name = first.get("type", "")
     value = first.get("input")
     if position is None:
         indexes = [part for part in location if isinstance(part, int)]
         position = indexes[0] + 1 if indexes else None
-    where = "route #%d" % position if position is not None else "the route config"
-    if kind == "missing":
+    where = "%s #%d" % (kind, position) if position is not None else "the route config"
+    if kind_name == "missing":
         if field == "routes":
             return "the route config needs a non-empty 'routes' list"
         return "%s needs a %s" % (where, field)
-    if kind == "extra_forbidden":
+    if kind_name == "extra_forbidden":
         return "%s has unknown field(s): %s" % (where, field)
     if field in ALLOWED:
         return "%s names %r, which is not a %s (%s)" % (
@@ -131,7 +161,12 @@ def _problem(error, position=None):
 
 def _route_problem(error, position):
     """One deterministic message from a validation failure: the route, the field, the value it holds."""
-    return _problem(error, position)
+    return _problem(error, position, "route")
+
+
+def _step_problem(error, position):
+    """One deterministic message from a validation failure: the step, the field, the value it holds."""
+    return _problem(error, position, "step")
 
 
 def validate_route(entry, position):
@@ -142,6 +177,17 @@ def validate_route(entry, position):
         raise RouteError(_route_problem(error, position)) from None
     return Route(
         klass=route.klass, backend=route.backend, model=route.model.strip(), effort=route.effort
+    )
+
+
+def validate_step(entry, position):
+    """One step of a config, validated. Every failure names the step and the field."""
+    try:
+        step = StepEntry.model_validate(entry)
+    except ValidationError as error:
+        raise RouteError(_step_problem(error, position)) from None
+    return StepRoute(
+        step=step.step, backend=step.backend, model=step.model.strip(), effort=step.effort
     )
 
 
@@ -164,7 +210,17 @@ def validate(data):
             )
         seen[route.klass] = position
         routes.append(route)
-    return RouteConfig(version=version, routes=tuple(routes))
+    steps, seen_steps = [], {}
+    for position, entry in enumerate(document.steps, 1):
+        step = validate_step(entry.model_dump(), position)
+        if step.step in seen_steps:
+            raise RouteError(
+                "step #%d repeats the step '%s' (step #%d already names it)"
+                % (position, step.step, seen_steps[step.step])
+            )
+        seen_steps[step.step] = position
+        steps.append(step)
+    return RouteConfig(version=version, routes=tuple(routes), steps=tuple(steps))
 
 
 def load_yaml(raw, path):
@@ -228,38 +284,47 @@ def find_config(explicit=None, repo=None, home=None):
     return None, None
 
 
+def _override_parts(text, what="route", noun="class"):
+    """The (name, backend, model, effort) an override names; every failure names the value it named."""
+    if not isinstance(text, str) or "=" not in text:
+        raise RouteError(
+            "a %s override reads '%s=backend/model[@effort]', got %r" % (what, noun, text)
+        )
+    name, _, rest = text.partition("=")
+    model_part, _, effort_part = rest.partition("@")
+    backend, slash, model = model_part.partition("/")
+    name, backend, model = name.strip(), backend.strip(), model.strip()
+    effort = effort_part.strip() or None
+    if not name:
+        raise RouteError("the %s override %r names no %s" % (what, text, noun))
+    if not slash or not model:
+        raise RouteError(
+            "the %s override %r names no model; it reads '%s=backend/model[@effort]'"
+            % (what, text, noun)
+        )
+    if backend not in BACKENDS:
+        raise RouteError(
+            "the %s override %r names the backend '%s', which is not a worker backend (%s)"
+            % (what, text, backend, ", ".join(BACKENDS))
+        )
+    if effort is not None and effort not in EFFORTS:
+        raise RouteError(
+            "the %s override %r names the effort '%s', which is not an effort (%s)"
+            % (what, text, effort, ", ".join(EFFORTS))
+        )
+    return name, backend, model, effort
+
+
 def override(text):
     """One explicit route override, read from the command line: `class=backend/model[@effort]`.
 
     It is validated like a config route: an unknown class, an unknown backend or an unknown effort is an error,
     never a fall back to another billable model."""
-    if not isinstance(text, str) or "=" not in text:
-        raise RouteError("a route override reads 'class=backend/model[@effort]', got %r" % (text,))
-    klass, _, rest = text.partition("=")
-    model_part, _, effort_part = rest.partition("@")
-    backend, slash, model = model_part.partition("/")
-    klass, backend, model = klass.strip(), backend.strip(), model.strip()
-    effort = effort_part.strip() or None
-    if not klass:
-        raise RouteError("the route override %r names no class" % text)
+    klass, backend, model, effort = _override_parts(text)
     if klass not in CLASSES:
         raise RouteError(
             "the route override %r names the class '%s', which is not a model class (%s)"
             % (text, klass, ", ".join(CLASSES))
-        )
-    if not slash or not model:
-        raise RouteError(
-            "the route override %r names no model; it reads 'class=backend/model[@effort]'" % text
-        )
-    if backend not in BACKENDS:
-        raise RouteError(
-            "the route override %r names the backend '%s', which is not a worker backend (%s)"
-            % (text, backend, ", ".join(BACKENDS))
-        )
-    if effort is not None and effort not in EFFORTS:
-        raise RouteError(
-            "the route override %r names the effort '%s', which is not an effort (%s)"
-            % (text, effort, ", ".join(EFFORTS))
         )
     return Route(klass=klass, backend=backend, model=model, effort=effort)
 
@@ -267,6 +332,24 @@ def override(text):
 def overrides(texts):
     """The route overrides a command line names, each one validated."""
     return [override(text) for text in texts or ()]
+
+
+def step_override(text):
+    """One explicit step override, read from the command line: `step=backend/model[@effort]`.
+
+    A step is one spawn site of a run: `implementer`, `reviewer`, `gaps` or `archive`."""
+    step, backend, model, effort = _override_parts(text, "step", "step")
+    if step not in STEPS:
+        raise RouteError(
+            "the step override %r names the step '%s', which is not a step (%s)"
+            % (text, step, ", ".join(STEPS))
+        )
+    return StepRoute(step=step, backend=backend, model=model, effort=effort)
+
+
+def step_overrides(texts):
+    """The step overrides a command line names, each one validated."""
+    return [step_override(text) for text in texts or ()]
 
 
 def apply_overrides(resolved, chosen):
@@ -282,8 +365,17 @@ def apply_overrides(resolved, chosen):
     return out
 
 
-def record(resolved, source, path=None):
-    """The route fields the ledger keeps: where the routes came from, and what each class runs on."""
+def apply_step_overrides(steps, chosen):
+    """The step routes with the explicit overrides on top: an override replaces the step it names."""
+    out = dict(steps or {})
+    for step in chosen or ():
+        out[step.step] = step
+    return out
+
+
+def record(resolved, source, path=None, steps=None):
+    """The route fields the ledger keeps: where the routes came from, what each class runs on and
+    what each step runs on."""
     return {
         "source": source,
         "path": str(path) if path else None,
@@ -295,6 +387,15 @@ def record(resolved, source, path=None):
                 "effort": route.effort,
             }
             for klass, route in sorted(resolved.items())
+        },
+        "steps": {
+            step: {
+                "step": route.step,
+                "backend": route.backend,
+                "model": route.model,
+                "effort": route.effort,
+            }
+            for step, route in sorted((steps or {}).items())
         },
     }
 

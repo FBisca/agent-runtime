@@ -57,6 +57,42 @@ class RouteSchemaTests(unittest.TestCase):
                 resolved = routes.validate(config(route("small", "pi", "some-model", effort=effort)))
                 self.assertEqual(resolved.routes[0].effort, effort)
 
+    def test_S8_a_step_route_answers_its_own_step(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — a config may name a step's backend, model and effort."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [{"step": "reviewer", "backend": "codex", "model": "gpt-l", "effort": "xhigh"}]
+        resolved = routes.validate(data)
+        self.assertEqual(len(resolved.steps), 1)
+        step = resolved.steps[0]
+        self.assertEqual(
+            (step.step, step.backend, step.model, step.effort),
+            ("reviewer", "codex", "gpt-l", "xhigh"),
+        )
+
+    def test_S10_a_step_route_naming_an_unknown_step_is_refused_by_name(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — the refusal names the step it named."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [{"step": "janitor", "backend": "codex", "model": "gpt-l"}]
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.validate(data)
+        self.assertIn("janitor", str(caught.exception))
+
+    def test_S10_a_step_route_naming_an_unknown_backend_is_refused_by_name(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a backend the driver cannot run is an error, not a fall back."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [{"step": "reviewer", "backend": "gemini", "model": "gpt-l"}]
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.validate(data)
+        self.assertIn("gemini", str(caught.exception))
+
+    def test_S10_a_step_route_naming_no_model_is_refused(self):
+        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a step route without a model is an error."""
+        data = config(route("small", "claude", "haiku"))
+        data["steps"] = [{"step": "reviewer", "backend": "codex"}]
+        with self.assertRaises(routes.RouteError) as caught:
+            routes.validate(data)
+        self.assertIn("model", str(caught.exception))
+
     def test_S3_a_route_for_an_unknown_class_is_refused(self):
         """orchestrator-engine/R4: P4/S3 — a route for a class the driver does not know is an error."""
         self.rejects(config(route(klass="tiny")), "tiny")
