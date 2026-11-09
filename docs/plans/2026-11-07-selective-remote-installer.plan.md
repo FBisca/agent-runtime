@@ -1,6 +1,6 @@
 # Plan: Selectable, Release-Pinned Agent Runtime Installer
 
-Slug: `selective-remote-installer`. Living spec: `docs/specs/installer-contract.md`. Status: APPROVED.
+Slug: `selective-remote-installer`. Living spec: `docs/specs/installer-contract.md`. Status: ARCHIVED 2026-11-09.
 
 ## Why
 
@@ -73,11 +73,11 @@ The proposed URL is illustrative: `vX.Y.Z` is a placeholder, not an existing rel
 
 | # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |
 |---|---|---|---|---|---|---|---|---|
-| T1 | The legacy `install.sh` behaviour is snapshotted in regression tests, and the component closure (`orchestrator → runtime`, adapters → runtime) and the install manifest are defined. | S1, S3, S4, S7, S8 | none | install.sh, tests/installer/ | regular | complex | agent | TO-DO |
-| T2 | The component menu on `/dev/tty`, the headless `--components`/`--yes` path, and `--dry-run`, with the no-TTY, clean-HOME and existing-HOME matrix tests. | S1, S2, S5, S8 | T1 | install.sh, tests/installer/ | regular | complex | agent | TO-DO |
-| T3 | The release artifact contract and the pinned, checksum-verified download: the payload is fetched from a pinned ref, verified against a checksum before anything runs, and a moving ref is refused. | S2, S3, S6, S8 | T2 | install.sh, scripts/, .github/workflows/, tests/installer/ | regular | complex | agent | TO-DO |
-| T4 | The install is transactional: the payload is verified before it is activated, an interrupted or failed install leaves no partial state, and the prior version stays usable. | S6, S8 | T3 | install.sh, tests/installer/ | regular | complex | agent | TO-DO |
-| T5 | The Claude, Codex and Pi adapters are wired without reading or writing a secret, and install, upgrade and selective uninstall keep the documented `agent-runtime*` shims and the other components intact. | S4, S7, S9 | T4 | install.sh, hooks/, tests/installer/, README.md | regular | complex | agent | TO-DO |
+| T1 | The legacy `install.sh` behaviour is snapshotted in regression tests, and the component closure (`orchestrator → runtime`, adapters → runtime) and the install manifest are defined. | S1, S3, S4, S7, S8 | none | install.sh, tests/installer/ | regular | complex | agent | COMPLETE 2026-11-09 · merged #71 |
+| T2 | The component menu on `/dev/tty`, the headless `--components`/`--yes` path, and `--dry-run`, with the no-TTY, clean-HOME and existing-HOME matrix tests. | S1, S2, S5, S8 | T1 | install.sh, tests/installer/ | regular | complex | agent | COMPLETE 2026-11-09 · merged #73 |
+| T3 | The release artifact contract and the pinned, checksum-verified download: the payload is fetched from a pinned ref, verified against a checksum before anything runs, and a moving ref is refused. | S2, S3, S6, S8 | T2 | install.sh, scripts/, .github/workflows/, tests/installer/ | regular | complex | agent | COMPLETE 2026-11-09 · merged #77 |
+| T4 | The install is transactional: the payload is verified before it is activated, an interrupted or failed install leaves no partial state, and the prior version stays usable. | S6, S8 | T3 | install.sh, tests/installer/ | regular | complex | agent | COMPLETE 2026-11-09 · merged #78 |
+| T5 | The Claude, Codex and Pi adapters are wired without reading or writing a secret, and install, upgrade and selective uninstall keep the documented `agent-runtime*` shims and the other components intact. | S4, S7, S9 | T4 | install.sh, hooks/, tests/installer/, README.md | regular | complex | agent | COMPLETE 2026-11-09 · merged #79 |
 
 **The plan's dependencies, settled.** P4b's package interface landed in `agent-runtime` PR #56 and the Pi worker
 support landed in PR #55/#58, so both are satisfied and neither is a blocker. The release artifact contract is
@@ -98,4 +98,4 @@ leaving a partial one.
 - Local checkout install remains supported for contributors and never implies remote release has already been published.
 - Test a genuine clean HOME, existing dotfiles HOME and CI no-TTY environment on macOS/Linux; no provider credentials or network required in fixtures.
 
-**Status: APPROVED. The installer is not yet implemented or published.**
+**Status: ARCHIVED 2026-11-09. The installer landed (#71, #73, #77, #78, #79); the living spec is `docs/specs/installer-contract.md`.**

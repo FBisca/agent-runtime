@@ -152,7 +152,7 @@ class ReleaseBuildTests(ReleaseCase):
     """scripts/build-release.sh: the artifact contract, one version and a checksum per asset."""
 
     def test_s3_a_release_is_one_version_with_a_checksum_for_every_asset(self):
-        """S3: the payload, its manifest and the installer are published with SHA-256 checksums."""
+        """installer-contract/R3: the payload, its manifest and the installer are published with SHA-256 checksums."""
         out = self.release("0.1.0")
         self.assertEqual(
             sorted(asset.name for asset in out.iterdir()),
@@ -182,7 +182,7 @@ class ReleaseBuildTests(ReleaseCase):
         self.assertTrue(all(name.startswith("agent-runtime-v0.1.0") for name in names), names)
 
     def test_s3_the_published_installer_names_the_release_it_belongs_to(self):
-        """S3: the installer asset carries its release, so a bootstrap needs no moving URL."""
+        """installer-contract/R3: the installer asset carries its release, so a bootstrap needs no moving URL."""
         out = self.release("0.1.0")
         stamped = (out / "install.sh").read_text(encoding="utf-8")
         self.assertIn("\nrelease_pin=v0.1.0\n", stamped)
@@ -197,7 +197,7 @@ class ReleaseBuildTests(ReleaseCase):
         self.assertEqual(version.stdout.strip(), "agent-runtime installer v0.1.0")
 
     def test_s3_a_release_whose_members_disagree_is_not_built(self):
-        """S3: the runtime and the orchestrator ship at one version, or the release is not built."""
+        """installer-contract/R3: the runtime and the orchestrator ship at one version, or the release is not built."""
         result, out = self.build("0.1.0", orchestrator_version="0.2.0")
         self.assertEqual(result.returncode, 1)
         self.assertIn("refusing to build a mixed release", result.stderr)
@@ -205,7 +205,7 @@ class ReleaseBuildTests(ReleaseCase):
         self.assertFalse(out.exists())
 
     def test_s3_a_release_is_built_from_a_version_and_never_from_a_moving_ref(self):
-        """S3: a tag that is not a version, or is not the checkout's version, builds nothing."""
+        """installer-contract/R3: a tag that is not a version, or is not the checkout's version, builds nothing."""
         for version in ("main", "latest", "HEAD", "1.0", "feature/x", "0.1.0;touch x", ""):
             result, out = self.build(version)
             self.assertEqual(result.returncode, 2, (version, result.stderr))
@@ -232,7 +232,7 @@ class ReleaseBuildTests(ReleaseCase):
         self.assertFalse((self.root / "x").exists())
 
     def test_s6_the_same_release_builds_to_the_same_bytes(self):
-        """S6: a reproducible artifact: a checksum published once is a checksum anyone can rebuild."""
+        """installer-contract/R6: a reproducible artifact: a checksum published once is a checksum anyone can rebuild."""
         first = self.release("0.1.0")
         source = self.source("0.1.0")
         again = self.root / "again"
@@ -245,7 +245,7 @@ class ReleaseBuildTests(ReleaseCase):
             self.assertEqual((first / name).read_bytes(), (again / name).read_bytes(), name)
 
     def test_s8_a_release_is_not_built_from_a_directory_that_is_no_checkout(self):
-        """S8: the build names its way out when the source is not a git work tree."""
+        """installer-contract/R8: the build names its way out when the source is not a git work tree."""
         plain = self.root / "plain"
         plain.mkdir()
         result = subprocess.run(
@@ -272,7 +272,7 @@ class PinnedBootstrapTests(ReleaseCase):
     """The bootstrap installs one pinned, verified release, and nothing else."""
 
     def test_s2_a_streamed_bootstrap_installs_the_payload_of_its_pinned_release(self):
-        """S2: streamed, pinned, verified: the shims point into the staged release payload."""
+        """installer-contract/R2: streamed, pinned, verified: the shims point into the staged release payload."""
         self.release("0.1.0")
         result = self.bootstrap(
             "--components", "runtime,orchestrator", "--yes", "--release", "v0.1.0"
@@ -299,14 +299,14 @@ class PinnedBootstrapTests(ReleaseCase):
         )
 
     def test_s2_the_published_installer_streamed_needs_no_release_flag(self):
-        """S2: the installer asset names its release, so the curl | sh line carries no ref to get wrong."""
+        """installer-contract/R2: the installer asset names its release, so the curl | sh line carries no ref to get wrong."""
         out = self.release("0.1.0")
         result = self.bootstrap("--components", "runtime", "--yes", script=out / "install.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.manifest()["components"]["runtime"]["release"], "v0.1.0")
 
     def test_s2_the_terminal_menu_runs_before_the_download_and_stdin_is_never_an_answer(self):
-        """S2: the menu is on the terminal; the confirmation is asked before anything is fetched."""
+        """installer-contract/R2: the menu is on the terminal; the confirmation is asked before anything is fetched."""
         self.release("0.1.0")
         declined = self.bootstrap("--release", "v0.1.0", answers=["pi", "n"])
         self.assertEqual(declined.returncode, 1)
@@ -320,7 +320,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.assertIn("~/.pi/agent/mcp.json", accepted.stdout)
 
     def test_s2_a_streamed_install_without_a_release_is_a_usage_error(self):
-        """S2: no release named, none stamped: the bootstrap says how to pin one and fetches nothing."""
+        """installer-contract/R2: no release named, none stamped: the bootstrap says how to pin one and fetches nothing."""
         self.release("0.1.0")
         result = self.bootstrap("--components", "runtime", "--yes")
         self.assertEqual(result.returncode, 2)
@@ -331,7 +331,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.clean(result)
 
     def test_s3_a_moving_ref_is_refused_before_anything_is_fetched(self):
-        """S3: main, a branch, latest, a sha or a half version are refused with the way out."""
+        """installer-contract/R3: main, a branch, latest, a sha or a half version are refused with the way out."""
         self.release("0.1.0")
         marker = self.root / "injected"
         for ref in (
@@ -366,7 +366,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.clean(dry)
 
     def test_s3_two_different_releases_named_are_refused(self):
-        """S3: a stamped installer, a flag and the environment must agree on one release."""
+        """installer-contract/R3: a stamped installer, a flag and the environment must agree on one release."""
         out = self.release("0.1.0")
         stamped = self.bootstrap(
             "--components", "runtime", "--yes", "--release", "v0.2.0", script=out / "install.sh"
@@ -397,7 +397,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.assertEqual(agreeing.returncode, 0, agreeing.stderr)
 
     def test_s3_a_release_manifest_that_mixes_versions_is_refused(self):
-        """S3: the release manifest is checked: components of two versions are a mixture."""
+        """installer-contract/R3: the release manifest is checked: components of two versions are a mixture."""
         out = self.release("0.1.0")
         manifest = json.loads((out / "release.json").read_text(encoding="utf-8"))
         manifest["components"]["orchestrator"] = "0.2.0"
@@ -409,7 +409,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.clean(result)
 
     def test_s3_the_orchestrator_installs_with_the_runtime_of_the_same_release(self):
-        """S3: the requirement is explicit in the plan, and both are installed from one release."""
+        """installer-contract/R3: the requirement is explicit in the plan, and both are installed from one release."""
         self.release("0.1.0")
         result = self.bootstrap("--components", "orchestrator", "--yes", "--release", "v0.1.0")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -419,7 +419,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.assertEqual(sorted(self.manifest()["components"]), ["orchestrator", "runtime"])
 
     def test_s3_an_installed_release_is_not_mixed_with_another_one(self):
-        """S3: components of another installed release are refused before the download."""
+        """installer-contract/R3: components of another installed release are refused before the download."""
         self.release("0.1.0")
         self.release("0.2.0")
         first = self.bootstrap("--components", "claude", "--yes", "--release", "v0.1.0")
@@ -431,7 +431,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.assertEqual(len(self.curl_calls()), before)
 
     def test_s5_a_pinned_dry_run_names_what_it_would_fetch_and_fetches_nothing(self):
-        """S5: the plan lists the assets, the checksum check and the staging path; no curl is run."""
+        """installer-contract/R5: the plan lists the assets, the checksum check and the staging path; no curl is run."""
         self.release("0.1.0")
         result = self.bootstrap(
             "--components", "runtime,orchestrator", "--dry-run", "--release", "v0.1.0"
@@ -448,7 +448,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.clean(result)
 
     def test_s8_the_download_is_https_only(self):
-        """S8: a plain http (or any other) release URL is refused: it can be rewritten in transit."""
+        """installer-contract/R8: a plain http (or any other) release URL is refused: it can be rewritten in transit."""
         self.release("0.1.0")
         for url in ("http://releases.test/download", "file:///tmp/x", "ftp://x/y", "releases.test"):
             result = self.bootstrap(
@@ -464,7 +464,7 @@ class PinnedBootstrapTests(ReleaseCase):
         self.assertEqual(self.curl_calls(), [])
 
     def test_s8_without_curl_the_bootstrap_says_so(self):
-        """S8: the bootstrap needs curl to fetch; without it nothing is attempted."""
+        """installer-contract/R8: the bootstrap needs curl to fetch; without it nothing is attempted."""
         self.release("0.1.0")
         bare = self.root / "bare"
         bare.mkdir()
@@ -533,7 +533,7 @@ class VerificationTests(ReleaseCase):
         )
 
     def test_s6_a_tampered_payload_is_refused_and_nothing_is_left(self):
-        """S6: the tarball no longer matches its checksum: nothing runs and nothing stays."""
+        """installer-contract/R6: the tarball no longer matches its checksum: nothing runs and nothing stays."""
         out = self.release("0.1.0")
         tarball = self.tarball(out)
         tarball.write_bytes(tarball.read_bytes() + b"tampered")
@@ -544,7 +544,7 @@ class VerificationTests(ReleaseCase):
         self.clean(result)
 
     def test_s6_a_failed_verification_leaves_the_prior_version_usable(self):
-        """S6: the prior install, its manifest and its shims are exactly as they were."""
+        """installer-contract/R6: the prior install, its manifest and its shims are exactly as they were."""
         self.install_prior()
         out = self.release("0.1.0")
         self.tarball(out).write_bytes(b"not a tarball")
@@ -559,7 +559,7 @@ class VerificationTests(ReleaseCase):
             self.assertTrue(self.shim(shim).resolve().is_file(), shim)
 
     def test_s6_an_interrupted_download_leaves_nothing_behind(self):
-        """S6: a download that stops half way (curl fails) installs nothing and cleans its staging."""
+        """installer-contract/R6: a download that stops half way (curl fails) installs nothing and cleans its staging."""
         out = self.release("0.1.0")
         for asset in ("agent-runtime-v0.1.0.tar.gz", "release.json", "SHA256SUMS"):
             result = self.refused(mode=f"partial:{asset}")
@@ -570,7 +570,7 @@ class VerificationTests(ReleaseCase):
         self.assertTrue(out.exists())
 
     def test_s6_a_signal_during_the_download_cleans_up_and_keeps_the_prior_install(self):
-        """S6: the shell is killed while a download is running; the staging directory goes with it."""
+        """installer-contract/R6: the shell is killed while a download is running; the staging directory goes with it."""
         self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -579,7 +579,7 @@ class VerificationTests(ReleaseCase):
         self.assertEqual(shared.snapshot(self.home), before)
 
     def test_s6_a_missing_asset_is_refused_with_the_asset_named(self):
-        """S6: a release with no checksums, no manifest or no payload is not installed."""
+        """installer-contract/R6: a release with no checksums, no manifest or no payload is not installed."""
         out = self.release("0.1.0")
         for name in ("SHA256SUMS", "release.json", "agent-runtime-v0.1.0.tar.gz"):
             hidden = self.root / f"hidden-{name}"
@@ -591,7 +591,7 @@ class VerificationTests(ReleaseCase):
             hidden.rename(out / name)
 
     def test_s6_a_checksum_file_without_the_payload_entry_is_refused(self):
-        """S6: no checksum for the asset means nothing to verify it against: refuse."""
+        """installer-contract/R6: no checksum for the asset means nothing to verify it against: refuse."""
         out = self.release("0.1.0")
         sums = (out / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
         kept = [line for line in sums if "tar.gz" not in line]
@@ -607,7 +607,7 @@ class VerificationTests(ReleaseCase):
         self.clean(garbled)
 
     def test_s6_an_independent_checksum_outranks_the_one_published_with_the_release(self):
-        """S6: a tamperer who rewrites the release's checksums cannot rewrite the user's own."""
+        """installer-contract/R6: a tamperer who rewrites the release's checksums cannot rewrite the user's own."""
         out = self.release("0.1.0")
         trusted = sha256(self.tarball(out))
         # The publisher swaps the payload and republishes consistent checksums.
@@ -632,7 +632,7 @@ class VerificationTests(ReleaseCase):
         self.assertIn("64 hexadecimal", malformed.stderr)
 
     def test_s6_an_independent_checksum_that_matches_installs_and_says_how_it_was_checked(self):
-        """S6: the assurance is stated: independent when --sha256 is given, same-origin when not."""
+        """installer-contract/R6: the assurance is stated: independent when --sha256 is given, same-origin when not."""
         out = self.release("0.1.0")
         trusted = sha256(self.tarball(out))
         verified = self.refused("--sha256", trusted.upper())
@@ -645,7 +645,7 @@ class VerificationTests(ReleaseCase):
         self.assertIn("--sha256", convenience.stdout)
 
     def test_s6_the_checksum_in_the_environment_installs_like_the_flag(self):
-        """S6: AGENT_RUNTIME_SHA256 is the same as --sha256: it must not break the hand-over."""
+        """installer-contract/R6: AGENT_RUNTIME_SHA256 is the same as --sha256: it must not break the hand-over."""
         out = self.release("0.1.0")
         trusted = sha256(self.tarball(out))
         result = self.refused(extra={"AGENT_RUNTIME_SHA256": trusted})
@@ -656,7 +656,7 @@ class VerificationTests(ReleaseCase):
         self.assertEqual(self.manifest()["components"]["runtime"]["release"], "v0.1.0")
 
     def test_s6_a_release_manifest_for_another_release_or_platform_is_refused(self):
-        """S6: a manifest that names another release, payload or platform is a mismatch."""
+        """installer-contract/R6: a manifest that names another release, payload or platform is a mismatch."""
         out = self.release("0.1.0")
         original = (out / "release.json").read_text(encoding="utf-8")
         for field, value in (
@@ -681,7 +681,7 @@ class VerificationTests(ReleaseCase):
         self.clean(broken)
 
     def test_s6_a_payload_that_escapes_its_directory_is_refused(self):
-        """S6: a tarball with traversal, an absolute path or an escaping link extracts nothing."""
+        """installer-contract/R6: a tarball with traversal, an absolute path or an escaping link extracts nothing."""
         out = self.release("0.1.0")
         escapes = self.root / "escaped"
         cases = {
@@ -711,7 +711,7 @@ class VerificationTests(ReleaseCase):
             self.clean(result)
 
     def test_s6_a_payload_that_is_not_a_release_checkout_is_refused(self):
-        """S6: a verified tarball that lacks the installer or the shims is no release payload."""
+        """installer-contract/R6: a verified tarball that lacks the installer or the shims is no release payload."""
         out = self.release("0.1.0")
         with tarfile.open(self.tarball(out), "w:gz") as archive:
             info = tarfile.TarInfo("agent-runtime-v0.1.0/README.md")
@@ -724,7 +724,7 @@ class VerificationTests(ReleaseCase):
         self.clean(result)
 
     def test_s6_a_staged_release_is_reused_and_a_different_payload_for_it_is_refused(self):
-        """S6: the staged release stays what it was verified to be; a rerun does not replace it."""
+        """installer-contract/R6: the staged release stays what it was verified to be; a rerun does not replace it."""
         out = self.release("0.1.0")
         first = self.refused()
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -748,7 +748,7 @@ class VerificationTests(ReleaseCase):
         self.assertEqual(shared.snapshot(staged), before)
 
     def test_s6_a_symlinked_release_directory_is_refused(self):
-        """S6: a releases directory that is a link is not written through."""
+        """installer-contract/R6: a releases directory that is a link is not written through."""
         self.release("0.1.0")
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
@@ -760,7 +760,7 @@ class VerificationTests(ReleaseCase):
         self.assertEqual(list(elsewhere.iterdir()), [])
 
     def test_s6_the_uninstall_of_a_streamed_run_needs_no_download(self):
-        """S6: an uninstall works from the manifest alone: no release, no network."""
+        """installer-contract/R6: an uninstall works from the manifest alone: no release, no network."""
         self.release("0.1.0")
         installed = self.refused()
         self.assertEqual(installed.returncode, 0, installed.stderr)
@@ -775,7 +775,7 @@ class ReleaseEnvironmentTests(ReleaseCase):
     """The matrix: clean and existing homes, no network and no credentials."""
 
     def test_s8_the_pinned_bootstrap_runs_in_a_clean_and_an_existing_home(self):
-        """S8: dotfiles are left alone, no credential is printed, and the fake curl is the only fetch."""
+        """installer-contract/R8: dotfiles are left alone, no credential is printed, and the fake curl is the only fetch."""
         self.release("0.1.0")
         existing = self.root / "existing"
         existing.mkdir()
@@ -804,7 +804,7 @@ class ReleaseEnvironmentTests(ReleaseCase):
             self.assertEqual((existing / name).read_bytes(), entry[1], name)
 
     def test_s8_shellcheck_is_happy_with_the_installer_and_the_release_scripts(self):
-        """S8: the installer and every script under scripts/ are shellcheck clean."""
+        """installer-contract/R8: the installer and every script under scripts/ are shellcheck clean."""
         if shutil.which("shellcheck") is None:
             self.skipTest("shellcheck is not installed")
         scripts = sorted((REPO / "scripts").glob("*.sh"))
@@ -818,7 +818,7 @@ class ReleaseEnvironmentTests(ReleaseCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_s8_the_release_workflow_publishes_the_assets_of_a_version_tag(self):
-        """S8: CI builds the release from a version tag with the same script the tests run."""
+        """installer-contract/R8: CI builds the release from a version tag with the same script the tests run."""
         workflow = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("scripts/build-release.sh", workflow)
         self.assertIn("v*.*.*", workflow)
