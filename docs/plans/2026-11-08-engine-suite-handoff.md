@@ -106,9 +106,11 @@ refuses, names the way out and exits 2. It never falls back to a second engine.
 - **The budgets are measured debt**: ruff 40/45, ruff format 30/31, ty 277/285. A change that pushes a
   count over its budget fails CI on purpose. The format budget sits one file below its limit.
 - **The suite is load-flaky** in two files (`tests/test_event_wait.py`, `tests/test_stop_failures.py`); run
-  the failing test alone before believing it. One more flake was in the member's benchmark harness and is
-  fixed (#65): the tree check gave the system two seconds to reap a tree it had just killed, and the
-  member's CI runs the suite in parallel on two-core runners.
+  the failing test alone before believing it. One more flake was in the member's benchmark harness: the
+  tree check gave the system two seconds to reap a tree it had just killed, and on the CI's two-core
+  runners the reaping takes longer — it fired again on the pull request that carried the first repair.
+  The check now waits, bounded, for the tree to stop running, and a process the system has not reaped yet
+  counts as exited.
 - **The driver does not strip backticks from a ticket's `Paths`**, so a backticked path reaches the worker
   as `` `install.sh` ``. The plans the driver runs write their paths plain.
 

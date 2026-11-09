@@ -28,8 +28,9 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R6** WHEN `launch` starts a run, THEN the pane runs the member's CLI. (from
   orchestrator-engine-suite/S6)
 - **R7** WHEN a run is terminated for exceeding its budget, THEN the harness waits, within a bounded
-  window, for the process group to empty before it decides the tree survived, and a tree that really
-  outlived the run still fails the check. (from orchestrator-engine-suite/S7)
+  window, for the tree it killed to stop running before it decides the tree survived — a process the
+  system has not reaped yet has exited — and a tree that really outlived the run still fails the check.
+  (from orchestrator-engine-suite/S7)
 
 ## Coverage
 
