@@ -34,17 +34,24 @@ def kill_tree(proc):
     proc.wait(timeout=10)
 
 
-def tree_gone(pgid):
-    """Whether the process group is empty: nothing the run started outlived it."""
-    for _ in range(20):
+def tree_gone(pgid, timeout=10.0):
+    """Whether the process group is empty: nothing the run started outlived it.
+
+    A killed tree is not gone the instant the signal lands: the processes stay in the group as zombies
+    until the system reaps them, and under load that takes longer than a moment. The wait is bounded,
+    so a tree that really outlived the run still fails the check.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
         try:
             os.killpg(pgid, 0)
         except ProcessLookupError:
             return True
         except PermissionError:
             return False
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(0.1)
-    return False
 
 
 def run_budgeted(

@@ -27,6 +27,9 @@ suite runs here, against the member, and the member answers the way the engine a
   refusal instead of crashing. (from orchestrator-engine-suite/S5)
 - **R6** WHEN `launch` starts a run, THEN the pane runs the member's CLI. (from
   orchestrator-engine-suite/S6)
+- **R7** WHEN a run is terminated for exceeding its budget, THEN the harness waits, within a bounded
+  window, for the process group to empty before it decides the tree survived, and a tree that really
+  outlived the run still fails the check. (from orchestrator-engine-suite/S7)
 
 ## Coverage
 
@@ -38,6 +41,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | S4 | R4 | the route refusal tests, listed under R4 below |
 | S5 | R5 | `packages/agent-orchestrator/tests/test_agents.py`: `test_S33_a_refused_spawn_leaves_no_open_intent`; `packages/agent-orchestrator/tests/test_run.py`: `test_a_refused_spawn_keeps_the_reservation_and_exits_1` |
 | S6 | R6 | `packages/agent-orchestrator/tests/test_launch.py`: `test_S17_starts_run_in_a_named_pane` |
+| S7 | R7 | `packages/agent-orchestrator/tests/test_baselines.py`: `test_S3_a_run_that_stalls_is_terminated_and_recorded_as_a_failure` |
 
 ### R4 — the route refusals
 

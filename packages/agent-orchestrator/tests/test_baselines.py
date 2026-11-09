@@ -177,7 +177,8 @@ class BaselineTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task().get("status"), "COMPLETE", self.task())
 
     def test_S3_a_run_that_stalls_is_terminated_and_recorded_as_a_failure(self):
-        """orchestrator-engine/R2: P3.T1/S3 — the run exceeds its declared budget; the benchmark kills it and records the failure."""
+        """orchestrator-engine/R2, orchestrator-engine/R7: P3.T1/S3 — the run exceeds its declared budget; the
+        benchmark kills it, waits for the tree it killed, and records the failure."""
         records = self.root / "records.jsonl"
         self.waits([self.worker_turn_ended(stall=["sleep", "120"])])
         record = self.drive(budget=8.0, label="S3-stall", records=str(records))
