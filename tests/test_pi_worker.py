@@ -45,8 +45,8 @@ class PiSpawnTests(ToolCase):
     def test_S1_a_pi_spawn_builds_the_pi_argv_with_the_task_last(self):
         """pi-worker/S1: the pi family launches Pi itself, not a Claude or Codex shim."""
         argv = self.spawn_argv(cli="pi", model="minimax/MiniMax-M3.1-Flash")
-        self.assertEqual(argv[:3], ["pi", "--model", "minimax/MiniMax-M3.1-Flash"])
-        self.assertEqual(len(argv), 4)
+        self.assertEqual(argv[:4], ["pi", "--approve", "--model", "minimax/MiniMax-M3.1-Flash"])
+        self.assertEqual(len(argv), 5)
         self.assertIn("do x", argv[-1])
         self.assertNotIn("claude", argv)
         self.assertNotIn("codex", argv)
@@ -55,13 +55,17 @@ class PiSpawnTests(ToolCase):
         """pi-worker/S1: Pi runs interactively with the task as its only argument."""
         argv = self.spawn_argv(cli="pi")
         self.assertEqual(argv[0], "pi")
-        self.assertEqual(len(argv), 2)
+        self.assertEqual(len(argv), 3)
         self.assertIn("do x", argv[-1])
 
     def test_S1_the_pi_task_carries_the_role_and_the_report_protocol(self):
-        """pi-worker/S1: Pi has no role file, so the role and the protocol travel in the task."""
+        """pi-worker/S1: Pi has no role file, so the role's content and the protocol travel in the task."""
+        roles = self.dir / "home" / ".claude" / "agents"
+        roles.mkdir(parents=True, exist_ok=True)
+        (roles / "implementer.md").write_text("OWN THE WORK\n", encoding="utf-8")
         task = self.spawn_argv(cli="pi", agent="implementer")[-1]
         self.assertIn("Role: implementer", task)
+        self.assertIn("OWN THE WORK", task)
         self.assertIn("Worker protocol:", task)
         self.assertIn("mcp__agent-runtime__report", task)
         self.assertIn("do x", task)
@@ -78,8 +82,8 @@ class PiSpawnTests(ToolCase):
         for effort in ("low", "medium", "high", "xhigh", "max"):
             with self.subTest(effort=effort):
                 argv = self.spawn_argv(cli="pi", effort=effort)
-                self.assertEqual(argv[:3], ["pi", "--thinking", effort])
-                self.assertEqual(len(argv), 4)
+                self.assertEqual(argv[:4], ["pi", "--approve", "--thinking", effort])
+                self.assertEqual(len(argv), 5)
 
     def test_S6_an_effort_pi_does_not_know_is_refused_before_anything_starts(self):
         """pi-worker/S6: the runtime never sends a level the CLI does not accept."""

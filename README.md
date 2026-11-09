@@ -120,9 +120,11 @@ required, and the lead needs an `hc` terminal to start workers from.
 ### Pi as a worker
 
 The `pi` family is a built-in worker backend, next to `claude` and `codex`. A spawn that names it
-launches `pi --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
+launches `pi --approve --model <model> --thinking <effort> "<task>"`, with the task last; `effort` is the
 runtime's own five levels (`low`, `medium`, `high`, `xhigh`, `max`) and Pi's extra levels (`off`,
-`minimal`) are never sent. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task:
+`minimal`) are never sent. `--approve` is what keeps the worker from stopping at a trust prompt in a
+folder Pi does not know: the worktree is a sibling of the repository, so the repository's trust entry does
+not cover it, and nobody answers a prompt in a pane nobody is watching. Pi has no role files and no `--agent` flag, so an explicitly selected role travels in the task:
 the runtime reads the user's own Claude role file (`~/.claude/agents/<agent>.md`, front matter aside — set
 `AGENT_RUNTIME_ROLE_DIR` to another directory) and puts the role's content in the task, under the role's
 name and ahead of the task itself; the runtime states the report protocol there too, naming Pi's own tool
@@ -147,6 +149,11 @@ The local configuration, as it stands on this machine:
 
 The `pi` backend in `backends` is what lets a Pi lead start a Pi worker; without it the spawn is
 refused with the policy's reason.
+
+Every worker stays interactive: no backend is spawned one-shot (`--print`, `-p`, `exec`), because the
+runtime resumes a live pane (`hc send` into the running terminal) and the driver resumes the same pane
+for a fix round. A one-shot worker cannot be sent to, so every fix round would restart from zero
+context. The suite fails if a backend is ever spawned headless.
 
 ### Servers
 

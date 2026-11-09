@@ -469,6 +469,22 @@ class SpawnTests(ToolCase):
         self.assertIn("do x", argv[-1])
         self.assertIn("Worker protocol:", argv[-1])
 
+    def test_S11_every_worker_is_spawned_interactive(self):
+        """agent-runtime/R170: orchestrator-routing-effort-role/S11 — the worker stays in its pane: the runtime resumes that pane for the next round."""
+        forbidden = {"claude": ("-p", "--print"), "codex": ("exec",), "pi": ("--print", "-p")}
+        for cli, flags in forbidden.items():
+            with self.subTest(cli=cli):
+                argv = self.spawn_argv(cli=cli, agent="none")
+                for flag in flags:
+                    self.assertNotIn(flag, argv[:-1])
+
+    def test_S12_a_pi_worker_is_launched_with_approve(self):
+        """agent-runtime/R171: orchestrator-routing-effort-role/S12 — Pi asks for trust in a folder it does not know, and nobody answers in a pane nobody watches."""
+        argv = self.spawn_argv(cli="pi", agent="none")
+        self.assertEqual(argv[0], "pi")
+        self.assertIn("--approve", argv)
+        self.assertNotIn("--approve", argv[-1])
+
     def test_dash_model_is_an_error(self):
         """agent-runtime/R134"""
         for cli in ("claude", "codex"):

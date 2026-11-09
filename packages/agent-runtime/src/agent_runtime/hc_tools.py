@@ -533,8 +533,9 @@ def spawn(arguments, env, ctx):
             ["claude"] + (["--agent", agent] if agent else []) + launch_args + model + [message]
         )
     elif cli == "pi":
-        # Interactive Pi stays available for follow-up assignments.
-        program = ["pi"] + model + [message]
+        # Interactive Pi stays available for follow-up assignments, and --approve keeps the worker
+        # from stopping at a trust prompt in a folder nobody can answer in.
+        program = ["pi", "--approve"] + model + [message]
     else:
         # The worker profile names the policy Codex actually runs; without it the worker runs the
         # CLI's defaults, so the profile is only passed when it is usable.
