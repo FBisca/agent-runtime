@@ -3847,6 +3847,9 @@ class Driver:
                 "",
                 "# %s: %s" % (ticket["#"], ticket["What it delivers"]),
                 "",
+                "Report with task_id `%s`: the driver refuses a report whose task_id is not this one."
+                % packet["task_id"],
+                "",
                 "Plan: %s (read its Decisions and Seams)." % self.plan_path,
                 "Checkout: %s on branch feat/%s (new, from %s). Work only here."
                 % (packet["checkout"], packet["worker"], self.args.base),
