@@ -744,6 +744,9 @@ class DryRunTests(StreamedInstallCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("components: runtime, orchestrator", result.stdout)
         self.assertIn("release: unresolved", result.stdout)
+        # No checkout, so no link target of its own: never a made-up system path.
+        self.assertNotIn("-> /bin/", result.stdout)
+        self.assertIn("-> the payload, pinned by the release", result.stdout)
         self.assertEqual(snapshot(self.home), {})
 
 

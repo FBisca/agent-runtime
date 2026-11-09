@@ -678,7 +678,8 @@ print_plan() {
     case $component in
       runtime)
         for shim in $shims; do
-          printf 'runtime: link %s -> %s\n' "$bin_dir/$shim" "$root/bin/$shim"
+          if [ -n "$root" ]; then target=$root/bin/$shim; else target='the payload, pinned by the release'; fi
+          printf 'runtime: link %s -> %s\n' "$bin_dir/$shim" "$target"
         done
         ;;
       orchestrator) printf 'orchestrator: the engine ships with the release, nothing is linked\n' ;;
