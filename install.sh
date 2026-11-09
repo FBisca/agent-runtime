@@ -232,10 +232,19 @@ def save(data):
     if directory:
         os.makedirs(directory, exist_ok=True)
     temporary = path + ".tmp"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-    os.replace(temporary, path)
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary, path)
+    except OSError as error:
+        # A failed write leaves no half-written file beside the manifest.
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        sys.stderr.write("cannot record the install manifest %s: %s\n" % (path, error.strerror or error))
+        sys.exit(1)
 
 
 if command == "dump":
@@ -323,14 +332,119 @@ check_shims() {
   done
 }
 
+# Point a symlink at a target in one step: the link is made beside the old one and renamed over it,
+# so a reader sees the old shim or the new one and never a missing one. ln -sf would unlink first.
+swap_link() {
+  python3 - swap "$1" "$2" <<'PY'
+import os
+import sys
+
+target, path = sys.argv[2], sys.argv[3]
+temporary = "%s.new.%d" % (os.path.join(os.path.dirname(path), "." + os.path.basename(path)), os.getpid())
+try:
+    os.symlink(target, temporary)
+    os.replace(temporary, path)
+except OSError as error:
+    try:
+        os.remove(temporary)
+    except OSError:
+        pass
+    sys.stderr.write("cannot link %s: %s\n" % (path, error.strerror or error))
+    sys.exit(1)
+PY
+}
+
 # Link the shims into BIN_DIR, once nothing in the way is left.
 link_shims() {
   check_shims "$1"
   mkdir -p "$bin_dir"
   for shim in $shims; do
-    ln -sfn "$root/bin/$shim" "$bin_dir/$shim"
+    swap_link "$root/bin/$shim" "$bin_dir/$shim" || exit 1
     echo "linked $bin_dir/$shim"
   done
+}
+
+# The topmost directory of a path that does not exist yet: what a run creates, it removes again.
+topmost_missing() {
+  missing=
+  probe=$1
+  while [ ! -d "$probe" ] && [ "$probe" != / ] && [ "$probe" != . ]; do
+    missing=$probe
+    probe=$(dirname "$probe")
+  done
+  printf '%s\n' "$missing"
+}
+
+# Remove the directories a run made, from the leaf up to the topmost one, and only while they are
+# empty: anything that landed in them since is not this run's to remove.
+remove_made_dirs() {
+  leaf=$1
+  top=$2
+  [ -n "$top" ] || return 0
+  while :; do
+    rmdir "$leaf" 2>/dev/null || break
+    [ "$leaf" != "$top" ] || break
+    leaf=$(dirname "$leaf")
+  done
+  return 0
+}
+
+# The activation is a transaction. Before the first shim moves, what the run is about to change is
+# recorded: where each shim pointed and the manifest as it was. A failure or a signal after that puts
+# every one of them back, so the prior installation is the one still active and no half of the new
+# one is. The record lives outside the install directory: it is not part of what it protects.
+txn=
+txn_bin_made=
+txn_home_made=
+begin_transaction() {
+  txn=$(mktemp -d "${TMPDIR:-/tmp}/agent-runtime-install.XXXXXX") || {
+    echo "cannot install: no temporary directory to keep the rollback record in" >&2
+    exit 1
+  }
+  txn_bin_made=$(topmost_missing "$bin_dir")
+  txn_home_made=$(topmost_missing "$install_home")
+  for shim in $shims; do
+    if [ -L "$bin_dir/$shim" ]; then readlink "$bin_dir/$shim" >"$txn/link.$shim"; fi
+  done
+  if [ -f "$manifest_path" ]; then cp -p "$manifest_path" "$txn/manifest"; fi
+  trap rollback_transaction EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+# Runs when the install ends without committing, for whatever reason: undo, best effort and in the
+# reverse of what was done, and keep going when one step cannot be undone so the rest still is.
+rollback_transaction() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  set +e
+  for shim in $shims; do
+    rm -f "$bin_dir"/."$shim".new.*
+    if [ -f "$txn/link.$shim" ]; then
+      swap_link "$(cat "$txn/link.$shim")" "$bin_dir/$shim" || echo "could not restore $bin_dir/$shim" >&2
+    elif [ -L "$bin_dir/$shim" ]; then
+      rm -f "$bin_dir/$shim"
+    fi
+  done
+  rm -f "$manifest_path.tmp"
+  if [ -f "$txn/manifest" ]; then
+    cp -p "$txn/manifest" "$manifest_path.restore" && mv -f "$manifest_path.restore" "$manifest_path" ||
+      echo "could not restore $manifest_path" >&2
+  elif [ -f "$manifest_path" ]; then
+    rm -f "$manifest_path"
+  fi
+  remove_made_dirs "$bin_dir" "$txn_bin_made"
+  remove_made_dirs "$install_home" "$txn_home_made"
+  rm -rf "$txn"
+  echo "the install did not finish: the previous installation is as it was" >&2
+  exit "$status"
+}
+
+commit_transaction() {
+  trap - EXIT HUP INT TERM
+  rm -rf "$txn"
+  txn=
 }
 
 note_path() {
@@ -549,10 +663,12 @@ legacy_install() {
     printf 'print the Claude Code and Codex wiring\n'
     return 0
   fi
+  begin_transaction
   link_shims legacy
   note_path
   print_claude_wiring
   print_codex_wiring
+  commit_transaction
 }
 
 # The names the user asked for, checked one by one.
@@ -989,19 +1105,45 @@ download_asset() {
 # any reason but a hand-over: an interrupted or refused download leaves nothing behind.
 stage=
 home_uncreated=
+staged_new=0
+releases_made=0
 cleanup_stage() {
   if [ -n "$stage" ]; then
     rm -rf "$stage"
     stage=
   fi
-  if [ -n "$home_uncreated" ]; then
-    leftover=$install_home
-    while :; do
-      rmdir "$leftover" 2>/dev/null || break
-      [ "$leftover" != "$home_uncreated" ] || break
-      leftover=$(dirname "$leftover")
-    done
+  # A release this run staged is removed with the rest unless the install it was staged for
+  # finished: a staged payload nobody activated is a leftover, and a release staged earlier stays.
+  if [ "$staged_new" -eq 1 ]; then
+    rm -rf "$staged"
+    staged_new=0
+    if [ "$releases_made" -eq 1 ]; then rmdir "$releases_dir" 2>/dev/null || true; fi
   fi
+  remove_made_dirs "$install_home" "$home_uncreated"
+  return 0
+}
+
+# The installer inside the payload runs as a child, so a refusal or a signal ends with this run
+# cleaning up what it staged. A signal for this shell is passed on: the child rolls back its own
+# activation, and this shell must not remove the release it is running from until it has.
+relayed=0
+relay() {
+  relayed=$1
+  kill -TERM "$inner" 2>/dev/null || true
+}
+run_inner() {
+  sh "$staged/install.sh" "$command" --components "$components" </dev/null &
+  inner=$!
+  trap 'relay 129' HUP
+  trap 'relay 130' INT
+  trap 'relay 143' TERM
+  status=0
+  wait "$inner" || status=$?
+  while kill -0 "$inner" 2>/dev/null; do
+    status=0
+    wait "$inner" || status=$?
+  done
+  if [ "$status" -ne 0 ] && [ "$relayed" -ne 0 ]; then status=$relayed; fi
   return 0
 }
 
@@ -1064,6 +1206,7 @@ fetch_release() {
   fi
   printf '%s\n' "$payload_sha" >"$stage/payload/$prefix/.payload-sha256"
 
+  [ -d "$releases_dir" ] || releases_made=1
   mkdir -p "$releases_dir"
   if [ -e "$staged" ]; then
     if [ "$(cat "$staged/.payload-sha256" 2>/dev/null)" != "$payload_sha" ]; then
@@ -1074,11 +1217,11 @@ fetch_release() {
     printf 'release %s is already staged: reusing %s\n' "$release" "$staged"
   else
     mv "$stage/payload/$prefix" "$staged"
+    staged_new=1
     printf 'staged %s\n' "$staged"
   fi
   rm -rf "$stage"
   stage=
-  trap - EXIT HUP INT TERM
 
   # The payload is a checkout of the release: its own installer does the install, against the same
   # release, so the runtime and the orchestrator never come from two different ones.
@@ -1087,7 +1230,14 @@ fetch_release() {
   # What only the bootstrap reads stays behind: the inner run is a checkout install that downloads
   # nothing, and it refuses a checksum to verify as a usage error.
   unset AGENT_RUNTIME_SHA256 AGENT_RUNTIME_RELEASE_URL
-  exec sh "$staged/install.sh" "$command" --components "$components" </dev/null
+  run_inner
+  if [ "$status" -eq 0 ]; then
+    staged_new=0
+    home_uncreated=
+  fi
+  trap - EXIT HUP INT TERM
+  [ "$status" -eq 0 ] || cleanup_stage
+  exit "$status"
 }
 
 # What a streamed run would fetch, check and stage: the dry run's part of the download.
@@ -1263,7 +1413,9 @@ if [ "$streamed" -eq 1 ]; then
   fetch_release
 fi
 
+begin_transaction
 for component in $selection; do
   install_component "$component"
 done
+commit_transaction
 printf 'recorded %s\n' "$manifest_path"
