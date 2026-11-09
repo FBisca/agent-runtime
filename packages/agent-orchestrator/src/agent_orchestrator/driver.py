@@ -1698,7 +1698,7 @@ class Driver:
             "Your report reached the driver, but %s is not a payload it can read: %s. The driver reads the file, "
             "not the report: write it again, then report again." % (path, reason)
         )
-        self.ensure_agent(
+        _, assignment_id = self.ensure_agent(
             name,
             sender.get("role") or ("reviewer" if where == "review" else "worker"),
             unit,
@@ -1712,6 +1712,12 @@ class Driver:
                 "effort": sender.get("effort") or task["packet"].get("effort"),
             },
         )
+        # The warned agent comes back as a new assignment: the record the next report is matched against must be
+        # the one that will speak, or the report lands on no gate at all.
+        if where == "review" and assignment_id:
+            self.mark(task_id, review=dict(task["review"], assignment_id=assignment_id))
+        elif assignment_id:
+            self.mark(task_id, assignment_id=assignment_id)
         self.mark(
             task_id,
             payload_warnings=dict(task.get("payload_warnings") or {}, **{where: warned + 1}),

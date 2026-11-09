@@ -87,9 +87,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
         R16: the worker that announced a report it never wrote is warned twice before the Lead is asked."""
         self.waits(
             [
-                report_wait("demo-t1", "complete"),
-                report_wait("demo-t1", "complete"),
-                report_wait("demo-t1", "complete"),
+                *self.repeated(report_wait("demo-t1", "complete")),
                 self.decide_step("t1", "skip"),
             ]
         )
@@ -112,13 +110,10 @@ class RequestTests(WakeFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1
 
         R16: an idle reviewer is still resumable, so it is warned twice before the Lead is asked."""
-        ended = wait_result([assignment("demo-t1-review", "working", "idle")])
         self.waits(
             [
                 self.worker_done(tests=True),
-                ended,
-                ended,
-                ended,
+                *self.repeated(wait_result([assignment("demo-t1-review", "working", "idle")])),
                 self.decide_step("t1", "skip"),
             ]
         )

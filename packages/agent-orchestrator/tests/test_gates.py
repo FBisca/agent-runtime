@@ -98,10 +98,6 @@ class GateFixture(RunFixture):
             )
         return step
 
-    def repeated(self, step, times=3):
-        """The same scripted step, `times` times: a payload that never lands is asked about more than once."""
-        return [copy.deepcopy(step) for _ in range(times)]
-
     def review(self, **over):
         return json.dumps(
             dict(
@@ -313,9 +309,7 @@ class GateTests(GateFixture, unittest.TestCase):
         asked. The ticket never advances on a payload that is not there."""
         self.waits(
             [
-                self.worker_done(report=False),
-                self.worker_done(report=False),
-                self.worker_done(report=False),
+                *self.repeated(self.worker_done(report=False)),
                 self.skipped(),
             ]
         )
@@ -360,14 +354,10 @@ class GateTests(GateFixture, unittest.TestCase):
 
         R16 moved the first answer from the Lead to the agent that sent the report: the gate waits, the reviewer is
         told its file is not on disk, and the ticket does not advance. The request comes after the warnings."""
-        stale = self.reviewer_done()
-        stale["write"] = []
         self.waits(
             [
                 self.worker_done(tests=True),
-                stale,
-                self.reviewer_done(review=None, write=[]),
-                self.reviewer_done(review=None, write=[]),
+                *self.repeated(self.reviewer_done(write=[])),
                 self.skipped(),
             ]
         )
@@ -388,13 +378,10 @@ class PayloadTests(GateFixture, unittest.TestCase):
 
     def test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead(self):
         """orchestrator-engine/R16: orchestrator-payload-race/S2"""
-        stale = self.reviewer_done(write=[])
         self.waits(
             [
                 self.worker_done(tests=True),
-                stale,
-                self.reviewer_done(write=[]),
-                self.reviewer_done(write=[]),
+                *self.repeated(self.reviewer_done(write=[])),
                 self.skipped(),
             ]
         )
@@ -407,9 +394,8 @@ class PayloadTests(GateFixture, unittest.TestCase):
 
     def test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead(self):
         """orchestrator-engine/R16: orchestrator-payload-race/S3"""
-        stale = self.reviewer_done(write=[])
         self.states({"demo-t1-review": "exited"})
-        self.waits([self.worker_done(tests=True), stale, self.skipped()])
+        self.waits([self.worker_done(tests=True), self.reviewer_done(write=[]), self.skipped()])
         self.run_driver()
         self.assertEqual(self.calls("resume"), [], "a dead reviewer cannot write the file: no warning is sent")
         self.assertEqual(self.request()["event"], "review")

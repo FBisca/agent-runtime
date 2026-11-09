@@ -305,9 +305,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         R16: a report that names a file nobody wrote is warned about twice before the Lead is asked."""
         self.waits(
             [
-                report_wait("demo-t1", "complete"),
-                report_wait("demo-t1", "complete"),
-                report_wait("demo-t1", "complete"),
+                *self.repeated(report_wait("demo-t1", "complete")),
                 self.decided("skip"),
             ]
         )
