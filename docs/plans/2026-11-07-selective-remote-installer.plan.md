@@ -1,6 +1,6 @@
 # Plan: Selectable, Release-Pinned Agent Runtime Installer
 
-Slug: `selective-remote-installer`. Living spec: `docs/specs/installer-contract.md`. Status: **APPROVED — READY FOR EXECUTION**.
+Slug: `selective-remote-installer`. Living spec: `docs/specs/installer-contract.md`. Status: APPROVED.
 
 ## Why
 
@@ -14,7 +14,7 @@ The present `agent-runtime/install.sh` is a local-checkout POSIX shell script th
 - https://docs.astral.sh/uv/getting-started/installation/ (uv bootstrap/versioning practices)
 - Accepted user constraint Q48; existing design decisions Q36, Q41, Q42, Q43.
 
-## Proposed decisions
+## Decisions
 
 | # | Choice | Rejected | Why | Status |
 |---|---|---|---|---|
@@ -24,6 +24,7 @@ The present `agent-runtime/install.sh` is a local-checkout POSIX shell script th
 | D4 | Pin release/tag and verify fetched payloads; stage install transactionally, support dry-run, rollback and upgrade. | Run unverified, moving `main` code with unchecked shell execution. | Remote installer has high privileges in user's account. | Recommended |
 | D5 | Default to preserving all existing files; print config instructions when conflict exists. No secret creation/printing. | Silent rewrites of Claude/Codex/Pi config. | Respect existing user tools and provider credentials. | Requested |
 | D6 | Install Pi binary only via official Pi distribution, optionally print its installation steps; own only agent-runtime integration. | Install a second custom Pi binary or own Pi credentials. | Avoid competing installers and auth state. | Recommended |
+| D7 | The release artifact contract: a GitHub Release with per-asset SHA-256 checksums published by CI; the bootstrap refuses a moving `main`; the CI tests run against a local fixture, so no real release is needed to pass. | A checksum check inside the downloaded script; a bootstrap that fetches `main`. | An integrity check inside the payload it fetched cannot authenticate that payload. The trusted reference has to come from outside the download. | Approved (action plan A4) |
 
 ## Binding P4c distribution and security contract — Q48, Q50–Q52
 
@@ -70,15 +71,25 @@ The proposed URL is illustrative: `vX.Y.Z` is a placeholder, not an existing rel
 
 ## Tickets
 
-| ID | Vertical deliverable | Scenarios | Depends | Paths | Size | Difficulty | Status |
-|---|---|---|---|---|---|---|---|
-| T1 | Snapshot legacy `install.sh` behaviour and add regression tests; define component dependency closure and install manifest. | S1,S3,S4,S7,S8 | P4b package interface | `install.sh`, `tests/installer/`, `docs/specs/installer-contract.md` | regular | complex | TO-DO |
-| T2 | POSIX-compatible menu `/dev/tty` and headless flags, with dry-run and automated matrix tests. | S1,S2,S5,S8 | T1 | `install.sh`, `tests/installer/` | regular | complex | TO-DO |
-| T3 | Release-pinned remote bootstrap, integrity verification, atomic staging and rollback tests. | S2,S3,S6,S8 | T2 + release artifact contract | `install.sh`, `scripts/`, `.github/workflows/`, `tests/installer/` | large | complex | TO-DO |
-| T4 | Wire requested Claude/Codex/Pi adapters without secret access or unsafe permissions; verify upgrade/uninstall, docs and backward compatibility. | S4,S7,S9 | T3, P2 for Pi runtime support | `install.sh`, `hooks/`, `tests/installer/`, `README.md` | regular | complex | TO-DO |
+| # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |
+|---|---|---|---|---|---|---|---|---|
+| T1 | The legacy `install.sh` behaviour is snapshotted in regression tests, and the component closure (`orchestrator → runtime`, adapters → runtime) and the install manifest are defined. | S1, S3, S4, S7, S8 | none | install.sh, tests/installer/ | regular | complex | agent | TO-DO |
+| T2 | The component menu on `/dev/tty`, the headless `--components`/`--yes` path, and `--dry-run`, with the no-TTY, clean-HOME and existing-HOME matrix tests. | S1, S2, S5, S8 | T1 | install.sh, tests/installer/ | regular | complex | agent | TO-DO |
+| T3 | The release artifact contract and the pinned, checksum-verified download: the payload is fetched from a pinned ref, verified against a checksum before anything runs, and a moving ref is refused. | S2, S3, S6, S8 | T2 | install.sh, scripts/, .github/workflows/, tests/installer/ | regular | complex | agent | TO-DO |
+| T4 | The install is transactional: the payload is verified before it is activated, an interrupted or failed install leaves no partial state, and the prior version stays usable. | S6, S8 | T3 | install.sh, tests/installer/ | regular | complex | agent | TO-DO |
+| T5 | The Claude, Codex and Pi adapters are wired without reading or writing a secret, and install, upgrade and selective uninstall keep the documented `agent-runtime*` shims and the other components intact. | S4, S7, S9 | T4 | install.sh, hooks/, tests/installer/, README.md | regular | complex | agent | TO-DO |
+
+**The plan's dependencies, settled.** P4b's package interface landed in `agent-runtime` PR #56 and the Pi worker
+support landed in PR #55/#58, so both are satisfied and neither is a blocker. The release artifact contract is
+decision D7. The first real release stays out of scope: the plan says so, and the CI tests run against a local
+fixture.
+
+**The ticket that was split.** The remote bootstrap was one `large` ticket, which `run` refuses (a `big` or
+`large` ticket needs a chunked dispatch it does not do). It is T3 — the artifact contract and the pinned,
+checksum-verified download — and T4 — the transactional activation, which is what keeps a failed install from
+leaving a partial one.
 
 **Owner-approved for implementation on 2026-11-07.** P0/dotfiles and P4b ownership/dependencies are reconciled in this plan. Independent pre-implementation review was waived by the owner; technical preflight and safety checks remain mandatory.
-
 
 ## Installer additional adversarial cases
 
@@ -87,4 +98,4 @@ The proposed URL is illustrative: `vX.Y.Z` is a placeholder, not an existing rel
 - Local checkout install remains supported for contributors and never implies remote release has already been published.
 - Test a genuine clean HOME, existing dotfiles HOME and CI no-TTY environment on macOS/Linux; no provider credentials or network required in fixtures.
 
-**Status: APPROVED — READY FOR EXECUTION. Installer not yet implemented or published.**
+**Status: APPROVED. The installer is not yet implemented or published.**
