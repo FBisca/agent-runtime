@@ -4,6 +4,7 @@ The fakes are modules (`fake_runtime`, `fake_gh`): the driver asks the runtime a
 wrappers for the same modules on PATH, for a driver run outside the tests.
 """
 
+import copy
 import io
 import json
 import os
@@ -381,6 +382,10 @@ class RunFixture(_Case):
         return fake_gh.process(argv, timeout=timeout)
 
     payload_grace = 0.05  # the payload wait, shortened so a test does not pay the real grace
+
+    def repeated(self, step, times=3):
+        """The same scripted step, `times` times: R16 asks the sender before the Lead, so a bad payload is seen twice."""
+        return [copy.deepcopy(step) for _ in range(times)]
 
     def in_process(self, spec, argv, timeout=60):
         """The script run in this process, with the fakes answering in process.

@@ -1,5 +1,6 @@
 """The gates after a worker reports: converge, a fresh reviewer, fix rounds, a fresh worker for a dead pane."""
 
+import copy
 import json
 import unittest
 
@@ -96,6 +97,10 @@ class GateFixture(RunFixture):
                 [str(self.worktree / "src" / "a" / "test_a.py"), 'def test_a():\n    """S1"""\n']
             )
         return step
+
+    def repeated(self, step, times=3):
+        """The same scripted step, `times` times: a payload that never lands is asked about more than once."""
+        return [copy.deepcopy(step) for _ in range(times)]
 
     def review(self, **over):
         return json.dumps(
@@ -326,25 +331,27 @@ class GateTests(GateFixture, unittest.TestCase):
 
     def test_S6a_an_invalid_report_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
-        self.waits([self.worker_done(report=self.report("t1", contract=3)), self.skipped()])
+        self.waits([*self.repeated(self.worker_done(report=self.report("t1", contract=3))), self.skipped()])
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.request()["event"], "report")
         self.assertIn("contract", self.request()["reason"])
+        self.assertEqual(len(self.calls("resume")), 2, "the worker was warned twice before the Lead was asked")
 
     def test_S6a_a_report_for_another_task_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
-        self.waits([self.worker_done(report=self.report("t9")), self.skipped()])
+        self.waits([*self.repeated(self.worker_done(report=self.report("t9"))), self.skipped()])
         self.run_driver()
         self.assertEqual(self.request()["event"], "report")
-        self.assertEqual(self.calls("resume"), [])
+        self.assertIn("t9", self.request()["reason"])
+        self.assertEqual(len(self.calls("resume")), 2, "the worker that misnamed its report was warned twice")
 
     def test_S6a_an_invalid_review_does_not_start_a_fix_round(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
         broken = self.review(verdict="pass", major=[MAJOR])
-        self.waits([self.worker_done(tests=True), self.reviewer_done(broken), self.skipped()])
+        self.waits([self.worker_done(tests=True), *self.repeated(self.reviewer_done(broken)), self.skipped()])
         self.run_driver()
-        self.assertEqual(self.calls("resume"), [])
+        self.assertEqual(len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead was asked")
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("review.json", self.request()["reason"])
 
@@ -369,7 +376,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(len(warned), 2, [c["args"]["task"] for c in warned])
         for call in warned:
             self.assertIn("review.json", call["args"]["task"])
-            self.assertIn("write the file, then report again", call["args"]["task"])
+            self.assertIn("write it again, then report again", call["args"]["task"])
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("2 warning(s)", self.request()["reason"])
         self.assertNotIn("reviewed_commit", self.task(), "no verdict was recorded from a missing file")

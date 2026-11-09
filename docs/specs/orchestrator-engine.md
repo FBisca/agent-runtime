@@ -23,10 +23,11 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R9** WHEN a step route names a step — `implementer`, `reviewer`, `gaps` or `archive` — THEN that step's spawn carries the step's backend, model and effort; `--brain-cli` still names one backend for every gate step, and a step route overrides it. (from orchestrator-routing-effort-role/S8, S9)
 - **R10** WHEN a step route names an unknown step, backend, model or effort, THEN the run fails before any worker is spawned, naming the value. (from orchestrator-routing-effort-role/S10)
 - **R11** WHEN no step route names a gate, THEN the gate keeps the effort it has always had: the reviewer `high`, the gaps reviewer `medium`, the archive worker the matrix's `low`. (from orchestrator-routing-effort-role/S3)
-- **R16** WHEN a worker's report reaches the driver before the file it names is on disk, THEN the driver waits a
-  bounded grace for the file, and a file that never arrives is the sending agent's news before it is the Lead's:
-  that agent is told, twice at most, to write the file and report again, and only then is the Lead asked, with the
-  number of warnings in the reason. An agent that is gone is not warned. (from orchestrator-payload-race/S1, S2, S3)
+- **R16** WHEN a worker's report reaches the driver before the file it names is usable — absent, half written, or
+  breaking its contract — THEN the driver waits a bounded grace for the file and reads it; a payload it still cannot
+  read is the sending agent's news before it is the Lead's: that agent is told what the driver needs, twice at most,
+  with the gate kept open, and only then is the Lead asked, naming the warnings. An agent that is gone is not
+  warned. (from orchestrator-payload-race/S1, S2, S3)
 
 ## Coverage
 
