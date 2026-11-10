@@ -22,11 +22,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import contracts, events, evidence, routes, verify
+from . import contracts, events, evidence, routes, runner, verify
 from . import plan as yaml_plan
 from .plan import PlanError
 from .runtime_client import CliRuntimeClient
 from .runtime_client import RuntimeError as RuntimeCallError
+
+ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
 
 
 def now():
@@ -1188,9 +1190,11 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
-        self.model = None  # the approved plan/1 model of a YAML plan
+        self.model: yaml_plan.Plan | None = None  # the approved plan/1 model of a YAML plan
         self.outcome_logged = False
-        self.approval = None  # the approval block of the YAML plan the loop last read
+        self.approval: yaml_plan.Approval | None = (
+            None  # the approval block of the YAML plan the loop last read
+        )
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1294,6 +1298,7 @@ class Driver:
                     enter_plan_state(data, "APPROVED", self.approval and self.approval.at)
                 if data["plan"]["state"] == "APPROVED":
                     enter_plan_state(data, "RUNNING")
+                self.resume_plan_state(data)
         for row in legacy:  # a run dir written before events.jsonl: its history enters the log once
             self.log("import", **row)
         self.log(
@@ -1314,6 +1319,7 @@ class Driver:
             )  # before the plan is read: a merge it makes unblocks work in this same round
             plan, valid = self.current_plan()
             if valid:
+                acted += self.integrate(plan)
                 dispatched = (
                     self.reopen_parked(plan)
                     + self.dispatch_ready(plan)
@@ -2189,7 +2195,10 @@ class Driver:
             event(reason)
             if packet["unit"] == ARCHIVE:
                 return "PASS", []
-            return self.verify_ticket(task_id, packet, report)
+            verdict, lines = self.verify_ticket(task_id, packet, report)
+            if verdict != "PASS":
+                return verdict, lines
+            return self.ticket_evidence(task_id, packet)
         if packet["unit"] == ARCHIVE:
             # The archive branch holds the plan with Status ARCHIVED; fall back to the driver's copy if it is untracked.
             copy = Path(packet["checkout"]) / self.plan_rel()
@@ -3151,6 +3160,7 @@ class Driver:
             unit = self.unit_of(task_id)
             self.defer_unverified(task_id, unverified)
             self.log("merged-unverified", unit=unit, task=task_id, reason=unverified)
+        self.flag_unverified_evidence(task_id)
         return True
 
     def merged_early(self, task_id, state):
@@ -4047,6 +4057,322 @@ class Driver:
             ]
         )
 
+    # ---- evidence: the ticket gates, integration on one pinned default-branch SHA, acceptance ---------------------
+    # Only the driver runs evidence, so only the driver writes a receipt: the Receipts directory is the run's, and
+    # the ledger holds each receipt's sha256. A YAML plan moves DELIVERED -> VERIFYING -> ACCEPTED | REJECTED |
+    # ACCEPTED_WITH_HUMAN; the archive waits for an accepted state.
+
+    def plan_state(self):
+        with self.book() as data:
+            return (data.get("plan") or {}).get("state")
+
+    def receipts_dir(self):
+        return self.run_dir / "receipts"
+
+    def tree_of(self, sha):
+        try:
+            return run(["git", "-C", str(self.repo), "rev-parse", "--verify", str(sha) + "^{tree}"])
+        except ValueError:
+            return None
+
+    def resume_plan_state(self, data):
+        """A plan state a drive that ended (or died) mid-way left behind, made right for this drive. A rejected plan
+        is verified again by a new `run`; a plan with a ticket still to do is running; an accepted plan stays so
+        only while its integration run is for the contract this drive holds."""
+        model, approval = self.contract()
+        state = data["plan"]["state"]
+        statuses = data.get("ticket_status") or {}
+        pending = [
+            t
+            for t in model.tickets
+            if t.owner.strip().lower() == "agent"
+            and not str(statuses.get(t.id, "")).strip().upper().startswith("COMPLETE")
+        ]
+        if state not in ("DELIVERED", "VERIFYING", "REJECTED", *ACCEPTED_STATES):
+            return
+        if pending:
+            enter_plan_state(data, "RUNNING")
+        elif state == "REJECTED":
+            enter_plan_state(data, "DELIVERED")
+        elif state == "VERIFYING":
+            if self.acceptance_of(data)["state"] != "VERIFYING":
+                enter_plan_state(data, "DELIVERED")  # a verification that did not finish
+        elif state in ACCEPTED_STATES:
+            if (data.get("integration") or {}).get("digest") != approval.digest:
+                enter_plan_state(data, "DELIVERED")
+
+    def contract(self):
+        """(model, approval) of the approved YAML plan this drive holds."""
+        assert self.model is not None and self.approval is not None
+        return self.model, self.approval
+
+    def acceptance_of(self, data):
+        model, approval = self.contract()
+        return verify.acceptance(
+            model, data, self.receipts_dir(), digest=approval.digest, tree_of=self.tree_of
+        )
+
+    def oracles(self):
+        """The approved oracle bytes: the approval snapshot's, never the authored directory's."""
+        snapshot = yaml_plan.snapshot_path(self.contract()[1], self.args.state_dir).parent
+        return yaml_plan.payloads(snapshot / "oracle")
+
+    def run_evidence(self, scenario_id, phase, commit):
+        """One run of a scenario's evidence at `commit`, its receipt written and its sha256 in the ledger."""
+        model, approval = self.contract()
+        scenario = verify.scenario_of(model, scenario_id)
+        assert scenario is not None and scenario.evidence is not None
+        item = scenario.evidence
+        files = self.oracles()
+        prior = self.earlier_receipts(scenario_id, phase)
+        result = runner.run_evidence(
+            self.repo,
+            commit,
+            scenario=scenario_id,
+            phase=phase,
+            digest=approval.digest,
+            check=item.check or "",
+            oracles={name: files[name] for name in item.oracle},
+            place=item.place,
+            env_names=item.env,
+            timeout=item.timeout,
+            negative=(item.negative, files[item.negative]) if item.negative else None,
+        )
+        receipt = result.receipt
+        # A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it.
+        if receipt["result"] == "PASS" and any(
+            r.get("tree") == receipt["tree"] and r.get("result") == "FAIL" for r in prior
+        ):
+            receipt.update(
+                result="UNKNOWN",
+                reason="flaky",
+                detail="it failed on this tree before and passed now",
+                label="UNKNOWN (flaky)",
+            )
+        runner.persist(result, self.receipts_dir())
+        with self.book() as data:
+            runner.record_in_ledger(data, result)
+        return result
+
+    def earlier_receipts(self, scenario_id, phase):
+        with self.book() as data:
+            stems = verify.receipt_stems(data, scenario_id, phase)
+        found = []
+        for stem in stems:
+            try:
+                found.append(
+                    json.loads((self.receipts_dir() / (stem + ".json")).read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError):
+                continue
+        return found
+
+    def ticket_evidence(self, task_id, packet):
+        """The evidence a ticket's gate runs at its head, after the invariants: ("PASS" | "FAIL" | "error", items).
+        Only a risk-tagged ticket that satisfies a scenario with evidence, or the ticket that completes an outcome
+        scenario's satisfies set, runs any; FAIL and UNKNOWN are both a fix round."""
+        unit = packet["unit"].upper()
+        plan = self.read_plan()
+        done = {t["#"] for t in plan["tickets"] if is_done(t)}
+        try:
+            scenario_ids = verify.gate_scenarios(self.model, unit, done)
+            if not scenario_ids:
+                return "PASS", []
+            commit = verify.snapshot_commit(packet["checkout"])
+            items = []
+            for scenario_id in scenario_ids:
+                result = self.run_evidence(scenario_id, "ticket", commit)
+                receipt = result.receipt
+                with self.book() as data:
+                    data.setdefault("ticket_evidence", {}).setdefault(unit, {})[scenario_id] = {
+                        "result": receipt["result"],
+                        "receipt": result.path.stem,
+                        "commit": commit,
+                    }
+                if receipt["result"] != "PASS":
+                    items.append(self.evidence_item(len(items) + 1, scenario_id, result))
+        except (runner.RunnerError, verify.VerifyError) as error:
+            return "error", [str(error)[:500]]
+        return ("FAIL", items) if items else ("PASS", [])
+
+    def evidence_item(self, number, scenario_id, result):
+        """A fix-round item for evidence that did not pass: the command and the tail of its log."""
+        receipt = result.receipt
+        text = log_tail(result.log).strip()
+        detail = ": " + receipt["detail"] if receipt.get("detail") else ""
+        return {
+            "id": "E%d" % number,
+            "kind": "blocking",
+            "source": "verify",
+            "check": "evidence %s" % scenario_id,
+            "command": receipt["check"],
+            "exit": receipt["exit"] if isinstance(receipt["exit"], int) else 1,
+            "excerpt": "%s %s%s%s"
+            % (
+                scenario_id,
+                receipt["label"],
+                detail,
+                (" — log tail:\n" + text) if text else "",
+            ),
+            "log_path": str(result.path.with_suffix(".log")),
+        }
+
+    def flag_unverified_evidence(self, task_id):
+        """A person merged the ticket. If its gate evidence failed or never ran, the ticket is COMPLETE and flagged
+        unverified: the plan cannot be accepted until that evidence passes at integration (D12)."""
+        if not self.model or self.task(task_id)["packet"]["unit"] == ARCHIVE:
+            return
+        unit = self.ticket_name(task_id)
+        plan = self.read_plan()
+        done = {t["#"] for t in plan["tickets"] if is_done(t)} | {unit}
+        scenario_ids = verify.gate_scenarios(self.model, unit, done)
+        with self.book() as data:
+            ran = (data.get("ticket_evidence") or {}).get(unit) or {}
+            bad = [s for s in scenario_ids if (ran.get(s) or {}).get("result") != "PASS"]
+            if not bad:
+                return
+            data.setdefault("unverified", {})[unit] = {
+                "scenarios": bad,
+                "reason": "merged with its evidence failed or never run: %s" % ", ".join(bad),
+                "at": now(),
+            }
+        self.log("evidence-unverified", unit=unit.lower(), task=task_id, scenarios=bad)
+        event("%s merged with its evidence unverified: %s" % (unit, ", ".join(bad)))
+
+    def integrate(self, plan):
+        """A YAML plan whose every agent ticket is COMPLETE is DELIVERED, verified on one pinned default-branch
+        commit and accepted, or rejected. Steps taken (state changes), 0 for a plan that is not there yet."""
+        if not self.model:
+            return 0
+        agents = [t for t in plan["tickets"] if is_agent(t)]
+        if not agents or not all(is_done(t) for t in agents):
+            return 0
+        steps = 0
+        with self.book() as data:
+            state = (data.get("plan") or {}).get("state")
+            if state == "RUNNING":
+                enter_plan_state(data, "DELIVERED")
+                steps, state = 1, "DELIVERED"
+        if state != "DELIVERED":
+            return steps
+        try:
+            return steps + self.verify_integration()
+        except (
+            ValueError,
+            OSError,
+            subprocess.TimeoutExpired,
+            runner.RunnerError,
+            verify.VerifyError,
+        ) as error:
+            message = "integration: %s" % " ".join(str(error).split())[:500]
+            if message not in self.errors:
+                self.errors.append(message)
+                self.log("error", gate="integration", error=message)
+                event(message)
+            return steps
+
+    def pin_default_branch(self):
+        """Fetch the default branch and pin its SHA: (sha, the units whose merge the commit lacks, the units whose
+        merge commit this repository does not know). The pin is one commit for every evidence item of the run."""
+        remote, _, branch = self.args.base.partition("/")
+        if branch:
+            run(
+                [
+                    "git",
+                    "-C",
+                    str(self.repo),
+                    "fetch",
+                    "--quiet",
+                    remote,
+                    "+refs/heads/%s:refs/remotes/%s/%s" % (branch, remote, branch),
+                ],
+                timeout=TREE_TIMEOUT,
+            )
+        sha = run(
+            ["git", "-C", str(self.repo), "rev-parse", "--verify", self.args.base + "^{commit}"]
+        )
+        with self.book() as data:
+            merges = {
+                task["packet"].get("unit"): task["merge_commit"]
+                for task in data["tasks"].values()
+                if task.get("merge_commit") and task["packet"].get("unit") != ARCHIVE
+            }
+        lacking, unknown = [], []
+        for unit, oid in sorted(merges.items()):
+            known = subprocess.run(
+                ["git", "-C", str(self.repo), "cat-file", "-e", oid + "^{commit}"],
+                capture_output=True,
+                timeout=60,
+            )
+            if known.returncode:
+                unknown.append(unit)
+            elif subprocess.run(
+                ["git", "-C", str(self.repo), "merge-base", "--is-ancestor", oid, sha],
+                capture_output=True,
+                timeout=60,
+            ).returncode:
+                lacking.append(unit)
+        return sha, lacking, unknown
+
+    def verify_integration(self):
+        sha, lacking, unknown = self.pin_default_branch()
+        if lacking:
+            self.wake(
+                "integration-waits",
+                "plan",
+                "integration waits: %s does not contain the merge of %s; it verifies once the default branch does "
+                "(run again after it has been fetched)" % (self.args.base, ", ".join(lacking)),
+                key="%s:%s" % (sha, ",".join(lacking)),
+            )
+            return 0
+        tree = self.tree_of(sha)
+        with self.book() as data:
+            attempt = (data.get("integration") or {}).get("attempt", 0) + 1
+            data["integration"] = {
+                "sha": sha,
+                "tree": tree,
+                "digest": self.contract()[1].digest,
+                "at": now(),
+                "attempt": attempt,
+                "unknown_merges": unknown,
+            }
+            enter_plan_state(data, "VERIFYING")
+        self.log("integration", sha=sha, tree=tree, attempt=attempt)
+        event("verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12]))
+        for scenario in verify.check_scenarios(self.model):
+            self.run_evidence(scenario.id, "integration", sha)
+        self.settle_acceptance()
+        return 2
+
+    def settle_acceptance(self):
+        """The plan's state from its receipts: accepted, accepted with a person's word, rejected (and the Lead is
+        asked), or still waiting for a person to confirm a human item."""
+        with self.book() as data:
+            result = self.acceptance_of(data)
+            if result["state"] != "VERIFYING":
+                enter_plan_state(data, result["state"])
+            pin = dict(data["integration"])
+        lines = verify.acceptance_errors(result)
+        if result["state"] == "REJECTED":
+            self.wake(
+                "plan-rejected",
+                "plan",
+                "plan-rejected %s: %s -> %s. Ways out: add a ticket for the failing scenario (edit the plan, `plan "
+                "approve`, `run` again), `run` again to verify a newer default branch, or `accept %s <S-id> --note "
+                "...` for an item a person has checked (the plan is then ACCEPTED_WITH_HUMAN, never ACCEPTED)"
+                % (self.slug, "; ".join(lines), self.receipts_dir(), self.plan_path),
+                key="%s:%s" % (pin["sha"], pin["attempt"]),
+            )
+        elif result["state"] == "VERIFYING":
+            self.wake(
+                "plan-needs-accept",
+                "plan",
+                "plan-needs-accept %s: %s. A person confirms with `accept %s <S-id> --note ...`; the archive waits for it"
+                % (self.slug, "; ".join(lines), self.plan_path),
+                key="%s:%s" % (pin["sha"], pin["attempt"]),
+            )
+        self.log("acceptance", state=result["state"], items=result["items"])
+
     # ---- archive: one more worker unit, a gaps review, then converge --final ----------------------------------
     # When every agent ticket is COMPLETE the driver claims unit `archive` (small, simple) like a ticket and starts
     # a medium gaps reviewer beside it. The archive's report is gated by `converge --final` alone (a failure is a
@@ -4062,6 +4388,8 @@ class Driver:
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
             return 0
+        if self.model and self.plan_state() not in ACCEPTED_STATES:
+            return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
         if not self.model and not self.outcome_logged:
             # A Markdown plan's outcome is never run: it completes unverified and cannot be accepted.
             self.outcome_logged = True
@@ -4964,9 +5292,12 @@ def plan_status(args):
             for task in (data.get("tasks") or {}).values()
             if (task.get("packet") or {}).get("unit") == ticket_id.lower() and task.get("pr")
         ]
-        tickets.append(
-            {"id": ticket_id, "state": status, "reason": reason, "pr": prs[-1] if prs else None}
-        )
+        row = {"id": ticket_id, "state": status, "reason": reason, "pr": prs[-1] if prs else None}
+        if ticket_id in (data.get("unverified") or {}):
+            row["unverified"] = (
+                True  # merged with its evidence failed or never run: integration must pass it
+            )
+        tickets.append(row)
     return {
         "slug": slug,
         "plan": str(plan_path),
@@ -4976,6 +5307,144 @@ def plan_status(args):
         "state": state,
         "history": history,
         "tickets": tickets,
+    }
+
+
+def acceptance_context(args):
+    """(plan model, repo, ledger path, run directory, ledger data) of the YAML plan a Lead command names. The model is
+    the approved one: a plan or oracle edited since approval is refused here, as everywhere."""
+    plan_path = Path(args.plan).resolve(strict=True)
+    require(
+        is_yaml(plan_path),
+        "%s is a Markdown plan: its outcome is never run, so it can finish COMPLETE (outcome unverified) and is "
+        "never accepted; rewrite it as plan/1 YAML (plan check)" % plan_path,
+    )
+    repo = repo_root(plan_path, args.repo)
+    model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, require_approval=True)
+    ledger_path, run_dir = locate_state(args.state_dir, plan_path, repo, model.slug)
+    data = read_ledger_file(ledger_path) if ledger_path.is_file() else {}
+    return model, repo, ledger_path, run_dir, data
+
+
+def tree_in(repo):
+    def tree_of(sha):
+        try:
+            return run(["git", "-C", str(repo), "rev-parse", "--verify", str(sha) + "^{tree}"])
+        except ValueError:
+            return None
+
+    return tree_of
+
+
+def verify_plan(args):
+    """`verify <plan>`: whether the plan's outcome holds, computed from its receipts and the ledger alone. A receipt
+    that is missing, was produced for another tree or approval digest, or no longer matches the sha256 the ledger
+    holds does not count: its item is UNKNOWN, naming the scenario and why, and the command exits non-zero. It runs
+    nothing and writes nothing."""
+    model, repo, _, run_dir, data = acceptance_context(args)
+    result = verify.acceptance(
+        model,
+        data,
+        run_dir / "receipts",
+        digest=model.approval.digest,
+        tree_of=tree_in(repo),
+    )
+    output = {
+        "slug": model.slug,
+        "state": result["state"],
+        "plan_state": (data.get("plan") or {}).get("state"),
+        "integration": (data.get("integration") or {}).get("sha"),
+        "items": result["items"],
+    }
+    errors = verify.acceptance_errors(result)
+    if result["state"] not in ACCEPTED_STATES:
+        errors = errors or ["%s: the plan is %s" % (model.slug, result["state"])]
+    if errors:
+        output["errors"] = errors
+    return output
+
+
+def accept_item(args):
+    """`accept <plan> <S-id> --note TEXT`: a person accepts an item that did not pass (or a human item). It is
+    HUMAN_ACCEPTED with the person, time, scope and tree; the plan can then be ACCEPTED_WITH_HUMAN, never ACCEPTED.
+    Evidence a person merged past unverified cannot be accepted: it has to pass at integration."""
+    caller = resolve_runtime()
+    if isinstance(caller, dict) and caller.get("role") == "worker":
+        raise Refused(
+            "accept: caller is a spawned worker, parent %s — accepting is the Lead's (the person in their own "
+            "session); ask the Lead to run accept" % caller.get("parent", "unknown")
+        )
+    require(args.note.strip(), "accept needs a --note saying what you checked")
+    model, repo, ledger_path, run_dir, _ = acceptance_context(args)
+    scenario = verify.scenario_of(model, args.scenario)
+    if scenario is None or scenario.evidence is None:
+        raise Refused("accept: %s is not a scenario with evidence" % args.scenario)
+    require(ledger_path.is_file(), "accept: %s has no run yet; run it first" % model.slug)
+    who = (
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        ).stdout.strip()
+        or os.environ.get("USER")
+        or "unknown"
+    )
+    with ledger(ledger_path) as data:
+        state = (data.get("plan") or {}).get("state")
+        pin = data.get("integration") or {}
+        if state not in ("VERIFYING", "REJECTED") or pin.get("digest") != model.approval.digest:
+            raise Refused(
+                "accept: the plan is %s; a person accepts an item once integration ran for this contract "
+                "(verified or rejected)" % (state or "not started")
+            )
+        flagged = verify.unverified_scenarios(data).get(args.scenario)
+        if flagged and scenario.evidence.check:
+            raise Refused(
+                "accept: %s merged with %s's evidence unverified, so it must pass at integration; fix it and run "
+                "again — a person cannot accept it" % (flagged, args.scenario)
+            )
+        result = verify.acceptance(
+            model,
+            data,
+            run_dir / "receipts",
+            digest=model.approval.digest,
+            tree_of=tree_in(repo),
+        )
+        item = next(i for i in result["items"] if i["scenario"] == args.scenario)
+        if item["state"] == "PASS":
+            raise Refused(
+                "accept: %s passes at integration; there is nothing to accept" % args.scenario
+            )
+        if item["state"] == "HUMAN_ACCEPTED":
+            raise Refused("accept: %s is already accepted: %s" % (args.scenario, item["reason"]))
+        data.setdefault("acceptance", {})[args.scenario] = {
+            "state": "HUMAN_ACCEPTED",
+            "by": who,
+            "at": now(),
+            "scope": "%s: THEN %s (%s at integration on %s)"
+            % (args.scenario, scenario.then, item["state"], pin["sha"][:12]),
+            "tree": pin["tree"],
+            "sha": pin["sha"],
+            "digest": model.approval.digest,
+            "note": args.note.strip(),
+            "previous": {"result": item["state"], "reason": item["reason"]},
+        }
+        outcome = verify.acceptance(
+            model,
+            data,
+            run_dir / "receipts",
+            digest=model.approval.digest,
+            tree_of=tree_in(repo),
+        )
+        if outcome["state"] == "ACCEPTED_WITH_HUMAN":
+            enter_plan_state(data, "ACCEPTED_WITH_HUMAN")
+    return {
+        "scenario": args.scenario,
+        "state": "HUMAN_ACCEPTED",
+        "by": who,
+        "plan_state": outcome["state"] if outcome["state"] == "ACCEPTED_WITH_HUMAN" else state,
+        "left": verify.acceptance_errors(outcome),
     }
 
 
@@ -5551,6 +6020,24 @@ def main(argv=None):
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
     sub = commands.add_parser(
+        "verify",
+        help="Whether a YAML plan's outcome holds on its receipts; exits non-zero when it does not",
+    )
+    sub.add_argument("plan")
+    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
+    sub = commands.add_parser(
+        "accept",
+        help="A person accepts an evidence item that did not pass (or a human item): HUMAN_ACCEPTED",
+    )
+    sub.add_argument("plan")
+    sub.add_argument("scenario", help="The scenario id of the item, such as S3")
+    sub.add_argument(
+        "--note", required=True, help="What you checked: kept with your name, the time and the tree"
+    )
+    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
+    sub = commands.add_parser(
         "launch", help="Check the plan and start `run` in a Herdr terminal named orchestrate-<slug>"
     )
     sub.add_argument("plan")
@@ -5586,6 +6073,10 @@ def main(argv=None):
     if args.command == "status":
         status = plan_status(args)
         return status if args.json else render_status(status)
+    if args.command == "verify":
+        return verify_plan(args)
+    if args.command == "accept":
+        return accept_item(args)
     if args.command == "run":
         return drive(args)
     if args.command == "await":

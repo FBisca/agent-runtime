@@ -12,13 +12,23 @@ gave before. A Markdown plan can finish as `COMPLETE (outcome unverified)` and n
 outcome. The Markdown reader and this path go together.
 
 Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items.
+
+Evidence is the other half. `gate_scenarios` says which scenarios' evidence runs at a ticket's gate, and
+`acceptance` computes from the ledger and the receipts on disk whether a plan's outcome holds on the one tree the
+driver pinned for integration: a receipt that is missing, was produced for another tree or approval digest, or no
+longer matches the sha256 the ledger holds does not count (the item is UNKNOWN, naming the scenario and why).
 """
 
 import ast
+import hashlib
+import json
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 UNVERIFIED = "COMPLETE (outcome unverified)"
@@ -256,3 +266,229 @@ def legacy_gate(script, plan, checkout, base, log_file, *, ticket=None):
 def legacy_outcome(complete):
     """What a Markdown plan can be once its tickets are done: complete with an unverified outcome, never accepted."""
     return UNVERIFIED if complete else None
+
+
+# ---- evidence: which items run at a ticket's gate, and whether a plan's receipts add up to acceptance ----------
+
+
+def scenario_of(model, sid):
+    return next((s for s in model.scenarios if s.id == sid), None)
+
+
+def check_scenarios(model):
+    """The scenarios whose evidence is a command the driver can run (a `human` item is confirmed by a person)."""
+    return [s for s in model.scenarios if s.evidence is not None and s.evidence.check]
+
+
+def gate_scenarios(model, ticket_id, done):
+    """The scenario ids whose evidence runs at `ticket_id`'s gate, in plan order (D11, D29).
+
+    A risk-tagged ticket runs the evidence of the scenarios it satisfies. Whatever its risk, the ticket that
+    completes an outcome scenario's satisfies set runs that outcome's evidence: every other ticket that satisfies it
+    is in `done`. Every other ticket runs none."""
+    ticket = next((t for t in model.tickets if t.id == ticket_id), None)
+    if ticket is None:
+        raise VerifyError("the plan has no ticket %s" % ticket_id)
+    wanted = set()
+    if ticket.risk:
+        wanted |= set(ticket.satisfies)
+    for sid in model.outcome:
+        others = {t.id for t in model.tickets if sid in t.satisfies} - {ticket_id}
+        if sid in ticket.satisfies and others <= set(done):
+            wanted.add(sid)
+    return [s.id for s in check_scenarios(model) if s.id in wanted]
+
+
+def snapshot_commit(checkout):
+    """A commit holding exactly what the ticket's checkout holds now, or its HEAD when it holds nothing more.
+
+    A worker reports before anything is committed for it, so a gate that ran evidence at HEAD alone would judge the
+    base. The commit is built in a scratch index: the checkout's own index, HEAD and files are not touched. It is
+    unreferenced; the runner needs it only while it runs."""
+    head = git(checkout, "rev-parse", "HEAD").strip()
+    if not git(checkout, "status", "--porcelain").strip():
+        return head
+    scratch = tempfile.mkdtemp(prefix="eec-index-")
+    try:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(scratch, "index"))
+
+        def stage(*args):
+            done = subprocess.run(
+                ["git", "-C", str(checkout), *args],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+            if done.returncode:
+                raise VerifyError("git %s failed: %s" % (args[0], done.stderr.strip()))
+            return done.stdout.strip()
+
+        stage("read-tree", head)
+        stage("add", "-A")
+        tree = stage("write-tree")
+        return stage(
+            "-c",
+            "user.name=orchestrator",
+            "-c",
+            "user.email=orchestrator@localhost",
+            "commit-tree",
+            tree,
+            "-p",
+            head,
+            "-m",
+            "ticket checkout as the gate saw it",
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def receipt_stems(data, sid, phase):
+    """The ledger's receipt keys of one item and phase, oldest first: `S1.integration.1`, `S1.integration.2`..."""
+    found = []
+    for stem in data.get("receipts") or {}:
+        match = re.fullmatch(r"%s\.%s\.(\d+)" % (re.escape(sid), re.escape(phase)), stem)
+        if match:
+            found.append((int(match.group(1)), stem))
+    return [stem for _, stem in sorted(found)]
+
+
+def read_receipt(data, stem, receipts_dir, digest, tree):
+    """(receipt, None) when the receipt counts for this digest and tree, else (None, why it does not)."""
+    path = Path(receipts_dir) / (stem + ".json")
+    if not path.is_file():
+        return None, "its receipt %s.json is missing" % stem
+    recorded = (data.get("receipts") or {}).get(stem)
+    if not recorded:
+        return None, "the ledger holds no sha256 for %s.json" % stem
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != recorded:
+        return None, "%s.json no longer matches the sha256 the ledger holds" % stem
+    try:
+        receipt = json.loads(raw)
+    except ValueError:
+        return None, "%s.json is not valid JSON" % stem
+    if not isinstance(receipt, dict):
+        return None, "%s.json is not a receipt" % stem
+    if receipt.get("digest") != digest:
+        return None, "%s.json was produced for another approval digest" % stem
+    if receipt.get("tree") != tree:
+        return None, "%s.json was produced for another tree (%s, not %s)" % (
+            stem,
+            str(receipt.get("tree"))[:12],
+            str(tree)[:12],
+        )
+    return receipt, None
+
+
+def holds_acceptance(record, digest, tree):
+    """A human acceptance counts for the contract and the tree it was given on, and no other."""
+    return (
+        isinstance(record, dict)
+        and record.get("state") == "HUMAN_ACCEPTED"
+        and record.get("digest") == digest
+        and record.get("tree") == tree
+    )
+
+
+def unverified_scenarios(data):
+    """{scenario: ticket} of the evidence a person merged past: it must pass at integration, a person cannot waive it."""
+    found = {}
+    for ticket, entry in (data.get("unverified") or {}).items():
+        for sid in (entry or {}).get("scenarios") or []:
+            found[sid] = ticket
+    return found
+
+
+def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
+    """What the receipts say about a plan: {"state", "items"}. Each item is {"scenario", "state", "reason"} with the
+    state PASS, FAIL, UNKNOWN, HUMAN_ACCEPTED or AWAITING_HUMAN.
+
+    The plan is ACCEPTED when every item is PASS; ACCEPTED_WITH_HUMAN when each is PASS or HUMAN_ACCEPTED and one is the
+    latter (never ACCEPTED); VERIFYING while only a person's word is missing; REJECTED otherwise. `tree_of` maps the
+    pinned commit to its tree, so a ledger whose tree was not the commit's is caught too."""
+    pin = data.get("integration") or {}
+    tree = pin.get("tree")
+    problem = None
+    if not pin:
+        problem = "the plan has not been verified on a pinned default-branch commit"
+    elif pin.get("digest") != digest:
+        problem = "the integration run was for another approval digest; verify the plan again"
+    elif tree_of is not None:
+        actual = tree_of(pin.get("sha"))
+        if actual != tree:
+            problem = "the pinned commit %s holds tree %s, not the recorded %s" % (
+                str(pin.get("sha"))[:12],
+                str(actual)[:12],
+                str(tree)[:12],
+            )
+    unverified = unverified_scenarios(data)
+    items = []
+    for sc in model.scenarios:
+        ev = sc.evidence
+        if ev is None:
+            continue
+        record = (data.get("acceptance") or {}).get(sc.id) or {}
+        human = holds_acceptance(record, digest, tree) and problem is None
+        if ev.human:
+            items.append(
+                {
+                    "scenario": sc.id,
+                    "state": "HUMAN_ACCEPTED",
+                    "reason": "accepted by %s" % record.get("by"),
+                }
+                if human
+                else {
+                    "scenario": sc.id,
+                    "state": "AWAITING_HUMAN",
+                    "reason": "a person confirms: %s (agent-orchestrator accept <plan> %s --note ...)"
+                    % (ev.human, sc.id),
+                }
+            )
+            continue
+        state, reason = "UNKNOWN", problem
+        if problem is None:
+            stems = receipt_stems(data, sc.id, "integration")
+            if not stems:
+                reason = "no integration receipt"
+            else:
+                receipt, why = read_receipt(data, stems[-1], receipts_dir, digest, tree)
+                if receipt is None:
+                    reason = why
+                else:
+                    state = (
+                        receipt.get("result")
+                        if receipt.get("result") in ("PASS", "FAIL")
+                        else "UNKNOWN"
+                    )
+                    reason = receipt.get("label") if state != "PASS" else None
+        if state != "PASS" and sc.id in unverified:
+            reason = (
+                "%s; %s merged with this evidence unverified, so it must pass at integration"
+                % (
+                    reason,
+                    unverified[sc.id],
+                )
+            )
+        elif state != "PASS" and human:
+            state, reason = "HUMAN_ACCEPTED", "accepted by %s over %s" % (record.get("by"), state)
+        items.append({"scenario": sc.id, "state": state, "reason": reason})
+    states = {item["state"] for item in items}
+    if states <= {"PASS"}:
+        overall = "ACCEPTED"
+    elif states <= {"PASS", "HUMAN_ACCEPTED"}:
+        overall = "ACCEPTED_WITH_HUMAN"
+    elif states <= {"PASS", "HUMAN_ACCEPTED", "AWAITING_HUMAN"}:
+        overall = "VERIFYING"
+    else:
+        overall = "REJECTED"
+    return {"state": overall, "items": items}
+
+
+def acceptance_errors(result):
+    """One line per item that does not count, naming the scenario and the reason: what `verify` exits non-zero on."""
+    return [
+        "%s %s: %s" % (item["scenario"], item["state"], item["reason"])
+        for item in result["items"]
+        if item["state"] not in ("PASS", "HUMAN_ACCEPTED")
+    ]

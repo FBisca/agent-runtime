@@ -110,7 +110,8 @@ class StatusJsonTests(StatusFixture, unittest.TestCase):
 
         done = self.status()
         self.assertEqual(done["run_dir"], idle["run_dir"])
-        self.assertEqual(done["state"], "RUNNING")
+        # The merge delivered the plan; its only evidence is a human item, so it waits for a person (VERIFYING).
+        self.assertEqual(done["state"], "VERIFYING")
         self.assertEqual(done["history"][:2], paused["history"])
         (ticket,) = done["tickets"]
         self.assertEqual((ticket["state"], ticket["pr"]), ("COMPLETE", PR))
