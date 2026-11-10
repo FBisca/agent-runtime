@@ -10,7 +10,8 @@ code, so they stay on this machine: outside every git working tree, directories 
 overwritten. Git decides what a working tree is (`git rev-parse`), so a stray `.git` entry that git does
 not accept does not block the default home.
 
-`agent-eval` is its own workspace member, `packages/agent-eval/`, standard library only. It only reads
+`agent-eval` is its own workspace member, `packages/agent-eval/`. Its one dependency is Pydantic, which
+validates the labels; capture needs nothing beyond the standard library. It only reads
 the files of the orchestrator, the runtime and the harnesses; it imports none of them and opens none of
 their stores.
 
@@ -67,7 +68,8 @@ first line is not a header is skipped.
 `manifest.json` (`schema: case/1`), `transcripts/<id>.jsonl.gz`,
 `transcripts/<parent>/<agent-id>.jsonl.gz` and `.meta.json.gz` for a subagent,
 `transcripts/<id>/tool-results/<path>.gz`, `transcripts/<id>/rollouts/<file>.gz` for a Codex session's later
-rollouts, `orchestrate/<path>.gz` for a run directory, and `changes.patch` when a repository was named.
+rollouts, `orchestrate/<path>.gz` for a run directory, `changes.patch` when a repository was named, and
+`labels/<kind>.json` for a judge's label (`agent-eval add-label`, written once and never overwritten).
 
 Manifest `sessions` carry `id`, `harness`, `role` (`root`, `continuation`, `fork`, `session`,
 `subagent`, `worker`), `parent`, `file`, `sha256`, `bytes`, `source`, `modified`, `cwd` and `assignment_id`
@@ -78,6 +80,113 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 `excluded`, `missing`, `git` (`{repo, base, head}` as resolved shas, or null) and `orchestrate` (null, or
 `{slug, source, window: {start, end}, worktrees, files}` with each file's `file`, `sha256`, `bytes` and
 `source`).
+
+A label is `label/1` (a verdict and four scores, `source: transcribed`) or `label/2`, the judge's whole output:
+the verdict, the gates, each dimension's anchor label, rationale and findings, the top issue, the smallest
+improvement, the probable cause and the judge's provenance. Every finding carries evidence refs into the
+case, each a `file` the manifest lists (or `changes.patch`), a verbatim `quote` of at most 300 characters and
+optionally the `line` it starts on. A complete `label/2`, which `agent-eval add-label --help` also prints:
+
+```json
+{
+  "schema": "label/2",
+  "kind": "agent-judge",
+  "subject": {
+    "session": "8b1d6f52-0c3e-4a79-9d1f-5e2a7c4b9013"
+  },
+  "judge": {
+    "skill": "score-agent",
+    "rubric_sha256": "9f2c4d7a1b3e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5061728394a5b6c7d8e",
+    "model": "claude-opus-4-7"
+  },
+  "judged_at": "2026-11-10",
+  "source": "judged",
+  "verdict": "FAIL",
+  "score": 0.69,
+  "gates": [],
+  "dimensions": {
+    "quality": {
+      "label": "weak",
+      "score": 0.4,
+      "rationale": "The worker reported the fix done while its patch still returns None.",
+      "findings": [
+        {
+          "kind": "proven",
+          "claim": "The worker reported done on a patch that returns None.",
+          "deduction": true,
+          "evidence": [
+            {
+              "file": "transcripts/8b1d6f52-0c3e-4a79-9d1f-5e2a7c4b9013.jsonl.gz",
+              "line": 212,
+              "quote": "All done, the fix is in place."
+            },
+            {
+              "file": "changes.patch",
+              "line": 14,
+              "quote": "+    return None"
+            }
+          ]
+        }
+      ]
+    },
+    "tests": {
+      "label": "good",
+      "score": 0.8,
+      "rationale": "The suite ran and passed, but no test covers the idle path.",
+      "findings": [
+        {
+          "kind": "risk",
+          "claim": "Only the happy path is tested.",
+          "deduction": true,
+          "evidence": [
+            {
+              "file": "transcripts/8b1d6f52-0c3e-4a79-9d1f-5e2a7c4b9013.jsonl.gz",
+              "line": 140,
+              "quote": "3 passed in 0.12s"
+            }
+          ]
+        }
+      ]
+    },
+    "efficiency": {
+      "label": "strong",
+      "score": 1.0,
+      "rationale": "It read the task, changed one file and stopped.",
+      "findings": [
+        {
+          "kind": "strength",
+          "claim": "It started from the task file.",
+          "deduction": false,
+          "evidence": [
+            {
+              "file": "transcripts/8b1d6f52-0c3e-4a79-9d1f-5e2a7c4b9013.jsonl.gz",
+              "line": 31,
+              "quote": "Read task.md and follow it."
+            }
+          ]
+        }
+      ]
+    },
+    "communication": {
+      "label": "insufficient_evidence",
+      "score": null,
+      "rationale": "The case holds no message the worker sent to its parent.",
+      "findings": []
+    }
+  },
+  "top_issue": "Reported done on a change that does nothing.",
+  "smallest_improvement": "Run the idle path before reporting done.",
+  "probable_cause": {
+    "cause": "instructions",
+    "confidence": "medium"
+  }
+}
+```
+
+`add-label` refuses a `label/2` whose evidence is not in the case, whose dimensions break the rubric's
+rules, whose score is not the weighted mean of its dimensions (quality .35, tests .25, efficiency .25,
+communication .15, renormalised over the scored dimensions, rounded half up to 2 decimals) or whose verdict does
+not follow from its gates and scores.
 
 ## Requirements
 
@@ -93,7 +202,13 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 - **R216** WHEN `--orchestrate-run <slug>` is given, THEN the run dir is copied into the case and every Claude, Codex or Pi session whose cwd is one of the run's ticket worktrees and which started inside the run window joins the case as a worker, with its `assignment_id` when the first prompt carries one. (from agent-eval-p0/S8)
 - **R217** WHEN a Codex session spans several rollout files, THEN all files sharing its `session_meta` id are captured under that one session. (from agent-eval-p0/S9)
 - **R218** WHEN a Pi session is captured, THEN its id is the first record's `id` and its cwd the first record's `cwd`, including directories whose names start with `--`. (from agent-eval-p0/S10)
-- **R219** WHEN `agent-eval add-label <case> --kind agent-judge <file>` reads a JSON label, THEN an invalid one exits 2 naming each failing field, a valid `label/1` one is written to `labels/agent-judge.json`, and an existing label is refused (exit 1, nothing written). (from agent-eval-p0/S12)
+- **R219** WHEN `agent-eval add-label <case> --kind agent-judge <file>` reads a JSON label, THEN an invalid one exits 2 naming each failing field, a valid `label/1` one (`source: transcribed`) is written to `labels/agent-judge.json`, and an existing label is refused (exit 1, nothing written). (from agent-eval-p0/S12)
+- **R220** WHEN `agent-eval add-label <case> --kind agent-judge <file>` reads a `label/2` JSON, THEN a valid one is written to `labels/agent-judge.json` as given; an invalid one exits 2 naming each failing field by its path (`dimensions.quality.findings[0].evidence[1].quote`), and nothing is written. A valid label has `subject.session`, `judge` (`skill`, 64-hex `rubric_sha256`, `model`), `judged_at` (a real date), `source: judged`, `verdict` PASS, FAIL, BLOCKED or INCOMPLETE, `score` (0..1 or null), `gates`, the four dimensions (each `label`, `score` 1.0, 0.8, 0.4, 0.2 or null, `rationale`, `findings`), `top_issue`, `smallest_improvement` and `probable_cause` (`cause` model, harness, repo, instructions, mixed or unknown; `confidence` low, medium or high), with `schema: label/2` and `kind`; any other field is refused. A finding has `kind`, `claim`, `deduction` and `evidence`. (from agent-eval-label-evidence/S1)
+- **R221** WHEN a `label/2` evidence ref (`file`, optional `line`, required `quote` of at most 300 characters) is checked, THEN it is accepted only when `file` is a file of the case listed in its manifest (a transcript, an orchestrate file) or `changes.patch`, and `quote` occurs verbatim in that file's decompressed text, on line `line` when given (the quote starts on it); a ref to an absolute path, a path leaving the case, an unlisted file, a line past the end or a quote that is not there exits 2 naming the ref. (from agent-eval-label-evidence/S2)
+- **R222** WHEN a dimension of a `label/2` is checked, THEN a scored dimension has at least one finding with evidence; a dimension scored below 1.0 has at least one finding with `deduction: true`; a finding's `kind` is proven, risk or strength; a null score has label `insufficient_evidence`, a rationale and no deduction; anything else exits 2 naming the dimension. (from agent-eval-label-evidence/S3)
+- **R223** WHEN the score and verdict of a `label/2` are checked, THEN `score` equals the weighted mean (quality .35, tests .25, efficiency .25, communication .15) renormalised over the scored dimensions, rounded to 2 decimals, and is null only when none is scored; `verdict` is BLOCKED exactly when `gates` is non-empty (each gate with `gate`, `rationale` and evidence), else INCOMPLETE when quality or tests is null, else PASS when every scored dimension and the score are at least 0.8, else FAIL; a mismatch exits 2 naming the expected value. (from agent-eval-label-evidence/S4)
+- **R224** WHEN a label names its subject or source, THEN a `label/2` whose `subject.session` is not a session of the case manifest exits 2 naming it; a `label/1` with `source: judged` exits 2 saying a judged label is `label/2`; a `label/1` with `source: transcribed` is still accepted as before. (from agent-eval-label-evidence/S5)
+- **R225** WHEN `agent-eval add-label --help` is read, or the spec's case layout, THEN both show `labels/<kind>.json` and a complete `label/2` example, and the spec names Pydantic as the package's one dependency. (from agent-eval-label-evidence/S6)
 
 ## Coverage
 
@@ -112,3 +227,9 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 | S9 | R217 | `test_R217_every_rollout_file_of_a_session_is_captured_under_it`, `test_R217_rollout_files_with_the_same_id_in_other_directories_still_join`, `test_R217_a_later_rollout_does_not_pull_in_a_session_that_started_outside_the_window` |
 | S10 | R218 | `test_R218_id_and_cwd_come_from_the_first_record_in_a_dash_dash_directory`, `test_R218_a_directory_name_that_looks_like_the_worktree_does_not_decide_the_cwd`, `test_R218_a_file_whose_first_record_is_not_a_session_header_is_skipped` |
 | S12 | R219 | `test_R219_an_invalid_label_exits_2_naming_each_failing_field`, `test_R219_a_label_valid_only_in_form_exits_2`, `test_R219_an_unreadable_label_file_exits_2`, `test_R219_a_valid_label_is_written_to_labels_agent_judge_json`, `test_R219_an_existing_label_is_refused_and_left_unchanged` |
+| S1 | R220 | `packages/agent-eval/tests/test_add_label2.py`: `test_S1_a_valid_label2_is_written_as_given`, `test_S1_an_invalid_label2_names_each_failing_field_by_its_path`, `test_S1_each_shape_fault_is_refused_and_nothing_is_written` |
+| S2 | R221 | `test_S2_a_ref_into_a_listed_file_with_a_verbatim_quote_is_accepted`, `test_S2_a_ref_that_does_not_resolve_exits_2_naming_it`, `test_S2_a_gate_ref_is_resolved_like_any_other`, `test_S2_a_listed_file_that_is_gone_from_the_case_is_refused` |
+| S3 | R222 | `test_S3_a_dimension_that_breaks_a_rule_exits_2_naming_it`, `test_S3_a_perfect_dimension_needs_evidence_but_no_deduction`, `test_S3_every_dimension_is_named_when_several_break` |
+| S4 | R223 | `test_S4_the_recomputed_score_and_verdict_are_accepted`, `test_S4_a_wrong_score_exits_2_naming_the_expected_value`, `test_S4_a_score_where_nothing_is_scored_must_be_null`, `test_S4_a_wrong_verdict_exits_2_naming_the_expected_value`, `test_S4_a_gate_makes_the_verdict_blocked_and_only_a_gate_does`, `test_S4_a_blocked_verdict_without_a_gate_is_refused` |
+| S5 | R224 | `test_S5_a_subject_that_is_not_a_session_of_the_manifest_exits_2_naming_it`, `test_S5_a_label2_needs_a_readable_manifest`, `test_S5_a_judged_label1_exits_2_saying_a_judged_label_is_label2`, `test_S5_a_transcribed_label1_is_still_accepted`, `test_S5_a_label2_of_another_kind_is_refused`, `test_S5_an_existing_label_still_stays` |
+| S6 | R225 | `test_S6_the_help_shows_where_the_label_goes_and_a_complete_label2`, `test_S6_the_spec_case_layout_and_example_match_the_help`, `test_S6_the_spec_names_pydantic_as_the_one_dependency`, `test_S6_the_example_is_accepted_by_add_label_against_the_case_it_cites` |
