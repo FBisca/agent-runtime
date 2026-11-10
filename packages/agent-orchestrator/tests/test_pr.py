@@ -711,7 +711,7 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
     def test_S14_a_unit_waiting_for_its_merge_is_never_idle(self):
-        """orchestrator-engine/R15: orchestrator-lead-alerts/S8 — and R62: orchestrator-silent-idle/S14"""
+        """orchestrator-engine/R15: orchestrator-lead-alerts/S8 — and R62: orchestrator-silent-idle/R14"""
         self.prs(["OPEN"])
         self.waits(
             [

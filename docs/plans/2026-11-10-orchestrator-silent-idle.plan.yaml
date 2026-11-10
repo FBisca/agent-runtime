@@ -1,0 +1,108 @@
+schema: plan/1
+slug: orchestrator-silent-idle
+goal: >-
+  An agent whose turn ended while it is still live (a reviewer, worker or answerer idle on a background job) is not
+  treated as finished: the driver waits for its complete report under the assignment it was given, and only the timed
+  idle watchdog asks the Lead, naming the agent and the way out.
+spec: docs/specs/orchestrator-engine.md
+outcome: [S1, S4]
+
+scenarios:
+  # Reviewer
+  - id: S1
+    when: >-
+      a live reviewer ends its turn idle or done several times with no review file and no report, then writes a valid
+      review and reports complete under its original assignment before the idle watchdog fires
+    then: >-
+      the review is accepted and the unit completes as usual (reviewed_commit recorded), with no resume, no assignment
+      replaced, no payload-warning or contract-error for the review, and no Lead request
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_reviewer_idle_outcome.py
+        -m integration -k "background_job or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_reviewer_idle_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+  - id: S2
+    when: a live reviewer is idle or done with a valid review file on disk but has sent no complete report
+    then: its gate stays reviewing and no verdict is recorded
+  - id: S3
+    when: an idle reviewer is observed on many loop iterations before the next timed idle tick
+    then: the observations consume no idle ticks and raise no request
+  - id: S4
+    when: a live reviewer never reports and its unit's signature stays unchanged through the baseline and two timed idle ticks
+    then: >-
+      exactly one request with event idle and one decision wake are written, naming the reviewer, the expected review
+      file, the inactivity and the `decide` options; no warning resume and no payload error precede it
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_reviewer_idle_outcome.py
+        -m integration -k "watchdog or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_reviewer_idle_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+
+  # Worker and answerer: the same class
+  - id: S5
+    when: a live worker ends its turn idle or done with no valid report on disk
+    then: it stays pending, with no immediate exited request, until its matching complete or the same idle watchdog
+  - id: S6
+    when: a worker ends its turn idle with a valid report for its task already on disk
+    then: the existing report_landed acceptance advances it as today
+  - id: S7
+    when: a live answerer ends its turn idle or done before reporting
+    then: it stays working with no additional resume, and its later matching complete is accepted
+  - id: S8
+    when: that answerer never reports
+    then: the idle watchdog raises one idle request, and the unit's PR-ready stays blocked on the answers
+
+  # What stays as it is
+  - id: S9
+    when: a complete report announces a review or report file that is missing or unreadable
+    then: >-
+      the R18 grace and the capped sender recovery still apply, and each recovery message names the file to write or
+      repair and says to report complete under the current assignment, without claiming the sender's report was read
+  - id: S10
+    when: a reviewer whose runtime state is failed, a gone reviewer, or a restart-orphaned reviewer has no usable review
+    then: the Lead is asked at once with zero warning resumes; an orphan with a valid review file is still accepted
+  - id: S11
+    when: the runtime reports unreported or error, or an agent reports blocked or decision
+    then: the attention is handled at once, as today, not deferred to the idle watchdog
+  - id: S12
+    when: a reviewer brief is written
+    then: >-
+      it says the reviewer may wait on background jobs, that ending a turn does not finish the review, and that the
+      review is written after the jobs it needs finish and then reported complete with the brief's assignment id
+  - id: S13
+    when: a reviewer's complete report arrives after its unit's gate moved to requested
+    then: the open Lead request stays open and the unit does not advance on its own
+  - id: S14
+    when: a unit is at awaiting-merge
+    then: the idle ticks still skip it
+
+tickets:
+  - id: T1
+    delivers: >-
+      Silent-idle classification for live reviewers, workers and answerers; reviewed only on the reviewer's complete;
+      the worker report_landed shortcut kept; truthful payload-recovery text; an actionable timed idle request; the
+      reviewer brief on background jobs; the rewritten idle tests and the role regressions; R22 in the spec
+    satisfies: [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_gates.py
+      - packages/agent-orchestrator/tests/test_wake.py
+      - packages/agent-orchestrator/tests/test_decider.py
+      - packages/agent-orchestrator/tests/test_report_timing.py
+      - packages/agent-orchestrator/tests/test_envelope.py
+      - packages/agent-orchestrator/tests/test_pr.py
+      - docs/specs/orchestrator-engine.md
+    size: regular
+    difficulty: complex
+    risk: [state, concurrency]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-10T10:29:26.955698+00:00'
+  base: 759dfc371b0a60fd710eb4cb17cfb5ff9e3a61b2
+  digest: e327878ddd355b04bf66c1bfa228b96e90b23cfab40a25c71d96d771bf74b150
