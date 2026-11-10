@@ -1274,15 +1274,20 @@ class Driver:
             self.receive(result)
             self.idle_ticks(result.get("assignments") or [])
             self.unfinished = {i for i in result.get("unfinished") or [] if isinstance(i, str)}
+            recovered = 0
             if (
                 not self.reconciled
             ):  # a drive that starts on a ledger a dead one left looks at it once
                 self.reconciled = True
-                dispatched += self.reconcile()
+                recovered = self.reconcile()
+                dispatched += recovered
             # `unfinished` lists assignment ids. A parked unit's assignment stays open in the runtime and makes `wait`
             # return at once: it is not work, so a run with only parked units left ends.
             parked = self.parked_assignments()
-            idle = not [entry for entry in result.get("unfinished") or [] if entry not in parked]
+            # An attempt recovered after this wait is one it could not list: the next wait settles it, not `status`.
+            idle = not recovered and not [
+                entry for entry in result.get("unfinished") or [] if entry not in parked
+            ]
             if not (dispatched or acted or self.received):
                 self.idle()
 
