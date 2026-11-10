@@ -936,6 +936,25 @@ def next_path(directory, stem, suffix):
     raise ValueError("too many %s files in %s" % (stem, directory))
 
 
+# The tail of a failing job's log that a fix round shows; the full log is at log_path.
+CI_EXCERPT_CHARS = 2048
+
+
+def job_log(run_log, job):
+    """The lines of a `gh run view --log-failed` log that belong to one job: each opens with the job's name and a tab.
+    A log with no such line is taken whole (it names no job)."""
+    lines = [line for line in run_log.splitlines() if line.split("\t", 1)[0] == job]
+    return "\n".join(lines) if lines else run_log
+
+
+def log_tail(text, limit=CI_EXCERPT_CHARS):
+    """The last `limit` characters of a log, starting at a whole line."""
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    return tail.split("\n", 1)[1] if "\n" in tail else tail
+
+
 def cell(text, limit=160):
     """Text safe inside one plan table cell: one line, no pipes, cut at `limit`."""
     flat = " ".join(str(text).replace("|", "/").split())
@@ -2759,50 +2778,43 @@ class Driver:
         return self.fail_gate(task_id, report, "conflict", [item], rebase=True)
 
     def ci_items(self, task_id, url, rows):
-        """The failing CI checks as evidence items: the check's name and the tail of its log (`gh run view`)."""
-        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
+        --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
         failing = [
             row
             for row in rows
             if str(row.get("bucket") or "").lower() in ("fail", "failing", "cancel", "cancelled")
         ]
+        runs = {}  # run id -> its failed-step log: every failing job of a run shares one fetch
         items = []
         for number, row in enumerate(failing, 1):
-            excerpt = str(row.get("description") or "").strip()
+            name = row.get("name") or "ci"
+            text = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
-                excerpt = (out or err).strip() or excerpt
-            items.append(
-                {
-                    "id": "CI%d" % number,
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": row.get("name") or "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": excerpt or "the check failed",
-                    "log_path": str(log),
-                }
-            )
+                if run.group(1) not in runs:
+                    _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
+                    runs[run.group(1)] = (out or err).strip()
+                text = job_log(runs[run.group(1)], name) or text
+            items.append(self.ci_item(task_id, url, "CI%d" % number, name, text))
         if not items:
-            items = [
-                {
-                    "id": "CI1",
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": "the checks failed",
-                    "log_path": str(log),
-                }
-            ]
-        log.write_text(
-            "\n".join("%s: %s" % (item["check"], item["excerpt"]) for item in items) + "\n",
-            encoding="utf-8",
-        )
+            items.append(self.ci_item(task_id, url, "CI1", "ci", "the checks failed"))
         return items
+
+    def ci_item(self, task_id, url, item_id, check, text):
+        """One CI finding: the job's full text at `log_path`, its capped tail as the excerpt."""
+        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        log.write_text(text + "\n", encoding="utf-8")
+        return {
+            "id": item_id,
+            "kind": "blocking",
+            "source": "ci",
+            "check": check,
+            "command": "gh pr checks %s" % url,
+            "exit": 1,
+            "excerpt": log_tail(text) or "the check failed",
+            "log_path": str(log),
+        }
 
     def put_status(self, task_id, status):
         """The ticket's Status cell; the archive unit has no row."""
