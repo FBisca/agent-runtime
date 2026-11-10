@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "record": "attempt",
   "file": "attempts.jsonl",
   "written_by": "agent_orchestrator/evidence.py",
@@ -16,7 +16,7 @@
     "finished_at": "when the attempt ended (ISO 8601), or null while it runs",
     "elapsed_seconds": "the seconds between the two, or null when one of them is missing",
     "outcome": "the attempt's final status (COMPLETE, RELEASED, BLOCKED, ...)",
-    "verified": "true when the completion was verified, false when it was not, null while it is unknown",
+    "claimed": "true when the attempt's report claims a completed, accepted and checked task (the worker's word, not a receipt), false when it does not, null while it is unknown",
     "counters": "tool_calls, model_calls, tool_loops, retries, interventions and human_rescues; a count that was not measured is null",
     "tokens": "the input, output and cached token figures, labelled; a figure nobody reported is null",
     "gates": "the gates the attempt went through and how each ended",

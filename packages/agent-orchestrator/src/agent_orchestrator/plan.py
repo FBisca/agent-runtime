@@ -25,6 +25,8 @@ from pydantic import (
     model_validator,
 )
 
+from . import runner
+
 DEFAULT_STATE = "~/.local/state/orchestrate"
 ScenarioId = Annotated[str, Field(pattern=r"^S\d+[a-z]?$")]
 TicketId = Annotated[str, Field(pattern=r"^T\d+$")]
@@ -611,15 +613,71 @@ def approved_text(text, approval):
     return prefix + (eol if prefix and not prefix.endswith("\n") else "") + block + text[end:]
 
 
+def baseline(model, repo, base_sha, approval_digest, files):
+    """Run every check item of the plan once at `base` and judge it against its `baseline:` (D24).
+
+    Returns the runs to persist, each with the calibration to record; raises PlanError naming every item that is
+    not what it claims, before anything is written."""
+    runs, refusals = [], []
+    for scenario in model.scenarios:
+        item = scenario.evidence
+        if item is None or not item.check:
+            continue
+        negative = (item.negative, files[item.negative]) if item.negative else None
+        run = runner.run_evidence(
+            repo,
+            base_sha,
+            scenario=scenario.id,
+            phase="baseline",
+            digest=approval_digest,
+            check=item.check,
+            oracles={name: files[name] for name in item.oracle},
+            place=item.place,
+            env_names=item.env,
+            timeout=item.timeout,
+            negative=negative,
+        )
+        ok, observed, calibrated = runner.judge_baseline(
+            run.receipt, item.baseline, bool(item.oracle)
+        )
+        if not ok:
+            refusals.append(
+                "%s: baseline expected %s at %s, observed %s — %s"
+                % (
+                    scenario.id,
+                    item.baseline,
+                    base_sha[:12],
+                    observed,
+                    "make the oracle fail on an assertion at base and pass its controls, or set baseline: pass"
+                    if item.baseline == "fail"
+                    else "fix the check or set baseline: fail",
+                )
+            )
+        runs.append((run, {"calibrated": calibrated, "expected": item.baseline}))
+    if refusals:
+        raise PlanError("approval: " + "; ".join(refusals) + " — nothing was approved")
+    return runs
+
+
+def receipts_dir(repo, slug, state_dir):
+    """Where the driver keeps a plan's receipts: `<state>/<repo-key>/<slug>/receipts` (D17)."""
+    # The driver owns the state key and imports this module, so it is imported late.
+    from . import driver
+
+    return Path(state_dir).expanduser() / driver.repo_key(repo) / slug / "receipts"
+
+
 def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
     path = Path(path).resolve()
     repo = repository(path, repo)
-    load(path, repo=repo, verify=False)
+    model = load(path, repo=repo, verify=False)
     data, _ = read_yaml(path)
     plan_bytes = canonical(data)
     files = payloads(oracle_dir(path))
     base_sha = git(repo, "rev-parse", "--verify", base + "^{commit}")
     sha = digest(identity(repo), base_sha, plan_bytes, files)
+    # A refusal here leaves no file behind: the runner writes nothing until the runs are accepted.
+    runs = baseline(model, repo, base_sha, sha, files)
     email = subprocess.run(
         ["git", "-C", str(repo), "config", "user.email"], capture_output=True, text=True, timeout=15
     ).stdout.strip()
@@ -653,6 +711,8 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
+    for run, calibration in runs:
+        runner.persist(run, receipts_dir(repo, model.slug, state_dir), calibration)
     fd, temporary = tempfile.mkstemp(prefix=".approval-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:

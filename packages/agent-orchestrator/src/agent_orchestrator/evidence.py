@@ -1,7 +1,7 @@
 """Per-attempt evidence: one schema-versioned record per attempt, and the old metrics.json it does not replace.
 
 `<run>/attempts.jsonl` holds one JSON object per attempt: what the attempt was (task, unit, harness, provider, source
-revision), when it ran (started, finished, elapsed), how it ended (outcome, verified completion, gate outcomes) and
+revision), when it ran (started, finished, elapsed), how it ended (outcome, claimed completion, gate outcomes) and
 what it cost (retries, tool loops, interventions, human rescues, input/output/cached tokens).
 
 Two rules hold everywhere. A measurement that was not taken is `null`, never `0`: an unknown cost is not a free
@@ -15,7 +15,8 @@ import json
 import os
 from datetime import datetime
 
-SCHEMA_VERSION = 1
+# 2: `verified` became `claimed`. A worker's report claims a completion; only the driver's receipt verifies one.
+SCHEMA_VERSION = 2
 
 FIELDS = (
     "schema_version",
@@ -29,7 +30,7 @@ FIELDS = (
     "finished_at",
     "elapsed_seconds",
     "outcome",
-    "verified",
+    "claimed",
     "counters",
     "tokens",
     "gates",
@@ -89,9 +90,10 @@ def elapsed(started, finished):
         return None
 
 
-def verified(task):
-    """Whether the attempt's completion was verified: a complete report that met its acceptance and passed every
-    check. An attempt that ended without one is not verified; an attempt still running is unknown (`None`)."""
+def claimed(task):
+    """Whether the attempt claims a completion: a complete report that says it met its acceptance and passed every
+    check. That is the worker's word, not evidence (a receipt is). An attempt that ended without such a report claims
+    nothing; an attempt still running is unknown (`None`)."""
     report = task.get("report")
     if report:
         checks = report.get("checks") or []
@@ -158,7 +160,7 @@ def record(task_id, task, rows, number):
         "finished_at": finished,
         "elapsed_seconds": elapsed(started, finished),
         "outcome": task.get("status"),
-        "verified": verified(task),
+        "claimed": claimed(task),
         "counters": counters,
         "tokens": sum_tokens(usages),
         "gates": gates,
