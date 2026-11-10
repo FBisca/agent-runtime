@@ -24,9 +24,17 @@ def screen(name):
 
 
 def terminal(state, cli="claude-code", argv=None):
-    return {"address": "t9", "name": "fix", "parent": "t0", "state": "live", "turn": 3,
-            "status": {"app": cli, "state": state},
-            "foreground": {"argv": argv or [("codex" if cli == "codex" else "claude"), "--agent", "implementer"]}}
+    return {
+        "address": "t9",
+        "name": "fix",
+        "parent": "t0",
+        "state": "live",
+        "turn": 3,
+        "status": {"app": cli, "state": state},
+        "foreground": {
+            "argv": argv or [("codex" if cli == "codex" else "claude"), "--agent", "implementer"]
+        },
+    }
 
 
 def world(raw, text=None, read_fails=False, calls=None):
@@ -42,6 +50,7 @@ def world(raw, text=None, read_fails=False, calls=None):
                 raise RuntimeError("read failed")
             return json.dumps({"complete": True, "how": "history", "text": text})
         raise AssertionError(argv)
+
     return fake
 
 
@@ -107,7 +116,9 @@ class InterruptionTests(unittest.TestCase):
 
     def test_S11_normal_finish_stays_idle(self):
         """agent-runtime-tools/S11"""
-        self.assertEqual(status_of(terminal("idle"), screen("claude_finished.txt"))["state"], "idle")
+        self.assertEqual(
+            status_of(terminal("idle"), screen("claude_finished.txt"))["state"], "idle"
+        )
 
     def test_S11_read_uses_200_lines(self):
         """agent-runtime-tools/S11"""
@@ -130,7 +141,10 @@ class InterruptionTests(unittest.TestCase):
 
     def test_S12_single_marker_has_resume_first(self):
         """agent-runtime-tools/S12"""
-        self.assertEqual(status_of(terminal("idle"), screen("claude_interrupted.txt"))["next"][0]["verb"], "resume")
+        self.assertEqual(
+            status_of(terminal("idle"), screen("claude_interrupted.txt"))["next"][0]["verb"],
+            "resume",
+        )
 
     def test_S13_marker_only_before_last_prompt_is_not_interrupted(self):
         """agent-runtime-tools/S13"""
@@ -142,16 +156,22 @@ class InterruptionTests(unittest.TestCase):
         """agent-runtime-tools/S13"""
         for name in ("codex_working_interrupted.txt", "codex_suggestion_composer.txt"):
             with self.subTest(name=name):
-                self.assertEqual(status_of(terminal("working", "codex"), screen(name))["state"], "interrupted")
+                self.assertEqual(
+                    status_of(terminal("working", "codex"), screen(name))["state"], "interrupted"
+                )
 
     def test_S11_typed_text_in_claude_box_still_interrupted(self):
         """agent-runtime-tools/S11"""
-        self.assertEqual(status_of(terminal("idle"), screen("claude_interrupted_typed_box.txt"))["state"],
-                         "interrupted")
+        self.assertEqual(
+            status_of(terminal("idle"), screen("claude_interrupted_typed_box.txt"))["state"],
+            "interrupted",
+        )
 
     def test_S11_marker_text_printed_mid_line_is_not_a_marker(self):
         """agent-runtime-tools/S11"""
-        self.assertEqual(status_of(terminal("idle"), screen("claude_printed_marker.txt"))["state"], "idle")
+        self.assertEqual(
+            status_of(terminal("idle"), screen("claude_printed_marker.txt"))["state"], "idle"
+        )
 
     def test_S12_redrawn_history_counts_one_event(self):
         """agent-runtime-tools/S12"""
@@ -174,13 +194,20 @@ class InterruptionTests(unittest.TestCase):
     def test_S14_unparseable_read_keeps_plain_state(self):
         """agent-runtime-tools/S14"""
         raw = terminal("idle")
-        with patch.object(app, "run_command", side_effect=lambda argv: json.dumps(raw)
-                          if argv[:2] == ["hc", "get"] else "not json"):
+        with patch.object(
+            app,
+            "run_command",
+            side_effect=lambda argv: json.dumps(raw) if argv[:2] == ["hc", "get"] else "not json",
+        ):
             self.assertEqual(app.status("hc", "fix", {"HC_TERMINAL_ID": "t0"})["state"], "idle")
 
     def test_markers_live_in_data_table(self):
         """agent-runtime-tools/S11"""
-        table = json.loads((HERE.parent / "packages/agent-runtime/src/agent_runtime" / "markers.json").read_text(encoding="utf-8"))
+        table = json.loads(
+            (HERE.parent / "packages/agent-runtime/src/agent_runtime" / "markers.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertEqual(set(table), {"claude-code", "codex"})
 
 
@@ -196,7 +223,9 @@ class ArgvTests(unittest.TestCase):
     def test_S15_list_trims_too(self):
         """agent-runtime-tools/S15"""
         raw = terminal("idle", "codex", argv=self.ARGV)
-        with patch.object(app, "run_command", side_effect=world(raw, screen("claude_finished.txt"))):
+        with patch.object(
+            app, "run_command", side_effect=world(raw, screen("claude_finished.txt"))
+        ):
             infos = app.list_children("hc", {"HC_TERMINAL_ID": "t0"})
         self.assertEqual(infos[0]["native"]["foreground"]["argv"], self.WANT)
 
@@ -207,8 +236,18 @@ class ArgvTests(unittest.TestCase):
 
 class UnreportedTests(unittest.TestCase):
     def silent(self, age):
-        return {"address": "t9", "name": "fix", "parent": "t0", "state": "live", "status": None, "status_ms": None,
-                "reported": False, "turn": 0, "created_ms": int((time.time() - age) * 1000), "exit_code": None}
+        return {
+            "address": "t9",
+            "name": "fix",
+            "parent": "t0",
+            "state": "live",
+            "status": None,
+            "status_ms": None,
+            "reported": False,
+            "turn": 0,
+            "created_ms": int((time.time() - age) * 1000),
+            "exit_code": None,
+        }
 
     def test_status_shows_unreported_with_the_same_next_rows(self):
         """agent-runtime/R105"""

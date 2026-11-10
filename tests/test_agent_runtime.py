@@ -18,7 +18,6 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-
 SCRIPT = Path(__file__).resolve().parents[1] / "server" / "agent_runtime.py"
 BIN = SCRIPT
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"))
@@ -46,16 +45,22 @@ class ResolveTests(unittest.TestCase):
 
     def test_herdr_pane_with_codex_is_native(self):
         """agent-runtime/R2"""
-        self.assertEqual(line({"HERDR_PANE_ID": "p1"}, cli="codex"), "runtime=native role=lead cli=codex")
+        self.assertEqual(
+            line({"HERDR_PANE_ID": "p1"}, cli="codex"), "runtime=native role=lead cli=codex"
+        )
 
     def test_hc_terminal_without_parent_is_lead(self):
         """agent-runtime/R3"""
-        self.assertEqual(line({"HC_TERMINAL_ID": "t1"}, hc=hc_returning(None)), "runtime=hc role=lead cli=claude")
+        self.assertEqual(
+            line({"HC_TERMINAL_ID": "t1"}, hc=hc_returning(None)), "runtime=hc role=lead cli=claude"
+        )
 
     def test_hc_terminal_with_parent_is_worker(self):
         """agent-runtime/R4"""
-        self.assertEqual(line({"HC_TERMINAL_ID": "t1"}, hc=hc_returning("tX")),
-                         "runtime=hc role=worker parent=tX cli=claude")
+        self.assertEqual(
+            line({"HC_TERMINAL_ID": "t1"}, hc=hc_returning("tX")),
+            "runtime=hc role=worker parent=tX cli=claude",
+        )
 
     def test_no_variables_is_native_lead(self):
         """agent-runtime/R5"""
@@ -72,7 +77,10 @@ class ResolveTests(unittest.TestCase):
         timeout = subprocess.TimeoutExpired("hc", 2)
         with patch.object(app.subprocess, "run", side_effect=timeout) as run:
             buf = io.StringIO()
-            with patch.dict(app.os.environ, {"HC_TERMINAL_ID": "t1"}, clear=True), redirect_stdout(buf):
+            with (
+                patch.dict(app.os.environ, {"HC_TERMINAL_ID": "t1"}, clear=True),
+                redirect_stdout(buf),
+            ):
                 code = app.main(["resolve"])
         self.assertEqual(code, 0)
         self.assertEqual(buf.getvalue().strip(), "runtime=hc role=unknown cli=claude")
@@ -83,9 +91,9 @@ class ResolveTests(unittest.TestCase):
         buf = io.StringIO()
         with patch.dict(app.os.environ, {}, clear=True), redirect_stdout(buf):
             self.assertEqual(app.main(["resolve", "--json", "--cli", "codex"]), 0)
-        self.assertEqual(json.loads(buf.getvalue()), {"runtime": "native", "role": "lead", "cli": "codex"})
-
-
+        self.assertEqual(
+            json.loads(buf.getvalue()), {"runtime": "native", "role": "lead", "cli": "codex"}
+        )
 
 
 class CliTests(unittest.TestCase):
@@ -107,8 +115,14 @@ class CliTests(unittest.TestCase):
     def run_cli(self, *args, env=None):
         full = {"PATH": str(self.bindir) + ":/usr/bin:/bin"}
         full.update(env or {})
-        done = subprocess.run([sys.executable, "-B", str(BIN), *args], env=full,
-                              capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=15)
+        done = subprocess.run(
+            [sys.executable, "-B", str(BIN), *args],
+            env=full,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=15,
+        )
         self.assertEqual(done.returncode, 0, done.stderr)
         return done.stdout.strip()
 
@@ -122,24 +136,32 @@ class CliTests(unittest.TestCase):
 
     def test_parent_through_symlink_is_worker(self):
         """agent-runtime/R4"""
-        self.assertEqual(self.hc_out('{"parent": "tX"}'), "runtime=hc role=worker parent=tX cli=claude")
+        self.assertEqual(
+            self.hc_out('{"parent": "tX"}'), "runtime=hc role=worker parent=tX cli=claude"
+        )
 
     def test_non_string_empty_or_spaced_parent_is_unknown(self):
         """agent-runtime/R4"""
         for parent in ("5", '""', '"a b"', "[]", "true"):
             with self.subTest(parent=parent):
-                self.assertEqual(self.hc_out('{"parent": %s}' % parent), "runtime=hc role=unknown cli=claude")
+                self.assertEqual(
+                    self.hc_out('{"parent": %s}' % parent), "runtime=hc role=unknown cli=claude"
+                )
 
     def test_missing_hc_is_unknown(self):
         """agent-runtime/R7"""
-        self.assertEqual(self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}),
-                         "runtime=hc role=unknown cli=claude")
+        self.assertEqual(
+            self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}),
+            "runtime=hc role=unknown cli=claude",
+        )
 
     def test_nonzero_exit_is_unknown(self):
         """agent-runtime/R7"""
         self.fake_hc("exit 3")
-        self.assertEqual(self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}),
-                         "runtime=hc role=unknown cli=claude")
+        self.assertEqual(
+            self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}),
+            "runtime=hc role=unknown cli=claude",
+        )
 
     def test_non_json_is_unknown(self):
         """agent-runtime/R7"""
@@ -152,9 +174,13 @@ class CliTests(unittest.TestCase):
 
     def test_bad_cli_value_falls_back_and_exits_zero(self):
         """agent-runtime/R5"""
-        self.assertEqual(self.run_cli("resolve", "--cli", "gemini"), "runtime=native role=unknown cli=claude")
-        self.assertEqual(self.run_cli("resolve", "--bogus", "--cli", "codex"),
-                         "runtime=native role=unknown cli=codex")
+        self.assertEqual(
+            self.run_cli("resolve", "--cli", "gemini"), "runtime=native role=unknown cli=claude"
+        )
+        self.assertEqual(
+            self.run_cli("resolve", "--bogus", "--cli", "codex"),
+            "runtime=native role=unknown cli=codex",
+        )
 
 
 def run_main(*argv, env=None):
@@ -169,6 +195,7 @@ STATUS_KEYS = {"name", "runtime", "role", "parent", "state", "turn", "native", "
 
 def hc_world(terminals, calls=None):
     """Fake hc: `get <t>` answers from raw get-records; `ls --json [--all]` rows carry parent when non-null."""
+
     def fake(argv):
         if calls is not None:
             calls.append(list(argv))
@@ -187,11 +214,22 @@ def hc_world(terminals, calls=None):
                 rows.append(row_)
             return json.dumps({"hidden_finished": 0, "terminals": rows})
         raise AssertionError("unexpected command %r" % (argv,))
+
     return fake
 
 
 def raw(status, parent: str | None = "t0", state: str = "live", **extra):
-    return dict({"address": "t9", "name": "fix", "parent": parent, "state": state, "status": status, "turn": 3}, **extra)
+    return dict(
+        {
+            "address": "t9",
+            "name": "fix",
+            "parent": parent,
+            "state": state,
+            "status": status,
+            "turn": 3,
+        },
+        **extra,
+    )
 
 
 def hc_status(record, name="fix"):
@@ -204,8 +242,10 @@ class StatusTests(unittest.TestCase):
         """agent-runtime/R11"""
         info = hc_status(raw({"app": "claude-code", "state": "working"}))
         self.assertEqual(set(info), STATUS_KEYS)
-        self.assertEqual((info["name"], info["runtime"], info["role"], info["parent"], info["turn"]),
-                         ("fix", "hc", "worker", "t0", 3))
+        self.assertEqual(
+            (info["name"], info["runtime"], info["role"], info["parent"], info["turn"]),
+            ("fix", "hc", "worker", "t0", 3),
+        )
         self.assertEqual(info["native"]["status"], {"app": "claude-code", "state": "working"})
         self.assertTrue(info["next"])
         for row in info["next"]:
@@ -213,11 +253,20 @@ class StatusTests(unittest.TestCase):
 
     def test_native_field_is_trimmed_to_actionable_raw_fields(self):
         """agent-runtime/R11"""
-        record = raw({"app": "claude-code", "state": "working"}, exit_code=None, reason=None,
-                     screen="exact", cols=216, records={"x": 1}, foreground={"argv": ["claude"], "pid": 1})
+        record = raw(
+            {"app": "claude-code", "state": "working"},
+            exit_code=None,
+            reason=None,
+            screen="exact",
+            cols=216,
+            records={"x": 1},
+            foreground={"argv": ["claude"], "pid": 1},
+        )
         info = hc_status(record)
-        self.assertEqual(set(info["native"]), {"address", "name", "state", "status", "turn", "exit_code",
-                                               "reason", "foreground"})
+        self.assertEqual(
+            set(info["native"]),
+            {"address", "name", "state", "status", "turn", "exit_code", "reason", "foreground"},
+        )
         self.assertEqual(info["native"]["foreground"], {"argv": ["claude"]})
         self.assertEqual(app.status("native", "helper", {})["native"], {})
         env = {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/s", "HERDR_PANE_ID": "w1:p1"}
@@ -232,8 +281,11 @@ class StatusTests(unittest.TestCase):
         world = {"fix": raw("idle")}
         for flags, multiline in (([], False), (["--pretty"], True)):
             buf = io.StringIO()
-            with patch.object(app, "run_command", side_effect=hc_world(world)), \
-                    patch.dict(app.os.environ, {}, clear=True), redirect_stdout(buf):
+            with (
+                patch.object(app, "run_command", side_effect=hc_world(world)),
+                patch.dict(app.os.environ, {}, clear=True),
+                redirect_stdout(buf),
+            ):
                 self.assertEqual(app.main(["status", "fix", "--runtime", "hc", *flags]), 0)
             self.assertEqual("\n" in buf.getvalue().strip(), multiline)
             json.loads(buf.getvalue())
@@ -244,9 +296,14 @@ class StatusTests(unittest.TestCase):
             hc = Path(tmp) / "hc"
             hc.write_text("#!/bin/sh\necho '%s'\n" % json.dumps(raw("idle")))
             hc.chmod(0o755)
-            done = subprocess.run([sys.executable, "-B", str(BIN), "status", "fix", "--runtime", "hc"],
-                                  env={"PATH": tmp + ":/usr/bin:/bin"}, capture_output=True, text=True,
-                                  stdin=subprocess.DEVNULL, timeout=15)
+            done = subprocess.run(
+                [sys.executable, "-B", str(BIN), "status", "fix", "--runtime", "hc"],
+                env={"PATH": tmp + ":/usr/bin:/bin"},
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=15,
+            )
         self.assertEqual(done.returncode, 0, done.stderr)
         info = json.loads(done.stdout)
         self.assertEqual(set(info), STATUS_KEYS)
@@ -254,19 +311,32 @@ class StatusTests(unittest.TestCase):
 
     def test_hc_states_map_to_contract_states(self):
         """agent-runtime/R12"""
-        cases = [({"app": "x", "state": "working"}, "live", "working"), ("working", "live", "working"),
-                 ("idle", "live", "idle"), ({"app": "x", "state": "done"}, "live", "done"),
-                 ("blocked", "live", "blocked"), ("error", "live", "error"), (None, "live", "unknown"),
-                 ({"state": "weird"}, "live", "unknown"), ("done", "finished", "exited"),
-                 (None, "finished", "exited")]
+        cases = [
+            ({"app": "x", "state": "working"}, "live", "working"),
+            ("working", "live", "working"),
+            ("idle", "live", "idle"),
+            ({"app": "x", "state": "done"}, "live", "done"),
+            ("blocked", "live", "blocked"),
+            ("error", "live", "error"),
+            (None, "live", "unknown"),
+            ({"state": "weird"}, "live", "unknown"),
+            ("done", "finished", "exited"),
+            (None, "finished", "exited"),
+        ]
         for status, state, expected in cases:
             with self.subTest(status=status, state=state):
                 self.assertEqual(hc_status(raw(status, state=state))["state"], expected)
 
     def test_exited_or_finished_in_state_or_status_maps_to_exited(self):
         """agent-runtime/R12"""
-        cases = [("exited", "live"), ({"app": "x", "state": "exited"}, "live"), ("finished", "live"),
-                 ({"state": "finished"}, "live"), ("idle", "exited"), (None, "finished")]
+        cases = [
+            ("exited", "live"),
+            ({"app": "x", "state": "exited"}, "live"),
+            ("finished", "live"),
+            ({"state": "finished"}, "live"),
+            ("idle", "exited"),
+            (None, "finished"),
+        ]
         for status, state in cases:
             with self.subTest(status=status, state=state):
                 self.assertEqual(hc_status(raw(status, state=state))["state"], "exited")
@@ -313,8 +383,12 @@ class StatusTests(unittest.TestCase):
 
     def test_herdmates_inspection_uses_explicit_session_and_no_mutation(self):
         """agent-runtime/R13"""
-        env = {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/example.sock",
-               "HERDR_PANE_ID": "w1:p1", "HERDR_SESSION": "test"}
+        env = {
+            "HERDR_ENV": "1",
+            "HERDR_SOCKET_PATH": "/tmp/example.sock",
+            "HERDR_PANE_ID": "w1:p1",
+            "HERDR_SESSION": "test",
+        }
         with patch.object(app, "run_command", return_value='{"result":{}}') as run:
             app.herdr_snapshot("w1:p2", "test", env)
             run.assert_called_once_with(["herdr", "pane", "get", "w1:p2", "--session", "test"])
@@ -324,8 +398,14 @@ class StatusTests(unittest.TestCase):
     def test_herdmates_maps_agent_status(self):
         """agent-runtime/R13"""
         env = {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/example.sock", "HERDR_PANE_ID": "w1:p1"}
-        for herdr, expected in (("idle", "idle"), ("working", "working"), ("blocked", "blocked"),
-                                ("done", "done"), ("unknown", "unknown"), ("weird", "unknown")):
+        for herdr, expected in (
+            ("idle", "idle"),
+            ("working", "working"),
+            ("blocked", "blocked"),
+            ("done", "done"),
+            ("unknown", "unknown"),
+            ("weird", "unknown"),
+        ):
             with self.subTest(herdr=herdr):
                 reply = json.dumps({"result": {"pane": {"agent_status": herdr}}})
                 with patch.object(app, "run_command", return_value=reply):
@@ -345,9 +425,13 @@ class StatusTests(unittest.TestCase):
 
     def test_hc_list_returns_one_status_per_child_of_caller_and_never_gets_foreign_terminals(self):
         """agent-runtime/R15"""
-        world = {"a": raw("working", parent="t0", address="a"), "b": raw("idle", parent="t0", address="b"),
-                 "c": raw("idle", parent="t5", address="c"), "d": raw("idle", parent=None, address="d"),
-                 "e": raw("done", parent="t0", state="finished", address="e")}
+        world = {
+            "a": raw("working", parent="t0", address="a"),
+            "b": raw("idle", parent="t0", address="b"),
+            "c": raw("idle", parent="t5", address="c"),
+            "d": raw("idle", parent=None, address="d"),
+            "e": raw("done", parent="t0", state="finished", address="e"),
+        }
         for address, record in world.items():
             record["name"] = "n" + address
         calls = []
@@ -363,8 +447,11 @@ class StatusTests(unittest.TestCase):
         """agent-runtime/R15"""
         for runtime in ("herdmates", "native"):
             out, err = io.StringIO(), io.StringIO()
-            with patch.dict(app.os.environ, {}, clear=True), redirect_stdout(out), \
-                    patch.object(app.sys, "stderr", err):
+            with (
+                patch.dict(app.os.environ, {}, clear=True),
+                redirect_stdout(out),
+                patch.object(app.sys, "stderr", err),
+            ):
                 self.assertEqual(app.main(["list", "--runtime", runtime]), 0)
             self.assertEqual(json.loads(out.getvalue()), [])
             self.assertIn("only available under hc", err.getvalue())
@@ -373,8 +460,11 @@ class StatusTests(unittest.TestCase):
         """agent-runtime/R15"""
         world = {"a": raw("idle", parent="t0", address="a")}
         buf = io.StringIO()
-        with patch.object(app, "run_command", side_effect=hc_world(world)), \
-                patch.dict(app.os.environ, {"HC_TERMINAL_ID": "t0"}, clear=True), redirect_stdout(buf):
+        with (
+            patch.object(app, "run_command", side_effect=hc_world(world)),
+            patch.dict(app.os.environ, {"HC_TERMINAL_ID": "t0"}, clear=True),
+            redirect_stdout(buf),
+        ):
             self.assertEqual(app.main(["list", "--runtime", "hc"]), 0)
         self.assertEqual(len(json.loads(buf.getvalue())), 1)
 
@@ -386,12 +476,19 @@ class CodexDetectionTests(unittest.TestCase):
         return lambda pid: chain.get(pid)
 
     def detect(self, env, table, ppid=100):
-        with patch.object(app, "ps_entry", side_effect=table), patch.object(app.os, "getppid", return_value=ppid):
+        with (
+            patch.object(app, "ps_entry", side_effect=table),
+            patch.object(app.os, "getppid", return_value=ppid),
+        ):
             return app.detect_cli(env)
 
     def test_nearest_codex_ancestor_wins_over_inherited_claudecode(self):
         """agent-runtime/R32"""
-        procs = {100: (90, "/bin/zsh -c run"), 90: (80, "/opt/homebrew/bin/codex exec"), 80: (70, "claude")}
+        procs = {
+            100: (90, "/bin/zsh -c run"),
+            90: (80, "/opt/homebrew/bin/codex exec"),
+            80: (70, "claude"),
+        }
         self.assertEqual(self.detect({"CLAUDECODE": "1"}, procs.get), "codex")
 
     def test_nearest_claude_ancestor_wins_over_inherited_codex_markers(self):
@@ -401,8 +498,16 @@ class CodexDetectionTests(unittest.TestCase):
 
     def test_node_wrapped_cli_is_matched(self):
         """agent-runtime/R32"""
-        procs = {100: (90, "node /usr/lib/node_modules/@openai/codex/bin/codex.js"), 90: (1, "node /x/bin/claude")}
-        self.assertEqual(self.detect({}, {100: (90, "sh"), 90: (80, "node /x/bin/codex"), 80: (1, "launchd")}.get), "codex")
+        procs = {
+            100: (90, "node /usr/lib/node_modules/@openai/codex/bin/codex.js"),
+            90: (1, "node /x/bin/claude"),
+        }
+        self.assertEqual(
+            self.detect(
+                {}, {100: (90, "sh"), 90: (80, "node /x/bin/codex"), 80: (1, "launchd")}.get
+            ),
+            "codex",
+        )
 
     def test_walk_failure_falls_back_to_env_markers(self):
         """agent-runtime/R32"""
@@ -422,14 +527,20 @@ class CodexDetectionTests(unittest.TestCase):
     def test_codex_without_cli_resolves_native_in_herdr(self):
         """agent-runtime/R32"""
         procs = {100: (90, "codex")}
-        with patch.object(app, "ps_entry", side_effect=procs.get), patch.object(app.os, "getppid", return_value=100):
+        with (
+            patch.object(app, "ps_entry", side_effect=procs.get),
+            patch.object(app.os, "getppid", return_value=100),
+        ):
             info = app.resolve({"HERDR_PANE_ID": "p1", "CLAUDECODE": "1"}, None, hc_failing)
         self.assertEqual((info["runtime"], info["cli"]), ("native", "codex"))
 
     def test_explicit_cli_wins_over_ancestry(self):
         """agent-runtime/R32"""
         procs = {100: (90, "codex")}
-        with patch.object(app, "ps_entry", side_effect=procs.get), patch.object(app.os, "getppid", return_value=100):
+        with (
+            patch.object(app, "ps_entry", side_effect=procs.get),
+            patch.object(app.os, "getppid", return_value=100),
+        ):
             info = app.resolve({"HERDR_PANE_ID": "p1"}, "claude", hc_failing)
         self.assertEqual((info["runtime"], info["cli"]), ("herdmates", "claude"))
 
@@ -442,7 +553,11 @@ class CodexDetectionTests(unittest.TestCase):
         reply = {"parent": "t1", "foreground": {"argv": ["/opt/homebrew/bin/codex", "--no-daemon"]}}
         info = app.resolve({"HC_TERMINAL_ID": "t2"}, None, lambda t: reply)
         self.assertEqual((info["runtime"], info["role"], info["cli"]), ("hc", "worker", "codex"))
-        info = app.resolve({"HC_TERMINAL_ID": "t2"}, None, lambda t: {"parent": None, "foreground": {"argv": ["claude"]}})
+        info = app.resolve(
+            {"HC_TERMINAL_ID": "t2"},
+            None,
+            lambda t: {"parent": None, "foreground": {"argv": ["claude"]}},
+        )
         self.assertEqual(info["cli"], "claude")
 
     def test_commands_without_cli_flag_use_detected_cli_even_on_fallback(self):
@@ -460,32 +575,50 @@ class CodexDetectionTests(unittest.TestCase):
 
 
 class SharedGenerationTests(unittest.TestCase):
-    PROCS = {100: (90, "/bin/zsh -c mcp"), 90: (80, "/opt/homebrew/bin/codex exec"), 80: (1, "launchd")}
+    PROCS = {
+        100: (90, "/bin/zsh -c mcp"),
+        90: (80, "/opt/homebrew/bin/codex exec"),
+        80: (1, "launchd"),
+    }
     STAMPS = {90: "Wed Nov  4 10:00:00 2026"}
 
     def generation(self, env=None):
-        with patch.object(app, "ps_entry", side_effect=self.PROCS.get), \
-                patch.object(app, "lstart", side_effect=self.STAMPS.get), \
-                patch.object(app.os, "getppid", return_value=100):
+        with (
+            patch.object(app, "ps_entry", side_effect=self.PROCS.get),
+            patch.object(app, "lstart", side_effect=self.STAMPS.get),
+            patch.object(app.os, "getppid", return_value=100),
+        ):
             return app.cli_generation()
 
     def test_generation_is_nearest_cli_pid_and_lstart_without_session_suffix(self):
         """agent-runtime/R107"""
         plain = self.generation({})
         self.assertEqual(plain, "90:Wed Nov  4 10:00:00 2026")
-        env = {"CODEX_THREAD_ID": "thread-a", "CLAUDE_CODE_SESSION_ID": "sess-a", "CLAUDE_SESSION_ID": "sess-b"}
+        env = {
+            "CODEX_THREAD_ID": "thread-a",
+            "CLAUDE_CODE_SESSION_ID": "sess-a",
+            "CLAUDE_SESSION_ID": "sess-b",
+        }
         self.assertEqual(self.generation(env), plain)
 
     def test_lstart_is_locale_independent(self):
         """agent-runtime/R107"""
         with tempfile.TemporaryDirectory() as tmp:
             ps = Path(tmp) / "ps"
-            ps.write_text("#!/bin/sh\n[ \"$LC_ALL\" = C ] && echo 'Wed Nov  4 10:00:00 2026' || echo 'Mi Nov  4 10:00:00 2026'\n")
+            ps.write_text(
+                "#!/bin/sh\n[ \"$LC_ALL\" = C ] && echo 'Wed Nov  4 10:00:00 2026' || echo 'Mi Nov  4 10:00:00 2026'\n"
+            )
             ps.chmod(0o755)
             stamps = set()
-            for loc in ({}, {"LC_ALL": "de_DE.UTF-8"}, {"LC_TIME": "en_GB.UTF-8", "LC_ALL": "en_GB.UTF-8"}):
-                with patch.dict(os.environ, dict(loc, PATH="%s:%s" % (tmp, os.environ["PATH"]))), \
-                        patch.object(app, "PS_TIMEOUT_SECONDS", 10):
+            for loc in (
+                {},
+                {"LC_ALL": "de_DE.UTF-8"},
+                {"LC_TIME": "en_GB.UTF-8", "LC_ALL": "en_GB.UTF-8"},
+            ):
+                with (
+                    patch.dict(os.environ, dict(loc, PATH="%s:%s" % (tmp, os.environ["PATH"]))),
+                    patch.object(app, "PS_TIMEOUT_SECONDS", 10),
+                ):
                     stamps.add(app.lstart(os.getpid()))
         self.assertEqual(stamps, {"Wed Nov  4 10:00:00 2026"})
 
@@ -525,7 +658,9 @@ class CallTests(unittest.TestCase):
         self.bin = self.dir / "bin"
         self.bin.mkdir()
         self.table = self.dir / "ps-table"
-        self.set_ancestors([(5000, "/bin/zsh -l"), (6000, "/Users/x/.local/bin/herdr-core hold --socket s")])
+        self.set_ancestors(
+            [(5000, "/bin/zsh -l"), (6000, "/Users/x/.local/bin/herdr-core hold --socket s")]
+        )
         (self.bin / "ps").write_text(FAKE_PS % {"table": str(self.table)})
         (self.bin / "ps").chmod(0o755)
         self.log = self.dir / "log"
@@ -533,7 +668,9 @@ class CallTests(unittest.TestCase):
         self.replies = self.dir / "replies"
         self.set_replies({})
         hc = self.bin / "hc"
-        hc.write_text(FAKE_HC % {"python": sys.executable, "log": str(self.log), "replies": str(self.replies)})
+        hc.write_text(
+            FAKE_HC % {"python": sys.executable, "log": str(self.log), "replies": str(self.replies)}
+        )
         hc.chmod(0o755)
 
     def set_ancestors(self, chain, end=1):
@@ -541,15 +678,24 @@ class CallTests(unittest.TestCase):
         the last one's parent is `end`, which has no entry (pid 1 ends the walk, any other pid is unreadable)."""
         pids = [os.getpid()] + [pid for pid, _ in chain]
         names = ["python3 -m unittest"] + [args for _, args in chain]
-        lines = ["%d %d %s" % (pid, (pids + [end])[index + 1], names[index]) for index, pid in enumerate(pids)]
+        lines = [
+            "%d %d %s" % (pid, (pids + [end])[index + 1], names[index])
+            for index, pid in enumerate(pids)
+        ]
         self.table.write_text("\n".join(lines) + "\n")
 
     def set_replies(self, replies):
-        base = {"get t0": {"out": json.dumps({"address": "t0", "name": "lead", "parent": None, "pid": 6000})},
-                "get t1": {"out": json.dumps({"address": "t1", "name": "w1", "parent": "t0"})},
-                "get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})},
-                "get w1": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})},
-                "run": {"out": json.dumps({"first_message": {"sent": True}})}}
+        base = {
+            "get t0": {
+                "out": json.dumps({"address": "t0", "name": "lead", "parent": None, "pid": 6000})
+            },
+            "get t1": {"out": json.dumps({"address": "t1", "name": "w1", "parent": "t0"})},
+            "get t9": {
+                "out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})
+            },
+            "get w1": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0"})},
+            "run": {"out": json.dumps({"first_message": {"sent": True}})},
+        }
         base.update(replies)
         self.replies.write_text(json.dumps(base))
 
@@ -557,13 +703,23 @@ class CallTests(unittest.TestCase):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     def call(self, *args, hc_terminal: str | None = "t0", extra_env=None):
-        env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.dir / "home"),
-               "XDG_STATE_HOME": str(self.dir / "state"), "XDG_CONFIG_HOME": str(self.dir / "config")}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % self.bin,
+            "HOME": str(self.dir / "home"),
+            "XDG_STATE_HOME": str(self.dir / "state"),
+            "XDG_CONFIG_HOME": str(self.dir / "config"),
+        }
         if hc_terminal:
             env["HC_TERMINAL_ID"] = hc_terminal
         env.update(extra_env or {})
-        done = subprocess.run([sys.executable, "-B", str(BIN), "call", *args], env=env, capture_output=True,
-                              text=True, stdin=subprocess.DEVNULL, timeout=30)
+        done = subprocess.run(
+            [sys.executable, "-B", str(BIN), "call", *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
         return done.returncode, done.stdout, done.stderr
 
     def test_S1_hc_terminal_runs_the_tool_and_prints_its_json(self):
@@ -584,7 +740,9 @@ class CallTests(unittest.TestCase):
 
     def test_S2_unexpected_exception_prints_error_json_not_a_traceback(self):
         """agent-runtime/R151"""
-        (self.dir / "state").write_text("not a directory")  # the store cannot open under XDG_STATE_HOME
+        (self.dir / "state").write_text(
+            "not a directory"
+        )  # the store cannot open under XDG_STATE_HOME
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assertEqual(code, 1)
         self.assertTrue(json.loads(out)["isError"])
@@ -600,15 +758,20 @@ class CallTests(unittest.TestCase):
 
     def test_S3_outside_hc_exits_2_with_require_hc_message_and_starts_nothing(self):
         """agent-runtime/R152"""
-        code, out, err = self.call("spawn", "--lead", "L1", "--json", '{"kind": "worker", "name": "w1"}',
-                                   hc_terminal=None)
+        code, out, err = self.call(
+            "spawn", "--lead", "L1", "--json", '{"kind": "worker", "name": "w1"}', hc_terminal=None
+        )
         self.assertEqual(code, 2)
         self.assertIn("worker tools", err)
         self.assertEqual(self.hc_calls(), [])
 
     def test_S4_bad_json_or_unknown_tool_exits_2_with_usage_and_starts_nothing(self):
         """agent-runtime/R153"""
-        for args in (("status", "--json", "{not json"), ("status", "--json", "[1]"), ("bogus", "--lead", "L1")):
+        for args in (
+            ("status", "--json", "{not json"),
+            ("status", "--json", "[1]"),
+            ("bogus", "--lead", "L1"),
+        ):
             with self.subTest(args=args):
                 code, out, err = self.call(*args)
                 self.assertEqual(code, 2)
@@ -621,19 +784,35 @@ class CallTests(unittest.TestCase):
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
         assignment = json.loads(out)["assignment_id"]
-        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
-        code, out, err = self.call("report", "--json",
-                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9",
-                                   extra_env={"CODEX_THREAD_ID": "W1"})
+        self.set_replies(
+            {
+                "get t9": {
+                    "out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})
+                }
+            }
+        )
+        code, out, err = self.call(
+            "report",
+            "--json",
+            json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}),
+            hc_terminal="t9",
+            extra_env={"CODEX_THREAD_ID": "W1"},
+        )
         self.assertEqual(code, 0, err)
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assertEqual(code, 0, err)
         result = json.loads(out)
         self.assertEqual(result["reason"], "completed")
-        self.assertEqual([(m["assignment_id"], m["kind"], m["text"]) for m in result["messages"]],
-                         [(assignment, "complete", "done")])
+        self.assertEqual(
+            [(m["assignment_id"], m["kind"], m["text"]) for m in result["messages"]],
+            [(assignment, "complete", "done")],
+        )
 
-    def test_S7_other_generation_with_unfinished_work_is_refused_and_the_live_one_keeps_working(self):
+    def test_S7_other_generation_with_unfinished_work_is_refused_and_the_live_one_keeps_working(
+        self,
+    ):
         """agent-runtime/R156"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
@@ -644,13 +823,27 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertIn("L1", err)
-        self.assertEqual([c for c in self.hc_calls() if c[0] in ("run", "kill", "rm", "send")], before)
-        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
-        code, out, err = self.call("report", "--json",
-                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9",
-                                   extra_env={"CODEX_THREAD_ID": "W1"})
+        self.assertEqual(
+            [c for c in self.hc_calls() if c[0] in ("run", "kill", "rm", "send")], before
+        )
+        self.set_replies(
+            {
+                "get t9": {
+                    "out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})
+                }
+            }
+        )
+        code, out, err = self.call(
+            "report",
+            "--json",
+            json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}),
+            hc_terminal="t9",
+            extra_env={"CODEX_THREAD_ID": "W1"},
+        )
         self.assertEqual(code, 0, err)
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)["reason"], "completed")
 
@@ -660,20 +853,34 @@ class CallTests(unittest.TestCase):
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
         assignment = json.loads(out)["assignment_id"]
-        self.set_replies({"get t9": {"out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})}})
-        code, out, err = self.call("report", "--json",
-                                   json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}), hc_terminal="t9",
-                                   extra_env={"CODEX_THREAD_ID": "W1"})
+        self.set_replies(
+            {
+                "get t9": {
+                    "out": json.dumps({"address": "t9", "name": "w1", "parent": "t0", "pid": 6000})
+                }
+            }
+        )
+        code, out, err = self.call(
+            "report",
+            "--json",
+            json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}),
+            hc_terminal="t9",
+            extra_env={"CODEX_THREAD_ID": "W1"},
+        )
         self.assertEqual(code, 0, err)
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
         self.assertEqual(code, 2)
         self.assertIn("L1", err)
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assertEqual(code, 0, err)
         result = json.loads(out)
         self.assertEqual(result["reason"], "completed")
-        self.assertEqual([(m["assignment_id"], m["kind"], m["text"]) for m in result["messages"]],
-                         [(assignment, "complete", "done")])
+        self.assertEqual(
+            [(m["assignment_id"], m["kind"], m["text"]) for m in result["messages"]],
+            [(assignment, "complete", "done")],
+        )
 
     def test_S7_other_generation_may_start_once_the_live_one_has_nothing_unfinished(self):
         """agent-runtime/R156"""
@@ -683,44 +890,72 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
 
     def test_ancestry_S5_parented_terminal_forced_lead_owns_worker_and_receives_report(self):
-        self.set_replies({"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}})
+        self.set_replies(
+            {"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}}
+        )
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, out + err)
         assignment = json.loads(out)["assignment_id"]
         run = next(c for c in self.hc_calls() if c[0] == "run")
         self.assertEqual(run[run.index("--parent") + 1], "t0")
-        code, out, err = self.call("report", "--json", json.dumps({"text": "done", "kind": "complete",
-                                                                  "assignment_id": assignment}),
-                                   hc_terminal="t9", extra_env={"CODEX_THREAD_ID": "W1"})
+        code, out, err = self.call(
+            "report",
+            "--json",
+            json.dumps({"text": "done", "kind": "complete", "assignment_id": assignment}),
+            hc_terminal="t9",
+            extra_env={"CODEX_THREAD_ID": "W1"},
+        )
         self.assertEqual(code, 0, out + err)
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assertEqual(code, 0, out + err)
-        self.assertEqual([(m["assignment_id"], m["text"]) for m in json.loads(out)["messages"]],
-                         [(assignment, "done")])
+        self.assertEqual(
+            [(m["assignment_id"], m["text"]) for m in json.loads(out)["messages"]],
+            [(assignment, "done")],
+        )
 
     def test_ancestry_S6_parented_terminal_without_lead_remains_worker(self):
-        self.set_replies({"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}})
-        code, out, err = self.call("status", "--json", '{"name": "w1"}', extra_env={"CODEX_THREAD_ID": "W1"})
+        self.set_replies(
+            {"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}}
+        )
+        code, out, err = self.call(
+            "status", "--json", '{"name": "w1"}', extra_env={"CODEX_THREAD_ID": "W1"}
+        )
         self.assertEqual(code, 1, out + err)
         self.assertIn("caller has no matching active assignment", out)
 
     def test_ancestry_S5_forced_lead_override_does_not_outlive_its_call(self):
         """The forced lead role belongs to the call that asked for it: a later call in the same process
         resolves the same terminal as a worker again."""
-        self.set_replies({"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}})
-        env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.dir / "home"),
-               "XDG_STATE_HOME": str(self.dir / "state"), "XDG_CONFIG_HOME": str(self.dir / "config"),
-               "HC_TERMINAL_ID": "t0"}
+        self.set_replies(
+            {"get t0": {"out": json.dumps({"address": "t0", "parent": "outer", "pid": 6000})}}
+        )
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % self.bin,
+            "HOME": str(self.dir / "home"),
+            "XDG_STATE_HOME": str(self.dir / "state"),
+            "XDG_CONFIG_HOME": str(self.dir / "config"),
+            "HC_TERMINAL_ID": "t0",
+        }
         forced = SimpleNamespace(tool="status", json='{"name": "w1"}', lead="L1")
         plain = SimpleNamespace(tool="status", json='{"name": "w1"}', lead=None)
-        chain = {os.getppid(): (5000, "/bin/zsh -l"), 5000: (6000, "/Users/x/.local/bin/herdr-core hold"),
-                 6000: (1, "/sbin/launchd")}
+        chain = {
+            os.getppid(): (5000, "/bin/zsh -l"),
+            5000: (6000, "/Users/x/.local/bin/herdr-core hold"),
+            6000: (1, "/sbin/launchd"),
+        }
         out = io.StringIO()
-        with patch.dict(os.environ, env, clear=True), patch.object(app, "ps_entry", lambda pid: chain.get(pid)), \
-                redirect_stdout(out):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(app, "ps_entry", lambda pid: chain.get(pid)),
+            redirect_stdout(out),
+        ):
             self.assertEqual(app.cmd_call(forced), 0, out.getvalue())
-            self.assertEqual(app.cmd_call(plain), 1, out.getvalue())  # a worker, not the forced lead
+            self.assertEqual(
+                app.cmd_call(plain), 1, out.getvalue()
+            )  # a worker, not the forced lead
 
     SERVER = (6000, "/Users/x/.local/bin/herdr-core hold --socket s")
 
@@ -730,9 +965,11 @@ class CallTests(unittest.TestCase):
         self.assertEqual([c for c in self.hc_calls() if c[:1] != ["get"]], [])
 
     def test_ancestry_S1_claude_or_codex_below_the_server_is_refused_naming_pid_and_name(self):
-        for pid, args, name in ((7001, "claude --agent implementer", "claude"),
-                                (7002, "/opt/bin/codex exec", "codex"),
-                                (7003, "node /usr/lib/codex/bin/codex", "codex")):
+        for pid, args, name in (
+            (7001, "claude --agent implementer", "claude"),
+            (7002, "/opt/bin/codex exec", "codex"),
+            (7003, "node /usr/lib/codex/bin/codex", "codex"),
+        ):
             self.set_ancestors([(5000, "/bin/zsh -c call"), (pid, args), self.SERVER])
             code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
             self.assert_refused_without_dispatch(code, err, "%d (%s)" % (pid, name))
@@ -760,7 +997,9 @@ class CallTests(unittest.TestCase):
         self.assert_refused_without_dispatch(code, err, "process")
 
     def test_ancestry_S3_walk_longer_than_the_hop_limit_refuses(self):
-        self.set_ancestors([(5000 + n, "/bin/sh") for n in range(app.MAX_CALL_ANCESTOR_HOPS + 2)] + [self.SERVER])
+        self.set_ancestors(
+            [(5000 + n, "/bin/sh") for n in range(app.MAX_CALL_ANCESTOR_HOPS + 2)] + [self.SERVER]
+        )
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assert_refused_without_dispatch(code, err, "process")
 
@@ -776,29 +1015,45 @@ class CallTests(unittest.TestCase):
 
     def test_ancestry_S4_shell_forms_that_hide_call_from_the_hook_are_refused_by_the_cli(self):
         # The CLI never sees the command text: whatever shell form launched it, the claude ancestor decides.
-        for form in ("/bin/zsh -c $(printf call)", "/usr/bin/env agent-runtime call wait", "/usr/bin/nohup agent-runtime call"):
-            self.set_ancestors([(5000, form), (5001, "/bin/zsh -c eval"), (7001, "claude"), self.SERVER])
-            code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        for form in (
+            "/bin/zsh -c $(printf call)",
+            "/usr/bin/env agent-runtime call wait",
+            "/usr/bin/nohup agent-runtime call",
+        ):
+            self.set_ancestors(
+                [(5000, form), (5001, "/bin/zsh -c eval"), (7001, "claude"), self.SERVER]
+            )
+            code, out, err = self.call(
+                "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+            )
             self.assert_refused_without_dispatch(code, err, "7001 (claude)")
 
     def test_ancestry_S4_orphaned_nohup_shell_reparented_to_pid_1_is_refused(self):
         self.set_ancestors([(5000, "sh -c sleep 1; agent-runtime call wait")])
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assert_refused_without_dispatch(code, err, "pid 1")
 
     def test_ancestry_S4_process_named_like_the_server_does_not_stop_the_walk(self):
         self.set_ancestors([(5000, "herdr-core bash -c probe"), (7001, "claude"), self.SERVER])
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assert_refused_without_dispatch(code, err, "7001 (claude)")
 
     def test_ancestry_S4_hc_exec_daemon_reparented_to_pid_1_is_refused(self):
         self.set_ancestors([(5000, "/bin/sh -c probe"), (5001, "hc --hc-launchd")])
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assert_refused_without_dispatch(code, err, "pid 1")
 
     def test_ancestry_S4_claude_as_the_terminal_root_is_refused(self):
         self.set_ancestors([(5000, "/bin/zsh -c probe"), (6000, "claude --agent implementer")])
-        code, out, err = self.call("wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}')
+        code, out, err = self.call(
+            "wait", "--lead", "L1", "--json", '{"target": "all", "timeout": 0}'
+        )
         self.assert_refused_without_dispatch(code, err, "6000 (claude)")
 
 

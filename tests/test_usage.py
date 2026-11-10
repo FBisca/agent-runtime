@@ -28,10 +28,13 @@ from test_tools import ToolCase, raw, unwrap  # noqa: E402
 pytestmark = pytest.mark.integration
 
 
-
 class CodexProfileTests(ToolCase):
     ARGS = {"kind": "worker", "task": "do x", "cwd": "/tmp/c"}
-    LEAD = {"HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock", "AGENT_RUNTIME_DISPATCH": "1"}
+    LEAD = {
+        "HC_SCOPE": "lead-token",
+        "HC_TERMINAL_SOCKET": "/hc/sock",
+        "AGENT_RUNTIME_DISPATCH": "1",
+    }
 
     def codex_home(self, label, profile=True, base=None, name="worker"):
         """A CODEX_HOME with (or without) a profile file and an optional base config."""
@@ -52,8 +55,18 @@ class CodexProfileTests(ToolCase):
     def metadata(self, worker="w1"):
         return json.loads(self.metadata_path(worker).read_text())
 
-    def spawn(self, cli="codex", name="w1", home=None, override=None, dispatch=True, cwd=None, replies=None,
-              extra_env=None, **extra):
+    def spawn(
+        self,
+        cli="codex",
+        name="w1",
+        home=None,
+        override=None,
+        dispatch=True,
+        cwd=None,
+        replies=None,
+        extra_env=None,
+        **extra,
+    ):
         """Spawn a worker through the tool; returns (result, text)."""
         env = dict(self.LEAD) if dispatch else {}
         if home is not None:
@@ -86,7 +99,9 @@ class CodexProfileTests(ToolCase):
         self.assertIn("report(kind, assignment_id)", program[-1])
         self.assertIn("do x", program[-1])
         with_model = self.spawn_codex(home=home, name="w2", model="gpt-5.5")
-        self.assertEqual(with_model[:6], ["codex", "--no-daemon", "-p", "worker", "--model", "gpt-5.5"])
+        self.assertEqual(
+            with_model[:6], ["codex", "--no-daemon", "-p", "worker", "--model", "gpt-5.5"]
+        )
         meta = self.metadata()
         self.assertTrue(meta["profile_applied"])
         self.assertEqual(meta["profile_name"], "worker")
@@ -104,8 +119,10 @@ class CodexProfileTests(ToolCase):
     def test_S2_unusable_worker_profile_starts_the_worker_without_the_flag(self):
         """worker-token-metrics/S2: a missing profile file or a legacy [profiles.worker] table starts the
         worker without -p worker, and the metadata records profile_applied=false with the reason."""
-        cases = (("missing", False, None, "missing_file", "w1"),
-                 ("legacy", True, '[profiles.worker]\nmodel = "gpt-5.5"\n', "legacy_table", "w2"))
+        cases = (
+            ("missing", False, None, "missing_file", "w1"),
+            ("legacy", True, '[profiles.worker]\nmodel = "gpt-5.5"\n', "legacy_table", "w2"),
+        )
         for label, profile, base, reason, worker in cases:
             with self.subTest(reason):
                 home = self.codex_home(label, profile=profile, base=base)
@@ -136,9 +153,14 @@ class CodexProfileTests(ToolCase):
         result, text = self.spawn(home=home, replies={"run": {"rc": 1, "err": "name w1 is taken"}})
         self.assertTrue(result["isError"])
         self.assertFalse(self.metadata_path("w1").exists())
-        result, text = self.spawn(name="w2", home=home,
-                                  replies={"get:w2": {"out": raw("w2", "t0")},
-                                           "run": {"out": json.dumps({"first_message": {"sent": False}})}})
+        result, text = self.spawn(
+            name="w2",
+            home=home,
+            replies={
+                "get:w2": {"out": raw("w2", "t0")},
+                "run": {"out": json.dumps({"first_message": {"sent": False}})},
+            },
+        )
         self.assertTrue(result["isError"])
         self.assertFalse(self.metadata_path("w2").exists())
 
@@ -147,9 +169,18 @@ class CodexProfileTests(ToolCase):
         home = self.codex_home("cancelled")
         env = dict(self.LEAD, CODEX_HOME=str(home), XDG_STATE_HOME=str(self.state()))
         lead = self.start({"run": {"sleep": 30}, "get:w1": {"rc": 1, "err": "boom"}}, env)
-        write = lambda message: (lead.proc.stdin.write(json.dumps(message) + "\n"), lead.proc.stdin.flush())
-        write({"jsonrpc": "2.0", "id": 70, "method": "tools/call",
-               "params": {"name": "spawn", "arguments": dict(self.ARGS, name="w1", cli="codex")}})
+        write = lambda message: (
+            lead.proc.stdin.write(json.dumps(message) + "\n"),
+            lead.proc.stdin.flush(),
+        )
+        write(
+            {
+                "jsonrpc": "2.0",
+                "id": 70,
+                "method": "tools/call",
+                "params": {"name": "spawn", "arguments": dict(self.ARGS, name="w1", cli="codex")},
+            }
+        )
         deadline = time.monotonic() + 5
         while not self.runs("run"):
             self.assertLess(time.monotonic(), deadline)
@@ -196,38 +227,82 @@ class CodexProfileTests(ToolCase):
         repo = self.dir / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@example.com", "-c", "user.name=Test",
-                        "commit", "-q", "--allow-empty", "-m", "base"], check=True)
-        head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True,
-                              check=True).stdout.strip()
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "base",
+            ],
+            check=True,
+        )
+        head = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
         self.spawn_codex(home=home, name="w2", cwd=str(repo))
         meta = self.metadata("w2")
         self.assertEqual(meta["cwd"], str(repo))
         self.assertEqual(meta["base_commit"], head)
         # Git's own environment must not point the command at another repository.
-        self.spawn_codex(home=home, name="w3", cwd=str(repo),
-                         extra_env={"GIT_DIR": str(self.dir / "elsewhere.git")})
+        self.spawn_codex(
+            home=home,
+            name="w3",
+            cwd=str(repo),
+            extra_env={"GIT_DIR": str(self.dir / "elsewhere.git")},
+        )
         self.assertEqual(self.metadata("w3")["base_commit"], head)
         clock = [1000]
-        env = dict(self.LEAD, HOME=str(self.dir / "home"), XDG_STATE_HOME=str(self.state()),
-                   HC_TERMINAL_ID="t0")
+        env = dict(
+            self.LEAD,
+            HOME=str(self.dir / "home"),
+            XDG_STATE_HOME=str(self.state()),
+            HC_TERMINAL_ID="t0",
+        )
 
         def worker_starts(argv, *_args):
             if argv[:2] == ["hc", "run"]:
                 clock[0] = 9000  # Startup can take longer than the log creation-time slack.
-                subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@example.com",
-                                "-c", "user.name=Test", "commit", "-q", "--allow-empty", "-m", "worker"],
-                               check=True)
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(repo),
+                        "-c",
+                        "user.email=t@example.com",
+                        "-c",
+                        "user.name=Test",
+                        "commit",
+                        "-q",
+                        "--allow-empty",
+                        "-m",
+                        "worker",
+                    ],
+                    check=True,
+                )
                 return 0, "{}", ""
             self.assertEqual(argv[:3], ["hc", "get", "timed"])
             return 0, raw("timed", "t0"), ""
 
-        with mock.patch.object(hc_tools.lib, "resolve", return_value={"runtime": "hc"}), \
-                mock.patch.object(hc_tools.lib, "cli_generation", return_value="clock-session"), \
-                mock.patch.object(hc_tools, "run", side_effect=worker_starts), \
-                mock.patch.object(usage, "now_ms", side_effect=lambda: clock[0]):
-            result = hc_tools.spawn(dict(self.ARGS, name="timed", cli="claude", cwd=str(repo)),
-                                    env, hc_tools.Context())
+        with (
+            mock.patch.object(hc_tools.lib, "resolve", return_value={"runtime": "hc"}),
+            mock.patch.object(hc_tools.lib, "cli_generation", return_value="clock-session"),
+            mock.patch.object(hc_tools, "run", side_effect=worker_starts),
+            mock.patch.object(usage, "now_ms", side_effect=lambda: clock[0]),
+        ):
+            result = hc_tools.spawn(
+                dict(self.ARGS, name="timed", cli="claude", cwd=str(repo)), env, hc_tools.Context()
+            )
         self.assertFalse(result["isError"])
         self.assertEqual(self.metadata("timed")["spawned_ms"], 1000)
         self.assertEqual(self.metadata("timed")["base_commit"], head)
@@ -235,7 +310,9 @@ class CodexProfileTests(ToolCase):
     def test_read_worker_metadata_returns_the_record_or_nothing(self):
         """worker-token-metrics/S1b: the reader returns the record that was written, and nothing else."""
         env = {"XDG_STATE_HOME": str(self.state()), "HOME": str(self.dir / "home")}
-        self.assertIsNotNone(usage.write_worker_metadata(env, "w1", cli="codex", profile_applied=True))
+        self.assertIsNotNone(
+            usage.write_worker_metadata(env, "w1", cli="codex", profile_applied=True)
+        )
         record = usage.read_worker_metadata(env, "w1")
         self.assertEqual(record["worker"], "w1")
         self.assertEqual(record["cli"], "codex")
@@ -266,14 +343,23 @@ class SessionBindingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.env = {"HOME": str(self.root), "CODEX_HOME": str(self.root / "codex"),
-                    "XDG_STATE_HOME": str(self.root / "state")}
+        self.env = {
+            "HOME": str(self.root),
+            "CODEX_HOME": str(self.root / "codex"),
+            "XDG_STATE_HOME": str(self.root / "state"),
+        }
         self.cwd = "/tmp/project.with.dots"
         self.spawned_ms = usage.now_ms()
 
     def metadata(self, worker, assignment, cli="codex", **extra):
-        fields = dict(assignment_id=assignment, cli=cli, cwd=self.cwd,
-                      spawned_ms=self.spawned_ms, session_id=None, base_commit="abc")
+        fields = dict(
+            assignment_id=assignment,
+            cli=cli,
+            cwd=self.cwd,
+            spawned_ms=self.spawned_ms,
+            session_id=None,
+            base_commit="abc",
+        )
         fields.update(extra)
         usage.write_worker_metadata(self.env, worker, **fields)
 
@@ -282,8 +368,11 @@ class SessionBindingTests(unittest.TestCase):
         text = fixture.read_text().replace("ASSIGNMENT", assignment)
         text = text.replace("SESSION", session_id).replace("CWD", cwd or self.cwd)
         if cli == "codex":
-            path = Path(self.env["CODEX_HOME"]) / "sessions/2026/11/06" / (
-                "rollout-2026-11-06T12-00-00-" + session_id + ".jsonl")
+            path = (
+                Path(self.env["CODEX_HOME"])
+                / "sessions/2026/11/06"
+                / ("rollout-2026-11-06T12-00-00-" + session_id + ".jsonl")
+            )
         else:
             slug = self.cwd.replace("/", "-").replace(".", "-")
             path = self.root / ".claude/projects" / slug / (session_id + ".jsonl")
@@ -300,12 +389,18 @@ class SessionBindingTests(unittest.TestCase):
                 self.assertEqual(usage.resolve_session_log(self.env, "context"), path)
                 original = path.read_text()
                 # A different prompt assignment wins even if our id appears after the assistant.
-                path.write_text(original.replace("assignment_id=alpha", "assignment_id=another")
-                                .replace("assignment_id=echo", "assignment_id=alpha"))
+                path.write_text(
+                    original.replace("assignment_id=alpha", "assignment_id=another").replace(
+                        "assignment_id=echo", "assignment_id=alpha"
+                    )
+                )
                 self.assertIsNone(usage.resolve_session_log(self.env, "context"))
                 # No prompt marker: a report after the first assistant is still not a prompt.
-                path.write_text(original.replace("assignment_id=alpha", "no marker")
-                                .replace("assignment_id=echo", "assignment_id=alpha"))
+                path.write_text(
+                    original.replace("assignment_id=alpha", "no marker").replace(
+                        "assignment_id=echo", "assignment_id=alpha"
+                    )
+                )
                 self.assertIsNone(usage.resolve_session_log(self.env, "context"))
 
     def test_S4_codex_binds_only_the_assignments_first_prompt(self):
@@ -330,8 +425,13 @@ class SessionBindingTests(unittest.TestCase):
         self.log("codex", "other-cwd", "different-cwd", cwd="/another/project")
         self.metadata("wrong-cwd", "different-cwd")
         self.assertIsNone(usage.resolve_session_log(self.env, "wrong-cwd"))
-        report = {"type": "response_item", "payload": {"role": "user", "content": [
-            {"type": "input_text", "text": "report assignment_id=report-only"}]}}
+        report = {
+            "type": "response_item",
+            "payload": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "report assignment_id=report-only"}],
+            },
+        }
         with alpha.open("a") as stream:
             stream.write(json.dumps(report) + "\n")
         for assignment in ("report-only", "alph", "unrelated"):
@@ -345,9 +445,11 @@ class SessionBindingTests(unittest.TestCase):
         self.metadata("fallback", "fallback")
         # Linux has no st_birthtime: exercise its ctime fallback on every host.
         real_stat = Path.stat
+
         def ctime_only(path, *args, **kwargs):
             info = real_stat(path, *args, **kwargs)
             return SimpleNamespace(st_ctime=info.st_ctime) if path == fallback else info
+
         with mock.patch.object(Path, "stat", ctime_only):
             self.assertEqual(usage.resolve_session_log(self.env, "fallback"), fallback)
         self.assertEqual(usage.read_worker_metadata(self.env, "fallback")["session_id"], "fallback")
@@ -382,8 +484,12 @@ class SessionBindingTests(unittest.TestCase):
         self.metadata("w3", "beta", "claude")
         self.assertEqual(usage.resolve_session_log(self.env, "w3"), beta)
         with alpha.open("a") as stream:
-            stream.write(json.dumps({"type": "user", "message": {
-                "content": "report assignment_id=report-only"}}) + "\n")
+            stream.write(
+                json.dumps(
+                    {"type": "user", "message": {"content": "report assignment_id=report-only"}}
+                )
+                + "\n"
+            )
         self.metadata("reject", "report-only", "claude")
         self.assertIsNone(usage.resolve_session_log(self.env, "reject"))
         self.metadata("old", "alpha", "claude", spawned_ms=usage.now_ms() + 10000)
@@ -391,8 +497,12 @@ class SessionBindingTests(unittest.TestCase):
 
     def test_S5a_identity_fallback_reads_claude_code_session_id(self):
         """worker-token-metrics/S5a: identity fallback uses the actual Claude session variable."""
-        env = dict(self.env, HC_SCOPE="scope", CLAUDE_CODE_SESSION_ID="current",
-                   CLAUDE_SESSION_ID="obsolete")
+        env = dict(
+            self.env,
+            HC_SCOPE="scope",
+            CLAUDE_CODE_SESSION_ID="current",
+            CLAUDE_SESSION_ID="obsolete",
+        )
         with mock.patch.object(hc_tools.lib, "cli_generation", return_value=None):
             self.assertEqual(hc_tools.dispatch_identity(env), ("scope", "current"))
 
@@ -404,25 +514,33 @@ class SessionBindingTests(unittest.TestCase):
                 self.assertIsNone(usage.resolve_session_log(self.env, "missing"))
             path = self.log(cli, "broken")
             real_open = Path.open
+
             def unreadable(candidate, *args, **kwargs):
                 if candidate == path:
                     raise PermissionError("unreadable test log")
                 return real_open(candidate, *args, **kwargs)
+
             with self.subTest(cli=cli, failure="unreadable"):
                 with mock.patch.object(Path, "open", unreadable):
                     self.assertIsNone(usage.resolve_session_log(self.env, "missing"))
-            for content in ('{"type":', 'garbage\n', '[]\n', '\ufffd\n'):
+            for content in ('{"type":', "garbage\n", "[]\n", "\ufffd\n"):
                 with self.subTest(cli=cli, content=content):
                     path.write_text(content)
                     self.assertIsNone(usage.resolve_session_log(self.env, "missing"))
             # A first user record beyond the read budget is deliberately not resolved.
-            path.write_text(json.dumps({"type": "padding", "text": "x" * usage.SESSION_HEAD_BYTES})
-                            + "\n" + '{"type":"user"}\n')
+            path.write_text(
+                json.dumps({"type": "padding", "text": "x" * usage.SESSION_HEAD_BYTES})
+                + "\n"
+                + '{"type":"user"}\n'
+            )
             with mock.patch.object(Path, "open") as opened:
                 stream = opened.return_value.__enter__.return_value
                 stream.read.return_value = b'{"type":'
-                self.assertIsNone(usage._session_match(path, {
-                    "cli": cli, "assignment_id": "alpha", "spawned_ms": self.spawned_ms}))
+                self.assertIsNone(
+                    usage._session_match(
+                        path, {"cli": cli, "assignment_id": "alpha", "spawned_ms": self.spawned_ms}
+                    )
+                )
                 stream.read.assert_called_once_with(usage.SESSION_HEAD_BYTES)
             self.assertIsNone(usage.resolve_session_log(self.env, "missing"))
             path.unlink()

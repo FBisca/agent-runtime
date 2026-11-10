@@ -45,10 +45,16 @@ class WakeFixture(GateFixture):
 
 
 class RequestTests(WakeFixture, unittest.TestCase):
-    def assert_request(self, event, needle, spawned=("demo-t1",)):
+    def assert_request(self, event, needle, spawned=("demo-t1",), whole=True):
+        """`whole`: the wake carries the reason as written; a long reason is cut in the wake, and the file has it all."""
         request = self.request()
         wake = "decision t1: %s -> %s" % (request["reason"], self.run_dir / "t1" / "request.json")
-        self.assertEqual(self.wake_lines("decision"), [wake])
+        if whole:
+            self.assertEqual(self.wake_lines("decision"), [wake])
+        else:
+            (line,) = self.wake_lines("decision")
+            self.assertTrue(line.startswith("decision t1: " + request["reason"][:100]), line)
+            self.assertTrue(line.endswith(" -> %s" % (self.run_dir / "t1" / "request.json")), line)
         self.assertEqual((request["event"], request["unit"], request["menu"]), (event, "t1", MENU))
         self.assertIn(needle, request["reason"])
         self.assertIn(str(self.run_dir / "t1" / "task.md"), request["evidence"])
@@ -97,33 +103,36 @@ class RequestTests(WakeFixture, unittest.TestCase):
         )
         self.assert_request("report", "report.json")
 
-    def test_S1_a_worker_whose_turn_ended_without_a_report_writes_a_request(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
-        self.waits(
-            [
-                wait_result([assignment("demo-t1", "working", "idle")]),
-                self.decide_step("t1", "skip"),
-            ]
-        )
-        self.run_driver()
-        self.assert_request("exited", "runtime state idle")
-
-    def test_S1_a_reviewer_that_ends_without_a_review_writes_a_request(self):
+    def test_S1_a_worker_whose_turn_ended_without_a_report_writes_an_idle_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1
 
-        R18: an idle reviewer is still resumable, so it is warned twice before the Lead is asked."""
+        R62: an ended turn is not an exit; the idle watchdog asks, naming the worker and the way out."""
+        self.waits(
+            [wait_result([assignment("demo-t1", "working", "idle")])] * 4
+            + [self.decide_step("t1", "skip")]
+        )
+        self.run_driver("--idle-minutes", "0")
+        self.assert_request("idle", "demo-t1", whole=False)
+        self.assertIn("decide", self.request()["reason"])
+
+    def test_S1_a_reviewer_that_ends_without_a_review_writes_an_idle_request_with_no_warnings(self):
+        """orchestrator-engine/R2: orchestrate-lean-loop/S1
+
+        R62: an idle reviewer is a live reviewer: no warning resume replaces its assignment, and the watchdog asks
+        the Lead once, naming the reviewer and the review file."""
         self.waits(
             [
                 self.worker_done(tests=True),
-                *self.repeated(wait_result([assignment("demo-t1-review", "working", "idle")])),
+                *[wait_result([assignment("demo-t1-review", "working", "idle")])] * 4,
                 self.decide_step("t1", "skip"),
             ]
         )
-        self.run_driver()
-        self.assertEqual(
-            len(self.calls("resume")), 2, "two warnings to the reviewer that ended without its file"
+        self.run_driver("--idle-minutes", "0")
+        self.assertEqual(self.calls("resume"), [], "no warning resume")
+        self.assert_request(
+            "idle", "review.json", spawned=("demo-t1", "demo-t1-review"), whole=False
         )
-        self.assert_request("review", "review.json", spawned=("demo-t1", "demo-t1-review"))
+        self.assertIn("demo-t1-review", self.request()["reason"])
 
     def test_S1_the_unit_waits_for_the_lead_and_the_wake_is_written_once(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
@@ -291,7 +300,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
     def test_S7_an_answer_naming_another_attempt_exits_2_writes_nothing_and_names_the_expected_id(
         self,
     ):
-        """orchestrator-engine/R2: drive-restart-recovery/S7"""
+        """orchestrator-engine/R31"""
         for wrong in ("t1", "t1d1", "t1r1", "t1o3"):
             with self.subTest(wrong=wrong):
                 path = self.write_open_request(task="t1r2")
@@ -306,7 +315,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
                 self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_S7_an_answer_naming_the_requests_attempt_or_no_attempt_is_written(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S7"""
+        """orchestrator-engine/R31"""
         for text in (
             "report under task_id t1r2",
             "see %s/t1r2/report.json" % self.run_dir,
@@ -367,7 +376,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
     def test_S6_an_answer_resumes_the_worker_on_the_same_task_id_and_its_report_passes_the_gate(
         self,
     ):
-        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        """orchestrator-engine/R30"""
         self.waits(
             [
                 self.blocked(),
@@ -391,7 +400,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S6_an_answer_to_a_gate_failure_resumes_the_same_attempt_with_the_findings(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        """orchestrator-engine/R30"""
         self.waits(
             [
                 self.worker_done(),
@@ -409,7 +418,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r2")["status"], "ACTIVE")
 
     def test_S6_a_report_written_before_the_answer_is_not_the_answered_rounds_news(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        """orchestrator-engine/R30"""
         blocked = self.blocked()
         blocked["write"] = [[str(self.run_dir / "t1" / "report.json"), self.report("t1")]]
         ended = wait_result([assignment("demo-t1", "working", "idle", id=resume_id("demo-t1", 1))])
@@ -417,12 +426,12 @@ class DecideTests(WakeFixture, unittest.TestCase):
             [
                 blocked,
                 self.decide_step("t1", "answer", "the port is known", answer="use port 5432"),
-                ended,
+                *[ended] * 4,
                 self.decide_step("t1", "skip"),
             ]
         )
-        self.run_driver()
-        self.assertEqual(self.request(nth=2)["event"], "exited")
+        self.run_driver("--idle-minutes", "0")
+        self.assertEqual(self.request(nth=2)["event"], "idle")
 
     def test_S3_skip_and_mark_blocked_close_the_unit(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S3"""

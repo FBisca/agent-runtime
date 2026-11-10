@@ -1,4 +1,5 @@
 """Shared durable task tool over fake-hc MCP (dispatch opt-in)."""
+
 import json
 import threading
 
@@ -8,7 +9,6 @@ from test_event_wait import Session
 from test_tools import ToolCase
 
 pytestmark = pytest.mark.integration
-
 
 
 class TaskTests(ToolCase):
@@ -35,72 +35,148 @@ class TaskTests(ToolCase):
         after = self.task(self.lead, action="create", subject="test", depends_on=[base["task_id"]])
         self.assertEqual(after["depends_on"], [base["task_id"]])
         self.task(self.workers[0], 0, action="claim", task_id=base["task_id"])
-        restarted = Session(dict(self.env, CODEX_THREAD_ID="event-lead"))  # new MCP process, same lead
+        restarted = Session(
+            dict(self.env, CODEX_THREAD_ID="event-lead")
+        )  # new MCP process, same lead
         self.addCleanup(restarted.close)
         restarted.handshake()
-        views = [self.task(s, i, action="list")["tasks"] for s, i in
-                 ((restarted, None), (self.workers[0], 0), (self.workers[1], 1))]
+        views = [
+            self.task(s, i, action="list")["tasks"]
+            for s, i in ((restarted, None), (self.workers[0], 0), (self.workers[1], 1))
+        ]
         self.assertEqual(views[0], views[1])
         self.assertEqual(views[0], views[2])
         by_id = {t["task_id"]: t for t in views[0]}
         self.assertEqual(by_id[base["task_id"]]["owner"], self.assignments[0]["worker_id"])
         self.assertEqual(by_id[base["task_id"]]["status"], "in_progress")
-        self.assertEqual((by_id[after["task_id"]]["status"], by_id[after["task_id"]]["ready"]), ("pending", False))
+        self.assertEqual(
+            (by_id[after["task_id"]]["status"], by_id[after["task_id"]]["ready"]),
+            ("pending", False),
+        )
 
     def test_one_concurrent_claim_wins_and_bad_dependencies_are_rejected(self):
         """agent-runtime/R50
         agent-runtime-dispatch/S17"""
         self.prepare()
         ready = self.task(self.lead, action="create", subject="ready")
-        blocked = self.task(self.lead, action="create", subject="later", depends_on=[ready["task_id"]])
+        blocked = self.task(
+            self.lead, action="create", subject="later", depends_on=[ready["task_id"]]
+        )
         outcomes = []
 
         def claim(index):
-            result, _ = self.call(self.workers[index], "task", {
-                "action": "claim", "task_id": ready["task_id"],
-                "assignment_id": self.assignments[index]["assignment_id"]})
+            result, _ = self.call(
+                self.workers[index],
+                "task",
+                {
+                    "action": "claim",
+                    "task_id": ready["task_id"],
+                    "assignment_id": self.assignments[index]["assignment_id"],
+                },
+            )
             outcomes.append(result["isError"])
+
         threads = [threading.Thread(target=claim, args=(i,)) for i in (0, 1)]
         [t.start() for t in threads]
         [t.join() for t in threads]
         self.assertEqual(sorted(outcomes), [False, True])
-        self.assertIn("dependenc", self.task(self.workers[1], 1, ok=False, action="claim", task_id=blocked["task_id"]))
-        self.assertIn("missing", self.task(self.lead, ok=False, action="create", subject="x", depends_on=["nope"]))
-        self.assertIn("cycle", self.task(self.lead, ok=False, action="update", task_id=ready["task_id"],
-                                        depends_on=[blocked["task_id"]]))
-        self.assertIn("cycle", self.task(self.lead, ok=False, action="update", task_id=ready["task_id"],
-                                        depends_on=[ready["task_id"]]))
+        self.assertIn(
+            "dependenc",
+            self.task(self.workers[1], 1, ok=False, action="claim", task_id=blocked["task_id"]),
+        )
+        self.assertIn(
+            "missing",
+            self.task(self.lead, ok=False, action="create", subject="x", depends_on=["nope"]),
+        )
+        self.assertIn(
+            "cycle",
+            self.task(
+                self.lead,
+                ok=False,
+                action="update",
+                task_id=ready["task_id"],
+                depends_on=[blocked["task_id"]],
+            ),
+        )
+        self.assertIn(
+            "cycle",
+            self.task(
+                self.lead,
+                ok=False,
+                action="update",
+                task_id=ready["task_id"],
+                depends_on=[ready["task_id"]],
+            ),
+        )
 
     def test_reports_transition_linked_task_once_and_unlock_dependents(self):
         """agent-runtime/R51
         agent-runtime-dispatch/S18"""
         self.prepare()
         first = self.task(self.lead, action="create", subject="first")
-        second = self.task(self.lead, action="create", subject="second", depends_on=[first["task_id"]])
+        second = self.task(
+            self.lead, action="create", subject="second", depends_on=[first["task_id"]]
+        )
         self.task(self.workers[0], 0, action="claim", task_id=first["task_id"])
         self.publish(0, kind="blocked", text="stuck")
         tasks = {t["task_id"]: t for t in self.task(self.lead, action="list")["tasks"]}
         self.assertEqual(tasks[first["task_id"]]["status"], "blocked")
-        self.assertIn("dependenc", self.task(self.workers[1], 1, ok=False, action="claim", task_id=second["task_id"]))
+        self.assertIn(
+            "dependenc",
+            self.task(self.workers[1], 1, ok=False, action="claim", task_id=second["task_id"]),
+        )
         # The same task is retried by a fresh assignment, then completed with a duplicate report.
         self.task(self.lead, action="update", task_id=first["task_id"], status="pending")
-        resumed = self.rpc.get(self.rpc.tool("resume", {"name": "w1", "task": "retry"}))["result"]["structuredContent"]
+        resumed = self.rpc.get(self.rpc.tool("resume", {"name": "w1", "task": "retry"}))["result"][
+            "structuredContent"
+        ]
         self.assignments[0] = resumed
         self.task(self.workers[0], 0, action="claim", task_id=first["task_id"])
-        done = self.call(self.workers[0], "report", {"text": "ok", "kind": "complete", "message_id": "m1",
-                                                    "assignment_id": resumed["assignment_id"]})[0]
+        done = self.call(
+            self.workers[0],
+            "report",
+            {
+                "text": "ok",
+                "kind": "complete",
+                "message_id": "m1",
+                "assignment_id": resumed["assignment_id"],
+            },
+        )[0]
         self.assertFalse(done["isError"], done)
-        before = {t["task_id"]: t for t in self.task(self.lead, action="list")["tasks"]}[first["task_id"]]
-        replay = self.call(self.workers[0], "report", {"text": "ok", "kind": "complete", "message_id": "m1",
-                                                      "assignment_id": resumed["assignment_id"]})[0]
+        before = {t["task_id"]: t for t in self.task(self.lead, action="list")["tasks"]}[
+            first["task_id"]
+        ]
+        replay = self.call(
+            self.workers[0],
+            "report",
+            {
+                "text": "ok",
+                "kind": "complete",
+                "message_id": "m1",
+                "assignment_id": resumed["assignment_id"],
+            },
+        )[0]
         self.assertFalse(replay["isError"], replay)
         tasks = {t["task_id"]: t for t in self.task(self.lead, action="list")["tasks"]}
         self.assertEqual(tasks[first["task_id"]]["status"], "complete")
         self.assertEqual(tasks[first["task_id"]], before)  # replay adds no transition
-        late = self.call(self.workers[0], "report", {"text": "again", "kind": "complete", "message_id": "m2",
-                                                    "assignment_id": resumed["assignment_id"]})[0]
+        late = self.call(
+            self.workers[0],
+            "report",
+            {
+                "text": "again",
+                "kind": "complete",
+                "message_id": "m2",
+                "assignment_id": resumed["assignment_id"],
+            },
+        )[0]
         self.assertTrue(late["isError"])
-        self.assertEqual({t["task_id"]: t for t in self.task(self.lead, action="list")["tasks"]}[first["task_id"]], before)
+        self.assertEqual(
+            {t["task_id"]: t for t in self.task(self.lead, action="list")["tasks"]}[
+                first["task_id"]
+            ],
+            before,
+        )
         self.assertTrue(tasks[second["task_id"]]["ready"])
         self.task(self.workers[1], 1, action="claim", task_id=second["task_id"])
 
@@ -112,7 +188,9 @@ class TaskTests(ToolCase):
         agent-runtime-dispatch/S18"""
         self.prepare()
         first = self.task(self.lead, action="create", subject="first")
-        second = self.task(self.lead, action="create", subject="second", depends_on=[first["task_id"]])
+        second = self.task(
+            self.lead, action="create", subject="second", depends_on=[first["task_id"]]
+        )
         self.task(self.workers[0], 0, action="claim", task_id=first["task_id"])
         self.publish(0, kind="blocked", text="stuck")
         self.assertFalse(self.listed()[second["task_id"]]["ready"])
@@ -129,17 +207,30 @@ class TaskTests(ToolCase):
         old = self.task(self.lead, action="create", subject="old")
         other = self.task(self.lead, action="create", subject="other")
         self.task(self.workers[0], 0, action="claim", task_id=old["task_id"])
-        resumed = self.rpc.get(self.rpc.tool("resume", {"name": "w1", "task": "next"}))["result"]["structuredContent"]
+        resumed = self.rpc.get(self.rpc.tool("resume", {"name": "w1", "task": "next"}))["result"][
+            "structuredContent"
+        ]
         before = self.listed()
         # Same worker, fresh assignment: the task still belongs to the previous assignment.
-        denied = self.task(self.workers[0], ok=False, action="update", task_id=old["task_id"], status="complete",
-                           assignment_id=resumed["assignment_id"])
+        denied = self.task(
+            self.workers[0],
+            ok=False,
+            action="update",
+            task_id=old["task_id"],
+            status="complete",
+            assignment_id=resumed["assignment_id"],
+        )
         self.assertIn("assignment", denied)
         self.assertEqual(self.listed(), before)
-        self.task(self.lead, action="update", task_id=old["task_id"], status="pending")  # lead override
+        self.task(
+            self.lead, action="update", task_id=old["task_id"], status="pending"
+        )  # lead override
         self.assignments[0] = resumed
         self.publish(0, kind="complete", text="no task")
-        self.assertIn("unfinished", self.task(self.workers[0], 0, ok=False, action="claim", task_id=other["task_id"]))
+        self.assertIn(
+            "unfinished",
+            self.task(self.workers[0], 0, ok=False, action="claim", task_id=other["task_id"]),
+        )
         self.assertEqual(self.listed()[other["task_id"]]["status"], "pending")
 
     def test_forged_assignment_identity_cannot_change_task_state(self):
@@ -148,18 +239,28 @@ class TaskTests(ToolCase):
         self.prepare()
         item = self.task(self.lead, action="create", subject="guarded")
         before = self.listed()
-        forged = self.task(self.workers[0], ok=False, action="claim", task_id=item["task_id"],
-                           assignment_id=self.assignments[1]["assignment_id"])
+        forged = self.task(
+            self.workers[0],
+            ok=False,
+            action="claim",
+            task_id=item["task_id"],
+            assignment_id=self.assignments[1]["assignment_id"],
+        )
         self.assertIn("assignment", forged)
         self.assertEqual(self.listed(), before)
-        foreign = self.task(self.workers[0], 0, ok=False, action="claim", task_id=item["task_id"], receipt="forged")
+        foreign = self.task(
+            self.workers[0], 0, ok=False, action="claim", task_id=item["task_id"], receipt="forged"
+        )
         self.assertIn("receipt", foreign)
         self.assertEqual(self.listed(), before)
 
-    def test_status_and_collect_report_diagnostics_when_storage_fails_but_auth_errors_stay_errors(self):
+    def test_status_and_collect_report_diagnostics_when_storage_fails_but_auth_errors_stay_errors(
+        self,
+    ):
         """agent-runtime/R55
         agent-runtime-dispatch/S22"""
         from agent_runtime.dispatch_store import Store
+
         self.prepare()
         self.replies["read"] = {"out": "screen says finished"}
         (self.dir / "replies").write_text(json.dumps(self.replies))
@@ -180,12 +281,22 @@ class TaskTests(ToolCase):
         """agent-runtime/R55
         agent-runtime-dispatch/S22"""
         self.prepare()
-        denied, _ = self.call(self.workers[0], "status", {"name": "w1"})  # no first-call assignment proof
+        denied, _ = self.call(
+            self.workers[0], "status", {"name": "w1"}
+        )  # no first-call assignment proof
         self.assertTrue(denied["isError"])
-        done, _ = self.call(self.workers[0], "status", {"name": "w1", "assignment_id": self.assignments[0]["assignment_id"]})
+        done, _ = self.call(
+            self.workers[0],
+            "status",
+            {"name": "w1", "assignment_id": self.assignments[0]["assignment_id"]},
+        )
         self.assertFalse(done["isError"])
-        batch = self.rpc.get(self.rpc.tool("wait", {"target": "all", "timeout": 0}))["result"]["structuredContent"]
-        self.assertEqual(batch["unfinished"].__len__(), 2)  # diagnostics never completed an assignment
+        batch = self.rpc.get(self.rpc.tool("wait", {"target": "all", "timeout": 0}))["result"][
+            "structuredContent"
+        ]
+        self.assertEqual(
+            batch["unfinished"].__len__(), 2
+        )  # diagnostics never completed an assignment
 
     def test_late_inbox_read_failure_leaves_no_first_contact_pin_and_keeps_reports(self):
         """agent-runtime/R55
@@ -193,28 +304,55 @@ class TaskTests(ToolCase):
         import sqlite3
 
         from agent_runtime.dispatch_store import Store
+
         self.prepare()
         self.publish(1, kind="complete", text="accepted before failure")
-        with sqlite3.connect(Store(self.env).path) as db:  # later inbox query now fails; setup and indexes still exist
+        with sqlite3.connect(
+            Store(self.env).path
+        ) as db:  # later inbox query now fails; setup and indexes still exist
             db.execute("ALTER TABLE messages RENAME COLUMN acked TO acked_broken")
             pins = db.execute("SELECT COUNT(*) FROM callers").fetchone()[0]
-            team = db.execute("SELECT team FROM workers WHERE id=?", (self.assignments[0]["worker_id"],)).fetchone()[0]
-            db.execute("INSERT INTO receipts VALUES ('r-late', ?, ?, '[]')", (team, self.assignments[0]["worker_id"]))
-        reply, _ = self.call(self.workers[0], "status", {"name": "w1", "receipt": "r-late",
-                                                         "assignment_id": self.assignments[0]["assignment_id"]})
+            team = db.execute(
+                "SELECT team FROM workers WHERE id=?", (self.assignments[0]["worker_id"],)
+            ).fetchone()[0]
+            db.execute(
+                "INSERT INTO receipts VALUES ('r-late', ?, ?, '[]')",
+                (team, self.assignments[0]["worker_id"]),
+            )
+        reply, _ = self.call(
+            self.workers[0],
+            "status",
+            {
+                "name": "w1",
+                "receipt": "r-late",
+                "assignment_id": self.assignments[0]["assignment_id"],
+            },
+        )
         self.assertFalse(reply["isError"], reply)
         payload = reply["structuredContent"]
         self.assertIn("delivery_error", payload)
         self.assertNotIn("inbox", payload)
         with sqlite3.connect(Store(self.env).path) as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], pins)  # no new pin
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], pins
+            )  # no new pin
             states = dict(db.execute("SELECT id,state FROM assignments"))
             self.assertEqual(states[self.assignments[0]["assignment_id"]], "working")
             self.assertEqual(states[self.assignments[1]["assignment_id"]], "complete")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
             db.execute("ALTER TABLE messages RENAME COLUMN acked_broken TO acked")
-        again, text = self.call(self.workers[0], "status", {"name": "w1", "receipt": "r-late", "assignment_id": self.assignments[0]["assignment_id"]})
+        again, text = self.call(
+            self.workers[0],
+            "status",
+            {
+                "name": "w1",
+                "receipt": "r-late",
+                "assignment_id": self.assignments[0]["assignment_id"],
+            },
+        )
         self.assertFalse(again["isError"], text)
         self.assertNotIn("delivery_error", text)
         with sqlite3.connect(Store(self.env).path) as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], pins + 1)  # pinned on success
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], pins + 1
+            )  # pinned on success

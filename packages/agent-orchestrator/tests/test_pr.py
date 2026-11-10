@@ -148,7 +148,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.gh_calls("run", "view")[0], ["run", "view", "77", "--log-failed"])
 
     def test_S10_several_failing_checks_with_long_logs_carry_only_their_own_capped_excerpt(self):
-        """orchestrator-engine/R2: merged-unit-completes/S10"""
+        """orchestrator-engine/R37"""
 
         def job(name, marker):
             return "\n".join(
@@ -524,7 +524,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
 
 class EarlyMergeTests(PrFixture, unittest.TestCase):
     def test_S7a_a_merged_early_ledger_task_keeps_the_checks_of_the_stored_report(self):
-        """orchestrator-engine/R2: merged-unit-completes/S7a"""
+        """orchestrator-engine/R33"""
         check = {"command": "pytest", "outcome": "passed"}
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
         self.waits(
@@ -581,7 +581,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
     def test_S7_a_merge_on_a_drive_with_a_named_gate_completes_the_unit_as_a_merged_unverified_one(
         self,
     ):
-        """orchestrator-engine/R2: merged-unit-completes/S7"""
+        """orchestrator-engine/R32"""
         self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
         # The report omits the gate, so the report-time refusal sends t1 into a fix round before the merge.
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
@@ -646,21 +646,21 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "idle")
 
     def test_S8_a_unit_whose_agent_the_runtime_reports_working_is_left_alone(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        """orchestrator-engine/R32"""
         self.waits([self.working(runtime_state="working")] * 5)
         self.run_driver("--idle-minutes", "0")
         self.assertEqual(self.idle_events(), [])
         self.assertEqual(self.wake_lines("decision"), [])
 
     def test_S8_a_unit_working_past_working_minutes_is_asked_with_how_long(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        """orchestrator-engine/R32"""
         self.waits([self.working(runtime_state="working")] * 4 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0", "--working-minutes", "0")
         self.assertEqual(self.request()["event"], "idle")
         self.assertIn("working for", self.wake_lines("decision")[0])
 
     def test_S8_a_working_agent_is_left_alone_until_working_minutes_have_passed(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        """orchestrator-engine/R32"""
         spec = load_script()
         moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
         self.waits([self.working(runtime_state="working")] * 6 + [self.decide_step("t1", "skip")])
@@ -672,7 +672,7 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
 
     def test_S8a_an_agent_not_reported_working_is_asked_at_two_ticks_as_today(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8a"""
+        """orchestrator-engine/R33"""
         self.waits([self.working()] * 3 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0")
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
@@ -710,8 +710,8 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([(e["waiting"], e["ticks"]) for e in rows], [("ci", 1), ("ci", 2)])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
-    def test_S8_a_unit_waiting_for_its_merge_is_never_idle(self):
-        """orchestrator-engine/R15: orchestrator-lead-alerts/S8"""
+    def test_S14_a_unit_waiting_for_its_merge_is_never_idle(self):
+        """orchestrator-engine/R15: orchestrator-lead-alerts/S8 — and R62: orchestrator-silent-idle/S14"""
         self.prs(["OPEN"])
         self.waits(
             [

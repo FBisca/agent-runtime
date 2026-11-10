@@ -1,6 +1,7 @@
 """The gates after a worker reports: converge, a fresh reviewer, fix rounds, a fresh worker for a dead pane."""
 
 import io
+import itertools
 import json
 import os
 import unittest
@@ -9,7 +10,16 @@ from unittest import mock
 
 import pytest
 import yaml
-from fixtures import RunFixture, load_script, plan_text, report_wait, resume_id, spawn_id
+from fixtures import (
+    RunFixture,
+    assignment,
+    load_script,
+    plan_text,
+    report_wait,
+    resume_id,
+    spawn_id,
+    wait_result,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -119,7 +129,7 @@ class GateFixture(RunFixture):
             directory.mkdir()
             (directory / "test_oracle.py.oracle").write_text("def test_o():\n    pass\n")
             evidence = {
-                "check": "pytest",
+                "check": "true",
                 "baseline": "pass",
                 "oracle": ["test_oracle.py.oracle"],
                 "place": "src/a/",
@@ -146,6 +156,9 @@ class GateFixture(RunFixture):
         self.plan.unlink()
         self.plan = self.plan.with_suffix(".yaml")
         self.plan.write_text(yaml.safe_dump(data, sort_keys=False))
+        # Approving a plan with a check runs its baseline and writes a receipt under the repo key: the alias the run
+        # uses must exist before that directory does.
+        self.alias_state(self.plan)
         out = io.StringIO()
         with (
             mock.patch.object(load_script(), "resolve_runtime", return_value={"role": "lead"}),
@@ -291,7 +304,7 @@ class GateTests(GateFixture, unittest.TestCase):
         return self.worker_done(task_id, report=self.report(task_id, checks=self.FAILED_CHECK))
 
     def test_S5_a_ready_report_that_fails_the_complete_rules_goes_back_to_its_worker(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5"""
+        """orchestrator-engine/R29"""
         self.waits([self.refused("t1")])
         self.run_driver()
         resumes = self.calls("resume")
@@ -307,7 +320,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["status"], "ACTIVE")
 
     def test_S5a_report_refusals_at_the_fix_round_cap_ask_the_lead(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5a"""
+        """orchestrator-engine/R30"""
         self.waits([self.refused("t1"), self.refused("t1r1"), self.refused("t1r2"), self.skipped()])
         self.run_driver()
         self.assertEqual(len(self.calls("resume")), 2)
@@ -317,7 +330,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
 
     def test_S5_a_report_the_ledger_cannot_read_asks_the_lead_and_the_driver_exits_clean(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5 — (a report with no `remaining`, or a check with no outcome)"""
+        """orchestrator-engine/R29 — (a report with no `remaining`, or a check with no outcome)"""
         for broken in (
             {"remaining": None},
             {"checks": [{"command": "pytest"}]},
@@ -509,12 +522,211 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(len(warned), 2, [c["args"]["task"] for c in warned])
         for call in warned:
             self.assertIn("review.json", call["args"]["task"])
-            self.assertIn("write it again, then report again", call["args"]["task"])
+            self.assertIn("Write or repair that file", call["args"]["task"])
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("2 warning(s)", self.request()["reason"])
         self.assertNotIn(
             "reviewed_commit", self.task(), "no verdict was recorded from a missing file"
         )
+
+
+REVIEWER = "demo-t1-review"
+
+
+class SilentReviewerTests(GateFixture, unittest.TestCase):
+    """R62: a reviewer whose turn ended is still a live reviewer. The driver waits for its complete under the
+    assignment it was given, and only the timed idle watchdog asks the Lead."""
+
+    def silent(self, runtime_state="idle", write=()):
+        """A wait step: the reviewer's turn ended under its original assignment; no report."""
+        return wait_result([assignment(REVIEWER, "working", runtime_state)], write=write)
+
+    def review_file(self):
+        return [[str(self.run_dir / "t1" / "review.json"), self.review()]]
+
+    def reviewer_resumes(self):
+        return [c for c in self.calls("resume") if c["args"].get("name") == REVIEWER]
+
+    def payload_trouble(self):
+        return [
+            e
+            for e in self.events("payload-warning", "contract-error")
+            if e.get("where") == "review"
+        ]
+
+    def gates(self):
+        return [e["gate"][1] for e in self.events("state") if e["task"] == "t1"]
+
+    def test_S1_a_reviewer_that_ends_its_turn_idle_then_reports_complete_is_accepted(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S1"""
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.silent("idle"),
+                self.silent("done"),
+                self.silent("idle"),
+                self.reviewer_done(),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.reviewer_resumes(), [], "a silent reviewer was resumed")
+        self.assertEqual(self.payload_trouble(), [])
+        self.assertFalse((self.run_dir / "t1" / "request.json").exists(), "the Lead was asked")
+        task = self.task()
+        self.assertEqual(task["review"]["assignment_id"], "a-" + REVIEWER)
+        self.assertIn("reviewed_commit", task)
+        self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
+
+    def test_S2_a_review_file_on_disk_without_a_complete_report_is_not_a_verdict(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S2"""
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.silent("idle", write=self.review_file()),
+                self.silent("done"),
+                self.silent("idle"),
+                self.silent("idle"),
+                self.silent("idle"),
+                self.skipped(),
+            ]
+        )
+        self.run_driver("--idle-minutes", "0")
+        self.assertNotIn("reviewed", self.gates(), "the gate left reviewing without a report")
+        self.assertNotIn("reviewed_commit", self.task())
+        self.assertEqual(self.request()["event"], "idle")
+
+    def test_S3_idle_observations_between_ticks_consume_no_ticks_and_raise_no_request(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S3"""
+        spec = load_script()
+        self.waits(
+            [self.worker_done(tests=True)] + [self.silent("idle")] * 8 + [self.reviewer_done()]
+        )
+        with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: 0)):
+            self.run_driver("--idle-minutes", "10")
+        self.assertEqual([e for e in self.events("idle") if e.get("unit")], [])
+        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
+        self.assertEqual(self.reviewer_resumes(), [])
+        self.assertEqual(self.task()["gate"], "done")
+
+    def test_S4_a_reviewer_that_never_reports_is_asked_about_once_by_the_idle_watchdog(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S4"""
+        spec = load_script()
+        moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
+        self.waits([self.worker_done(tests=True)] + [self.silent("idle")] * 6 + [self.skipped()])
+        with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: next(moments))):
+            self.run_driver("--idle-minutes", "10")
+        self.assertEqual(self.reviewer_resumes(), [], "a warning preceded the request")
+        self.assertEqual(self.payload_trouble(), [], "a payload error preceded the request")
+        request = self.request()
+        self.assertEqual(request["event"], "idle")
+        reason = request["reason"]
+        self.assertIn(REVIEWER, reason)
+        self.assertIn(str(self.run_dir / "t1" / "review.json"), reason)
+        self.assertIn("20 minutes", reason)
+        self.assertIn("decide %s t1 retry | answer | skip" % self.plan, reason)
+        self.assertEqual(len(self.wake_lines("decision")), 1)
+
+    def test_S9_a_missing_review_is_recovered_with_text_that_does_not_claim_a_read_report(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S9"""
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                *self.repeated(self.reviewer_done(write=[])),
+                self.skipped(),
+            ]
+        )
+        self.run_driver()
+        warned = self.reviewer_resumes()
+        self.assertEqual(len(warned), 2, "the R18 cap still applies")
+        path = str(self.run_dir / "t1" / "review.json")
+        for call in warned:
+            text = call["args"]["task"]
+            self.assertIn(path, text)
+            self.assertIn("Write or repair that file", text)
+            self.assertIn("report complete under this assignment", text)
+            self.assertNotIn("reached the driver", text)
+        self.assertEqual(self.request()["event"], "review")
+
+    def test_S10_a_reviewer_the_runtime_reports_failed_goes_straight_to_the_lead(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S10"""
+        self.states({REVIEWER: "exited"})
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                wait_result([assignment(REVIEWER, "failed")]),
+                self.skipped(),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.reviewer_resumes(), [], "a failed reviewer cannot write the file")
+        self.assertEqual(self.request()["event"], "review")
+        self.assertIn("no agent left to write it", self.request()["reason"])
+
+    def test_S10_a_restart_orphaned_reviewer_with_a_valid_review_is_still_accepted(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S10"""
+        self.waits([self.worker_done(tests=True)])
+        self.run_driver()
+        self.assertEqual(self.task()["gate"], "reviewing")
+        self.gone(REVIEWER)
+        head = self.git(self.worktree, "rev-parse", "HEAD")
+        (self.run_dir / "t1" / "review.json").write_text(
+            self.review().replace("@HEAD", head), encoding="utf-8"
+        )
+        self.waits([wait_result()])
+        self.run_driver()
+        self.assertEqual(self.reviewer_resumes(), [])
+        self.assertIn("reviewed_commit", self.task())
+
+    def test_S10_a_restart_orphaned_reviewer_without_a_review_goes_straight_to_the_lead(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S10"""
+        self.waits([self.worker_done(tests=True)])
+        self.run_driver()
+        self.gone(REVIEWER)
+        self.waits([wait_result(), self.skipped()])
+        self.run_driver()
+        self.assertEqual(self.reviewer_resumes(), [])
+        self.assertEqual(self.request()["event"], "review")
+
+    def test_S11_a_reviewer_the_runtime_reports_unreported_or_error_is_handled_at_once(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S11 — as before, not deferred to the idle watchdog."""
+        for runtime_state in ("unreported", "error"):
+            with self.subTest(runtime_state=runtime_state):
+                self.setUp()
+                recovered = report_wait(REVIEWER, "complete", id=resume_id(REVIEWER, 1))
+                recovered["write"] = self.review_file()
+                self.waits([self.worker_done(tests=True), self.silent(runtime_state), recovered])
+                self.run_driver()  # the default idle watchdog could not have fired
+                self.assertEqual(len(self.reviewer_resumes()), 1, "no recovery at once")
+                self.assertEqual(len(self.events("payload-warning")), 1)
+                self.assertEqual(self.task()["gate"], "done")
+
+    def test_S12_the_reviewer_brief_allows_background_jobs_and_names_the_report_order(self):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S12"""
+        self.waits([self.worker_done(tests=True), self.reviewer_done()])
+        self.run_driver()
+        brief = (self.run_dir / "t1-review" / "task.md").read_text(encoding="utf-8")
+        for needle in (
+            "background jobs",
+            "Ending a turn does not finish the review",
+            "after the jobs it needs finish",
+            "report complete with the assignment id",
+        ):
+            self.assertIn(needle, brief)
+
+    def test_S13_a_reviewer_complete_after_the_gate_moved_to_requested_leaves_the_request_open(
+        self,
+    ):
+        """orchestrator-engine/R62: orchestrator-silent-idle/S13"""
+        self.waits(
+            [self.worker_done(tests=True)]
+            + [self.silent("idle")] * 4
+            + [self.reviewer_done(), self.skipped()]
+        )
+        self.run_driver("--idle-minutes", "0")
+        self.assertEqual(self.request()["event"], "idle")
+        self.assertNotIn("reviewed", self.gates())
+        self.assertNotIn("reviewed_commit", self.task())
+        self.assertEqual(self.task()["gate"], "skipped")
 
 
 class PayloadTests(GateFixture, unittest.TestCase):
@@ -533,7 +745,7 @@ class PayloadTests(GateFixture, unittest.TestCase):
         warned = [c["args"] for c in self.calls("resume")]
         self.assertEqual(len(warned), 2, "one warning per report, capped")
         self.assertEqual(warned[0]["name"], "demo-t1-review")
-        self.assertIn("The driver reads the file, not the report", warned[0]["task"])
+        self.assertIn("Write or repair that file", warned[0]["task"])
         self.assertEqual(self.task()["gate"], "skipped")
 
     def test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead(self):
