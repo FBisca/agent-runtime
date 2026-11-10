@@ -569,7 +569,9 @@ class RecoveryTests(GateFixture, unittest.TestCase):
             ]
         )
 
-    def test_S5_a_failed_dispatch_raises_one_wake_and_the_lead_s_todo_retries_it_in_the_same_run(self):
+    def test_S5_a_failed_dispatch_raises_one_wake_and_the_lead_s_todo_retries_it_in_the_same_run(
+        self,
+    ):
         """orchestrator-engine/R5: drive-restart-recovery/S5"""
         self.refuse(["demo-t1"])
         self.waits([self.lead_answers()])
@@ -606,10 +608,14 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.run_driver()
         tasks = self.ledger()["tasks"]
         self.assertEqual(tasks["t1r1"]["status"], "ACTIVE")
-        self.assertEqual(self.spawned(), ["demo-t1"] * 4)  # the first, the refused, its restart-time retry, the Lead's retry
+        self.assertEqual(
+            self.spawned(), ["demo-t1"] * 4
+        )  # the first, the refused, its restart-time retry, the Lead's retry
         self.assertNotIn("t1r2", tasks)
 
-    def test_S5_a_refused_orphan_redispatch_raises_not_dispatched_and_retries_after_the_lead_s_todo(self):
+    def test_S5_a_refused_orphan_redispatch_raises_not_dispatched_and_retries_after_the_lead_s_todo(
+        self,
+    ):
         """orchestrator-engine/R5: drive-restart-recovery/S5"""
         self.crashed()
         self.refuse(["demo-t1"])

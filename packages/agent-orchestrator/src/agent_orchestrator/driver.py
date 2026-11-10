@@ -616,9 +616,7 @@ def is_agent(ticket):
 def ready(ticket, by_id, restartable=False):
     """A TO-DO ticket (or an IN PROGRESS one with nothing alive behind it: `restartable`) whose blockers are all
     COMPLETE."""
-    return (
-        restartable or ticket["Status"].strip().upper().startswith("TO-DO")
-    ) and all(
+    return (restartable or ticket["Status"].strip().upper().startswith("TO-DO")) and all(
         is_done(by_id[b])
         for b in re.split(r"[,\s]+", ticket["Blocked by"].strip())
         if b and b.lower() != "none"
@@ -3967,7 +3965,9 @@ class Driver:
             if not ready(ticket, by_id, self.restartable(ticket, tasks)):
                 continue
             attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == task_id}
-            open_ = {k: t for k, t in attempts.items() if t["status"] not in ("COMPLETE", "RELEASED")}
+            open_ = {
+                k: t for k, t in attempts.items() if t["status"] not in ("COMPLETE", "RELEASED")
+            }
             held, new_id = None, None
             if any(t["status"] == "COMPLETE" for t in attempts.values()) or any(
                 t["runtime_id"] for t in open_.values()
