@@ -19,7 +19,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import contracts, events, evidence, routes, verify
@@ -4165,30 +4165,32 @@ class Driver:
         return self.plan_path.with_name(self.plan_path.name.removesuffix(".plan.yaml") + ".plan.md")
 
     def yaml_copies(self):
-        """(repo-relative destination, approved source) for the plan files the archive worker copies byte-identical."""
+        """(repo-relative destination, approved source) for the plan files the archive worker copies byte-identical.
+        The narrative is copied only when the plan has one."""
         oracle = yaml_plan.oracle_dir(self.plan_path)
-        return [
-            (self.plan_rel(), self.plan_path),
-            (self.repo_rel(self.narrative_path()), self.narrative_path()),
-            (self.repo_rel(oracle) + "/", oracle),
-        ]
+        copies = [(self.plan_rel(), self.plan_path)]
+        if self.narrative_path().exists():
+            copies.append((self.beside_plan(self.narrative_path()), self.narrative_path()))
+        copies.append((self.beside_plan(oracle) + "/", oracle))
+        return copies
 
     def yaml_places(self, model):
-        """(repo-relative destination, approved source) for each promote oracle file, at its place."""
+        """(repo-relative destination, approved source) for each promote oracle file, at its place. The oracle
+        keeps its source name without the `.oracle` suffix: only the promoted name is collected as a test."""
         oracle = yaml_plan.oracle_dir(self.plan_path)
         places = []
         for scenario in model.scenarios:
             evidence = scenario.evidence
             if evidence and evidence.promote and evidence.place:
                 for name in evidence.oracle:
-                    places.append((evidence.place.rstrip("/") + "/" + name, oracle / name))
+                    placed = name.removesuffix(".oracle")
+                    places.append((evidence.place.rstrip("/") + "/" + placed, oracle / name))
         return places
 
-    def repo_rel(self, path):
-        try:
-            return Path(path).relative_to(self.repo).as_posix()
-        except ValueError:
-            return str(path)
+    def beside_plan(self, path):
+        """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
+        the plan itself sits outside the repository."""
+        return (PurePosixPath(self.plan_rel()).parent / Path(path).name).as_posix()
 
     def yaml_archive_text(self, model, plan, packet, task_dir):
         """The archive brief for a YAML plan: the plan's spec is the living spec; plan files and oracles are copied."""
