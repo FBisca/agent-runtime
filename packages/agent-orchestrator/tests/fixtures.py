@@ -276,7 +276,21 @@ class RunFixture(_Case):
         self.models = models
 
     def git(self, cwd, *args):
-        result = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+        # A CI runner has no git identity: every commit a test makes names its own.
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(cwd),
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                *args,
+            ],
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
