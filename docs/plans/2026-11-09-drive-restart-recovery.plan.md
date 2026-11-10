@@ -1,6 +1,6 @@
 # Plan: A restarted drive recovers, or says why it cannot
 
-Slug: `drive-restart-recovery`. Living spec: `docs/specs/orchestrator-engine.md`. Status: ARCHIVED 2026-11-10.
+Slug: `drive-restart-recovery`. Living spec: `docs/specs/orchestrator-engine.md`. Status: ARCHIVED 2026-11-10. The drive's driver died before the archive merged; the Lead carried the archive by hand.
 
 ## Why now
 
