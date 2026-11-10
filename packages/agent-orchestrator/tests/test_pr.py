@@ -646,21 +646,21 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "idle")
 
     def test_S8_a_unit_whose_agent_the_runtime_reports_working_is_left_alone(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        """orchestrator-engine/R32"""
         self.waits([self.working(runtime_state="working")] * 5)
         self.run_driver("--idle-minutes", "0")
         self.assertEqual(self.idle_events(), [])
         self.assertEqual(self.wake_lines("decision"), [])
 
     def test_S8_a_unit_working_past_working_minutes_is_asked_with_how_long(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        """orchestrator-engine/R32"""
         self.waits([self.working(runtime_state="working")] * 4 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0", "--working-minutes", "0")
         self.assertEqual(self.request()["event"], "idle")
         self.assertIn("working for", self.wake_lines("decision")[0])
 
     def test_S8_a_working_agent_is_left_alone_until_working_minutes_have_passed(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        """orchestrator-engine/R32"""
         spec = load_script()
         moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
         self.waits([self.working(runtime_state="working")] * 6 + [self.decide_step("t1", "skip")])
@@ -672,7 +672,7 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
 
     def test_S8a_an_agent_not_reported_working_is_asked_at_two_ticks_as_today(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S8a"""
+        """orchestrator-engine/R33"""
         self.waits([self.working()] * 3 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0")
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
@@ -710,8 +710,8 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([(e["waiting"], e["ticks"]) for e in rows], [("ci", 1), ("ci", 2)])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
-    def test_S8_a_unit_waiting_for_its_merge_is_never_idle(self):
-        """orchestrator-engine/R15: orchestrator-lead-alerts/S8"""
+    def test_S14_a_unit_waiting_for_its_merge_is_never_idle(self):
+        """orchestrator-engine/R15: orchestrator-lead-alerts/S8 — and R62: orchestrator-silent-idle/S14"""
         self.prs(["OPEN"])
         self.waits(
             [

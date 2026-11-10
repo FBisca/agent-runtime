@@ -45,7 +45,7 @@ jobs:
           fi
       - name: ruff format (legacy budget)
         env:
-          RUFF_FORMAT_BUDGET: "31"
+          RUFF_FORMAT_BUDGET: "0"
         run: |
           uv run ruff format --check . > "$RUNNER_TEMP/ruff-format.txt" || true
           found=$(grep -oE '^[0-9]+ files would be reformatted' "$RUNNER_TEMP/ruff-format.txt" | grep -oE '^[0-9]+' || echo 0)

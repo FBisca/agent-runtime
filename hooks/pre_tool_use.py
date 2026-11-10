@@ -13,13 +13,34 @@ import sys
 HC_INFO_FLAGS = {"--help", "-h", "--version"}
 
 SEPARATORS = ";&|()\n"
-KEYWORDS = {"then", "do", "else", "elif", "if", "while", "until", "{", "!", "time", "builtin",
-            "command", "exec", "nohup", "env", "sudo"}
+KEYWORDS = {
+    "then",
+    "do",
+    "else",
+    "elif",
+    "if",
+    "while",
+    "until",
+    "{",
+    "!",
+    "time",
+    "builtin",
+    "command",
+    "exec",
+    "nohup",
+    "env",
+    "sudo",
+}
 # wrapper -> options that consume a separate value; `positional` wrappers take one fixed arg
-VALUE_FLAGS = {"timeout": {"-s", "-k", "--signal", "--kill-after"}, "nice": {"-n", "--adjustment"},
-               "stdbuf": {"-i", "-o", "-e"}, "watch": {"-n", "--interval"},
-               "xargs": {"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a"}, "env": {"-u", "-C"},
-               "sudo": {"-u", "-g", "-C", "-h", "-p"}}
+VALUE_FLAGS = {
+    "timeout": {"-s", "-k", "--signal", "--kill-after"},
+    "nice": {"-n", "--adjustment"},
+    "stdbuf": {"-i", "-o", "-e"},
+    "watch": {"-n", "--interval"},
+    "xargs": {"-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a"},
+    "env": {"-u", "-C"},
+    "sudo": {"-u", "-g", "-C", "-h", "-p"},
+}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 
 
@@ -78,7 +99,7 @@ def substitutions(command):
         while j < len(command) and depth:
             depth += {"(": 1, ")": -1}.get(command[j], 0)
             j += 1
-        found.append(command[i + 2:j - 1 if depth == 0 else j])
+        found.append(command[i + 2 : j - 1 if depth == 0 else j])
         i = command.find("$(", i + 2)
     return found
 
@@ -96,14 +117,14 @@ def invocations(command, depth=0):
         i = command_start(words)
         if i >= len(words):
             continue
-        program, args = os.path.basename(words[i]), words[i + 1:]
+        program, args = os.path.basename(words[i]), words[i + 1 :]
         yield program, args
         if program == "eval" and depth < 3:
             yield from invocations(" ".join(args), depth + 1)
         if program == "hc" and depth < 3:
             sub = hc_subcommand(args)
             if sub == "exec":
-                argv = [a for a in args[args.index("exec") + 1:]]
+                argv = [a for a in args[args.index("exec") + 1 :]]
                 while argv and argv[0].startswith("-") and argv[0] != "--":
                     argv.pop(0)
                 if argv[:1] == ["--"]:
@@ -112,7 +133,12 @@ def invocations(command, depth=0):
                     yield from invocations(shlex.join(argv), depth + 1)
         if program in SHELLS and depth < 3:
             for j, arg in enumerate(args):
-                if arg.startswith("-") and not arg.startswith("--") and "c" in arg and j + 1 < len(args):
+                if (
+                    arg.startswith("-")
+                    and not arg.startswith("--")
+                    and "c" in arg
+                    and j + 1 < len(args)
+                ):
                     yield from invocations(args[j + 1], depth + 1)
                     break
 
@@ -128,7 +154,7 @@ def hc_subcommand(args):
 
 
 def file_read_only(args, sub):
-    rest = [a for a in args[args.index(sub) + 1:] if a != "--json"]
+    rest = [a for a in args[args.index(sub) + 1 :] if a != "--json"]
     return bool(rest) and rest[0] in HC_INFO_FLAGS | {"read", "help"}
 
 
@@ -142,16 +168,59 @@ TOOL_NAME = re.compile(r"^mcp__(?:plugin_agent-runtime_)?agent-runtime__(\w+)$")
 
 # A plan's receipts are the driver's evidence (yaml-eec D17): `<state>/<repo-key>/<slug>/receipts/`. The state
 # directory is `orchestrate` or a `state` directory; a repository's own `receipts/` folder is not matched.
-RECEIPTS = re.compile(r"(?:orchestrate|\.local/state|(?:^|/)state)/(?:[^\s'\"]*/)?receipts(?:[/'\"\s]|$)")
-RECEIPTS_REASON = ("A plan's receipts are written only by the driver's evidence runner, never by an agent: a receipt you "
-                   "write is not evidence. Read them freely; to change a result, fix the code and let the driver "
-                   "re-run the evidence (verify or run).")
-APPROVE_REASON = ("plan approve is the Lead's: approval binds the contract to a person and runs its baseline. "
-                  "Ask the Lead to run `agent-orchestrator plan approve <plan>`; you may run plan check.")
+RECEIPTS = re.compile(
+    r"(?:orchestrate|\.local/state|(?:^|/)state)/(?:[^\s'\"]*/)?receipts(?:[/'\"\s]|$)"
+)
+RECEIPTS_REASON = (
+    "A plan's receipts are written only by the driver's evidence runner, never by an agent: a receipt you "
+    "write is not evidence. Read them freely; to change a result, fix the code and let the driver "
+    "re-run the evidence (verify or run)."
+)
+APPROVE_REASON = (
+    "plan approve is the Lead's: approval binds the contract to a person and runs its baseline. "
+    "Ask the Lead to run `agent-orchestrator plan approve <plan>`; you may run plan check."
+)
 # Programs that only read; with `cd`, they may mention a receipts path without writing it.
-READERS = {"cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "jq", "wc", "stat", "diff", "cmp", "less",
-           "more", "nl", "sort", "file", "sha256sum", "shasum", "md5sum", "cksum", "echo", "printf", "pwd", "cd",
-           "test", "[", "true", "false", "realpath", "basename", "dirname", "du", "tree", "xxd", "od", "column"}
+READERS = {
+    "cat",
+    "ls",
+    "head",
+    "tail",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "jq",
+    "wc",
+    "stat",
+    "diff",
+    "cmp",
+    "less",
+    "more",
+    "nl",
+    "sort",
+    "file",
+    "sha256sum",
+    "shasum",
+    "md5sum",
+    "cksum",
+    "echo",
+    "printf",
+    "pwd",
+    "cd",
+    "test",
+    "[",
+    "true",
+    "false",
+    "realpath",
+    "basename",
+    "dirname",
+    "du",
+    "tree",
+    "xxd",
+    "od",
+    "column",
+}
 
 
 def mentions_receipts(text):
@@ -187,13 +256,19 @@ def verdict(command, is_subagent):
     if not isinstance(command, str):
         command = json.dumps(command)
         if re.search(r"\bhc\b", command):
-            return "deny", "Cannot parse this command and it mentions hc: use the agent-runtime tools."
+            return (
+                "deny",
+                "Cannot parse this command and it mentions hc: use the agent-runtime tools.",
+            )
         return None
     try:
         list(segments(command))
     except ValueError:
         if re.search(r"\bhc\b", command):
-            return "deny", "Cannot parse this command and it mentions hc: use the agent-runtime tools."
+            return (
+                "deny",
+                "Cannot parse this command and it mentions hc: use the agent-runtime tools.",
+            )
     result = None
     if is_subagent:
         reason = approve_verdict(command) or receipts_verdict(command)
@@ -232,7 +307,7 @@ def entrypoint_args(program, args):
                 return None
             i += 2 if args[i] in PYTHON_VALUE_FLAGS else 1
         if i < len(args) and os.path.basename(args[i]) == "agent_runtime.py":
-            return args[i + 1:]
+            return args[i + 1 :]
     return None
 
 
@@ -264,14 +339,16 @@ def call_verdict(args, is_subagent):
     rest = [a for a in args if not a.startswith("-")]
     if rest[:1] != ["call"]:
         return None
-    argv = args[args.index("call") + 1:]
+    argv = args[args.index("call") + 1 :]
     if "-h" in argv or "--help" in argv:
         return None  # the CLI prints usage and runs nothing
     parsed = parse_call(argv)
     if parsed is None:
         if is_subagent:
-            return "deny", ("Subagents must not run agent-runtime call with unreadable arguments: "
-                            "report through your return value.")
+            return "deny", (
+                "Subagents must not run agent-runtime call with unreadable arguments: "
+                "report through your return value."
+            )
         return "ask", "approve to run agent-runtime call with arguments the hook cannot read"
     tool = parsed.tool
     try:
@@ -299,14 +376,23 @@ def tool_verdict(tool_name, is_subagent, arguments=None):
             pass
     if not isinstance(arguments, dict):
         return "Subagents must not call agent-runtime tools with unreadable input: report through your return value."
-    if tool == "task" and arguments.get("action") == "list" and arguments.get("receipt") is None \
-            and arguments.get("assignment_id") is None:
+    if (
+        tool == "task"
+        and arguments.get("action") == "list"
+        and arguments.get("receipt") is None
+        and arguments.get("assignment_id") is None
+    ):
         return None  # read-only listing
     if tool in MUTATING_TOOLS | SESSION_TOOLS:
-        return "Subagents must not call the agent-runtime %s tool: report through your return value." % tool
+        return (
+            "Subagents must not call the agent-runtime %s tool: report through your return value."
+            % tool
+        )
     if arguments.get("assignment_id") is not None:  # would pin a session or read the lead's reports
         return "Subagents must not pass assignment_id to agent-runtime tools: report through your return value."
-    if arguments.get("receipt") is not None:  # an explicit ack mutates the lead's or teammate's inbox
+    if (
+        arguments.get("receipt") is not None
+    ):  # an explicit ack mutates the lead's or teammate's inbox
         return "Subagents must not acknowledge agent-runtime receipts: report through your return value."
     return None
 
@@ -316,19 +402,32 @@ def main(argv=()):
         data = json.load(sys.stdin)
         name = data.get("tool_name", "Bash")
         if name in FILE_TOOLS:
-            path = (data.get("tool_input") or {}).get("file_path") or (data.get("tool_input") or {}).get(
-                "notebook_path")
-            result = ("deny", RECEIPTS_REASON) if data.get("agent_id") and isinstance(path, str) \
-                and mentions_receipts(path) else None
+            tool_input = data.get("tool_input") or {}
+            path = tool_input.get("file_path") or tool_input.get("notebook_path")
+            result = (
+                ("deny", RECEIPTS_REASON)
+                if data.get("agent_id") and isinstance(path, str) and mentions_receipts(path)
+                else None
+            )
         elif name == "Bash":
-            result = verdict(data.get("tool_input", {}).get("command", ""), bool(data.get("agent_id")))
+            result = verdict(
+                data.get("tool_input", {}).get("command", ""), bool(data.get("agent_id"))
+            )
         else:
             reason = tool_verdict(name, bool(data.get("agent_id")), data.get("tool_input"))
             result = ("deny", reason) if reason else None
         if result:
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                                     "permissionDecision": result[0],
-                                                     "permissionDecisionReason": result[1]}}))
+            print(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": result[0],
+                            "permissionDecisionReason": result[1],
+                        }
+                    }
+                )
+            )
     except Exception:
         pass
     return 0

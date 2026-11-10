@@ -65,14 +65,18 @@ class ProfileConfigTests(unittest.TestCase):
 
     def test_a_credential_must_be_a_reference(self):
         """agent-runtime/R145: a secret never travels in the config."""
-        env = self.write({"profiles": {"mini": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "sk-live"}}}})
+        env = self.write(
+            {"profiles": {"mini": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "sk-live"}}}}
+        )
         with self.assertRaises(profiles.ProfileError) as error:
             profiles.load(env)
         self.assertIn("credential reference", str(error.exception))
 
     def test_launch_options_belong_to_the_claude_family(self):
         """agent-runtime/R145"""
-        env = self.write({"profiles": {"mini": {"cli": "codex", "env": {}, "permission_mode": "auto"}}})
+        env = self.write(
+            {"profiles": {"mini": {"cli": "codex", "env": {}, "permission_mode": "auto"}}}
+        )
         with self.assertRaises(profiles.ProfileError) as error:
             profiles.load(env)
         self.assertIn("claude family", str(error.exception))
@@ -87,8 +91,10 @@ class ScrubTests(unittest.TestCase):
         self.dir = Path(self.temp.name)
         self.env = {"HOME": str(self.dir), "XDG_CONFIG_HOME": str(self.dir)}
         (self.dir / "agent-runtime").mkdir()
-        (self.dir / "agent-runtime" / "profiles.json").write_text(json.dumps(
-            {"profiles": {"mini": {"cli": "claude", "env": {"PROFILE_MARKER": "set"}}}}), encoding="utf-8")
+        (self.dir / "agent-runtime" / "profiles.json").write_text(
+            json.dumps({"profiles": {"mini": {"cli": "claude", "env": {"PROFILE_MARKER": "set"}}}}),
+            encoding="utf-8",
+        )
 
     def scrubbed(self, cli):
         """The variables the spawn removes: the prefix is `env -u NAME...`."""
@@ -140,7 +146,9 @@ class ConfigPathTests(unittest.TestCase):
 
     def test_an_override_wins(self):
         """agent-runtime/R22"""
-        path = profiles.config_path({"HOME": "/home/you", "AGENT_RUNTIME_PROFILES": "/elsewhere.json"})
+        path = profiles.config_path(
+            {"HOME": "/home/you", "AGENT_RUNTIME_PROFILES": "/elsewhere.json"}
+        )
         self.assertEqual(path, Path("/elsewhere.json"))
 
     def test_a_tilde_override_expands_to_the_home(self):

@@ -99,7 +99,9 @@ class IsolationTests(unittest.TestCase):
             )
             self.assertEqual(installed.returncode, 0, installed.stderr)
 
-            imported = run([str(python), "-c", "import agent_runtime.agent_runtime, agent_runtime.mcp_server"])
+            imported = run(
+                [str(python), "-c", "import agent_runtime.agent_runtime, agent_runtime.mcp_server"]
+            )
             self.assertEqual(
                 imported.returncode, 0, f"the runtime wheel does not import: {imported.stderr}"
             )

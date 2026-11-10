@@ -1,4 +1,5 @@
 """Durable dispatch over real MCP subprocesses, fake hc only."""
+
 import json
 import stat
 import sys
@@ -13,23 +14,40 @@ from agent_runtime.dispatch_store import MAX_BATCH_BYTES, Store, StoreError
 pytestmark = pytest.mark.integration
 
 
-
 class DispatchTests(ToolCase):
     def lead(self, generation="lead-session"):
-        return self.start({"get:w1": {"out": raw("w1", "t0")}},
-                          {"CODEX_THREAD_ID": generation, "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                           "AGENT_RUNTIME_DISPATCH": "1"}, new_cli=generation != "lead-session")
+        return self.start(
+            {"get:w1": {"out": raw("w1", "t0")}},
+            {
+                "CODEX_THREAD_ID": generation,
+                "HC_SCOPE": "lead-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+            new_cli=generation != "lead-session",
+        )
 
     def spawn(self, lead, cli="claude"):
-        result, text = self.call(lead, "spawn", {"kind": "worker", "cli": cli,
-                                "name": "w1", "task": "work", "cwd": "/tmp"})
+        result, text = self.call(
+            lead,
+            "spawn",
+            {"kind": "worker", "cli": cli, "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(result["isError"], text)
         return json.loads(text)
 
     def worker(self, generation="worker-session"):
-        return self.start(env={"HC_TERMINAL_ID": "t9", "HC_SCOPE": "worker-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                              "CODEX_THREAD_ID": generation, "AGENT_RUNTIME_DISPATCH": "1"},
-                          replies={"get:t9": {"out": raw("w1", "t0")}}, new_cli=generation != "worker-session")
+        return self.start(
+            env={
+                "HC_TERMINAL_ID": "t9",
+                "HC_SCOPE": "worker-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "CODEX_THREAD_ID": generation,
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+            replies={"get:t9": {"out": raw("w1", "t0")}},
+            new_cli=generation != "worker-session",
+        )
 
     def publish(self, worker, assignment, **extra):
         args = {"text": "done", "kind": "complete", "assignment_id": assignment["assignment_id"]}
@@ -50,7 +68,7 @@ class DispatchTests(ToolCase):
             result, text = self.publish(self.worker(generation=cli), assignment)
             self.assertFalse(result["isError"], text)
             batch = self.read(lead)
-            message, = batch["messages"]
+            (message,) = batch["messages"]
             for key in ("team_id", "worker_id", "assignment_id"):
                 self.assertEqual(message[key], assignment[key])
             self.assertTrue(message["message_id"])
@@ -82,8 +100,18 @@ class DispatchTests(ToolCase):
         team = store.team("test", "t0", "lead")
         identity = store.register(team, "w1")
         with self.assertRaises(StoreError):
-            store.publish("test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="other")
-        store.publish("test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1")
+            store.publish(
+                "test",
+                "t9",
+                "t0",
+                identity["assignment_id"],
+                "done",
+                "complete",
+                caller_name="other",
+            )
+        store.publish(
+            "test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1"
+        )
         store.bind(identity["assignment_id"], "t9", "test")
         self.assertEqual(store.read(team, "t0", "all")["reason"], "completed")
 
@@ -92,7 +120,9 @@ class DispatchTests(ToolCase):
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         identity = store.register(team, "w1")
-        store.publish("test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1")
+        store.publish(
+            "test", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1"
+        )
         store.fail(identity["assignment_id"])
         batch = store.read(team, "t0", "all")
         self.assertEqual(batch["reason"], "completed")
@@ -104,7 +134,11 @@ class DispatchTests(ToolCase):
         assignment = self.spawn(lead)
         worker = self.worker()
         for missing in ("kind", "assignment_id"):
-            args = {"text": "done", "kind": "complete", "assignment_id": assignment["assignment_id"]}
+            args = {
+                "text": "done",
+                "kind": "complete",
+                "assignment_id": assignment["assignment_id"],
+            }
             del args[missing]
             result, _ = self.call(worker, "report", args)
             self.assertTrue(result["isError"])
@@ -135,12 +169,30 @@ class DispatchTests(ToolCase):
                 if bound:
                     store.bind(current["assignment_id"], "t9", "test")
                 with self.assertRaises(StoreError):
-                    store.publish("test", "t9", "t0", old["assignment_id"], "late", "complete", caller_name=name)
+                    store.publish(
+                        "test",
+                        "t9",
+                        "t0",
+                        old["assignment_id"],
+                        "late",
+                        "complete",
+                        caller_name=name,
+                    )
                 with self.assertRaises(StoreError):
                     store.bind(old["assignment_id"], "t9", "test")
-                store.publish("test", "t9", "t0", current["assignment_id"], "current", "complete", caller_name=name)
+                store.publish(
+                    "test",
+                    "t9",
+                    "t0",
+                    current["assignment_id"],
+                    "current",
+                    "complete",
+                    caller_name=name,
+                )
                 batch = store.read(team, "t0", name)
-                self.assertEqual([a["assignment_id"] for a in batch["assignments"]], [current["assignment_id"]])
+                self.assertEqual(
+                    [a["assignment_id"] for a in batch["assignments"]], [current["assignment_id"]]
+                )
                 self.assertEqual([m["text"] for m in batch["messages"]], ["current"])
 
     def test_stale_pending_cannot_steal_address_from_new_team_generation(self):
@@ -156,10 +208,26 @@ class DispatchTests(ToolCase):
         for candidate, name in ((old, "old-name"), (later_old, "another-old-name")):
             with self.subTest(name=name):
                 with self.assertRaises(StoreError):
-                    store.publish("test", "t9", "t0", candidate["assignment_id"], "late", "complete", caller_name=name)
+                    store.publish(
+                        "test",
+                        "t9",
+                        "t0",
+                        candidate["assignment_id"],
+                        "late",
+                        "complete",
+                        caller_name=name,
+                    )
                 with self.assertRaises(StoreError):
                     store.bind(candidate["assignment_id"], "t9", "test")
-        store.publish("test", "t9", "t0", current["assignment_id"], "current", "complete", caller_name="new-name")
+        store.publish(
+            "test",
+            "t9",
+            "t0",
+            current["assignment_id"],
+            "current",
+            "complete",
+            caller_name="new-name",
+        )
         self.assertEqual(store.read(old_team, "t0", "all")["messages"], [])
         self.assertEqual(store.read(new_team, "t0", "all")["reason"], "completed")
 
@@ -172,8 +240,9 @@ class DispatchTests(ToolCase):
         self.assertEqual(self.read(lead)["messages"], first["messages"])
         for _ in range(2):
             self.assertEqual(self.read(lead, receipt=first["receipt"])["messages"], [])
-        result, _ = self.call(self.lead("other"), "wait", {"target": "all", "timeout": 0,
-                                                            "receipt": first["receipt"]})
+        result, _ = self.call(
+            self.lead("other"), "wait", {"target": "all", "timeout": 0, "receipt": first["receipt"]}
+        )
         self.assertTrue(result["isError"])
 
     def test_publication_deduplicates_and_conflicts(self):
@@ -211,7 +280,9 @@ class DispatchTests(ToolCase):
         assignment = self.spawn(lead)
         worker = self.worker()
         for i in range(35):
-            result, text = self.publish(worker, assignment, kind="progress", text=str(i), message_id=str(i))
+            result, text = self.publish(
+                worker, assignment, kind="progress", text=str(i), message_id=str(i)
+            )
             self.assertFalse(result["isError"], text)
         first = self.read(lead)
         self.assertTrue(first["more"])
@@ -225,8 +296,9 @@ class DispatchTests(ToolCase):
         self.assertEqual(self.read(lead)["messages"], second["messages"])
         self.read(lead, receipt=second["receipt"])
         for i in range(3):
-            result, text = self.publish(worker, assignment, kind="progress", text="x" * 60000,
-                                        message_id="large-%s" % i)
+            result, text = self.publish(
+                worker, assignment, kind="progress", text="x" * 60000, message_id="large-%s" % i
+            )
             self.assertFalse(result["isError"], text)
         page = self.read(lead)
         self.assertEqual(len(page["messages"]), 2)
@@ -247,14 +319,20 @@ class DispatchTests(ToolCase):
         for overflow in (0, 1):
             with self.subTest(overflow_bytes=overflow):
                 first_id, second_id = "boundary-%s-a" % overflow, "boundary-%s-b" % overflow
-                result, text = self.publish(worker, assignment, kind="progress", text="x" * 65530,
-                                            message_id=first_id)
+                result, text = self.publish(
+                    worker, assignment, kind="progress", text="x" * 65530, message_id=first_id
+                )
                 self.assertFalse(result["isError"], text)
                 first = result["structuredContent"]
                 second = dict(first, message_id=second_id, text="y")
                 padding = MAX_BATCH_BYTES + overflow - len(encode([first, second]))
-                result, text = self.publish(worker, assignment, kind="progress", text="y" * (1 + padding),
-                                            message_id=second_id)
+                result, text = self.publish(
+                    worker,
+                    assignment,
+                    kind="progress",
+                    text="y" * (1 + padding),
+                    message_id=second_id,
+                )
                 self.assertFalse(result["isError"], text)
                 second = result["structuredContent"]
                 self.assertEqual(len(encode([first, second])), MAX_BATCH_BYTES + overflow)
@@ -277,25 +355,57 @@ class DispatchTests(ToolCase):
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
-        result, text = self.call(worker, "wait", {"target": "inbox", "timeout": 0, "assignment_id": assignment["assignment_id"]})
+        result, text = self.call(
+            worker,
+            "wait",
+            {"target": "inbox", "timeout": 0, "assignment_id": assignment["assignment_id"]},
+        )
         self.assertFalse(result["isError"], text)
         result, text = self.publish(worker, assignment)
         self.assertFalse(result["isError"], text)
         self.assertEqual(self.read(lead)["reason"], "completed")
         # A different hc server (socket) never reaches this team.
-        other = self.start(env={"HC_TERMINAL_ID": "t9", "HC_SCOPE": "worker-token", "HC_TERMINAL_SOCKET": "/other/sock",
-                                "CODEX_THREAD_ID": "x", "AGENT_RUNTIME_DISPATCH": "1"},
-                           replies={"get:t9": {"out": raw("w1", "t0")}})
+        other = self.start(
+            env={
+                "HC_TERMINAL_ID": "t9",
+                "HC_SCOPE": "worker-token",
+                "HC_TERMINAL_SOCKET": "/other/sock",
+                "CODEX_THREAD_ID": "x",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+            replies={"get:t9": {"out": raw("w1", "t0")}},
+        )
         result, _ = self.publish(other, assignment, message_id="foreign")
         self.assertTrue(result["isError"])
 
     def test_worker_turn_ended_without_final_report_returns_attention(self):
         """agent-runtime/R63"""
-        lead = self.start({"get:w1": {"out": raw("w1", "t0", "working")},
-                           "ls": {"out": json.dumps({"terminals": [{"address": "t9", "name": "w1", "parent": "t0",
-                                                                    "turn": 1, "status": {"state": "done"}}]})}},
-                          {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                           "AGENT_RUNTIME_DISPATCH": "1"})
+        lead = self.start(
+            {
+                "get:w1": {"out": raw("w1", "t0", "working")},
+                "ls": {
+                    "out": json.dumps(
+                        {
+                            "terminals": [
+                                {
+                                    "address": "t9",
+                                    "name": "w1",
+                                    "parent": "t0",
+                                    "turn": 1,
+                                    "status": {"state": "done"},
+                                }
+                            ]
+                        }
+                    )
+                },
+            },
+            {
+                "CODEX_THREAD_ID": "l",
+                "HC_SCOPE": "lead-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+        )
         assignment = self.spawn(lead)
         result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
         batch = result["structuredContent"]
@@ -309,34 +419,84 @@ class DispatchTests(ToolCase):
         """agent-runtime/R63"""
         started = json.loads(raw("w1", "t0", "idle"))
         started["turn"] = 0
-        row = {"address": "t9", "name": "w1", "parent": "t0", "turn": 0, "status": {"state": "idle"}}
-        replies = {"get:w1": {"out": json.dumps(started)}, "ls": {"out": json.dumps({"terminals": [row]})},
-                   "get:t0": {"out": raw("lead", None)}}
-        lead = self.start(replies, {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                                    "AGENT_RUNTIME_DISPATCH": "1"})
+        row = {
+            "address": "t9",
+            "name": "w1",
+            "parent": "t0",
+            "turn": 0,
+            "status": {"state": "idle"},
+        }
+        replies = {
+            "get:w1": {"out": json.dumps(started)},
+            "ls": {"out": json.dumps({"terminals": [row]})},
+            "get:t0": {"out": raw("lead", None)},
+        }
+        lead = self.start(
+            replies,
+            {
+                "CODEX_THREAD_ID": "l",
+                "HC_SCOPE": "lead-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+        )
         self.spawn(lead)
         result, text = self.call(lead, "wait", {"target": "all", "timeout": 1})
-        self.assertEqual(result["structuredContent"]["reason"], "timeout", text)  # CLI still starting up
-        replies["ls"] = {"out": json.dumps({"terminals": [dict(row, turn=1, status={"state": "done"})]})}
+        self.assertEqual(
+            result["structuredContent"]["reason"], "timeout", text
+        )  # CLI still starting up
+        replies["ls"] = {
+            "out": json.dumps({"terminals": [dict(row, turn=1, status={"state": "done"})]})
+        }
         (self.dir / "replies").write_text(json.dumps(replies))
         result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
-        self.assertEqual(result["structuredContent"]["reason"], "attention", text)  # first turn ended, no report
+        self.assertEqual(
+            result["structuredContent"]["reason"], "attention", text
+        )  # first turn ended, no report
 
     def test_resume_then_immediate_wait_ignores_the_old_done_turn(self):
         """agent-runtime/R63"""
+
         def ls(turn):
-            return {"out": json.dumps({"terminals": [{"address": "t9", "name": "w1", "parent": "t0", "turn": turn,
-                                                       "status": {"state": "done"}}]})}
+            return {
+                "out": json.dumps(
+                    {
+                        "terminals": [
+                            {
+                                "address": "t9",
+                                "name": "w1",
+                                "parent": "t0",
+                                "turn": turn,
+                                "status": {"state": "done"},
+                            }
+                        ]
+                    }
+                )
+            }
+
         worker = json.loads(raw("w1", "t0"))
         worker["turn"] = 1
-        replies = {"get:w1": {"out": json.dumps(worker)}, "ls": ls(1), "get:t0": {"out": raw("lead", None)}}
-        lead = self.start(replies, {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                                    "AGENT_RUNTIME_DISPATCH": "1"})
+        replies = {
+            "get:w1": {"out": json.dumps(worker)},
+            "ls": ls(1),
+            "get:t0": {"out": raw("lead", None)},
+        }
+        lead = self.start(
+            replies,
+            {
+                "CODEX_THREAD_ID": "l",
+                "HC_SCOPE": "lead-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+        )
         self.spawn(lead)
         result, text = self.call(lead, "resume", {"name": "w1", "task": "again"})
         self.assertFalse(result["isError"], text)
         result, text = self.call(lead, "wait", {"target": "all", "timeout": 1})
-        self.assertEqual(result["structuredContent"]["reason"], "timeout")  # still the previous turn's done
+        self.assertEqual(
+            result["structuredContent"]["reason"], "timeout"
+        )  # still the previous turn's done
         replies["ls"] = ls(2)
         (self.dir / "replies").write_text(json.dumps(replies))
         result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
@@ -346,16 +506,44 @@ class DispatchTests(ToolCase):
 
     def test_resume_of_a_mid_turn_worker_ignores_the_old_turn_ending(self):
         """agent-runtime/R63"""
+
         def ls(turn):
-            return {"out": json.dumps({"terminals": [{"address": "t9", "name": "w1", "parent": "t0", "turn": turn,
-                                                       "status": {"state": "done"}}]})}
+            return {
+                "out": json.dumps(
+                    {
+                        "terminals": [
+                            {
+                                "address": "t9",
+                                "name": "w1",
+                                "parent": "t0",
+                                "turn": turn,
+                                "status": {"state": "done"},
+                            }
+                        ]
+                    }
+                )
+            }
+
         worker = json.loads(raw("w1", "t0", "working"))
         worker["turn"] = 3
-        replies = {"get:w1": {"out": json.dumps(worker)}, "ls": ls(3), "get:t0": {"out": raw("lead", None)}}
-        lead = self.start(replies, {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                                    "AGENT_RUNTIME_DISPATCH": "1"})
+        replies = {
+            "get:w1": {"out": json.dumps(worker)},
+            "ls": ls(3),
+            "get:t0": {"out": raw("lead", None)},
+        }
+        lead = self.start(
+            replies,
+            {
+                "CODEX_THREAD_ID": "l",
+                "HC_SCOPE": "lead-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+        )
         self.spawn(lead)
-        result, text = self.call(lead, "resume", {"name": "w1", "task": "again"})  # recorded: working, turn 3
+        result, text = self.call(
+            lead, "resume", {"name": "w1", "task": "again"}
+        )  # recorded: working, turn 3
         self.assertFalse(result["isError"], text)
         replies["ls"] = ls(4)  # the turn that was already running ends
         (self.dir / "replies").write_text(json.dumps(replies))
@@ -369,13 +557,25 @@ class DispatchTests(ToolCase):
     def test_unsent_spawn_is_removed_and_can_be_spawned_again(self):
         """agent-runtime/R72
         agent-runtime/R64"""
-        replies = {"run": {"out": json.dumps({"first_message": {"sent": False}})}, "get:w1": {"out": raw("w1", "t0")}}
-        lead = self.start(replies, {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                                    "AGENT_RUNTIME_DISPATCH": "1"})
+        replies = {
+            "run": {"out": json.dumps({"first_message": {"sent": False}})},
+            "get:w1": {"out": raw("w1", "t0")},
+        }
+        lead = self.start(
+            replies,
+            {
+                "CODEX_THREAD_ID": "l",
+                "HC_SCOPE": "lead-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+        )
         args = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}
         result, _ = self.call(lead, "spawn", args)
         self.assertTrue(result["isError"])
-        self.assertEqual([c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]])
+        self.assertEqual(
+            [c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]]
+        )
         replies = json.loads((self.dir / "replies").read_text())
         replies["run"] = {"out": ""}
         (self.dir / "replies").write_text(json.dumps(replies))
@@ -398,15 +598,21 @@ class DispatchTests(ToolCase):
         live = store.register(team, "live")
         for n, identity in enumerate((stopped, done, live)):
             store.bind(identity["assignment_id"], "t%d" % (n + 1), "test")
-        store.publish("test", "t2", "t0", done["assignment_id"], "ok", "complete", caller_name="done")
-        before = store.snapshot(team, "t0", "all")  # a wait already in progress keeps its members (S21)
+        store.publish(
+            "test", "t2", "t0", done["assignment_id"], "ok", "complete", caller_name="done"
+        )
+        before = store.snapshot(
+            team, "t0", "all"
+        )  # a wait already in progress keeps its members (S21)
         store.stopped(team, "stopped")
         self.assertEqual(len(before), 3)
         # The unacknowledged complete result is still a member; the stopped worker is not.
         names = {m["name"] for m in store.snapshot(team, "t0", "all")}
         self.assertEqual(names, {"done", "live"})
         batch = store.read(team, "t0", "all", assignment_ids=[m["assignment_id"] for m in before])
-        self.assertEqual(batch["reason"], "attention")  # S21: the in-progress wait still sees the stop
+        self.assertEqual(
+            batch["reason"], "attention"
+        )  # S21: the in-progress wait still sees the stop
         receipt = batch["receipt"]
         # After acknowledgement, only current unfinished work remains.
         self.assertEqual([m["name"] for m in store.snapshot(team, "t0", "all", receipt)], ["live"])
@@ -420,17 +626,25 @@ class DispatchTests(ToolCase):
         team = store.team("test", "t0", "lead")
         a, b = store.register(team, "a"), store.register(team, "b")
         store.bind(a["assignment_id"], "t1", "test")
-        store.bind(b["assignment_id"], "t1", "test")  # a's terminal vanished; the address was reused
+        store.bind(
+            b["assignment_id"], "t1", "test"
+        )  # a's terminal vanished; the address was reused
         members = store.snapshot(team, "t0", "all")
-        self.assertEqual({m["assignment_id"] for m in members}, {a["assignment_id"], b["assignment_id"]})
+        self.assertEqual(
+            {m["assignment_id"] for m in members}, {a["assignment_id"], b["assignment_id"]}
+        )
         batch = store.read(team, "t0", "all", assignment_ids=[m["assignment_id"] for m in members])
         self.assertEqual(batch["reason"], "attention")
-        failure, = batch["messages"]
-        self.assertEqual((failure["assignment_id"], failure["kind"]), (a["assignment_id"], "failed"))
+        (failure,) = batch["messages"]
+        self.assertEqual(
+            (failure["assignment_id"], failure["kind"]), (a["assignment_id"], "failed")
+        )
         self.assertIn("replaced", failure["text"])
         # Once acknowledged the replaced assignment is gone; the live one remains.
-        self.assertEqual([m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
-                         [b["assignment_id"]])
+        self.assertEqual(
+            [m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
+            [b["assignment_id"]],
+        )
 
     def test_unacknowledged_report_of_a_superseded_assignment_stays_a_member(self):
         """agent-runtime/R65"""
@@ -442,11 +656,15 @@ class DispatchTests(ToolCase):
         new = store.register(team, "c")
         store.bind(new["assignment_id"], "t1", "test")  # resumed before the lead waited
         members = store.snapshot(team, "t0", "all")
-        self.assertEqual({m["assignment_id"] for m in members}, {old["assignment_id"], new["assignment_id"]})
+        self.assertEqual(
+            {m["assignment_id"] for m in members}, {old["assignment_id"], new["assignment_id"]}
+        )
         batch = store.read(team, "t0", "all", assignment_ids=[m["assignment_id"] for m in members])
         self.assertEqual([m["text"] for m in batch["messages"]], ["stuck"])
-        self.assertEqual([m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
-                         [new["assignment_id"]])
+        self.assertEqual(
+            [m["assignment_id"] for m in store.snapshot(team, "t0", "all", batch["receipt"])],
+            [new["assignment_id"]],
+        )
 
     def test_runtime_failure_and_acknowledged_attention_stay_members(self):
         """agent-runtime/R65"""
@@ -455,7 +673,9 @@ class DispatchTests(ToolCase):
         working, blocked = store.register(team, "w"), store.register(team, "b")
         store.bind(working["assignment_id"], "t1", "test")
         store.bind(blocked["assignment_id"], "t2", "test")
-        store.publish("test", "t2", "t0", blocked["assignment_id"], "help", "decision", caller_name="b")
+        store.publish(
+            "test", "t2", "t0", blocked["assignment_id"], "help", "decision", caller_name="b"
+        )
         batch = store.read(team, "t0", "all")
         # w's terminal exited but the store still says working; b's decision is acknowledged but unanswered.
         names = {m["name"] for m in store.snapshot(team, "t0", "all", batch["receipt"])}
@@ -464,6 +684,7 @@ class DispatchTests(ToolCase):
     def test_messages_without_members_are_not_empty(self):
         """agent-runtime/R65"""
         from agent_runtime import dispatch_wait
+
         batch = {"assignments": [], "messages": [{"message_id": "m"}], "unfinished": []}
         self.assertEqual(dispatch_wait.reason(batch, "all", {}), "messages")
         self.assertEqual(dispatch_wait.reason(dict(batch, messages=[]), "all", {}), "empty")
@@ -476,20 +697,37 @@ class DispatchTests(ToolCase):
         first = self.read(lead)
         self.assertEqual(first["reason"], "completed")
         later = self.read(lead, receipt=first["receipt"])
-        self.assertEqual((later["reason"], later["assignments"], later["unfinished"]), ("empty", [], []))
+        self.assertEqual(
+            (later["reason"], later["assignments"], later["unfinished"]), ("empty", [], [])
+        )
 
     def test_failed_spawn_deactivates_worker_and_rejects_message_and_resume(self):
         """agent-runtime/R64"""
-        lead = self.start({"run": {"rc": 1, "err": "bad name shaped like an id"},
-                           "get:w1": {"rc": 1, "err": "no such terminal"}},
-                          {"CODEX_THREAD_ID": "l", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-                           "AGENT_RUNTIME_DISPATCH": "1"})
-        result, _ = self.call(lead, "spawn", {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"})
+        lead = self.start(
+            {
+                "run": {"rc": 1, "err": "bad name shaped like an id"},
+                "get:w1": {"rc": 1, "err": "no such terminal"},
+            },
+            {
+                "CODEX_THREAD_ID": "l",
+                "HC_SCOPE": "lead-token",
+                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "AGENT_RUNTIME_DISPATCH": "1",
+            },
+        )
+        result, _ = self.call(
+            lead, "spawn", {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}
+        )
         self.assertTrue(result["isError"])
-        for tool, args in (("message", {"to": "w1", "text": "hi"}), ("resume", {"name": "w1", "task": "go"})):
+        for tool, args in (
+            ("message", {"to": "w1", "text": "hi"}),
+            ("resume", {"name": "w1", "task": "go"}),
+        ):
             result, text = self.call(lead, tool, args)
             self.assertTrue(result["isError"], tool)
-            self.assertIn("no such terminal" if tool == "resume" else "not an active teammate", text)
+            self.assertIn(
+                "no such terminal" if tool == "resume" else "not an active teammate", text
+            )
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.read(lead)["messages"], [])
 
@@ -499,7 +737,9 @@ class ActivationTests(ToolCase):
         """agent-runtime/R56"""
         out = []
         for flag in ("0", "1"):
-            session = self.start(env={"HC_TERMINAL_ID": "", "HERDR_ENV": "", "AGENT_RUNTIME_DISPATCH": flag})
+            session = self.start(
+                env={"HC_TERMINAL_ID": "", "HERDR_ENV": "", "AGENT_RUNTIME_DISPATCH": flag}
+            )
             result, text = self.call(session, "status", {"name": "w1"})
             out.append((result["isError"], text))
         self.assertEqual(out[0], out[1])
@@ -510,11 +750,17 @@ class ActivationTests(ToolCase):
         for flag in (None, "0"):
             with self.subTest(flag=flag):
                 env = {} if flag is None else {"AGENT_RUNTIME_DISPATCH": flag}
-                lead = self.start({"get:w1": {"out": raw("w1", "t0")},
-                                   "wait": {"out": '{"reason":"idle"}'},
-                                   "ls": {"out": '{"terminals":[]}'}}, env)
-                result, text = self.call(lead, "spawn", {"kind": "worker", "name": "w1",
-                                                       "task": "work", "cwd": "/tmp"})
+                lead = self.start(
+                    {
+                        "get:w1": {"out": raw("w1", "t0")},
+                        "wait": {"out": '{"reason":"idle"}'},
+                        "ls": {"out": '{"terminals":[]}'},
+                    },
+                    env,
+                )
+                result, text = self.call(
+                    lead, "spawn", {"kind": "worker", "name": "w1", "task": "work", "cwd": "/tmp"}
+                )
                 self.assertFalse(result["isError"], text)
                 self.assertEqual(json.loads(text), {"name": "w1", "address": "t9", "parent": "t0"})
                 self.assertNotIn("structuredContent", result)
@@ -525,10 +771,18 @@ class ActivationTests(ToolCase):
                 self.assertEqual(report_schema["required"], ["text"])
                 result, text = self.call(lead, "wait", {"target": "any", "timeout": 20})
                 self.assertFalse(result["isError"], text)
-                self.assertEqual(json.loads(text), {"wait": {"exit": 0, "news": {"reason": "idle"}}, "workers": []})
-                self.assertEqual(self.runs("wait")[-1], ["wait", "--children", "any", "--timeout", "20", "--json"])
+                self.assertEqual(
+                    json.loads(text),
+                    {"wait": {"exit": 0, "news": {"reason": "idle"}}, "workers": []},
+                )
+                self.assertEqual(
+                    self.runs("wait")[-1],
+                    ["wait", "--children", "any", "--timeout", "20", "--json"],
+                )
                 self.call(lead, "resume", {"name": "w1", "task": "continue"})
-                self.assertEqual(self.runs("send")[-1], ["send", "--wait", "--timeout", "170", "w1", "continue"])
+                self.assertEqual(
+                    self.runs("send")[-1], ["send", "--wait", "--timeout", "170", "w1", "continue"]
+                )
                 worker = self.start(env=dict(env, HC_TERMINAL_ID="t1"))
                 result, text = self.call(worker, "report", {"text": "done"})
                 self.assertFalse(result["isError"], text)
