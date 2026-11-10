@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 
 HC_INFO_FLAGS = {"--help", "-h", "--version"}
@@ -251,6 +252,31 @@ def approve_verdict(command):
     return None
 
 
+def spawned_worker():
+    """Whether the runtime says this session is a spawned worker: `agent-runtime resolve --json` with role worker.
+
+    A spawned worker is its own session with no agent_id, so the runtime's public answer is the only signal. Any
+    failure reads as "not a worker": the hook is defence in depth and the CLI is the authority (D26)."""
+    home = os.environ.get("AGENT_RUNTIME_HOME")
+    script = os.path.join(os.path.expanduser(home), "server", "agent_runtime.py") if home else None
+    argv = [sys.executable, script] if script and os.path.isfile(script) else ["agent-runtime"]
+    try:
+        done = subprocess.run(
+            [*argv, "resolve", "--json"], capture_output=True, text=True, timeout=3, check=True
+        )
+        answer = json.loads(done.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return isinstance(answer, dict) and answer.get("role") == "worker"
+
+
+def contract_verdict(command, is_subagent):
+    """A reason when a worker (a native subagent, or a session the runtime resolves as a spawned worker) tries
+    `plan approve` or a write under receipts. The runtime is asked only once a command looks like either."""
+    reason = approve_verdict(command) or receipts_verdict(command)
+    return reason if reason and (is_subagent or spawned_worker()) else None
+
+
 def verdict(command, is_subagent):
     """(decision, reason) or None."""
     if not isinstance(command, str):
@@ -270,10 +296,9 @@ def verdict(command, is_subagent):
                 "Cannot parse this command and it mentions hc: use the agent-runtime tools.",
             )
     result = None
-    if is_subagent:
-        reason = approve_verdict(command) or receipts_verdict(command)
-        if reason:
-            return "deny", reason
+    reason = contract_verdict(command, is_subagent)
+    if reason:
+        return "deny", reason
     for program, args in invocations(command):
         runtime_args = entrypoint_args(program, args)
         if runtime_args is not None:
@@ -404,11 +429,12 @@ def main(argv=()):
         if name in FILE_TOOLS:
             tool_input = data.get("tool_input") or {}
             path = tool_input.get("file_path") or tool_input.get("notebook_path")
-            result = (
-                ("deny", RECEIPTS_REASON)
-                if data.get("agent_id") and isinstance(path, str) and mentions_receipts(path)
-                else None
+            guarded = (
+                isinstance(path, str)
+                and mentions_receipts(path)
+                and (bool(data.get("agent_id")) or spawned_worker())
             )
+            result = ("deny", RECEIPTS_REASON) if guarded else None
         elif name == "Bash":
             result = verdict(
                 data.get("tool_input", {}).get("command", ""), bool(data.get("agent_id"))

@@ -411,7 +411,71 @@ RECEIPTS = "~/.local/state/orchestrate/agent-runtime-0123456789ab/demo/receipts"
 
 class PlanContractTests(unittest.TestCase):
     """yaml-eec D17/D26: the driver alone writes receipts and the Lead alone approves; the hook is defence in depth
-    behind the CLI, so it refuses a worker's attempt and says who can do it instead."""
+    behind the CLI, so it refuses a worker's attempt and says who can do it instead. A worker is a native subagent
+    (agent_id) or a session the runtime resolves as a spawned worker; `agent-runtime` on PATH is a fake here."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.bin = Path(self.temp.name) / "bin"
+        self.bin.mkdir()
+        self.asked = Path(self.temp.name) / "asked"
+        fake = self.bin / "agent-runtime"
+        fake.write_text(
+            "#!/bin/sh\n"
+            'echo asked >> "$FAKE_ASKED"\n'
+            'case "$FAKE_ROLE" in\n'
+            "  broken) exit 1;;\n"
+            "  garbage) echo not-json;;\n"
+            '  *) printf \'{"runtime": "rt", "role": "%s"}\' "$FAKE_ROLE";;\n'
+            "esac\n"
+        )
+        fake.chmod(0o755)
+
+    def hook(self, payload, role="lead", path=True):
+        """The hook run as `role` says the runtime resolves this session; `path=False` leaves no agent-runtime."""
+        env = {
+            "PATH": (str(self.bin) + os.pathsep if path else "") + "/usr/bin:/bin",
+            "HOME": self.temp.name,
+            "FAKE_ROLE": role,
+            "FAKE_ASKED": str(self.asked),
+        }
+        done = subprocess.run(
+            [sys.executable, "-B", str(PRE)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=env,
+        )
+        return json.loads(done.stdout) if done.stdout.strip() else None
+
+    def test_C2_a_spawned_worker_without_agent_id_is_denied_by_the_runtimes_answer(self):
+        """yaml-eec/S3: the runtime's role worker is a worker, whatever the payload says"""
+        path = str(Path.home() / ".local/state/orchestrate/k/demo/receipts/S1.integration.1.json")
+        payloads = (
+            bash("agent-orchestrator plan approve x.plan.yaml"),
+            bash("echo '{}' > %s/S1.integration.1.json" % RECEIPTS),
+            {"tool_name": "Write", "tool_input": {"file_path": path, "content": "{}"}},
+        )
+        for payload in payloads:
+            self.assertTrue(denied(self.hook(payload, role="worker")), payload)
+            self.assertIsNone(self.hook(payload, role="lead"), payload)
+
+    def test_C2_the_hook_fails_open_when_the_runtime_cannot_answer(self):
+        """yaml-eec/D26: defence in depth; the CLI is the authority"""
+        command = bash("agent-orchestrator plan approve x.plan.yaml")
+        for role in ("broken", "garbage", "unknown"):
+            self.assertIsNone(self.hook(command, role=role), role)
+        self.assertIsNone(self.hook(command, path=False))
+
+    def test_C2_the_runtime_is_asked_only_when_a_command_touches_the_contract(self):
+        """yaml-eec/D26: no extra process for every Bash call"""
+        for command in ("ls -la", "git status", "agent-orchestrator plan check x.plan.yaml"):
+            self.hook(bash(command), role="worker")
+        self.assertFalse(self.asked.exists())
+        self.hook(bash("agent-orchestrator plan approve x.plan.yaml"), role="worker")
+        self.assertTrue(self.asked.exists())
 
     def test_S3_a_worker_is_denied_plan_approve_however_it_is_spelled(self):
         """yaml-eec/S3"""
@@ -424,7 +488,7 @@ class PlanContractTests(unittest.TestCase):
             "bash -c 'agent-orchestrator plan approve x.plan.yaml'",
             "echo $(agent-orchestrator plan approve x.plan.yaml)",
         ):
-            out = run(PRE, bash(command, agent_id="sub-1", agent_type="worker"))
+            out = self.hook(bash(command, agent_id="sub-1", agent_type="worker"))
             self.assertTrue(denied(out), command)
             reason = out["hookSpecificOutput"]["permissionDecisionReason"]
             self.assertIn("Lead", reason, command)
@@ -432,7 +496,7 @@ class PlanContractTests(unittest.TestCase):
 
     def test_S3_the_lead_may_approve_and_a_worker_may_check_and_list(self):
         """yaml-eec/S3"""
-        self.assertIsNone(run(PRE, bash("agent-orchestrator plan approve x.plan.yaml")))
+        self.assertIsNone(self.hook(bash("agent-orchestrator plan approve x.plan.yaml")))
         for command in (
             "agent-orchestrator plan check x.plan.yaml",
             "agent-orchestrator plans list --json",
@@ -441,7 +505,7 @@ class PlanContractTests(unittest.TestCase):
             "agent-orchestrator status x.plan.yaml",
         ):
             self.assertIsNone(
-                run(PRE, bash(command, agent_id="sub-1", agent_type="worker")), command
+                self.hook(bash(command, agent_id="sub-1", agent_type="worker")), command
             )
 
     def test_D17_a_worker_is_denied_writes_to_receipts_by_shell(self):
@@ -459,7 +523,7 @@ class PlanContractTests(unittest.TestCase):
             "python3 -c \"open('%s/S1.integration.1.json','w').write('{}')\"" % RECEIPTS,
             "sh -c 'echo {} > %s/S1.integration.1.json'" % RECEIPTS,
         ):
-            out = run(PRE, bash(command, agent_id="sub-1", agent_type="worker"))
+            out = self.hook(bash(command, agent_id="sub-1", agent_type="worker"))
             self.assertTrue(denied(out), command)
             reason = out["hookSpecificOutput"]["permissionDecisionReason"]
             self.assertIn("receipts", reason, command)
@@ -477,12 +541,12 @@ class PlanContractTests(unittest.TestCase):
             "cp a.txt docs/receipts/a.txt",
         ):
             self.assertIsNone(
-                run(PRE, bash(command, agent_id="sub-1", agent_type="worker")), command
+                self.hook(bash(command, agent_id="sub-1", agent_type="worker")), command
             )
 
     def test_D17_the_lead_and_the_driver_are_not_stopped_from_writing_receipts(self):
         """yaml-eec/D17"""
-        self.assertIsNone(run(PRE, bash("echo '{}' > %s/S1.integration.1.json" % RECEIPTS)))
+        self.assertIsNone(self.hook(bash("echo '{}' > %s/S1.integration.1.json" % RECEIPTS)))
 
     def test_D17_a_worker_is_denied_the_file_tools_on_receipts(self):
         """yaml-eec/D17"""
@@ -490,16 +554,16 @@ class PlanContractTests(unittest.TestCase):
         for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             payload = {"tool_name": tool, "tool_input": {"file_path": path, "content": "{}"}}
             self.assertTrue(
-                denied(run(PRE, {**payload, "agent_id": "sub-1", "agent_type": "worker"})), tool
+                denied(self.hook({**payload, "agent_id": "sub-1", "agent_type": "worker"})), tool
             )
-            self.assertIsNone(run(PRE, payload), tool)
+            self.assertIsNone(self.hook(payload), tool)
         other = {
             "tool_name": "Write",
             "tool_input": {"file_path": "/repo/src/receipts/a.py"},
             "agent_id": "sub-1",
             "agent_type": "worker",
         }
-        self.assertIsNone(run(PRE, other))
+        self.assertIsNone(self.hook(other))
 
 
 class WiringTests(unittest.TestCase):

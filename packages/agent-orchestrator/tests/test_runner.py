@@ -46,6 +46,14 @@ PASSING = '<testcase classname="t" name="ok"/>'
 FAILING = '<testcase classname="t" name="bad"><failure message="assert 1 == 2"/></testcase>'
 ERRORING = '<testcase classname="" name="tests.test_x"><error message="collection"/></testcase>'
 SKIPPED = '<testcase classname="t" name="skip"><skipped message="why"/></testcase>'
+# A case that dies on a missing interface is a failure, but not an assertion: it says nothing about the oracle.
+MISSING = (
+    '<testcase classname="t" name="behaviour"><failure message="ModuleNotFoundError: '
+    "No module named 'not_yet_written'\"/></testcase>"
+)
+UNITTEST_ASSERTION = (
+    '<testcase classname="t" name="eq"><failure type="AssertionError" message="1 != 2"/></testcase>'
+)
 XFAILED = '<testcase classname="t" name="xf"><skipped type="pytest.xfail" message="x"/></testcase>'
 
 
@@ -159,7 +167,15 @@ class EvidenceRunner(RepoCase):
         self.assertEqual(receipt["exit"], 0)
         self.assertEqual(
             receipt["junit"],
-            {"tests": 1, "executed": 1, "passed": 1, "failures": 0, "errors": 0, "skipped": 0},
+            {
+                "tests": 1,
+                "executed": 1,
+                "passed": 1,
+                "failures": 0,
+                "assertions": 0,
+                "errors": 0,
+                "skipped": 0,
+            },
         )
         self.assertEqual(receipt["result"], "PASS")
         self.assertFalse(receipt["exit_code_only"])
@@ -208,6 +224,27 @@ class Results(RepoCase):
     def test_S13_an_assertion_failure_is_FAIL(self):
         run = self.run_check(junit(PASSING + FAILING, tests=2, failures=1) + "exit 1")
         self.assertEqual((run.receipt["result"], self.result(run)), ("FAIL", "FAIL"))
+
+    def test_S13_only_an_assertion_failure_counts_as_one_in_the_junit_counts(self):
+        for cases, assertions in (
+            (PASSING + FAILING, 1),
+            (PASSING + UNITTEST_ASSERTION, 1),
+            (PASSING + MISSING, 0),
+            (FAILING + MISSING, 1),
+        ):
+            with self.subTest(cases=cases):
+                run = self.run_check(junit(cases, tests=2, failures=2) + "exit 1")
+                self.assertEqual(run.receipt["result"], "FAIL")
+                self.assertEqual(run.receipt["junit"]["assertions"], assertions)
+
+    def test_S13_a_check_that_dies_on_an_unbound_variable_never_ran_and_is_UNKNOWN_env(self):
+        run = self.run_check('test -n "$EEC_UNDECLARED_VARIABLE"')
+        self.assertEqual(self.result(run), "UNKNOWN (env)")
+        self.assertIn("EEC_UNDECLARED_VARIABLE", run.receipt["detail"])
+
+    def test_S13_an_unbound_variable_beside_junit_is_not_taken_for_a_missing_env(self):
+        run = self.run_check(junit(PASSING + FAILING, tests=2, failures=1) + "exit 1")
+        self.assertEqual(run.receipt["label"], "FAIL")
 
     def test_S13_a_collection_or_setup_error_is_FAIL_error(self):
         run = self.run_check(junit(ERRORING, tests=1, errors=1) + "exit 2")
@@ -291,6 +328,18 @@ class NegativeControl(RepoCase):
         run = self.run_check("true", negative=("break.patch.oracle", self.patch()))
         self.assertEqual((run.receipt["result"], run.receipt["label"]), ("FAIL", "FAIL (vacuous)"))
         self.assertEqual(run.receipt["negative"]["result"], "PASS")
+
+    def test_S15_a_negative_that_fails_on_something_other_than_an_assertion_is_UNKNOWN(self):
+        check = (
+            "if grep -qx broken a.txt; then\n"
+            + junit(PASSING + MISSING, tests=2, failures=1)
+            + "exit 1\nelse\n"
+            + junit(PASSING, tests=1)
+            + "fi\n"
+        )
+        run = self.run_check(check, negative=("break.patch.oracle", self.patch()))
+        self.assertEqual(run.receipt["result"], "UNKNOWN")
+        self.assertEqual(run.receipt["reason"], "negative control")
 
     def test_S15_a_patch_that_does_not_apply_is_UNKNOWN(self):
         run = self.run_check("true", negative=("bad.patch.oracle", b"not a patch\n"))
@@ -412,6 +461,33 @@ class Baseline(RepoCase):
     def test_S14_a_red_from_a_collection_error_is_refused(self):
         check = junit(ERRORING, tests=1, errors=1) + "exit 2"
         self.refused({"check": check, "baseline": "fail"}, "baseline", "error")
+
+    def test_S14_a_new_oracle_whose_behaviour_dies_on_a_missing_interface_is_uncalibrated(self):
+        check = junit(PASSING + MISSING, tests=2, failures=1) + "exit 1"
+        _, receipt = self.approved({"check": check, "baseline": "fail"})
+        self.assertFalse(receipt["calibrated"])
+        self.assertEqual(receipt["junit"]["assertions"], 0)
+
+    def test_S14_a_missing_interface_with_no_passing_control_is_refused(self):
+        check = junit(MISSING, tests=1, failures=1) + "exit 1"
+        self.refused({"check": check, "baseline": "fail"}, "baseline", "control")
+
+    def test_S14_an_existing_test_that_dies_on_a_missing_interface_is_refused(self):
+        check = junit(PASSING + MISSING, tests=2, failures=1) + "exit 1"
+        self.refused(
+            {"check": check, "baseline": "fail"}, "baseline", "on an assertion", oracle=False
+        )
+
+    def test_S14_a_check_that_dies_on_an_unbound_variable_is_refused_naming_it(self):
+        for expected in ("fail", "pass"):
+            with self.subTest(expected):
+                self.refused(
+                    {"check": 'test -n "$EEC_UNDECLARED_VARIABLE"', "baseline": expected},
+                    "baseline",
+                    "UNKNOWN (env)",
+                    "EEC_UNDECLARED_VARIABLE",
+                    oracle=False,
+                )
 
     def test_S14_a_new_oracle_with_no_passing_control_case_is_refused(self):
         check = junit(FAILING, tests=1, failures=1) + "exit 1"

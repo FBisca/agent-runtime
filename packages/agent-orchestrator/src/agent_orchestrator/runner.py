@@ -9,6 +9,7 @@ run never yields a receipt, because only the driver calls this module. Stdlib on
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -153,6 +154,19 @@ def tool_versions(path):
     return versions
 
 
+ASSERTION = re.compile(r"(?:assert\b|(?:[\w.]+\.)?AssertionError\b)")
+UNBOUND = re.compile(r"(\w+): unbound variable")
+
+
+def is_assertion(failure):
+    """Whether a JUnit <failure> is an assertion: pytest writes `assert ...` or `AssertionError: ...` as the message,
+    unittest names the type. Any other exception (a missing module or attribute, a TypeError) is not one."""
+    kind = failure.get("type") or ""
+    return bool(
+        ASSERTION.fullmatch(kind) or ASSERTION.match((failure.get("message") or "").lstrip())
+    )
+
+
 def junit_counts(path):
     """Case counts from a JUnit file: None when there is no file, "unreadable" when it does not parse."""
     try:
@@ -163,7 +177,15 @@ def junit_counts(path):
         root = ET.parse(path).getroot()
     except (ET.ParseError, OSError):
         return "unreadable"
-    counts = {"tests": 0, "executed": 0, "passed": 0, "failures": 0, "errors": 0, "skipped": 0}
+    counts = {
+        "tests": 0,
+        "executed": 0,
+        "passed": 0,
+        "failures": 0,
+        "assertions": 0,
+        "errors": 0,
+        "skipped": 0,
+    }
     for case in root.iter("testcase"):
         counts["tests"] += 1
         if case.find("error") is not None:
@@ -171,6 +193,7 @@ def junit_counts(path):
             counts["executed"] += 1
         elif case.find("failure") is not None:
             counts["failures"] += 1
+            counts["assertions"] += any(is_assertion(f) for f in case.findall("failure"))
             counts["executed"] += 1
         elif case.find("skipped") is not None:
             counts["skipped"] += 1
@@ -324,6 +347,14 @@ def attempt(repo, commit, *, check, oracles, place_dir, env_names, timeout, base
         )
         if timed_out:
             facts.update(result="UNKNOWN", reason="timeout", detail="killed after %ss" % timeout)
+        elif code and counts is None and UNBOUND.search(tail(log_path)):
+            # `set -u` killed the check before it asserted anything: it never ran, whatever its exit says.
+            names = sorted(set(UNBOUND.findall(tail(log_path))))
+            facts.update(
+                result="UNKNOWN",
+                reason="env",
+                detail="unbound variable%s: %s" % ("s" if len(names) > 1 else "", ", ".join(names)),
+            )
         elif dirty:
             facts.update(
                 result="UNKNOWN",
@@ -415,7 +446,11 @@ def run_evidence(
             receipt.update(
                 result="FAIL", reason="vacuous", detail="the check passes with %s applied" % name
             )
-        elif second["result"] == "FAIL" and second["reason"] is None:
+        elif (
+            second["result"] == "FAIL"
+            and second["reason"] is None
+            and (second["junit"] is None or second["junit"]["assertions"])
+        ):
             pass  # the check fails on the broken copy on an assertion: the control holds
         else:
             receipt.update(
@@ -472,9 +507,10 @@ def record_in_ledger(data, run):
 def judge_baseline(receipt, expected, has_oracle):
     """(ok, observed, calibrated) of a baseline receipt against the item's `baseline:` (D24).
 
-    A `fail` item must collect without errors and fail at least one case on an assertion; a new test oracle must
-    also pass at least one case, its controls. An item whose check writes no JUnit can only show a non-zero exit:
-    it is accepted as red but never calibrated."""
+    A red is calibrated only when the check collects without errors and at least one case fails on an assertion. A
+    new test oracle must also pass at least one case, its controls. A new oracle whose behaviour dies on something
+    else (a missing interface) is accepted as an uncalibrated red when its controls pass; an existing test that does
+    is refused. An item whose check writes no JUnit can only show a non-zero exit: accepted as red, never calibrated."""
     result, reason, junit = receipt["result"], receipt["reason"], receipt["junit"]
     observed = receipt["label"]
     if receipt.get("detail"):
@@ -487,8 +523,10 @@ def judge_baseline(receipt, expected, has_oracle):
         return False, observed, False
     if junit is None:
         return True, observed, False
-    if not junit["failures"]:
-        return False, observed + " (no case failed on an assertion)", False
     if has_oracle and not junit["passed"]:
         return False, observed + " (no control case passed)", False
+    if not junit["assertions"]:
+        if not has_oracle:
+            return False, observed + " (no case failed on an assertion)", False
+        return True, observed, False
     return True, observed, True
