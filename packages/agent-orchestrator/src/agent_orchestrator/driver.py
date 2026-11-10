@@ -256,6 +256,30 @@ def bind(data, task_id, runtime_id):
     return task
 
 
+# Launcher words a worker may put in front of a gate command. Closed on purpose: an
+# `endswith` match would let `echo scripts/checks.sh` pass as the gate.
+# Whole prefix sequences, never single words: `python` alone is not a launcher of the gate.
+CHECK_PREFIXES = (("bash",), ("sh",), ("uv", "run"), ("python", "-m"), ("python3", "-m"))
+
+
+def normalise_check(command):
+    """The gate command, with launcher prefixes and a leading `./` removed, so `bash scripts/checks.sh` matches `scripts/checks.sh`."""
+    tokens = command.split()
+    changed = True
+    while changed and tokens:
+        changed = False
+        for prefix in CHECK_PREFIXES:
+            if tuple(tokens[: len(prefix)]) == prefix:
+                del tokens[: len(prefix)]
+                changed = True
+                break
+        else:
+            if tokens[0].startswith("./"):
+                tokens[0] = tokens[0][2:]
+                changed = True
+    return " ".join(tokens)
+
+
 def checkpoint(data, task_id, report):
     task = data["tasks"][task_id]
     require(isinstance(report, dict), "report must be an object")
@@ -285,11 +309,17 @@ def checkpoint(data, task_id, report):
         require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
         require(not report["remaining"], "complete result has remaining work")
         require(
-            all(c["outcome"] == "passed" for c in checks),
-            "complete result has failed or omitted checks",
+            all(c["outcome"] != "failed" for c in checks),
+            "complete result has failed checks: "
+            + ", ".join(c["command"] for c in checks if c["outcome"] == "failed"),
         )
-        passed = {c["command"] for c in checks if c["outcome"] == "passed"}
-        require(set(task["packet"]["checks"]).issubset(passed), "required checks are missing")
+        required = {normalise_check(c): c for c in task["packet"]["checks"]}
+        passed = {normalise_check(c["command"]) for c in checks if c["outcome"] == "passed"}
+        missing = [command for key, command in required.items() if key not in passed]
+        require(
+            not missing,
+            "required checks are not passed: " + ", ".join(sorted(missing)),
+        )
         if routed(task["packet"]):
             require("review_rounds" in report, "a routed task needs review_rounds")
             require(
@@ -488,6 +518,7 @@ CONTRACT = """# Contract for every task in this run
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
+- COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
 - Red-first: one test per scenario, named with its S-ID, seen failing before the code exists.
