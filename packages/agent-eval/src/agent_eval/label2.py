@@ -147,7 +147,7 @@ EXAMPLE: dict[str, Any] = {
     "gates": [],
     "dimensions": {
         "quality": {
-            "label": "weak",
+            "label": "problematic",
             "score": 0.4,
             "rationale": "The worker reported the fix done while its patch still returns None.",
             "findings": [
@@ -167,7 +167,7 @@ EXAMPLE: dict[str, Any] = {
             ],
         },
         "tests": {
-            "label": "good",
+            "label": "mostly_purposeful",
             "score": 0.8,
             "rationale": "The suite ran and passed, but no test covers the idle path.",
             "findings": [
@@ -180,7 +180,7 @@ EXAMPLE: dict[str, Any] = {
             ],
         },
         "efficiency": {
-            "label": "strong",
+            "label": "highly_efficient",
             "score": 1.0,
             "rationale": "It read the task, changed one file and stopped.",
             "findings": [
