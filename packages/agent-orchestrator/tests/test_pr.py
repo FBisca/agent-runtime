@@ -673,7 +673,7 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
 
     def test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window(self):
-        """orchestrator-engine/R60: S13"""
+        """orchestrator-engine/R60, orchestrator-engine/R68"""
         spec = load_script()
         moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
         self.waits(
@@ -697,7 +697,7 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertIn("working for 50 minutes", idle[0])
 
     def test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it(self):
-        """orchestrator-engine/R60: S13a"""
+        """orchestrator-engine/R60, orchestrator-engine/R69"""
         spec = load_script()
         args = argparse.Namespace(
             plan=str(self.plan),

@@ -91,6 +91,13 @@ suite runs here, against the member, and the member answers the way the engine a
   reviewer brief says the reviewer may wait on background jobs, that ending a turn does not finish the review, and
   that it writes the review after those jobs finish and then reports complete with the brief's assignment id. A
   reviewer `complete` after its unit's request is open leaves the request open. (from orchestrator-silent-idle/S1–S14)
+- **R63** WHEN `decide … answer` is given text naming an attempt id of the unit other than the request's `task` — including a reopen attempt `t<N>p<n>`, and any uppercase form such as `T1` or `T1R1` — THEN it exits 2, writes no decision, and names the id it expects. An uppercase form of the expected id is accepted. (from drive-restart-recovery-gaps/S9)
+- **R64** WHEN the loop would finish while an open, unparked task is held by a live terminal this drive did not bind, THEN a `stranded` wake names the task and the runtime's answer, and the run exits non-zero instead of logging `finish`. (from drive-restart-recovery-gaps/S10)
+- **R65** WHEN the loop would finish while an open task's agent has ended its turn (`idle` or `done`) and its report has landed for that attempt, THEN the gate moves to `reported`, nothing is spawned, and the run does not finish over it. (from drive-restart-recovery-gaps/S11)
+- **R66** WHEN a ticket is in the not-dispatched state and the Lead edits its cell to anything other than exactly `TO-DO` (for example `TO-DO · retry`), THEN the same run does not dispatch it again. (from drive-restart-recovery-gaps/S12)
+- **R67** WHEN a dispatch fails, THEN the `not-dispatched` wake names the ticket, the reason, and the way out "set the ticket's Status cell back to exactly `TO-DO`". (from drive-restart-recovery-gaps/S12a)
+- **R68** WHEN a unit the idle tick skipped (its gate was `requested`, `awaiting-merge` or parked) returns to `working`, THEN its working window starts again at that tick, and the idle tick does not count it until another `--working-minutes` have passed. (from drive-restart-recovery-gaps/S13)
+- **R69** WHEN a drive starts, THEN the working window starts empty: `--working-minutes` is measured from the first tick that sees the agent `working`, and a restart resets it. (from drive-restart-recovery-gaps/S13a)
 
 ## Coverage
 
@@ -125,6 +132,13 @@ suite runs here, against the member, and the member answers the way the engine a
 | S12 | R34 | `packages/agent-orchestrator/tests/test_archive.py`: `test_S12_a_conflicting_archive_pr_is_rebased_with_no_review` |
 | drive-restart-recovery-gaps/S10 | R51 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished` |
 | drive-restart-recovery-gaps/S11 | R51 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish` |
+| drive-restart-recovery-gaps/S9 | R63 | `packages/agent-orchestrator/tests/test_wake.py`: `test_S7_an_answer_naming_another_attempt_exits_2_writes_nothing_and_names_the_expected_id` |
+| drive-restart-recovery-gaps/S10 | R64 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished` |
+| drive-restart-recovery-gaps/S11 | R65 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish` |
+| drive-restart-recovery-gaps/S12 | R66 | `packages/agent-orchestrator/tests/test_run.py`: `test_S12_a_not_dispatched_ticket_whose_cell_is_not_exactly_TO_DO_is_not_tried_again_in_the_run` |
+| drive-restart-recovery-gaps/S12a | R67 | `packages/agent-orchestrator/tests/test_run.py`: `test_S12a_the_not_dispatched_wake_names_the_ticket_the_reason_and_the_exact_TO_DO_way_out` |
+| drive-restart-recovery-gaps/S13 | R68 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window` |
+| drive-restart-recovery-gaps/S13a | R69 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it` |
 
 ### R4 — the route refusals
 
