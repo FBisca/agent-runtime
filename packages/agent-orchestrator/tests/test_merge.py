@@ -148,7 +148,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         ]
 
     def test_S6_a_merged_pr_completes_a_unit_whose_report_fails_the_rules(self):
-        """orchestrator-engine/R2: merged-unit-completes/S6"""
+        """orchestrator-engine/R31"""
         self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
         failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
         self.waits(self.refused_then_merged(failed))
@@ -183,7 +183,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.gh_process = process
 
     def test_S8_a_merged_pr_completes_when_the_checkout_is_gone(self):
-        """orchestrator-engine/R2: merged-unit-completes/S8"""
+        """orchestrator-engine/R34"""
         gone = str(self.worktree)
         self.prs(["OPEN", "MERGED"])
         self.on_merged_view(lambda: shutil.rmtree(gone))
@@ -197,7 +197,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertNotEqual(task["gate"], "awaiting-merge")
 
     def test_S8_a_merged_pr_that_fails_the_rules_completes_when_the_checkout_is_gone(self):
-        """orchestrator-engine/R2: merged-unit-completes/S8"""
+        """orchestrator-engine/R34"""
         gone = str(self.worktree)
         failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
         self.on_merged_view(lambda: shutil.rmtree(gone))
@@ -211,7 +211,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertFalse((self.run_dir / "t1r1" / "request.json").exists())
 
     def test_S9_cleanup_keeps_a_worktree_a_sibling_under_another_worker_still_uses(self):
-        """orchestrator-engine/R2: merged-unit-completes/S9"""
+        """orchestrator-engine/R36"""
 
         def edit_ledger(status):
             path = self.state_dir / "demo.json"

@@ -291,7 +291,7 @@ class GateTests(GateFixture, unittest.TestCase):
         return self.worker_done(task_id, report=self.report(task_id, checks=self.FAILED_CHECK))
 
     def test_S5_a_ready_report_that_fails_the_complete_rules_goes_back_to_its_worker(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5"""
+        """orchestrator-engine/R29"""
         self.waits([self.refused("t1")])
         self.run_driver()
         resumes = self.calls("resume")
@@ -307,7 +307,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["status"], "ACTIVE")
 
     def test_S5a_report_refusals_at_the_fix_round_cap_ask_the_lead(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5a"""
+        """orchestrator-engine/R30"""
         self.waits([self.refused("t1"), self.refused("t1r1"), self.refused("t1r2"), self.skipped()])
         self.run_driver()
         self.assertEqual(len(self.calls("resume")), 2)
@@ -317,7 +317,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
 
     def test_S5_a_report_the_ledger_cannot_read_asks_the_lead_and_the_driver_exits_clean(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5 — (a report with no `remaining`, or a check with no outcome)"""
+        """orchestrator-engine/R29 — (a report with no `remaining`, or a check with no outcome)"""
         for broken in (
             {"remaining": None},
             {"checks": [{"command": "pytest"}]},
