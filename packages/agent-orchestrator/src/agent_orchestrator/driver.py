@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from . import contracts, events, evidence, routes
+from . import plan as yaml_plan
+from .plan import PlanError
 from .runtime_client import CliRuntimeClient
 from .runtime_client import RuntimeError as RuntimeCallError
 
@@ -507,10 +509,6 @@ def resolve_runtime():
         return {"runtime": "unknown"}
 
 
-class PlanError(ValueError):
-    """The plan cannot be run as written; `run` exits 2 and starts nothing."""
-
-
 TICKET_COLUMNS = (
     "#",
     "What it delivers",
@@ -746,6 +744,8 @@ def set_status(plan_path, ticket_id, status):
     """Rewrite one ticket row's Status cell; every other line stays byte-identical."""
     require("|" not in status and "\n" not in status, "status must be one table cell")
     path = Path(plan_path)
+    if path.name.endswith(".plan.yaml"):
+        return  # YAML contracts are immutable; Driver.write_status owns the ledger copy.
     with path.open(encoding="utf-8", newline="") as stream:
         text = stream.read()
     ticket = next((t for t in parse_plan(text)["tickets"] if t["#"] == ticket_id), None)
@@ -1157,6 +1157,19 @@ class Driver:
                 )
 
     def read_plan(self):
+        if self.plan_path.name.endswith(".plan.yaml"):
+            model = yaml_plan.load(
+                self.plan_path,
+                repo=self.repo,
+                state_dir=self.args.state_dir,
+                require_approval=True,
+            )
+            ledger_path = Path(self.args.state_dir).expanduser() / (model.slug + ".json")
+            statuses = {}
+            if ledger_path.exists():
+                with ledger(ledger_path) as data:
+                    statuses = dict(data.get("ticket_status", {}))
+            return model.legacy(statuses)
         plan = parse_plan(self.plan_path.read_text(encoding="utf-8"))
         check_plan(plan)
         return plan
@@ -1210,6 +1223,8 @@ class Driver:
     def loop(self):
         idle = False
         while True:
+            if self.plan_path.name.endswith(".plan.yaml"):
+                self.read_plan()  # Integrity precedes gates, which can also spawn workers.
             acted = (
                 self.advance()
             )  # before the plan is read: a merge it makes unblocks work in this same round
@@ -1255,6 +1270,8 @@ class Driver:
             self.last_plan = self.read_plan()
             return self.last_plan, True
         except PlanError as error:
+            if self.plan_path.name.endswith(".plan.yaml"):
+                raise  # A stale approval must never fall back to dispatching the last valid plan.
             event("plan not runnable, running on the last valid plan: %s" % error)
             self.wake(
                 "plan-invalid",
@@ -1752,6 +1769,10 @@ class Driver:
     def write_status(self, ticket_id, status):
         if ticket_id == ARCHIVE.upper():
             return  # the archive unit has no ticket row
+        if self.plan_path.name.endswith(".plan.yaml"):
+            with self.book() as data:
+                data.setdefault("ticket_status", {})[ticket_id] = status
+            return
         try:
             set_status(self.plan_path, ticket_id, status)
         except (ValueError, OSError) as error:
@@ -2000,6 +2021,11 @@ class Driver:
 
     def converge(self, task_id, packet):
         """Run converge for the unit's ticket: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
+        if self.plan_path.name.endswith(".plan.yaml"):
+            reason = "YAML plan: legacy converge reads Markdown; verify replaces this gate in a later ticket"
+            self.log("converge-skipped", task=task_id, reason=reason)
+            event(reason)
+            return "PASS", []
         if packet["unit"] == ARCHIVE:
             # The archive branch holds the plan with Status ARCHIVED; fall back to the driver's copy if it is untracked.
             copy = Path(packet["checkout"]) / self.plan_rel()
@@ -2781,7 +2807,10 @@ class Driver:
     def put_status(self, task_id, status):
         """The ticket's Status cell; the archive unit has no row."""
         if self.task(task_id)["packet"]["unit"] != ARCHIVE:
-            set_status(self.plan_path, self.ticket_name(task_id), status)
+            if self.plan_path.name.endswith(".plan.yaml"):
+                self.write_status(self.ticket_name(task_id), status)
+            else:
+                set_status(self.plan_path, self.ticket_name(task_id), status)
 
     def ticket_name(self, task_id):
         return self.task(task_id)["packet"]["unit"].upper()
@@ -4646,7 +4675,11 @@ def drive(args):
     require(args.idle_minutes >= 0, "--idle-minutes must not be negative")
     require(args.working_minutes >= 0, "--working-minutes must not be negative")
     driver = Driver(args)
-    slug = parse_plan(driver.plan_path.read_text(encoding="utf-8"))["slug"]
+    slug = (
+        driver.read_plan()["slug"]
+        if driver.plan_path.name.endswith(".plan.yaml")
+        else parse_plan(driver.plan_path.read_text(encoding="utf-8"))["slug"]
+    )
     with run_lock(driver.repo, slug, driver.plan_path):
         return drive_locked(driver)
 
@@ -4673,6 +4706,17 @@ def drive_locked(driver):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    plan_commands = commands.add_parser(
+        "plan", help="Validate and approve plan/1 YAML contracts"
+    ).add_subparsers(dest="plan_command", required=True)
+    plan_commands.add_parser("schema", help="Print the plan/1 JSON Schema")
+    for verb in ("check", "approve"):
+        sub = plan_commands.add_parser(verb)
+        sub.add_argument("plan")
+        sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+        sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
+        if verb == "approve":
+            sub.add_argument("--base", default="origin/main")
     inspect = commands.add_parser(
         "inspect", help="Read checkout identity and installed command paths"
     )
@@ -4871,6 +4915,24 @@ def main(argv=None):
         parser.error("unrecognized arguments: " + " ".join(extra))
     if args.command == "launch":
         return launch(args, extra)  # unknown options are forwarded to `run`, which validates them
+    if args.command == "plan":
+        if args.plan_command == "schema":
+            return yaml_plan.Plan.model_json_schema(by_alias=True)
+        if args.plan_command == "approve":
+            caller = resolve_runtime()
+            if isinstance(caller, dict) and caller.get("role") == "worker":
+                raise PlanError(
+                    "approval: caller is a spawned worker, parent %s — approval belongs to the Lead "
+                    "(the person in their own session); ask the Lead to run plan approve"
+                    % caller.get("parent", "unknown")
+                )
+            return {
+                "approval": yaml_plan.approve(
+                    args.plan, repo=args.repo, state_dir=args.state_dir, base=args.base
+                )
+            }
+        model = yaml_plan.load(args.plan, repo=args.repo, state_dir=args.state_dir)
+        return {"valid": True, "slug": model.slug}
     if args.command == "run":
         return drive(args)
     if args.command == "await":
