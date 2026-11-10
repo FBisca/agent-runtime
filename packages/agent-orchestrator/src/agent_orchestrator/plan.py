@@ -5,11 +5,13 @@ safe_dump(sort_keys=True) after dropping approval: comments, key order and YAML
 presentation are preserved on disk but do not affect the contract digest.
 """
 
+import fcntl
 import hashlib
 import os
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -24,6 +26,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from . import runner
 
 DEFAULT_STATE = "~/.local/state/orchestrate"
 ScenarioId = Annotated[str, Field(pattern=r"^S\d+[a-z]?$")]
@@ -611,15 +615,127 @@ def approved_text(text, approval):
     return prefix + (eol if prefix and not prefix.endswith("\n") else "") + block + text[end:]
 
 
+def baseline(model, repo, base_sha, approval_digest, files):
+    """Run every check item of the plan once at `base` and judge it against its `baseline:` (D24).
+
+    Returns the runs to persist, each with the calibration to record; raises PlanError naming every item that is
+    not what it claims, before anything is written."""
+    runs, refusals = [], []
+    for scenario in model.scenarios:
+        item = scenario.evidence
+        if item is None or not item.check:
+            continue
+        negative = (item.negative, files[item.negative]) if item.negative else None
+        run = runner.run_evidence(
+            repo,
+            base_sha,
+            scenario=scenario.id,
+            phase="baseline",
+            digest=approval_digest,
+            check=item.check,
+            oracles={name: files[name] for name in item.oracle},
+            place=item.place,
+            env_names=item.env,
+            timeout=item.timeout,
+            negative=negative,
+        )
+        ok, observed, calibrated = runner.judge_baseline(
+            run.receipt, item.baseline, bool(item.oracle)
+        )
+        if not ok:
+            refusals.append(
+                "%s: baseline expected %s at %s, observed %s — %s"
+                % (
+                    scenario.id,
+                    item.baseline,
+                    base_sha[:12],
+                    observed,
+                    "make the oracle fail on an assertion at base and pass its controls, or set baseline: pass"
+                    if item.baseline == "fail"
+                    else "fix the check or set baseline: fail",
+                )
+            )
+        runs.append((run, {"calibrated": calibrated, "expected": item.baseline}))
+    if refusals:
+        raise PlanError("approval: " + "; ".join(refusals) + " — nothing was approved")
+    return runs
+
+
+def state_paths(repo, slug, state_dir):
+    """(ledger path, receipts directory) of a plan: `<state>/<repo-key>/<slug>.json` and `.../<slug>/receipts` (D17).
+
+    A ledger an older driver wrote under `<state>/<slug>.json` is imported first when this repository owns it, so
+    creating the ledger here never hides it."""
+    # The driver owns the state key and imports this module, so it is imported late.
+    from . import driver
+
+    state = Path(state_dir).expanduser()
+    keyed = state / driver.repo_key(repo)
+    ledger, run_dir = keyed / (slug + ".json"), keyed / slug
+    driver.import_old_ledger(state, repo, slug, ledger, run_dir)
+    return ledger, run_dir / "receipts"
+
+
+@contextmanager
+def run_lock(repo, slug):
+    """The plan's run lock, the file `driver.run_lock` holds for a whole run (`<git common dir>/agent-orchestrator/
+    <slug>.lock`, flock, non-blocking), so a live driver refuses approval and a driver refuses to start under one.
+    The protocol is the driver's; it is written here because the driver's helper runs git through a function its
+    callers replace."""
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    directory = common / "agent-orchestrator"
+    directory.mkdir(exist_ok=True, mode=0o700)
+    fd = os.open(directory / (slug + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = lock.read().strip() or "another driver"
+            raise PlanError(
+                "plan %s is being driven by %s; stop that driver (close its orchestrate-%s pane), then "
+                "run plan approve again" % (slug, holder, slug)
+            ) from None
+        lock.seek(0)
+        lock.truncate()
+        lock.write(
+            "plan approve, pid %d since %s\n"
+            % (os.getpid(), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        )
+        lock.flush()
+        yield
+
+
 def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
+    """Approve a plan: run its baseline, then write the receipts, their ledger hashes, the snapshot and the block.
+
+    Everything runs under the plan's run lock, so a live driver is never moved or raced; a held lock refuses before
+    anything is written."""
     path = Path(path).resolve()
     repo = repository(path, repo)
-    load(path, repo=repo, verify=False)
+    model = load(path, repo=repo, verify=False)
+    with run_lock(repo, model.slug):
+        try:
+            return approve_locked(path, repo, model, state_dir, base)
+        except runner.RunnerError as error:
+            raise PlanError(
+                "approval: %s — the plan was not approved; fix that and run plan approve again"
+                % error
+            ) from None
+
+
+def approve_locked(path, repo, model, state_dir, base):
     data, _ = read_yaml(path)
     plan_bytes = canonical(data)
     files = payloads(oracle_dir(path))
     base_sha = git(repo, "rev-parse", "--verify", base + "^{commit}")
     sha = digest(identity(repo), base_sha, plan_bytes, files)
+    # A refusal here leaves no file behind: the runner writes nothing until the runs are accepted.
+    runs = baseline(model, repo, base_sha, sha, files)
+    if runs:
+        ledger, receipts = state_paths(repo, model.slug, state_dir)
+        for run, calibration in runs:
+            runner.persist(run, receipts, calibration)
+        runner.record_receipts(ledger, [run for run, _ in runs])
     email = subprocess.run(
         ["git", "-C", str(repo), "config", "user.email"], capture_output=True, text=True, timeout=15
     ).stdout.strip()

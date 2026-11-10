@@ -103,7 +103,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(record["source_revision"], "abc1234")
         self.assertEqual(record["elapsed_seconds"], 90.0)
         self.assertEqual(record["outcome"], "COMPLETE")
-        self.assertIs(record["verified"], True)
+        self.assertIs(record["claimed"], True)
         self.assertEqual(record["counters"]["retries"], 1)
         self.assertEqual(record["counters"]["tool_loops"], 1)
         self.assertEqual(record["counters"]["interventions"], 1)
@@ -114,12 +114,23 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual([g["source"] for g in record["gates"]], ["converge"])
 
     @pytest.mark.unit
+    def test_an_attempts_completion_is_claimed_never_verified_and_the_schema_says_so(self):
+        """Only the driver's receipt verifies; the record keeps what the worker's report claimed."""
+        evidence = load_evidence()
+        data = {"version": 1, "tasks": {"t1": task(status="COMPLETE")}}
+        record = evidence.attempts(data, [], "demo")[0]
+        self.assertNotIn("verified", record)
+        self.assertNotIn("verified", evidence.FIELDS)
+        self.assertIn("claimed", record)
+        self.assertEqual(record["schema_version"], 2)
+
+    @pytest.mark.unit
     def test_S2_an_attempt_that_ended_without_a_verified_report_is_not_verified(self):
         """orchestrator-engine/R2: P3.T3/S2"""
         evidence = load_evidence()
         data = {"version": 1, "tasks": {"t1": task(status="RELEASED", report=None)}}
         record = evidence.attempts(data, [], "demo")[0]
-        self.assertIs(record["verified"], False)
+        self.assertIs(record["claimed"], False)
         self.assertEqual(record["outcome"], "RELEASED")
         self.assertEqual(record["finished_at"], "2026-11-07T00:01:30+00:00")
         self.assertEqual(record["elapsed_seconds"], 90.0)
@@ -159,7 +170,7 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
         self.assertIn("t1", [r["task_id"] for r in records])
         record = self.attempt("t1")
         self.assertEqual(record["outcome"], "COMPLETE")
-        self.assertIs(record["verified"], True)
+        self.assertIs(record["claimed"], True)
         self.assertIsNotNone(record["elapsed_seconds"])
         self.assertGreaterEqual(record["elapsed_seconds"], 0)
         self.assertEqual(record["harness"], "claude")
@@ -180,7 +191,7 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
         records = self.attempts()
         self.assertIn("t1", [r["task_id"] for r in records])
         record = self.attempt("t1")
-        self.assertIs(record["verified"], False)
+        self.assertIs(record["claimed"], False)
         self.assertEqual(record["counters"]["interventions"], 1)
         self.assertEqual(record["counters"]["human_rescues"], 1)
         self.assertEqual(record["tokens"], {"input": None, "output": None, "cached": None})
