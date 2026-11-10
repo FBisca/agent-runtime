@@ -291,7 +291,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
     def test_S7_an_answer_naming_another_attempt_exits_2_writes_nothing_and_names_the_expected_id(
         self,
     ):
-        """orchestrator-engine/R2: drive-restart-recovery/S7"""
+        """orchestrator-engine/R31"""
         for wrong in ("t1", "t1d1", "t1r1", "t1o3"):
             with self.subTest(wrong=wrong):
                 path = self.write_open_request(task="t1r2")
@@ -306,7 +306,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
                 self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_S7_an_answer_naming_the_requests_attempt_or_no_attempt_is_written(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S7"""
+        """orchestrator-engine/R31"""
         for text in (
             "report under task_id t1r2",
             "see %s/t1r2/report.json" % self.run_dir,
@@ -367,7 +367,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
     def test_S6_an_answer_resumes_the_worker_on_the_same_task_id_and_its_report_passes_the_gate(
         self,
     ):
-        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        """orchestrator-engine/R30"""
         self.waits(
             [
                 self.blocked(),
@@ -391,7 +391,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S6_an_answer_to_a_gate_failure_resumes_the_same_attempt_with_the_findings(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        """orchestrator-engine/R30"""
         self.waits(
             [
                 self.worker_done(),
@@ -409,7 +409,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r2")["status"], "ACTIVE")
 
     def test_S6_a_report_written_before_the_answer_is_not_the_answered_rounds_news(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        """orchestrator-engine/R30"""
         blocked = self.blocked()
         blocked["write"] = [[str(self.run_dir / "t1" / "report.json"), self.report("t1")]]
         ended = wait_result([assignment("demo-t1", "working", "idle", id=resume_id("demo-t1", 1))])

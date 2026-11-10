@@ -40,7 +40,7 @@ class ReopenTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.plan_status(), "IN PROGRESS")
 
     def test_S5_a_refused_reopen_is_asked_about_and_dispatched_again_after_the_lead_s_todo(self):
-        """orchestrator-engine/R5: drive-restart-recovery/S5"""
+        """orchestrator-engine/R29"""
         self.pause()
         self.set_status("TO-DO")
         self.refuse(["demo-t1"])

@@ -37,6 +37,7 @@ the suite before a reviewer notices it in a diff.
 - **R204** WHEN the orchestrator member runs, THEN it keeps no state of its own: it writes nothing into the runtime's store and its wheel needs neither the runtime member nor the orchestrator's dependencies. (from uv-workspace-python-standards/S8)
 - **R205** WHEN the PRs that carry the session, resume and usage semantics merge or change, THEN those semantics stay pinned to their commits and keep their own regression tests, and the workspace contract does not duplicate them. (from uv-workspace-python-standards/S7)
 - **R206** WHEN the orchestrator member's own suite runs, THEN the workspace's pytest run collects it, the member's tests and sources stay type-clean by contract, and the suite's own harness measures the behaviour it stands for and not the machine's speed: a terminated run's tree counts as gone when nothing in it is still running. (from orchestrator-engine-suite/S3)
+- **R207** WHEN the orchestrator member's tests cite the orchestrator-engine requirement each scenario stands for, including the drive-restart recovery scenarios, THEN each test's docstring first line carries that `orchestrator-engine/R<m>` id, and the member's tests and sources stay type-clean under `ty`. (from drive-restart-recovery/S3)
 
 ## Coverage
 
