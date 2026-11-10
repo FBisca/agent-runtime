@@ -3528,6 +3528,12 @@ class Driver:
                 unit.upper(), ("BLOCKED" if blocked else "SKIPPED") + " · " + cell(reason)
             )
         self.write_status(unit.upper(), "IN PROGRESS")
+        answers = task.get("answers") or {}
+        if answers.get("state") == "working":
+            # The Lead decided a unit whose implementer went silent on the answers: the hand-over below puts that
+            # pane on a new assignment, so the old answers assignment can never report. Left `working`, pr-ready
+            # would wait on it for ever; `failed` is what the old exit path recorded.
+            self.mark(task_id, answers=dict(answers, state="failed"))
         finished = next((m for m in held if m["kind"] == "complete"), None)
         if finished and self.report_is_valid(task_id):
             self.log("held-acted", unit=unit, task=task_id, held="complete", acted="reported")
