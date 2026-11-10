@@ -156,6 +156,14 @@ class AcceptanceFixture(GateFixture):
         )
         return ["sh", "-c", script]
 
+    def merged_on_main(self, content):
+        """The person's merge, before the run: `content` is on origin's default branch and gh names that commit as the
+        pull request's merge commit. Returns the commit."""
+        subprocess.run(self.land(content), check=True, capture_output=True)
+        sha = self.git(self.origin, "rev-parse", "main")
+        self.prs([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
+        return sha
+
     def worker(self, content="done", covers=None):
         report = json.loads(self.report("t1"))
         report["covers"] = covers or self.COVERS
@@ -170,10 +178,9 @@ class AcceptanceFixture(GateFixture):
         ]
         return step
 
-    def reviewer(self, lands="done"):
+    def reviewer(self):
         step = report_wait("demo-t1-review", "complete")
         step["write"] = [[str(self.run_dir / "t1" / "review.json"), self.review2()]]
-        step["run"] = [self.land(lands)] if lands else []
         return step
 
     def archive_steps(self):
@@ -199,7 +206,9 @@ class AcceptanceFixture(GateFixture):
 
     def delivered(self, gate="done", lands="done", scenarios=None, tickets=None, archive=False):
         self.write_plan(scenarios, tickets)
-        self.drive([self.worker(gate), self.reviewer(lands)], archive)
+        if lands:
+            self.merged_on_main(lands)
+        self.drive([self.worker(gate), self.reviewer()], archive)
 
     def receipts(self, phase=None):
         found = [
@@ -288,7 +297,7 @@ class TicketGateTests(AcceptanceFixture, unittest.TestCase):
             [ticket("T1", ("S2",)), ticket("T2", ("S1",), blocked_by=["T1"])],
         )
         self.COVERS = {"S2": ["src/a/test_feature.py::test_feature"]}
-        self.waits([self.worker("done"), self.reviewer(None)])
+        self.waits([self.worker("done"), self.reviewer()])
         self.run_driver("--repo", str(self.repo))
         self.assertEqual(self.receipts("ticket"), [])
 
@@ -326,8 +335,22 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.write_plan()
         orphan = self.git(self.repo, "commit-tree", "-m", "orphan", "HEAD^{tree}")
         self.prs([{"state": "MERGED", "mergeCommit": {"oid": orphan}}])
-        self.drive([self.worker("done"), self.reviewer("done")])
-        self.assertEqual(self.history(), ["APPROVED", "RUNNING", "DELIVERED"])
+        self.drive([self.worker("done"), self.reviewer()])
+        self.assertEqual(
+            self.history(),
+            ["APPROVED", "RUNNING"],
+            "nothing is delivered until a commit holds the merge",
+        )
+        self.assertEqual(self.receipts("integration"), [])
+        (wake,) = [w for w in self.wakes() if w["kind"] == "integration-waits"]
+        self.assertIn("T1", wake["text"])
+
+    def test_S17_a_merge_commit_the_repository_does_not_have_is_not_contained_either(self):
+        self.write_plan()
+        self.drive(
+            [self.worker("done"), self.reviewer()]
+        )  # gh answers a merge commit that exists nowhere
+        self.assertEqual(self.history(), ["APPROVED", "RUNNING"])
         self.assertEqual(self.receipts("integration"), [])
         self.assertTrue([w for w in self.wakes() if w["kind"] == "integration-waits"])
 
@@ -430,7 +453,8 @@ class UnverifiedTests(AcceptanceFixture, unittest.TestCase):
         self.write_plan(
             [scenario("S1", check_item(check))], [ticket("T1", ("S1",), risk=["state"])]
         )
-        self.early(["MERGED"])
+        sha = self.merged_on_main("almost")
+        self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
         self.drive([self.worker("almost")])
         status = self.status()
         self.assertEqual(status["tickets"][0]["state"], "COMPLETE")

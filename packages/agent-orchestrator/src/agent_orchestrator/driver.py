@@ -4247,16 +4247,11 @@ class Driver:
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents):
             return 0
+        if self.plan_state() not in ("RUNNING", "DELIVERED"):
+            return 0
         steps = 0
-        with self.book() as data:
-            state = (data.get("plan") or {}).get("state")
-            if state == "RUNNING":
-                enter_plan_state(data, "DELIVERED")
-                steps, state = 1, "DELIVERED"
-        if state != "DELIVERED":
-            return steps
         try:
-            return steps + self.verify_integration()
+            return self.verify_integration()
         except (
             ValueError,
             OSError,
@@ -4272,8 +4267,9 @@ class Driver:
             return steps
 
     def pin_default_branch(self):
-        """Fetch the default branch and pin its SHA: (sha, the units whose merge the commit lacks, the units whose
-        merge commit this repository does not know). The pin is one commit for every evidence item of the run."""
+        """Fetch the default branch and pin its SHA: (sha, the units whose merge the commit does not contain). A merge
+        commit this repository does not have even after the fetch is not contained either. The pin is one commit for
+        every evidence item of the run."""
         remote, _, branch = self.args.base.partition("/")
         if branch:
             run(
@@ -4297,31 +4293,33 @@ class Driver:
                 for task in data["tasks"].values()
                 if task.get("merge_commit") and task["packet"].get("unit") != ARCHIVE
             }
-        lacking, unknown = [], []
+        lacking = []
         for unit, oid in sorted(merges.items()):
             known = subprocess.run(
                 ["git", "-C", str(self.repo), "cat-file", "-e", oid + "^{commit}"],
                 capture_output=True,
                 timeout=60,
             )
-            if known.returncode:
-                unknown.append(unit)
-            elif subprocess.run(
-                ["git", "-C", str(self.repo), "merge-base", "--is-ancestor", oid, sha],
-                capture_output=True,
-                timeout=60,
-            ).returncode:
+            if (
+                known.returncode
+                or subprocess.run(
+                    ["git", "-C", str(self.repo), "merge-base", "--is-ancestor", oid, sha],
+                    capture_output=True,
+                    timeout=60,
+                ).returncode
+            ):
                 lacking.append(unit)
-        return sha, lacking, unknown
+        return sha, lacking
 
     def verify_integration(self):
-        sha, lacking, unknown = self.pin_default_branch()
+        sha, lacking = self.pin_default_branch()
         if lacking:
             self.wake(
                 "integration-waits",
                 "plan",
-                "integration waits: %s does not contain the merge of %s; it verifies once the default branch does "
-                "(run again after it has been fetched)" % (self.args.base, ", ".join(lacking)),
+                "integration waits: %s does not contain the merge commit of %s; it verifies once the default branch "
+                "does (run again after it has been fetched)"
+                % (self.args.base, ", ".join(unit.upper() for unit in lacking)),
                 key="%s:%s" % (sha, ",".join(lacking)),
             )
             return 0
@@ -4334,8 +4332,9 @@ class Driver:
                 "digest": self.contract()[1].digest,
                 "at": now(),
                 "attempt": attempt,
-                "unknown_merges": unknown,
             }
+            # Delivered means a default branch that holds every merge was found, so the two states change together.
+            enter_plan_state(data, "DELIVERED")
             enter_plan_state(data, "VERIFYING")
         self.log("integration", sha=sha, tree=tree, attempt=attempt)
         event("verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12]))
