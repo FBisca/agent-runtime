@@ -92,7 +92,9 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
         self.plan.write_text(
             self.plan.read_text(encoding="utf-8").replace("IN PROGRESS", "TO-DO"), encoding="utf-8"
         )
-        self.run_driver()
+        # exit 1: the first drive left the worker idle with no report, and the restart strands that unit
+        # instead of finishing over it; the point here is that it spawns no second agent under the name
+        self.run_driver(expect=1)
         self.assertEqual([c["args"]["name"] for c in self.calls("spawn")], ["demo-t1"])
         self.assertEqual(self.ledger()["agents"]["demo-t1"]["assignment_id"], spawn_id("demo-t1"))
 

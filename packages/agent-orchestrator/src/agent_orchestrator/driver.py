@@ -1098,9 +1098,9 @@ class Driver:
         )  # tasks the last reconciliation could not settle: the run must not finish over them
         self.unfinished = set()  # the assignment ids the runtime's last `wait` listed as unfinished
         self.reconciled = False
-        self.started_at = (
-            now()
-        )  # an agent this drive bound itself is not one a dead drive left behind
+        self.touched = (
+            set()
+        )  # the agents this drive spawned, attached or resumed: no dead drive left them
         self.receipt = None
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
@@ -3121,6 +3121,7 @@ class Driver:
             data["agents"][name].update(
                 assignment_id=assignment_id, address=address, bound_at=now(), how=how
             )
+        self.touched.add(name)
         self.log("agent", name=name, role=role, unit=unit, how=how, assignment_id=assignment_id)
         return address, assignment_id
 
@@ -3328,6 +3329,7 @@ class Driver:
             with self.book() as data:
                 if name in (data.get("agents") or {}):
                     data["agents"][name]["assignment_id"] = assignment_id
+            self.touched.add(name)
             self.log(
                 "agent",
                 name=name,
@@ -3982,9 +3984,7 @@ class Driver:
 
     def bound_here(self, name):
         """True when this drive spawned or attached the agent: the runtime has had no `wait` round to list it yet."""
-        with self.book() as data:
-            bound = ((data.get("agents") or {}).get(name) or {}).get("bound_at")
-        return bool(bound) and bound >= self.started_at
+        return name in self.touched
 
     def strand(self, task_id, name, error):
         """The run cannot tell what became of this task's agent: the task stays open and the Lead hears of it."""
