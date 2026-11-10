@@ -57,6 +57,7 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 - **R213** WHEN `--repo <path> --base <rev> --head <rev>` are given, or omitted, THEN `changes.patch` holds `git diff --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ base..head`, independent of the user's diff config, and the manifest records the resolved shas; without them the manifest records null and no patch is written. (from agent-eval-p0/S7)
 - **R214** WHEN the same session id is found under two Claude project directories, THEN capture exits non-zero naming both paths, and nothing is written. (from agent-eval-p0/S7a)
 - **R215** WHEN capture writes, THEN every directory it creates, `<home>` and its parents included, is 0700 and every file 0600, and nothing is written inside a git working tree or outside `<home>` (env `AGENT_EVALS_HOME`, default `~/.local/state/agent-evals`). (from agent-eval-p0/S11)
+- **R216** WHEN `agent-eval add-label <case> --kind agent-judge <file>` reads a JSON label, THEN an invalid one exits 2 naming each failing field, a valid `label/1` one is written to `labels/agent-judge.json`, and an existing label is refused (exit 1, nothing written). (from agent-eval-p0/S12)
 
 ## Coverage
 
@@ -71,3 +72,4 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 | S7 | R213 | `test_S7_the_patch_holds_the_pinned_diff_and_the_manifest_the_resolved_shas`, `test_S7_the_patch_does_not_depend_on_the_users_diff_config`, `test_S7_without_them_the_manifest_records_null_and_no_patch`, `test_S7_partial_arguments_are_a_usage_error_and_write_nothing`, `test_S7_an_unresolvable_revision_fails_and_writes_nothing` |
 | S7a | R214 | `test_S7a_one_id_under_two_project_directories_is_refused_naming_both`, `test_S7a_a_duplicate_reached_through_the_chain_is_refused_too` |
 | S11 | R215 | `test_S11_directories_0700_and_files_0600_home_and_parents_included`, `test_S11_a_home_inside_a_git_working_tree_is_refused_and_nothing_is_written`, `test_S11_a_stray_dot_git_that_git_does_not_accept_is_not_a_working_tree`, `test_S11_a_home_inside_a_dot_git_directory_is_refused`, `test_S11_the_default_home_is_under_the_user_state_dir`, `test_S11_nothing_is_left_behind_when_a_write_fails` |
+| S12 | R216 | `test_S12_an_invalid_label_exits_2_naming_each_failing_field`, `test_S12_an_unreadable_label_file_exits_2`, `test_S12_a_valid_label_is_written_to_labels_agent_judge_json`, `test_S12_an_existing_label_is_refused_and_left_unchanged` |
