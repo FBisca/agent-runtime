@@ -319,13 +319,30 @@ class RecoveryTests(GateFixture, unittest.TestCase):
                 )
                 self.assertEqual(self.task()["release_reason"], "orphaned: " + answer)
 
-    def test_S2_a_live_terminal_is_left_alone(self):
+    def test_S2_a_live_terminal_is_not_released_or_spawned_over(self):
         """orchestrator-engine/R2: drive-restart-recovery/S2"""
         self.crashed("working")
-        self.run_driver()
+        self.run_driver(expect=1)
         self.assertEqual(self.events("orphaned"), [])
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.task()["status"], "ACTIVE")
+
+    def test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S2a"""
+        self.crashed("working")
+        self.run_driver(expect=1)
+        self.assertEqual(len(self.events("finish")), 1, "only the first, healthy drive finished")
+        (stranded,) = self.wakes_of("stranded")
+        self.assertIn("t1", stranded["text"])
+        self.assertIn("working", stranded["text"])
+
+    def test_S2a_a_second_restart_over_the_same_stranded_task_exits_non_zero_too(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S2a"""
+        self.crashed("unreadable")
+        self.run_driver(expect=1)
+        self.run_driver(expect=1)
+        self.assertEqual(len(self.events("finish")), 1, "only the first, healthy drive finished")
+        self.assertEqual(len(self.wakes_of("stranded")), 1, "the Lead is told once")
 
     def test_S2a_a_loss_the_loop_meets_before_it_would_finish_is_reconciled_first(self):
         """orchestrator-engine/R2: drive-restart-recovery/S2a"""

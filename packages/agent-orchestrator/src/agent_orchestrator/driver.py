@@ -1098,6 +1098,9 @@ class Driver:
         )  # tasks the last reconciliation could not settle: the run must not finish over them
         self.unfinished = set()  # the assignment ids the runtime's last `wait` listed as unfinished
         self.reconciled = False
+        self.started_at = (
+            now()
+        )  # an agent this drive bound itself is not one a dead drive left behind
         self.receipt = None
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
@@ -1207,7 +1210,7 @@ class Driver:
                 dispatched = self.dispatch_ready(plan)
             if idle and not dispatched and not acted and not self.awaiting():
                 # An open task whose agent the runtime no longer lists is work the run would otherwise drop.
-                dispatched = self.reconcile()
+                dispatched = self.reconcile(finishing=True)
                 if not dispatched:
                     return
             wait = {"target": "all", "timeout": self.args.wait_seconds}
@@ -3977,6 +3980,12 @@ class Driver:
             "status answered unknown: %s" % (cell(error, 200) if error else "no reason given")
         )
 
+    def bound_here(self, name):
+        """True when this drive spawned or attached the agent: the runtime has had no `wait` round to list it yet."""
+        with self.book() as data:
+            bound = ((data.get("agents") or {}).get(name) or {}).get("bound_at")
+        return bool(bound) and bound >= self.started_at
+
     def strand(self, task_id, name, error):
         """The run cannot tell what became of this task's agent: the task stays open and the Lead hears of it."""
         unit = self.unit_of(task_id)
@@ -3985,14 +3994,20 @@ class Driver:
             "stranded %s: the agent %s of task %s cannot be settled: %s -> nothing was released or spawned; "
             "look at the terminal, then restart the drive" % (unit, name, task_id, cell(error, 300))
         )
-        if self.wake("stranded", unit, text, key="%s:%s" % (task_id, error)):
-            self.errors.append("%s: %s" % (task_id, error))
+        self.wake("stranded", unit, text, key="%s:%s" % (task_id, error))  # once per task and error
+        reason = "%s: %s" % (task_id, error)
+        if (
+            reason not in self.errors
+        ):  # the exit code follows what is stranded now, not what the Lead was told first
+            self.errors.append(reason)
         self.log("stranded", unit=unit, task=task_id, name=name, error=str(error)[:500])
         event("%s stranded: %s" % (task_id, error))
 
-    def reconcile(self):
+    def reconcile(self, finishing=False):
         """Settle every open task whose assignment `wait` does not list. Returns how many it acted on; a task it
-        cannot settle is left in `self.stranded`."""
+        cannot settle is left in `self.stranded`. At startup a live terminal is left alone (its message may still
+        come); when the run would finish, a terminal still at work that the runtime does not list, and that a
+        dead drive left behind, is a unit nobody waits on."""
         self.stranded = set()
         acted = 0
         for task_id, role, name, assignment_id in self.in_flight():
@@ -4004,7 +4019,11 @@ class Driver:
                 self.strand(task_id, name, str(error))
                 continue
             if not lost:
-                continue  # the terminal is live: its message reaches `wait` on its own
+                if finishing and said not in ("idle", "done") and not self.bound_here(name):
+                    # a turn that ended is the ended-turn path's to read; a terminal still at work that no `wait`
+                    # tracks would be left running when the run finishes
+                    self.strand(task_id, name, "live but not an assignment of this run: %s" % said)
+                continue
             unit = self.unit_of(task_id)
             self.log(
                 "orphaned",
