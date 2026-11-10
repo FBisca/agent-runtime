@@ -1,5 +1,5 @@
 # Agent runtime
-Paths: .claude-plugin/, packages/agent-runtime/src/agent_runtime/, server/, hooks/, bin/, install.sh
+Paths: .claude-plugin/, packages/agent-runtime/src/agent_runtime/, packages/agent-runtime/tests/, server/, hooks/, bin/, install.sh
 
 > **Repository move (2026-11-03).** The runtime now lives in its own repository, which supersedes D1 of the archived [follow-ups plan](../plans/2026-10-30-agent-runtime-followups.plan.md) ("the runtime stays in dotfiles"). Earlier plans and requirements below refer to the original layout.
 
