@@ -1,6 +1,7 @@
 """agent-eval: freeze a coding-agent run into a local case (outside every repo, 0700/0600, immutable)."""
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from agent_eval.capture import capture
 from agent_eval.errors import CaptureError
 from agent_eval.label import KINDS, add_label
+from agent_eval.label2 import EXAMPLE
 
 CAPTURE_EPILOG = """\
 --session  a Claude session id, or a unique prefix; the sessions its job's resume and fork links
@@ -28,10 +30,33 @@ session's files after 30 days: capture warns when one is more than 25 days old.
 """
 
 
-LABEL_EPILOG = """\
-FILE is a label/1 JSON object; it is written to <case>/labels/<kind>.json. An invalid file exits 2
-naming each failing field; a case without a label of that kind is the only thing that accepts one.
+LABEL_EPILOG = (
+    """\
+FILE is a JSON object, label/1 (source `transcribed`) or label/2; it is written to
+<case>/labels/<kind>.json, and a case takes one label of each kind. An invalid file exits 2 naming
+each failing field by its path (dimensions.quality.findings[0].evidence[1].quote), and nothing is
+written.
+
+A label/2 is the judge's whole output, and agent-eval holds it against the case:
+  evidence   every ref names a `file` the case manifest lists (a transcript, an orchestrate file) or
+             changes.patch, a `quote` of at most 300 characters that occurs verbatim in that file's
+             decompressed text, and optionally the `line` it starts on (1-based).
+  dimensions a scored dimension (1.0, 0.8, 0.4 or 0.2) has a finding with evidence; below 1.0 it has a
+             finding with `deduction: true`, and every such finding has evidence; a null score has
+             label `insufficient_evidence`, a rationale and no deduction, and only a null score has it.
+  score      the weighted mean (quality .35, tests .25, efficiency .25, communication .15) of the
+             scored dimensions, renormalised, rounded half up to 2 decimals on the exact decimal mean
+             (float round() differs on some); null only when none is scored.
+  verdict    BLOCKED when `gates` is not empty, else INCOMPLETE when quality or tests is null, else
+             PASS when every scored dimension and the score are at least 0.8, else FAIL.
+  subject    `subject.session` is a session of the case manifest.
+
+A complete label/2:
+
 """
+    + json.dumps(EXAMPLE, indent=2)
+    + "\n"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     label = commands.add_parser(
         "add-label",
-        help="store a judge's label/1 JSON beside a case",
+        help="store a judge's label/1 or label/2 JSON beside a case",
         epilog=LABEL_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

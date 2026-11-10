@@ -1,0 +1,74 @@
+schema: plan/1
+slug: agent-eval-label-evidence
+goal: >-
+  A judge's label carries the reasons and evidence behind its score, so every deduction can be traced back to a
+  verbatim line in the case it judged. `label/2` holds the score-agent rubric's whole output (verdict, gates, each
+  dimension's anchor, rationale and findings, top issue, smallest improvement, probable cause, judge provenance), and
+  `agent-eval add-label` refuses a label whose evidence is not in the case or whose score and verdict do not follow
+  the rubric.
+spec: docs/specs/agent-eval.md
+outcome: [S7]
+
+scenarios:
+  # T1: label/2 in agent-eval
+  - id: S1
+    when: "`agent-eval add-label <case> --kind agent-judge <file>` reads a `label/2` JSON"
+    then: "a valid one is written to `labels/agent-judge.json` as given; an invalid one exits 2 naming each failing field by its path (`dimensions.quality.findings[0].evidence[1].quote`), and nothing is written. A valid label has `subject.session`, `judge` (`skill`, 64-hex `rubric_sha256`, `model`), `judged_at` (a real date), `source: judged`, `verdict` PASS|FAIL|BLOCKED|INCOMPLETE, `score` (0..1 or null), `gates`, the four dimensions (each `label`, `score` 1.0|0.8|0.4|0.2|null, `rationale`, `findings`), `top_issue`, `smallest_improvement` and `probable_cause` (`cause` model|harness|repo|instructions|mixed|unknown, `confidence` low|medium|high); any other field is refused"
+  - id: S2
+    when: "a `label/2` evidence ref (`file`, optional `line`, required `quote` of at most 300 characters) is checked"
+    then: "it is accepted only when `file` is a file of the case listed in its manifest (a transcript, an orchestrate file) or `changes.patch`, and `quote` occurs verbatim in that file's decompressed text, on line `line` when given; a ref to an absolute path, a path leaving the case, an unlisted file, a line past the end or a quote that is not there exits 2 naming the ref"
+  - id: S3
+    when: "a dimension of a `label/2` is checked"
+    then: "a scored dimension has at least one finding with evidence; a dimension scored below 1.0 has at least one finding with `deduction: true`; a finding's `kind` is proven|risk|strength; a null score has label `insufficient_evidence`, a rationale and no deduction; anything else exits 2 naming the dimension"
+  - id: S4
+    when: "the score and verdict of a `label/2` are checked"
+    then: "`score` equals the weighted mean (quality .35, tests .25, efficiency .25, communication .15) renormalised over the scored dimensions, rounded to 2 decimals, and is null only when none is scored; `verdict` is BLOCKED exactly when `gates` is non-empty (each gate with `gate`, `rationale` and evidence), else INCOMPLETE when quality or tests is null, else PASS when every scored dimension and the score are at least 0.8, else FAIL; a mismatch exits 2 naming the expected value"
+  - id: S5
+    when: "a label names its subject or source"
+    then: "a `label/2` whose `subject.session` is not a session of the case manifest exits 2 naming it; a `label/1` with `source: judged` exits 2 saying a judged label is `label/2`; a `label/1` with `source: transcribed` is still accepted as before"
+  - id: S6
+    when: "`agent-eval add-label --help` is read, or the spec's case layout"
+    then: "both show `labels/<kind>.json` and a complete `label/2` example, and the spec names Pydantic as the package's one dependency"
+
+  # T2: the judge writes label/2 (agent-skills, by the Lead)
+  - id: S6a
+    when: "`score-agent` is given a case directory"
+    then: "it judges from the case's own files, writes a `label/2` JSON whose every evidence ref points into the case with a verbatim quote, and prints its score block rendered from that label"
+    evidence:
+      human: "the Lead runs score-agent on a captured case and `agent-eval add-label` accepts its output without edits"
+
+  # Outcome (T3, person)
+  - id: S7
+    when: "the case `orchestrator-silent-idle` is judged again"
+    then: "`labels/agent-judge.json` holds a `label/2` from score-agent with `source: judged`, accepted by `add-label`, whose every deduction's quote can be found in the case"
+    evidence:
+      human: "Felippe opens the label, follows two deductions to their quoted lines in the case, and confirms the 0600 mode"
+
+tickets:
+  - id: T1
+    delivers: "`label/2` (strict Pydantic, beside `label/1`) and `add-label` checks: field shape, evidence refs resolved against the case and its manifest with verbatim quotes, dimension rules, score recomputation and verdict rule, subject in the manifest, `label/1` limited to `source: transcribed`; the spec's case layout, a `label/2` example in the spec and in `add-label --help`, and the spec's dependency line"
+    satisfies: [S1, S2, S3, S4, S5, S6]
+    paths:
+      - packages/agent-eval/
+      - docs/specs/agent-eval.md
+    size: regular
+    difficulty: complex
+  - id: T2
+    delivers: "score-agent case mode in agent-skills (`skills/score-agent/SKILL.md`): judge from a case directory, write `label/2`, render the score block from it; done by the Lead outside the driver (another repository)"
+    satisfies: [S6a]
+    blocked_by: [T1]
+    paths:
+      - docs/specs/agent-eval.md
+    owner: Felippe
+  - id: T3
+    delivers: "Re-judge `orchestrator-silent-idle` with score-agent's case mode and store the `label/2`; the `label/1` written there on 2026-11-10 before evidence existed is removed by Felippe first (writes under ~/.local/state/agent-evals only)"
+    satisfies: [S7]
+    blocked_by: [T1, T2]
+    paths:
+      - docs/specs/agent-eval.md
+    owner: Felippe
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-10T16:02:46.058901+00:00'
+  base: 9deb8f2ef140bcf05434815f9257ad1e75dc58a2
+  digest: 446558ee9b98e6f86fc501bb737b3c4c82b9efccf5ba020b6a2ffc50f41812a6

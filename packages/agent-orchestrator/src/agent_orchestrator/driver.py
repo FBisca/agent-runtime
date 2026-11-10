@@ -19,7 +19,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import contracts, events, evidence, routes, runner, verify
@@ -1033,7 +1033,9 @@ def describe(item):
             item["command"],
             item["log_path"],
         )
-    where = "%s:%s " % (item["file"], item["line"]) if item.get("file") else ""
+    # Only a blocking item must carry a line; a concern, question or nit may name just its file.
+    place = "%s:%s" % (item["file"], item["line"]) if item.get("line") else item.get("file")
+    where = place + " " if place else ""
     line = "%s%s%s: %s%s" % (
         item["id"],
         " (%s)" % item["kind"] if item.get("kind") else "",
@@ -1089,6 +1091,12 @@ ARCHIVE_ACCEPTANCE = [
     "Every test is renamed from S<n> to <area>/R<m>",
     "The plan's Status is ARCHIVED",
     "converge --final passes",
+]
+YAML_ARCHIVE_ACCEPTANCE = [
+    "Every scenario is a requirement with provenance in the plan's spec; no new spec file is created",
+    "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies",
+    "Each promote oracle is byte-identical at its place",
+    "No test is renamed and no Status is written into plan.yaml",
 ]
 
 
@@ -1395,12 +1403,16 @@ class Driver:
         self.last_tick = moment
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
-            if task["status"] in ("COMPLETE", "RELEASED") or task.get("gate") in PARKED:
+            # The Lead already has a `requested` unit, and a merge is a person's step (the pr-ready wake asked).
+            skipped = (
+                task["status"] in ("COMPLETE", "RELEASED")
+                or task.get("gate") in PARKED
+                or task.get("gate") in ("requested", "awaiting-merge")
+            )
+            if skipped:
+                # A skipped unit that returns to `working` starts a fresh window, not the one it left.
+                self.working_since.pop(task_id, None)
                 continue
-            if task.get("gate") == "requested":
-                continue  # the Lead already has it
-            if task.get("gate") == "awaiting-merge":
-                continue  # the merge is a person's step, and the pr-ready wake already asked for it
             working = self.working_minutes(task_id, assignments, moment)
             if working is not None and working < self.args.working_minutes:
                 # A long test is one turn: the runtime says the agent is busy, so there is nothing to ask.
@@ -4421,11 +4433,22 @@ class Driver:
         model = self.step_model("archive", self.routes[klass].model)
         effort = self.step_effort("archive", effort)
         checkout = self.worktree(name, "feat/" + name)
-        owns = ["docs/specs/", "docs/plans/"]
-        for ticket in agents:
-            owns += [
-                p.strip() for p in ticket["Paths"].split(",") if p.strip() and p.strip() not in owns
-            ]
+        if self.model:
+            owns = (
+                [self.model.spec]
+                + [rel for rel, _ in self.yaml_copies()]
+                + [rel for rel, _ in self.yaml_places(self.model)]
+            )
+            acceptance = YAML_ARCHIVE_ACCEPTANCE
+        else:
+            owns = ["docs/specs/", "docs/plans/"]
+            for ticket in agents:
+                owns += [
+                    p.strip()
+                    for p in ticket["Paths"].split(",")
+                    if p.strip() and p.strip() not in owns
+                ]
+            acceptance = ARCHIVE_ACCEPTANCE
         packet = {
             "task_id": ARCHIVE,
             "worker": name,
@@ -4434,7 +4457,7 @@ class Driver:
             "checkout": str(checkout),
             "backend": backend,
             "owns": owns,
-            "acceptance": ARCHIVE_ACCEPTANCE,
+            "acceptance": acceptance,
             "checks": list(self.args.gate),
             "depends_on": [],
             "unit": ARCHIVE,
@@ -4471,11 +4494,116 @@ class Driver:
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
 
+    def narrative_path(self):
+        """A YAML plan's Markdown narrative, beside it: <stem>.plan.md."""
+        return self.plan_path.with_name(self.plan_path.name.removesuffix(".plan.yaml") + ".plan.md")
+
+    def yaml_copies(self):
+        """(repo-relative destination, approved source) for the plan files the archive worker copies byte-identical.
+        The narrative is copied only when the plan has one."""
+        oracle = yaml_plan.oracle_dir(self.plan_path)
+        copies = [(self.plan_rel(), self.plan_path)]
+        if self.narrative_path().exists():
+            copies.append((self.beside_plan(self.narrative_path()), self.narrative_path()))
+        copies.append((self.beside_plan(oracle) + "/", oracle))
+        return copies
+
+    def yaml_places(self, model):
+        """(repo-relative destination, approved source) for each promote oracle file, at its place. The oracle
+        keeps its source name without the `.oracle` suffix: only the promoted name is collected as a test."""
+        oracle = yaml_plan.oracle_dir(self.plan_path)
+        places = []
+        for scenario in model.scenarios:
+            evidence = scenario.evidence
+            if evidence and evidence.promote and evidence.place:
+                for name in evidence.oracle:
+                    placed = name.removesuffix(".oracle")
+                    places.append((evidence.place.rstrip("/") + "/" + placed, oracle / name))
+        return places
+
+    def beside_plan(self, path):
+        """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
+        the plan itself sits outside the repository."""
+        return (PurePosixPath(self.plan_rel()).parent / Path(path).name).as_posix()
+
+    def held_requirements(self, spec):
+        """This plan's scenarios the spec already holds, each with its requirement: {"S3": "R220"}."""
+        try:
+            text = Path(spec).read_text(encoding="utf-8")
+        except OSError:
+            return {}
+        found = re.findall(
+            r"^- \*\*(R\d+)\*\*.*\(from %s/(S\w+)\)" % re.escape(self.slug), text, re.MULTILINE
+        )
+        return {sid: rid for rid, sid in found}
+
+    def scenario_steps(self, spec, plan):
+        """The brief's steps and scenario list: a ticket may have written its scenarios into the spec already, and
+        appending them again duplicates them."""
+        held = self.held_requirements(spec)
+        pending = [text for sid, text in plan["scenarios"].items() if sid not in held]
+        steps = []
+        if held:
+            steps.append(
+                "- Already in the spec with their provenance, keep as they are: %s."
+                % ", ".join("%s (%s)" % (sid, rid) for sid, rid in held.items())
+            )
+        if not pending:
+            return steps + ["- Every scenario is already in the spec: append none."], [""]
+        steps.append(
+            "- Append each scenario below as a requirement with the next free number and its provenance: "
+            "`- **R4** WHEN ..., THEN ... (from %s/S3)`." % self.slug
+        )
+        return steps, ["Scenarios, verbatim:", "", *pending, ""]
+
+    def yaml_archive_text(self, model, plan, packet, task_dir):
+        """The archive brief for a YAML plan: the plan's spec is the living spec; plan files and oracles are copied."""
+        copies = "\n".join(
+            "- Copy byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
+            for rel, source in self.yaml_copies()
+        )
+        places = "\n".join(
+            "- Place byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
+            for rel, source in self.yaml_places(model)
+        )
+        steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / model.spec, plan)
+        return "\n".join(
+            [
+                "Contract: %s" % (self.run_dir / "contract.md"),
+                "Report: %s" % (task_dir / "report.json"),
+                "",
+                "# Archive %s into its living spec" % self.slug,
+                "",
+                "Plan: %s (repo path `%s`)." % (self.plan_path, self.plan_rel()),
+                "Checkout: %s on branch feat/%s (new, from %s). Work only here."
+                % (packet["checkout"], packet["worker"], self.args.base),
+                "Owns (edit nothing else): %s." % ", ".join(packet["owns"]),
+                "",
+                "Steps:",
+                "- The living spec is `%s`, named by plan.yaml. Do not create a new spec file."
+                % model.spec,
+                *steps,
+                copies,
+                places,
+                "- Do not write a Status into plan.yaml, and rename no test.",
+                "- Run before you report COMPLETE: %s. Then open a pull request against %s."
+                % (
+                    "; ".join(packet["checks"]) or "the repository's full CI gate",
+                    self.args.base.partition("/")[2],
+                ),
+                "",
+                *verbatim,
+            ]
+        )
+
     def archive_text(self, plan, packet, task_dir):
+        if self.model:
+            return self.yaml_archive_text(self.model, plan, packet, task_dir)
         text = self.plan_path.read_text(encoding="utf-8")
         found = re.search(r"Living spec:\s*`([^`]+)`", text)
         spec = found.group(1) if found else "docs/specs/%s.md" % self.slug
         area = Path(spec).stem
+        steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / spec, plan)
         return "\n".join(
             [
                 "Contract: %s" % (self.run_dir / "contract.md"),
@@ -4493,8 +4621,7 @@ class Driver:
                 "- Create the living spec `%s` if it is missing. Its first lines are `# %s` and `Paths: src/area/, tests/area/**`: "
                 "the comma-separated code paths the area covers. Converge fails a spec without a parseable `Paths:` line."
                 % (spec, area.title()),
-                "- Append each scenario below as a requirement with the next free number and its provenance: "
-                "`- **R4** WHEN ..., THEN ... (from %s/S3)`." % self.slug,
+                *steps,
                 "- Rename each test's `S<n>` to `%s/R<m>`: in the test name, or in a Python test's docstring first line."
                 % area,
                 "- Set the plan's `Status: ARCHIVED %s`." % now()[:10],
@@ -4505,10 +4632,7 @@ class Driver:
                 ),
                 "The driver then runs `converge.py --final` on this branch; a FAIL comes back as a fix round.",
                 "",
-                "Scenarios, verbatim:",
-                "",
-                *plan["scenarios"].values(),
-                "",
+                *verbatim,
             ]
         )
 

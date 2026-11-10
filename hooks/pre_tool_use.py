@@ -163,6 +163,8 @@ HC_DENIED = {"run", "send", "kill", "rm"}
 HC_ASKED = {"keys", "interrupt"}
 MUTATING_TOOLS = {"spawn", "message", "resume", "stop", "report", "task"}
 FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+PATCH_TOOLS = {"apply_patch"}  # Codex file edits; the patch text names every path it touches
+PATCH_PATH = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$", re.M)
 SESSION_TOOLS = {"wait"}  # subagents may not block on the lead's inbox
 TOOL_NAME = re.compile(r"^mcp__(?:plugin_agent-runtime_)?agent-runtime__(\w+)$")
 
@@ -250,6 +252,34 @@ def approve_verdict(command):
         if any(a == "plan" and b == "approve" for a, b in zip(words, words[1:])):
             return APPROVE_REASON
     return None
+
+
+def patch_text(tool_input):
+    """The patch an apply_patch call carries. Codex versions put it under `patch`, `command` (a string or an
+    argv list) or `input`, or send the bare string; read whichever is there."""
+    if isinstance(tool_input, str):
+        return tool_input
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in ("patch", "command", "input"):
+        value = tool_input.get(key)
+        if isinstance(value, list):
+            value = "\n".join(item for item in value if isinstance(item, str))
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def edited_paths(name, tool_input, cwd):
+    """Every path a file-edit call writes, made absolute against the session's cwd when relative."""
+    if name in PATCH_TOOLS:
+        paths = PATCH_PATH.findall(patch_text(tool_input))
+    else:
+        tool_input = tool_input if isinstance(tool_input, dict) else {}
+        path = tool_input.get("file_path") or tool_input.get("notebook_path")
+        paths = [path] if isinstance(path, str) else []
+    base = cwd if isinstance(cwd, str) else ""
+    return [os.path.join(base, os.path.expanduser(path)) for path in paths]
 
 
 def spawned_worker():
@@ -426,13 +456,10 @@ def main(argv=()):
     try:
         data = json.load(sys.stdin)
         name = data.get("tool_name", "Bash")
-        if name in FILE_TOOLS:
-            tool_input = data.get("tool_input") or {}
-            path = tool_input.get("file_path") or tool_input.get("notebook_path")
-            guarded = (
-                isinstance(path, str)
-                and mentions_receipts(path)
-                and (bool(data.get("agent_id")) or spawned_worker())
+        if name in FILE_TOOLS | PATCH_TOOLS:
+            paths = edited_paths(name, data.get("tool_input"), data.get("cwd"))
+            guarded = any(mentions_receipts(path) for path in paths) and (
+                bool(data.get("agent_id")) or spawned_worker()
             )
             result = ("deny", RECEIPTS_REASON) if guarded else None
         elif name == "Bash":

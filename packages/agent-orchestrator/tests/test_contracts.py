@@ -421,3 +421,15 @@ class ContractParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DescribeTests(unittest.TestCase):
+    """A review item that is not blocking may name a file without a line: the fix round shows it as is."""
+
+    def test_a_concern_with_a_file_and_no_line_is_described(self):
+        from agent_orchestrator import driver
+
+        item = {"id": "C1", "kind": "concern", "file": "src/a.py", "summary": "racy"}
+        self.assertEqual(driver.describe(item).splitlines()[0], "C1 (concern): src/a.py racy")
+        lined = {**item, "line": 7}
+        self.assertEqual(driver.describe(lined).splitlines()[0], "C1 (concern): src/a.py:7 racy")

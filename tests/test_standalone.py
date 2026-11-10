@@ -158,6 +158,8 @@ class InstallWiringTest(unittest.TestCase):
             pre = cfg["hooks"]["PreToolUse"]
             self.assertRegex("Bash", pre[0]["matcher"])
             self.assertRegex("mcp__agent-runtime__task", pre[1]["matcher"])
+            self.assertRegex("apply_patch", pre[2]["matcher"])  # yaml-eec D31: Codex file edits
+            self.assertNotRegex("apply_patch_x", pre[2]["matcher"])
             for entry in pre:
                 hook = entry["hooks"][0]
                 self.assertEqual(hook["timeout"], 5)

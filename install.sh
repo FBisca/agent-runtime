@@ -602,6 +602,15 @@ type = "command"
 command = "\\"$hook\\" --cli codex"
 timeout = 5
 statusMessage = "Checking agent-runtime caller"
+
+[[hooks.PreToolUse]]
+matcher = "^apply_patch\$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "\\"$hook\\" --cli codex"
+timeout = 5
+statusMessage = "Checking file edits"
 EOT
 
 }
