@@ -1,6 +1,6 @@
 # Python workspace contracts
 
-Paths: pyproject.toml, uv.lock, packages/agent-runtime/, packages/agent-orchestrator/, packages/agent-orchestrator/tests/, .github/workflows/ci.yml, tests/test_workspace_isolation.py, tests/test_orchestrator_contract.py, tests/test_rollback_contract.py
+Paths: pyproject.toml, uv.lock, packages/agent-runtime/pyproject.toml, packages/agent-orchestrator/pyproject.toml, .github/workflows/ci.yml, tests/test_workspace_isolation.py, tests/test_orchestrator_contract.py, tests/test_rollback_contract.py
 
 The runtime and the orchestrator are two installable members of one uv workspace. The runtime stays
 standard-library only in production; the orchestrator owns the typed, Pydantic-backed contracts and the
