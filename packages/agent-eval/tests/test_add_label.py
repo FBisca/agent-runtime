@@ -1,5 +1,5 @@
 """Add a judge's label to a case: the `label/1` shape, refusal of an invalid or existing label
-(agent-eval-p0/S12)."""
+(agent-eval-p0/R219)."""
 
 import json
 import stat
@@ -37,7 +37,7 @@ def write_json(path, data) -> str:
     return str(path)
 
 
-def test_S12_an_invalid_label_exits_2_naming_each_failing_field(home, tmp_path, capsys):
+def test_R219_an_invalid_label_exits_2_naming_each_failing_field(home, tmp_path, capsys):
     bad = valid_label()
     bad["verdict"] = "MAYBE"
     bad["score"] = 1.5
@@ -64,8 +64,8 @@ def test_S12_an_invalid_label_exits_2_naming_each_failing_field(home, tmp_path, 
     ],
     ids=["impossible-month", "impossible-day", "python-name-for-schema"],
 )
-def test_S12_a_label_valid_only_in_form_exits_2(home, tmp_path, capsys, change, field):
-    """agent-eval-p0/S12
+def test_R219_a_label_valid_only_in_form_exits_2(home, tmp_path, capsys, change, field):
+    """agent-eval-p0/R219
 
     label/1 has one spelling per field and real dates: a pattern-shaped date or the model's own
     field name is invalid, not silently accepted."""
@@ -85,7 +85,7 @@ def test_S12_a_label_valid_only_in_form_exits_2(home, tmp_path, capsys, change, 
     assert not (home / "cases" / CASE / "labels").exists()
 
 
-def test_S12_an_unreadable_label_file_exits_2(home, tmp_path, capsys):
+def test_R219_an_unreadable_label_file_exits_2(home, tmp_path, capsys):
     file = tmp_path / "label.json"
     file.write_text("{not json", encoding="utf-8")
 
@@ -95,7 +95,7 @@ def test_S12_an_unreadable_label_file_exits_2(home, tmp_path, capsys):
     assert "label.json" in capsys.readouterr().err
 
 
-def test_S12_a_valid_label_is_written_to_labels_agent_judge_json(home, tmp_path, capsys):
+def test_R219_a_valid_label_is_written_to_labels_agent_judge_json(home, tmp_path, capsys):
     file = write_json(tmp_path / "label.json", valid_label())
 
     code = main(["add-label", CASE, "--kind", "agent-judge", file])
@@ -108,7 +108,7 @@ def test_S12_a_valid_label_is_written_to_labels_agent_judge_json(home, tmp_path,
     assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
 
 
-def test_S12_an_existing_label_is_refused_and_left_unchanged(home, tmp_path, capsys):
+def test_R219_an_existing_label_is_refused_and_left_unchanged(home, tmp_path, capsys):
     file = write_json(tmp_path / "label.json", valid_label())
     assert main(["add-label", CASE, "--kind", "agent-judge", file]) == 0
     target = home / "cases" / CASE / "labels" / "agent-judge.json"
