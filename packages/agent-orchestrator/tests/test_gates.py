@@ -240,6 +240,28 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertIn("complete result has failed checks: pytest", request["reason"])
         self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
 
+    def test_S5_a_report_the_ledger_cannot_read_asks_the_lead_and_the_driver_exits_clean(self):
+        """orchestrator-engine/R2: merged-unit-completes/S5 — (a report with no `remaining`, or a check with no outcome)"""
+        for broken in (
+            {"remaining": None},
+            {"checks": [{"command": "pytest"}]},
+        ):
+            with self.subTest(broken=broken):
+                report = json.loads(self.report("t1"))
+                if "remaining" in broken:
+                    del report["remaining"]
+                else:
+                    report.update(broken)
+                self.waits(
+                    [
+                        self.worker_done("t1", tests=True, report=json.dumps(report)),
+                        self.skipped(),
+                    ]
+                )
+                self.run_driver()
+                self.assertEqual(self.request()["event"], "report")
+                self.setUp()
+
     def test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6"""
         self.waits([self.worker_done(tests=True)])

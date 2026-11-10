@@ -294,16 +294,19 @@ def merged_snapshot(path):
 def require_completable(task, report):
     """The rules a report meets to be COMPLETE, apart from the ledger's own state. Raises ValueError naming the first
     that fails; `checkpoint` and the report gate share it, so a report is refused for the same reason in both."""
-    checks = report["checks"]
+    # Total over a schema-valid report: the report gate runs before the ledger's structural checks, which
+    # turn a malformed `remaining` or check into the Lead request they always did.
+    checks = [c for c in report.get("checks") or [] if isinstance(c, dict)]
     require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
-    require(not report["remaining"], "complete result has remaining work")
-    require(
-        all(c["outcome"] != "failed" for c in checks),
-        "complete result has failed checks: "
-        + ", ".join(c["command"] for c in checks if c["outcome"] == "failed"),
-    )
+    require(not report.get("remaining"), "complete result has remaining work")
+    failed = [str(c.get("command")) for c in checks if c.get("outcome") == "failed"]
+    require(not failed, "complete result has failed checks: " + ", ".join(failed))
     required = {normalise_check(c): c for c in task["packet"]["checks"]}
-    passed = {normalise_check(c["command"]) for c in checks if c["outcome"] == "passed"}
+    passed = {
+        normalise_check(c["command"])
+        for c in checks
+        if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
+    }
     missing = [command for key, command in required.items() if key not in passed]
     require(
         not missing,
