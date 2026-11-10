@@ -1327,7 +1327,7 @@ class Driver:
             )  # before the plan is read: a merge it makes unblocks work in this same round
             plan, valid = self.current_plan()
             if valid:
-                acted += self.integrate(plan)
+                acted += self.integrate(plan) + self.advance_mutations()
                 dispatched = (
                     self.reopen_parked(plan)
                     + self.dispatch_ready(plan)
@@ -1527,6 +1527,14 @@ class Driver:
                 if (data.get("gaps") or {}).get("assignment_id") == assignment_id:
                     data["gaps"]["ended"] = True  # advisory: nothing waits on it any more
                     continue
+                if any(
+                    r.get("state") == "reviewing" and r.get("assignment_id") == assignment_id
+                    for r in (data.get("mutation") or {}).values()
+                ):
+                    for r in data["mutation"].values():
+                        if r.get("assignment_id") == assignment_id:
+                            r["ended"] = True
+                    continue
                 for task in data["tasks"].values():
                     if task["status"] in ("COMPLETE", "RELEASED"):
                         continue
@@ -1612,6 +1620,8 @@ class Driver:
                 elif not gate and task.get("assignment_id") == assignment_id:
                     hit = (task_id, "worker", task["packet"]["worker"])
         if not hit:
+            if not silent and self.mutation_ended(assignment_id):
+                return event("mutation reviewer %s: %s" % (ATTENTION[kind], text or "no patch yet"))
             with self.book() as data:
                 if (data.get("gaps") or {}).get("assignment_id") == assignment_id:
                     data["gaps"]["ended"] = (
@@ -1731,7 +1741,7 @@ class Driver:
             return any(
                 t.get("gate") in ("ready-for-ci", "awaiting-merge", "requested")
                 for t in data["tasks"].values()
-            )
+            ) or any(r.get("state") == "reviewing" for r in (data.get("mutation") or {}).values())
 
     def task(self, task_id):
         with self.book() as data:
@@ -4120,7 +4130,7 @@ class Driver:
 
     def acceptance_of(self, data):
         model, approval = self.contract()
-        return verify.acceptance(
+        return acceptance(
             model, data, self.receipts_dir(), digest=approval.digest, tree_of=self.tree_of
         )
 
@@ -4352,15 +4362,276 @@ class Driver:
                 "at": now(),
                 "attempt": attempt,
             }
+            data["mutation"] = {}  # a mutation check belongs to one integration run
             # Delivered means a default branch that holds every merge was found, so the two states change together.
             enter_plan_state(data, "DELIVERED")
             enter_plan_state(data, "VERIFYING")
         self.log("integration", sha=sha, tree=tree, attempt=attempt)
         event("verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12]))
-        for scenario in verify.check_scenarios(self.model):
-            self.run_evidence(scenario.id, "integration", sha)
-        self.settle_acceptance()
+        passed = [
+            scenario.id
+            for scenario in verify.check_scenarios(self.model)
+            if self.run_evidence(scenario.id, "integration", sha).receipt["result"] == "PASS"
+        ]
+        # The plan settles once every mutation check has: an unkilled oracle is not an accepted outcome.
+        if not self.start_mutations(sha, passed):
+            self.settle_acceptance()
         return 2
+
+    # ---- the mutation check (S21) ----------------------------------------------------------------------------
+    # An outcome oracle that was uncalibrated at baseline (it failed for a missing interface, so its assertions were
+    # never seen to bite) must show at integration that it fails when the delivered behaviour is broken. A fresh
+    # reviewer, never an implementer of the plan, writes one behavioural mutation as a patch; the runner applies it
+    # and the oracle must fail on an assertion. An ineffective mutation gets one more reviewer; then a person decides.
+
+    def uncalibrated_outcomes(self, passed):
+        """Outcome scenarios among `passed` whose new oracle was uncalibrated at the approval baseline."""
+        found = []
+        with self.book() as data:
+            for scenario in self.model.scenarios:
+                item = scenario.evidence
+                if scenario.id not in passed or scenario.id not in self.model.outcome:
+                    continue
+                if item is None or not (item.check and item.oracle) or item.baseline != "fail":
+                    continue
+                stems = verify.receipt_stems(data, scenario.id, "baseline")
+                try:
+                    receipt = json.loads(
+                        (self.receipts_dir() / (stems[-1] + ".json")).read_text(encoding="utf-8")
+                    )
+                except (IndexError, OSError, ValueError):
+                    continue  # without its baseline receipt nobody can say it was uncalibrated
+                if receipt.get("calibrated") is False:
+                    found.append(scenario.id)
+        return found
+
+    def start_mutations(self, sha, passed):
+        """Start the first attempt of each uncalibrated outcome item that passed; True when any is waiting."""
+        targets = self.uncalibrated_outcomes(passed)
+        for scenario_id in targets:
+            with self.book() as data:
+                data["mutation"][scenario_id] = {
+                    "state": "reviewing",
+                    "attempt": 0,
+                    "sha": sha,
+                    "history": [],
+                }
+            self.spawn_mutation_reviewer(scenario_id, 1)
+        return bool(targets)
+
+    def spawn_mutation_reviewer(self, scenario_id, number):
+        """One fresh reviewer for one attempt. A name no implementer or ticket reviewer holds, so no agent that saw
+        the plan's work is resumed."""
+        model, approval = self.contract()
+        scenario = verify.scenario_of(model, scenario_id)
+        with self.book() as data:
+            record = data["mutation"][scenario_id]
+            previous = list(record["history"])
+            sha = record["sha"]
+        directory = self.run_dir / "mutation"
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        patch = directory / ("%s.%d.patch" % (scenario_id, number))
+        task_md = directory / ("%s.%d-task.md" % (scenario_id, number))
+        item = scenario.evidence
+        suffix = "-mut-%s-%d" % (scenario_id.lower(), number)
+        name = self.slug[: 32 - len(suffix)].rstrip("-_") + suffix
+        lines = [
+            "# Mutation check of %s: one behavioural mutation of the delivered code" % scenario_id,
+            "",
+            "You did not build this plan. Read these yourself; nothing is pasted here.",
+            "- Plan: %s (scenario %s: WHEN/THEN, and its Decisions)"
+            % (self.plan_path, scenario_id),
+            "- Oracle: %s (the files named %s, approved bytes)"
+            % (
+                yaml_plan.snapshot_path(approval, self.args.state_dir).parent / "oracle",
+                ", ".join(item.oracle),
+            ),
+            "- Check: `%s`" % item.check,
+            "- Delivered code: commit %s of %s" % (sha, self.repo),
+            "",
+            "The oracle failed at the base for a missing interface, so nobody has seen its assertions fail. Show that "
+            "they do: change the delivered code so the behaviour %s promises is wrong, while the code still runs "
+            "(a branch dropped, a condition inverted, a value changed). The oracle must then fail on an assertion."
+            % scenario_id,
+            "",
+            "Rules:",
+            "- Mutate delivered code only. Never edit the oracle or the file it is placed as (%s%s); such a patch "
+            "counts as ineffective."
+            % (item.place or "", ", ".join(n.removesuffix(".oracle") for n in item.oracle)),
+            "- Do not touch the repository checkout. Make the change in a scratch worktree "
+            "(`git worktree add --detach <dir> %s`), write `git diff` there to %s, then remove the worktree."
+            % (sha, patch),
+            "- The patch must apply with `git apply` at %s and break behaviour, not syntax or formatting."
+            % sha[:12],
+        ]
+        if previous:
+            lines += [
+                "",
+                "Earlier attempts did not work; choose a different, more telling mutation:",
+            ]
+            lines += ["- attempt %d: %s" % (h["attempt"], h["detail"]) for h in previous]
+        lines += [
+            "",
+            "Then call the agent-runtime `report` tool with kind=complete and one line: `mutation - %s`."
+            % patch,
+            "",
+        ]
+        task_md.write_text("\n".join(lines), encoding="utf-8")
+        record_update = {"attempt": number, "name": name, "ended": False}
+        try:
+            backend, model_name = self.gate_step("reviewer", "medium")
+            effort = self.step_effort("reviewer", "medium")
+            _, assignment_id = self.ensure_agent(
+                name,
+                "mutation",
+                "mutation",
+                {
+                    "kind": "worker",
+                    "name": name,
+                    "task": "Read %s and follow it." % task_md,
+                    "cwd": str(self.repo),
+                    "cli": backend,
+                    "model": model_name,
+                    "effort": effort,
+                },
+            )
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            event("mutation reviewer %s not started: %s" % (name, error))
+            record_update.update(ended=True, error=str(error)[:300])
+        else:
+            record_update["assignment_id"] = assignment_id
+            event(
+                "spawned %s (%s, %s, %s)"
+                % (name, self.gate_label("reviewer", "medium"), model_name, effort)
+            )
+        with self.book() as data:
+            data["mutation"][scenario_id].update(record_update)
+        self.log("mutation-reviewer", scenario=scenario_id, attempt=number, name=name)
+
+    def mutation_ended(self, assignment_id):
+        """True when `assignment_id` is a mutation reviewer's: its turn is over, so its patch is read next round."""
+        with self.book() as data:
+            for record in (data.get("mutation") or {}).values():
+                if (
+                    record.get("state") == "reviewing"
+                    and record.get("assignment_id") == assignment_id
+                ):
+                    record["ended"] = True
+                    return True
+        return False
+
+    def mutation_outcome(self, scenario_id, record):
+        """(outcome, detail, run) of one reviewer's attempt: the patch is read, refused when it is no patch or edits the
+        oracle, else applied and run. Outcomes: killed, survived, invalid, oracle, error."""
+        item = verify.scenario_of(self.model, scenario_id).evidence
+        number = record["attempt"]
+        path = self.run_dir / "mutation" / ("%s.%d.patch" % (scenario_id, number))
+        try:
+            patch = path.read_bytes()
+        except OSError:
+            return "invalid", "no patch was written to %s" % path, None
+        if record.get("error"):
+            return "error", "the reviewer did not start: %s" % record["error"], None
+        touched = {
+            line[6:].strip().split("\t")[0]
+            for line in patch.decode("utf-8", "replace").splitlines()
+            if line.startswith(("--- a/", "+++ b/"))
+        }
+        placed = {
+            (item.place or "").rstrip("/") + "/" + name.removesuffix(".oracle")
+            for name in item.oracle
+        }
+        placed = {p.lstrip("/") for p in placed}
+        if not touched:
+            return (
+                "invalid",
+                "the patch changes no file (it must be a `git diff` against the commit)",
+                None,
+            )
+        if touched & placed:
+            return (
+                "oracle",
+                "the patch edits the oracle's file %s" % sorted(touched & placed)[0],
+                None,
+            )
+        files = self.oracles()
+        run_ = runner.run_mutation(
+            self.repo,
+            record["sha"],
+            scenario=scenario_id,
+            digest=self.contract()[1].digest,
+            check=item.check,
+            patch=patch,
+            oracles={name: files[name] for name in item.oracle},
+            place=item.place,
+            env_names=item.env,
+            timeout=item.timeout,
+            attempt_number=number,
+        )
+        receipt = run_.receipt
+        if receipt["mutation"]["killed"]:
+            return "killed", "the oracle failed on an assertion with the mutation applied", run_
+        if receipt["result"] == "PASS":
+            return "survived", "the oracle still passed with the mutation applied", run_
+        return (
+            "survived",
+            "the mutation did not make the oracle fail on an assertion (%s%s)"
+            % (receipt["label"], ": " + receipt["detail"] if receipt.get("detail") else ""),
+            run_,
+        )
+
+    def advance_mutations(self):
+        """Read each finished reviewer's patch and apply it; a killed mutation settles the item, an ineffective one
+        asks for one more attempt, then the item is human. The plan settles when no check is left running."""
+        if not self.model:
+            return 0
+        with self.book() as data:
+            ready = [
+                (sid, copy.deepcopy(record))
+                for sid, record in (data.get("mutation") or {}).items()
+                if record.get("state") == "reviewing" and record.get("ended")
+            ]
+        steps = 0
+        for scenario_id, record in ready:
+            try:
+                outcome, detail, run_ = self.mutation_outcome(scenario_id, record)
+            except (OSError, ValueError, subprocess.TimeoutExpired, runner.RunnerError) as error:
+                outcome, detail, run_ = "error", "the mutation could not run: %s" % error, None
+            if run_ is not None:
+                runner.persist(run_, self.receipts_dir())
+            with self.book() as data:
+                entry = data["mutation"][scenario_id]
+                entry["history"].append(
+                    {
+                        "attempt": record["attempt"],
+                        "outcome": outcome,
+                        "detail": detail,
+                        "receipt": run_.path.stem if run_ is not None else None,
+                    }
+                )
+                if run_ is not None:
+                    runner.record_in_ledger(data, run_)
+                if outcome == "killed":
+                    entry["state"] = "killed"
+                elif record["attempt"] >= MUTATION_ATTEMPTS:
+                    entry["state"] = "human"
+                else:
+                    entry["ended"] = False
+            self.log("mutation", scenario=scenario_id, attempt=record["attempt"], outcome=outcome)
+            event(
+                "mutation %s attempt %d: %s — %s"
+                % (scenario_id, record["attempt"], outcome, detail)
+            )
+            if outcome != "killed" and record["attempt"] < MUTATION_ATTEMPTS:
+                self.spawn_mutation_reviewer(scenario_id, record["attempt"] + 1)
+            steps += 1
+        with self.book() as data:
+            records = (data.get("mutation") or {}).values()
+            done = bool(records) and all(r["state"] != "reviewing" for r in records)
+            waiting = (data.get("plan") or {}).get("state") == "VERIFYING"
+        if steps and done and waiting:
+            self.settle_acceptance()
+        return steps
 
     def settle_acceptance(self):
         """The plan's state from its receipts: accepted, accepted with a person's word, rejected (and the Lead is
@@ -5472,7 +5743,7 @@ def verify_plan(args):
     holds does not count: its item is UNKNOWN, naming the scenario and why, and the command exits non-zero. It runs
     nothing and writes nothing."""
     model, repo, _, run_dir, data = acceptance_context(args)
-    result = verify.acceptance(
+    result = acceptance(
         model,
         data,
         run_dir / "receipts",
@@ -5492,6 +5763,53 @@ def verify_plan(args):
     if errors:
         output["errors"] = errors
     return output
+
+
+MUTATION_ATTEMPTS = 2
+
+
+def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
+    """`verify.acceptance`, plus the mutation check (S21): an outcome item that passes at integration but whose
+    uncalibrated oracle no reviewer-written mutation killed is a human item (AWAITING_HUMAN, or HUMAN_ACCEPTED once a
+    person accepted it), and the plan state follows from the items again."""
+    result = verify.acceptance(model, data, receipts_dir, digest=digest, tree_of=tree_of)
+    pin = data.get("integration") or {}
+    held = False
+    for item in result["items"]:
+        record = (data.get("mutation") or {}).get(item["scenario"])
+        if not record or item["state"] != "PASS" or record.get("sha") != pin.get("sha"):
+            continue
+        if record["state"] == "killed":
+            continue
+        held = True
+        accepted = (data.get("acceptance") or {}).get(item["scenario"])
+        if verify.holds_acceptance(accepted, digest, pin.get("tree")):
+            item.update(
+                state="HUMAN_ACCEPTED",
+                reason="accepted by %s over an unkilled mutation" % accepted.get("by"),
+            )
+        else:
+            item.update(
+                state="AWAITING_HUMAN",
+                reason=(
+                    "the mutation check is running"
+                    if record["state"] == "reviewing"
+                    else "no reviewer-written mutation made the uncalibrated oracle fail after %d attempts; a person "
+                    "confirms it (agent-orchestrator accept <plan> %s --note ...)"
+                    % (record["attempt"], item["scenario"])
+                ),
+            )
+    if held:
+        states = {item["state"] for item in result["items"]}
+        if states <= {"PASS"}:
+            result["state"] = "ACCEPTED"
+        elif states <= {"PASS", "HUMAN_ACCEPTED"}:
+            result["state"] = "ACCEPTED_WITH_HUMAN"
+        elif states <= {"PASS", "HUMAN_ACCEPTED", "AWAITING_HUMAN"}:
+            result["state"] = "VERIFYING"
+        else:
+            result["state"] = "REJECTED"
+    return result
 
 
 def accept_item(args):
@@ -5534,7 +5852,7 @@ def accept_item(args):
                 "accept: %s merged with %s's evidence unverified, so it must pass at integration; fix it and run "
                 "again — a person cannot accept it" % (flagged, args.scenario)
             )
-        result = verify.acceptance(
+        result = acceptance(
             model,
             data,
             run_dir / "receipts",
@@ -5560,7 +5878,7 @@ def accept_item(args):
             "note": args.note.strip(),
             "previous": {"result": item["state"], "reason": item["reason"]},
         }
-        outcome = verify.acceptance(
+        outcome = acceptance(
             model,
             data,
             run_dir / "receipts",
