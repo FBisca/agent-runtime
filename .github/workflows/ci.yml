@@ -48,7 +48,7 @@ jobs:
           RUFF_FORMAT_BUDGET: "0"
         run: |
           uv run ruff format --check . > "$RUNNER_TEMP/ruff-format.txt" || true
-          found=$(grep -oE '^[0-9]+ files would be reformatted' "$RUNNER_TEMP/ruff-format.txt" | grep -oE '^[0-9]+' || echo 0)
+          found=$(grep -oE '^[0-9]+ files? would be reformatted' "$RUNNER_TEMP/ruff-format.txt" | grep -oE '^[0-9]+' || echo 0)
           echo "ruff format: $found files would be reformatted (budget $RUFF_FORMAT_BUDGET)"
           if [ "$found" -gt "$RUFF_FORMAT_BUDGET" ]; then
             echo "::error::the ruff format debt grew: $found is above the budget $RUFF_FORMAT_BUDGET"

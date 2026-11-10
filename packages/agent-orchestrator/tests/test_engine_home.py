@@ -6,6 +6,7 @@ member's suite, would let the two copies diverge again without anything failing.
 """
 
 import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -57,6 +58,19 @@ class EngineHomeTests(unittest.TestCase):
         self.assertIn("ty check packages/", workflow)
         pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn("packages/agent-orchestrator/tests", pyproject)
+
+    def test_R3_the_format_budget_counts_a_single_unformatted_file(self):
+        """orchestrator-engine/R3"""
+        workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        step = workflow.split("name: ruff format (legacy budget)", 1)[1].split("- name:", 1)[0]
+        patterns = re.findall(r"grep -oE '([^']+)'", step)
+        self.assertTrue(patterns, "the format step parses no count from ruff's output")
+        counting = re.compile(patterns[0])
+        self.assertTrue(counting.search("1 file would be reformatted, 175 files already formatted"))
+        self.assertTrue(
+            counting.search("3 files would be reformatted, 173 files already formatted")
+        )
+        self.assertIsNone(counting.search("175 files already formatted"))
 
 
 if __name__ == "__main__":
