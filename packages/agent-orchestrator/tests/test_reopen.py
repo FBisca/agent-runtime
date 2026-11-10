@@ -39,6 +39,24 @@ class ReopenTests(DeciderFixture, unittest.TestCase):
         self.assertEqual((fresh["packet"]["unit"], fresh["status"]), ("t1", "ACTIVE"))
         self.assertEqual(self.plan_status(), "IN PROGRESS")
 
+    def test_S5_a_refused_reopen_is_asked_about_and_dispatched_again_after_the_lead_s_todo(self):
+        """orchestrator-engine/R5: drive-restart-recovery/S5"""
+        self.pause()
+        self.set_status("TO-DO")
+        self.refuse(["demo-t1"])
+        self.waits([])
+        self.run_driver(expect=1)
+        (wake,) = [w for w in self.wakes() if w["kind"] == "not-dispatched"]
+        self.assertEqual(wake["unit"], "t1")
+        self.assertEqual(self.ledger()["tasks"]["t1p1"]["status"], "RESERVED")
+        self.refuse([])
+        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.waits([])
+        self.run_driver()
+        tasks = self.ledger()["tasks"]
+        self.assertEqual(tasks["t1p1"]["status"], "ACTIVE")
+        self.assertNotIn("t1p2", tasks)
+
     def test_S4_a_paused_ticket_set_to_complete_unblocks_its_dependent(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S4"""
         self.pause(rows=("T1", "T2"))

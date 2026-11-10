@@ -289,7 +289,7 @@ class RunTests(RunFixture, unittest.TestCase):
         result = self.run_driver(expect=1)
         self.assertIn("T1 not dispatched", result.stderr)
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RESERVED")
-        self.assertIn("TO-DO", self.plan.read_text(encoding="utf-8"))
+        self.assertIn("not dispatched", self.plan.read_text(encoding="utf-8"))
         self.refuse([])
         self.run_driver()
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "ACTIVE")
@@ -560,34 +560,79 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.spawned(), [])
 
-    def test_S5_a_failed_dispatch_raises_one_wake_and_the_lead_s_todo_retries_it(self):
+    def lead_answers(self):
+        """A wait step during which the cause is fixed and the Lead sets the ticket's cell back to TO-DO."""
+        return wait_result(
+            write=[
+                [str(self.home / "refuse.json"), "[]"],
+                [str(self.plan), plan_text(rows=("T1",))],
+            ]
+        )
+
+    def test_S5_a_failed_dispatch_raises_one_wake_and_the_lead_s_todo_retries_it_in_the_same_run(self):
         """orchestrator-engine/R5: drive-restart-recovery/S5"""
         self.refuse(["demo-t1"])
-        self.run_driver(expect=1)
+        self.waits([self.lead_answers()])
+        self.run_driver()
         (wake,) = self.wakes_of("not-dispatched")
         self.assertEqual(wake["unit"], "t1")
         self.assertIn("T1", wake["text"])
         self.assertIn("TO-DO", wake["text"])
+        self.assertIn("name_taken", wake["text"])
+        self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])  # the refused one, then the retry
+        self.assertEqual(self.task()["status"], "ACTIVE")
+        self.assertEqual(len(self.events("start")), 1)
+
+    def test_S5_without_the_lead_s_todo_the_same_run_does_not_try_again(self):
+        """orchestrator-engine/R5: drive-restart-recovery/S5"""
+        self.refuse(["demo-t1"])
+        self.waits([wait_result(write=[[str(self.home / "refuse.json"), "[]"]])])
         self.run_driver(expect=1)
+        self.assertEqual(self.spawned(), ["demo-t1"])  # the refused attempt only
+        self.assertEqual(len(self.wakes_of("not-dispatched")), 1)
+        self.assertIn("not dispatched", self.plan.read_text(encoding="utf-8"))
         self.assertEqual(len(self.wakes_of("not-dispatched")), 1)  # once per ticket and reason
 
-    def test_S5_the_lead_setting_the_cell_to_todo_takes_the_ticket_out_of_the_failed_set(self):
+    def test_S5_a_refused_restart_attempt_is_dispatched_again_after_the_lead_s_todo(self):
         """orchestrator-engine/R5: drive-restart-recovery/S5"""
-        import re
-
+        self.crashed()
+        self.release()
         self.refuse(["demo-t1"])
-        plan_path = str(self.plan)
-
-        def to_todo(text):
-            return re.sub(r"\| TO-DO[^|]*\|\s*$", "| TO-DO |", text, flags=re.M)
-
         self.run_driver(expect=1)
-        cell = self.plan.read_text(encoding="utf-8")
-        self.assertIn("not dispatched", cell)
-        self.refuse([])
-        self.waits([wait_result(write=[[plan_path, to_todo(cell)]])])
+        (wake,) = self.wakes_of("not-dispatched")
+        self.assertEqual(self.ledger()["tasks"]["t1r1"]["status"], "RESERVED")
+        self.assertEqual(wake["unit"], "t1")
+        self.waits([self.lead_answers()])
         self.run_driver()
-        self.assertEqual(self.task()["status"], "ACTIVE")
+        tasks = self.ledger()["tasks"]
+        self.assertEqual(tasks["t1r1"]["status"], "ACTIVE")
+        self.assertEqual(self.spawned(), ["demo-t1"] * 4)  # the first, the refused, its restart-time retry, the Lead's retry
+        self.assertNotIn("t1r2", tasks)
+
+    def test_S5_a_refused_orphan_redispatch_raises_not_dispatched_and_retries_after_the_lead_s_todo(self):
+        """orchestrator-engine/R5: drive-restart-recovery/S5"""
+        self.crashed()
+        self.refuse(["demo-t1"])
+        self.run_driver(expect=1)
+        (wake,) = self.wakes_of("not-dispatched")
+        self.assertIn("t1o1", wake["text"])
+        self.assertEqual(self.wakes_of("stranded"), [])
+        self.assertEqual(self.ledger()["tasks"]["t1o1"]["status"], "RESERVED")
+        self.refuse([])
+        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.run_driver()
+        tasks = self.ledger()["tasks"]
+        self.assertEqual(tasks["t1o1"]["status"], "ACTIVE")
+        self.assertNotIn("t1o2", tasks)
+
+    def test_S4_a_worker_that_status_cannot_read_strands_the_unit_and_spawns_nothing(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S4"""
+        self.crashed("unreadable")
+        self.release()
+        self.run_driver(expect=1)
+        self.assertEqual(self.spawned(), ["demo-t1"])
+        (wake,) = self.wakes_of("stranded")
+        self.assertIn("t1", wake["text"])
 
 
 if __name__ == "__main__":

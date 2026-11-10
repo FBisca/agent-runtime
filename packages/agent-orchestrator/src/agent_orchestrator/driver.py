@@ -3964,20 +3964,26 @@ class Driver:
                 self.failed.discard(task_id)  # the Lead's answer to the wake: try it again
             if task_id in self.failed:
                 continue
-            held = tasks.get(task_id)
-            new_id = None
-            if ready(ticket, by_id, self.restartable(ticket, tasks)):
-                attempts = [t for t in tasks.values() if t["packet"].get("unit") == task_id]
-                if attempts and all(t["status"] == "RELEASED" for t in attempts):
-                    # every attempt is closed, and a closed id is never dispatched again
-                    new_id = next(
-                        "%sr%d" % (task_id, n)
-                        for n in range(1, 1000)
-                        if "%sr%d" % (task_id, n) not in tasks
-                    )
-                    held = None
-            else:
+            if not ready(ticket, by_id, self.restartable(ticket, tasks)):
                 continue
+            attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == task_id}
+            open_ = {k: t for k, t in attempts.items() if t["status"] not in ("COMPLETE", "RELEASED")}
+            held, new_id = None, None
+            if any(t["status"] == "COMPLETE" for t in attempts.values()) or any(
+                t["runtime_id"] for t in open_.values()
+            ):
+                continue
+            if open_:
+                # a dispatch that failed after its claim left a reserved attempt: it is dispatched again under its
+                # own id (claim is idempotent for it), not as a fresh one
+                new_id, held = next(iter(open_.items()))
+            elif attempts:
+                # every attempt is closed, and a closed id is never dispatched again
+                new_id = next(
+                    "%sr%d" % (task_id, n)
+                    for n in range(1, 1000)
+                    if "%sr%d" % (task_id, n) not in tasks
+                )
             if held and held["runtime_id"]:
                 continue
             if not held and unfinished >= self.args.max_workers:
@@ -3989,28 +3995,33 @@ class Driver:
                 unfinished += 0 if held else 1
                 continue
             unfinished += 0 if held else 1
+            # a failure the Lead has answered no longer fails the run
+            self.errors[:] = [e for e in self.errors if not e.startswith(ticket["#"] + ": ")]
             count += 1
         return count
 
     def restartable(self, ticket, tasks):
         """True when a ticket whose cell reads `IN PROGRESS` holds no live work: the ledger has an attempt of its
         unit, every one is RELEASED, and the runtime answers definitively that its worker is not live. A cell with
-        no attempt in the ledger belongs to some other run and stays a lock; a failed lookup is not an answer."""
+        no attempt in the ledger belongs to some other run and stays a lock; a failed lookup is not an answer: it
+        strands the unit (a wake and a non-zero exit) and nothing is spawned."""
         if not ticket["Status"].strip().upper().startswith("IN PROGRESS"):
             return False
         unit = ticket["#"].lower()
-        attempts = [t for t in tasks.values() if t["packet"].get("unit") == unit]
-        if not attempts or any(t["status"] != "RELEASED" for t in attempts):
+        attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == unit}
+        if not attempts or any(t["status"] != "RELEASED" for t in attempts.values()):
             return False
+        name = worker_name(self.slug, ticket["#"][1:])
         try:
-            return self.agent_gone(worker_name(self.slug, ticket["#"][1:]))[0]
+            return self.agent_gone(name)[0]
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            event("%s: cannot tell whether its worker is live: %s" % (ticket["#"], error))
+            self.strand(list(attempts)[-1], name, str(error))
             return False
 
     def not_dispatched(self, ticket, error, what="not dispatched"):
         """A dispatch that cannot happen asks the Lead, once per ticket and reason; the cell keeps the reason and
-        the ticket stays out of the rounds until the Lead sets its Status to TO-DO."""
+        the ticket stays out of this run's rounds until the Lead sets its Status to TO-DO (a restarted drive reads the cell
+        as TO-DO and tries it once more)."""
         task_id = ticket["#"].lower()
         self.failed.add(task_id)
         self.errors.append("%s: %s" % (ticket["#"], error))
@@ -4175,7 +4186,10 @@ class Driver:
                 raise ValueError("the plan no longer has ticket %s" % unit.upper())
             self.dispatch(plan, ticket, new_id, note=note)
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            if ticket is None:
+                self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            else:
+                self.not_dispatched(ticket, error, "not re-dispatched as " + new_id)
             return 0
         event("%s: dispatched again as %s after %s" % (unit.upper(), new_id, said))
         return 1
