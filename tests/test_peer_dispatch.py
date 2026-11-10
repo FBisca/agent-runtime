@@ -1,4 +1,5 @@
 """Concurrent dispatch, peer inboxes and receipt transactions over fake-hc MCP."""
+
 import json
 import threading
 import time
@@ -20,7 +21,6 @@ pytestmark = pytest.mark.integration
 RESUME_BOUND = 10
 
 
-
 class PeerDispatchTests(ToolCase):
     prepare = event_helpers.EventWaitTests.prepare
     spawn = event_helpers.EventWaitTests.spawn
@@ -40,9 +40,13 @@ class PeerDispatchTests(ToolCase):
         """agent-runtime/R97"""
         self.prepare()
         row = {"name": "w3", "address": "t4", "parent": "t0", "status": "working"}
-        self.replies.update({"get:w3": {"out": json.dumps(row)}, "get:t4": {"out": json.dumps(row)}})
+        self.replies.update(
+            {"get:w3": {"out": json.dumps(row)}, "get:t4": {"out": json.dumps(row)}}
+        )
         (self.dir / "replies").write_text(json.dumps(self.replies))
-        third = self.tool("spawn", kind="worker", name="w3", task="work", cwd="/tmp")["structuredContent"]
+        third = self.tool("spawn", kind="worker", name="w3", task="work", cwd="/tmp")[
+            "structuredContent"
+        ]
         self.assertEqual((third["unfinished"], third["next"]), (3, self.NUDGE))
         self.publish(0)
         self.publish(1)
@@ -54,8 +58,11 @@ class PeerDispatchTests(ToolCase):
     def test_S3_message_without_lead_unfinished_work_carries_no_nudge(self):
         """agent-runtime/R98"""
         self.prepare()
-        peer, text = self.call(self.workers[0], "message", {
-            "to": "w2", "text": "hi", "assignment_id": self.assignments[0]["assignment_id"]})
+        peer, text = self.call(
+            self.workers[0],
+            "message",
+            {"to": "w2", "text": "hi", "assignment_id": self.assignments[0]["assignment_id"]},
+        )
         self.assertFalse(peer["isError"], text)
         up, text = self.call(self.workers[0], "message", {"to": "lead", "text": "hi"})
         self.assertFalse(up["isError"], text)
@@ -75,7 +82,9 @@ class PeerDispatchTests(ToolCase):
         Store(self.env).fail_observed({self.assignments[1]["assignment_id"]: "exited"})
         batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
         self.assertEqual(batch["reason"], "failed")
-        sent = self.tool("message", to="w2", text="still there?", receipt=batch["receipt"])["structuredContent"]
+        sent = self.tool("message", to="w2", text="still there?", receipt=batch["receipt"])[
+            "structuredContent"
+        ]
         self.assertNotIn("unfinished", sent)
         self.assertNotIn("next", sent)
         empty = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
@@ -85,11 +94,14 @@ class PeerDispatchTests(ToolCase):
         """agent-runtime/R97"""
         self.prepare()
         row = {"name": "kid", "address": "t5", "parent": "t1", "status": "working"}
-        self.replies.update({"get:kid": {"out": json.dumps(row)}, "get:t5": {"out": json.dumps(row)}})
+        self.replies.update(
+            {"get:kid": {"out": json.dumps(row)}, "get:t5": {"out": json.dumps(row)}}
+        )
         (self.dir / "replies").write_text(json.dumps(self.replies))
         proof = {"assignment_id": self.assignments[0]["assignment_id"]}
-        spawned, text = self.call(self.workers[0], "spawn", dict(proof, kind="worker", name="kid",
-                                                                 task="sub", cwd="/tmp"))
+        spawned, text = self.call(
+            self.workers[0], "spawn", dict(proof, kind="worker", name="kid", task="sub", cwd="/tmp")
+        )
         self.assertFalse(spawned["isError"], text)
         self.assertEqual(spawned["structuredContent"]["unfinished"], 1)
         self.assertEqual(spawned["structuredContent"]["next"], self.NUDGE)
@@ -103,10 +115,14 @@ class PeerDispatchTests(ToolCase):
     def test_mixed_workers_resume_promptly_with_fresh_ids_and_preserve_failed_dispatch(self):
         """agent-runtime/R45"""
         self.prepare()
-        self.assignments[1] = self.tool("spawn", kind="worker", cli="codex", name="w2",
-                                        task="codex work", cwd="/tmp")["structuredContent"]
+        self.assignments[1] = self.tool(
+            "spawn", kind="worker", cli="codex", name="w2", task="codex work", cwd="/tmp"
+        )["structuredContent"]
         started = time.monotonic()
-        resumed = [self.tool("resume", name=name, task="continue")["structuredContent"] for name in ("w1", "w2")]
+        resumed = [
+            self.tool("resume", name=name, task="continue")["structuredContent"]
+            for name in ("w1", "w2")
+        ]
         self.assertLess(time.monotonic() - started, RESUME_BOUND)
         for before, after in zip(self.assignments, resumed):
             self.assertNotEqual(before["assignment_id"], after["assignment_id"])
@@ -123,32 +139,61 @@ class PeerDispatchTests(ToolCase):
         self.assertEqual(set(batch["unfinished"]), {a["assignment_id"] for a in resumed})
         self.replies["send"] = {"rc": 1, "err": "permission dialog"}
         (self.dir / "replies").write_text(json.dumps(self.replies))
-        failed = self.rpc.get(self.rpc.tool("resume", {"name": "w1", "task": "blocked dispatch"}))["result"]
+        failed = self.rpc.get(self.rpc.tool("resume", {"name": "w1", "task": "blocked dispatch"}))[
+            "result"
+        ]
         self.assertTrue(failed["isError"])
         batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "w1", "timeout": 0}))
         self.assertEqual(batch["unfinished"], [resumed[0]["assignment_id"]])
-        old, _ = self.call(self.workers[0], "report", {"text": "late", "kind": "complete",
-                                                     "assignment_id": self.assignments[0]["assignment_id"]})
+        old, _ = self.call(
+            self.workers[0],
+            "report",
+            {
+                "text": "late",
+                "kind": "complete",
+                "assignment_id": self.assignments[0]["assignment_id"],
+            },
+        )
         self.assertTrue(old["isError"])
 
     def test_peer_idle_and_active_inboxes_deliver_true_sender_without_hc_injection(self):
         """agent-runtime/R47"""
         self.prepare()
-        first, text = self.call(self.workers[0], "message", {"to": "w2", "text": "idle data",
-                                                          "assignment_id": self.assignments[0]["assignment_id"]})
+        first, text = self.call(
+            self.workers[0],
+            "message",
+            {
+                "to": "w2",
+                "text": "idle data",
+                "assignment_id": self.assignments[0]["assignment_id"],
+            },
+        )
         self.assertFalse(first["isError"], text)
         event = first["structuredContent"]
         self.assertEqual(event["sender"], self.assignments[0]["worker_id"])
         self.assertEqual(self.runs("send"), [])
-        self.assignments[1] = self.tool("resume", name="w2", task="continue work")["structuredContent"]
+        self.assignments[1] = self.tool("resume", name="w2", task="continue work")[
+            "structuredContent"
+        ]
         resume_sends = self.runs("send")
         self.assertNotIn("idle data", resume_sends[0][-1])
-        result, text = self.call(self.workers[1], "wait", {"target": "inbox", "timeout": 0,
-                                                           "assignment_id": self.assignments[1]["assignment_id"]})
-        self.assertFalse(result["isError"], text)  # status no longer piggybacks the inbox without a receipt (D15)
+        result, text = self.call(
+            self.workers[1],
+            "wait",
+            {
+                "target": "inbox",
+                "timeout": 0,
+                "assignment_id": self.assignments[1]["assignment_id"],
+            },
+        )
+        self.assertFalse(
+            result["isError"], text
+        )  # status no longer piggybacks the inbox without a receipt (D15)
         inbox = result["structuredContent"]
         self.assertEqual(inbox["messages"], [event])
-        empty, text = self.call(self.workers[1], "wait", {"target": "inbox", "timeout": 0, "receipt": inbox["receipt"]})
+        empty, text = self.call(
+            self.workers[1], "wait", {"target": "inbox", "timeout": 0, "receipt": inbox["receipt"]}
+        )
         self.assertFalse(empty["isError"], text)
         self.assertEqual(empty["structuredContent"]["messages"], [])
         self.publish(0)  # Completed workers must still block for future inbox data.
@@ -159,7 +204,9 @@ class PeerDispatchTests(ToolCase):
         directory = endpoints(Store(self.env).directory)
         deadline = time.monotonic() + 2
         while not list(directory.glob("*.sock")):
-            self.assertNotIn(request_id, worker_rpc.counts, "worker inbox returned before a message")
+            self.assertNotIn(
+                request_id, worker_rpc.counts, "worker inbox returned before a message"
+            )
             self.assertLess(time.monotonic(), deadline)
             threading.Event().wait(0.005)
         self.pending(worker_rpc, request_id)
@@ -170,10 +217,14 @@ class PeerDispatchTests(ToolCase):
         self.assertEqual(batch["messages"], [reply["structuredContent"]])
         self.assertEqual(batch["messages"][0]["sender"], self.assignments[1]["worker_id"])
         self.assertEqual(batch["assignments"], [])
-        to_lead = worker_rpc.get(worker_rpc.tool("message", {"to": "lead", "text": "lead data"}))["result"]
+        to_lead = worker_rpc.get(worker_rpc.tool("message", {"to": "lead", "text": "lead data"}))[
+            "result"
+        ]
         self.assertFalse(to_lead["isError"])
         received = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
-        self.assertEqual(received["messages"][0]["message_id"], to_lead["structuredContent"]["message_id"])
+        self.assertEqual(
+            received["messages"][0]["message_id"], to_lead["structuredContent"]["message_id"]
+        )
         self.assertEqual(to_lead["structuredContent"]["inbox"]["messages"], batch["messages"])
         self.assertEqual(self.runs("send"), resume_sends)
         denied, _ = self.call(self.workers[1], "message", {"to": "foreign-worker-id", "text": "no"})
@@ -182,8 +233,11 @@ class PeerDispatchTests(ToolCase):
     def test_stale_worker_session_cannot_route_into_reused_team_generation(self):
         """agent-runtime/R47"""
         self.prepare()
-        old, text = self.call(self.workers[0], "message", {"to": "w2", "text": "old team",
-                                                        "assignment_id": self.assignments[0]["assignment_id"]})
+        old, text = self.call(
+            self.workers[0],
+            "message",
+            {"to": "w2", "text": "old team", "assignment_id": self.assignments[0]["assignment_id"]},
+        )
         self.assertFalse(old["isError"], text)
         replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"), new_cli=True)
         self.addCleanup(replacement.close)
@@ -191,20 +245,30 @@ class PeerDispatchTests(ToolCase):
         fresh = [self.spawn(replacement, name) for name in ("w1", "w2")]
         denied, _ = self.call(self.workers[0], "message", {"to": "w2", "text": "stale caller"})
         self.assertTrue(denied["isError"])
-        new_worker = Session(dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker"), new_cli=True)
+        new_worker = Session(
+            dict(self.env, HC_TERMINAL_ID="t1", CODEX_THREAD_ID="replacement-worker"), new_cli=True
+        )
         self.addCleanup(new_worker.close)
         new_worker.handshake()
-        sent, text = self.call(new_worker, "message", {"to": "w2", "text": "new team", "assignment_id": fresh[0]["assignment_id"]})
+        sent, text = self.call(
+            new_worker,
+            "message",
+            {"to": "w2", "text": "new team", "assignment_id": fresh[0]["assignment_id"]},
+        )
         self.assertFalse(sent["isError"], text)
         self.assertEqual(sent["structuredContent"]["team_id"], fresh[0]["team_id"])
         store = Store(self.env)
-        received = store.read(fresh[1]["team_id"], fresh[1]["worker_id"], "any", assignment_ids=[], inbox=True)
+        received = store.read(
+            fresh[1]["team_id"], fresh[1]["worker_id"], "any", assignment_ids=[], inbox=True
+        )
         self.assertEqual([m["text"] for m in received["messages"]], ["new team"])
 
     def test_worker_can_message_its_own_child_without_crossing_peer_team(self):
         """agent-runtime/R47"""
         self.prepare()
-        child = self.spawn(self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"])
+        child = self.spawn(
+            self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"]
+        )
         sent, text = self.call(self.workers[0], "message", {"to": "child", "text": "child data"})
         self.assertFalse(sent["isError"], text)
         self.assertEqual(sent["structuredContent"]["team_id"], child["team_id"])
@@ -232,13 +296,18 @@ class PeerDispatchTests(ToolCase):
         store = Store(self.env)
         with store.transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], 0)
-        self.assertEqual(store.read(fresh[1]["team_id"], fresh[1]["worker_id"], "any", inbox=True)["messages"], [])
+        self.assertEqual(
+            store.read(fresh[1]["team_id"], fresh[1]["worker_id"], "any", inbox=True)["messages"],
+            [],
+        )
 
     def test_first_inbox_wait_cannot_adopt_reused_address_or_read_new_team(self):
         """agent-runtime/R47"""
         self.prepare()
         replacement, fresh = self.replace_team_without_contacting_old_workers()
-        sent, text = self.call(replacement, "message", {"to": "w1", "text": "new team private data"})
+        sent, text = self.call(
+            replacement, "message", {"to": "w1", "text": "new team private data"}
+        )
         self.assertFalse(sent["isError"], text)
         for proof in (None, self.assignments[0]["assignment_id"]):
             with self.subTest(proof=proof):
@@ -259,7 +328,11 @@ class PeerDispatchTests(ToolCase):
                     arguments["assignment_id"] = fresh[0]["assignment_id"]
                 received, text = self.call(worker, "wait", arguments)
                 self.assertFalse(received["isError"], text)
-                event = {k: v for k, v in sent["structuredContent"].items() if k not in ("unfinished", "next")}
+                event = {
+                    k: v
+                    for k, v in sent["structuredContent"].items()
+                    if k not in ("unfinished", "next")
+                }
                 self.assertEqual(received["structuredContent"]["messages"], [event])
             finally:
                 worker.close()
@@ -271,8 +344,15 @@ class PeerDispatchTests(ToolCase):
         team = self.assignments[0]["team_id"]
         old_pending = store.register(team, "w1")
         store.register(team, "w1")
-        denied, _ = self.call(self.workers[0], "report", {"assignment_id": old_pending["assignment_id"],
-                                                        "kind": "complete", "text": "stale pending"})
+        denied, _ = self.call(
+            self.workers[0],
+            "report",
+            {
+                "assignment_id": old_pending["assignment_id"],
+                "kind": "complete",
+                "text": "stale pending",
+            },
+        )
         self.assertTrue(denied["isError"])
         with store.transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], 0)
@@ -284,8 +364,11 @@ class PeerDispatchTests(ToolCase):
         self.prepare()
         store = Store(self.env)
         pending = store.register(self.assignments[0]["team_id"], "w1")
-        result, text = self.call(self.workers[0], "report", {"assignment_id": pending["assignment_id"],
-                                                          "kind": "progress", "text": "fast report"})
+        result, text = self.call(
+            self.workers[0],
+            "report",
+            {"assignment_id": pending["assignment_id"], "kind": "progress", "text": "fast report"},
+        )
         self.assertFalse(result["isError"], text)
         with store.transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM callers").fetchone()[0], 1)
@@ -299,23 +382,57 @@ class PeerDispatchTests(ToolCase):
         self.publish(0, "progress", "first")
         first = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
         self.tool("status", name="w1", receipt=first["receipt"])
-        self.assertEqual(self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))["messages"], [])
+        self.assertEqual(
+            self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))[
+                "messages"
+            ],
+            [],
+        )
         progress = self.publish(0, "progress", "second")
         second = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
         self.tool("message", to="w1", text="original", message_id="retry")
-        conflict = self.rpc.get(self.rpc.tool("message", {"to": "w1", "text": "changed", "message_id": "retry",
-                                                         "receipt": second["receipt"]}))["result"]
+        conflict = self.rpc.get(
+            self.rpc.tool(
+                "message",
+                {
+                    "to": "w1",
+                    "text": "changed",
+                    "message_id": "retry",
+                    "receipt": second["receipt"],
+                },
+            )
+        )["result"]
         self.assertTrue(conflict["isError"])
-        self.assertEqual(self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))["messages"], [progress])
-        denied, _ = self.call(self.workers[1], "message", {"to": "w1", "text": "foreign receipt", "receipt": second["receipt"],
-                                                        "assignment_id": self.assignments[1]["assignment_id"]})
+        self.assertEqual(
+            self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))[
+                "messages"
+            ],
+            [progress],
+        )
+        denied, _ = self.call(
+            self.workers[1],
+            "message",
+            {
+                "to": "w1",
+                "text": "foreign receipt",
+                "receipt": second["receipt"],
+                "assignment_id": self.assignments[1]["assignment_id"],
+            },
+        )
         self.assertTrue(denied["isError"])
-        denied = self.rpc.get(self.rpc.tool("message", {"to": "w1", "text": "invalid receipt", "receipt": "invalid"}))["result"]
+        denied = self.rpc.get(
+            self.rpc.tool("message", {"to": "w1", "text": "invalid receipt", "receipt": "invalid"})
+        )["result"]
         self.assertTrue(denied["isError"])
         self.assertEqual(self.runs("send"), [])
         final = self.tool("message", to="w2", text="valid ack", receipt=second["receipt"])
         self.assertTrue(final["structuredContent"]["message_id"])
-        self.assertEqual(self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))["messages"], [])
+        self.assertEqual(
+            self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))[
+                "messages"
+            ],
+            [],
+        )
 
     def test_stop_wakes_an_already_pending_wait(self):
         """agent-runtime/R54"""

@@ -20,7 +20,7 @@ RUNTIME_SRC = Path(__file__).resolve().parents[1] / "packages" / "agent-runtime"
 sys.path.insert(0, str(RUNTIME_SRC))
 from agent_runtime import hc_tools  # noqa: E402
 
-FAKE = '''#!%(python)s
+FAKE = """#!%(python)s
 import json, os, sys, time
 argv = sys.argv[1:]
 with open(%(log)r, "a") as log:
@@ -80,7 +80,7 @@ if reply.get("sleep"):
 sys.stdout.write(reply.get("out", ""))
 sys.stderr.write(reply.get("err", ""))
 sys.exit(reply.get("rc", 0))
-'''
+"""
 TOML = 'name = "implementer"\ndeveloper_instructions = """\nCODEX IMPLEMENTER RULES\n"""\n'
 
 
@@ -90,10 +90,21 @@ def raw(name, parent, state="idle", app=None):
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-PROVIDERS = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
-             "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-             "CLAUDE_CODE_AUTO_MODE_SERVER", "CLAUDE_CODE_AUTO_MODE_MODEL",
-             "MINIMAX_API_KEY", "PI_API_KEY", "PI_PROVIDER", "PI_MODEL"]
+PROVIDERS = [
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_AUTO_MODE_SERVER",
+    "CLAUDE_CODE_AUTO_MODE_MODEL",
+    "MINIMAX_API_KEY",
+    "PI_API_KEY",
+    "PI_PROVIDER",
+    "PI_MODEL",
+]
 
 
 def scrub(keys):
@@ -106,7 +117,7 @@ def unwrap(argv):
     if argv[:1] != ["env"]:
         return argv
     i = 1
-    while argv[i:i + 1] == ["-u"]:
+    while argv[i : i + 1] == ["-u"]:
         i += 2
     return argv[i:]
 
@@ -129,11 +140,22 @@ class ToolCase(unittest.TestCase):
         replies.setdefault("get:t1", {"out": raw("worker", "t0")})
         (self.dir / "replies").write_text(json.dumps(replies))
         hc = self.dir / "bin" / "hc"
-        hc.write_text(FAKE % {"python": sys.executable, "log": str(self.log), "replies": str(self.dir / "replies"),
-                              "overlay": str(self.dir / "overlay")})
+        hc.write_text(
+            FAKE
+            % {
+                "python": sys.executable,
+                "log": str(self.log),
+                "replies": str(self.dir / "replies"),
+                "overlay": str(self.dir / "overlay"),
+            }
+        )
         hc.chmod(0o755)
-        full = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
-                "HC_TERMINAL_ID": "t0", "CODEX_THREAD_ID": "test-session"}
+        full = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+            "CODEX_THREAD_ID": "test-session",
+        }
         full.update(env or {})
         session = Session(full, new_cli=new_cli)
         self.addCleanup(session.close)
@@ -154,14 +176,23 @@ class IdentityTests(ToolCase):
 
     def identity(self, **extra):
         from agent_runtime import hc_tools
-        with mock.patch.object(hc_tools.lib, "ps_entry", side_effect={100: (90, "/usr/bin/zsh"), 90: (1, "claude")}.get), \
-                mock.patch.object(hc_tools.lib, "lstart", return_value="Wed Nov  4 10:00:00 2026"), \
-                mock.patch.object(hc_tools.os, "getppid", return_value=100):
+
+        with (
+            mock.patch.object(
+                hc_tools.lib,
+                "ps_entry",
+                side_effect={100: (90, "/usr/bin/zsh"), 90: (1, "claude")}.get,
+            ),
+            mock.patch.object(hc_tools.lib, "lstart", return_value="Wed Nov  4 10:00:00 2026"),
+            mock.patch.object(hc_tools.os, "getppid", return_value=100),
+        ):
             return hc_tools.dispatch_identity(dict(self.ENV, **extra))
 
     def test_server_identity_ignores_session_ids_under_a_cli_ancestor(self):
         """agent-runtime/R107"""
-        scope, generation = self.identity(CODEX_THREAD_ID="t", CLAUDE_CODE_SESSION_ID="c", CLAUDE_SESSION_ID="s")
+        scope, generation = self.identity(
+            CODEX_THREAD_ID="t", CLAUDE_CODE_SESSION_ID="c", CLAUDE_SESSION_ID="s"
+        )
         self.assertEqual(generation, "90:Wed Nov  4 10:00:00 2026")
 
     def test_the_session_identity_is_resolved_once_and_never_changes(self):
@@ -169,7 +200,9 @@ class IdentityTests(ToolCase):
         A session's identity is decided once: a walk that misses its budget on a later call must not
         fork the team, or the workers of the first team go stale."""
         ctx = hc_tools.Context()
-        with mock.patch.object(hc_tools.lib, "cli_generation", return_value="90:Wed Nov  4 10:00:00 2026"):
+        with mock.patch.object(
+            hc_tools.lib, "cli_generation", return_value="90:Wed Nov  4 10:00:00 2026"
+        ):
             first = hc_tools.dispatch_identity(self.ENV, ctx)
         with mock.patch.object(hc_tools.lib, "cli_generation", return_value=None):
             second = hc_tools.dispatch_identity(self.ENV, ctx)
@@ -179,6 +212,7 @@ class IdentityTests(ToolCase):
         """agent-runtime/R108"""
         from agent_runtime import dispatch_store as store_module
         from agent_runtime import hc_tools
+
         Store = store_module.Store
         env = {"HOME": str(self.dir / "home")}
         store = Store(env)
@@ -198,17 +232,36 @@ class SpawnTests(ToolCase):
 
     def test_S2_claude_worker_runs_hc_run_bg_with_task_and_report_line(self):
         """agent-runtime-tools/S2"""
-        session = self.start({"run": {"out": json.dumps({"first_message": {"sent": True}})},
-                              "get:w1": {"out": raw("w1", "t0")}})
+        session = self.start(
+            {
+                "run": {"out": json.dumps({"first_message": {"sent": True}})},
+                "get:w1": {"out": raw("w1", "t0")},
+            }
+        )
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="claude"))
         self.assertFalse(result["isError"], text)
         (argv,) = self.runs("run")
-        self.assertEqual(argv[:10], ["run", "--bg", "--name", "w1", "--cwd", "/tmp/c", "--parent", "t0", "--json",
-                                         "--no-notify"])
+        self.assertEqual(
+            argv[:10],
+            [
+                "run",
+                "--bg",
+                "--name",
+                "w1",
+                "--cwd",
+                "/tmp/c",
+                "--parent",
+                "t0",
+                "--json",
+                "--no-notify",
+            ],
+        )
         program = unwrap(argv[10:])
         self.assertEqual(program[:3], ["claude", "--permission-mode", "auto"])
         self.assertTrue(program[3].startswith("do x"))
-        self.assertIn("When done or stuck, call the agent-runtime report tool with your result.", program[3])
+        self.assertIn(
+            "When done or stuck, call the agent-runtime report tool with your result.", program[3]
+        )
         self.assertNotIn("hc send", program[3])
         info = json.loads(text)
         self.assertEqual((info["name"], info["address"], info["parent"]), ("w1", "t9", "t0"))
@@ -286,7 +339,16 @@ class SpawnTests(ToolCase):
 
     def test_whitespace_or_control_characters_in_model_are_an_error(self):
         """agent-runtime/R133"""
-        for model in (" haiku", "haiku ", "  -x", "ha iku", "ha\niku", "ha\x00iku", "ha\x7fiku", "ha\tiku"):
+        for model in (
+            " haiku",
+            "haiku ",
+            "  -x",
+            "ha iku",
+            "ha\niku",
+            "ha\x00iku",
+            "ha\x7fiku",
+            "ha\tiku",
+        ):
             with self.subTest(model=model):
                 session = self.start()
                 result, _ = self.call(session, "spawn", dict(self.ARGS, model=model))
@@ -299,11 +361,24 @@ class SpawnTests(ToolCase):
     def test_claude_agent_flag(self):
         """agent-runtime/R136"""
         argv = self.spawn_argv(cli="claude", agent="scene-reviewer")
-        self.assertEqual(argv[:5], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto"])
+        self.assertEqual(
+            argv[:5], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto"]
+        )
         self.assertEqual(len(argv), 6)
         self.assertTrue(argv[-1].startswith("do x"))
         argv = self.spawn_argv(cli="claude", agent="scene-reviewer", model="haiku")
-        self.assertEqual(argv[:7], ["claude", "--agent", "scene-reviewer", "--permission-mode", "auto", "--model", "haiku"])
+        self.assertEqual(
+            argv[:7],
+            [
+                "claude",
+                "--agent",
+                "scene-reviewer",
+                "--permission-mode",
+                "auto",
+                "--model",
+                "haiku",
+            ],
+        )
         self.assertEqual(len(argv), 8)
         self.assertTrue(argv[-1].startswith("do x"))
 
@@ -322,7 +397,10 @@ class SpawnTests(ToolCase):
         self.assertEqual(claude[:3], ["claude", "--permission-mode", "auto"])
         self.assertEqual(len(claude), 4)
         self.assertEqual(claude, self.spawn_argv(cli="claude", agent="none"))
-        self.assertEqual(self.spawn_argv(cli="claude", agent="implementer")[:3], ["claude", "--agent", "implementer"])
+        self.assertEqual(
+            self.spawn_argv(cli="claude", agent="implementer")[:3],
+            ["claude", "--agent", "implementer"],
+        )
         codex = self.spawn_argv(cli="codex")
         self.assertTrue(codex[-1].startswith("do x"))
         self.assertEqual(codex, self.spawn_argv(cli="codex", agent="none"))
@@ -332,7 +410,21 @@ class SpawnTests(ToolCase):
 
     def test_invalid_agent_is_an_error(self):
         """agent-runtime/R139"""
-        for agent in ("", "   ", 5, ["a"], True, "-x", "../x", "a/b", "a.b", "a" * 65, " a", "a b", "a\n"):
+        for agent in (
+            "",
+            "   ",
+            5,
+            ["a"],
+            True,
+            "-x",
+            "../x",
+            "a/b",
+            "a.b",
+            "a" * 65,
+            " a",
+            "a b",
+            "a\n",
+        ):
             for cli in ("claude", "codex"):
                 with self.subTest(agent=agent, cli=cli):
                     session = self.start()
@@ -346,20 +438,29 @@ class SpawnTests(ToolCase):
         self.assertEqual(argv[:3], ["claude", "--agent", "plugin:reviewer"])
         self.write_agent("plugin:reviewer")
         session = self.start()
-        result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex", agent="plugin:reviewer"))
+        result, text = self.call(
+            session, "spawn", dict(self.ARGS, cli="codex", agent="plugin:reviewer")
+        )
         self.assertTrue(result["isError"])
         self.assertIn(":", text)
         self.assertEqual(len(self.runs("run")), 1)  # only the Claude spawn above
 
     def test_codex_agent_file_missing_or_without_instructions(self):
         """agent-runtime/R141"""
-        for body in (None, 'name = "reviewer"\n', "developer_instructions = 5\n",
-                     'developer_instructions = ""\n', 'developer_instructions = "  \\n "\n'):
+        for body in (
+            None,
+            'name = "reviewer"\n',
+            "developer_instructions = 5\n",
+            'developer_instructions = ""\n',
+            'developer_instructions = "  \\n "\n',
+        ):
             with self.subTest(body=body):
                 if body is not None:
                     self.write_agent("reviewer", body)
                 session = self.start()
-                result, text = self.call(session, "spawn", dict(self.ARGS, cli="codex", agent="reviewer"))
+                result, text = self.call(
+                    session, "spawn", dict(self.ARGS, cli="codex", agent="reviewer")
+                )
                 self.assertTrue(result["isError"])
                 self.assertIn("reviewer.toml", text)
                 self.assertEqual(self.runs("run"), [])
@@ -490,15 +591,18 @@ class SpawnTests(ToolCase):
         for cli in ("claude", "codex"):
             with self.subTest(cli=cli):
                 session = self.start()
-                result, _ = self.call(session, "spawn", dict(self.ARGS, cli=cli, model="--dangerous"))
+                result, _ = self.call(
+                    session, "spawn", dict(self.ARGS, cli=cli, model="--dangerous")
+                )
                 self.assertTrue(result["isError"])
                 self.assertEqual(self.runs("run"), [])
 
     def test_claude_effort_flag(self):
         """agent-runtime/R147"""
         argv = self.spawn_argv(cli="claude", model="haiku", effort="low")
-        self.assertEqual(argv[:7], ["claude", "--permission-mode", "auto",
-                                    "--model", "haiku", "--effort", "low"])
+        self.assertEqual(
+            argv[:7], ["claude", "--permission-mode", "auto", "--model", "haiku", "--effort", "low"]
+        )
         self.assertEqual(len(argv), 8)
 
     def test_codex_effort_config(self):
@@ -561,9 +665,18 @@ class SpawnTests(ToolCase):
 
 class ProfileTests(ToolCase):
     ARGS = {"kind": "worker", "name": "w1", "task": "profile task", "cwd": "/tmp"}
-    PROMPT = "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
-    BUILTIN_PROGRAMS = {"claude": ["claude", "--permission-mode", "auto", PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL],
-                        "codex": ["codex", "--no-daemon", PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL]}
+    PROMPT = (
+        "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
+    )
+    BUILTIN_PROGRAMS = {
+        "claude": [
+            "claude",
+            "--permission-mode",
+            "auto",
+            PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL,
+        ],
+        "codex": ["codex", "--no-daemon", PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL],
+    }
 
     def config(self, profiles):
         path = self.dir / "home" / ".config" / "agent-runtime" / "profiles.json"
@@ -573,7 +686,9 @@ class ProfileTests(ToolCase):
 
     def test_S26_exec_failure_never_echoes_expanded_secret(self):
         """S26: exec errors name the program without leaking a path containing a credential."""
-        self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$PROFILE_TEST_SECRET"}}})
+        self.config(
+            {"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$PROFILE_TEST_SECRET"}}}
+        )
         bindir = self.dir / "launcher-bin"
         bindir.mkdir()
         (bindir / "python3").symlink_to(sys.executable)
@@ -587,31 +702,56 @@ class ProfileTests(ToolCase):
 
     def test_S19_profile_scrubs_unset_provider_variables(self):
         """S19: only explicitly configured provider settings reach the worker."""
-        providers = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
-                     "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"]
+        providers = [
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ]
         self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_MODEL": "profile-model"}}})
         program = self.dir / "bin" / "claude"
-        program.write_text("#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n" %
-                           (sys.executable, providers))
+        program.write_text(
+            "#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n"
+            % (sys.executable, providers)
+        )
         program.chmod(0o755)
-        session = self.start({"execute_profile": True, "login_env": dict.fromkeys(providers, "inherited"),
-                              "get:w1": {"out": raw("w1", "t0")}})
+        session = self.start(
+            {
+                "execute_profile": True,
+                "login_env": dict.fromkeys(providers, "inherited"),
+                "get:w1": {"out": raw("w1", "t0")},
+            }
+        )
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
         self.assertFalse(result["isError"], text)
-        self.assertEqual(json.loads((self.dir / "overlay").read_text()), {"ANTHROPIC_MODEL": "profile-model"})
+        self.assertEqual(
+            json.loads((self.dir / "overlay").read_text()), {"ANTHROPIC_MODEL": "profile-model"}
+        )
 
     def test_S18_private_references_and_failures_within_startup_window(self):
         """S18: references stay private; diagnostics and exits inside the startup window fail launch."""
-        path = self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$ANTHROPIC_API_KEY"}}})
+        path = self.config(
+            {"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$ANTHROPIC_API_KEY"}}}
+        )
         program = self.dir / "bin" / "claude"
-        program.write_text("#!%s\nimport hashlib, os\nassert 'ANTHROPIC_API_KEY' not in os.environ\nassert hashlib.sha256(os.environ['ANTHROPIC_AUTH_TOKEN'].encode()).hexdigest() == os.environ['PROFILE_TEST_DIGEST']\nprint('reference-ok')\n" % sys.executable)
+        program.write_text(
+            "#!%s\nimport hashlib, os\nassert 'ANTHROPIC_API_KEY' not in os.environ\nassert hashlib.sha256(os.environ['ANTHROPIC_AUTH_TOKEN'].encode()).hexdigest() == os.environ['PROFILE_TEST_DIGEST']\nprint('reference-ok')\n"
+            % sys.executable
+        )
         program.chmod(0o755)
-        session = self.start({"execute_profile": True, "live": [], "get:w1": {"out": raw("w1", "t0")}},
-                             {"ANTHROPIC_API_KEY": "server-value-must-not-be-used", "AGENT_RUNTIME_DISPATCH": "1"})
+        session = self.start(
+            {"execute_profile": True, "live": [], "get:w1": {"out": raw("w1", "t0")}},
+            {"ANTHROPIC_API_KEY": "server-value-must-not-be-used", "AGENT_RUNTIME_DISPATCH": "1"},
+        )
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
         self.assertFalse(result["isError"], text)
-        self.assertEqual(json.loads((self.dir / "overlay.audit").read_text()),
-                         {"argv": False, "config": False, "overlay": False})
+        self.assertEqual(
+            json.loads((self.dir / "overlay.audit").read_text()),
+            {"argv": False, "config": False, "overlay": False},
+        )
         self.assertEqual((self.dir / "overlay").read_text(), "reference-ok\n")
         self.assertNotIn("server-value-must-not-be-used", self.log.read_text())
         self.assertIn("$ANTHROPIC_API_KEY", path.read_text())
@@ -619,7 +759,14 @@ class ProfileTests(ToolCase):
         replies = json.loads((self.dir / "replies").read_text())
         replies["live"] = []
         (self.dir / "replies").write_text(json.dumps(replies))
-        self.config({"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "$MISSING_PROFILE_SECRET"}}})
+        self.config(
+            {
+                "custom": {
+                    "cli": "claude",
+                    "env": {"ANTHROPIC_AUTH_TOKEN": "$MISSING_PROFILE_SECRET"},
+                }
+            }
+        )
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
         self.assertTrue(result["isError"])
         self.assertIn("MISSING_PROFILE_SECRET", text)
@@ -637,15 +784,23 @@ class ProfileTests(ToolCase):
                 self.assertIn("MISSING_PROFILE_SECRET", text)
                 self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
                 from agent_runtime.dispatch_store import Store
+
                 with Store({"HOME": str(self.dir / "home")}).transaction() as db:
-                    self.assertEqual(db.execute("SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1").fetchone()[0], "failed")
+                    self.assertEqual(
+                        db.execute(
+                            "SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1"
+                        ).fetchone()[0],
+                        "failed",
+                    )
                     self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
         # Exits observed inside the startup window are failures even without a diagnostic.
         for state in ("finished", "exited"):
             with self.subTest(state=state):
                 replies = json.loads((self.dir / "replies").read_text())
                 replies.update(execute_profile=False, profile_ready_at=0)
-                replies["get:w1"] = {"out": json.dumps({"address": "t9", "parent": "t0", "state": state})}
+                replies["get:w1"] = {
+                    "out": json.dumps({"address": "t9", "parent": "t0", "state": state})
+                }
                 replies["read:w1"] = {"out": ""}
                 (self.dir / "replies").write_text(json.dumps(replies))
                 result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom"))
@@ -654,23 +809,44 @@ class ProfileTests(ToolCase):
                 self.assertIn("launcher exited", text)
                 self.assertEqual(json.loads((self.dir / "replies").read_text())["live"], [])
                 with Store({"HOME": str(self.dir / "home")}).transaction() as db:
-                    self.assertEqual(db.execute("SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1").fetchone()[0], "failed")
+                    self.assertEqual(
+                        db.execute(
+                            "SELECT state FROM assignments ORDER BY rowid DESC LIMIT 1"
+                        ).fetchone()[0],
+                        "failed",
+                    )
                     self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
 
     def test_S22_override_replaces_default_config_for_schema_and_launcher(self):
         """S22: AGENT_RUNTIME_PROFILES selects a different file for listing and launching."""
         self.config({"ignored": {"cli": "claude", "env": {}}})
         override = self.dir / "home" / "alternate.json"
-        override.write_text(json.dumps({"profiles": {"selected": {"cli": "claude", "env": {"PROFILE_MARKER": "selected"}}}}))
+        override.write_text(
+            json.dumps(
+                {"profiles": {"selected": {"cli": "claude", "env": {"PROFILE_MARKER": "selected"}}}}
+            )
+        )
         program = self.dir / "bin" / "claude"
-        program.write_text("#!%s\nimport os\nprint(os.environ['PROFILE_MARKER'])\n" % sys.executable)
+        program.write_text(
+            "#!%s\nimport os\nprint(os.environ['PROFILE_MARKER'])\n" % sys.executable
+        )
         program.chmod(0o755)
-        session = self.start({"execute_profile": True, "get:w1": {"out": raw("w1", "t0")},
-                              "login_env": {"AGENT_RUNTIME_PROFILES": str(self.dir / "wrong.json"),
-                                            "XDG_CONFIG_HOME": "/wrong"}},
-                             {"AGENT_RUNTIME_PROFILES": "~/alternate.json"})
+        session = self.start(
+            {
+                "execute_profile": True,
+                "get:w1": {"out": raw("w1", "t0")},
+                "login_env": {
+                    "AGENT_RUNTIME_PROFILES": str(self.dir / "wrong.json"),
+                    "XDG_CONFIG_HOME": "/wrong",
+                },
+            },
+            {"AGENT_RUNTIME_PROFILES": "~/alternate.json"},
+        )
         tools = session.send("tools/list")["result"]["tools"]
-        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi", "selected"])
+        self.assertEqual(
+            tools[0]["inputSchema"]["properties"]["cli"]["enum"],
+            ["claude", "codex", "pi", "selected"],
+        )
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="selected"))
         self.assertFalse(result["isError"], text)
         self.assertEqual((self.dir / "overlay").read_text(), "selected\n")
@@ -679,24 +855,54 @@ class ProfileTests(ToolCase):
         """S21: removing config restores exactly the original built-in schema and commands."""
         path = self.config({"custom": {"cli": "claude", "env": {}}})
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
-        self.assertIn("custom", session.send("tools/list")["result"]["tools"][0]["inputSchema"]["properties"]["cli"]["enum"])
+        self.assertIn(
+            "custom",
+            session.send("tools/list")["result"]["tools"][0]["inputSchema"]["properties"]["cli"][
+                "enum"
+            ],
+        )
         path.unlink()
         tools = session.send("tools/list")["result"]["tools"]
-        self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi"])
+        self.assertEqual(
+            tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi"]
+        )
         for family, program in self.BUILTIN_PROGRAMS.items():
             result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
             self.assertFalse(result["isError"], text)
-            self.assertEqual(self.runs("run")[-1], ["run", "--bg", "--name", "w1", "--cwd", "/tmp", "--parent", "t0",
-                                                   "--json", "--no-notify"] + scrub(PROVIDERS) + program)
+            self.assertEqual(
+                self.runs("run")[-1],
+                [
+                    "run",
+                    "--bg",
+                    "--name",
+                    "w1",
+                    "--cwd",
+                    "/tmp",
+                    "--parent",
+                    "t0",
+                    "--json",
+                    "--no-notify",
+                ]
+                + scrub(PROVIDERS)
+                + program,
+            )
 
-    MINIMAX = {"cli": "claude", "env": {"ANTHROPIC_BASE_URL": "https://provider.example/api",
-                                        "ANTHROPIC_MODEL": "provider-model", "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "512000"}}
+    MINIMAX = {
+        "cli": "claude",
+        "env": {
+            "ANTHROPIC_BASE_URL": "https://provider.example/api",
+            "ANTHROPIC_MODEL": "provider-model",
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "512000",
+        },
+    }
     WATCHED = PROVIDERS + ["CLAUDE_CODE_MAX_CONTEXT_TOKENS"]
 
     def env_printer(self, name):
         program = self.dir / "bin" / name
-        program.write_text("#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n"
-                           % (sys.executable, self.WATCHED))
+        program.write_text(
+            "#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n"
+            % (sys.executable, self.WATCHED)
+        )
         program.chmod(0o755)
 
     def overlays(self):
@@ -708,8 +914,10 @@ class ProfileTests(ToolCase):
         for family in ("claude", "codex"):
             self.env_printer(family)
         leaked = {key: "inherited" for key in self.WATCHED if key != "ANTHROPIC_BASE_URL"}
-        session = self.start({"execute_profile": True, "login_env": leaked, "get:w1": {"out": raw("w1", "t0")}},
-                             {"ANTHROPIC_BASE_URL": "lead-value"})
+        session = self.start(
+            {"execute_profile": True, "login_env": leaked, "get:w1": {"out": raw("w1", "t0")}},
+            {"ANTHROPIC_BASE_URL": "lead-value"},
+        )
         for family in ("claude", "codex"):
             result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
             self.assertFalse(result["isError"], text)
@@ -721,18 +929,33 @@ class ProfileTests(ToolCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{not json")
         self.env_printer("claude")
-        session = self.start({"execute_profile": True, "login_env": dict.fromkeys(PROVIDERS, "inherited"),
-                              "get:w1": {"out": raw("w1", "t0")}})
+        session = self.start(
+            {
+                "execute_profile": True,
+                "login_env": dict.fromkeys(PROVIDERS, "inherited"),
+                "get:w1": {"out": raw("w1", "t0")},
+            }
+        )
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="claude"))
         self.assertFalse(result["isError"], text)
         self.assertEqual(self.overlays(), [{}])
 
     def test_profile_gets_exactly_its_own_values(self):
         """#35: another profile's overlay keys never reach a profile worker."""
-        self.config({"minimax": self.MINIMAX, "other": {"cli": "claude", "env": {"ANTHROPIC_MODEL": "other-model"}}})
+        self.config(
+            {
+                "minimax": self.MINIMAX,
+                "other": {"cli": "claude", "env": {"ANTHROPIC_MODEL": "other-model"}},
+            }
+        )
         self.env_printer("claude")
-        session = self.start({"execute_profile": True, "get:w1": {"out": raw("w1", "t0")},
-                              "login_env": {key: "inherited" for key in self.WATCHED}})
+        session = self.start(
+            {
+                "execute_profile": True,
+                "get:w1": {"out": raw("w1", "t0")},
+                "login_env": {key: "inherited" for key in self.WATCHED},
+            }
+        )
         for profile in ("other", "minimax"):
             result, text = self.call(session, "spawn", dict(self.ARGS, cli=profile))
             self.assertFalse(result["isError"], text)
@@ -740,47 +963,82 @@ class ProfileTests(ToolCase):
 
     def test_S17_profiles_wrap_each_family_with_prompt_last(self):
         """S17: configured names launch the family's standard argv through the installed shim."""
-        config = self.config({"custom-claude": {"cli": "claude", "env": {}},
-                     "custom-codex": {"cli": "codex", "env": {}}})
+        config = self.config(
+            {
+                "custom-claude": {"cli": "claude", "env": {}},
+                "custom-codex": {"cli": "codex", "env": {}},
+            }
+        )
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
         for family, builtin in self.BUILTIN_PROGRAMS.items():
             with self.subTest(family=family):
-                result, text = self.call(session, "spawn", dict(self.ARGS, cli="custom-" + family, model="sample"))
+                result, text = self.call(
+                    session, "spawn", dict(self.ARGS, cli="custom-" + family, model="sample")
+                )
                 self.assertFalse(result["isError"], text)
                 argv = self.runs("run")[-1][10:]
-                self.assertEqual(argv, [str(SERVER.parent.parent / "bin" / "agent-runtime-profile"),
-                                        "custom-" + family, str(config), "--"] +
-                                 builtin[:-1] + ["--model", "sample"] + builtin[-1:])
-
+                self.assertEqual(
+                    argv,
+                    [
+                        str(SERVER.parent.parent / "bin" / "agent-runtime-profile"),
+                        "custom-" + family,
+                        str(config),
+                        "--",
+                    ]
+                    + builtin[:-1]
+                    + ["--model", "sample"]
+                    + builtin[-1:],
+                )
 
     def test_profile_permission_mode_and_settings_replace_auto(self):
         """agent-runtime/R143 agent-runtime/R144"""
         settings = self.dir / "home" / "worker-settings.json"
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text("{}")
-        config = self.config({"plain": {"cli": "claude", "env": {}},
-                              "edits": {"cli": "claude", "env": {}, "permission_mode": "acceptEdits",
-                                        "settings": "~/worker-settings.json"}})
+        config = self.config(
+            {
+                "plain": {"cli": "claude", "env": {}},
+                "edits": {
+                    "cli": "claude",
+                    "env": {},
+                    "permission_mode": "acceptEdits",
+                    "settings": "~/worker-settings.json",
+                },
+            }
+        )
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
         launcher = str(SERVER.parent.parent / "bin" / "agent-runtime-profile")
         builtin = self.BUILTIN_PROGRAMS["claude"]
-        expected = {"plain": builtin,
-                    "edits": ["claude", "--permission-mode", "acceptEdits",
-                              "--settings", str(settings), self.PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL]}
+        expected = {
+            "plain": builtin,
+            "edits": [
+                "claude",
+                "--permission-mode",
+                "acceptEdits",
+                "--settings",
+                str(settings),
+                self.PROMPT + "\n\n" + hc_tools.LEGACY_WORKER_PROTOCOL,
+            ],
+        }
         for profile, program in expected.items():
             with self.subTest(profile=profile):
                 result, text = self.call(session, "spawn", dict(self.ARGS, cli=profile))
                 self.assertFalse(result["isError"], text)
-                self.assertEqual(self.runs("run")[-1][10:], [launcher, profile, str(config), "--"] + program)
+                self.assertEqual(
+                    self.runs("run")[-1][10:], [launcher, profile, str(config), "--"] + program
+                )
 
     def test_missing_settings_file_is_refused_before_hc_run(self):
         """agent-runtime/R146"""
-        self.config({"edits": {"cli": "claude", "env": {}, "settings": "/nonexistent/worker-settings.json"}})
+        self.config(
+            {"edits": {"cli": "claude", "env": {}, "settings": "/nonexistent/worker-settings.json"}}
+        )
         session = self.start({"get:w1": {"out": raw("w1", "t0")}})
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="edits"))
         self.assertTrue(result["isError"])
         self.assertIn("settings file /nonexistent/worker-settings.json does not exist", text)
         self.assertEqual(self.runs("run"), [])
+
 
 class SendTests(ToolCase):
     CHILD = {"get:w1": {"out": raw("w1", "t0")}}
@@ -788,7 +1046,10 @@ class SendTests(ToolCase):
     def test_S4_message_refuses_a_terminal_that_is_not_my_child(self):
         """agent-runtime-tools/S4"""
         session = self.start({"get:w1": {"out": raw("w1", "tX")}})
-        for name, args in (("message", {"to": "w1", "text": "hi"}), ("resume", {"name": "w1", "task": "go"})):
+        for name, args in (
+            ("message", {"to": "w1", "text": "hi"}),
+            ("resume", {"name": "w1", "task": "go"}),
+        ):
             result, text = self.call(session, name, args)
             self.assertTrue(result["isError"], name)
             self.assertIn("not your child", text)
@@ -822,7 +1083,9 @@ class SendTests(ToolCase):
 class WaitCollectStopReportTests(ToolCase):
     def test_S5_wait_any_waits_on_children_and_returns_their_status(self):
         """agent-runtime-tools/S5"""
-        listing = json.dumps({"terminals": [{"address": "t1", "parent": "t0"}, {"address": "t8", "parent": "tX"}]})
+        listing = json.dumps(
+            {"terminals": [{"address": "t1", "parent": "t0"}, {"address": "t8", "parent": "tX"}]}
+        )
         session = self.start({"ls": {"out": listing}})
         result, text = self.call(session, "wait", {"target": "any", "timeout": 20})
         self.assertFalse(result["isError"], text)
@@ -833,16 +1096,25 @@ class WaitCollectStopReportTests(ToolCase):
 
     def test_S5_wait_all_and_named_worker(self):
         """agent-runtime-tools/S5"""
-        session = self.start({"ls": {"out": json.dumps({"terminals": []})}, "get:w1": {"out": raw("w1", "t0")}})
+        session = self.start(
+            {"ls": {"out": json.dumps({"terminals": []})}, "get:w1": {"out": raw("w1", "t0")}}
+        )
         self.call(session, "wait", {"target": "all"})
         self.call(session, "wait", {"target": "w1"})
-        self.assertEqual(self.runs("wait"), [["wait", "--children", "all", "--timeout", "170", "--json"],
-                                             ["wait", "w1", "--timeout", "170", "--json"]])
+        self.assertEqual(
+            self.runs("wait"),
+            [
+                ["wait", "--children", "all", "--timeout", "170", "--json"],
+                ["wait", "w1", "--timeout", "170", "--json"],
+            ],
+        )
 
     def test_S5_wait_returns_hcs_parsed_news_without_truncation(self):
         """agent-runtime-tools/S5"""
         news = {"reason": "idle", "terminal": "t1", "note": "x" * 900}
-        session = self.start({"wait": {"out": json.dumps(news)}, "ls": {"out": json.dumps({"terminals": []})}})
+        session = self.start(
+            {"wait": {"out": json.dumps(news)}, "ls": {"out": json.dumps({"terminals": []})}}
+        )
         _, text = self.call(session, "wait", {"target": "any"})
         self.assertEqual(json.loads(text)["wait"]["news"], news)
 
@@ -855,9 +1127,18 @@ class WaitCollectStopReportTests(ToolCase):
     def test_S5_long_wait_does_not_block_ping_and_cancel_ends_it(self):
         """agent-runtime-tools/S5"""
         session = self.start({"wait": {"sleep": 30}, "ls": {"out": json.dumps({"terminals": []})}})
-        write = lambda m: (session.proc.stdin.write(json.dumps(m) + "\n"), session.proc.stdin.flush())
-        write({"jsonrpc": "2.0", "id": 50, "method": "tools/call",
-               "params": {"name": "wait", "arguments": {"target": "any"}}})
+        write = lambda m: (
+            session.proc.stdin.write(json.dumps(m) + "\n"),
+            session.proc.stdin.flush(),
+        )
+        write(
+            {
+                "jsonrpc": "2.0",
+                "id": 50,
+                "method": "tools/call",
+                "params": {"name": "wait", "arguments": {"target": "any"}},
+            }
+        )
         write({"jsonrpc": "2.0", "id": 51, "method": "ping"})
         self.assertEqual(json.loads(session.proc.stdout.readline())["id"], 51)
         write({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 50}})
@@ -889,9 +1170,18 @@ class WaitCollectStopReportTests(ToolCase):
         """agent-runtime/R34
         agent-runtime-dispatch/S1; retains transport cancellation coverage."""
         session = self.start({"read": {"sleep": 30}})
-        write = lambda m: (session.proc.stdin.write(json.dumps(m) + "\n"), session.proc.stdin.flush())
-        write({"jsonrpc": "2.0", "id": 50, "method": "tools/call",
-               "params": {"name": "collect", "arguments": {"name": "w1"}}})
+        write = lambda m: (
+            session.proc.stdin.write(json.dumps(m) + "\n"),
+            session.proc.stdin.flush(),
+        )
+        write(
+            {
+                "jsonrpc": "2.0",
+                "id": 50,
+                "method": "tools/call",
+                "params": {"name": "collect", "arguments": {"name": "w1"}},
+            }
+        )
         write({"jsonrpc": "2.0", "id": 51, "method": "ping"})
         self.assertEqual(json.loads(session.proc.stdout.readline())["id"], 51)
         write({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 50}})
@@ -903,8 +1193,17 @@ class WaitCollectStopReportTests(ToolCase):
 
     def test_S6_collect_returns_text_after_last_prompt_line_bounded(self):
         """agent-runtime-tools/S6"""
-        body = ["old output", "❯ first task", "old answer", "› do the thing"] + ["line %d" % i for i in range(300)] + ["❯ "]
-        session = self.start({"read": {"out": "\n".join(body)}, "get:w1": {"out": raw("w1", "t0", app="claude-code")}})
+        body = (
+            ["old output", "❯ first task", "old answer", "› do the thing"]
+            + ["line %d" % i for i in range(300)]
+            + ["❯ "]
+        )
+        session = self.start(
+            {
+                "read": {"out": "\n".join(body)},
+                "get:w1": {"out": raw("w1", "t0", app="claude-code")},
+            }
+        )
         result, text = self.call(session, "collect", {"name": "w1"})
         self.assertFalse(result["isError"])
         self.assertNotIn("old answer", text)
@@ -916,7 +1215,9 @@ class WaitCollectStopReportTests(ToolCase):
     def test_S6_collect_on_codex_skips_the_composer_and_footer(self):
         """agent-runtime-tools/S6"""
         screen = (FIXTURES / "codex_working_interrupted.txt").read_text()
-        session = self.start({"read": {"out": screen}, "get:w1": {"out": raw("w1", "t0", app="codex")}})
+        session = self.start(
+            {"read": {"out": screen}, "get:w1": {"out": raw("w1", "t0", app="codex")}}
+        )
         _, text = self.call(session, "collect", {"name": "w1"})
         self.assertIn("Running npm run build", text)
         self.assertNotIn("Ask Codex to do anything", text)
@@ -969,7 +1270,9 @@ class WaitCollectStopReportTests(ToolCase):
 class StopCleanupTests(ToolCase):
     def test_S7_stop_still_removes_a_terminal_that_already_exited(self):
         """agent-runtime-tools/S7"""
-        session = self.start({"get:w1": {"out": raw("w1", "t0")}, "kill": {"rc": 1, "err": "already exited"}})
+        session = self.start(
+            {"get:w1": {"out": raw("w1", "t0")}, "kill": {"rc": 1, "err": "already exited"}}
+        )
         result, text = self.call(session, "stop", {"name": "w1"})
         self.assertFalse(result["isError"], text)
         self.assertEqual([c[0] for c in self.runs() if c[0] in ("kill", "rm")], ["kill", "rm"])
@@ -977,25 +1280,43 @@ class StopCleanupTests(ToolCase):
     def test_S2_cancelling_spawn_ends_the_terminal_it_started(self):
         """agent-runtime-tools/S2"""
         session = self.start({"run": {"sleep": 30}})
-        write = lambda m: (session.proc.stdin.write(json.dumps(m) + "\n"), session.proc.stdin.flush())
-        write({"jsonrpc": "2.0", "id": 60, "method": "tools/call", "params": {"name": "spawn", "arguments": {
-            "kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp"}}})
+        write = lambda m: (
+            session.proc.stdin.write(json.dumps(m) + "\n"),
+            session.proc.stdin.flush(),
+        )
+        write(
+            {
+                "jsonrpc": "2.0",
+                "id": 60,
+                "method": "tools/call",
+                "params": {
+                    "name": "spawn",
+                    "arguments": {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp"},
+                },
+            }
+        )
         deadline = time.monotonic() + 5
         while not self.runs("run") and time.monotonic() < deadline:
             time.sleep(0.05)
         write({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 60}})
         session.proc.stdin.close()
         self.assertEqual(session.proc.wait(timeout=15), 0)
-        self.assertEqual([c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]])
+        self.assertEqual(
+            [c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]]
+        )
 
 
 class RuntimeGapTests(ToolCase):
     def test_S9_herdmates_worker_tools_return_a_gap_naming_the_native_tool(self):
         """agent-runtime-tools/S9"""
         session = self.start(env={"HERDR_PANE_ID": "p1", "CLAUDECODE": "1"})
-        for name, args in (("spawn", {"kind": "worker", "name": "w", "task": "t", "cwd": "/"}),
-                           ("message", {"to": "w", "text": "t"}), ("wait", {"target": "any"}),
-                           ("stop", {"name": "w"}), ("collect", {"name": "w"})):
+        for name, args in (
+            ("spawn", {"kind": "worker", "name": "w", "task": "t", "cwd": "/"}),
+            ("message", {"to": "w", "text": "t"}),
+            ("wait", {"target": "any"}),
+            ("stop", {"name": "w"}),
+            ("collect", {"name": "w"}),
+        ):
             result, text = self.call(session, name, args)
             self.assertTrue(result["isError"], name)
             self.assertTrue(text.startswith("gap: add "), text)

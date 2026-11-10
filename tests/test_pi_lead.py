@@ -41,31 +41,39 @@ class PiIdentityTests(unittest.TestCase):
         self.assertEqual(lib.cli_of_args("pi "), "pi")
         self.assertEqual(lib.cli_of_args("pi --version"), "pi")
         self.assertEqual(lib.cli_of_args("node /x/node_modules/.bin/pi --version"), "pi")
-        self.assertEqual(lib.cli_of_args("node /x/@earendil-works/pi-coding-agent/dist/index.js"), "pi")
+        self.assertEqual(
+            lib.cli_of_args("node /x/@earendil-works/pi-coding-agent/dist/index.js"), "pi"
+        )
         for other in ("pip install", "/usr/bin/pip3", "pixel --version", "node /x/pi.js"):
             self.assertIsNone(lib.cli_of_args(other), other)
 
     def test_pi_marker_never_resolves_to_claude(self):
         """agent-runtime/P2-S1"""
         self.assertEqual(lib.detect_cli({"PI_CODING_AGENT": "true"}), "pi")
-        info = lib.resolve({"PI_CODING_AGENT": "true", "HC_TERMINAL_ID": "t0"}, None, lambda t: {"parent": None})
+        info = lib.resolve(
+            {"PI_CODING_AGENT": "true", "HC_TERMINAL_ID": "t0"}, None, lambda t: {"parent": None}
+        )
         self.assertEqual((info["cli"], info["role"]), ("pi", "lead"))
 
     def test_pi_generation_is_the_pi_process_pid_and_start_time(self):
         """agent-runtime/P2-S1"""
         procs = {100: (90, "/bin/zsh -l"), 90: (80, "pi "), 80: (1, "launchd")}
-        with mock.patch.object(lib, "ps_entry", side_effect=procs.get), \
-                mock.patch.object(lib, "lstart", side_effect={90: "Fri Nov  7 09:00:00 2026"}.get), \
-                mock.patch.object(lib.os, "getppid", return_value=100):
+        with (
+            mock.patch.object(lib, "ps_entry", side_effect=procs.get),
+            mock.patch.object(lib, "lstart", side_effect={90: "Fri Nov  7 09:00:00 2026"}.get),
+            mock.patch.object(lib.os, "getppid", return_value=100),
+        ):
             self.assertEqual(lib.cli_generation(), "90:Fri Nov  7 09:00:00 2026")
             self.assertIsNone(lib.parent_cli())  # the direct parent is a shell, not the harness
 
     def test_claude_and_codex_keep_their_own_identity(self):
         """agent-runtime/P2-S5"""
         procs = {100: (90, "/bin/zsh"), 90: (80, "codex exec"), 80: (1, "launchd")}
-        with mock.patch.object(lib, "ps_entry", side_effect=procs.get), \
-                mock.patch.object(lib, "lstart", side_effect={90: "Fri Nov  7 09:00:00 2026"}.get), \
-                mock.patch.object(lib.os, "getppid", return_value=100):
+        with (
+            mock.patch.object(lib, "ps_entry", side_effect=procs.get),
+            mock.patch.object(lib, "lstart", side_effect={90: "Fri Nov  7 09:00:00 2026"}.get),
+            mock.patch.object(lib.os, "getppid", return_value=100),
+        ):
             self.assertEqual(lib.cli_generation(), "90:Fri Nov  7 09:00:00 2026")
         with mock.patch.object(lib, "ps_entry", return_value=None):
             self.assertEqual(lib.detect_cli({"CODEX_THREAD_ID": "x"}), "codex")
@@ -84,7 +92,9 @@ class PiIdentityTests(unittest.TestCase):
         """agent-runtime/P2-S4: two hosts claiming one session are ambiguous, not Claude."""
         with mock.patch.object(lib, "cli_generation", return_value=None):
             with self.assertRaises(hc_tools.ToolError) as error:
-                hc_tools.dispatch_identity({"PI_CODING_AGENT": "true", "CLAUDECODE": "1", "HC_SCOPE": "pi"})
+                hc_tools.dispatch_identity(
+                    {"PI_CODING_AGENT": "true", "CLAUDECODE": "1", "HC_SCOPE": "pi"}
+                )
         self.assertIn("ambiguous", str(error.exception))
 
     def test_claude_and_codex_keep_their_session_id_fallback(self):
@@ -92,8 +102,10 @@ class PiIdentityTests(unittest.TestCase):
 
         PR #45 renames the Claude session variable; the fallback stays a session id either way."""
         with mock.patch.object(lib, "cli_generation", return_value=None):
-            self.assertEqual(hc_tools.dispatch_identity({"CODEX_THREAD_ID": "thread", "HC_SCOPE": "s"}),
-                             ("s", "thread"))
+            self.assertEqual(
+                hc_tools.dispatch_identity({"CODEX_THREAD_ID": "thread", "HC_SCOPE": "s"}),
+                ("s", "thread"),
+            )
             found = []
             for name in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
                 try:
@@ -128,9 +140,14 @@ class PiPolicyTests(unittest.TestCase):
             host = host_policy.host_of(env)
             self.assertEqual(host, "pi")
             with self.assertRaises(host_policy.Refused):
-                host_policy.authorize(env, host, "lead", "spawn",
-                                      {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp",
-                                       "cli": "claude"}, None)
+                host_policy.authorize(
+                    env,
+                    host,
+                    "lead",
+                    "spawn",
+                    {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp", "cli": "claude"},
+                    None,
+                )
 
     def test_policy_allows_the_named_backend_and_nothing_else(self):
         """agent-runtime/P2-S4"""
@@ -142,7 +159,9 @@ class PiPolicyTests(unittest.TestCase):
             with self.assertRaises(host_policy.Refused):
                 host_policy.authorize(env, host, "lead", "spawn", dict(arguments), None)
             with self.assertRaises(host_policy.Refused):
-                host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cli="other-cli"), None)
+                host_policy.authorize(
+                    env, host, "lead", "spawn", dict(arguments, cli="other-cli"), None
+                )
             host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cli="claude"), None)
 
     def test_policy_limits_the_directory_a_worker_may_run_in(self):
@@ -172,17 +191,28 @@ class PiPolicyTests(unittest.TestCase):
         with mock.patch.object(lib, "parent_cli", return_value="pi"):
             host = host_policy.host_of(env)
             with self.assertRaises(host_policy.Refused):
-                host_policy.authorize(env, host, "worker", "spawn",
-                                      {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp",
-                                       "cli": "claude"}, None)
+                host_policy.authorize(
+                    env,
+                    host,
+                    "worker",
+                    "spawn",
+                    {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp", "cli": "claude"},
+                    None,
+                )
 
     def test_claude_and_codex_hosts_keep_their_unrestricted_behaviour(self):
         """agent-runtime/P2-S5"""
         for host in ("claude", "codex"):
             with mock.patch.object(lib, "parent_cli", return_value=host):
                 self.assertEqual(host_policy.host_of(self.env()), host)
-                host_policy.authorize(self.env(), host, "lead", "spawn",
-                                      {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp"}, None)
+                host_policy.authorize(
+                    self.env(),
+                    host,
+                    "lead",
+                    "spawn",
+                    {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp"},
+                    None,
+                )
 
 
 class PiLeadTests(ToolCase):
@@ -196,13 +226,21 @@ class PiLeadTests(ToolCase):
         (self.config / "agent-runtime").mkdir(parents=True)
 
     def policy(self, **rules):
-        (self.config / "agent-runtime" / "hosts.json").write_text(json.dumps({"hosts": {"pi": rules}}),
-                                                                   encoding="utf-8")
+        (self.config / "agent-runtime" / "hosts.json").write_text(
+            json.dumps({"hosts": {"pi": rules}}), encoding="utf-8"
+        )
 
     def pi_env(self, **extra):
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
-               "HC_TERMINAL_ID": "t0", "HC_SCOPE": "pi", "AGENT_RUNTIME_DISPATCH": "1",
-               "XDG_CONFIG_HOME": str(self.config), "PI_CODING_AGENT": "true", "CODEX_THREAD_ID": ""}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+            "HC_SCOPE": "pi",
+            "AGENT_RUNTIME_DISPATCH": "1",
+            "XDG_CONFIG_HOME": str(self.config),
+            "PI_CODING_AGENT": "true",
+            "CODEX_THREAD_ID": "",
+        }
         env.update(extra)
         return env
 
@@ -215,20 +253,29 @@ class PiLeadTests(ToolCase):
             return [tuple(row) for row in db.execute("SELECT scope, lead, generation FROM teams")]
 
     def worker_session(self, address="t1"):
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
-               "HC_TERMINAL_ID": address, "CODEX_THREAD_ID": "worker-" + address, "HC_SCOPE": "pi",
-               "AGENT_RUNTIME_DISPATCH": "1"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": address,
+            "CODEX_THREAD_ID": "worker-" + address,
+            "HC_SCOPE": "pi",
+            "AGENT_RUNTIME_DISPATCH": "1",
+        }
         session = Session(env, new_cli=True)
         self.addCleanup(session.close)
         session.handshake()
         return session
 
     def lead_replies(self, workers=("w1",)):
-        rows = [{"name": name, "address": "t%d" % (index + 1), "parent": "t0", "status": "working"}
-                for index, name in enumerate(workers)]
-        replies = {"get:t0": {"out": raw("lead", None)},
-                   "ls": {"out": json.dumps({"terminals": rows})},
-                   "live": []}
+        rows = [
+            {"name": name, "address": "t%d" % (index + 1), "parent": "t0", "status": "working"}
+            for index, name in enumerate(workers)
+        ]
+        replies = {
+            "get:t0": {"out": raw("lead", None)},
+            "ls": {"out": json.dumps({"terminals": rows})},
+            "live": [],
+        }
         for row in rows:
             for key in (row["name"], row["address"]):
                 replies["get:" + key] = {"out": json.dumps(row)}
@@ -276,8 +323,11 @@ class PiLeadTests(ToolCase):
         replies = self.lead_replies()
         replies["read:w1"] = {"out": "the worker's answer"}
         session = self.pi_session(replies)
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                     "task": "review this", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "review this", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
         assignment = spawned["structuredContent"]["assignment_id"]
         self.assertEqual(spawned["structuredContent"]["name"], "w1")
@@ -285,8 +335,11 @@ class PiLeadTests(ToolCase):
         worker = self.worker_session()
         sent, text = self.call(session, "message", {"to": "w1", "text": "also check the tests"})
         self.assertFalse(sent["isError"], text)
-        reported, text = self.call(worker, "report", {"text": "STATUS: COMPLETE", "kind": "complete",
-                                                      "assignment_id": assignment})
+        reported, text = self.call(
+            worker,
+            "report",
+            {"text": "STATUS: COMPLETE", "kind": "complete", "assignment_id": assignment},
+        )
         self.assertFalse(reported["isError"], text)
         waited, text = self.call(session, "wait", {"target": "all", "timeout": 5})
         self.assertFalse(waited["isError"], text)
@@ -303,8 +356,11 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S2: the same path with the other backend."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "codex", "name": "w1",
-                                                     "task": "review this", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "codex", "name": "w1", "task": "review this", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
         self.assertIn("codex", self.runs("run")[-1])
 
@@ -312,14 +368,24 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S2: at-least-once delivery, one report."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, _ = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                  "task": "work", "cwd": "/tmp"})
+        spawned, _ = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         assignment = spawned["structuredContent"]["assignment_id"]
         worker = self.worker_session()
         for _ in range(2):
-            reported, text = self.call(worker, "report", {"text": "done", "kind": "complete",
-                                                          "assignment_id": assignment,
-                                                          "message_id": "retry-1"})
+            reported, text = self.call(
+                worker,
+                "report",
+                {
+                    "text": "done",
+                    "kind": "complete",
+                    "assignment_id": assignment,
+                    "message_id": "retry-1",
+                },
+            )
             self.assertFalse(reported["isError"], text)
         waited, text = self.call(session, "wait", {"target": "all", "timeout": 5})
         self.assertFalse(waited["isError"], text)
@@ -329,11 +395,17 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S2: one task, one worker, one report."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                     "task": "work", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
-        again, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                    "task": "work again", "cwd": "/tmp"})
+        again, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work again", "cwd": "/tmp"},
+        )
         self.assertTrue(again["isError"], text)
         self.assertIn("name_taken", text)  # the live name was refused, nothing was started
 
@@ -341,15 +413,28 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S2 (#31): wait(all) returns the first undelivered report."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies(("w1", "w2")))
-        fast, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                  "task": "fast", "cwd": "/tmp"})
+        fast, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "fast", "cwd": "/tmp"},
+        )
         self.assertFalse(fast["isError"], text)
-        slow, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w2",
-                                                  "task": "slow", "cwd": "/tmp"})
+        slow, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w2", "task": "slow", "cwd": "/tmp"},
+        )
         self.assertFalse(slow["isError"], text)
         worker = self.worker_session("t1")
-        reported, text = self.call(worker, "report", {"text": "fast done", "kind": "complete",
-                                                      "assignment_id": fast["structuredContent"]["assignment_id"]})
+        reported, text = self.call(
+            worker,
+            "report",
+            {
+                "text": "fast done",
+                "kind": "complete",
+                "assignment_id": fast["structuredContent"]["assignment_id"],
+            },
+        )
         self.assertFalse(reported["isError"], text)
         waited, text = self.call(session, "wait", {"target": "all", "timeout": 5})
         self.assertFalse(waited["isError"], text)
@@ -362,8 +447,11 @@ class PiLeadTests(ToolCase):
         once and the team limit is the same one every host sees."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                     "task": "work", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
         store = Store({"HOME": str(self.dir / "home")})
         with store.transaction() as db:
@@ -377,14 +465,18 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S3: the MCP connection dropped after the spawn; the work is not repeated."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                     "task": "work", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
         assignment = spawned["structuredContent"]["assignment_id"]
         session.close()  # the MCP connection dropped
         worker = self.worker_session()
-        reported, text = self.call(worker, "report", {"text": "done", "kind": "complete",
-                                                      "assignment_id": assignment})
+        reported, text = self.call(
+            worker, "report", {"text": "done", "kind": "complete", "assignment_id": assignment}
+        )
         self.assertFalse(reported["isError"], text)
         again = self.pi_session(self.lead_replies())
         waited, text = self.call(again, "wait", {"target": "all", "timeout": 5})
@@ -409,8 +501,11 @@ class PiLeadTests(ToolCase):
     def test_S4_a_pi_lead_may_not_mutate_without_a_policy(self):
         """agent-runtime/P2-S4: mutations are denied by default."""
         session = self.pi_session(self.lead_replies())
-        denied, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                    "task": "work", "cwd": "/tmp"})
+        denied, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertTrue(denied["isError"], text)
         self.assertIn("not authorized to mutate", text)
         self.assertEqual(self.runs("run"), [])  # nothing was started
@@ -419,8 +514,11 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S4: an explicit, authorized backend; never a silent provider choice."""
         self.policy(mutations=True, backends=["codex"], paths=["/tmp"])
         session = self.pi_session(self.lead_replies())
-        denied, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                    "task": "work", "cwd": "/tmp"})
+        denied, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertTrue(denied["isError"], text)
         self.assertIn("not authorized", text)
         self.assertEqual(self.runs("run"), [])
@@ -429,8 +527,11 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S4: the path scope of a mutation."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        denied, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                    "task": "work", "cwd": "/etc"})
+        denied, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/etc"},
+        )
         self.assertTrue(denied["isError"], text)
         self.assertIn("may not start a worker in", text)
         self.assertEqual(self.runs("run"), [])
@@ -439,8 +540,9 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S4: the runtime never picks a provider for a Pi lead."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        denied, text = self.call(session, "spawn", {"kind": "worker", "name": "w1",
-                                                    "task": "work", "cwd": "/tmp"})
+        denied, text = self.call(
+            session, "spawn", {"kind": "worker", "name": "w1", "task": "work", "cwd": "/tmp"}
+        )
         self.assertTrue(denied["isError"], text)
         self.assertIn("explicit cli", text)
         self.assertEqual(self.runs("run"), [])
@@ -456,31 +558,51 @@ class PiLeadTests(ToolCase):
         """agent-runtime/P2-S4: two hosts claiming one session are ambiguous, not Claude."""
         with mock.patch.object(lib, "cli_generation", return_value=None):
             with self.assertRaises(hc_tools.ToolError) as error:
-                hc_tools.dispatch_identity({"PI_CODING_AGENT": "true", "CLAUDECODE": "1", "HC_SCOPE": "pi"})
+                hc_tools.dispatch_identity(
+                    {"PI_CODING_AGENT": "true", "CLAUDECODE": "1", "HC_SCOPE": "pi"}
+                )
         self.assertIn("ambiguous", str(error.exception))
 
     def test_S4_a_pi_lead_needs_the_durable_store(self):
         """agent-runtime/P2-S2: without dispatch there is no identity, attribution or scope."""
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
-               "HC_TERMINAL_ID": "t0", "HC_SCOPE": "pi", "PI_CODING_AGENT": "true"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+            "HC_SCOPE": "pi",
+            "PI_CODING_AGENT": "true",
+        }
         session = Session(env, new_cli=self.pi)
         self.addCleanup(session.close)
         session.handshake()
         denied, text = self.call(session, "status", {"name": "w1"})
         self.assertTrue(denied["isError"], text)
         self.assertIn("AGENT_RUNTIME_DISPATCH=1", text)
+
     # --- cancellation --------------------------------------------------------------------------
 
     def test_a_cancelled_wait_leaves_the_worker_running(self):
         """agent-runtime/P2-S2: an interrupted wait never stops or duplicates the worker."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "claude", "name": "w1",
-                                                     "task": "work", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
-        write = lambda m: (session.proc.stdin.write(json.dumps(m) + "\n"), session.proc.stdin.flush())
-        write({"jsonrpc": "2.0", "id": 50, "method": "tools/call",
-               "params": {"name": "wait", "arguments": {"target": "all", "timeout": 30}}})
+        write = lambda m: (
+            session.proc.stdin.write(json.dumps(m) + "\n"),
+            session.proc.stdin.flush(),
+        )
+        write(
+            {
+                "jsonrpc": "2.0",
+                "id": 50,
+                "method": "tools/call",
+                "params": {"name": "wait", "arguments": {"target": "all", "timeout": 30}},
+            }
+        )
         write({"jsonrpc": "2.0", "id": 51, "method": "ping"})
         self.assertEqual(json.loads(session.proc.stdout.readline())["id"], 51)
         write({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 50}})
