@@ -480,6 +480,20 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.calls("resume"), [])
         self.assertIn("| IN PROGRESS |", self.plan.read_text(encoding="utf-8"))
 
+    def test_S3_the_attempt_dispatched_again_is_waited_on_before_the_run_may_finish(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S3
+
+        The wait that came before the re-dispatch cannot list the new attempt. Judging the run idle on it sent the
+        loop to its finishing check, which asked `status` of a terminal the runtime had not settled yet: the real
+        runtime answers `unknown` there, so the unit was stranded and the new worker died with the drive."""
+        self.crashed()
+        self.run_driver()
+        calls = self.calls()
+        respawn = [i for i, c in enumerate(calls) if c["tool"] == "spawn"][-1]
+        after = [c["tool"] for c in calls[respawn + 1 :] if c["tool"] in ("wait", "status")]
+        self.assertTrue(after, "the run ended without asking the runtime about the new attempt")
+        self.assertEqual(after[0], "wait", "the new attempt was judged by status before any wait")
+
     def test_S3_a_second_loss_is_dispatched_again_as_the_next_attempt(self):
         """orchestrator-engine/R26"""
         self.crashed()

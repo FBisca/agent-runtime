@@ -1,10 +1,15 @@
 """The gates after a worker reports: converge, a fresh reviewer, fix rounds, a fresh worker for a dead pane."""
 
+import io
 import json
+import os
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 import pytest
-from fixtures import RunFixture, plan_text, report_wait, resume_id, spawn_id
+import yaml
+from fixtures import RunFixture, load_script, plan_text, report_wait, resume_id, spawn_id
 
 pytestmark = pytest.mark.integration
 
@@ -57,11 +62,17 @@ class GateFixture(RunFixture):
         self.run_dir = self.state_dir / "demo"
         self.worktree = self.root / "repo.worktrees" / "demo-t1"
 
+    extra_files = None  # worktree path -> text the worker also writes
+    COVERS = {"S1": ["src/a/test_a.py::test_a"]}
+
     def report(self, task_id, **over):
+        yaml_plan = self.plan.name.endswith(".plan.yaml")
         return json.dumps(
             dict(
                 {
-                    "contract": 1,
+                    # A YAML plan's ticket reports contract 3 and maps its scenarios to test nodes.
+                    "contract": 3 if yaml_plan else 1,
+                    **({"covers": self.COVERS} if yaml_plan else {}),
                     "task_id": task_id,
                     "status": "COMPLETE",
                     "summary": "done",
@@ -95,7 +106,72 @@ class GateFixture(RunFixture):
             step["write"].append(
                 [str(self.worktree / "src" / "a" / "test_a.py"), 'def test_a():\n    """S1"""\n']
             )
+        for name_, text in (self.extra_files or {}).items():
+            step["write"].append([str(self.worktree / name_), text])
         return step
+
+    def use_yaml_plan(self, paths=("src/a/",), oracle=False):
+        """Swap the Markdown plan for an approved YAML plan with one ticket (and, with `oracle`, an oracle placed
+        under src/a/)."""
+        evidence = {"human": "confirm"}
+        if oracle:
+            directory = self.plan.parent / "demo.oracle"
+            directory.mkdir()
+            (directory / "test_oracle.py.oracle").write_text("def test_o():\n    pass\n")
+            evidence = {
+                "check": "pytest",
+                "baseline": "pass",
+                "oracle": ["test_oracle.py.oracle"],
+                "place": "src/a/",
+            }
+        data = {
+            "schema": "plan/1",
+            "slug": "demo",
+            "goal": "deliver",
+            "spec": "docs/specs/demo.md",
+            "outcome": ["S1"],
+            "scenarios": [dict(id="S1", when="a", then="b", evidence=evidence)],
+            "tickets": [
+                dict(
+                    id="T1",
+                    delivers="first",
+                    satisfies=["S1"],
+                    paths=list(paths),
+                    size="small",
+                    difficulty="simple",
+                    max_fix_rounds=3,
+                )
+            ],
+        }
+        self.plan.unlink()
+        self.plan = self.plan.with_suffix(".yaml")
+        self.plan.write_text(yaml.safe_dump(data, sort_keys=False))
+        out = io.StringIO()
+        with (
+            mock.patch.object(load_script(), "resolve_runtime", return_value={"role": "lead"}),
+            mock.patch.dict(
+                os.environ,
+                {"XDG_STATE_HOME": str(self.root / "xdg"), "HC_TERMINAL_ID": "test-lead"},
+            ),
+            redirect_stdout(out),
+            redirect_stderr(out),
+        ):
+            code = load_script().run_cli(
+                [
+                    "plan",
+                    "approve",
+                    str(self.plan),
+                    "--repo",
+                    str(self.repo),
+                    "--state-dir",
+                    str(self.state_dir),
+                ]
+            )
+        self.assertEqual(code, 0, out.getvalue())
+
+    def first_findings(self):
+        path = self.run_dir / "t1r1" / "findings.json"
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def review(self, **over):
         return json.dumps(
@@ -215,7 +291,7 @@ class GateTests(GateFixture, unittest.TestCase):
         return self.worker_done(task_id, report=self.report(task_id, checks=self.FAILED_CHECK))
 
     def test_S5_a_ready_report_that_fails_the_complete_rules_goes_back_to_its_worker(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5"""
+        """orchestrator-engine/R29"""
         self.waits([self.refused("t1")])
         self.run_driver()
         resumes = self.calls("resume")
@@ -231,7 +307,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["status"], "ACTIVE")
 
     def test_S5a_report_refusals_at_the_fix_round_cap_ask_the_lead(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5a"""
+        """orchestrator-engine/R30"""
         self.waits([self.refused("t1"), self.refused("t1r1"), self.refused("t1r2"), self.skipped()])
         self.run_driver()
         self.assertEqual(len(self.calls("resume")), 2)
@@ -241,7 +317,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
 
     def test_S5_a_report_the_ledger_cannot_read_asks_the_lead_and_the_driver_exits_clean(self):
-        """orchestrator-engine/R2: merged-unit-completes/S5 — (a report with no `remaining`, or a check with no outcome)"""
+        """orchestrator-engine/R29 — (a report with no `remaining`, or a check with no outcome)"""
         for broken in (
             {"remaining": None},
             {"checks": [{"command": "pytest"}]},
@@ -379,7 +455,7 @@ class GateTests(GateFixture, unittest.TestCase):
     def test_S6a_an_invalid_report_does_not_advance_the_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
         self.waits(
-            [*self.repeated(self.worker_done(report=self.report("t1", contract=3))), self.skipped()]
+            [*self.repeated(self.worker_done(report=self.report("t1", contract=4))), self.skipped()]
         )
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1"])
@@ -491,3 +567,113 @@ class CheckoutTimeoutTests(GateFixture, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifyGateTests(GateFixture, unittest.TestCase):
+    """A YAML plan's ticket is gated by verify's invariants, not by converge."""
+
+    def setUp(self):
+        super().setUp()
+        self.use_yaml_plan()
+
+    def found(self):
+        findings = self.first_findings()
+        self.assertEqual((findings["contract"], findings["source"]), (2, "verify"))
+        return [(i["check"], i["excerpt"]) for i in findings["items"]]
+
+    def test_S9_a_report_that_maps_every_satisfied_scenario_to_changed_nodes_goes_to_review(self):
+        self.waits([self.worker_done(tests=True), self.reviewer_done()])
+        self.run_driver()
+        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
+        self.assertEqual(self.calls("resume"), [])
+
+    def test_S9_a_node_that_does_not_exist_is_a_fix_round_naming_scenario_node_and_reason(self):
+        covers = {"S1": ["src/a/test_a.py::test_nope"]}
+        report = self.report("t1", covers=covers)
+        self.waits([self.worker_done(tests=True, report=report)])
+        self.run_driver()
+        self.assertEqual(
+            self.found(),
+            [
+                (
+                    "covers",
+                    "S1: test node src/a/test_a.py::test_nope does not exist"
+                    " (no test_nope in src/a/test_a.py)",
+                )
+            ],
+        )
+        self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1"])
+        self.assertEqual(self.spawned(), ["demo-t1"])
+        task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
+        self.assertIn("test_nope", task_md)
+
+    def test_S9_a_satisfied_scenario_left_unmapped_is_a_fix_round(self):
+        report = self.report("t1", covers={})
+        self.waits([self.worker_done(tests=True, report=report)])
+        self.run_driver()
+        self.assertEqual(
+            self.found(),
+            [("covers", "S1: no test node in covers; map the scenario to the tests that prove it")],
+        )
+
+    def test_S9_a_report_that_is_not_contract_3_is_refused_by_name(self):
+        report = json.loads(self.report("t1", contract=2))
+        del report["covers"]
+        self.waits([self.worker_done(tests=True, report=json.dumps(report))])
+        self.run_driver()
+        found = self.found()
+        self.assertEqual([c for c, _ in found], ["covers"])
+        self.assertIn("report is contract 2, not 3", found[0][1])
+
+    def test_S10_a_file_outside_the_ticket_paths_is_a_fix_round_naming_file_and_scope(self):
+        self.extra_files = {"src/z/extra.py": "x = 1\n"}
+        self.waits([self.worker_done(tests=True)])
+        self.run_driver()
+        self.assertEqual(
+            self.found(),
+            [("scope", "src/z/extra.py is outside the ticket paths (src/a/)")],
+        )
+        self.assertEqual(self.spawned(), ["demo-t1"])
+
+    def test_S10_touching_the_plan_is_an_integrity_failure_not_a_scope_one(self):
+        self.extra_files = {"docs/plans/demo.plan.yaml": "schema: plan/1\n"}
+        self.waits([self.worker_done(tests=True)])
+        self.run_driver()
+        self.assertEqual(
+            self.found(),
+            [
+                (
+                    "integrity",
+                    "docs/plans/demo.plan.yaml is the plan; a ticket never edits its contract",
+                )
+            ],
+        )
+
+    def test_S10_an_oracle_place_is_integrity(self):
+        self.use_yaml_plan(oracle=True)
+        self.extra_files = {"src/a/test_oracle.py": "def test_o(): pass\n"}
+        self.waits([self.worker_done(tests=True)])
+        self.run_driver()
+        self.assertEqual(
+            [c for c, _ in self.found()],
+            ["integrity"],
+        )
+        self.assertIn("src/a/test_oracle.py is an oracle place", self.found()[0][1])
+
+
+class LegacyGateTests(GateFixture, unittest.TestCase):
+    def test_S11_a_markdown_plan_gets_the_converge_verdicts_and_completes_unverified(self):
+        self.waits([self.worker_done()])
+        self.run_driver()
+        findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            [(i["source"], i["check"], i["excerpt"]) for i in findings["items"]],
+            [("converge", "coverage", "FAIL coverage: S1")],
+        )
+
+    def test_S11_a_markdown_plan_that_finishes_is_complete_outcome_unverified_never_accepted(self):
+        self.waits([self.worker_done(tests=True), self.reviewer_done()])
+        self.run_driver()
+        outcomes = [e for e in self.events() if e["kind"] == "plan-outcome"]
+        self.assertEqual([e["outcome"] for e in outcomes], ["COMPLETE (outcome unverified)"])
+        self.assertNotIn("ACCEPTED", json.dumps(self.events()))

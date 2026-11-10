@@ -1,4 +1,5 @@
 """Stop and observed worker failures never strand later waits (hardening D1, D2, D9, D12, D13)."""
+
 import json
 import sys
 import tempfile
@@ -16,18 +17,24 @@ from agent_runtime.dispatch_store import Store
 pytestmark = pytest.mark.integration
 
 
-
-NOT_FOUND = json.dumps({"error": {"hint": "see `hc ls --all`", "kind": "not_found", "message": 'no terminal "w1"'}})
+NOT_FOUND = json.dumps(
+    {"error": {"hint": "see `hc ls --all`", "kind": "not_found", "message": 'no terminal "w1"'}}
+)
 
 
 def put_task(store, assignment, worker, team, status="in_progress"):
     with store.transaction() as db:
-        db.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?,'[]')", ("task1", team, "subject", status, worker, assignment))
+        db.execute(
+            "INSERT INTO tasks VALUES (?,?,?,?,?,?,'[]')",
+            ("task1", team, "subject", status, worker, assignment),
+        )
 
 
 def task_row(store):
     with store.transaction() as db:
-        return dict(db.execute("SELECT status,owner,assignment FROM tasks WHERE id='task1'").fetchone())
+        return dict(
+            db.execute("SELECT status,owner,assignment FROM tasks WHERE id='task1'").fetchone()
+        )
 
 
 class StopFailureTests(ToolCase):
@@ -44,7 +51,9 @@ class StopFailureTests(ToolCase):
         return result["structuredContent"]
 
     def rpc_call(self, name, arguments):
-        result = self.rpc.get(self.rpc.tool(name, arguments))["result"]  # prepare() gave the lead's stdout to rpc
+        result = self.rpc.get(self.rpc.tool(name, arguments))[
+            "result"
+        ]  # prepare() gave the lead's stdout to rpc
         self.assertFalse(result["isError"], result)
         return result
 
@@ -61,8 +70,11 @@ class StopFailureTests(ToolCase):
     def test_other_hc_errors_leave_the_record_active(self):
         """agent-runtime/R66"""
         self.prepare()
-        for err in ("timeout talking to hc", "cannot run hc: [Errno 2] No such file or directory",
-                    json.dumps({"error": {"kind": "io", "message": "no such socket"}})):
+        for err in (
+            "timeout talking to hc",
+            "cannot run hc: [Errno 2] No such file or directory",
+            json.dumps({"error": {"kind": "io", "message": "no such socket"}}),
+        ):
             self.set_reply("get:w1", {"rc": 1, "err": err})
             result = self.rpc.get(self.rpc.tool("stop", {"name": "w1"}))["result"]
             self.assertTrue(result["isError"], err)
@@ -108,7 +120,12 @@ class StopFailureTests(ToolCase):
         """agent-runtime/R69"""
         self.prepare()
         store = Store(self.env)
-        put_task(store, self.assignments[0]["assignment_id"], self.assignments[0]["worker_id"], self.assignments[0]["team_id"])
+        put_task(
+            store,
+            self.assignments[0]["assignment_id"],
+            self.assignments[0]["worker_id"],
+            self.assignments[0]["team_id"],
+        )
         self.rows.remove(self.rows[0])
         self.set_reply("ls", {"out": json.dumps({"terminals": self.rows})})
         self.assertEqual(self.wait(3)["reason"], "failed")
@@ -118,16 +135,25 @@ class StopFailureTests(ToolCase):
         """agent-runtime/R68"""
         self.prepare()
         old = self.assignments[0]
-        self.assignments[0] = self.rpc_call("resume", {"name": "w1", "task": "again"})["structuredContent"]
+        self.assignments[0] = self.rpc_call("resume", {"name": "w1", "task": "again"})[
+            "structuredContent"
+        ]
         store = Store(self.env)
         put_task(store, old["assignment_id"], old["worker_id"], old["team_id"])
         self.rows.remove(self.rows[0])
         self.set_reply("ls", {"out": json.dumps({"terminals": self.rows})})
         first = self.wait(3)
         failures = [m for m in first["messages"] if m["kind"] == "failed"]
-        self.assertEqual([m["assignment_id"] for m in failures], [self.assignments[0]["assignment_id"]])
+        self.assertEqual(
+            [m["assignment_id"] for m in failures], [self.assignments[0]["assignment_id"]]
+        )
         with store.transaction() as db:
-            states = [r[0] for r in db.execute("SELECT state FROM assignments WHERE worker=?", (old["worker_id"],))]
+            states = [
+                r[0]
+                for r in db.execute(
+                    "SELECT state FROM assignments WHERE worker=?", (old["worker_id"],)
+                )
+            ]
         self.assertEqual(states, ["failed", "failed"])
 
 
@@ -144,12 +170,16 @@ class StoreTaskReleaseTests(unittest.TestCase):
         """agent-runtime/R69"""
         self.store.bind(self.identity["assignment_id"], "t1", "test")
         self.store.stopped(self.team, "w1")
-        self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
+        self.assertEqual(
+            task_row(self.store), {"status": "pending", "owner": None, "assignment": None}
+        )
 
     def test_failed_spawn_releases_its_unfinished_task(self):
         """agent-runtime/R69"""
         self.store.fail(self.identity["assignment_id"])
-        self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
+        self.assertEqual(
+            task_row(self.store), {"status": "pending", "owner": None, "assignment": None}
+        )
 
     def test_stopped_worker_releases_its_blocked_task(self):
         """agent-runtime/R69"""
@@ -157,22 +187,31 @@ class StoreTaskReleaseTests(unittest.TestCase):
         with self.store.transaction() as db:
             db.execute("UPDATE tasks SET status='blocked'")
         self.store.stopped(self.team, "w1")
-        self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
+        self.assertEqual(
+            task_row(self.store), {"status": "pending", "owner": None, "assignment": None}
+        )
 
     def report_then(self, kind):
         self.store.bind(self.identity["assignment_id"], "t1", "test")
-        self.store.publish("test", "t1", "t0", self.identity["assignment_id"], "stuck", kind, caller_name="w1")
+        self.store.publish(
+            "test", "t1", "t0", self.identity["assignment_id"], "stuck", kind, caller_name="w1"
+        )
 
     def failed_messages(self):
         with self.store.transaction() as db:
-            return [json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")
-                    if json.loads(r[0])["kind"] == "failed"]
+            return [
+                json.loads(r[0])["kind"]
+                for r in db.execute("SELECT body FROM messages")
+                if json.loads(r[0])["kind"] == "failed"
+            ]
 
     def test_removed_terminal_after_a_blocked_report_fails_and_releases_the_task(self):
         """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("blocked")
         self.store.fail(self.identity["assignment_id"], inactive=True)
-        self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
+        self.assertEqual(
+            task_row(self.store), {"status": "pending", "owner": None, "assignment": None}
+        )
         with self.store.transaction() as db:
             self.assertEqual(db.execute("SELECT state FROM assignments").fetchone()[0], "failed")
         self.assertEqual(self.failed_messages(), ["failed"])
@@ -181,7 +220,9 @@ class StoreTaskReleaseTests(unittest.TestCase):
         """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("decision")
         self.store.fail(self.identity["assignment_id"], inactive=True)
-        self.assertEqual(task_row(self.store), {"status": "pending", "owner": None, "assignment": None})
+        self.assertEqual(
+            task_row(self.store), {"status": "pending", "owner": None, "assignment": None}
+        )
         self.assertEqual(self.failed_messages(), ["failed"])
         self.store.fail(self.identity["assignment_id"], inactive=True)  # repeating adds nothing
         self.assertEqual(self.failed_messages(), ["failed"])

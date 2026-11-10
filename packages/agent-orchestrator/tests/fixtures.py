@@ -21,6 +21,7 @@ from unittest import mock
 
 import fake_gh
 import fake_runtime
+import yaml
 
 MEMBER = Path(__file__).resolve().parents[1]
 REPO = Path(__file__).resolve().parents[3]
@@ -286,9 +287,10 @@ class RunFixture(_Case):
         {"name": "unit", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/55/job/8"}
     ]
 
-    def checks(self, answers, pr=None):
+    def checks(self, answers, pr=None, ready=False):
         """What `gh pr checks` answers on its next calls (the last repeats): "green", "pending", "none" (no checks
-        reported yet), "fail" or ("fail", <check name>). With `pr` (a number) only that PR is answered this way."""
+        reported yet), "fail" or ("fail", <check name>). With `pr` (a number) only that PR is answered this way; with
+        `ready`, only a PR that is ready (not a draft)."""
         rows = []
         for answer in answers:
             kind, *names = answer if isinstance(answer, tuple) else (answer, "unit tests")
@@ -309,13 +311,22 @@ class RunFixture(_Case):
                     "fail": [1, json.dumps(fails + [self.GREEN[0]]), ""],
                 }[kind]
             )
-        (self.home / ("checks.json" if pr is None else "checks-%s.json" % pr)).write_text(
-            json.dumps(rows), encoding="utf-8"
+        name = (
+            "checks-ready.json" if ready else "checks.json" if pr is None else "checks-%s.json" % pr
         )
+        (self.home / name).write_text(json.dumps(rows), encoding="utf-8")
 
     def prs(self, states):
         """The PR's states once `gh pr ready` has run: names or objects (mergeStateStatus ...); the last repeats."""
         (self.home / "prs.json").write_text(json.dumps(states), encoding="utf-8")
+
+    def drafts(self, states):
+        """The PR's states while it is a draft (OPEN when unscripted); the last repeats."""
+        (self.home / "view-draft.json").write_text(json.dumps(states), encoding="utf-8")
+
+    def undos(self, answers):
+        """What `gh pr ready --undo` answers: [exit code, stderr] per call (the last repeats)."""
+        (self.home / "undo.json").write_text(json.dumps(answers), encoding="utf-8")
 
     def early(self, states):
         """PR states `gh pr view` answers before and regardless of `gh pr ready` (a merge by hand)."""
@@ -488,9 +499,77 @@ class RunFixture(_Case):
     def wake_lines(self, kind=None):
         return [w["text"] for w in self.wakes() if kind in (None, w["kind"])]
 
+    # A YAML plan's ledger and run directory sit under `<state>/<repo-key>/`. Tests written before the key look for
+    # `<state>/demo` and `<state>/demo.json`, so the key directory is by default an alias of the state directory
+    # itself: both spellings name the same files. A test of the layout turns the alias off.
+    alias_repo_key = True
+
+    def alias_state(self, plan):
+        if not self.alias_repo_key or not str(plan).endswith(".plan.yaml"):
+            return
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        alias = self.state_dir / load_script().repo_key(self.repo)
+        if not alias.is_symlink():
+            alias.symlink_to(".")
+
+    def approved_yaml_plan(self, rows=("T1",), repo=None, name="demo.plan.yaml"):
+        """The Markdown fixture plan's tickets as an approved plan/1 YAML file in `repo`; its path."""
+        repo = repo or self.repo
+        parsed = load_script().parse_plan(plan_text(rows=rows))
+        path = repo / "docs" / "plans" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "schema": "plan/1",
+            "slug": "demo",
+            "goal": "deliver",
+            "spec": "docs/specs/demo.md",
+            "outcome": ["S1"],
+            "scenarios": [
+                dict(id=s, when="a", then="b", evidence={"human": "confirm"})
+                for s in parsed["scenarios"]
+            ],
+            "tickets": [
+                dict(
+                    id=t["#"],
+                    delivers=t["What it delivers"],
+                    satisfies=t["Satisfies"].split(","),
+                    paths=t["Paths"].split(","),
+                    size=t["Size"],
+                    difficulty=t["Difficulty"],
+                    blocked_by=[] if t["Blocked by"] == "none" else [t["Blocked by"]],
+                )
+                for t in parsed["tickets"]
+            ],
+        }
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        out = io.StringIO()
+        spec = load_script()
+        with (
+            mock.patch.object(spec, "resolve_runtime", return_value={"role": "lead"}),
+            mock.patch.dict(
+                os.environ, {"XDG_STATE_HOME": str(self.root / "xdg"), "HC_TERMINAL_ID": "lead"}
+            ),
+            redirect_stdout(out),
+            redirect_stderr(out),
+        ):
+            code = spec.run_cli(
+                [
+                    "plan",
+                    "approve",
+                    str(path),
+                    "--repo",
+                    str(repo),
+                    "--state-dir",
+                    str(self.state_dir),
+                ]
+            )
+        self.assertEqual(code, 0, out.getvalue())
+        return path
+
     def run_driver(self, *extra, plan=None, expect=0):
         """The driver run in this process: the fakes answer in process, so the run starts no process of its own."""
         spec = load_script()
+        self.alias_state(plan or self.plan)
         argv = [
             "run",
             str(plan or self.plan),

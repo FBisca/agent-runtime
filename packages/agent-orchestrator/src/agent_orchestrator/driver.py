@@ -6,6 +6,7 @@ No model calls and no shell evaluation. Only `run` starts workers, and only thro
 import argparse
 import copy
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -21,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import contracts, events, evidence, routes
+from . import contracts, events, evidence, routes, verify
 from . import plan as yaml_plan
 from .plan import PlanError
 from .runtime_client import CliRuntimeClient
@@ -553,6 +554,7 @@ CONTRACT = """# Contract for every task in this run
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
+- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node.
 - COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
@@ -930,6 +932,28 @@ GATES = (
     "awaiting-merge",
     "cleanup",
 )  # ledger `gate` stages the loop acts on
+
+
+def merge_state(view):
+    """One word for what a pull request's merge state asks of the driver, in precedence order: merged, closed,
+    conflict, unknown, behind, open. A conflict wins over red checks (it can keep CI from starting). A draft reports
+    mergeStateStatus DRAFT, which hides BEHIND but not `mergeable: CONFLICTING`: it is open until it is readied."""
+    if view.get("error"):
+        return "unknown"
+    state = str(view.get("state") or "").upper()
+    if state in ("MERGED", "CLOSED"):
+        return state.lower()
+    status = str(view.get("mergeStateStatus") or "").upper()
+    mergeable = str(view.get("mergeable") or "").upper()
+    if status == "DIRTY" or mergeable == "CONFLICTING":
+        return "conflict"
+    if status in ("", "UNKNOWN") or mergeable == "UNKNOWN":
+        return "unknown"
+    if status == "BEHIND":
+        return "behind"
+    return "open"
+
+
 PARKED = (
     "attention",
     "blocked",
@@ -959,6 +983,25 @@ def next_path(directory, stem, suffix):
     raise ValueError("too many %s files in %s" % (stem, directory))
 
 
+# The tail of a failing job's log that a fix round shows; the full log is at log_path.
+CI_EXCERPT_CHARS = 2048
+
+
+def job_log(run_log, job):
+    """The lines of a `gh run view --log-failed` log that belong to one job: each opens with the job's name and a tab.
+    A log with no such line is taken whole (it names no job)."""
+    lines = [line for line in run_log.splitlines() if line.split("\t", 1)[0] == job]
+    return "\n".join(lines) if lines else run_log
+
+
+def log_tail(text, limit=CI_EXCERPT_CHARS):
+    """The last `limit` characters of a log, starting at a whole line."""
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    return tail.split("\n", 1)[1] if "\n" in tail else tail
+
+
 def cell(text, limit=160):
     """Text safe inside one plan table cell: one line, no pipes, cut at `limit`."""
     flat = " ".join(str(text).replace("|", "/").split())
@@ -977,7 +1020,7 @@ def describe(item):
     """The lines a fix round shows for one findings item (text lines of contract 1 are shown as they are)."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci", "conflict"):
+    if item.get("source") in ("converge", "verify", "ci", "conflict"):
         return "%s %s: %s (exit %s of `%s`; full log %s)" % (
             item["source"],
             item["check"],
@@ -1011,7 +1054,7 @@ def short(item):
     """A finding in a few words, for a request's reason and a ledger `remaining` line."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci"):
+    if item.get("source") in ("converge", "verify", "ci"):
         return (
             item["excerpt"].splitlines()[0]
             if item["excerpt"]
@@ -1143,6 +1186,9 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
+        self.model = None  # the approved plan/1 model of a YAML plan
+        self.outcome_logged = False
+        self.approval = None  # the approval block of the YAML plan the loop last read
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1187,7 +1233,13 @@ class Driver:
                 state_dir=self.args.state_dir,
                 require_approval=True,
             )
-            ledger_path = Path(self.args.state_dir).expanduser() / (model.slug + ".json")
+            self.model = (
+                model  # verify gates a ticket against the approved plan, not the legacy table
+            )
+            self.approval = model.approval
+            ledger_path = state_layout(self.args.state_dir, self.plan_path, self.repo, model.slug)[
+                0
+            ]
             statuses = {}
             if ledger_path.exists():
                 with ledger(ledger_path) as data:
@@ -1219,11 +1271,11 @@ class Driver:
                 else self.models
             )
         self.routes, self.step_routes = self.load_routes()
-        state_dir = Path(self.args.state_dir).expanduser()
-        state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.ledger_path = state_dir / (self.slug + ".json")
-        self.run_dir = state_dir / self.slug
-        self.run_dir.mkdir(exist_ok=True, mode=0o700)
+        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.ledger_path, self.run_dir = locate_state(
+            self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
+        )
+        self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         contract = self.run_dir / "contract.md"
         if not contract.exists():
             contract.write_text(CONTRACT, encoding="utf-8")
@@ -1233,6 +1285,13 @@ class Driver:
                 self.routes, self.route_source or "legacy", self.routes_file, self.step_routes
             )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
+            if is_yaml(
+                self.plan_path
+            ):  # the ledger owns the plan's state; the plan file is never written
+                if not data.get("plan"):
+                    enter_plan_state(data, "APPROVED", self.approval and self.approval.at)
+                if data["plan"]["state"] == "APPROVED":
+                    enter_plan_state(data, "RUNNING")
         for row in legacy:  # a run dir written before events.jsonl: its history enters the log once
             self.log("import", **row)
         self.log(
@@ -1274,15 +1333,20 @@ class Driver:
             self.receive(result)
             self.idle_ticks(result.get("assignments") or [])
             self.unfinished = {i for i in result.get("unfinished") or [] if isinstance(i, str)}
+            recovered = 0
             if (
                 not self.reconciled
             ):  # a drive that starts on a ledger a dead one left looks at it once
                 self.reconciled = True
-                dispatched += self.reconcile()
+                recovered = self.reconcile()
+                dispatched += recovered
             # `unfinished` lists assignment ids. A parked unit's assignment stays open in the runtime and makes `wait`
             # return at once: it is not work, so a run with only parked units left ends.
             parked = self.parked_assignments()
-            idle = not [entry for entry in result.get("unfinished") or [] if entry not in parked]
+            # An attempt recovered after this wait is one it could not list: the next wait settles it, not `status`.
+            idle = not recovered and not [
+                entry for entry in result.get("unfinished") or [] if entry not in parked
+            ]
             if not (dispatched or acted or self.received):
                 self.idle()
 
@@ -1806,8 +1870,13 @@ class Driver:
         path = self.run_dir / "attention.md"
         if not path.exists():
             path.write_text(
-                "# Needs you: %s\n\nThe ticket's Status in the plan carries the same reason.\n\n"
-                % self.slug,
+                "# Needs you: %s\n\n%s carries the same reason.\n\n"
+                % (
+                    self.slug,
+                    "`status <plan> --json`"
+                    if is_yaml(self.plan_path)
+                    else "The ticket's Status in the plan",
+                ),
                 encoding="utf-8",
             )
         with path.open("a", encoding="utf-8") as stream:
@@ -2007,12 +2076,12 @@ class Driver:
             return self.fail_gate(
                 task_id,
                 report,
-                "converge",
+                self.gate_name(),
                 [
                     {
                         "id": "R1",
                         "kind": "blocking",
-                        "source": "converge",
+                        "source": self.gate_name(),
                         "check": "report",
                         "command": "the COMPLETE rules for %s" % path.name,
                         "exit": 1,
@@ -2021,16 +2090,16 @@ class Driver:
                     }
                 ],
             )
-        verdict, lines = self.converge(task_id, task["packet"])
+        verdict, lines = self.gate(task_id, task["packet"], report)
         if verdict == "error":
-            return self.request(task_id, "converge", lines[0])
+            return self.request(task_id, self.gate_name(), lines[0])
         try:
             if verdict == "FAIL":
-                return self.fail_gate(task_id, report, "converge", lines)
+                return self.fail_gate(task_id, report, lines[0]["source"], lines)
             self.record_report(task_id, report)
         except ValueError as error:
             return self.request(task_id, "report", "the ledger rejected the report: %s" % error)
-        # The archive is gated by converge --final alone. Every other report, a fix round of any source included, goes to
+        # The archive is gated by the converge --final path alone. Every other report, a fix round of any source included, goes to
         # the unit's reviewer: a delta re-review once the unit has been reviewed, else the first review.
         if task["packet"]["unit"] == ARCHIVE:
             return self.mark(task_id, gate="ready-for-ci")
@@ -2064,68 +2133,61 @@ class Driver:
         assignment_id = self.resume_for_responses(task, task_id, path, missing)
         self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
 
-    def converge(self, task_id, packet):
-        """Run converge for the unit's ticket: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
+    def gate_name(self):
+        """The gate that reads a plan: verify for a YAML plan, converge (verify's legacy path) for a Markdown one."""
+        return "verify" if self.plan_path.name.endswith(".plan.yaml") else "converge"
+
+    def gate(self, task_id, packet, report):
+        """The gate for a unit's report: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
         if self.plan_path.name.endswith(".plan.yaml"):
-            reason = "YAML plan: legacy converge reads Markdown; verify replaces this gate in a later ticket"
+            # The Markdown converge reads no YAML plan; verify's invariants gate a ticket. The archive's gate is its own.
+            reason = "YAML plan: verify gates this report; the Markdown converge does not run"
             self.log("converge-skipped", task=task_id, reason=reason)
             event(reason)
-            return "PASS", []
+            if packet["unit"] == ARCHIVE:
+                return "PASS", []
+            return self.verify_ticket(task_id, packet, report)
         if packet["unit"] == ARCHIVE:
             # The archive branch holds the plan with Status ARCHIVED; fall back to the driver's copy if it is untracked.
             copy = Path(packet["checkout"]) / self.plan_rel()
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(copy if copy.exists() else self.plan_path),
-                "--final",
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
+            plan, ticket = (copy if copy.exists() else self.plan_path), None
         else:
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(self.plan_path),
-                "--ticket",
-                packet["unit"].upper(),
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=300)
-        lines = [line for line in result.stdout.splitlines() if line.startswith("FAIL")]
-        if result.returncode == 0:
+            plan, ticket = self.plan_path, packet["unit"]
+        return verify.legacy_gate(
+            self.args.converge,
+            plan,
+            packet["checkout"],
+            self.args.base,
+            lambda: next_path(self.run_dir / task_id, "converge", ".log")[0],
+            ticket=ticket,
+        )
+
+    def verify_ticket(self, task_id, packet, report):
+        """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
+        ticket = packet["unit"].upper()
+        try:
+            findings = verify.invariants(
+                self.model,
+                ticket,
+                report,
+                repo=packet["checkout"],
+                base=self.args.base,
+                plan_rel=self.plan_rel(),
+            )
+        except verify.VerifyError as error:
+            return "error", [str(error)[:500]]
+        if not findings:
             return "PASS", []
-        if result.returncode == 1 and lines:
-            log = next_path(self.run_dir / task_id, "converge", ".log")[0]
-            log.write_text(result.stdout, encoding="utf-8")
-            command = " ".join(shlex.quote(part) for part in argv)
-            return "FAIL", [
-                {
-                    "id": "C%d" % number,
-                    "kind": "blocking",
-                    "source": "converge",
-                    "check": (
-                        (re.match(r"FAIL ([^:]+):", line) or [None, "converge"])[1] or "converge"
-                    ).strip(),
-                    "command": command,
-                    "exit": result.returncode,
-                    "excerpt": line,
-                    "log_path": str(log),
-                }
-                for number, line in enumerate(lines, 1)
-            ]
-        return "error", [
-            (
-                result.stderr.strip()
-                or result.stdout.strip()
-                or "converge exited %d" % result.returncode
-            )[:500]
-        ]
+        log = next_path(self.run_dir / task_id, "verify", ".log")[0]
+        log.write_text(
+            "".join("FAIL %(check)s: %(excerpt)s\n" % f for f in findings), encoding="utf-8"
+        )
+        command = "verify %s --repo %s --base %s" % (
+            ticket,
+            shlex.quote(str(packet["checkout"])),
+            shlex.quote(self.args.base),
+        )
+        return "FAIL", verify.items(findings, command, log)
 
     def fail_gate(self, task_id, report, source, items, checks_run=(), answer_ids=(), rebase=False):
         """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure."""
@@ -2147,7 +2209,14 @@ class Driver:
             "checks_run": list(checks_run),
             "answer_ids": list(answer_ids),
             "rebase": True if rebase else None,
+            "draft": None,
         }
+        if self.unit_flag(unit, "pr_ready"):
+            # the PR was readied: it goes back to draft before anyone changes its code, a capped one included
+            url = self.pr_of(task_id)
+            if url and not self.undraft(task_id, url):
+                # step_fix tries again and dispatches no worker until it is a draft
+                fix["draft"] = url
         self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
         for item in items:
             self.log_finding(
@@ -2563,18 +2632,24 @@ class Driver:
             if r["status"] == "disputed" and r.get("changes_code") is True
         ]
         if changing and task.get("gate") in ("ready-for-ci", "awaiting-merge"):
-            # the new commits go to a delta re-review before the unit goes on to CI again
+            # the new commits go to a delta re-review before the unit goes on to CI again; the PR goes back to
+            # draft (the poll's ensure_draft, once readiness is forgotten) and is readied again on its return
+            self.unready(self.unit_of(task_id))
+            reviewed = task.get("reviewed_commit")
             self.mark(
                 task_id,
                 answers=dict(answers, state="done"),
                 gate="converged",
                 review=None,
                 ci_green=None,
-                delta={"from": task["reviewed_commit"], "findings": answers["findings"]},
+                ci_state=None,
+                ci_rows=None,
+                ci_head=None,
+                delta={"from": reviewed, "findings": answers["findings"]},
             )
             return event(
                 "%s: %s disputed with changes_code; delta re-review from %s"
-                % (task_id, ", ".join(changing), task["reviewed_commit"][:7])
+                % (task_id, ", ".join(changing), (reviewed or "the base")[:7])
             )
         self.mark(task_id, answers=dict(answers, state="done"))
 
@@ -2623,10 +2698,16 @@ class Driver:
             return None
 
     def pr_view(self, url) -> dict[str, Any]:
-        """The pull request as `gh` sees it: {state, isDraft, mergeStateStatus, mergeable}. A `gh` that fails is no
-        state at all: the driver polls again rather than guessing."""
+        """The pull request as `gh` sees it: {state, isDraft, mergeStateStatus, mergeable, headRefOid}. A `gh` that
+        fails is no state at all: the driver polls again rather than guessing."""
         code, out, err = self.gh(
-            ["pr", "view", url, "--json", "state,isDraft,mergeStateStatus,mergeable,mergeCommit"]
+            [
+                "pr",
+                "view",
+                url,
+                "--json",
+                "state,isDraft,mergeStateStatus,mergeable,mergeCommit,headRefOid",
+            ]
         )
         if code != 0:
             return {"error": (err or out).strip()[:200]}
@@ -2679,22 +2760,28 @@ class Driver:
     def poll(self):
         """One non-blocking look at every unit's pull request: was it merged by hand, is it still a draft, how are
         its checks. A unit with no checks yet, or with checks still running, is looked at again on a later round: no
-        fix round is raised and no other unit waits."""
+        fix round is raised and no other unit waits. The view taken here is the one `step_ci` acts on this round."""
+        self.views = {}
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
             gate = task.get("gate")
             if (
                 task["status"] in ("COMPLETE", "RELEASED")
                 or gate in PARKED
-                or gate in ("awaiting-merge", "cleanup", "done")
+                or gate in ("cleanup", "done")
             ):
                 continue
             url = self.pr_of(task_id)
             if not url:
                 continue
+            if gate == "awaiting-merge":
+                # main moves after the PR is ready: red checks there are a fix round (`step_merge` reads the view)
+                self.poll_checks(task_id, url)
+                continue
             state = self.pr_view(url)
             if state.get("error"):
                 continue
+            self.views[url] = state
             if state.get("state") == "MERGED":
                 self.merged_early(task_id, state)
                 continue
@@ -2703,7 +2790,7 @@ class Driver:
             ):
                 self.ensure_draft(task_id, url, state)
             if gate in ("converged", "reviewing", "reviewed", "ready-for-ci"):
-                self.poll_checks(task_id, url)
+                self.poll_checks(task_id, url, state.get("headRefOid"))
 
     def ensure_draft(self, task_id, url, state):
         """The pull request is a draft while the review runs: a worker that opened it ready is put back."""
@@ -2718,12 +2805,44 @@ class Driver:
             event("%s: the pull request is a draft again (%s)" % (task_id, url))
         self.mark(task_id, draft_done=True)
 
-    def poll_checks(self, task_id, url):
-        """The pull request's checks, once per round. The state is kept on the task; nothing waits for it."""
+    def undraft(self, task_id, url):
+        """The pull request goes back to draft before its code changes again, so nobody merges it half-fixed. On
+        success readiness is cleared across the unit: `gh pr ready` runs again when the unit is back at ready-for-ci.
+        False when `gh` refused; the caller holds the round and tries again on a later round."""
+        unit = self.unit_of(task_id)
+        code, out, err = self.gh(["pr", "ready", url, "--undo"])
+        self.log(
+            "draft", unit=unit, task=task_id, pr=url, outcome="draft" if code == 0 else "failed"
+        )
+        if code != 0:
+            event(
+                "%s: could not put %s back to draft (%s); trying again on a later round"
+                % (task_id, url, (err or out).strip()[:200])
+            )
+            return False
+        self.unready(unit)
+        event("%s: the pull request is a draft again (%s)" % (task_id, url))
+        return True
+
+    def unready(self, unit):
+        """Forget that the unit's pull request was readied: `unit_flag` ORs every attempt, so every one is cleared."""
+        with self.book() as data:
+            for task in data["tasks"].values():
+                if task["packet"].get("unit") == unit:
+                    task.pop("pr_ready", None)
+                    task.pop("draft_done", None)
+
+    def poll_checks(self, task_id, url, head=None):
+        """The pull request's checks, once per round, and the head they were read on. The state is kept on the task;
+        nothing waits for it."""
         state, rows = self.pr_checks(url)
         task = self.task(task_id)
-        if task.get("ci_state") != state or task.get("ci_rows") != rows:
-            self.mark(task_id, ci_state=state, ci_rows=rows)
+        if (
+            task.get("ci_state") != state
+            or task.get("ci_rows") != rows
+            or task.get("ci_head") != head
+        ):
+            self.mark(task_id, ci_state=state, ci_rows=rows, ci_head=head)
         self.log(
             "ci",
             unit=self.unit_of(task_id),
@@ -2735,13 +2854,23 @@ class Driver:
         return state
 
     def step_ci(self, task_id):
-        """The unit's checks. Green and the last review passed: the pull request is marked ready and the unit waits
-        for the merge. A pull request behind its base is updated; a conflict is a fix round of its own."""
+        """The unit's merge state, then its checks. A conflict, a branch behind its base or a merge state GitHub has
+        not computed yet is handled before `gh pr ready`, so a pull request that cannot merge is never readied. Green
+        and the last review passed: the pull request is marked ready and the unit waits for the merge."""
         task = self.task(task_id)
         try:
             url = self.pr_url(task_id)[0]
         except (contracts.ContractError, ValueError) as error:
             return self.request(task_id, "ci", str(error))
+        view = getattr(self, "views", {}).pop(url, None) or self.pr_view(url)
+        kind = merge_state(view)
+        if kind == "merged":
+            return False  # the next poll completes it (merged_early)
+        if kind == "closed":
+            return self.request(task_id, "merge", "%s was closed without a merge" % url)
+        moved = self.merge_moved(task_id, url, view)
+        if moved is not None:
+            return moved
         state = task.get("ci_state")
         if state != "green":
             if state == "failed":
@@ -2755,6 +2884,11 @@ class Driver:
                 return self.request(task_id, "ci", "gh pr checks failed for %s" % url)
             event("%s: no checks yet, or they are still running; polling again" % task_id)
             return False  # no fix round: the unit is polled again on a later round
+        before = task.get("updated_from")
+        if before and task.get("ci_head") in (None, before):
+            # green read before GitHub moved the head is the old head's green, not the update's
+            event("%s: the checks are not yet those of the updated branch; polling again" % task_id)
+            return False
         waiting = (task.get("answers") or {}).get("state") in ("working", "reported")
         if waiting:  # green, but the implementer's answers may still change the code: pr-ready waits for them
             return False
@@ -2766,37 +2900,93 @@ class Driver:
                 )
             self.mark(task_id, pr_ready=True)
             event("%s: the pull request is ready for review (%s)" % (task_id, url))
-        view = self.pr_view(url)
-        if str(view.get("mergeStateStatus") or "").upper() == "BEHIND":
-            return self.update_branch(task_id, url)
         unit = self.unit_of(task_id)
-        head = contracts.load(self.task(task_id)["report_path"], contracts.validate_report)["head"]
+        # an update-branch moves the head without a new report: the live head keys the wake, so it is sent again
+        head = (
+            view.get("headRefOid")
+            or contracts.load(self.task(task_id)["report_path"], contracts.validate_report)["head"]
+        )
         self.wake("pr-ready", unit, "pr-ready %s: %s" % (unit, url), key="%s:%s" % (unit, head))
         self.put_status(task_id, "IN PROGRESS · awaiting merge (%s)" % url)
-        self.mark(task_id, gate="awaiting-merge", pr=url)
+        self.mark(task_id, gate="awaiting-merge", pr=url, updated_from=None)
 
-    def update_branch(self, task_id, url):
+    def merge_moved(self, task_id, url, view):
+        """What an open pull request's merge state asks for: a conflict round, an update, or another poll. None when
+        it can merge as it is and the caller goes on; True when the gate moved, False when nothing moves yet."""
+        kind = merge_state(view)
+        if kind == "conflict":
+            self.conflict(task_id, url, view)
+            return True
+        if kind == "unknown":
+            event(
+                "%s: the merge state of %s is not known yet (%s); polling again"
+                % (task_id, url, view.get("error") or "UNKNOWN")
+            )
+            return False
+        if kind == "behind":
+            return self.update_branch(task_id, url, view) is not False
+        return None
+
+    def update_branch(self, task_id, url, view):
         """The pull request is behind its base: `gh pr update-branch` brings it up to date. A clean update needs no
-        review (nobody wrote code); a conflict is a fix round of its own: a fresh worker rebases and the result goes
-        to a delta re-review."""
+        review (nobody wrote code): the unit is back at ready-for-ci, its checks run again and the PR stays ready. A
+        failed update is a conflict round only when the PR now conflicts; any other failure goes to the Lead, since no
+        rebase fixes an access or network error."""
+        before = view.get("headRefOid")
         code, out, err = self.gh(["pr", "update-branch", url])
         unit = self.unit_of(task_id)
         if code == 0:
             self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="updated")
             event("%s: the branch was updated; no review needed" % unit)
-            self.mark(task_id, ci_state=None, ci_rows=None)
+            self.mark(
+                task_id,
+                gate="ready-for-ci",
+                ci_state=None,
+                ci_rows=None,
+                ci_head=None,
+                updated_from=before,
+            )
             return False  # the new commits run CI again: polled on a later round
         excerpt = (err or out).strip()[:1500] or "gh pr update-branch exited %d" % code
-        self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="conflict")
-        log = next_path(self.run_dir / task_id, "update-branch", ".log")[0]
+        fresh = self.pr_view(url)
+        if merge_state(fresh) == "conflict":
+            self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="conflict")
+            evidence = ("update-branch", "gh pr update-branch %s" % url, code, excerpt)
+            return self.conflict(task_id, url, fresh, evidence)
+        self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="failed")
+        return self.request(
+            task_id,
+            "ci",
+            "gh pr update-branch failed for %s and the pull request does not conflict: %s. Fix the access or "
+            "update the branch by hand, then decide how the unit goes on." % (url, excerpt[:300]),
+        )
+
+    def conflict(self, task_id, url, view, evidence=None):
+        """The pull request conflicts with its base: a fix round of its own, where a fresh worker rebases and the
+        result goes to a delta re-review. The evidence is what `gh` said: the merge state, or the failed update."""
+        unit = self.unit_of(task_id)
+        status = "mergeStateStatus %s, mergeable %s" % (
+            view.get("mergeStateStatus"),
+            view.get("mergeable"),
+        )
+        check, command, code, excerpt = evidence or (
+            "merge-state",
+            "gh pr view %s --json mergeStateStatus,mergeable" % url,
+            0,
+            "the pull request conflicts with its base: %s" % status,
+        )
+        if evidence:
+            excerpt = "%s (%s)" % (excerpt, status)
+        log = next_path(self.run_dir / task_id, check, ".log")[0]
         log.write_text(excerpt + "\n", encoding="utf-8")
+        self.log("conflict", unit=unit, task=task_id, pr=url, state=status)
         report = contracts.load(self.task(task_id)["report_path"], contracts.validate_report)
         item = {
             "id": "BR1",
             "kind": "blocking",
             "source": "conflict",
-            "check": "update-branch",
-            "command": "gh pr update-branch %s" % url,
+            "check": check,
+            "command": command,
             "exit": code,
             "excerpt": excerpt,
             "log_path": str(log),
@@ -2804,50 +2994,43 @@ class Driver:
         return self.fail_gate(task_id, report, "conflict", [item], rebase=True)
 
     def ci_items(self, task_id, url, rows):
-        """The failing CI checks as evidence items: the check's name and the tail of its log (`gh run view`)."""
-        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
+        --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
         failing = [
             row
             for row in rows
             if str(row.get("bucket") or "").lower() in ("fail", "failing", "cancel", "cancelled")
         ]
+        runs = {}  # run id -> its failed-step log: every failing job of a run shares one fetch
         items = []
         for number, row in enumerate(failing, 1):
-            excerpt = str(row.get("description") or "").strip()
+            name = row.get("name") or "ci"
+            text = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
-                excerpt = (out or err).strip() or excerpt
-            items.append(
-                {
-                    "id": "CI%d" % number,
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": row.get("name") or "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": excerpt or "the check failed",
-                    "log_path": str(log),
-                }
-            )
+                if run.group(1) not in runs:
+                    _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
+                    runs[run.group(1)] = (out or err).strip()
+                text = job_log(runs[run.group(1)], name) or text
+            items.append(self.ci_item(task_id, url, "CI%d" % number, name, text))
         if not items:
-            items = [
-                {
-                    "id": "CI1",
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": "the checks failed",
-                    "log_path": str(log),
-                }
-            ]
-        log.write_text(
-            "\n".join("%s: %s" % (item["check"], item["excerpt"]) for item in items) + "\n",
-            encoding="utf-8",
-        )
+            items.append(self.ci_item(task_id, url, "CI1", "ci", "the checks failed"))
         return items
+
+    def ci_item(self, task_id, url, item_id, check, text):
+        """One CI finding: the job's full text at `log_path`, its capped tail as the excerpt."""
+        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        log.write_text(text + "\n", encoding="utf-8")
+        return {
+            "id": item_id,
+            "kind": "blocking",
+            "source": "ci",
+            "check": check,
+            "command": "gh pr checks %s" % url,
+            "exit": 1,
+            "excerpt": log_tail(text) or "the check failed",
+            "log_path": str(log),
+        }
 
     def put_status(self, task_id, status):
         """The ticket's Status cell; the archive unit has no row."""
@@ -2861,17 +3044,25 @@ class Driver:
         return self.task(task_id)["packet"]["unit"].upper()
 
     def step_merge(self, task_id):
-        """The unit waits for the merge: the driver polls `gh` for it, and the merge itself is the user's."""
+        """The unit waits for the merge, and the merge itself is the user's. The driver watches the pull request
+        while it waits: main moves on, so a PR that now conflicts, is behind or has red checks is acted on."""
         url = self.task(task_id).get("pr")
         if not url:
             return self.request(task_id, "merge", "no pull request to wait for")
         state = self.pr_view(url)
-        if state.get("error"):
-            event("%s: gh pr view failed (%s); polling again" % (task_id, state["error"]))
-            return False
-        if state.get("state") == "CLOSED":
+        kind = merge_state(state)
+        if kind == "closed":
             return self.request(task_id, "merge", "%s was closed without a merge" % url)
-        if state.get("state") != "MERGED":
+        if kind != "merged":
+            moved = self.merge_moved(task_id, url, state)
+            if moved is not None:
+                return moved
+            task = self.task(task_id)
+            if task.get("ci_state") == "failed":
+                report = contracts.load(task["report_path"], contracts.validate_report)
+                return self.fail_gate(
+                    task_id, report, "ci", self.ci_items(task_id, url, task.get("ci_rows") or [])
+                )
             return False
         stored = self.task(task_id)["report"]
         report = dict(
@@ -3353,6 +3544,11 @@ class Driver:
         """Hand the failing items to the unit's worker in a new task directory; a gone pane gets a fresh worker."""
         task = self.task(task_id)
         packet, fix = task["packet"], task["fix"]
+        if fix.get("draft"):
+            if not self.undraft(task_id, fix["draft"]):
+                return False  # a ready PR must not change under a reviewer's or a merger's eyes
+            fix = dict(fix, draft=None)
+            self.mark(task_id, fix=fix)
         unit, attempt = packet["unit"], fix["attempt"]
         new_id = "%sr%d" % (unit, attempt)
         new_dir = self.run_dir / new_id
@@ -3388,8 +3584,7 @@ class Driver:
         )
         if fix.get("rebase"):
             text = (
-                "Read %s and follow it. The pull request could not be updated because the branch conflicts with "
-                "its base: this is a rebase round, not a fix round. Rebase the branch onto the base, resolve the "
+                "Read %s and follow it. The pull request conflicts with its base: this is a rebase round, not a fix round. Rebase the branch onto the base, resolve the "
                 "conflicts, push the result to the same branch and open no new pull request. The round's brief is "
                 "at %s." % (task_md, task_md)
             )
@@ -3779,9 +3974,8 @@ class Driver:
                 "# Rebase %s (task %s): the branch conflicts with its base"
                 % (packet["unit"].upper(), new_id),
                 "",
-                "This is a rebase round: the pull request of %s could not be updated because the branch conflicts with "
-                "the base. Rebase the branch onto the base, resolve the conflicts, and push the result to the same "
-                "branch. What `gh pr update-branch` said (also in %s):"
+                "This is a rebase round: the pull request of %s conflicts with its base. Rebase the branch onto the "
+                "base, resolve the conflicts, and push the result to the same branch. What `gh` said (also in %s):"
                 % (packet["unit"].upper(), new_dir / "findings.json"),
                 "",
                 *["- " + describe(item) for item in findings["items"]],
@@ -3816,6 +4010,10 @@ class Driver:
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
             return 0
+        if not self.model and not self.outcome_logged:
+            # A Markdown plan's outcome is never run: it completes unverified and cannot be accepted.
+            self.outcome_logged = True
+            self.log("plan-outcome", outcome=verify.legacy_outcome(True))
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
         if held and held["runtime_id"]:
@@ -4434,7 +4632,10 @@ class Driver:
         with self.book() as data:
             bind(data, task_id, str(runtime_id))
             data["tasks"][task_id]["assignment_id"] = assignment_id
-        set_status(self.plan_path, ticket["#"], "IN PROGRESS")
+        if is_yaml(self.plan_path):
+            self.write_status(ticket["#"], "IN PROGRESS")
+        else:
+            set_status(self.plan_path, ticket["#"], "IN PROGRESS")
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, packet["model"], effort))
 
@@ -4537,6 +4738,220 @@ def forwarded(argv, option):
     return None
 
 
+def is_yaml(plan_path):
+    return Path(plan_path).name.endswith(".plan.yaml")
+
+
+def repo_root(plan_path, repo=None):
+    """The repository a plan belongs to: the one named, else the one holding the plan file."""
+    if repo:
+        return Path(repo).resolve()
+    return Path(
+        run(["git", "-C", str(Path(plan_path).resolve().parent), "rev-parse", "--show-toplevel"])
+    ).resolve()
+
+
+def repo_key(repo):
+    """The directory a repository's YAML plan state lives in under the state dir: its name for the eye, a hash of its
+    git common dir for uniqueness. A worktree of the repository has the repository's key, and two clones that share
+    a name do not share one."""
+    common = Path(yaml_plan.identity(Path(repo).resolve()))
+    home = common.parent if common.name == ".git" else common
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", home.name.removesuffix(".git")).strip("-.") or "repo"
+    return "%s-%s" % (name[:40], hashlib.sha256(str(common).encode("utf-8")).hexdigest()[:12])
+
+
+def state_layout(state_dir, plan_path, repo, slug):
+    """(ledger path, run directory) of a plan. A YAML plan's are under `<state>/<repo-key>/`, so two repositories
+    that run the same slug have two ledgers; a Markdown plan keeps `<state>/<slug>.json` until the format is gone."""
+    state = Path(state_dir).expanduser()
+    if not is_yaml(plan_path):
+        return state / (slug + ".json"), state / slug
+    keyed = state / repo_key(repo)
+    return keyed / (slug + ".json"), keyed / slug
+
+
+def owns_ledger(repo, data):
+    """Whether a ledger written under the old `<state>/<slug>.json` key belongs to `repo`: one of its tasks names the
+    plan file or the checkout inside the repository or its `.worktrees` directory. A ledger that names neither is
+    nobody's."""
+    repo = Path(os.path.realpath(repo))
+    roots = (repo, repo.parent / (repo.name + ".worktrees"))
+    for task in (data.get("tasks") or {}).values():
+        packet = task.get("packet") if isinstance(task, dict) else None
+        for field in ("plan", "checkout"):
+            value = (packet or {}).get(field)
+            if isinstance(value, str) and any(
+                Path(os.path.realpath(value)).is_relative_to(root) for root in roots
+            ):
+                return True
+    return False
+
+
+def old_ledger_of(state_dir, repo, slug):
+    """The ledger of the old `<state>/<slug>.json` key when `repo` owns it, else None."""
+    path = Path(state_dir).expanduser() / (slug + ".json")
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return path if isinstance(data, dict) and owns_ledger(repo, data) else None
+
+
+def import_old_ledger(state_dir, repo, slug, ledger_path, run_dir):
+    """Move a ledger and a run directory written under the old `<state>/<slug>` key into the repository that owns
+    them. Only a `run` does it, under the plan's run lock: a Lead command that moved them would pull the files out
+    from under a live driver. Once the repository's own ledger exists nothing is imported over it, and a repository
+    that does not own the old ledger leaves it alone for the one that does."""
+    state = Path(state_dir).expanduser()
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(state / ".import.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if ledger_path.exists():
+            return
+        old = old_ledger_of(state, repo, slug)
+        if old is None:
+            return
+        # The old ledger's own lock is what a driver holds while it updates that ledger.
+        old_fd = os.open(
+            old.with_name(old.name + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(old_fd, "w") as old_lock:
+            try:
+                fcntl.flock(old_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise PlanError(
+                    "plan '%s': a live driver is updating its old ledger %s; the ledger moves to %s "
+                    "when that driver has stopped — follow it with `await`, or stop it and run again"
+                    % (slug, old, ledger_path)
+                ) from None
+            ledger_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            old_run = state / slug
+            if old_run.is_dir() and not run_dir.exists():
+                os.replace(old_run, run_dir)
+            os.replace(old, ledger_path)
+
+
+def locate_state(state_dir, plan_path, repo, slug, importing=False):
+    """(ledger path, run directory) of a plan. A YAML plan's old ledger is imported only when `importing`, which is
+    `run` under the plan's run lock; every other caller reads the old key in place while the repository's own ledger
+    is absent and the repository owns the old one."""
+    ledger_path, run_dir = state_layout(state_dir, plan_path, repo, slug)
+    if is_yaml(plan_path):
+        if importing:
+            import_old_ledger(state_dir, repo, slug, ledger_path, run_dir)
+        elif not ledger_path.exists() and old_ledger_of(state_dir, repo, slug):
+            return Path(state_dir).expanduser() / (slug + ".json"), Path(
+                state_dir
+            ).expanduser() / slug
+    return ledger_path, run_dir
+
+
+def plan_home(args):
+    """(slug, ledger path, run directory) of the plan a Lead command names."""
+    plan_path = Path(args.plan).resolve(strict=True)
+    slug = plan_slug(plan_path)
+    if not slug:
+        raise Refused("plan has no Slug")
+    repo = repo_root(plan_path, getattr(args, "repo", None)) if is_yaml(plan_path) else None
+    return (slug, *locate_state(args.state_dir, plan_path, repo, slug))
+
+
+def enter_plan_state(data, state, at=None):
+    """The plan's state in the ledger, with its history: one entry per change, oldest first."""
+    plan = data.setdefault("plan", {"state": None, "history": []})
+    if plan["state"] != state:
+        plan["state"] = state
+        plan["history"].append({"state": state, "at": at or now()})
+
+
+def split_status(text):
+    """(state, reason) of a ticket Status: `IN PROGRESS · decision pending: why` is IN PROGRESS and its reason."""
+    text = " ".join((text or "TO-DO").split())
+    if text.lower().startswith("needs you:"):
+        return "needs you", text.split(":", 1)[1].strip() or None
+    head, _, reason = text.partition(" · ")
+    return re.sub(r"\s+\d{4}-\d{2}-\d{2}$", "", head), reason.strip() or None
+
+
+def plan_status(args):
+    """`status <plan> --json`: the plan's state and history, and each ticket's state, reason and pull request, read
+    from the ledger. It writes nothing, takes no lock and needs no run: before one, the plan is APPROVED (or DRAFT)
+    and every ticket TO-DO."""
+    plan_path = Path(args.plan).resolve(strict=True)
+    if is_yaml(plan_path):
+        repo = repo_root(plan_path, args.repo)
+        model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
+        slug, ids, statuses = model.slug, [t.id for t in model.tickets], {}
+        state = "APPROVED" if model.approval else "DRAFT"
+        history = [{"state": state, "at": model.approval.at}] if model.approval else []
+    else:
+        repo = None
+        plan = parse_plan(plan_path.read_text(encoding="utf-8"))
+        slug, ids = plan["slug"], [t["#"] for t in plan["tickets"]]
+        statuses = {t["#"]: t["Status"] for t in plan["tickets"]}
+        state, history = plan.get("status") or "DRAFT", []
+    ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
+    if is_yaml(plan_path) and not ledger_path.exists():
+        ledger_path = old_ledger_of(args.state_dir, repo, slug) or ledger_path
+    data = {}
+    if ledger_path.is_file():
+        data = read_ledger_file(ledger_path)
+        if is_yaml(plan_path):
+            statuses = data.get("ticket_status") or {}
+            moves = data.get("plan") or {}
+            state, history = moves.get("state") or state, moves.get("history") or history
+    tickets = []
+    for ticket_id in ids:
+        status, reason = split_status(statuses.get(ticket_id))
+        prs = [
+            task.get("pr")
+            for task in (data.get("tasks") or {}).values()
+            if (task.get("packet") or {}).get("unit") == ticket_id.lower() and task.get("pr")
+        ]
+        tickets.append(
+            {"id": ticket_id, "state": status, "reason": reason, "pr": prs[-1] if prs else None}
+        )
+    return {
+        "slug": slug,
+        "plan": str(plan_path),
+        "repo": str(repo) if repo else None,
+        "run_dir": str(run_dir),
+        "ledger": str(ledger_path),
+        "state": state,
+        "history": history,
+        "tickets": tickets,
+    }
+
+
+def read_ledger_file(path):
+    """A ledger read without its lock: every writer replaces the file whole, so a reader sees one version."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("cannot read the ledger %s: %s" % (path, error)) from None
+    require(isinstance(data, dict), "the ledger %s is not an object" % path)
+    return data
+
+
+def render_status(status):
+    lines = ["%s: %s" % (status["slug"], status["state"]), "run: " + status["run_dir"]]
+    for ticket in status["tickets"]:
+        lines.append(
+            "%s  %s%s%s"
+            % (
+                ticket["id"],
+                ticket["state"],
+                " · " + ticket["reason"] if ticket["reason"] else "",
+                "  " + ticket["pr"] if ticket["pr"] else "",
+            )
+        )
+    return "\n".join(lines)
+
+
 def plan_slug(plan_path):
     """The slug a Markdown or YAML plan names, read without validating it: a plan mid-edit still names its slug."""
     path = Path(plan_path).resolve(strict=True)
@@ -4622,15 +5037,12 @@ def launch(args, run_args):
 def rebuild_metrics(args):
     """`metrics <plan>`: metrics.json rebuilt from the run's events.jsonl, which survives a crash. A run dir written
     before the log existed is read from its ledger instead."""
-    slug = plan_slug(args.plan)
-    state_dir = Path(args.state_dir).expanduser()
-    run_dir = state_dir / slug
+    slug, ledger_path, run_dir = plan_home(args)
     rows = events.read(run_dir / "events.jsonl")
     if not rows:
-        ledger_path = state_dir / (slug + ".json")
         require(
             ledger_path.exists(),
-            "no events.jsonl or ledger for %s under %s" % (slug, state_dir),
+            "no events.jsonl or ledger for %s under %s" % (slug, run_dir.parent),
         )
         with ledger(ledger_path) as data:
             rows = [dict(row, kind="import") for row in legacy_imports(data)]
@@ -4643,11 +5055,8 @@ def rebuild_metrics(args):
 def rebuild_evidence(args):
     """`evidence <plan>`: the run's attempts.jsonl rebuilt from its ledger and its events.jsonl, which survive a crash.
     The old metrics.json is left alone: the evidence is written beside it."""
-    slug = plan_slug(args.plan)
-    state_dir = Path(args.state_dir).expanduser()
-    run_dir = state_dir / slug
-    ledger_path = state_dir / (slug + ".json")
-    require(ledger_path.exists(), "no ledger for %s under %s" % (slug, state_dir))
+    slug, ledger_path, run_dir = plan_home(args)
+    require(ledger_path.exists(), "no ledger for %s under %s" % (slug, run_dir.parent))
     with ledger(ledger_path) as data:
         records = evidence.attempts(data, events.read(run_dir / "events.jsonl"), slug)
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -4674,10 +5083,7 @@ class Refused(PlanError):
 
 def run_dir_of(args):
     """The run directory of the plan a Lead command names."""
-    slug = plan_slug(args.plan)
-    if not slug:
-        raise Refused("plan has no Slug")
-    return Path(args.state_dir).expanduser() / slug
+    return plan_home(args)[2]
 
 
 def numbered(directory, stem, suffix):
@@ -4867,6 +5273,13 @@ def main(argv=None):
         "plan", help="Validate and approve plan/1 YAML contracts"
     ).add_subparsers(dest="plan_command", required=True)
     plan_commands.add_parser("schema", help="Print the plan/1 JSON Schema")
+    plans = commands.add_parser(
+        "plans", help="List the plans of a repository (or of an explicit plan's directory)"
+    ).add_subparsers(dest="plans_command", required=True)
+    listing = plans.add_parser("list")
+    listing.add_argument("path", nargs="?", help="A plan file, or the directory holding plans")
+    listing.add_argument("--repo", help="Repository root; default the current repository")
+    listing.add_argument("--json", action="store_true", help="Print the list as a JSON array")
     for verb in ("check", "approve"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
@@ -4916,7 +5329,10 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
+    )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
     )
     sub = commands.add_parser(
         "evidence", help="Rebuild a run's attempts.jsonl (the per-attempt evidence) from its ledger"
@@ -4925,7 +5341,10 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
+    )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
     )
     sub = commands.add_parser(
         "run", help="Dispatch an approved plan's ready agent tickets and wait for them"
@@ -4973,7 +5392,7 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
     )
     sub.add_argument(
         "--models-file",
@@ -5042,7 +5461,10 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
+    )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
     )
     sub.add_argument(
         "--poll-seconds", type=float, default=2, help="How often wakes.jsonl is read while waiting"
@@ -5060,8 +5482,19 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
     )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
+    )
+    sub = commands.add_parser(
+        "status",
+        help="A plan's state and history and each ticket's state, reason and PR, from its ledger",
+    )
+    sub.add_argument("plan")
+    sub.add_argument("--json", action="store_true", help="Print the answer as JSON")
+    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
     sub = commands.add_parser(
         "launch", help="Check the plan and start `run` in a Herdr terminal named orchestrate-<slug>"
     )
@@ -5090,6 +5523,14 @@ def main(argv=None):
             }
         model = yaml_plan.load(args.plan, repo=args.repo, state_dir=args.state_dir)
         return {"valid": True, "slug": model.slug}
+    if args.command == "plans":
+        found = yaml_plan.discover(args.repo, args.path)
+        if args.json:
+            return found
+        return "\n".join(entry["path"] for entry in found)
+    if args.command == "status":
+        status = plan_status(args)
+        return status if args.json else render_status(status)
     if args.command == "run":
         return drive(args)
     if args.command == "await":

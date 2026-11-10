@@ -19,7 +19,18 @@ PLUGIN = Path(__file__).resolve().parents[1]
 RUNTIME_SRC = PLUGIN / "packages" / "agent-runtime" / "src"
 SERVER = PLUGIN / "server" / "mcp_server.py"
 MARKETPLACE = PLUGIN / ".claude-plugin" / "marketplace.json"
-TOOLS = ["spawn", "message", "resume", "wait", "status", "list", "collect", "stop", "report", "task"]
+TOOLS = [
+    "spawn",
+    "message",
+    "resume",
+    "wait",
+    "status",
+    "list",
+    "collect",
+    "stop",
+    "report",
+    "task",
+]
 
 
 class _Launched:
@@ -37,6 +48,7 @@ class _Launched:
                 self.stdout.read()  # EOF means the server exited
             except (ValueError, OSError):
                 return  # the file was closed under the thread: the server is gone anyway
+
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         reader.join(timeout)
@@ -60,11 +72,22 @@ class FakeCli:
     def __init__(self, harness="codex"):
         self.dir = tempfile.TemporaryDirectory()
         self.count = 0
-        self.proc = subprocess.Popen([harness, "-c", 'while IFS= read -r d; do v=(); while IFS= read -r -d "" e; do v+=("$e"); done <"$d/env"; \
+        self.proc = subprocess.Popen(
+            [
+                harness,
+                "-c",
+                'while IFS= read -r d; do v=(); while IFS= read -r -d "" e; do v+=("$e"); done <"$d/env"; \
 env -i "${v[@]}" "$PYTHON" -B -c "$WRAP" "$d/rc" "$@" <"$d/in" >"$d/out" 2>"$d/err" & done; wait',
-                                      harness, sys.executable, "-B", str(SERVER)], executable="/bin/bash",
-                                     stdin=subprocess.PIPE, text=True,
-                                     env=dict(os.environ, PYTHON=sys.executable, WRAP=self.WRAP))
+                harness,
+                sys.executable,
+                "-B",
+                str(SERVER),
+            ],
+            executable="/bin/bash",
+            stdin=subprocess.PIPE,
+            text=True,
+            env=dict(os.environ, PYTHON=sys.executable, WRAP=self.WRAP),
+        )
 
     def launch(self, env):
         self.count += 1
@@ -72,7 +95,9 @@ env -i "${v[@]}" "$PYTHON" -B -c "$WRAP" "$d/rc" "$@" <"$d/in" >"$d/out" 2>"$d/e
         directory.mkdir()
         for name in ("in", "out", "err"):
             os.mkfifo(directory / name)
-        (directory / "env").write_bytes(b"".join(("%s=%s" % kv).encode() + b"\0" for kv in env.items()))
+        (directory / "env").write_bytes(
+            b"".join(("%s=%s" % kv).encode() + b"\0" for kv in env.items())
+        )
         self.proc.stdin.write(directory.as_posix() + "\n")
         self.proc.stdin.flush()
         return _Launched(directory)
@@ -95,9 +120,21 @@ class Session:
             return
         argv = [sys.executable, "-B", str(SERVER)]
         if new_cli:
-            argv = ["codex", "-c", '"$@"; exit $?', "codex"] + argv  # non-exec shell stays the parent
-        self.proc = subprocess.Popen(argv, executable="/bin/bash" if new_cli else None, env=env, text=True,
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            argv = [
+                "codex",
+                "-c",
+                '"$@"; exit $?',
+                "codex",
+            ] + argv  # non-exec shell stays the parent
+        self.proc = subprocess.Popen(
+            argv,
+            executable="/bin/bash" if new_cli else None,
+            env=env,
+            text=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         self.next_id = 0
 
     def send(self, method, params=None, notify=False):
@@ -116,8 +153,14 @@ class Session:
         return reply
 
     def handshake(self):
-        reply = self.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                         "clientInfo": {"name": "test", "version": "0"}})
+        reply = self.send(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0"},
+            },
+        )
         self.send("notifications/initialized", notify=True)
         return reply
 
@@ -157,7 +200,10 @@ class ToolListTests(ServerCase):
         words = 0
         for tool in tools:
             words += len(tool["description"].split())
-            words += sum(len(p.get("description", "").split()) for p in tool["inputSchema"]["properties"].values())
+            words += sum(
+                len(p.get("description", "").split())
+                for p in tool["inputSchema"]["properties"].values()
+            )
         self.assertLessEqual(words, 400)
 
     def test_S16_profiles_are_listed_dynamically(self):
@@ -169,14 +215,18 @@ class ToolListTests(ServerCase):
             session.handshake()
             config.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": {}}}}))
             tools = session.send("tools/list")["result"]["tools"]
-            self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"],
-                             ["claude", "codex", "pi", "custom"])
+            self.assertEqual(
+                tools[0]["inputSchema"]["properties"]["cli"]["enum"],
+                ["claude", "codex", "pi", "custom"],
+            )
 
     def test_spawn_schema_has_optional_string_model(self):
         """agent-runtime/R135"""
         session = self.start()
         session.handshake()
-        spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
+        spawn = next(
+            t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn"
+        )
         self.assertEqual(spawn["inputSchema"]["properties"]["model"]["type"], "string")
         self.assertNotIn("model", spawn["inputSchema"]["required"])
 
@@ -184,15 +234,22 @@ class ToolListTests(ServerCase):
         """agent-runtime/R149"""
         session = self.start()
         session.handshake()
-        spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
-        self.assertEqual(spawn["inputSchema"]["properties"]["effort"]["enum"], ["low", "medium", "high", "xhigh", "max"])
+        spawn = next(
+            t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn"
+        )
+        self.assertEqual(
+            spawn["inputSchema"]["properties"]["effort"]["enum"],
+            ["low", "medium", "high", "xhigh", "max"],
+        )
         self.assertNotIn("effort", spawn["inputSchema"]["required"])
 
     def test_spawn_schema_has_optional_string_agent(self):
         """agent-runtime/R142"""
         session = self.start()
         session.handshake()
-        spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
+        spawn = next(
+            t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn"
+        )
         agent = spawn["inputSchema"]["properties"]["agent"]
         self.assertEqual(agent["type"], "string")
         self.assertIn("report", agent["description"])
@@ -202,7 +259,9 @@ class ToolListTests(ServerCase):
         """agent-runtime/R164"""
         session = self.start()
         session.handshake()
-        spawn = next(t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn")
+        spawn = next(
+            t for t in session.send("tools/list")["result"]["tools"] if t["name"] == "spawn"
+        )
         properties = spawn["inputSchema"]["properties"]
         self.assertEqual(properties["instructions_file"]["type"], "string")
         self.assertNotIn("instructions_file", spawn["inputSchema"]["required"])
@@ -253,7 +312,12 @@ class ToolCallTests(ServerCase):
 
     def test_status_wraps_the_library_with_a_fake_hc(self):
         """agent-runtime-tools/S1"""
-        raw = {"address": "t9", "name": "w1", "parent": "t0", "status": {"app": "x", "state": "idle"}}
+        raw = {
+            "address": "t9",
+            "name": "w1",
+            "parent": "t0",
+            "status": {"app": "x", "state": "idle"},
+        }
         session = self.start("echo '%s'" % json.dumps(raw), env={"HC_TERMINAL_ID": "t0"})
         session.handshake()
         result = self.call(session, "status", {"name": "w1"})
@@ -263,8 +327,10 @@ class ToolCallTests(ServerCase):
 
     def test_list_returns_children_of_the_caller(self):
         """agent-runtime-tools/S1"""
-        body = ('case "$1" in ls) echo \'{"terminals":[{"address":"t5","parent":"t0"},{"address":"t6","parent":"tX"}]}\';;'
-                ' get) echo \'{"address":"t5","name":"w5","parent":"t0","status":"working"}\';; esac')
+        body = (
+            'case "$1" in ls) echo \'{"terminals":[{"address":"t5","parent":"t0"},{"address":"t6","parent":"tX"}]}\';;'
+            ' get) echo \'{"address":"t5","name":"w5","parent":"t0","status":"working"}\';; esac'
+        )
         session = self.start(body, env={"HC_TERMINAL_ID": "t0"})
         session.handshake()
         result = self.call(session, "list", {})
@@ -300,8 +366,15 @@ class WiringTests(unittest.TestCase):
         server = mcp["mcpServers"]["agent-runtime"]
         self.assertEqual(server["command"], "python3")
         self.assertEqual(server["args"], ["${CLAUDE_PLUGIN_ROOT}/server/mcp_server.py"])
-        for name in ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV",
-                     "HERDR_SOCKET_PATH", "HERDR_SESSION"):
+        for name in (
+            "HC_TERMINAL_ID",
+            "HC_SCOPE",
+            "HC_TERMINAL_SOCKET",
+            "HERDR_PANE_ID",
+            "HERDR_ENV",
+            "HERDR_SOCKET_PATH",
+            "HERDR_SESSION",
+        ):
             self.assertEqual(server["env"][name], "${%s:-}" % name)
         hooks = self.load(PLUGIN / "hooks" / "hooks.json")
         self.assertIsInstance(hooks["hooks"], dict)

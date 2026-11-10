@@ -52,7 +52,7 @@ class CheckpointRulesTests(unittest.TestCase):
         return {"command": command, "outcome": "passed"}
 
     def test_S1_bash_and_dot_slash_prefixes_match_the_required_check(self):
-        """orchestrator-engine/R2"""
+        """orchestrator-engine/R22"""
         for command in (
             "bash scripts/checks.sh",
             "./scripts/checks.sh",
@@ -64,7 +64,7 @@ class CheckpointRulesTests(unittest.TestCase):
                 self.data["tasks"]["validation"]["status"] = "ACTIVE"
 
     def test_S1a_uv_run_python_m_prefix_matches_pytest(self):
-        """orchestrator-engine/R2"""
+        """orchestrator-engine/R23"""
         self.packet["checks"] = ["pytest"]
         done = app.checkpoint(
             self.data, "validation", self.report([self.passed("uv run python -m pytest")])
@@ -72,7 +72,7 @@ class CheckpointRulesTests(unittest.TestCase):
         self.assertEqual(done["status"], "COMPLETE")
 
     def test_S2_prefix_off_the_strip_list_or_absent_check_is_refused(self):
-        """orchestrator-engine/R2"""
+        """orchestrator-engine/R24"""
         for checks in (
             [self.passed("echo scripts/checks.sh")],
             [self.passed("python scripts/checks.sh")],
@@ -88,7 +88,7 @@ class CheckpointRulesTests(unittest.TestCase):
                 self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
     def test_S3_not_run_with_reason_on_a_non_required_check_is_accepted(self):
-        """orchestrator-engine/R2"""
+        """orchestrator-engine/R25"""
         checks = [
             self.passed("scripts/checks.sh"),
             {"command": "slow-benchmark", "outcome": "not_run", "reason": "no GPU here"},
@@ -97,7 +97,7 @@ class CheckpointRulesTests(unittest.TestCase):
         self.assertEqual(done["status"], "COMPLETE")
 
     def test_S3a_not_run_without_reason_is_refused(self):
-        """orchestrator-engine/R2"""
+        """orchestrator-engine/R26"""
         checks = [
             self.passed("scripts/checks.sh"),
             {"command": "slow-benchmark", "outcome": "not_run"},
@@ -107,7 +107,7 @@ class CheckpointRulesTests(unittest.TestCase):
         self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
     def test_S3b_required_check_reported_not_run_is_refused(self):
-        """orchestrator-engine/R2"""
+        """orchestrator-engine/R27"""
         checks = [
             {"command": "scripts/checks.sh", "outcome": "not_run", "reason": "skipped"},
         ]
@@ -116,7 +116,7 @@ class CheckpointRulesTests(unittest.TestCase):
         self.assertIn("scripts/checks.sh", str(caught.exception))
 
     def test_S4_any_failed_check_refuses_complete(self):
-        """orchestrator-engine/R2"""
+        """orchestrator-engine/R28"""
         checks = [
             self.passed("scripts/checks.sh"),
             {"command": "slow-benchmark", "outcome": "failed", "reason": "timeout"},
@@ -126,7 +126,7 @@ class CheckpointRulesTests(unittest.TestCase):
         self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
     def test_S8a_a_partial_checkpoint_raises_when_the_checkout_is_missing(self):
-        """orchestrator-engine/R2: merged-unit-completes/S8a"""
+        """orchestrator-engine/R35"""
         self.snapshot.side_effect = FileNotFoundError("/nonexistent")
         with self.assertRaises(FileNotFoundError):
             app.checkpoint(

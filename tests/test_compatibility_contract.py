@@ -52,9 +52,17 @@ class BaselineTests(unittest.TestCase):
     def test_the_baseline_inventory_is_recorded(self):
         """python-workspace-contracts/R199"""
         data = baseline()
-        for key in ("entrypoints", "cli_subcommands", "mcp_tools", "orchestration_verbs",
-                    "store", "runtime_dependencies", "pr_pins", "sqlite_imports",
-                    "regression_coverage"):
+        for key in (
+            "entrypoints",
+            "cli_subcommands",
+            "mcp_tools",
+            "orchestration_verbs",
+            "store",
+            "runtime_dependencies",
+            "pr_pins",
+            "sqlite_imports",
+            "regression_coverage",
+        ):
             self.assertIn(key, data, key)
 
 

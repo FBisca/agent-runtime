@@ -65,8 +65,12 @@ class SeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "argv"
             fake = Path(tmp) / "agent-runtime"
-            fake.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > ' + str(log)
-                            + '\nprintf \'{"assignment_id": "a1"}\'\n', encoding="utf-8")
+            fake.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > "
+                + str(log)
+                + '\nprintf \'{"assignment_id": "a1"}\'\n',
+                encoding="utf-8",
+            )
             fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
             with mock.patch.dict(os.environ, {"PATH": "%s:%s" % (tmp, os.environ["PATH"])}):
                 answer = CliRuntimeClient("lead-1").call("spawn", {"name": "w1"}, timeout=30)
@@ -92,9 +96,20 @@ class BoundaryTests(unittest.TestCase):
     """R201, R202: the typed boundary rejects what it does not accept."""
 
     def report(self, **over):
-        row = {"contract": 2, "task_id": "t1", "status": "COMPLETE", "summary": "done", "acceptance_met": True,
-               "files": [], "decisions": [], "interfaces": [], "remaining": [], "checks": [],
-               "head": "abc1234", "pr": None}
+        row = {
+            "contract": 2,
+            "task_id": "t1",
+            "status": "COMPLETE",
+            "summary": "done",
+            "acceptance_met": True,
+            "files": [],
+            "decisions": [],
+            "interfaces": [],
+            "remaining": [],
+            "checks": [],
+            "head": "abc1234",
+            "pr": None,
+        }
         row.update(over)
         return row
 
@@ -128,17 +143,21 @@ class BoundaryTests(unittest.TestCase):
     def test_S4_a_route_policy_naming_an_unknown_class_is_refused(self):
         """python-workspace-contracts/R202"""
         with self.assertRaises(routes.RouteError) as caught:
-            routes.validate({"version": 1, "routes": [{"class": "tiny", "backend": "claude", "model": "haiku"}]})
+            routes.validate(
+                {"version": 1, "routes": [{"class": "tiny", "backend": "claude", "model": "haiku"}]}
+            )
         self.assertIn("class", str(caught.exception))
 
     def test_S4_a_yaml_route_policy_loads_and_its_unknown_field_is_refused(self):
         """python-workspace-contracts/R202"""
-        policy = ("version: 1\n"
-                  "routes:\n"
-                  "  - class: small\n"
-                  "    backend: claude\n"
-                  "    model: haiku\n"
-                  "    effort: low\n")
+        policy = (
+            "version: 1\n"
+            "routes:\n"
+            "  - class: small\n"
+            "    backend: claude\n"
+            "    model: haiku\n"
+            "    effort: low\n"
+        )
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "routes.yaml"
             path.write_text(policy, encoding="utf-8")
@@ -156,11 +175,30 @@ class CliContractTests(unittest.TestCase):
     def test_the_cli_offers_the_documented_commands(self):
         """python-workspace-contracts/R202"""
         env = dict(os.environ, PYTHONPATH=str(MEMBER.parent))
-        result = subprocess.run([sys.executable, "-m", "agent_orchestrator", "--help"], capture_output=True, text=True,
-                                cwd=str(REPO), timeout=60, env=env)
+        result = subprocess.run(
+            [sys.executable, "-m", "agent_orchestrator", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO),
+            timeout=60,
+            env=env,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
-        for command in ("run", "launch", "decide", "await", "show", "claim", "bind", "checkpoint", "release",
-                        "context", "metrics", "evidence", "inspect"):
+        for command in (
+            "run",
+            "launch",
+            "decide",
+            "await",
+            "show",
+            "claim",
+            "bind",
+            "checkpoint",
+            "release",
+            "context",
+            "metrics",
+            "evidence",
+            "inspect",
+        ):
             self.assertIn(command, result.stdout)
 
 
@@ -178,6 +216,8 @@ class StateTests(unittest.TestCase):
 
     def test_S8_the_runtime_wheel_needs_neither_member_nor_its_dependencies(self):
         """python-workspace-contracts/R204"""
-        manifest = (REPO / "packages" / "agent-runtime" / "pyproject.toml").read_text(encoding="utf-8")
+        manifest = (REPO / "packages" / "agent-runtime" / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("pydantic", manifest.lower())
         self.assertNotIn("yaml", manifest.lower())

@@ -85,7 +85,9 @@ class PlanTests(RunFixture, unittest.TestCase):
         from agent_orchestrator.plan import load
 
         reference = Path(__file__).resolve().parents[3] / "docs/plans/2026-11-10-yaml-eec.plan.yaml"
-        self.assertEqual(load(reference).slug, "yaml-eec")
+        # The reference's schema, not its approval: the snapshot lives in the approver's state dir (D26), so a
+        # committed approval block cannot be verified on CI or any other machine.
+        self.assertEqual(load(reference, verify=False).slug, "yaml-eec")
         self.assertEqual(self.command("check")[0], 0)
         out = io.StringIO()
         with redirect_stdout(out):

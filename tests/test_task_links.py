@@ -1,4 +1,5 @@
 """Tasks link to workers on spawn and move on resume (hardening D8, D9, D11)."""
+
 import json
 import sys
 import tempfile
@@ -15,20 +16,30 @@ from agent_runtime.dispatch_store import Store, StoreError
 pytestmark = pytest.mark.integration
 
 
-ENV = {"CODEX_THREAD_ID": "lead-session", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-       "AGENT_RUNTIME_DISPATCH": "1"}
+ENV = {
+    "CODEX_THREAD_ID": "lead-session",
+    "HC_SCOPE": "lead-token",
+    "HC_TERMINAL_SOCKET": "/hc/sock",
+    "AGENT_RUNTIME_DISPATCH": "1",
+}
 SPAWN = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}
 
 
 def add_task(store, team, task_id="t1", status="pending", deps=(), owner=None, assignment=None):
     with store.transaction() as db:
-        db.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?,?)",
-                   (task_id, team, "subject", status, owner, assignment, json.dumps(list(deps))))
+        db.execute(
+            "INSERT INTO tasks VALUES (?,?,?,?,?,?,?)",
+            (task_id, team, "subject", status, owner, assignment, json.dumps(list(deps))),
+        )
 
 
 def task_row(store, task_id="t1"):
     with store.transaction() as db:
-        return dict(db.execute("SELECT status,owner,assignment FROM tasks WHERE id=?", (task_id,)).fetchone())
+        return dict(
+            db.execute(
+                "SELECT status,owner,assignment FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+        )
 
 
 class StoreLinkTests(unittest.TestCase):
@@ -44,10 +55,18 @@ class StoreLinkTests(unittest.TestCase):
         add_task(self.store, self.team, deps=["dep"])
         identity = self.store.register(self.team, "w1", "t1")
         self.assertEqual(identity["task_id"], "t1")
-        self.assertEqual(task_row(self.store), {"status": "in_progress", "owner": identity["worker_id"],
-                                                "assignment": identity["assignment_id"]})
+        self.assertEqual(
+            task_row(self.store),
+            {
+                "status": "in_progress",
+                "owner": identity["worker_id"],
+                "assignment": identity["assignment_id"],
+            },
+        )
         self.store.bind(identity["assignment_id"], "t1", "test")
-        self.store.publish("test", "t1", "t0", identity["assignment_id"], "done", "complete", caller_name="w1")
+        self.store.publish(
+            "test", "t1", "t0", identity["assignment_id"], "done", "complete", caller_name="w1"
+        )
         self.assertEqual(task_row(self.store)["status"], "complete")
 
     def test_invalid_tasks_are_refused_and_register_nothing(self):
@@ -92,11 +111,23 @@ class StoreLinkTests(unittest.TestCase):
         self.store.bind(first["assignment_id"], "t1", "test")
         for status in ("in_progress", "blocked"):
             with self.subTest(status=status):
-                add_task(self.store, self.team, "own-" + status, status, owner=first["worker_id"], assignment=first["assignment_id"])
+                add_task(
+                    self.store,
+                    self.team,
+                    "own-" + status,
+                    status,
+                    owner=first["worker_id"],
+                    assignment=first["assignment_id"],
+                )
                 second = self.store.register(self.team, "w1", "own-" + status, transfer=True)
-                self.assertEqual(task_row(self.store, "own-" + status),
-                                 {"status": "in_progress", "owner": first["worker_id"],
-                                  "assignment": second["assignment_id"]})
+                self.assertEqual(
+                    task_row(self.store, "own-" + status),
+                    {
+                        "status": "in_progress",
+                        "owner": first["worker_id"],
+                        "assignment": second["assignment_id"],
+                    },
+                )
         add_task(self.store, self.team, "ready")
         third = self.store.register(self.team, "w1", "ready", transfer=True)
         self.assertEqual(task_row(self.store, "ready")["assignment"], third["assignment_id"])
@@ -105,7 +136,14 @@ class StoreLinkTests(unittest.TestCase):
         """agent-runtime/R80"""
         add_task(self.store, self.team, "dep")
         add_task(self.store, self.team, "gated", deps=["dep"])
-        add_task(self.store, self.team, "theirs", "in_progress", owner="someone-else", assignment="other-assignment")
+        add_task(
+            self.store,
+            self.team,
+            "theirs",
+            "in_progress",
+            owner="someone-else",
+            assignment="other-assignment",
+        )
         for task_id in ("gated", "theirs"):
             with self.assertRaises(StoreError):
                 self.store.register(self.team, "w1", task_id, transfer=True)
@@ -113,7 +151,13 @@ class StoreLinkTests(unittest.TestCase):
     def test_resume_without_task_id_leaves_links_unchanged(self):
         """agent-runtime/R80"""
         first = self.store.register(self.team, "w1", None)
-        add_task(self.store, self.team, status="in_progress", owner=first["worker_id"], assignment=first["assignment_id"])
+        add_task(
+            self.store,
+            self.team,
+            status="in_progress",
+            owner=first["worker_id"],
+            assignment=first["assignment_id"],
+        )
         before = task_row(self.store)
         self.store.register(self.team, "w1", transfer=True)
         self.assertEqual(task_row(self.store), before)
@@ -126,7 +170,9 @@ class ToolLinkTests(ToolCase):
         return self.start(replies, ENV)
 
     def make_task(self, lead, **arguments):
-        result, text = self.call(lead, "task", dict({"action": "create", "subject": "do it"}, **arguments))
+        result, text = self.call(
+            lead, "task", dict({"action": "create", "subject": "do it"}, **arguments)
+        )
         self.assertFalse(result["isError"], text)
         return result["structuredContent"]["task_id"]
 
@@ -143,7 +189,9 @@ class ToolLinkTests(ToolCase):
         self.assertEqual(identity["task_id"], task_id)
         store = self.store()
         self.assertEqual(task_row(store, task_id)["assignment"], identity["assignment_id"])
-        store.publish("/hc/sock", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1")
+        store.publish(
+            "/hc/sock", "t9", "t0", identity["assignment_id"], "done", "complete", caller_name="w1"
+        )
         self.assertEqual(task_row(store, task_id)["status"], "complete")
 
     def test_spawn_with_an_unready_task_starts_no_terminal(self):
@@ -163,7 +211,10 @@ class ToolLinkTests(ToolCase):
         task_id = self.make_task(lead)
         result, _ = self.call(lead, "spawn", dict(SPAWN, task_id=task_id))
         self.assertTrue(result["isError"])
-        self.assertEqual(task_row(self.store(), task_id), {"status": "pending", "owner": None, "assignment": None})
+        self.assertEqual(
+            task_row(self.store(), task_id),
+            {"status": "pending", "owner": None, "assignment": None},
+        )
 
     def test_resume_with_task_id_moves_the_task_and_returns_it(self):
         """agent-runtime/R80"""
@@ -171,13 +222,17 @@ class ToolLinkTests(ToolCase):
         task_id = self.make_task(lead)
         result, text = self.call(lead, "spawn", dict(SPAWN, task_id=task_id))
         first = result["structuredContent"]
-        result, text = self.call(lead, "resume", {"name": "w1", "task": "again", "task_id": task_id})
+        result, text = self.call(
+            lead, "resume", {"name": "w1", "task": "again", "task_id": task_id}
+        )
         self.assertFalse(result["isError"], text)
         second = result["structuredContent"]
         self.assertEqual(second["task_id"], task_id)
         store = self.store()
         self.assertEqual(task_row(store, task_id)["assignment"], second["assignment_id"])
-        store.publish("/hc/sock", "t9", "t0", second["assignment_id"], "done", "complete", caller_name="w1")
+        store.publish(
+            "/hc/sock", "t9", "t0", second["assignment_id"], "done", "complete", caller_name="w1"
+        )
         self.assertEqual(task_row(store, task_id)["status"], "complete")
         self.assertNotEqual(first["assignment_id"], second["assignment_id"])
 
@@ -192,9 +247,17 @@ class ToolLinkTests(ToolCase):
         result, _ = self.call(lead, "resume", {"name": "w1", "task": "again", "task_id": task_id})
         self.assertTrue(result["isError"])
         store = self.store()
-        self.assertEqual(task_row(store, task_id), {"status": "in_progress", "owner": first["worker_id"],
-                                                    "assignment": first["assignment_id"]})
-        store.publish("/hc/sock", "t9", "t0", first["assignment_id"], "done", "complete", caller_name="w1")
+        self.assertEqual(
+            task_row(store, task_id),
+            {
+                "status": "in_progress",
+                "owner": first["worker_id"],
+                "assignment": first["assignment_id"],
+            },
+        )
+        store.publish(
+            "/hc/sock", "t9", "t0", first["assignment_id"], "done", "complete", caller_name="w1"
+        )
         self.assertEqual(task_row(store, task_id)["status"], "complete")
 
     def test_refused_resume_sends_nothing(self):
@@ -204,7 +267,9 @@ class ToolLinkTests(ToolCase):
         gated = self.make_task(lead, depends_on=[dep])
         self.call(lead, "spawn", dict(SPAWN, task_id=self.make_task(lead)))
         for task_id in ("missing", gated):
-            result, _ = self.call(lead, "resume", {"name": "w1", "task": "again", "task_id": task_id})
+            result, _ = self.call(
+                lead, "resume", {"name": "w1", "task": "again", "task_id": task_id}
+            )
             self.assertTrue(result["isError"], task_id)
         self.assertEqual(self.runs("send"), [])
 
