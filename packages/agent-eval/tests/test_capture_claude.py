@@ -3,7 +3,6 @@ duplicates and permissions (agent-eval-p0/S1-S7a, S11)."""
 
 import gzip
 import hashlib
-import json
 import os
 import stat
 
@@ -12,7 +11,6 @@ from claude_fixture import (
     CHAIN,
     FORKED,
     OTHER,
-    PROJECT,
     RESUMED,
     SOLO,
     CaptureCase,
