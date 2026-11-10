@@ -565,6 +565,48 @@ class PlanContractTests(unittest.TestCase):
         }
         self.assertIsNone(self.hook(other))
 
+    def patch(self, body, key="patch", cwd=None):
+        """A Codex apply_patch payload; Codex versions carry the patch under different keys."""
+        text = "*** Begin Patch\n%s\n*** End Patch\n" % body
+        payload = {
+            "tool_name": "apply_patch",
+            "tool_input": {key: [text] if key == "command" else text},
+        }
+        return {**payload, "cwd": cwd} if cwd else payload
+
+    def test_D31_a_worker_is_denied_apply_patch_on_receipts(self):
+        """yaml-eec/D31: a Codex worker's file edits reach the same receipts branch"""
+        receipts = str(Path(self.temp.name) / ".local/state/orchestrate/k/demo/receipts")
+        payloads = (
+            self.patch("*** Add File: %s/S1.integration.1.json\n+{}" % receipts),
+            self.patch(
+                "*** Update File: %s/S1.integration.1.json\n@@\n-{}\n+{}" % receipts, key="command"
+            ),
+            self.patch("*** Delete File: %s/S1.integration.1.json" % receipts, key="input"),
+            self.patch(
+                "*** Update File: src/a.py\n*** Move to: %s/S1.integration.1.json" % receipts
+            ),
+            self.patch(
+                "*** Add File: receipts/S1.integration.1.json\n+{}", cwd=str(Path(receipts).parent)
+            ),
+        )
+        for payload in payloads:
+            self.assertTrue(denied(self.hook(payload, role="worker")), payload)
+            self.assertTrue(denied(self.hook({**payload, "agent_id": "sub-1"})), payload)
+            self.assertIsNone(self.hook(payload, role="lead"), payload)
+
+    def test_D31_apply_patch_elsewhere_passes_without_asking_the_runtime(self):
+        """yaml-eec/D31: the runtime is asked only after a path matches"""
+        payloads = (
+            self.patch("*** Add File: src/receipts/a.py\n+x", cwd="/repo"),
+            self.patch("*** Update File: README.md\n@@\n-a\n+b"),
+            {"tool_name": "apply_patch", "tool_input": {}},
+            {"tool_name": "apply_patch", "tool_input": "*** Begin Patch\n*** End Patch\n"},
+        )
+        for payload in payloads:
+            self.assertIsNone(self.hook(payload, role="worker"), payload)
+        self.assertFalse(self.asked.exists())
+
 
 class WiringTests(unittest.TestCase):
     def test_S18_hooks_json_registers_both_hooks_through_plugin_root(self):
@@ -573,14 +615,19 @@ class WiringTests(unittest.TestCase):
         pre = hooks["PreToolUse"]
         matchers = {entry["matcher"] for entry in pre}
         self.assertIn("Bash", matchers)
-        mcp = [m for m in matchers if m != "Bash"]
+        files = "Write|Edit|MultiEdit|NotebookEdit"  # yaml-eec D31: the receipts branch runs for file edits
+        self.assertIn(files, matchers)
+        for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+            self.assertRegex(tool, "^(?:%s)$" % files)
+        self.assertNotRegex("Read", "^(?:%s)$" % files)
+        mcp = [m for m in matchers if m not in ("Bash", files)]
         self.assertEqual(len(mcp), 1)
         self.assertRegex(TOOL + "spawn", mcp[0])
         context = hooks["SessionStart"] + hooks["UserPromptSubmit"] + hooks["Stop"]
         commands = [
             h["command"] for entry in pre + hooks["SubagentStart"] + context for h in entry["hooks"]
         ]
-        self.assertEqual(len(commands), 6)
+        self.assertEqual(len(commands), 7)
         for command in commands:
             self.assertIn('"${CLAUDE_PLUGIN_ROOT}"/hooks/', command)
         self.assertEqual({e.get("matcher") for e in hooks["SessionStart"]}, {"compact|clear"})

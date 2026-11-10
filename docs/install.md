@@ -42,7 +42,7 @@ Codex has no plugin marketplace, so it uses shims. `install.sh` links `agent-run
 ./install.sh
 ```
 
-The block registers the MCP server with `AGENT_RUNTIME_DISPATCH=1`, a 600 s tool timeout and `approve` mode on the mutating tools (`spawn`, `message`, `resume`, `stop`, `report`, `task`), plus PreToolUse hooks for Bash and the runtime's own tools.
+The block registers the MCP server with `AGENT_RUNTIME_DISPATCH=1`, a 600 s tool timeout and `approve` mode on the mutating tools (`spawn`, `message`, `resume`, `stop`, `report`, `task`), plus PreToolUse hooks for Bash, the runtime's own tools and `apply_patch` (file edits: a worker may not write a plan's receipts). Pi has no hooks, so a Pi worker's write to receipts is caught only by the ledger's receipt hash.
 
 ### Codex lead hooks
 

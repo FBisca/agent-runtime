@@ -77,5 +77,14 @@ command = "\"<HOME>/.local/bin/agent-runtime-hook\" --cli codex"
 timeout = 5
 statusMessage = "Checking agent-runtime caller"
 
+[[hooks.PreToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "\"<HOME>/.local/bin/agent-runtime-hook\" --cli codex"
+timeout = 5
+statusMessage = "Checking file edits"
+
 # Optional lead hooks for Codex: re-run with CODEX_LEAD_HOOKS=1 to print the Stop, SessionStart and
 # UserPromptSubmit blocks.
