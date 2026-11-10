@@ -171,6 +171,37 @@ class ToolchainTests(unittest.TestCase):
             re.search(r"--no-deps", workflow), "CI does not install the runtime wheel in isolation"
         )
 
+    def test_S6_the_format_budget_counts_what_ruff_reports(self):
+        """python-workspace-contracts/R197
+
+        ruff says "1 file would be reformatted" for one file: a count that read only the plural let an
+        unformatted file through a budget of 0."""
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        (line,) = [
+            line.strip()
+            for line in workflow.splitlines()
+            if line.strip().startswith("found=") and "ruff-format.txt" in line
+        ]
+        for report, expected in (
+            (
+                "Would reformat: a.py\n1 file would be reformatted, 174 files already formatted\n",
+                "1",
+            ),
+            ("Would reformat: a.py\nWould reformat: b.py\n2 files would be reformatted\n", "2"),
+            ("175 files already formatted\n", "0"),
+        ):
+            with self.subTest(report=report.splitlines()[-1]):
+                with tempfile.TemporaryDirectory() as temp:
+                    Path(temp, "ruff-format.txt").write_text(report, encoding="utf-8")
+                    counted = subprocess.run(
+                        ["bash", "-c", line + '\necho "$found"'],
+                        env=dict(os.environ, RUNNER_TEMP=temp),
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                self.assertEqual(counted.stdout.strip(), expected)
+
 
 if __name__ == "__main__":
     unittest.main()
