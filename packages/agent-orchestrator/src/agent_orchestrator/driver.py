@@ -5151,10 +5151,13 @@ def numbered(directory, stem, suffix):
 
 def foreign_attempt(text, unit, expected):
     """The first attempt id of `unit` that `text` names and that is not `expected`, else None. An attempt id is the
-    unit's own id or the unit followed by a round letter (fix `r`, retry `d`, orphan `o`) and a number; the worker
-    name (`demo-t1`) and any longer word are not ids."""
-    pattern = r"(?<![\w-])%s(?:[rdo]\d+)?(?!\w)" % re.escape(unit)
-    return next((m for m in re.findall(pattern, text) if m != expected), None)
+    unit's own id or the unit followed by a round letter (fix `r`, retry `d`, orphan `o`, reopen `p`) and a number,
+    in any case: a worker that writes `T1R2` has named the same attempt as `t1r2`. The worker name (`demo-t1`) and
+    any longer word are not ids."""
+    pattern = r"(?<![\w-])%s(?:[rdop]\d+)?(?!\w)" % re.escape(unit)
+    return next(
+        (m for m in re.findall(pattern, text, re.IGNORECASE) if m.lower() != expected.lower()), None
+    )
 
 
 def decide(args):
