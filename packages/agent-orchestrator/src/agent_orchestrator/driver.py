@@ -4887,6 +4887,13 @@ def main(argv=None):
         "plan", help="Validate and approve plan/1 YAML contracts"
     ).add_subparsers(dest="plan_command", required=True)
     plan_commands.add_parser("schema", help="Print the plan/1 JSON Schema")
+    plans = commands.add_parser(
+        "plans", help="List the plans of a repository (or of an explicit plan's directory)"
+    ).add_subparsers(dest="plans_command", required=True)
+    listing = plans.add_parser("list")
+    listing.add_argument("path", nargs="?", help="A plan file, or the directory holding plans")
+    listing.add_argument("--repo", help="Repository root; default the current repository")
+    listing.add_argument("--json", action="store_true", help="Print the list as a JSON array")
     for verb in ("check", "approve"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
@@ -5110,6 +5117,11 @@ def main(argv=None):
             }
         model = yaml_plan.load(args.plan, repo=args.repo, state_dir=args.state_dir)
         return {"valid": True, "slug": model.slug}
+    if args.command == "plans":
+        found = yaml_plan.discover(args.repo, args.path)
+        if args.json:
+            return found
+        return "\n".join(entry["path"] for entry in found)
     if args.command == "run":
         return drive(args)
     if args.command == "await":
