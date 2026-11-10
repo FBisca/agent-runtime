@@ -1094,7 +1094,7 @@ ARCHIVE_ACCEPTANCE = [
 ]
 YAML_ARCHIVE_ACCEPTANCE = [
     "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
-    "The promoted oracles the driver placed are untouched, no test is renamed, and plan.yaml is untouched",
+    "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies; the oracles the driver placed are untouched; no test is renamed and no Status is written into plan.yaml",
 ]
 
 
@@ -4462,7 +4462,11 @@ class Driver:
         if self.model:
             # The driver places the oracles itself: the worker's scope is the spec and those places only.
             self.place_oracles(checkout)
-            owns = [self.model.spec] + [rel for rel, _ in self.yaml_places(self.model)]
+            owns = (
+                [self.model.spec]
+                + [rel for rel, _ in self.yaml_copies()]
+                + [rel for rel, _ in self.yaml_places(self.model)]
+            )
             acceptance = YAML_ARCHIVE_ACCEPTANCE
         else:
             owns = ["docs/specs/", "docs/plans/"]
@@ -4597,6 +4601,10 @@ class Driver:
     def yaml_archive_text(self, model, plan, packet, task_dir):
         """The archive brief for a YAML plan: the plan's spec is the living spec; the driver has already placed the
         oracles, and the worker writes requirements and a Coverage table."""
+        copies = "\n".join(
+            "- Copy byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
+            for rel, source in self.yaml_copies()
+        )
         places = "\n".join(
             "- Already placed by the driver, byte-identical, do not edit: `%s`." % rel
             for rel, _ in self.yaml_places(model)
@@ -4620,6 +4628,7 @@ class Driver:
                 *steps,
                 "- Give the spec a `Coverage` table: one row per requirement of this plan, with the test node ids "
                 "(`path::test_name`) that prove it. Take the node ids from the tickets' reports and the placed oracles.",
+                copies,
                 places,
                 "- The driver placed the promoted oracles before you started. The archive renames no test, leaves "
                 "plan.yaml untouched, and writes no Status.",

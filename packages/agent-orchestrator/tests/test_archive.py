@@ -238,11 +238,12 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         task_md = self.archive_run()
         line = next(line for line in task_md.splitlines() if line.startswith("Owns"))
         owns = [item.strip() for item in line.split(": ", 1)[1].rstrip(".").split(",")]
-        self.assertEqual(owns, ["docs/specs/demo.md", "src/a/test_oracle.py"])
+        self.assertEqual(owns[0], "docs/specs/demo.md")
+        self.assertEqual(owns[-1], "src/a/test_oracle.py")
+        self.assertIn("docs/plans/demo.plan.yaml", owns)
         for needle in ("(from demo/S", "Coverage", "renames no test", "plan.yaml"):
             self.assertIn(needle, task_md)
-        self.assertNotIn("Copy byte-identical", task_md)
-        self.assertNotIn("Place byte-identical", task_md)
+        self.assertNotIn("Place byte-identical", task_md)  # the driver places; the worker does not
 
     def test_S25_the_driver_reruns_outcome_evidence_on_the_archive_head(self):
         self.archive_run()
