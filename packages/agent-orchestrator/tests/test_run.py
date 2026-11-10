@@ -336,6 +336,25 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertIn("t1", stranded["text"])
         self.assertIn("working", stranded["text"])
 
+    def test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S2a"""
+        for state in ("idle", "done"):
+            with self.subTest(state=state):
+                self.setUp()
+                self.crashed(state)
+                (self.run_dir / "t1" / "report.json").write_text(
+                    self.report("t1"), encoding="utf-8"
+                )
+                (self.worktree / "src" / "a").mkdir(parents=True)
+                (self.worktree / "src" / "a" / "test_a.py").write_text(
+                    'def test_a():\n    """S1"""\n', encoding="utf-8"
+                )
+                self.waits([wait_result(), wait_result(), self.reviewer_done()])
+                self.run_driver()
+                self.assertEqual(self.events("orphaned"), [])
+                self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
+                self.assertEqual(self.task()["status"], "COMPLETE")
+
     def test_S2a_a_second_restart_over_the_same_stranded_task_exits_non_zero_too(self):
         """orchestrator-engine/R2: drive-restart-recovery/S2a"""
         self.crashed("unreadable")

@@ -4019,10 +4019,25 @@ class Driver:
                 self.strand(task_id, name, str(error))
                 continue
             if not lost:
-                if finishing and said not in ("idle", "done") and not self.bound_here(name):
-                    # a turn that ended is the ended-turn path's to read; a terminal still at work that no `wait`
-                    # tracks would be left running when the run finishes
-                    self.strand(task_id, name, "live but not an assignment of this run: %s" % said)
+                if finishing and not self.bound_here(name):
+                    # A live terminal that a dead drive left and that `wait` does not list. `wait` lists every
+                    # assignment that is not complete, a turn that ended with no report included, so a terminal at
+                    # `idle` or `done` here has a complete assignment: its report is on disk, and the gates read it.
+                    # Anything still at work, or an ended turn with no report, nothing will ever settle.
+                    ended = said in ("idle", "done")
+                    if ended and role == "worker" and self.report_landed(task_id):
+                        self.log(
+                            "report-landed",
+                            unit=self.unit_of(task_id),
+                            task=task_id,
+                            assignment_id=assignment_id,
+                        )
+                        self.mark(task_id, gate="reported")
+                        acted += 1
+                    elif not ended:
+                        self.strand(
+                            task_id, name, "live but not an assignment of this run: %s" % said
+                        )
                 continue
             unit = self.unit_of(task_id)
             self.log(
