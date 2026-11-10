@@ -55,6 +55,36 @@ def test_S12_an_invalid_label_exits_2_naming_each_failing_field(home, tmp_path, 
     assert not (home / "cases" / CASE / "labels").exists()
 
 
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"judged_at": "2026-13-45"}, "judged_at"),
+        ({"judged_at": "2026-02-30"}, "judged_at"),
+        ({"schema": None, "schema_version": "label/1"}, "schema"),
+    ],
+    ids=["impossible-month", "impossible-day", "python-name-for-schema"],
+)
+def test_S12_a_label_valid_only_in_form_exits_2(home, tmp_path, capsys, change, field):
+    """agent-eval-p0/S12
+
+    label/1 has one spelling per field and real dates: a pattern-shaped date or the model's own
+    field name is invalid, not silently accepted."""
+    bad = valid_label()
+    for key, value in change.items():
+        if value is None:
+            del bad[key]
+        else:
+            bad[key] = value
+    file = write_json(tmp_path / "label.json", bad)
+
+    code = main(["add-label", CASE, "--kind", "agent-judge", file])
+
+    err = capsys.readouterr().err
+    assert code == 2, err
+    assert field in err, f"{field!r} not named in: {err}"
+    assert not (home / "cases" / CASE / "labels").exists()
+
+
 def test_S12_an_unreadable_label_file_exits_2(home, tmp_path, capsys):
     file = tmp_path / "label.json"
     file.write_text("{not json", encoding="utf-8")

@@ -5,10 +5,18 @@ overwritten: a second label of the same kind is refused, and the first one stays
 """
 
 import json
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+)
 
 from agent_eval.errors import CaptureError
 from agent_eval.store import check_slug, home, make_private_dirs, write_file
@@ -16,7 +24,15 @@ from agent_eval.store import check_slug, home, make_private_dirs, write_file
 KINDS = ("agent-judge",)
 DIMENSIONS = ("quality", "tests", "efficiency", "communication")
 Unit = Annotated[float, Field(ge=0, le=1)]
-Date = Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+
+
+def real_date(value: str) -> str:
+    """The pattern fixes the shape; the calendar decides whether the day exists."""
+    date.fromisoformat(value)
+    return value
+
+
+Date = Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$"), AfterValidator(real_date)]
 
 
 class Dimensions(BaseModel):
@@ -31,7 +47,8 @@ class Dimensions(BaseModel):
 class Label(BaseModel):
     """A `label/1` record: the verdict and score a judge gave a case, and where they came from."""
 
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, populate_by_name=True)
+    # Validation by alias only: `schema` is the one spelling, the Python name is an unknown field.
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     schema_version: Literal["label/1"] = Field(alias="schema")
     kind: Literal["agent-judge"]
