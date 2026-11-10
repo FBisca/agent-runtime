@@ -1389,12 +1389,16 @@ class Driver:
         self.last_tick = moment
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
-            if task["status"] in ("COMPLETE", "RELEASED") or task.get("gate") in PARKED:
+            # The Lead already has a `requested` unit, and a merge is a person's step (the pr-ready wake asked).
+            skipped = (
+                task["status"] in ("COMPLETE", "RELEASED")
+                or task.get("gate") in PARKED
+                or task.get("gate") in ("requested", "awaiting-merge")
+            )
+            if skipped:
+                # A skipped unit that returns to `working` starts a fresh window, not the one it left.
+                self.working_since.pop(task_id, None)
                 continue
-            if task.get("gate") == "requested":
-                continue  # the Lead already has it
-            if task.get("gate") == "awaiting-merge":
-                continue  # the merge is a person's step, and the pr-ready wake already asked for it
             working = self.working_minutes(task_id, assignments, moment)
             if working is not None and working < self.args.working_minutes:
                 # A long test is one turn: the runtime says the agent is busy, so there is nothing to ask.
