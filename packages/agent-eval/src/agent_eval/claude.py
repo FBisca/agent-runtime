@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_eval.errors import CaptureError
+from agent_eval.sessions import Aux, Found, Transcript, epoch, head, regular, text_of
 from agent_eval.store import SLUG
 
 
@@ -20,29 +21,8 @@ class Edge:
     created: str
 
 
-@dataclass(frozen=True)
-class Aux:
-    """A file beside a transcript: a subagent's meta, or a session's tool result."""
-
-    kind: str  # "meta" | "tool-result"
-    source: Path
-    name: str  # the path below its owner's directory in the case
-
-
-@dataclass
-class Transcript:
-    id: str
-    source: Path
-    aux: list[Aux]
-
-
 def claude_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-
-
-def regular(path: Path) -> bool:
-    """A real file: a link is never followed, so a planted one cannot pull in a file from elsewhere."""
-    return path.is_file() and not path.is_symlink()
 
 
 def jobs(cdir: Path) -> list[dict]:
@@ -196,4 +176,35 @@ def subagents(main: Transcript) -> list[Transcript]:
         meta = path.with_suffix(".meta.json")
         aux = [Aux("meta", meta, meta.name)] if regular(meta) else []
         found.append(Transcript(path.stem, path, aux))
+    return found
+
+
+def scan(cdir: Path) -> list[Found]:
+    """Every main session under `projects/`, with the cwd and start time of its first records.
+
+    A session's cwd is the first one a record carries (bookkeeping records carry none); its first
+    prompt is its first user record with text. Subagent files are not sessions of their own: they
+    join through their parent.
+    """
+    found = []
+    for path in sorted((cdir / "projects").glob("*/*.jsonl")):
+        sid = session_id(path.stem)
+        if sid is None or not regular(path):
+            continue
+        cwd, started, prompt = None, None, None
+        for record in head(path):
+            if cwd is None and isinstance(record.get("cwd"), str):
+                cwd = record["cwd"]
+            if started is None:
+                started = epoch(record.get("timestamp"))
+            if prompt is None and record.get("type") == "user" and not record.get("isMeta"):
+                message = record.get("message")
+                prompt = text_of(message.get("content")) if isinstance(message, dict) else ""
+                prompt = prompt or None
+            if cwd is not None and started is not None and prompt is not None:
+                break
+        if cwd is not None and started is not None:
+            found.append(
+                Found(sid, "claude", cwd, started, Transcript(sid, path, []), prompt or "")
+            )
     return found

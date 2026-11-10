@@ -13,8 +13,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent_eval import claude, gitpatch
+from agent_eval import claude, gitpatch, orchestrate
 from agent_eval.errors import CaptureError
+from agent_eval.sessions import Aux, Transcript, assignment_id
 from agent_eval.store import (
     check_slug,
     home,
@@ -38,17 +39,20 @@ class Entry:
     role: str
     parent: str | None
     harness: str
-    transcript: claude.Transcript
-    folder: str  # the directory below `transcripts/` that holds its files
+    transcript: Transcript
+    cwd: str | None = None
+    assignment_id: str | None = None
 
 
-def plan_claude(
-    cdir: Path, refs: Sequence[str], excludes: Sequence[str]
-) -> tuple[list[Entry], list[str], list[str], str]:
+def plan(
+    cdir: Path, refs: Sequence[str], excludes: Sequence[str], run: orchestrate.Run | None = None
+) -> tuple[list[Entry], list[str], list[str], str | None]:
     """-> (entries, excluded ids, missing ids, root id). Reads only; writes nothing.
 
     The root is the oldest session of the first `--session` chain, captured or not: it names the
-    default case. Sessions of later `--session` values that no link joins to it have role `session`.
+    default case, and is None when only a run was named. Sessions of later `--session` values that no
+    link joins to it have role `session`. The run's workers join as role `worker`, each once: a worker
+    the chain already holds stays what the chain made it.
     """
     all_jobs = claude.jobs(cdir)
     named = [claude.resolve(cdir, ref) for ref in refs]
@@ -59,14 +63,16 @@ def plan_claude(
             if member not in links:
                 order.append(member)
                 links[member] = edge
-    root = order[0]
+    root = order[0] if order else None
+    workers = [w for w in orchestrate.workers(run) if w.id not in links] if run else []
+    candidates = order + [w.id for w in workers]
     excluded: list[str] = []
     for ref in excludes:
-        matches = [sid for sid in order if sid.startswith(ref)]
+        matches = [sid for sid in candidates if sid.startswith(ref)]
         if len(matches) != 1:
             raise CaptureError(
-                f"--exclude {ref!r} does not name exactly one session of the chain "
-                f"({', '.join(sid[:8] for sid in order)})",
+                f"--exclude {ref!r} does not name exactly one session of the chain or the run "
+                f"({', '.join(sid[:8] for sid in candidates)})",
                 2,
             )
         if matches[0] not in excluded:
@@ -84,12 +90,34 @@ def plan_claude(
             continue
         edge = links[sid]
         role = edge.kind if edge else ("root" if sid == root else "session")
-        entries.append(Entry(sid, role, edge.parent if edge else None, "claude", found, sid))
-        for sub in claude.subagents(found):
-            entries.append(Entry(sub.id, "subagent", sid, "claude", sub, sid))
+        entries.append(Entry(sid, role, edge.parent if edge else None, "claude", found))
+        entries.extend(subagent_entries(found, sid))
+    for worker in workers:
+        if worker.id in excluded:
+            continue
+        found = worker.transcript
+        if worker.harness == "claude":  # tool results and subagents sit beside the main file
+            found = claude.transcript(cdir, worker.id) or found
+        entries.append(
+            Entry(
+                worker.id,
+                "worker",
+                None,
+                worker.harness,
+                found,
+                worker.cwd,
+                assignment_id(worker.prompt),
+            )
+        )
+        if worker.harness == "claude":
+            entries.extend(subagent_entries(found, worker.id))
     if not entries:
         raise CaptureError("nothing to capture: every session of the chain is excluded or missing")
     return entries, excluded, missing, root
+
+
+def subagent_entries(main: Transcript, parent: str) -> list[Entry]:
+    return [Entry(sub.id, "subagent", parent, "claude", sub) for sub in claude.subagents(main)]
 
 
 def staged_path(entry: Entry) -> str:
@@ -104,12 +132,14 @@ def capture(
     repo: str | None = None,
     base: str | None = None,
     head: str | None = None,
+    orchestrate_run: str | None = None,
+    orchestrate_state_dir: str | None = None,
     now: float | None = None,
     warn: Callable[[str], None] = lambda message: None,
 ) -> Path:
-    """Freeze the sessions, their chains and subagents into a new case; returns its path."""
-    if not sessions:
-        raise CaptureError("--session is required", 2)
+    """Freeze the sessions, their chains and subagents, and a run's workers, into a new case."""
+    if not sessions and orchestrate_run is None:
+        raise CaptureError("--session or --orchestrate-run is required", 2)
     git_args = (repo, base, head)
     if any(x is not None for x in git_args) and not all(x is not None for x in git_args):
         raise CaptureError("--repo, --base and --head go together", 2)
@@ -121,8 +151,12 @@ def capture(
             f"{root_dir} is inside a git working tree; cases hold transcripts and stay outside "
             "every repository: set AGENT_EVALS_HOME to a directory outside it"
         )
-    entries, excluded, missing, root_id = plan_claude(claude.claude_dir(), sessions, excludes)
-    slug = case or root_id
+    run = orchestrate.load(orchestrate_run, orchestrate_state_dir) if orchestrate_run else None
+    entries, excluded, missing, root_id = plan(claude.claude_dir(), sessions, excludes, run)
+    slug = case or root_id or (run.slug if run else None)
+    if slug is None:
+        raise CaptureError("no case slug: name one with --case")
+    check_slug(slug)
     final = root_dir / "cases" / slug
     if os.path.lexists(final):
         raise CaptureError(f"case {slug} already exists at {final}; cases are immutable")
@@ -135,6 +169,8 @@ def capture(
 
     stamp = time.time() if now is None else now
     for entry in entries:
+        if entry.harness != "claude":  # only Claude deletes a session's files on a schedule
+            continue
         age = (stamp - entry.transcript.source.stat().st_mtime) / 86400
         if age > WARN_AFTER_DAYS:
             whole = int(age)
@@ -147,6 +183,7 @@ def capture(
     staging = final.parent / f".tmp-{slug}-{os.getpid()}"
     try:
         records = [write_entry(staging, entry) for entry in entries]
+        run_record = write_run(staging, run) if run else None
         if patch is not None:
             write_file(staging / "changes.patch", patch)
         manifest = {
@@ -157,6 +194,7 @@ def capture(
             "excluded": excluded,
             "missing": missing,
             "git": git_info,
+            "orchestrate": run_record,
         }
         write_file(staging / "manifest.json", (json.dumps(manifest, indent=2) + "\n").encode())
         try:
@@ -170,6 +208,25 @@ def capture(
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return final
+
+
+def write_run(staging: Path, run: orchestrate.Run) -> dict:
+    """Copy the run directory, gzipped like a transcript, below `orchestrate/`."""
+    files = []
+    for source in run.files:
+        rel = f"orchestrate/{source.relative_to(run.directory).as_posix()}.gz"
+        try:
+            digest, size = write_gzipped(source, staging / rel)
+        except OSError as error:
+            raise CaptureError(f"cannot read {source}: {error}") from error
+        files.append({"file": rel, "sha256": digest, "bytes": size, "source": str(source)})
+    return {
+        "slug": run.slug,
+        "source": str(run.directory),
+        "window": {"start": iso(run.start), "end": iso(run.end)},
+        "worktrees": sorted(run.worktrees),
+        "files": files,
+    }
 
 
 def write_entry(staging: Path, entry: Entry) -> dict:
@@ -202,12 +259,15 @@ def write_entry(staging: Path, entry: Entry) -> dict:
         "bytes": size,
         "source": str(source),
         "modified": iso(source.stat().st_mtime),
+        "cwd": entry.cwd,
+        "assignment_id": entry.assignment_id,
         "files": files,
     }
 
 
-def aux_path(entry: Entry, aux: claude.Aux) -> str:
-    """Where an aux file goes: a subagent's meta beside its transcript, tool results in a folder."""
+def aux_path(entry: Entry, aux: Aux) -> str:
+    """Where an aux file goes: a subagent's meta beside its transcript, the rest in a folder."""
     if aux.kind == "meta":
         return f"transcripts/{entry.parent}/{aux.name}.gz"
-    return f"transcripts/{entry.id}/tool-results/{aux.name}.gz"
+    folder = "rollouts" if aux.kind == "rollout" else "tool-results"
+    return f"transcripts/{entry.id}/{folder}/{aux.name}.gz"
