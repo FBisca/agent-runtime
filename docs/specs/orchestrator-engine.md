@@ -213,4 +213,4 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | `test_run.py` | R2, R5 | `code-driven-orchestrator/S1`–`S4`, `code-driven-orchestrator/S14` — the dispatch loop and its restart |
 | `test_swap.py` | R2 | `orchestrate-lean-loop/S19` — the agent below the context reserve |
 | `test_wait_checks.py` | R2 | the CI gate's wait |
-| `test_wake.py` | R2 | `orchestrate-lean-loop/S1`–`S5`, `orchestrate-lean-loop/S7`, `orchestrate-lean-loop/S31` — the requests, the wakes and the decisions |
+| `test_wake.py` | R2, R59 | `orchestrate-lean-loop/S1`–`S5`, `orchestrate-lean-loop/S7`, `orchestrate-lean-loop/S31`, `drive-restart-recovery/S7` — the requests, the wakes and the decisions |
