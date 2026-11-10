@@ -108,6 +108,8 @@ class CaptureCase(unittest.TestCase):
         full = {
             **os.environ,
             "CLAUDE_CONFIG_DIR": str(self.claude),
+            "CODEX_HOME": str(self.tmp / "codex"),
+            "PI_CODING_AGENT_DIR": str(self.tmp / "pi"),
             "AGENT_EVALS_HOME": str(home or self.home),
             **(env or {}),
         }

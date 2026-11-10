@@ -2,7 +2,7 @@
 
 Paths: packages/agent-eval/, packages/agent-eval/tests/, pyproject.toml, uv.lock, docs/specs/agent-eval.md
 
-A coding-agent run (a root session and every session it delegated to) is frozen into a local, immutable
+A coding-agent run (a root session and every session it delegated to, on Claude, Codex or Pi) is frozen into a local, immutable
 case, so it can be judged after the harness deletes its transcripts. Claude deletes a session's files
 after 30 days. `agent-eval capture` copies them, with the code change, into `<home>/cases/<slug>/`, where
 `<home>` is `$AGENT_EVALS_HOME` (default `~/.local/state/agent-evals`). Cases hold verbatim transcripts and
@@ -34,17 +34,50 @@ names the default case even when excluded. Sessions of a later `--session` that 
 have role `session`. A session the job state names whose file is already deleted is listed under `missing`;
 one the user named that has no file is an error.
 
+## Orchestrate runs
+
+`--orchestrate-run <slug>` names a run of the orchestrator: its state directory `<state>/<slug>/`, where
+`<state>` is `--orchestrate-state-dir` (the orchestrator's `--state-dir`, default
+`~/.local/state/orchestrate`). The directory is read as its own record. `events.jsonl` gives the run
+window, from its earliest to its latest `at`, and each `<task>/task.md` names the checkout its worker was
+given on a `Checkout: <path> on branch <branch>` line: those paths are the run's ticket worktrees.
+
+The whole directory joins the case, every regular file gzipped under `orchestrate/` (links are not
+followed), with the same sha256 and size as a transcript. Then every session of Claude, Codex or Pi whose
+cwd is one of the ticket worktrees (compared as real paths) and whose first record is inside the window,
+ends included, joins as role `worker`, with its subagents and tool results when it is a Claude session.
+Its `assignment_id` is the 32 hex digits after `assignment_id` in the first prompt, null without one: the
+first prompt is the first user message with text, and for Codex the first one that is not the
+`# AGENTS.md instructions` or `<...>` context Codex injects. A session `--session` already named is not
+captured twice, and `--exclude` leaves a worker out. Without `--session` the case is named after the run.
+A session id found under two Claude project directories, or under two harnesses, is refused.
+
+Codex keeps `sessions/**/rollout-*.jsonl` under `$CODEX_HOME` (default `~/.codex`). A session may span
+several rollout files; the `id` of each file's first record, a `session_meta`, groups them, whatever the
+file name or the day folder says. The earliest file is the session's transcript and starts it; the rest
+are in its `files` as kind `rollout`.
+
+Pi keeps `sessions/<folder>/*.jsonl` under `$PI_CODING_AGENT_DIR` (default `~/.pi/agent`). The first
+record of each file is the session header; its `id` is the session's id and its `cwd` the session's cwd.
+The folder name, which starts with `--` and encodes the cwd lossily, is never read back, and a file whose
+first line is not a header is skipped.
+
 ## Case layout
 
 `manifest.json` (`schema: case/1`), `transcripts/<id>.jsonl.gz`,
 `transcripts/<parent>/<agent-id>.jsonl.gz` and `.meta.json.gz` for a subagent,
-`transcripts/<id>/tool-results/<path>.gz`, and `changes.patch` when a repository was named.
+`transcripts/<id>/tool-results/<path>.gz`, `transcripts/<id>/rollouts/<file>.gz` for a Codex session's later
+rollouts, `orchestrate/<path>.gz` for a run directory, and `changes.patch` when a repository was named.
 
 Manifest `sessions` carry `id`, `harness`, `role` (`root`, `continuation`, `fork`, `session`,
-`subagent`), `parent`, `file`, `sha256`, `bytes`, `source`, `modified`, and `files`: the session's
-other files, each `kind` (`meta` or `tool-result`), `file`, `sha256`, `bytes` and `source`. The digest and
+`subagent`, `worker`), `parent`, `file`, `sha256`, `bytes`, `source`, `modified`, `cwd` and `assignment_id`
+(null unless the session joined as a worker, and then only when its first prompt carries one), and `files`:
+the session's other files, each `kind` (`meta`, `tool-result` or `rollout`), `file`, `sha256`, `bytes` and
+`source`. The digest and
 the size are of the original bytes, not of the gzip. The manifest also carries `case`, `captured`,
-`excluded`, `missing` and `git` (`{repo, base, head}` as resolved shas, or null).
+`excluded`, `missing`, `git` (`{repo, base, head}` as resolved shas, or null) and `orchestrate` (null, or
+`{slug, source, window: {start, end}, worktrees, files}` with each file's `file`, `sha256`, `bytes` and
+`source`).
 
 ## Requirements
 
@@ -57,6 +90,9 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 - **R213** WHEN `--repo <path> --base <rev> --head <rev>` are given, or omitted, THEN `changes.patch` holds `git diff --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ base..head`, independent of the user's diff config, and the manifest records the resolved shas; without them the manifest records null and no patch is written. (from agent-eval-p0/S7)
 - **R214** WHEN the same session id is found under two Claude project directories, THEN capture exits non-zero naming both paths, and nothing is written. (from agent-eval-p0/S7a)
 - **R215** WHEN capture writes, THEN every directory it creates, `<home>` and its parents included, is 0700 and every file 0600, and nothing is written inside a git working tree or outside `<home>` (env `AGENT_EVALS_HOME`, default `~/.local/state/agent-evals`). (from agent-eval-p0/S11)
+- **R216** WHEN `--orchestrate-run <slug>` is given, THEN the run dir is copied into the case and every Claude, Codex or Pi session whose cwd is one of the run's ticket worktrees and which started inside the run window joins the case as a worker, with its `assignment_id` when the first prompt carries one. (from agent-eval-p0/S8)
+- **R217** WHEN a Codex session spans several rollout files, THEN all files sharing its `session_meta` id are captured under that one session. (from agent-eval-p0/S9)
+- **R218** WHEN a Pi session is captured, THEN its id is the first record's `id` and its cwd the first record's `cwd`, including directories whose names start with `--`. (from agent-eval-p0/S10)
 
 ## Coverage
 
@@ -71,3 +107,6 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 | S7 | R213 | `test_S7_the_patch_holds_the_pinned_diff_and_the_manifest_the_resolved_shas`, `test_S7_the_patch_does_not_depend_on_the_users_diff_config`, `test_S7_without_them_the_manifest_records_null_and_no_patch`, `test_S7_partial_arguments_are_a_usage_error_and_write_nothing`, `test_S7_an_unresolvable_revision_fails_and_writes_nothing` |
 | S7a | R214 | `test_S7a_one_id_under_two_project_directories_is_refused_naming_both`, `test_S7a_a_duplicate_reached_through_the_chain_is_refused_too` |
 | S11 | R215 | `test_S11_directories_0700_and_files_0600_home_and_parents_included`, `test_S11_a_home_inside_a_git_working_tree_is_refused_and_nothing_is_written`, `test_S11_a_stray_dot_git_that_git_does_not_accept_is_not_a_working_tree`, `test_S11_a_home_inside_a_dot_git_directory_is_refused`, `test_S11_the_default_home_is_under_the_user_state_dir`, `test_S11_nothing_is_left_behind_when_a_write_fails` |
+| S8 | R216 | `packages/agent-eval/tests/test_capture_orchestrate.py`: `test_S8_the_run_dir_is_copied_into_the_case`, `test_S8_claude_codex_and_pi_sessions_of_the_ticket_worktrees_join_as_workers`, `test_S8_a_session_outside_the_worktrees_or_the_run_window_stays_out`, `test_S8_the_window_is_inclusive_at_both_ends`, `test_S8_the_case_slug_defaults_to_the_run_and_session_flags_add_to_it`, `test_S8_a_worker_the_chain_already_holds_is_captured_once`, `test_S8_exclude_leaves_a_worker_out_and_lists_it`, `test_S8_without_an_orchestrate_run_no_worker_joins_and_the_manifest_says_null`, `test_S8_an_unknown_run_fails_naming_it_and_writes_nothing`, `test_S8_a_run_with_no_session_to_capture_fails_and_writes_nothing`, `test_S8_a_run_slug_cannot_leave_the_state_dir`, `test_S8_a_symlink_in_the_run_dir_is_not_followed`, `test_S8_a_claude_worker_found_under_two_project_directories_is_refused` |
+| S9 | R217 | `test_S9_every_rollout_file_of_a_session_is_captured_under_it`, `test_S9_rollout_files_with_the_same_id_in_other_directories_still_join`, `test_S9_a_later_rollout_does_not_pull_in_a_session_that_started_outside_the_window` |
+| S10 | R218 | `test_S10_id_and_cwd_come_from_the_first_record_in_a_dash_dash_directory`, `test_S10_a_directory_name_that_looks_like_the_worktree_does_not_decide_the_cwd`, `test_S10_a_file_whose_first_record_is_not_a_session_header_is_skipped` |
