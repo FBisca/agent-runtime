@@ -2826,6 +2826,21 @@ class Driver:
         self.stop_unit_agents(unit, "merged")
         event("%s merged early: %s" % (unit, url))
 
+    def reported_checks(self, task_id):
+        """The checks of the newest attempt of the unit that holds a report: a fix round's own attempt usually has
+        none yet, and the merge must not erase the evidence its worker already stored. [] only when none reported."""
+        with self.book() as data:
+            unit = data["tasks"][task_id]["packet"].get("unit") or task_id
+            attempts = [
+                tid for tid, t in data["tasks"].items() if (t["packet"].get("unit") or tid) == unit
+            ]
+            reports = {tid: data["tasks"][tid].get("report") for tid in attempts}
+        ordered = [task_id] + [tid for tid in reversed(attempts) if tid != task_id]
+        for tid in ordered:
+            if reports.get(tid):
+                return list(reports[tid].get("checks") or [])
+        return []
+
     def merged_report(self, task_id, url):
         """The report a unit that was merged before it finished completes with: the merge settled it."""
         task = self.task(task_id)
@@ -2843,7 +2858,7 @@ class Driver:
             "decisions": [],
             "interfaces": [],
             "remaining": [],
-            "checks": list((task.get("report") or {}).get("checks") or []),
+            "checks": self.reported_checks(task_id),
             "review_rounds": 0,
             "usage": "unknown",
             "head": head,
