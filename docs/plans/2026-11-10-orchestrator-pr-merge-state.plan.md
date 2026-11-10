@@ -4,7 +4,7 @@ Contract: [`2026-11-10-orchestrator-pr-merge-state.plan.yaml`](2026-11-10-orches
 (scenarios, tickets, evidence; validated by `agent-orchestrator plan check`). This file is the narrative: why,
 sources, decisions, risks. It is not covered by the approval digest.
 
-Slug: `orchestrator-pr-merge-state`. Living spec: `docs/specs/orchestrator-engine.md`. Status: AWAITING APPROVAL.
+Slug: `orchestrator-pr-merge-state`. Living spec: `docs/specs/orchestrator-engine.md`. Status: APPROVED 2026-11-10 (`plan approve`, digest `6ef5d1df`).
 
 ## Why now
 

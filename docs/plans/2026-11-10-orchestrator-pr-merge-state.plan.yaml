@@ -86,3 +86,8 @@ tickets:
     size: regular
     difficulty: complex
     risk: [state, external]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-10T12:55:23.275096+00:00'
+  base: 943b7a36767531bc5fad02783236eab7254d81b7
+  digest: 6ef5d1dfe723cc7896e242c2a65956522bd67c7a0590e867d0a1979761595774
