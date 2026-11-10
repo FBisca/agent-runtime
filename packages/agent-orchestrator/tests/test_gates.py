@@ -284,6 +284,60 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
 
+    FAILED_CHECK = [{"command": "pytest", "outcome": "failed", "reason": "2 tests failed"}]
+
+    def refused(self, task_id):
+        """A wait step: the worker reports a unit ready with a failed check, which COMPLETE refuses."""
+        return self.worker_done(task_id, report=self.report(task_id, checks=self.FAILED_CHECK))
+
+    def test_S5_a_ready_report_that_fails_the_complete_rules_goes_back_to_its_worker(self):
+        """orchestrator-engine/R2: merged-unit-completes/S5"""
+        self.waits([self.refused("t1")])
+        self.run_driver()
+        resumes = self.calls("resume")
+        self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
+        findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(findings["attempt"], 1)
+        self.assertIn("complete result has failed checks: pytest", findings["items"][0]["excerpt"])
+        task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
+        self.assertIn("complete result has failed checks: pytest", task_md)
+        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
+        self.assertEqual(self.spawned(), ["demo-t1"])  # no reviewer: the unit never left its gate
+        self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 1)
+        self.assertEqual(self.task("t1r1")["status"], "ACTIVE")
+
+    def test_S5a_report_refusals_at_the_fix_round_cap_ask_the_lead(self):
+        """orchestrator-engine/R2: merged-unit-completes/S5a"""
+        self.waits([self.refused("t1"), self.refused("t1r1"), self.refused("t1r2"), self.skipped()])
+        self.run_driver()
+        self.assertEqual(len(self.calls("resume")), 2)
+        request = self.request()
+        self.assertEqual((request["task"], request["event"]), ("t1r2", "gate"))
+        self.assertIn("complete result has failed checks: pytest", request["reason"])
+        self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
+
+    def test_S5_a_report_the_ledger_cannot_read_asks_the_lead_and_the_driver_exits_clean(self):
+        """orchestrator-engine/R2: merged-unit-completes/S5 — (a report with no `remaining`, or a check with no outcome)"""
+        for broken in (
+            {"remaining": None},
+            {"checks": [{"command": "pytest"}]},
+        ):
+            with self.subTest(broken=broken):
+                report = json.loads(self.report("t1"))
+                if "remaining" in broken:
+                    del report["remaining"]
+                else:
+                    report.update(broken)
+                self.waits(
+                    [
+                        self.worker_done("t1", tests=True, report=json.dumps(report)),
+                        self.skipped(),
+                    ]
+                )
+                self.run_driver()
+                self.assertEqual(self.request()["event"], "report")
+                self.setUp()
+
     def test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6"""
         self.waits([self.worker_done(tests=True)])

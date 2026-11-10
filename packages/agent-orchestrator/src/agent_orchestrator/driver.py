@@ -291,6 +291,35 @@ def merged_snapshot(path):
         return None
 
 
+def require_completable(task, report):
+    """The rules a report meets to be COMPLETE, apart from the ledger's own state. Raises ValueError naming the first
+    that fails; `checkpoint` and the report gate share it, so a report is refused for the same reason in both."""
+    # Total over a schema-valid report: the report gate runs before the ledger's structural checks, which
+    # turn a malformed `remaining` or check into the Lead request they always did.
+    checks = [c for c in report.get("checks") or [] if isinstance(c, dict)]
+    require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
+    require(not report.get("remaining"), "complete result has remaining work")
+    failed = [str(c.get("command")) for c in checks if c.get("outcome") == "failed"]
+    require(not failed, "complete result has failed checks: " + ", ".join(failed))
+    required = {normalise_check(c): c for c in task["packet"]["checks"]}
+    passed = {
+        normalise_check(c["command"])
+        for c in checks
+        if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
+    }
+    missing = [command for key, command in required.items() if key not in passed]
+    require(
+        not missing,
+        "required checks are not passed: " + ", ".join(sorted(missing)),
+    )
+    if routed(task["packet"]):
+        require("review_rounds" in report, "a routed task needs review_rounds")
+        require(
+            isinstance(report.get("usage"), str) and report["usage"].strip(),
+            "a routed task needs usage (the runtime's metric line, or unknown)",
+        )
+
+
 def checkpoint(data, task_id, report, merged=False):
     task = data["tasks"][task_id]
     require(isinstance(report, dict), "report must be an object")
@@ -317,26 +346,7 @@ def checkpoint(data, task_id, report, merged=False):
     )
     if status == "COMPLETE":
         require(task["runtime_id"], "bind the runtime agent before completion")
-        require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
-        require(not report["remaining"], "complete result has remaining work")
-        require(
-            all(c["outcome"] != "failed" for c in checks),
-            "complete result has failed checks: "
-            + ", ".join(c["command"] for c in checks if c["outcome"] == "failed"),
-        )
-        required = {normalise_check(c): c for c in task["packet"]["checks"]}
-        passed = {normalise_check(c["command"]) for c in checks if c["outcome"] == "passed"}
-        missing = [command for key, command in required.items() if key not in passed]
-        require(
-            not missing,
-            "required checks are not passed: " + ", ".join(sorted(missing)),
-        )
-        if routed(task["packet"]):
-            require("review_rounds" in report, "a routed task needs review_rounds")
-            require(
-                isinstance(report.get("usage"), str) and report["usage"].strip(),
-                "a routed task needs usage (the runtime's metric line, or unknown)",
-            )
+        require_completable(task, report)
         task["finished_at"] = now()
     elif status == "BLOCKED":
         require(
@@ -624,9 +634,10 @@ def is_agent(ticket):
     return ticket["Owner"].strip().lower() == "agent"
 
 
-def ready(ticket, by_id):
-    """A TO-DO ticket whose blockers are all COMPLETE."""
-    return ticket["Status"].strip().upper().startswith("TO-DO") and all(
+def ready(ticket, by_id, restartable=False):
+    """A TO-DO ticket (or an IN PROGRESS one with nothing alive behind it: `restartable`) whose blockers are all
+    COMPLETE."""
+    return (restartable or ticket["Status"].strip().upper().startswith("TO-DO")) and all(
         is_done(by_id[b])
         for b in re.split(r"[,\s]+", ticket["Blocked by"].strip())
         if b and b.lower() != "none"
@@ -1994,6 +2005,28 @@ class Driver:
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
             return self.chase_responses(task_id, path, missing)
+        # The merge completes the unit by the same rules, so a report they refuse is the worker's to fix now, while
+        # it can still act: a fix round, not a Lead request, until the cap.
+        try:
+            require_completable(task, dict(report, review_rounds=0))
+        except ValueError as error:
+            return self.fail_gate(
+                task_id,
+                report,
+                self.gate_name(),
+                [
+                    {
+                        "id": "R1",
+                        "kind": "blocking",
+                        "source": self.gate_name(),
+                        "check": "report",
+                        "command": "the COMPLETE rules for %s" % path.name,
+                        "exit": 1,
+                        "excerpt": str(error),
+                        "log_path": str(path),
+                    }
+                ],
+            )
         verdict, lines = self.gate(task_id, task["packet"], report)
         if verdict == "error":
             return self.request(task_id, self.gate_name(), lines[0])
@@ -4021,24 +4054,84 @@ class Driver:
         count = 0
         for ticket in plan["tickets"]:
             task_id = ticket["#"].lower()
-            if not is_agent(ticket) or task_id in self.failed or not ready(ticket, by_id):
+            if not is_agent(ticket):
                 continue
-            held = tasks.get(task_id)
+            if task_id in self.failed and ticket["Status"].strip().upper() == "TO-DO":
+                self.failed.discard(task_id)  # the Lead's answer to the wake: try it again
+            if task_id in self.failed:
+                continue
+            if not ready(ticket, by_id, self.restartable(ticket, tasks)):
+                continue
+            attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == task_id}
+            open_ = {
+                k: t for k, t in attempts.items() if t["status"] not in ("COMPLETE", "RELEASED")
+            }
+            held, new_id = None, None
+            if any(t["status"] == "COMPLETE" for t in attempts.values()) or any(
+                t["runtime_id"] for t in open_.values()
+            ):
+                continue
+            if open_:
+                # a dispatch that failed after its claim left a reserved attempt: it is dispatched again under its
+                # own id (claim is idempotent for it), not as a fresh one
+                new_id, held = next(iter(open_.items()))
+            elif attempts:
+                # every attempt is closed, and a closed id is never dispatched again
+                new_id = next(
+                    "%sr%d" % (task_id, n)
+                    for n in range(1, 1000)
+                    if "%sr%d" % (task_id, n) not in tasks
+                )
             if held and held["runtime_id"]:
                 continue
             if not held and unfinished >= self.args.max_workers:
                 continue
             try:
-                self.dispatch(plan, ticket)
+                self.dispatch(plan, ticket, new_id)
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.failed.add(task_id)
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error)
                 unfinished += 0 if held else 1
                 continue
             unfinished += 0 if held else 1
+            # a failure the Lead has answered no longer fails the run
+            self.errors[:] = [e for e in self.errors if not e.startswith(ticket["#"] + ": ")]
             count += 1
         return count
+
+    def restartable(self, ticket, tasks):
+        """True when a ticket whose cell reads `IN PROGRESS` holds no live work: the ledger has an attempt of its
+        unit, every one is RELEASED, and the runtime answers definitively that its worker is not live. A cell with
+        no attempt in the ledger belongs to some other run and stays a lock; a failed lookup is not an answer: it
+        strands the unit (a wake and a non-zero exit) and nothing is spawned."""
+        if not ticket["Status"].strip().upper().startswith("IN PROGRESS"):
+            return False
+        unit = ticket["#"].lower()
+        attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == unit}
+        if not attempts or any(t["status"] != "RELEASED" for t in attempts.values()):
+            return False
+        name = worker_name(self.slug, ticket["#"][1:])
+        try:
+            return self.agent_gone(name)[0]
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            self.strand(list(attempts)[-1], name, str(error))
+            return False
+
+    def not_dispatched(self, ticket, error, what="not dispatched"):
+        """A dispatch that cannot happen asks the Lead, once per ticket and reason; the cell keeps the reason and
+        the ticket stays out of this run's rounds until the Lead sets its Status to TO-DO (a restarted drive reads the cell
+        as TO-DO and tries it once more)."""
+        task_id = ticket["#"].lower()
+        self.failed.add(task_id)
+        self.errors.append("%s: %s" % (ticket["#"], error))
+        event("%s %s: %s" % (ticket["#"], what, error))
+        self.write_status(ticket["#"], "TO-DO · %s: %s" % (what, cell(error, 120)))
+        self.wake(
+            "not-dispatched",
+            task_id,
+            "%s %s: %s -> fix that, then set the ticket's Status to TO-DO and the next round tries it again"
+            % (ticket["#"], what, cell(error, 300)),
+            key="%s:%s" % (task_id, error),
+        )
 
     # ---- reconciliation: an open task whose agent the runtime no longer lists -------------------------------------
     # A drive that restarts (or finds its worker gone) must not trust the ledger's `runtime_id`, and must not finish
@@ -4191,7 +4284,10 @@ class Driver:
                 raise ValueError("the plan no longer has ticket %s" % unit.upper())
             self.dispatch(plan, ticket, new_id, note=note)
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            if ticket is None:
+                self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            else:
+                self.not_dispatched(ticket, error, "not re-dispatched as " + new_id)
             return 0
         event("%s: dispatched again as %s after %s" % (unit.upper(), new_id, said))
         return 1
@@ -4256,8 +4352,7 @@ class Driver:
             try:
                 self.dispatch(plan, ticket, "%sp%d" % (task["packet"]["unit"], attempt))
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not re-dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error, "not re-dispatched")
                 continue
             count += 1
         return count
