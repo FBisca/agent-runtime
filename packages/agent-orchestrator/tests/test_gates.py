@@ -129,7 +129,7 @@ class GateFixture(RunFixture):
             directory.mkdir()
             (directory / "test_oracle.py.oracle").write_text("def test_o():\n    pass\n")
             evidence = {
-                "check": "pytest",
+                "check": "true",
                 "baseline": "pass",
                 "oracle": ["test_oracle.py.oracle"],
                 "place": "src/a/",
@@ -156,6 +156,9 @@ class GateFixture(RunFixture):
         self.plan.unlink()
         self.plan = self.plan.with_suffix(".yaml")
         self.plan.write_text(yaml.safe_dump(data, sort_keys=False))
+        # Approving a plan with a check runs its baseline and writes a receipt under the repo key: the alias the run
+        # uses must exist before that directory does.
+        self.alias_state(self.plan)
         out = io.StringIO()
         with (
             mock.patch.object(load_script(), "resolve_runtime", return_value={"role": "lead"}),
