@@ -21,6 +21,7 @@ from unittest import mock
 
 import fake_gh
 import fake_runtime
+import yaml
 
 MEMBER = Path(__file__).resolve().parents[1]
 REPO = Path(__file__).resolve().parents[3]
@@ -498,9 +499,77 @@ class RunFixture(_Case):
     def wake_lines(self, kind=None):
         return [w["text"] for w in self.wakes() if kind in (None, w["kind"])]
 
+    # A YAML plan's ledger and run directory sit under `<state>/<repo-key>/`. Tests written before the key look for
+    # `<state>/demo` and `<state>/demo.json`, so the key directory is by default an alias of the state directory
+    # itself: both spellings name the same files. A test of the layout turns the alias off.
+    alias_repo_key = True
+
+    def alias_state(self, plan):
+        if not self.alias_repo_key or not str(plan).endswith(".plan.yaml"):
+            return
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        alias = self.state_dir / load_script().repo_key(self.repo)
+        if not alias.is_symlink():
+            alias.symlink_to(".")
+
+    def approved_yaml_plan(self, rows=("T1",), repo=None, name="demo.plan.yaml"):
+        """The Markdown fixture plan's tickets as an approved plan/1 YAML file in `repo`; its path."""
+        repo = repo or self.repo
+        parsed = load_script().parse_plan(plan_text(rows=rows))
+        path = repo / "docs" / "plans" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "schema": "plan/1",
+            "slug": "demo",
+            "goal": "deliver",
+            "spec": "docs/specs/demo.md",
+            "outcome": ["S1"],
+            "scenarios": [
+                dict(id=s, when="a", then="b", evidence={"human": "confirm"})
+                for s in parsed["scenarios"]
+            ],
+            "tickets": [
+                dict(
+                    id=t["#"],
+                    delivers=t["What it delivers"],
+                    satisfies=t["Satisfies"].split(","),
+                    paths=t["Paths"].split(","),
+                    size=t["Size"],
+                    difficulty=t["Difficulty"],
+                    blocked_by=[] if t["Blocked by"] == "none" else [t["Blocked by"]],
+                )
+                for t in parsed["tickets"]
+            ],
+        }
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        out = io.StringIO()
+        spec = load_script()
+        with (
+            mock.patch.object(spec, "resolve_runtime", return_value={"role": "lead"}),
+            mock.patch.dict(
+                os.environ, {"XDG_STATE_HOME": str(self.root / "xdg"), "HC_TERMINAL_ID": "lead"}
+            ),
+            redirect_stdout(out),
+            redirect_stderr(out),
+        ):
+            code = spec.run_cli(
+                [
+                    "plan",
+                    "approve",
+                    str(path),
+                    "--repo",
+                    str(repo),
+                    "--state-dir",
+                    str(self.state_dir),
+                ]
+            )
+        self.assertEqual(code, 0, out.getvalue())
+        return path
+
     def run_driver(self, *extra, plan=None, expect=0):
         """The driver run in this process: the fakes answer in process, so the run starts no process of its own."""
         spec = load_script()
+        self.alias_state(plan or self.plan)
         argv = [
             "run",
             str(plan or self.plan),
