@@ -132,6 +132,11 @@ scenarios:
     when: a Markdown plan is passed to `run` after the legacy path is removed
     then: it is refused naming the YAML format and `plan check`; the converge adapter and the plan-cell writer no longer exist
 
+  # T12: the YAML archive brief, ahead of acceptance
+  - id: S29
+    when: every agent ticket of a YAML plan is COMPLETE and the driver starts its archive worker
+    then: "the archive brief names the plan's `spec` as the living spec (no new spec file), writes no Status into plan.yaml, has the worker copy plan.yaml, its Markdown narrative and its oracle directory byte-identical, places each `promote: true` oracle byte-identical at its `place`, and renames no test; the worker's scope is the spec, those plan files and those places"
+
 tickets:
   - id: T1
     delivers: "plan/1 model and strict loader, `plan check`, `plan approve` (digest, snapshot, worker refusal; baseline added in T5), YAML plans dispatch through the existing loop"
@@ -224,7 +229,7 @@ tickets:
   - id: T8
     delivers: "Archive by promotion and Coverage table: driver-placed oracles, narrowed archive scope, no renames, archive-head re-verification"
     satisfies: [S25, S23]
-    blocked_by: [T6]
+    blocked_by: [T6, T12]
     paths:
       - packages/agent-orchestrator/src/agent_orchestrator/driver.py
       - packages/agent-orchestrator/src/agent_orchestrator/verify.py
@@ -262,8 +267,17 @@ tickets:
       - packages/agent-orchestrator/tests/
     size: regular
     difficulty: simple
+  - id: T12
+    delivers: "The archive brief for a YAML plan: the plan's spec, no Status in plan.yaml, the plan files and oracle directory copied, promote:true oracles placed byte-identical, no test renames"
+    satisfies: [S29]
+    blocked_by: [T3]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_archive_yaml.py
+    size: small
+    difficulty: simple
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-10T09:28:07.565092+00:00'
-  base: bae029d365a348d2b15e6e057f3a7a1a40fb307d
-  digest: 1b8fc38126d81102f7686a0e2d0577e049eb7653314ff4778a16198cc5fb947d
+  at: '2026-11-10T15:22:57.380737+00:00'
+  base: 47a1722c8e05b75711401c2b4fc638beca7ff842
+  digest: ed46df64a038bcf0e6f84d4eeec54710c67c8445f1765f4edbd57336091671d5
