@@ -1,0 +1,264 @@
+schema: plan/1
+slug: yaml-eec
+goal: >-
+  A plan is a schema-validated YAML contract the orchestrator consumes directly; every plan's final outcome is
+  verified by evidence the driver runs against the exact integrated tree before the plan can be archived; converge no
+  longer exists as a separate mechanism.
+spec: docs/specs/plan-contract.md
+outcome: [S22, S23, S24]
+
+scenarios:
+  # T1: the contract, check, approve
+  - id: S1
+    when: "`plan check <plan.yaml>` reads a plan with an unknown or duplicate key, a missing required field, a duplicate ID, a reference to an undeclared scenario or ticket, a dependency cycle, an evidence item with neither `check` nor `human`, an oracle `place` that escapes the repo or exists already, or a risk-tagged ticket with no evidence-bearing scenario and no `evidence_waiver`"
+    then: it exits 2 and names each defect with its YAML path and the fix; a valid plan exits 0
+  - id: S2
+    when: "`plan approve` runs on a valid plan, and afterwards plan.yaml (outside `approval`) or a file in its oracle directory changes"
+    then: "approve writes `approval: {by, at, base, digest}` (digest over repo identity, base, the plan and the ordered oracle bytes) and snapshots those bytes under the state dir; after the change `plan check` and `run` refuse, naming the changed file and `plan approve`; no worker is spawned"
+  - id: S3
+    when: "`plan approve` is invoked by an agent the runtime's dispatch store knows as a spawned worker"
+    then: it refuses, naming the reason and that approval is the Lead's; nothing is written
+  - id: S4
+    when: an approved YAML plan is launched
+    then: its agent tickets dispatch with the class, effort, model and blocking order a Markdown plan with the same rows gets today
+
+  # T2: discovery
+  - id: S5
+    when: "`plans list --json` runs with an explicit path, in a repo whose plans sit in one directory (`docs/plans/` or hidden `.plans/`), in a repo with plan files in two directories, and in a repo with none"
+    then: it lists the explicit plan; that directory's plans; refuses naming both directories and the explicit-path way out; an empty list. No directory or config file is created
+  - id: S6
+    when: a plan.yaml outside the repository is passed explicitly with `--repo` to `plan check`, `plan approve` and `run`
+    then: all three work, and nothing is written next to the plan except the approval block
+
+  # T3: the ledger owns status
+  - id: S7
+    when: a YAML plan runs through dispatch, a pause, a `decide` answer and a merge
+    then: plan.yaml stays byte-identical; `status <plan> --json` reports run_dir, the plan state and its history, and each ticket's state, reason and PR, before and during the run
+  - id: S8
+    when: two repositories each run a plan with the same slug, and a ledger under the old `<state>/<slug>.json` key exists
+    then: each gets its own ledger under `<state>/<repo-key>/<slug>`; the old ledger is imported once into the repository that owns it
+
+  # T4: verify replaces converge
+  - id: S9
+    when: "a ticket report (contract 3) maps a satisfied scenario in `covers` to a test node that does not exist or did not change in the ticket, or leaves a satisfied scenario unmapped"
+    then: verify fails the gate with a fix round naming the scenario, the node and the reason
+  - id: S10
+    when: a ticket's diff touches a file outside its paths, the plan, an oracle file or an oracle place
+    then: verify fails the gate naming the file and the rule (scope or integrity)
+  - id: S11
+    when: a Markdown plan in flight is gated
+    then: verify's legacy path gives the verdicts converge gives today; the plan can reach COMPLETE (outcome unverified), never ACCEPTED
+
+  # T5: the runner, receipts, baseline
+  - id: S12
+    when: the driver runs an evidence item
+    then: "it runs `check` under `bash -euo pipefail` in a detached worktree at the target commit, oracles placed, with a temporary HOME and XDG_STATE_HOME, the real cache dirs, no VIRTUAL_ENV or lead venv on PATH, only the declared env names, and `EEC_JUNIT` set; the receipt names digest, phase, commit, tree, check, oracle sha256s, env names (never values), tool versions, exit, JUnit counts and result; the ledger holds its sha256"
+  - id: S13
+    when: a check exits 0 with JUnit counts showing executed cases and no skips; exits 0 with no cases executed or a selected case skipped or xfailed; fails on an assertion; fails with a collection or setup error; times out; exits 127; names an unset env variable; or leaves a tracked file modified
+    then: the result is PASS; UNKNOWN; FAIL; FAIL (error); UNKNOWN (timeout, the process group killed); UNKNOWN (missing tool); UNKNOWN (env); UNKNOWN (dirty tree). A check that writes no JUnit is labelled exit-code-only. Nothing is rerun automatically
+  - id: S14
+    when: "`plan approve` runs the baseline at `base`"
+    then: "a `baseline: fail` item must collect without errors, fail at least one case on an assertion and, for a new test oracle, pass at least one case (its controls); a `baseline: pass` item must pass; otherwise approve refuses, naming the scenario, expected and observed, and writes nothing. The receipt records whether the red was calibrated"
+  - id: S15
+    when: an evidence item declares a `negative` patch
+    then: the runner applies it to a scratch copy and the check must fail there on an assertion; a check that still passes is FAIL (vacuous)
+
+  # T6: routing, integration, acceptance
+  - id: S16
+    when: a ticket reports COMPLETE and either is risk-tagged and satisfies a scenario with evidence, or is the ticket that completes an outcome scenario's satisfies set
+    then: the driver runs that evidence at the ticket head after the invariants; FAIL or UNKNOWN is a fix round carrying the command and the log tail; other tickets run no evidence
+  - id: S17
+    when: every ticket of a YAML plan is COMPLETE
+    then: the driver fetches and pins one default-branch SHA that contains every ticket's merge, runs every evidence item there, and moves DELIVERED → VERIFYING → ACCEPTED (archive may start) or REJECTED (a Lead request to add a ticket, re-verify or human-accept; no archive)
+  - id: S18
+    when: an evidence item is `human`, or the Lead human-accepts a rejected item with `accept <plan> <S-id> --note`
+    then: the item is HUMAN_ACCEPTED with the person, time, scope and tree; the plan can reach ACCEPTED_WITH_HUMAN, never ACCEPTED; the archive waits for it
+  - id: S19
+    when: a person merges a ticket whose ticket evidence failed or never ran
+    then: the ticket is COMPLETE, flagged unverified; the plan cannot be accepted until that evidence passes at integration
+  - id: S20
+    when: "`verify <plan>` computes acceptance and a receipt is missing, was produced for another tree or approval digest, or no longer matches the sha256 the ledger holds"
+    then: that receipt does not count, the item is UNKNOWN naming the scenario and the reason, and verify exits non-zero
+
+  # T7: mutation check
+  - id: S21
+    when: an outcome item with a new oracle was uncalibrated at baseline and passes at integration
+    then: a fresh-context reviewer (never an implementer of the plan) writes one behavioural mutation of the delivered code; the runner applies it and the oracle must fail on an assertion; an ineffective mutation gets one more attempt, then the item becomes a human item
+
+  # Outcome
+  - id: S22
+    when: verification meets a check that passes at base, a plan or oracle edited after approval, a missing receipt, a receipt for another tree, and a plan whose tickets all completed but whose outcome evidence fails
+    then: each is refused with its reason, no worker runs on the edited contract, and none of those plans is ACCEPTED or archived
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_yaml_eec.py
+        -m integration -k "rejects or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_yaml_eec.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 900
+  - id: S23
+    when: a one-ticket YAML plan with an oracle-backed outcome is approved, launched and its work reaches the default branch
+    then: "status history is APPROVED → RUNNING → DELIVERED → VERIFYING → ACCEPTED → ARCHIVED; the integration receipt is PASS for the default branch's tree and the approval digest; the outcome is re-verified on the archive head; the oracle is promoted byte-identical; plan.yaml is unchanged since approval; `verify` exits 0"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_yaml_eec.py
+        -m integration -k "lifecycle or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_yaml_eec.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 900
+  - id: S24
+    when: a small real YAML plan in a scratch repository is planned with start-planning, approved, orchestrated with real agents, verified and archived
+    then: the Herdr panel and `status --json` show it ARCHIVED, its receipts exist, and `plan check` still accepts its approval digest
+    evidence:
+      human: "Run the scratch plan end to end; confirm the panel row, the receipts and `plan check` after archive"
+
+  # T8: archive
+  - id: S25
+    when: an ACCEPTED or ACCEPTED_WITH_HUMAN plan archives
+    then: "the driver copies each `promote: true` oracle byte-identical to its place in the archive worktree before the archive worker starts; the worker's scope is the spec and those places only; it writes requirements with `(from <slug>/S<n>)` and a Coverage table of test node ids, renames no test, leaves plan.yaml untouched; the driver re-runs outcome evidence on the archive head; the plan is ARCHIVED when that PR merges"
+
+  # Skills and panel
+  - id: S26
+    when: the orchestrate shim is asked for `plan check`, `plan approve`, `plans list`, `verify`, `accept` or `status`
+    then: it hands them to the member unchanged, and the agent-skills tree carries no converge skill
+  - id: S27
+    when: the Herdr Plans panel shows a repository's plans
+    then: it reads them from `plans list --json`, shows YAML and Markdown plans with their ledger state, and parses no plan file
+
+  # Removal
+  - id: S28
+    when: a Markdown plan is passed to `run` after the legacy path is removed
+    then: it is refused naming the YAML format and `plan check`; the converge adapter and the plan-cell writer no longer exist
+
+tickets:
+  - id: T1
+    delivers: "plan/1 model and strict loader, `plan check`, `plan approve` (digest, snapshot, worker refusal; baseline added in T5), YAML plans dispatch through the existing loop"
+    satisfies: [S1, S2, S3, S4]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_plan.py
+      - packages/agent-orchestrator/tests/test_plan_dispatch.py
+    size: regular
+    difficulty: complex
+    risk: [security]
+    evidence_waiver: "Built outside the driver (D21), so no gate can run ticket evidence; S22 re-verifies the digest refusal at integration"
+  - id: T2
+    delivers: "Plan discovery and `plans list --json`, shared by driver, skills and panel"
+    satisfies: [S5, S6]
+    blocked_by: [T1]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_discovery.py
+    size: small
+    difficulty: simple
+  - id: T3
+    delivers: "The ledger owns status: nothing written into YAML plans, `status --json`, state keyed by repo and slug with legacy import"
+    satisfies: [S7, S8]
+    blocked_by: [T1]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_status_json.py
+      - packages/agent-orchestrator/tests/test_state_key.py
+      - packages/agent-orchestrator/tests/fixtures.py
+    size: regular
+    difficulty: complex
+    risk: [state]
+    evidence_waiver: "S23 asserts plan.yaml byte-identity and the status history through a whole run at integration"
+  - id: T4
+    delivers: "verify: scope, integrity and covers invariants replace the converge gate; report contract 3; converge.py becomes verify's legacy path"
+    satisfies: [S9, S10, S11]
+    blocked_by: [T1]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/verify.py
+      - packages/agent-orchestrator/src/agent_orchestrator/converge.py
+      - packages/agent-orchestrator/src/agent_orchestrator/contracts.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_verify.py
+      - packages/agent-orchestrator/tests/test_contracts.py
+      - packages/agent-orchestrator/tests/test_gates.py
+    size: regular
+    difficulty: complex
+  - id: T5
+    delivers: "The evidence runner and receipts, the approval baseline, negative controls; the hook blocks worker writes to receipts and `plan approve`; attempts.jsonl `verified` becomes `claimed`"
+    satisfies: [S12, S13, S14, S15]
+    blocked_by: [T1, T3]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/runner.py
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/evidence.py
+      - packages/agent-orchestrator/tests/test_runner.py
+      - packages/agent-orchestrator/tests/test_evidence.py
+      - packages/agent-orchestrator/tests/evidence-manifest.json
+      - hooks/pre_tool_use.py
+      - tests/test_hooks.py
+    size: regular
+    difficulty: complex
+    risk: [security]
+    evidence_waiver: "S22 and S23 exercise the runner, the baseline refusal and receipt binding end to end; before T6 nothing consumes a receipt"
+  - id: T6
+    delivers: "Evidence routing at ticket gates, integration verification on a pinned default-branch SHA, acceptance states, `accept`, `verify <plan>`"
+    satisfies: [S16, S17, S18, S19, S20, S22]
+    blocked_by: [T4, T5]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/verify.py
+      - packages/agent-orchestrator/tests/test_acceptance.py
+      - packages/agent-orchestrator/tests/test_merge.py
+    size: regular
+    difficulty: complex
+    risk: [state, concurrency]
+  - id: T7
+    delivers: "The integration mutation check for uncalibrated outcome oracles"
+    satisfies: [S21]
+    blocked_by: [T6]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/runner.py
+      - packages/agent-orchestrator/tests/test_mutation_check.py
+    size: small
+    difficulty: complex
+  - id: T8
+    delivers: "Archive by promotion and Coverage table: driver-placed oracles, narrowed archive scope, no renames, archive-head re-verification"
+    satisfies: [S25, S23]
+    blocked_by: [T6]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/verify.py
+      - packages/agent-orchestrator/tests/test_archive.py
+    size: regular
+    difficulty: simple
+  - id: T9
+    delivers: "agent-skills: start-planning discovers the plan dir, writes the YAML trio by the oracle ladder, runs the oracle reviewer, `plan check`, and `plan approve` after the user's yes; orchestrate docs use decide, verify, accept and status; the converge skill, its README row and workflow step are removed"
+    satisfies: [S26]
+    blocked_by: [T2, T8]
+    owner: lead
+    repo: ../agent-skills
+    paths:
+      - skills/start-planning/
+      - skills/orchestrate/
+      - skills/converge/
+      - README.md
+      - docs/workflow.md
+  - id: T10
+    delivers: "herdr-app-mods: the Plans panel reads `plans list --json`"
+    satisfies: [S27, S24]
+    blocked_by: [T2, T3, T9]
+    owner: lead
+    repo: ../herdr-app-mods
+    paths:
+      - plans/mods/plans/
+  - id: T11
+    delivers: "Remove the Markdown reader, the converge adapter and the plan-cell writer, once `plans list` shows no Markdown plan in flight"
+    satisfies: [S28]
+    blocked_by: [T7, T10]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/converge.py
+      - packages/agent-orchestrator/src/agent_orchestrator/verify.py
+      - packages/agent-orchestrator/tests/
+    size: regular
+    difficulty: simple
