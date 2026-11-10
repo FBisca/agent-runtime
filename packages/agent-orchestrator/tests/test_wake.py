@@ -288,6 +288,36 @@ class DecideTests(WakeFixture, unittest.TestCase):
             "use port 5432",
         )
 
+    def test_S7_an_answer_naming_another_attempt_exits_2_writes_nothing_and_names_the_expected_id(
+        self,
+    ):
+        """orchestrator-engine/R2: drive-restart-recovery/S7"""
+        for wrong in ("t1", "t1d1", "t1r1", "t1o3"):
+            with self.subTest(wrong=wrong):
+                path = self.write_open_request(task="t1r2")
+                before = path.read_text(encoding="utf-8")
+                result = self.decide(
+                    "t1", "answer", "--reason", "x", "--answer", "report under task_id `%s`" % wrong
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(wrong, result.stderr)
+                self.assertIn("t1r2", result.stderr)
+                self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
+                self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_S7_an_answer_naming_the_requests_attempt_or_no_attempt_is_written(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S7"""
+        for text in (
+            "report under task_id t1r2",
+            "see %s/t1r2/report.json" % self.run_dir,
+            "ask demo-t1 and use port 5432; t2 is not yours",
+        ):
+            with self.subTest(text=text):
+                self.write_open_request(task="t1r2")
+                result = self.decide("t1", "answer", "--reason", "x", "--answer", text)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                (self.run_dir / "t1" / "decision.json").unlink()
+
     def test_S3_a_reason_is_required(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
         self.write_open_request()
@@ -322,11 +352,46 @@ class DecideTests(WakeFixture, unittest.TestCase):
         self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
         self.assertIn("use port 5432", resumes[0]["args"]["task"])
         self.assertIn(
-            "use port 5432", (self.run_dir / "t1d1" / "task.md").read_text(encoding="utf-8")
+            "use port 5432", (self.run_dir / "t1" / "answer.md").read_text(encoding="utf-8")
         )
 
-    def test_S3_answer_to_a_gate_failure_reaches_the_next_fix_round(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
+    def answered_report(self, task_id="t1", nth=1):
+        """The resumed worker finishes under the task id it was resumed on, and writes a test the gate can see."""
+        step = report_wait("demo-t1", "complete", id=resume_id("demo-t1", nth))
+        step["write"] = [
+            [str(self.run_dir / task_id / "report.json"), self.report(task_id)],
+            [str(self.worktree / "src" / "a" / "test_a.py"), 'def test_a():\n    """S1"""\n'],
+        ]
+        return step
+
+    def test_S6_an_answer_resumes_the_worker_on_the_same_task_id_and_its_report_passes_the_gate(
+        self,
+    ):
+        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        self.waits(
+            [
+                self.blocked(),
+                self.decide_step("t1", "answer", "the port is known", answer="use port 5432"),
+                self.answered_report(),
+                self.reviewer_done(),
+            ]
+        )
+        self.run_driver()
+        resumes = self.calls("resume")
+        self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
+        self.assertIn("use port 5432", resumes[0]["args"]["task"])
+        brief = (self.run_dir / "t1" / "answer.md").read_text(encoding="utf-8")
+        for needle in ("use port 5432", "`t1`", str(self.run_dir / "t1" / "report.json")):
+            self.assertIn(needle, brief)
+        self.assertEqual(
+            [t for t in self.ledger()["tasks"] if t != "archive"], ["t1"]
+        )  # no new attempt
+        self.assertFalse((self.run_dir / "t1d1").exists())
+        self.assertEqual(self.task()["assignment_id"], resume_id("demo-t1", 1))
+        self.assertEqual(self.task()["gate"], "done")
+
+    def test_S6_an_answer_to_a_gate_failure_resumes_the_same_attempt_with_the_findings(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S6"""
         self.waits(
             [
                 self.worker_done(),
@@ -336,10 +401,28 @@ class DecideTests(WakeFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assertIn("name the test S1", self.calls("resume")[2]["args"]["task"])
-        self.assertIn(
-            "name the test S1", (self.run_dir / "t1r3" / "task.md").read_text(encoding="utf-8")
+        resumes = self.calls("resume")
+        self.assertEqual(len(resumes), 3)  # two fix rounds, then the answer
+        self.assertIn("name the test S1", resumes[2]["args"]["task"])
+        self.assertIn("FAIL coverage: S1", (self.run_dir / "t1r2" / "answer.md").read_text())
+        self.assertNotIn("t1r3", self.ledger()["tasks"])
+        self.assertEqual(self.task("t1r2")["status"], "ACTIVE")
+
+    def test_S6_a_report_written_before_the_answer_is_not_the_answered_rounds_news(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S6"""
+        blocked = self.blocked()
+        blocked["write"] = [[str(self.run_dir / "t1" / "report.json"), self.report("t1")]]
+        ended = wait_result([assignment("demo-t1", "working", "idle", id=resume_id("demo-t1", 1))])
+        self.waits(
+            [
+                blocked,
+                self.decide_step("t1", "answer", "the port is known", answer="use port 5432"),
+                ended,
+                self.decide_step("t1", "skip"),
+            ]
         )
+        self.run_driver()
+        self.assertEqual(self.request(nth=2)["event"], "exited")
 
     def test_S3_skip_and_mark_blocked_close_the_unit(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S3"""
