@@ -333,7 +333,17 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
 
     def test_S17_integration_waits_while_the_default_branch_lacks_a_ticket_merge(self):
         self.write_plan()
-        orphan = self.git(self.repo, "commit-tree", "-m", "orphan", "HEAD^{tree}")
+        orphan = self.git(
+            self.repo,
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit-tree",
+            "-m",
+            "orphan",
+            "HEAD^{tree}",
+        )
         self.prs([{"state": "MERGED", "mergeCommit": {"oid": orphan}}])
         self.drive([self.worker("done"), self.reviewer()])
         self.assertEqual(
@@ -353,6 +363,20 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(self.history(), ["APPROVED", "RUNNING"])
         self.assertEqual(self.receipts("integration"), [])
         self.assertTrue([w for w in self.wakes() if w["kind"] == "integration-waits"])
+
+    def test_S17_a_ticket_complete_without_a_known_merge_commit_makes_integration_wait(self):
+        self.write_plan()
+        self.merged_on_main("done")
+        self.prs([{"state": "MERGED", "mergeCommit": None}])  # gh names no merge commit
+        self.drive([self.worker("done"), self.reviewer()])
+        self.assertEqual(
+            self.history(),
+            ["APPROVED", "RUNNING"],
+            "a ticket whose merge is unknown is not contained by any commit",
+        )
+        self.assertEqual(self.receipts("integration"), [])
+        (wake,) = [w for w in self.wakes() if w["kind"] == "integration-waits"]
+        self.assertIn("T1", wake["text"])
 
     def test_S17_a_new_run_verifies_a_rejected_plan_again(self):
         self.delivered(lands="almost")

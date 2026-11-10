@@ -4268,8 +4268,8 @@ class Driver:
 
     def pin_default_branch(self):
         """Fetch the default branch and pin its SHA: (sha, the units whose merge the commit does not contain). A merge
-        commit this repository does not have even after the fetch is not contained either. The pin is one commit for
-        every evidence item of the run."""
+        commit this repository does not have even after the fetch is not contained either, nor is one nobody knows. The
+        pin is one commit for every evidence item of the run."""
         remote, _, branch = self.args.base.partition("/")
         if branch:
             run(
@@ -4293,7 +4293,14 @@ class Driver:
                 for task in data["tasks"].values()
                 if task.get("merge_commit") and task["packet"].get("unit") != ARCHIVE
             }
-        lacking = []
+        # A COMPLETE agent ticket whose merge commit is unknown (gh named none, or no task of the driver merged it) is
+        # contained by no commit this can pin, so it makes integration wait like a missing one.
+        unmerged = [
+            ticket["#"].lower()
+            for ticket in self.read_plan()["tickets"]
+            if is_agent(ticket) and is_done(ticket) and ticket["#"].lower() not in merges
+        ]
+        lacking = list(unmerged)
         for unit, oid in sorted(merges.items()):
             known = subprocess.run(
                 ["git", "-C", str(self.repo), "cat-file", "-e", oid + "^{commit}"],
@@ -4309,7 +4316,7 @@ class Driver:
                 ).returncode
             ):
                 lacking.append(unit)
-        return sha, lacking
+        return sha, sorted(lacking)
 
     def verify_integration(self):
         sha, lacking = self.pin_default_branch()
