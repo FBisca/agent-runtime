@@ -6,6 +6,7 @@ import subprocess
 import unittest
 
 import pytest
+import yaml
 from fixtures import DRIVER, RunFixture, plan_text
 
 pytestmark = pytest.mark.integration
@@ -145,6 +146,106 @@ class LaunchTests(RunFixture, unittest.TestCase):
         out = json.loads(result.stdout)
         self.assertEqual((out["pane"], out["started"]), ("orchestrate-demo", False))
         self.assertEqual([c for c in self.hc_calls() if c[0] == "run"], [])
+
+    def yaml_plan(self, approve=True):
+        """An approved (or unapproved) one-ticket YAML plan in the temp repo; approval state under self.state_dir."""
+        self.plan.unlink()
+        self.plan = self.plan.parent / "2026-11-10-demo.plan.yaml"
+        self.plan.write_text(
+            yaml.safe_dump(
+                {
+                    "schema": "plan/1",
+                    "slug": "demo",
+                    "goal": "deliver",
+                    "spec": "docs/specs/demo.md",
+                    "outcome": ["S1"],
+                    "scenarios": [
+                        {"id": "S1", "when": "a", "then": "b", "evidence": {"human": "confirm"}}
+                    ],
+                    "tickets": [
+                        {
+                            "id": "T1",
+                            "delivers": "x",
+                            "satisfies": ["S1"],
+                            "paths": ["src/a/"],
+                            "size": "small",
+                            "difficulty": "simple",
+                        }
+                    ],
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        if approve:
+            result = subprocess.run(
+                [
+                    *DRIVER,
+                    "plan",
+                    "approve",
+                    str(self.plan),
+                    "--repo",
+                    str(self.repo),
+                    "--state-dir",
+                    str(self.state_dir),
+                ],
+                capture_output=True,
+                text=True,
+                env=dict(os.environ, PATH=str(self.home) + os.pathsep + os.environ["PATH"]),
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_approved_yaml_plan_starts_run_in_its_named_pane(self):
+        """An approved YAML plan is launched like a Markdown one: one pane running `run <plan.yaml>`."""
+        self.yaml_plan()
+        result = subprocess.run(
+            [*DRIVER, "launch", str(self.plan), "--state-dir", str(self.state_dir)],
+            capture_output=True,
+            text=True,
+            env=dict(
+                {k: v for k, v in os.environ.items() if k != "HC_TERMINAL_ID"},
+                PATH=str(self.home) + os.pathsep + os.environ["PATH"],
+                FAKE_HC_HOME=str(self.home),
+            ),
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["pane"], "orchestrate-demo")
+        starts = [c for c in self.hc_calls() if c[0] == "run"]
+        self.assertEqual(len(starts), 1)
+        tail = starts[0][starts[0].index("--") + 1 :]
+        self.assertEqual(tail[2:5], ["agent_orchestrator", "run", str(self.plan)])
+        self.assertEqual(tail[tail.index("--state-dir") + 1], str(self.state_dir))
+
+    def test_an_unapproved_yaml_plan_exits_2_naming_plan_approve(self):
+        """`launch` makes the check `run` makes: an unapproved contract starts no pane."""
+        self.yaml_plan(approve=False)
+        result = self.launch(expect=2)
+        self.assertIn("plan approve", result.stderr)
+        self.assertEqual([c for c in self.hc_calls() if c[0] == "run"], [])
+
+    def test_lead_commands_find_a_yaml_plans_run_directory(self):
+        """`decide` reads a YAML plan's slug, so it reaches the unit's requests instead of refusing the plan."""
+        self.yaml_plan()
+        result = subprocess.run(
+            [
+                *DRIVER,
+                "decide",
+                str(self.plan),
+                "t1",
+                "retry",
+                "--reason",
+                "r",
+                "--state-dir",
+                str(self.state_dir),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("t1 has no open request", result.stderr + result.stdout)
 
     def test_S17_exited_terminal_of_the_same_name_does_not_block(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S17"""
