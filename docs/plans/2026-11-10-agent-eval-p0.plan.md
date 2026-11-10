@@ -47,6 +47,8 @@ judge's score next to it. Labelling, judge isolation and golden sets come after 
 | D13 | No Linear; plan in agent-runtime `docs/plans/` as `.md` and `.plan.yaml` | Linear; one format | personal tooling | grill R1 Q9, R2 Q7 |
 | D14 | A case is immutable: an existing case id or label is refused | overwrite / merge | evidence must not drift after judging | assumption (stated) |
 | D15 | Forked sessions join the chain | stop at fork boundary | a fork's history is part of the run that produced it | assumption (stated; #31 review Q1) |
+| D16 | Supersedes D11 and S13's case for now: the first case is the agent-runtime run `orchestrator-silent-idle` (`--orchestrate-run`, patch `7456440..72c4da9`), labelled with a `/score-agent` score as `source: judged`; the svc-platform case waits | `org-chart-custodian-leaves` first | Felippe, 2026-11-10: not on svc-platform for now; a recent agent-runtime run instead | Felippe, in session |
+| D17 | A label must carry its reasons and evidence: `label/2` and the judge writing it move to plan `2026-11-10-agent-eval-label-evidence`; this plan's T4 ends with the evidence-less `label/1` on `orchestrator-silent-idle`, which that plan replaces | widen this plan while its archive runs | this plan is approved and archiving | Felippe, in session |
 
 ## Scenarios
 
