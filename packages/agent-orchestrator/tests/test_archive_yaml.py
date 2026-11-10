@@ -28,6 +28,15 @@ def commit_spec(case, text):
 
 
 class YamlArchiveTests(ArchiveFixture, unittest.TestCase):
+    def ticket_merged(self):
+        """T1's merge lands on origin's default branch and gh names it: a YAML plan verifies there before it archives."""
+        self.git(self.repo, "commit", "-q", "--allow-empty", "-m", "t1")
+        self.git(self.repo, "push", "-q", "origin", "HEAD:main")
+        self.prs(
+            [{"state": "MERGED", "mergeCommit": {"oid": self.git(self.repo, "rev-parse", "HEAD")}}]
+        )
+        return super().ticket_merged()
+
     def test_S29_yaml_archive_brief_copies_plan_files_and_places_oracles(self):
         self.use_yaml_plan(oracle=True)
         narrative = self.plan.parent / "demo.plan.md"
