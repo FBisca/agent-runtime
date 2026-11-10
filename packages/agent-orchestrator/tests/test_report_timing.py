@@ -45,7 +45,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         return (self.run_dir / "t1" / "request.json").exists()
 
     def test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/R6 — the report_landed shortcut is kept."""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S6 — the report_landed shortcut is kept."""
         self.waits([self.turn_ended(), self.answer(), self.worker_done()])
         self.run_driver()
         self.assertFalse(self.asked())
@@ -64,7 +64,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         )
 
     def test_S5_a_worker_whose_turn_ended_without_a_report_stays_pending_until_its_complete(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/R5 — idle and done are a live worker, not an exit."""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S5 — idle and done are a live worker, not an exit."""
         spec = load_script()
         done = GateFixture.worker_done(self, tests=True)
         self.waits(
@@ -83,7 +83,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S5_a_worker_that_never_reports_is_asked_about_by_the_idle_watchdog(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/R5"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S5"""
         self.waits([self.turn_ended(report=False)] * 4 + [self.skipped()])
         self.run_driver("--idle-minutes", "0")
         request = self.request()

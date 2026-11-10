@@ -342,7 +342,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         )
 
     def test_S7_an_answerer_whose_turn_ended_stays_working_and_its_complete_is_accepted(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/R7"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S7"""
         self.waits(
             self.passing_with_question()
             + [
@@ -358,7 +358,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["answers"]["state"], "done")
 
     def test_S8_an_answerer_that_never_reports_is_one_idle_request_and_the_pr_stays_blocked(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/R8"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S8"""
         self.waits(
             self.passing_with_question() + [self.silent_answerer("idle")] * 5 + [self.skipped()]
         )
@@ -370,7 +370,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(ready, [], "the PR was marked ready with the answers outstanding")
 
     def test_S8_after_the_lead_answers_an_idle_answerer_the_unit_reaches_pr_ready_and_done(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/R8 — the Lead's decision replaces the silent answers
+        """orchestrator-engine/R62: orchestrator-silent-idle/S8 — the Lead's decision replaces the silent answers
         assignment, so the answers no longer hold pr-ready."""
         worker = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 2))
         worker["write"] = [[str(self.run_dir / "t1" / "report.2.json"), self.report("t1")]]
