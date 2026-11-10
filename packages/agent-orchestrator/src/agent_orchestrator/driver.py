@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import contracts, events, evidence, routes
+from . import contracts, events, evidence, routes, verify
 from . import plan as yaml_plan
 from .plan import PlanError
 from .runtime_client import CliRuntimeClient
@@ -291,6 +291,35 @@ def merged_snapshot(path):
         return None
 
 
+def require_completable(task, report):
+    """The rules a report meets to be COMPLETE, apart from the ledger's own state. Raises ValueError naming the first
+    that fails; `checkpoint` and the report gate share it, so a report is refused for the same reason in both."""
+    # Total over a schema-valid report: the report gate runs before the ledger's structural checks, which
+    # turn a malformed `remaining` or check into the Lead request they always did.
+    checks = [c for c in report.get("checks") or [] if isinstance(c, dict)]
+    require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
+    require(not report.get("remaining"), "complete result has remaining work")
+    failed = [str(c.get("command")) for c in checks if c.get("outcome") == "failed"]
+    require(not failed, "complete result has failed checks: " + ", ".join(failed))
+    required = {normalise_check(c): c for c in task["packet"]["checks"]}
+    passed = {
+        normalise_check(c["command"])
+        for c in checks
+        if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
+    }
+    missing = [command for key, command in required.items() if key not in passed]
+    require(
+        not missing,
+        "required checks are not passed: " + ", ".join(sorted(missing)),
+    )
+    if routed(task["packet"]):
+        require("review_rounds" in report, "a routed task needs review_rounds")
+        require(
+            isinstance(report.get("usage"), str) and report["usage"].strip(),
+            "a routed task needs usage (the runtime's metric line, or unknown)",
+        )
+
+
 def checkpoint(data, task_id, report, merged=False):
     task = data["tasks"][task_id]
     require(isinstance(report, dict), "report must be an object")
@@ -317,26 +346,7 @@ def checkpoint(data, task_id, report, merged=False):
     )
     if status == "COMPLETE":
         require(task["runtime_id"], "bind the runtime agent before completion")
-        require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
-        require(not report["remaining"], "complete result has remaining work")
-        require(
-            all(c["outcome"] != "failed" for c in checks),
-            "complete result has failed checks: "
-            + ", ".join(c["command"] for c in checks if c["outcome"] == "failed"),
-        )
-        required = {normalise_check(c): c for c in task["packet"]["checks"]}
-        passed = {normalise_check(c["command"]) for c in checks if c["outcome"] == "passed"}
-        missing = [command for key, command in required.items() if key not in passed]
-        require(
-            not missing,
-            "required checks are not passed: " + ", ".join(sorted(missing)),
-        )
-        if routed(task["packet"]):
-            require("review_rounds" in report, "a routed task needs review_rounds")
-            require(
-                isinstance(report.get("usage"), str) and report["usage"].strip(),
-                "a routed task needs usage (the runtime's metric line, or unknown)",
-            )
+        require_completable(task, report)
         task["finished_at"] = now()
     elif status == "BLOCKED":
         require(
@@ -543,6 +553,7 @@ CONTRACT = """# Contract for every task in this run
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
+- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node.
 - COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
@@ -623,9 +634,10 @@ def is_agent(ticket):
     return ticket["Owner"].strip().lower() == "agent"
 
 
-def ready(ticket, by_id):
-    """A TO-DO ticket whose blockers are all COMPLETE."""
-    return ticket["Status"].strip().upper().startswith("TO-DO") and all(
+def ready(ticket, by_id, restartable=False):
+    """A TO-DO ticket (or an IN PROGRESS one with nothing alive behind it: `restartable`) whose blockers are all
+    COMPLETE."""
+    return (restartable or ticket["Status"].strip().upper().startswith("TO-DO")) and all(
         is_done(by_id[b])
         for b in re.split(r"[,\s]+", ticket["Blocked by"].strip())
         if b and b.lower() != "none"
@@ -948,6 +960,25 @@ def next_path(directory, stem, suffix):
     raise ValueError("too many %s files in %s" % (stem, directory))
 
 
+# The tail of a failing job's log that a fix round shows; the full log is at log_path.
+CI_EXCERPT_CHARS = 2048
+
+
+def job_log(run_log, job):
+    """The lines of a `gh run view --log-failed` log that belong to one job: each opens with the job's name and a tab.
+    A log with no such line is taken whole (it names no job)."""
+    lines = [line for line in run_log.splitlines() if line.split("\t", 1)[0] == job]
+    return "\n".join(lines) if lines else run_log
+
+
+def log_tail(text, limit=CI_EXCERPT_CHARS):
+    """The last `limit` characters of a log, starting at a whole line."""
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    return tail.split("\n", 1)[1] if "\n" in tail else tail
+
+
 def cell(text, limit=160):
     """Text safe inside one plan table cell: one line, no pipes, cut at `limit`."""
     flat = " ".join(str(text).replace("|", "/").split())
@@ -966,7 +997,7 @@ def describe(item):
     """The lines a fix round shows for one findings item (text lines of contract 1 are shown as they are)."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci", "conflict"):
+    if item.get("source") in ("converge", "verify", "ci", "conflict"):
         return "%s %s: %s (exit %s of `%s`; full log %s)" % (
             item["source"],
             item["check"],
@@ -1000,7 +1031,7 @@ def short(item):
     """A finding in a few words, for a request's reason and a ledger `remaining` line."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci"):
+    if item.get("source") in ("converge", "verify", "ci"):
         return (
             item["excerpt"].splitlines()[0]
             if item["excerpt"]
@@ -1132,6 +1163,8 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
+        self.model = None  # the approved plan/1 model of a YAML plan
+        self.outcome_logged = False
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1175,6 +1208,9 @@ class Driver:
                 repo=self.repo,
                 state_dir=self.args.state_dir,
                 require_approval=True,
+            )
+            self.model = (
+                model  # verify gates a ticket against the approved plan, not the legacy table
             )
             ledger_path = Path(self.args.state_dir).expanduser() / (model.slug + ".json")
             statuses = {}
@@ -1263,15 +1299,20 @@ class Driver:
             self.receive(result)
             self.idle_ticks(result.get("assignments") or [])
             self.unfinished = {i for i in result.get("unfinished") or [] if isinstance(i, str)}
+            recovered = 0
             if (
                 not self.reconciled
             ):  # a drive that starts on a ledger a dead one left looks at it once
                 self.reconciled = True
-                dispatched += self.reconcile()
+                recovered = self.reconcile()
+                dispatched += recovered
             # `unfinished` lists assignment ids. A parked unit's assignment stays open in the runtime and makes `wait`
             # return at once: it is not work, so a run with only parked units left ends.
             parked = self.parked_assignments()
-            idle = not [entry for entry in result.get("unfinished") or [] if entry not in parked]
+            # An attempt recovered after this wait is one it could not list: the next wait settles it, not `status`.
+            idle = not recovered and not [
+                entry for entry in result.get("unfinished") or [] if entry not in parked
+            ]
             if not (dispatched or acted or self.received):
                 self.idle()
 
@@ -1988,16 +2029,38 @@ class Driver:
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
             return self.chase_responses(task_id, path, missing)
-        verdict, lines = self.converge(task_id, task["packet"])
+        # The merge completes the unit by the same rules, so a report they refuse is the worker's to fix now, while
+        # it can still act: a fix round, not a Lead request, until the cap.
+        try:
+            require_completable(task, dict(report, review_rounds=0))
+        except ValueError as error:
+            return self.fail_gate(
+                task_id,
+                report,
+                self.gate_name(),
+                [
+                    {
+                        "id": "R1",
+                        "kind": "blocking",
+                        "source": self.gate_name(),
+                        "check": "report",
+                        "command": "the COMPLETE rules for %s" % path.name,
+                        "exit": 1,
+                        "excerpt": str(error),
+                        "log_path": str(path),
+                    }
+                ],
+            )
+        verdict, lines = self.gate(task_id, task["packet"], report)
         if verdict == "error":
-            return self.request(task_id, "converge", lines[0])
+            return self.request(task_id, self.gate_name(), lines[0])
         try:
             if verdict == "FAIL":
-                return self.fail_gate(task_id, report, "converge", lines)
+                return self.fail_gate(task_id, report, lines[0]["source"], lines)
             self.record_report(task_id, report)
         except ValueError as error:
             return self.request(task_id, "report", "the ledger rejected the report: %s" % error)
-        # The archive is gated by converge --final alone. Every other report, a fix round of any source included, goes to
+        # The archive is gated by the converge --final path alone. Every other report, a fix round of any source included, goes to
         # the unit's reviewer: a delta re-review once the unit has been reviewed, else the first review.
         if task["packet"]["unit"] == ARCHIVE:
             return self.mark(task_id, gate="ready-for-ci")
@@ -2031,68 +2094,61 @@ class Driver:
         assignment_id = self.resume_for_responses(task, task_id, path, missing)
         self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
 
-    def converge(self, task_id, packet):
-        """Run converge for the unit's ticket: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
+    def gate_name(self):
+        """The gate that reads a plan: verify for a YAML plan, converge (verify's legacy path) for a Markdown one."""
+        return "verify" if self.plan_path.name.endswith(".plan.yaml") else "converge"
+
+    def gate(self, task_id, packet, report):
+        """The gate for a unit's report: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
         if self.plan_path.name.endswith(".plan.yaml"):
-            reason = "YAML plan: legacy converge reads Markdown; verify replaces this gate in a later ticket"
+            # The Markdown converge reads no YAML plan; verify's invariants gate a ticket. The archive's gate is its own.
+            reason = "YAML plan: verify gates this report; the Markdown converge does not run"
             self.log("converge-skipped", task=task_id, reason=reason)
             event(reason)
-            return "PASS", []
+            if packet["unit"] == ARCHIVE:
+                return "PASS", []
+            return self.verify_ticket(task_id, packet, report)
         if packet["unit"] == ARCHIVE:
             # The archive branch holds the plan with Status ARCHIVED; fall back to the driver's copy if it is untracked.
             copy = Path(packet["checkout"]) / self.plan_rel()
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(copy if copy.exists() else self.plan_path),
-                "--final",
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
+            plan, ticket = (copy if copy.exists() else self.plan_path), None
         else:
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(self.plan_path),
-                "--ticket",
-                packet["unit"].upper(),
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=300)
-        lines = [line for line in result.stdout.splitlines() if line.startswith("FAIL")]
-        if result.returncode == 0:
+            plan, ticket = self.plan_path, packet["unit"]
+        return verify.legacy_gate(
+            self.args.converge,
+            plan,
+            packet["checkout"],
+            self.args.base,
+            lambda: next_path(self.run_dir / task_id, "converge", ".log")[0],
+            ticket=ticket,
+        )
+
+    def verify_ticket(self, task_id, packet, report):
+        """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
+        ticket = packet["unit"].upper()
+        try:
+            findings = verify.invariants(
+                self.model,
+                ticket,
+                report,
+                repo=packet["checkout"],
+                base=self.args.base,
+                plan_rel=self.plan_rel(),
+            )
+        except verify.VerifyError as error:
+            return "error", [str(error)[:500]]
+        if not findings:
             return "PASS", []
-        if result.returncode == 1 and lines:
-            log = next_path(self.run_dir / task_id, "converge", ".log")[0]
-            log.write_text(result.stdout, encoding="utf-8")
-            command = " ".join(shlex.quote(part) for part in argv)
-            return "FAIL", [
-                {
-                    "id": "C%d" % number,
-                    "kind": "blocking",
-                    "source": "converge",
-                    "check": (
-                        (re.match(r"FAIL ([^:]+):", line) or [None, "converge"])[1] or "converge"
-                    ).strip(),
-                    "command": command,
-                    "exit": result.returncode,
-                    "excerpt": line,
-                    "log_path": str(log),
-                }
-                for number, line in enumerate(lines, 1)
-            ]
-        return "error", [
-            (
-                result.stderr.strip()
-                or result.stdout.strip()
-                or "converge exited %d" % result.returncode
-            )[:500]
-        ]
+        log = next_path(self.run_dir / task_id, "verify", ".log")[0]
+        log.write_text(
+            "".join("FAIL %(check)s: %(excerpt)s\n" % f for f in findings), encoding="utf-8"
+        )
+        command = "verify %s --repo %s --base %s" % (
+            ticket,
+            shlex.quote(str(packet["checkout"])),
+            shlex.quote(self.args.base),
+        )
+        return "FAIL", verify.items(findings, command, log)
 
     def fail_gate(self, task_id, report, source, items, checks_run=(), answer_ids=(), rebase=False):
         """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure."""
@@ -2771,50 +2827,43 @@ class Driver:
         return self.fail_gate(task_id, report, "conflict", [item], rebase=True)
 
     def ci_items(self, task_id, url, rows):
-        """The failing CI checks as evidence items: the check's name and the tail of its log (`gh run view`)."""
-        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
+        --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
         failing = [
             row
             for row in rows
             if str(row.get("bucket") or "").lower() in ("fail", "failing", "cancel", "cancelled")
         ]
+        runs = {}  # run id -> its failed-step log: every failing job of a run shares one fetch
         items = []
         for number, row in enumerate(failing, 1):
-            excerpt = str(row.get("description") or "").strip()
+            name = row.get("name") or "ci"
+            text = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
-                excerpt = (out or err).strip() or excerpt
-            items.append(
-                {
-                    "id": "CI%d" % number,
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": row.get("name") or "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": excerpt or "the check failed",
-                    "log_path": str(log),
-                }
-            )
+                if run.group(1) not in runs:
+                    _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
+                    runs[run.group(1)] = (out or err).strip()
+                text = job_log(runs[run.group(1)], name) or text
+            items.append(self.ci_item(task_id, url, "CI%d" % number, name, text))
         if not items:
-            items = [
-                {
-                    "id": "CI1",
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": "the checks failed",
-                    "log_path": str(log),
-                }
-            ]
-        log.write_text(
-            "\n".join("%s: %s" % (item["check"], item["excerpt"]) for item in items) + "\n",
-            encoding="utf-8",
-        )
+            items.append(self.ci_item(task_id, url, "CI1", "ci", "the checks failed"))
         return items
+
+    def ci_item(self, task_id, url, item_id, check, text):
+        """One CI finding: the job's full text at `log_path`, its capped tail as the excerpt."""
+        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        log.write_text(text + "\n", encoding="utf-8")
+        return {
+            "id": item_id,
+            "kind": "blocking",
+            "source": "ci",
+            "check": check,
+            "command": "gh pr checks %s" % url,
+            "exit": 1,
+            "excerpt": log_tail(text) or "the check failed",
+            "log_path": str(log),
+        }
 
     def put_status(self, task_id, status):
         """The ticket's Status cell; the archive unit has no row."""
@@ -3783,6 +3832,10 @@ class Driver:
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
             return 0
+        if not self.model and not self.outcome_logged:
+            # A Markdown plan's outcome is never run: it completes unverified and cannot be accepted.
+            self.outcome_logged = True
+            self.log("plan-outcome", outcome=verify.legacy_outcome(True))
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
         if held and held["runtime_id"]:
@@ -4018,24 +4071,84 @@ class Driver:
         count = 0
         for ticket in plan["tickets"]:
             task_id = ticket["#"].lower()
-            if not is_agent(ticket) or task_id in self.failed or not ready(ticket, by_id):
+            if not is_agent(ticket):
                 continue
-            held = tasks.get(task_id)
+            if task_id in self.failed and ticket["Status"].strip().upper() == "TO-DO":
+                self.failed.discard(task_id)  # the Lead's answer to the wake: try it again
+            if task_id in self.failed:
+                continue
+            if not ready(ticket, by_id, self.restartable(ticket, tasks)):
+                continue
+            attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == task_id}
+            open_ = {
+                k: t for k, t in attempts.items() if t["status"] not in ("COMPLETE", "RELEASED")
+            }
+            held, new_id = None, None
+            if any(t["status"] == "COMPLETE" for t in attempts.values()) or any(
+                t["runtime_id"] for t in open_.values()
+            ):
+                continue
+            if open_:
+                # a dispatch that failed after its claim left a reserved attempt: it is dispatched again under its
+                # own id (claim is idempotent for it), not as a fresh one
+                new_id, held = next(iter(open_.items()))
+            elif attempts:
+                # every attempt is closed, and a closed id is never dispatched again
+                new_id = next(
+                    "%sr%d" % (task_id, n)
+                    for n in range(1, 1000)
+                    if "%sr%d" % (task_id, n) not in tasks
+                )
             if held and held["runtime_id"]:
                 continue
             if not held and unfinished >= self.args.max_workers:
                 continue
             try:
-                self.dispatch(plan, ticket)
+                self.dispatch(plan, ticket, new_id)
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.failed.add(task_id)
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error)
                 unfinished += 0 if held else 1
                 continue
             unfinished += 0 if held else 1
+            # a failure the Lead has answered no longer fails the run
+            self.errors[:] = [e for e in self.errors if not e.startswith(ticket["#"] + ": ")]
             count += 1
         return count
+
+    def restartable(self, ticket, tasks):
+        """True when a ticket whose cell reads `IN PROGRESS` holds no live work: the ledger has an attempt of its
+        unit, every one is RELEASED, and the runtime answers definitively that its worker is not live. A cell with
+        no attempt in the ledger belongs to some other run and stays a lock; a failed lookup is not an answer: it
+        strands the unit (a wake and a non-zero exit) and nothing is spawned."""
+        if not ticket["Status"].strip().upper().startswith("IN PROGRESS"):
+            return False
+        unit = ticket["#"].lower()
+        attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == unit}
+        if not attempts or any(t["status"] != "RELEASED" for t in attempts.values()):
+            return False
+        name = worker_name(self.slug, ticket["#"][1:])
+        try:
+            return self.agent_gone(name)[0]
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            self.strand(list(attempts)[-1], name, str(error))
+            return False
+
+    def not_dispatched(self, ticket, error, what="not dispatched"):
+        """A dispatch that cannot happen asks the Lead, once per ticket and reason; the cell keeps the reason and
+        the ticket stays out of this run's rounds until the Lead sets its Status to TO-DO (a restarted drive reads the cell
+        as TO-DO and tries it once more)."""
+        task_id = ticket["#"].lower()
+        self.failed.add(task_id)
+        self.errors.append("%s: %s" % (ticket["#"], error))
+        event("%s %s: %s" % (ticket["#"], what, error))
+        self.write_status(ticket["#"], "TO-DO · %s: %s" % (what, cell(error, 120)))
+        self.wake(
+            "not-dispatched",
+            task_id,
+            "%s %s: %s -> fix that, then set the ticket's Status to TO-DO and the next round tries it again"
+            % (ticket["#"], what, cell(error, 300)),
+            key="%s:%s" % (task_id, error),
+        )
 
     # ---- reconciliation: an open task whose agent the runtime no longer lists -------------------------------------
     # A drive that restarts (or finds its worker gone) must not trust the ledger's `runtime_id`, and must not finish
@@ -4188,7 +4301,10 @@ class Driver:
                 raise ValueError("the plan no longer has ticket %s" % unit.upper())
             self.dispatch(plan, ticket, new_id, note=note)
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            if ticket is None:
+                self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            else:
+                self.not_dispatched(ticket, error, "not re-dispatched as " + new_id)
             return 0
         event("%s: dispatched again as %s after %s" % (unit.upper(), new_id, said))
         return 1
@@ -4253,8 +4369,7 @@ class Driver:
             try:
                 self.dispatch(plan, ticket, "%sp%d" % (task["packet"]["unit"], attempt))
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not re-dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error, "not re-dispatched")
                 continue
             count += 1
         return count
@@ -4772,6 +4887,13 @@ def main(argv=None):
         "plan", help="Validate and approve plan/1 YAML contracts"
     ).add_subparsers(dest="plan_command", required=True)
     plan_commands.add_parser("schema", help="Print the plan/1 JSON Schema")
+    plans = commands.add_parser(
+        "plans", help="List the plans of a repository (or of an explicit plan's directory)"
+    ).add_subparsers(dest="plans_command", required=True)
+    listing = plans.add_parser("list")
+    listing.add_argument("path", nargs="?", help="A plan file, or the directory holding plans")
+    listing.add_argument("--repo", help="Repository root; default the current repository")
+    listing.add_argument("--json", action="store_true", help="Print the list as a JSON array")
     for verb in ("check", "approve"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
@@ -4995,6 +5117,11 @@ def main(argv=None):
             }
         model = yaml_plan.load(args.plan, repo=args.repo, state_dir=args.state_dir)
         return {"valid": True, "slug": model.slug}
+    if args.command == "plans":
+        found = yaml_plan.discover(args.repo, args.path)
+        if args.json:
+            return found
+        return "\n".join(entry["path"] for entry in found)
     if args.command == "run":
         return drive(args)
     if args.command == "await":

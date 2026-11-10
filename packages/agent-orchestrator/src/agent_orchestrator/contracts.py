@@ -9,20 +9,23 @@ verbatim: a review item's fields outside the core survive a round trip unchanged
 
 `report.json`   worker: the ledger checkpoint shape plus `head` (commit sha) and `pr` (URL or null); optional
                 `responses[] {id, status fixed|disputed, commit, note, changes_code?}` (one per answer_required finding)
-                and `clarifications[] {finding, asked_by, note}`.
+                and `clarifications[] {finding, asked_by, note}`. Contract 3 is a YAML plan ticket's report: it adds
+                `covers {S<n>: [test node ids]}`, the scenarios the ticket satisfies mapped to the tests that prove
+                them; verify checks each node exists and changed in the ticket.
 `review.json`   reviewer: `verdict` pass|block, `items[]`, `checks_run[] {command, exit, at_commit}`, optional
                 `clarifications[]`, `commit` reviewed (must equal the checkout's HEAD). An item has the core `id`, `kind`
                 (blocking|concern|question|nit|deferred), `summary`, `answer_required`; a blocking item also `file`,
                 `line`, `fix` and `evidence {command, exit, excerpt, log_path}`. Any other field is kept verbatim.
                 Block iff there is a blocking item.
-`findings.json` driver -> fix round: `source`, `attempt`, the blocking and answer_required `items` (converge, CI
-                and conflict items carry `kind`, `source`, `check`, `command`, `exit`, `excerpt`, `log_path`) and the
+`findings.json` driver -> fix round: `source`, `attempt`, the blocking and answer_required `items` (converge, verify,
+                CI and conflict items carry `kind`, `source`, `check`, `command`, `exit`, `excerpt`, `log_path`) and the
                 reviewer's `checks_run`.
 `request.json`  driver -> Lead: why a unit needs a decision, the evidence paths and the action menu; `status` open|resolved.
 `decision.json` Lead (through `agent-orchestrator decide`): one `action` from the menu, a `reason`, and for `answer` the `answer`.
 """
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -32,7 +35,8 @@ VERSION = 2  # what the driver writes
 SUPPORTED = (1, 2)  # what it reads
 LIMIT = 65536
 STATUSES = ("PARTIAL", "BLOCKED", "COMPLETE")
-SOURCES = ("converge", "review", "ci", "conflict")
+REPORT_SUPPORTED = (1, 2, 3)  # a report may also be contract 3 (`covers`); no other file is
+SOURCES = ("converge", "verify", "review", "ci", "conflict")
 ACTIONS = (
     "retry",
     "retry one class up",
@@ -53,13 +57,14 @@ GATE_ITEM_FIELDS = (
     "exit",
     "excerpt",
     "log_path",
-)  # converge and CI findings
+)  # converge, verify and CI findings
 RESPONSE_STATUSES = ("fixed", "disputed")
 
 Contract = Literal[1, 2]
 Status = Literal["PARTIAL", "BLOCKED", "COMPLETE"]
 Kind = Literal["blocking", "concern", "question", "nit", "deferred"]
-Source = Literal["converge", "review", "ci", "conflict"]
+Source = Literal["converge", "verify", "review", "ci", "conflict"]
+ReportContract = Literal[1, 2, 3]
 Action = Literal["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]
 ResponseStatus = Literal["fixed", "disputed"]
 
@@ -123,7 +128,7 @@ class Check(Open):
 class Report(Strict):
     """The worker's report: the ledger checkpoint shape plus the commit and the pull request."""
 
-    contract: Contract
+    contract: ReportContract
     task_id: str = Field(min_length=1)
     status: Status
     summary: str = Field(min_length=1)
@@ -141,6 +146,8 @@ class Report(Strict):
     clarifications: list[Clarification] = Field(default_factory=list)
     # CONTRACT asks for it: the worker's context telemetry, `{"status": "unknown"}` when it has none.
     context: dict[str, Any] | None = None
+    # Contract 3: each scenario the ticket satisfies, mapped to the test nodes (`path::name`) that prove it.
+    covers: dict[str, list[str]] | None = None
 
 
 class Evidence(Strict):
@@ -211,7 +218,7 @@ class ReviewV1(Strict):
 
 
 class GateItem(Strict):
-    """A converge, CI or conflict finding: the evidence the driver filled in."""
+    """A converge, verify, CI or conflict finding: the evidence the driver filled in."""
 
     kind: Literal["blocking"]
     source: Source
@@ -279,8 +286,35 @@ def _check(model, value, what):
     return value
 
 
+def validate_covers(report):
+    """Contract 3 carries `covers {S<n>: [node, ...]}`; no other contract does."""
+    covers = report.get("covers")
+    if report["contract"] != 3:
+        need(
+            covers is None,
+            "report: covers needs contract 3, this report is contract %s" % report["contract"],
+        )
+        return
+    need(isinstance(covers, dict), "report: contract 3 needs covers {S<n>: [test node ids]}")
+    for scenario, nodes in covers.items():
+        need(
+            isinstance(scenario, str) and re.fullmatch(r"S\d+[a-z]?", scenario),
+            "report: covers key %r is not a scenario id like S3" % (scenario,),
+        )
+        need(
+            isinstance(nodes, list) and nodes and all(text(node) for node in nodes),
+            "report: covers %s must list at least one test node id, each a non-empty string"
+            % scenario,
+        )
+
+
 def validate_report(report):
-    versioned(report, "report")
+    need(isinstance(report, dict), "report must be a JSON object")
+    need(
+        report.get("contract") in REPORT_SUPPORTED,
+        "report: contract must be one of %s" % ", ".join(map(str, REPORT_SUPPORTED)),
+    )
+    validate_covers(report)
     _check(Report, report, "report")
     for response in report.get("responses", []):
         validate_response(response)
