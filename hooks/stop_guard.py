@@ -19,7 +19,9 @@ def main():
     who, found = hook_lib.lead_check()
     if not who:
         return
-    blocking = bool(found) and (found["undelivered"] > 0 or (found["working"] > 0 and not found["seen"]))
+    blocking = bool(found) and (
+        found["undelivered"] > 0 or (found["working"] > 0 and not found["seen"])
+    )
     if not blocking:
         hook_lib.reset_budget(os.environ, who)  # nothing to block on: a new period
         return
@@ -28,16 +30,27 @@ def main():
         return  # a backgrounded wait(all) will deliver; no budget spent, none reset
     allowed, first_time = hook_lib.spend_budget(os.environ, who)
     if allowed:
-        print(json.dumps({"decision": "block", "reason": "agent-runtime: %d unfinished, %d undelivered — "
-                          "call wait(all) before ending the turn" % (found["unfinished"], found["undelivered"])}))
+        print(
+            json.dumps(
+                {
+                    "decision": "block",
+                    "reason": "agent-runtime: %d unfinished, %d undelivered — "
+                    "call wait(all) before ending the turn"
+                    % (found["unfinished"], found["undelivered"]),
+                }
+            )
+        )
     elif first_time:
-        print("agent-runtime: stop guard budget spent; allowing the stop (resets on your next prompt)",
-              file=sys.stderr)
+        print(
+            "agent-runtime: stop guard budget spent; allowing the stop (resets on your next prompt)",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
     try:
         import hook_lib
+
         hook_lib.fail_open(main)
     except Exception:  # an import error also allows the stop
         pass

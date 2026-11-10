@@ -25,7 +25,6 @@ from agent_runtime import (
 pytestmark = pytest.mark.integration
 
 
-
 RULES = {"mutations": True, "backends": ["claude", "codex", "pi"], "paths": ["/tmp"]}
 # The credentials a Pi worker needs and a Claude or Codex worker must never inherit.
 PI_VARS = ["MINIMAX_API_KEY", "PI_API_KEY", "PI_PROVIDER", "PI_MODEL"]
@@ -147,8 +146,10 @@ class PiProviderTests(ToolCase):
 
     def env_printer(self, name):
         program = self.dir / "bin" / name
-        program.write_text("#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n"
-                           % (sys.executable, self.WATCHED))
+        program.write_text(
+            "#!%s\nimport json, os\nprint(json.dumps({k: os.environ[k] for k in %r if k in os.environ}))\n"
+            % (sys.executable, self.WATCHED)
+        )
         program.chmod(0o755)
 
     def overlays(self):
@@ -158,8 +159,9 @@ class PiProviderTests(ToolCase):
         """pi-worker/S2: Pi authenticates with MINIMAX_API_KEY, so its worker keeps it."""
         self.env_printer("pi")
         inherited = {key: "inherited" for key in self.WATCHED}
-        session = self.start({"execute_profile": True, "login_env": inherited,
-                              "get:w1": {"out": raw("w1", "t0")}})
+        session = self.start(
+            {"execute_profile": True, "login_env": inherited, "get:w1": {"out": raw("w1", "t0")}}
+        )
         result, text = self.call(session, "spawn", dict(self.ARGS, cli="pi"))
         self.assertFalse(result["isError"], text)
         self.assertEqual(self.overlays(), [inherited])
@@ -170,8 +172,13 @@ class PiProviderTests(ToolCase):
             with self.subTest(family=family):
                 self.env_printer(family)
                 inherited = {key: "inherited" for key in self.WATCHED}
-                session = self.start({"execute_profile": True, "login_env": inherited,
-                                      "get:w1": {"out": raw("w1", "t0")}})
+                session = self.start(
+                    {
+                        "execute_profile": True,
+                        "login_env": inherited,
+                        "get:w1": {"out": raw("w1", "t0")},
+                    }
+                )
                 result, text = self.call(session, "spawn", dict(self.ARGS, cli=family))
                 self.assertFalse(result["isError"], text)
                 self.assertEqual(self.overlays()[-1], {})
@@ -209,7 +216,9 @@ class PiWorkerPolicyTests(unittest.TestCase):
         """pi-worker/S3: reporting is the one thing a Pi worker must be able to do."""
         env = self.env()
         self.write(env, {"hosts": {"pi": RULES}})
-        self.authorize(env, "worker", "report", {"text": "done", "kind": "complete", "assignment_id": "a1"})
+        self.authorize(
+            env, "worker", "report", {"text": "done", "kind": "complete", "assignment_id": "a1"}
+        )
 
     def test_S3_a_pi_worker_may_read_its_own_team(self):
         """pi-worker/S3: the team-scoped reads and the peer message stay open."""
@@ -226,8 +235,18 @@ class PiWorkerPolicyTests(unittest.TestCase):
         for tool in ("spawn", "stop", "resume"):
             with self.subTest(tool=tool):
                 with self.assertRaises(host_policy.Refused) as error:
-                    self.authorize(env, "worker", tool, {"kind": "worker", "name": "w1", "task": "t",
-                                                        "cwd": "/tmp", "cli": "claude"})
+                    self.authorize(
+                        env,
+                        "worker",
+                        tool,
+                        {
+                            "kind": "worker",
+                            "name": "w1",
+                            "task": "t",
+                            "cwd": "/tmp",
+                            "cli": "claude",
+                        },
+                    )
                 self.assertIn("worker", str(error.exception))
 
     def test_S4_a_pi_worker_may_not_create_a_team_task(self):
@@ -242,7 +261,9 @@ class PiWorkerPolicyTests(unittest.TestCase):
         """pi-worker/S4: the operator's policy still governs the host."""
         env = self.env()
         with self.assertRaises(host_policy.Refused):
-            self.authorize(env, "worker", "report", {"text": "done", "kind": "complete", "assignment_id": "a1"})
+            self.authorize(
+                env, "worker", "report", {"text": "done", "kind": "complete", "assignment_id": "a1"}
+            )
 
 
 class PiWorkerTests(ToolCase):
@@ -256,22 +277,33 @@ class PiWorkerTests(ToolCase):
         (self.config / "agent-runtime").mkdir(parents=True)
 
     def policy(self, **rules):
-        (self.config / "agent-runtime" / "hosts.json").write_text(json.dumps({"hosts": {"pi": rules}}),
-                                                                   encoding="utf-8")
+        (self.config / "agent-runtime" / "hosts.json").write_text(
+            json.dumps({"hosts": {"pi": rules}}), encoding="utf-8"
+        )
 
     def lead_env(self, **extra):
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
-               "HC_TERMINAL_ID": "t0", "HC_SCOPE": "pi", "AGENT_RUNTIME_DISPATCH": "1",
-               "XDG_CONFIG_HOME": str(self.config), "PI_CODING_AGENT": "true"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+            "HC_SCOPE": "pi",
+            "AGENT_RUNTIME_DISPATCH": "1",
+            "XDG_CONFIG_HOME": str(self.config),
+            "PI_CODING_AGENT": "true",
+        }
         env.update(extra)
         return env
 
     def lead_replies(self, workers=("w1",)):
-        rows = [{"name": name, "address": "t%d" % (index + 1), "parent": "t0", "status": "working"}
-                for index, name in enumerate(workers)]
-        replies = {"get:t0": {"out": raw("lead", None)},
-                   "ls": {"out": json.dumps({"terminals": rows})},
-                   "live": []}
+        rows = [
+            {"name": name, "address": "t%d" % (index + 1), "parent": "t0", "status": "working"}
+            for index, name in enumerate(workers)
+        ]
+        replies = {
+            "get:t0": {"out": raw("lead", None)},
+            "ls": {"out": json.dumps({"terminals": rows})},
+            "live": [],
+        }
         for row in rows:
             for key in (row["name"], row["address"]):
                 replies["get:" + key] = {"out": json.dumps(row)}
@@ -282,9 +314,15 @@ class PiWorkerTests(ToolCase):
         return session
 
     def worker_session(self, address="t1"):
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"),
-               "HC_TERMINAL_ID": address, "HC_SCOPE": "pi", "AGENT_RUNTIME_DISPATCH": "1",
-               "XDG_CONFIG_HOME": str(self.config), "PI_CODING_AGENT": "true"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": address,
+            "HC_SCOPE": "pi",
+            "AGENT_RUNTIME_DISPATCH": "1",
+            "XDG_CONFIG_HOME": str(self.config),
+            "PI_CODING_AGENT": "true",
+        }
         session = Session(env, new_cli=self.pi)
         self.addCleanup(session.close)
         session.handshake()
@@ -294,14 +332,20 @@ class PiWorkerTests(ToolCase):
         """pi-worker/S8: the report binds the assignment and lands in the lead's team, once."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "pi", "name": "w1",
-                                                     "task": "work", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "pi", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
         assignment = spawned["structuredContent"]["assignment_id"]
         self.assertIn("pi", self.runs("run")[-1])
         worker = self.worker_session()
-        reported, text = self.call(worker, "report", {"text": "STATUS: COMPLETE", "kind": "complete",
-                                                      "assignment_id": assignment})
+        reported, text = self.call(
+            worker,
+            "report",
+            {"text": "STATUS: COMPLETE", "kind": "complete", "assignment_id": assignment},
+        )
         self.assertFalse(reported["isError"], text)
         waited, text = self.call(session, "wait", {"target": "all", "timeout": 5})
         self.assertFalse(waited["isError"], text)
@@ -315,13 +359,17 @@ class PiWorkerTests(ToolCase):
         """pi-worker/S5: the team scope holds for a Pi worker too."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "pi", "name": "w1",
-                                                     "task": "work", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "pi", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
         assignment = spawned["structuredContent"]["assignment_id"]
         worker = self.worker_session()
-        reported, text = self.call(worker, "report", {"text": "half done", "kind": "progress",
-                                                      "assignment_id": assignment})
+        reported, text = self.call(
+            worker, "report", {"text": "half done", "kind": "progress", "assignment_id": assignment}
+        )
         self.assertFalse(reported["isError"], text)
         denied, text = self.call(worker, "collect", {"name": "someone-else"})
         self.assertTrue(denied["isError"], text)
@@ -331,12 +379,18 @@ class PiWorkerTests(ToolCase):
         """pi-worker/S4: the host policy refuses a worker's spawn, whatever it names."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        spawned, text = self.call(session, "spawn", {"kind": "worker", "cli": "pi", "name": "w1",
-                                                     "task": "work", "cwd": "/tmp"})
+        spawned, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "pi", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertFalse(spawned["isError"], text)
         worker = self.worker_session()
-        denied, text = self.call(worker, "spawn", {"kind": "worker", "cli": "claude", "name": "w2",
-                                                    "task": "more work", "cwd": "/tmp"})
+        denied, text = self.call(
+            worker,
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w2", "task": "more work", "cwd": "/tmp"},
+        )
         self.assertTrue(denied["isError"], text)
         self.assertIn("worker", text)
 
@@ -344,8 +398,11 @@ class PiWorkerTests(ToolCase):
         """pi-worker/S7: the operator's directories bound a Pi spawn like any other."""
         self.policy(**RULES)
         session = self.pi_session(self.lead_replies())
-        denied, text = self.call(session, "spawn", {"kind": "worker", "cli": "pi", "name": "w1",
-                                                    "task": "work", "cwd": "/etc"})
+        denied, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "pi", "name": "w1", "task": "work", "cwd": "/etc"},
+        )
         self.assertTrue(denied["isError"], text)
         self.assertIn("may not start a worker in", text)
         self.assertEqual(self.runs("run"), [])
@@ -354,8 +411,11 @@ class PiWorkerTests(ToolCase):
         """pi-worker/S7: the runtime never picks a provider for a Pi lead."""
         self.policy(mutations=True, backends=["claude"], paths=["/tmp"])
         session = self.pi_session(self.lead_replies())
-        denied, text = self.call(session, "spawn", {"kind": "worker", "cli": "pi", "name": "w1",
-                                                    "task": "work", "cwd": "/tmp"})
+        denied, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "cli": "pi", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
         self.assertTrue(denied["isError"], text)
         self.assertIn("not authorized", text)
         self.assertEqual(self.runs("run"), [])

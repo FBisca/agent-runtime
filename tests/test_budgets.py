@@ -1,4 +1,5 @@
 """Complete-envelope budgets, lossless pagination and host output limits (D22)."""
+
 import json
 from pathlib import Path
 
@@ -10,8 +11,6 @@ from test_mcp_server import TOOLS
 from test_tools import ToolCase
 
 pytestmark = pytest.mark.integration
-
-
 
 
 def canonical(payload):
@@ -44,16 +43,29 @@ class BudgetTests(ToolCase):
         """agent-runtime/R61
         agent-runtime-dispatch/S28"""
         self.prepare()
-        created = [self.ask("task", action="create", subject="%03d%s" % (i, "s" * 996))["structuredContent"]["task_id"]
-                   for i in range(70)]
-        sent = [self.publish(i, kind="progress", text=chr(97 + n) * 60000)["message_id"]
-                for n, i in enumerate((0, 1, 0))]
+        created = [
+            self.ask("task", action="create", subject="%03d%s" % (i, "s" * 996))[
+                "structuredContent"
+            ]["task_id"]
+            for i in range(70)
+        ]
+        sent = [
+            self.publish(i, kind="progress", text=chr(97 + n) * 60000)["message_id"]
+            for n, i in enumerate((0, 1, 0))
+        ]
         # Reads piggyback the inbox only with a receipt (D15): the mutating create below delivers the first page.
         seed = self.ask("task", action="create", subject="seed")["structuredContent"]
         created.append(seed["task_id"])
         first = seed["inbox"]
-        self.assertEqual(self.store_receipt(first["receipt"]), [m["message_id"] for m in first["messages"]])
-        tasks, delivered, arguments, pages = [], [m["message_id"] for m in first["messages"]], {"action": "list", "receipt": first["receipt"]}, 0
+        self.assertEqual(
+            self.store_receipt(first["receipt"]), [m["message_id"] for m in first["messages"]]
+        )
+        tasks, delivered, arguments, pages = (
+            [],
+            [m["message_id"] for m in first["messages"]],
+            {"action": "list", "receipt": first["receipt"]},
+            0,
+        )
         while True:
             payload = self.ask("task", **arguments)["structuredContent"]
             self.assertLessEqual(canonical(payload), MAX_RESPONSE_BYTES)
@@ -63,7 +75,9 @@ class BudgetTests(ToolCase):
             inbox = payload.get("inbox") or {"messages": [], "receipt": None, "more": False}
             ids = [m["message_id"] for m in inbox["messages"]]
             if inbox["receipt"]:
-                self.assertEqual(self.store_receipt(inbox["receipt"]), ids)  # receipt names exactly the delivered IDs
+                self.assertEqual(
+                    self.store_receipt(inbox["receipt"]), ids
+                )  # receipt names exactly the delivered IDs
             delivered += ids
             if not payload.get("next_cursor") and not inbox["more"]:
                 break
@@ -76,8 +90,11 @@ class BudgetTests(ToolCase):
 
     def store_receipt(self, receipt):
         from agent_runtime.dispatch_store import Store
+
         with Store(self.env).transaction() as db:
-            return json.loads(db.execute("SELECT ids FROM receipts WHERE id=?", (receipt,)).fetchone()[0])
+            return json.loads(
+                db.execute("SELECT ids FROM receipts WHERE id=?", (receipt,)).fetchone()[0]
+            )
 
     def test_oversized_collect_text_is_explicitly_partial_not_silently_clipped(self):
         """agent-runtime/R61
@@ -113,23 +130,34 @@ class BudgetTests(ToolCase):
         for n in range(32):
             assignment = store.register(team, "w%02d%s" % (n, "n" * 40))["assignment_id"]
             store.bind(assignment, "t%d" % (n + 1), "worst")
-            ids.append(store.publish("worst", "t%d" % (n + 1), "t0", assignment,
-                                     chr(97 + n % 26) * 4000, "progress")["message_id"])
+            ids.append(
+                store.publish(
+                    "worst", "t%d" % (n + 1), "t0", assignment, chr(97 + n % 26) * 4000, "progress"
+                )["message_id"]
+            )
+
         def observe(members, budget):
             return {m["assignment_id"]: "interrupted" for m in members}
+
         delivered, failures, receipt, rounds = [], [], None, 0
         while True:
             rounds += 1
             self.assertLess(rounds, 6)
-            batch = dispatch_wait.wait(store, team, "t0", "all", 1, receipt, hc_tools.Context(), observe)
-            if batch["more"]:  # the last page keeps only assignments with unacknowledged results (D26)
+            batch = dispatch_wait.wait(
+                store, team, "t0", "all", 1, receipt, hc_tools.Context(), observe
+            )
+            if batch[
+                "more"
+            ]:  # the last page keeps only assignments with unacknowledged results (D26)
                 self.assertEqual(len(batch["assignments"]), 32)
             if rounds == 1:
                 self.assertEqual(batch["assignments"][0]["runtime_state"], "interrupted")
             else:  # persisted: the store, not the probe, now says failed
                 self.assertEqual({a["state"] for a in batch["assignments"]}, {"failed"})
                 with store.transaction() as db:
-                    self.assertEqual({r[0] for r in db.execute("SELECT state FROM assignments")}, {"failed"})
+                    self.assertEqual(
+                        {r[0] for r in db.execute("SELECT state FROM assignments")}, {"failed"}
+                    )
             self.assertLessEqual(canonical(batch), MAX_RESPONSE_BYTES)
             self.assertTrue(batch["messages"])
             names = [m["message_id"] for m in batch["messages"]]
@@ -139,10 +167,14 @@ class BudgetTests(ToolCase):
             receipt = batch["receipt"]
             if not batch["more"]:
                 break
-        self.assertEqual([m for m in delivered if m not in failures], ids)  # D2 adds one persisted failure each
+        self.assertEqual(
+            [m for m in delivered if m not in failures], ids
+        )  # D2 adds one persisted failure each
         self.assertEqual(len(failures), 32)
         self.assertGreater(rounds, 1)
-        final = dispatch_wait.wait(store, team, "t0", "all", 0, receipt, hc_tools.Context(), observe)
+        final = dispatch_wait.wait(
+            store, team, "t0", "all", 0, receipt, hc_tools.Context(), observe
+        )
         self.assertEqual(final["messages"], [])
 
     def test_structured_base_at_the_cap_still_admits_the_first_message(self):
@@ -152,13 +184,26 @@ class BudgetTests(ToolCase):
         team = store.team("starve", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
         store.bind(assignment, "t1", "starve")
-        sent = store.publish("starve", "t1", "t0", assignment, "é" * 10900, "progress")["message_id"]
-        batch = store.read(team, "t0", "any", assignment_ids=[], inbox=True, reserve=MAX_BASE_BYTES + len(',"inbox":'))
+        sent = store.publish("starve", "t1", "t0", assignment, "é" * 10900, "progress")[
+            "message_id"
+        ]
+        batch = store.read(
+            team,
+            "t0",
+            "any",
+            assignment_ids=[],
+            inbox=True,
+            reserve=MAX_BASE_BYTES + len(',"inbox":'),
+        )
         self.assertEqual([m["message_id"] for m in batch["messages"]], [sent])
         self.assertTrue(batch["receipt"])
         self.assertFalse(batch["more"])
-        with self.assertRaises(StoreError):  # an unbounded base could starve the inbox: refuse, never "more" with nothing
-            store.read(team, "t0", "any", assignment_ids=[], inbox=True, reserve=MAX_BASE_BYTES + 1000)
+        with self.assertRaises(
+            StoreError
+        ):  # an unbounded base could starve the inbox: refuse, never "more" with nothing
+            store.read(
+                team, "t0", "any", assignment_ids=[], inbox=True, reserve=MAX_BASE_BYTES + 1000
+            )
 
     def test_collect_partial_keeps_the_tail_with_a_single_bounded_trim(self):
         """agent-runtime/R61

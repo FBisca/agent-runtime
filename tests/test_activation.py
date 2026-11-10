@@ -23,8 +23,10 @@ MCP_JSON = PLUGIN / ".mcp.json"
 
 def count_words(node):
     if isinstance(node, dict):
-        return sum(len(v.split()) if k == "description" and isinstance(v, str) else count_words(v)
-                   for k, v in node.items())
+        return sum(
+            len(v.split()) if k == "description" and isinstance(v, str) else count_words(v)
+            for k, v in node.items()
+        )
     if isinstance(node, list):
         return sum(count_words(v) for v in node)
     return 0
@@ -94,13 +96,22 @@ class ActivationWiringTest(unittest.TestCase):
         section = readme
         spec = (REPO / "docs/specs/agent-runtime.md").read_text()
         intro = spec.split("## Requirements")[0]
-        description = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["description"]
-        for label, text in (("README", section), ("plugin.json", description), ("spec intro", intro)):
+        description = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())[
+            "description"
+        ]
+        for label, text in (
+            ("README", section),
+            ("plugin.json", description),
+            ("spec intro", intro),
+        ):
             for tool in tools:
                 self.assertRegex(text, r"\b%s\b" % tool, "%s lacks %s" % (label, tool))
         for label, text in (("README", readme), ("spec", spec)):
             for line in text.splitlines():
-                self.assertIsNone(re.search(r"\b0\.1\.\d|\b0\.2\.0\b", line), "%s states a stale version: %s" % (label, line))
+                self.assertIsNone(
+                    re.search(r"\b0\.1\.\d|\b0\.2\.0\b", line),
+                    "%s states a stale version: %s" % (label, line),
+                )
         self.assertIn("receipt", intro)
 
     def test_descriptions_state_lookup_and_dispatch_rules(self):
@@ -115,7 +126,7 @@ class ActivationWiringTest(unittest.TestCase):
     def test_spec_intro_says_diagnostics_authorize_store_first_then_fall_back(self):
         """agent-runtime/R92"""
         spec = (REPO / "docs/specs/agent-runtime.md").read_text()
-        intro = spec[:spec.index("## Requirements")]
+        intro = spec[: spec.index("## Requirements")]
         self.assertRegex(intro, r"(?is)diagnostics authorize against the dispatch store first")
         self.assertIn("hc-only state with `delivery_error`", intro)
         self.assertRegex(intro, r"(?i)authorization failures? return no hc data")

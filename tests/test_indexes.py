@@ -1,4 +1,5 @@
 """Dispatch store indexes: present, additive, and used by wait's hot queries."""
+
 import sqlite3
 import sys
 import tempfile
@@ -43,7 +44,9 @@ class IndexTests(unittest.TestCase):
                     self.assertIn(columns, have, table)
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
             db.execute("INSERT INTO assignments VALUES (?,?,?,'pending',0)", ("a", "t", "w"))
-            db.execute("INSERT INTO messages (id,team,recipient,assignment,body,acked) VALUES ('m','t','r','a','{}',0)")
+            db.execute(
+                "INSERT INTO messages (id,team,recipient,assignment,body,acked) VALUES ('m','t','r','a','{}',0)"
+            )
         Store({"HOME": self.tmp.name})  # re-init is idempotent
 
     def test_wait_snapshot_and_read_plans_use_indexes_without_scanning_messages(self):
@@ -54,8 +57,14 @@ class IndexTests(unittest.TestCase):
             (ds.SNAPSHOT_SQL, ("t",) + ("w",) * 6),
             (members.format(selection="a.current=1"), ("t",)),
             (members.format(selection="a.id IN (?)"), ("t", "a")),
-            (ds.READ_MESSAGES_SQL + ds.READ_NAMED_CLAUSE + " ORDER BY seq", ("t", "r", "t", "w", "a")),
-            (ds.READ_MESSAGES_SQL + ds.READ_PINNED_CLAUSE.format(ids="?") + " ORDER BY seq", ("t", "r", "a")),
+            (
+                ds.READ_MESSAGES_SQL + ds.READ_NAMED_CLAUSE + " ORDER BY seq",
+                ("t", "r", "t", "w", "a"),
+            ),
+            (
+                ds.READ_MESSAGES_SQL + ds.READ_PINNED_CLAUSE.format(ids="?") + " ORDER BY seq",
+                ("t", "r", "a"),
+            ),
             (ds.ACTOR_SQL, ("s", "lead", "addr", "a", "w")),
             (ds.BIND_NEWER_ADDRESS_SQL, ("addr", "s", 1)),
             (ds.BIND_GONE_SQL, ("addr", "w", "s")),
@@ -75,8 +84,14 @@ class IndexTests(unittest.TestCase):
                         continue
                     self.assertFalse(line.startswith("SCAN "), (sql, plan))
         seen = " ".join(plans)
-        for name in ("idx_assignments_team_current", "idx_assignments_worker", "idx_workers_address",
-                     "idx_messages_assignment_acked", "idx_tasks_team_status", "idx_tasks_assignment"):
+        for name in (
+            "idx_assignments_team_current",
+            "idx_assignments_worker",
+            "idx_workers_address",
+            "idx_messages_assignment_acked",
+            "idx_tasks_team_status",
+            "idx_tasks_assignment",
+        ):
             self.assertIn(name, seen)
 
 
