@@ -274,6 +274,23 @@ class BranchTests(PrFixture, unittest.TestCase):
 
 
 class EarlyMergeTests(PrFixture, unittest.TestCase):
+    def test_S7a_a_merged_early_ledger_task_keeps_the_checks_of_the_stored_report(self):
+        """orchestrator-engine/R2: merged-unit-completes/S7a"""
+        check = {"command": "pytest", "outcome": "passed"}
+        merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
+        self.waits(
+            [
+                self.worker_done(
+                    tests=True, report=self.report("t1", checks=[check], review_rounds=0)
+                ),
+                self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
+                merged,
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
+        self.assertEqual(self.task("t1r1")["report"]["checks"], [check])
+
     def test_S24_a_merge_during_a_fix_round_completes_the_unit_and_defers_its_open_findings(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S24"""
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
