@@ -123,6 +123,9 @@ scenarios:
   - id: S26
     when: the orchestrate shim is asked for `plan check`, `plan approve`, `plans list`, `verify`, `accept` or `status`
     then: it hands them to the member unchanged, and the agent-skills tree carries no converge skill
+  - id: S30
+    when: start-planning writes a Python oracle for a repository whose formatter is configured (ruff format in pyproject.toml)
+    then: "the oracle is formatted as that formatter formats its promoted path (`ruff format --stdin-filename <place>/<name>.py`) before `plan check` and `plan approve`, so the byte-identical copy promoted at archive passes the repository's format gate"
   - id: S27
     when: the Herdr Plans panel shows a repository's plans
     then: it reads them from `plans list --json`, shows YAML and Markdown plans with their ledger state, and parses no plan file
@@ -237,8 +240,8 @@ tickets:
     size: regular
     difficulty: simple
   - id: T9
-    delivers: "agent-skills: start-planning discovers the plan dir, writes the YAML trio by the oracle ladder, runs the oracle reviewer, `plan check`, and `plan approve` after the user's yes; orchestrate docs use decide, verify, accept and status; the converge skill, its README row and workflow step are removed"
-    satisfies: [S26]
+    delivers: "agent-skills: start-planning discovers the plan dir, writes the YAML trio by the oracle ladder, runs the oracle reviewer, `plan check`, and `plan approve` after the user's yes; orchestrate docs use decide, verify, accept and status; the converge skill, its README row and workflow step are removed; Python oracles are formatted as the repository's formatter would format their promoted path"
+    satisfies: [S26, S30]
     blocked_by: [T2, T8]
     owner: lead
     repo: ../agent-skills
@@ -278,6 +281,6 @@ tickets:
     difficulty: simple
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-10T15:22:57.380737+00:00'
-  base: 47a1722c8e05b75711401c2b4fc638beca7ff842
-  digest: ed46df64a038bcf0e6f84d4eeec54710c67c8445f1765f4edbd57336091671d5
+  at: '2026-11-10T16:08:18.456132+00:00'
+  base: ab35a74282a8e897fa0774cd6136bee25f7d7a78
+  digest: d275557af2d0e22d517f4b0fbf6a71741386704b43ac5af6da743dda7b030d61
