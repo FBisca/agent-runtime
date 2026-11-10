@@ -1,0 +1,106 @@
+schema: plan/1
+slug: agent-eval-p0
+goal: >-
+  A coding-agent run (a root session and every session it delegated to, on Claude, Codex or Pi) can be frozen into a
+  local, immutable case with its code change and run state, and a judge's score can be stored beside it in a
+  validated format, before the harness deletes the transcripts. The capture lives in its own workspace package,
+  `packages/agent-eval`, which only reads orchestrator, runtime and harness files.
+spec: docs/specs/agent-eval.md
+outcome: [S13]
+
+scenarios:
+  # T1: capture a Claude run
+  - id: S1
+    when: "`agent-eval capture --session <claude-id>` runs on a session that belongs to a Claude background job, including a job whose state resumes itself (`sessionId == resumeSessionId`) and a job forked from another (`forkParentSessionId`)"
+    then: "the case holds every session reachable through every job's resume and fork links, each session's `subagents/agent-*.jsonl` with its `.meta.json`, and each session's `tool-results/` files; the manifest lists each session with harness `claude`, role and parent"
+  - id: S2
+    when: "`--session` is repeated"
+    then: every named session and its subagents join the case, so a chain the job state cannot resolve can still be captured
+  - id: S3
+    when: a transcript or session file is captured
+    then: it is stored gzipped and the manifest records the sha256 and byte size of the original file; decompressing reproduces those bytes
+  - id: S4
+    when: "`--case <slug>` is given, or omitted, or names a case that exists"
+    then: "the case lives at `<home>/cases/<slug>/`; without it the slug is the root (oldest) session id of the first `--session` chain, even when that session is excluded; an existing case makes capture exit non-zero naming it, and nothing is written"
+  - id: S5
+    when: "`--exclude <id>` names a session of the chain"
+    then: "it is not copied and the manifest lists it under `excluded`"
+  - id: S6
+    when: a captured session's file was last modified more than 25 × 86400 seconds ago
+    then: capture prints a warning naming the session and the days left before the 30-day deletion, and still captures it; a file 25.5 days old warns, one 24.9 days old does not
+  - id: S7
+    when: "`--repo <path> --base <rev> --head <rev>` are given, or omitted"
+    then: "`changes.patch` holds `git diff --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ base..head`, independent of the user's diff config, and the manifest records the resolved shas; without them the manifest records null and no patch is written"
+  - id: S7a
+    when: the same session id is found under two Claude project directories
+    then: capture exits non-zero naming both paths, and nothing is written
+  - id: S11
+    when: capture writes
+    then: "every directory it creates, `<home>` and its parents included, is 0700 and every file 0600, and nothing is written inside a git working tree or outside `<home>` (env `AGENT_EVALS_HOME`, default `~/.local/state/agent-evals`)"
+
+  # T2: orchestrate runs, Codex, Pi
+  - id: S8
+    when: "`--orchestrate-run <slug>` is given"
+    then: "the run dir is copied into the case and every Claude, Codex or Pi session whose cwd is one of the run's ticket worktrees and which started inside the run window joins the case as a worker, with its `assignment_id` when the first prompt carries one"
+  - id: S9
+    when: a Codex session spans several rollout files
+    then: "all files sharing its `session_meta` id are captured under that one session"
+  - id: S10
+    when: a Pi session is captured
+    then: "its id is the first record's `id` and its cwd the first record's `cwd`, including directories whose names start with `--`"
+
+  # T3: labels
+  - id: S12
+    when: "`agent-eval add-label <case> --kind agent-judge <file>` reads a JSON label"
+    then: "an invalid one exits 2 naming each failing field, a valid `label/1` one is written to `labels/agent-judge.json`, and an existing label is refused"
+
+  # Outcome (T4, person)
+  - id: S13
+    when: the first case is captured
+    then: "`cases/org-chart-custodian-leaves/` holds `22e11767` with its subagent and `3eec2edb`, lists `d7fe1995` as excluded, and `labels/agent-judge.json` holds the 2026-11-09 score (FAIL, 0.64; quality 0.8, tests 0.8, efficiency 0.4, communication 0.4) with `source: transcribed`"
+    evidence:
+      human: "Felippe opens the case manifest and label and confirms the sessions, exclusion, score and 0700/0600 permissions"
+
+tickets:
+  - id: T1
+    delivers: "New workspace member `packages/agent-eval` (`agent-eval` script) with `capture` for Claude sessions: resume and fork chains, subagents with meta, tool-results, gzip + sha256, manifest `case/1`, case id, exclude, age warning, pinned git patch, duplicate-id refusal, permissions; spec `docs/specs/agent-eval.md`. Reference code: agent-fleet branch `feat/agent-eval-capture-t1` (b686d32), closed PR agent-fleet#31 and its review findings."
+    satisfies: [S1, S2, S3, S4, S5, S6, S7, S7a, S11]
+    paths:
+      - packages/agent-eval/
+      - pyproject.toml
+      - uv.lock
+      - docs/specs/agent-eval.md
+    size: regular
+    difficulty: complex
+    risk: [security]
+    evidence_waiver: "The package does not exist at base, so no baseline-fail check can collect; S11 is pinned by T1's tests and re-checked on the real case in S13's human check"
+  - id: T2
+    delivers: "Orchestrate runs: run dir copy, worker sessions by worktree cwd and run window on Claude, Codex (every rollout file of a session) and Pi"
+    satisfies: [S8, S9, S10]
+    blocked_by: [T1]
+    paths:
+      - packages/agent-eval/
+      - docs/specs/agent-eval.md
+    size: regular
+    difficulty: complex
+  - id: T3
+    delivers: "`label/1` model (Pydantic, strict, as `agent_orchestrator.contracts`) and `agent-eval add-label`"
+    satisfies: [S12]
+    blocked_by: [T1]
+    paths:
+      - packages/agent-eval/
+      - docs/specs/agent-eval.md
+    size: small
+    difficulty: simple
+  - id: T4
+    delivers: "The first case captured and the 2026-11-09 score transcribed, checked against S13 (writes under ~/.local/state/agent-evals only; changes no repo file)"
+    satisfies: [S13]
+    blocked_by: [T1, T3]
+    paths:
+      - docs/specs/agent-eval.md
+    owner: Felippe
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-10T10:20:59.657627+00:00'
+  base: 759dfc371b0a60fd710eb4cb17cfb5ff9e3a61b2
+  digest: 06d4e49db7d663ba8a55bb4a3844d4b10c3e4ed247fa0668b38930fe5962a8db
