@@ -42,10 +42,11 @@ A label/2 is the judge's whole output, and agent-eval holds it against the case:
              changes.patch, a `quote` of at most 300 characters that occurs verbatim in that file's
              decompressed text, and optionally the `line` it starts on (1-based).
   dimensions a scored dimension (1.0, 0.8, 0.4 or 0.2) has a finding with evidence; below 1.0 it has a
-             finding with `deduction: true`; a null score has label `insufficient_evidence`, a
-             rationale and no deduction.
+             finding with `deduction: true`, and every such finding has evidence; a null score has
+             label `insufficient_evidence`, a rationale and no deduction, and only a null score has it.
   score      the weighted mean (quality .35, tests .25, efficiency .25, communication .15) of the
-             scored dimensions, renormalised, rounded to 2 decimals; null only when none is scored.
+             scored dimensions, renormalised, rounded half up to 2 decimals on the exact decimal mean
+             (float round() differs on some); null only when none is scored.
   verdict    BLOCKED when `gates` is not empty, else INCOMPLETE when quality or tests is null, else
              PASS when every scored dimension and the score are at least 0.8, else FAIL.
   subject    `subject.session` is a session of the case manifest.

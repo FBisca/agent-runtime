@@ -1,6 +1,5 @@
 schema: plan/1
 slug: agent-eval-label-evidence
-Status: ARCHIVED 2026-11-10
 goal: >-
   A judge's label carries the reasons and evidence behind its score, so every deduction can be traced back to a
   verbatim line in the case it judged. `label/2` holds the score-agent rubric's whole output (verdict, gates, each
