@@ -659,12 +659,19 @@ def baseline(model, repo, base_sha, approval_digest, files):
     return runs
 
 
-def receipts_dir(repo, slug, state_dir):
-    """Where the driver keeps a plan's receipts: `<state>/<repo-key>/<slug>/receipts` (D17)."""
+def state_paths(repo, slug, state_dir):
+    """(ledger path, receipts directory) of a plan: `<state>/<repo-key>/<slug>.json` and `.../<slug>/receipts` (D17).
+
+    A ledger an older driver wrote under `<state>/<slug>.json` is imported first when this repository owns it, so
+    creating the ledger here never hides it."""
     # The driver owns the state key and imports this module, so it is imported late.
     from . import driver
 
-    return Path(state_dir).expanduser() / driver.repo_key(repo) / slug / "receipts"
+    state = Path(state_dir).expanduser()
+    keyed = state / driver.repo_key(repo)
+    ledger, run_dir = keyed / (slug + ".json"), keyed / slug
+    driver.import_old_ledger(state, repo, slug, ledger, run_dir)
+    return ledger, run_dir / "receipts"
 
 
 def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
@@ -678,6 +685,8 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
     sha = digest(identity(repo), base_sha, plan_bytes, files)
     # A refusal here leaves no file behind: the runner writes nothing until the runs are accepted.
     runs = baseline(model, repo, base_sha, sha, files)
+    # Before any write: importing an older ledger can refuse (a live driver holds it).
+    ledger, receipts = state_paths(repo, model.slug, state_dir) if runs else (None, None)
     email = subprocess.run(
         ["git", "-C", str(repo), "config", "user.email"], capture_output=True, text=True, timeout=15
     ).stdout.strip()
@@ -711,8 +720,10 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
-    for run, calibration in runs:
-        runner.persist(run, receipts_dir(repo, model.slug, state_dir), calibration)
+    if runs:
+        for run, calibration in runs:
+            runner.persist(run, receipts, calibration)
+        runner.record_receipts(ledger, [run for run, _ in runs])
     fd, temporary = tempfile.mkstemp(prefix=".approval-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:

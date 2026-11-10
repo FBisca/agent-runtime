@@ -26,6 +26,10 @@ pytestmark = pytest.mark.integration
 SECRET = "s3cr3t-value-never-logged"
 
 
+def sha256_of(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def git(repo, *args):
     done = subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True, timeout=30
@@ -446,6 +450,55 @@ class Baseline(RepoCase):
             ("baseline", approval["digest"], "FAIL"),
         )
         self.assertEqual(receipt["commit"], approval["base"])
+
+    def ledger_path(self):
+        from agent_orchestrator import driver
+
+        return self.state / driver.repo_key(self.repo) / "demo.json"
+
+    def test_S12_approve_records_each_baseline_receipts_sha256_in_the_plans_ledger(self):
+        check = junit(PASSING + FAILING, tests=2, failures=1) + "exit 1"
+        _, receipt = self.approved({"check": check, "baseline": "fail"})
+        path = next(self.state.rglob("receipts/S1.baseline.1.json"))
+        data = json.loads(self.ledger_path().read_text())
+        self.assertEqual(data["receipts"], {"S1.baseline.1": sha256_of(path)})
+        self.assertEqual((data["version"], data["tasks"]), (1, {}))
+
+    def test_S12_approve_keeps_what_the_ledger_already_holds_and_a_second_approval_adds_to_it(self):
+        ledger = self.ledger_path()
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(
+            json.dumps({"version": 1, "tasks": {"t1": {"status": "COMPLETE"}}, "lead": "L"})
+        )
+        check = junit(PASSING + FAILING, tests=2, failures=1) + "exit 1"
+        self.approved({"check": check, "baseline": "fail"})
+        self.approve()
+        data = json.loads(ledger.read_text())
+        self.assertEqual((data["tasks"], data["lead"]), ({"t1": {"status": "COMPLETE"}}, "L"))
+        self.assertEqual(sorted(data["receipts"]), ["S1.baseline.1", "S1.baseline.2"])
+        for name, digest in data["receipts"].items():
+            self.assertEqual(digest, sha256_of(next(self.state.rglob("receipts/%s.json" % name))))
+
+    def test_S12_a_ledger_under_the_old_key_is_imported_before_the_baseline_is_recorded(self):
+        old = self.state / "demo.json"
+        old.parent.mkdir(parents=True)
+        task = {"packet": {"plan": str(self.plan), "checkout": str(self.repo)}}
+        old.write_text(json.dumps({"version": 1, "tasks": {"t1": task}}))
+        check = junit(PASSING + FAILING, tests=2, failures=1) + "exit 1"
+        self.approved({"check": check, "baseline": "fail"})
+        data = json.loads(self.ledger_path().read_text())
+        self.assertEqual(data["tasks"], {"t1": task})
+        self.assertEqual(list(data["receipts"]), ["S1.baseline.1"])
+        self.assertFalse(old.exists(), "the old ledger was left behind")
+
+    def test_S12_a_refused_approval_creates_no_ledger(self):
+        self.refused({"check": "true", "baseline": "fail"}, "baseline", oracle=False)
+        self.assertFalse(self.ledger_path().exists())
+
+    def test_S12_a_plan_with_no_check_evidence_creates_no_ledger(self):
+        self.write({"human": "confirm"}, oracle=False)
+        self.assertEqual(self.approve()[0], 0)
+        self.assertFalse(self.ledger_path().exists())
 
     def test_S14_a_red_that_cannot_be_calibrated_is_approved_but_marked_so(self):
         _, receipt = self.approved({"check": "grep -q nothing a.txt", "baseline": "fail"})

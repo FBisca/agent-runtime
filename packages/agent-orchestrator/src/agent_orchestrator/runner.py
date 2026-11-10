@@ -6,6 +6,7 @@ env names the plan declares. The result is PASS, FAIL or UNKNOWN by rule (D16); 
 run never yields a receipt, because only the driver calls this module. Stdlib only.
 """
 
+import fcntl
 import hashlib
 import json
 import os
@@ -502,6 +503,57 @@ def record_in_ledger(data, run):
     """Keep a persisted receipt's sha256 in the ledger data, keyed by its file stem."""
     data.setdefault("receipts", {})[run.path.stem] = run.sha256
     return data
+
+
+LEDGER_WAIT = 10
+
+
+def record_receipts(ledger_path, runs):
+    """Record the sha256 of each persisted run's receipt in the plan's ledger file, creating the ledger when absent.
+
+    The write takes the ledger's own `<ledger>.lock` and replaces the file whole, as the driver's does, so a driver
+    updating the ledger and this call never interleave; it waits a few seconds for a busy lock. The ledger's other
+    keys are kept as they are."""
+    path = Path(ledger_path).absolute()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.is_symlink():
+        raise RunnerError("the ledger %s must not be a symlink" % path)
+    lock_fd = os.open(
+        path.with_name(path.name + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(lock_fd, "w") as lock:
+        deadline = time.monotonic() + LEDGER_WAIT
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise RunnerError(
+                        "the ledger %s is busy; retry when the other update is done" % path
+                    ) from None
+                time.sleep(0.05)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        except (OSError, ValueError) as error:
+            raise RunnerError("cannot read the ledger %s: %s" % (path, error)) from None
+        if data is None:
+            data = {"version": 1, "tasks": {}}
+        if not isinstance(data, dict) or data.get("version") != 1:
+            raise RunnerError("the ledger %s is not a version 1 ledger" % path)
+        for run in runs:
+            record_in_ledger(data, run)
+        fd, temporary = tempfile.mkstemp(prefix=".orchestrate-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
 
 def judge_baseline(receipt, expected, has_oracle):
