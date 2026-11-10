@@ -264,7 +264,9 @@ class RunTests(RunFixture, unittest.TestCase):
             self.plan.read_text(encoding="utf-8").replace("IN PROGRESS", "TO-DO"), encoding="utf-8"
         )
         self.calls_reset = len(self.calls())
-        self.run_driver()
+        self.run_driver(
+            expect=1
+        )  # the worker the first drive left idle with no report is stranded, not finished
         self.assertEqual(len(self.calls("spawn")), first_calls)
         later = self.calls()[self.calls_reset :]
         self.assertTrue(later and all(c["lead"] == "orchestrate:stored" for c in later))
@@ -276,7 +278,7 @@ class RunTests(RunFixture, unittest.TestCase):
         self.plan.write_text(
             self.plan.read_text(encoding="utf-8").replace("IN PROGRESS", "TO-DO"), encoding="utf-8"
         )
-        self.run_driver("--max-workers", "1")
+        self.run_driver("--max-workers", "1", expect=1)  # stranded: see above
         names = [c["args"]["name"] for c in self.calls("spawn")]
         self.assertEqual(names.count("demo-t1"), 1)
 
@@ -354,6 +356,19 @@ class RecoveryTests(GateFixture, unittest.TestCase):
                 self.assertEqual(self.events("orphaned"), [])
                 self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
                 self.assertEqual(self.task()["status"], "COMPLETE")
+
+    def test_S2a_a_finished_turn_with_no_landed_report_is_stranded_not_finished(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S2a"""
+        for state in ("idle", "done"):
+            with self.subTest(state=state):
+                self.setUp()
+                self.crashed(state)
+                self.run_driver(expect=1)
+                self.assertEqual(len(self.events("finish")), 1, "only the first drive finished")
+                (stranded,) = self.wakes_of("stranded")
+                self.assertIn("t1", stranded["text"])
+                self.assertIn("no report", stranded["text"])
+                self.assertEqual(self.task()["status"], "ACTIVE")
 
     def test_S2a_a_second_restart_over_the_same_stranded_task_exits_non_zero_too(self):
         """orchestrator-engine/R2: drive-restart-recovery/S2a"""

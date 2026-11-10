@@ -4020,10 +4020,9 @@ class Driver:
                 continue
             if not lost:
                 if finishing and not self.bound_here(name):
-                    # A live terminal that a dead drive left and that `wait` does not list. `wait` lists every
-                    # assignment that is not complete, a turn that ended with no report included, so a terminal at
-                    # `idle` or `done` here has a complete assignment: its report is on disk, and the gates read it.
-                    # Anything still at work, or an ended turn with no report, nothing will ever settle.
+                    # A live terminal that a dead drive left and that this run's `wait` does not list (its
+                    # assignment belongs to the dead drive's team). A turn that ended with its report on disk goes to
+                    # the gates; anything else nothing will ever settle, so the Lead is told.
                     ended = said in ("idle", "done")
                     if ended and role == "worker" and self.report_landed(task_id):
                         self.log(
@@ -4034,9 +4033,13 @@ class Driver:
                         )
                         self.mark(task_id, gate="reported")
                         acted += 1
-                    elif not ended:
+                    else:
                         self.strand(
-                            task_id, name, "live but not an assignment of this run: %s" % said
+                            task_id,
+                            name,
+                            "turn ended (%s) with no report for this attempt" % said
+                            if ended
+                            else "live but not an assignment of this run: %s" % said,
                         )
                 continue
             unit = self.unit_of(task_id)
