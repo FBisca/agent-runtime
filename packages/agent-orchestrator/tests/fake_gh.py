@@ -4,9 +4,10 @@ The driver asks `gh` through one seam (`gh_process` in `orchestrate.py`), so the
 starting a process per call. The executable the fixture puts on PATH is a wrapper around this module.
 
 Every call is logged with the plan and events as they stand. `pr view` answers `view-early.json` when scripted;
-otherwise a draft is OPEN and the next `prs.json` state is used after that PR is made ready. Each queue's last
-answer repeats. `pr checks` uses `checks-<number>.json`, falling back to `checks.json`. Draft flags are per PR.
-`pr update-branch` uses `update.json`; `run view` returns a canned failed log. A draft that is never made ready
+otherwise a draft answers the next `view-draft.json` state (OPEN when there is none) and the next `prs.json` state is
+used after that PR is made ready. Each queue's last answer repeats. `pr checks` uses `checks-ready.json` while the PR
+is ready, when scripted, then `checks-<number>.json`, falling back to `checks.json`. Draft flags are per PR.
+`pr ready --undo` uses `undo.json`, `pr update-branch` uses `update.json`; `run view` returns a canned failed log. A draft that is never made ready
 raises after 100 polls, exposing a missing transition without hanging the suite.
 """
 
@@ -58,12 +59,17 @@ def process(argv, timeout=None):
     ready = os.path.join(home, "ready-%s.flag" % number)
     if argv[:2] == ["pr", "checks"]:
         name = "checks-%s.json" % number
-        if not os.path.exists(os.path.join(home, name)):
+        if os.path.exists(ready) and os.path.exists(os.path.join(home, "checks-ready.json")):
+            name = "checks-ready.json"
+        elif not os.path.exists(os.path.join(home, name)):
             name = "checks.json"
         code, out, err = (pop(home, name, [0, "[]", ""]) + ["", ""])[:3]
         return Completed(argv, code, out, err)
     if argv[:2] == ["pr", "ready"]:
         if "--undo" in argv:
+            code, err = (pop(home, "undo.json", [0, ""]) + [""])[:2]
+            if code:
+                return Completed(argv, code, "", err)
             if os.path.exists(ready):
                 os.remove(ready)
         else:
@@ -89,7 +95,7 @@ def process(argv, timeout=None):
                 if polls >= 100:
                     raise RuntimeError("fake gh: PR %s stayed draft for 100 polls" % number)
                 count.write(".")
-            state = "OPEN"
+            state = pop(home, "view-draft.json", "OPEN")
     row = {"state": state} if isinstance(state, str) else dict(state)
     row.setdefault("isDraft", not os.path.exists(ready))
     row.setdefault("mergeStateStatus", "CLEAN")
