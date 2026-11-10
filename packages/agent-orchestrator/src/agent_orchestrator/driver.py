@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import contracts, events, evidence, routes
+from . import contracts, events, evidence, routes, verify
 from . import plan as yaml_plan
 from .plan import PlanError
 from .runtime_client import CliRuntimeClient
@@ -543,6 +543,7 @@ CONTRACT = """# Contract for every task in this run
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
+- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node.
 - COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
@@ -966,7 +967,7 @@ def describe(item):
     """The lines a fix round shows for one findings item (text lines of contract 1 are shown as they are)."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci", "conflict"):
+    if item.get("source") in ("converge", "verify", "ci", "conflict"):
         return "%s %s: %s (exit %s of `%s`; full log %s)" % (
             item["source"],
             item["check"],
@@ -1000,7 +1001,7 @@ def short(item):
     """A finding in a few words, for a request's reason and a ledger `remaining` line."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci"):
+    if item.get("source") in ("converge", "verify", "ci"):
         return (
             item["excerpt"].splitlines()[0]
             if item["excerpt"]
@@ -1132,6 +1133,8 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
+        self.model = None  # the approved plan/1 model of a YAML plan
+        self.outcome_logged = False
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1175,6 +1178,9 @@ class Driver:
                 repo=self.repo,
                 state_dir=self.args.state_dir,
                 require_approval=True,
+            )
+            self.model = (
+                model  # verify gates a ticket against the approved plan, not the legacy table
             )
             ledger_path = Path(self.args.state_dir).expanduser() / (model.slug + ".json")
             statuses = {}
@@ -1988,16 +1994,16 @@ class Driver:
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
             return self.chase_responses(task_id, path, missing)
-        verdict, lines = self.converge(task_id, task["packet"])
+        verdict, lines = self.gate(task_id, task["packet"], report)
         if verdict == "error":
-            return self.request(task_id, "converge", lines[0])
+            return self.request(task_id, self.gate_name(), lines[0])
         try:
             if verdict == "FAIL":
-                return self.fail_gate(task_id, report, "converge", lines)
+                return self.fail_gate(task_id, report, lines[0]["source"], lines)
             self.record_report(task_id, report)
         except ValueError as error:
             return self.request(task_id, "report", "the ledger rejected the report: %s" % error)
-        # The archive is gated by converge --final alone. Every other report, a fix round of any source included, goes to
+        # The archive is gated by the converge --final path alone. Every other report, a fix round of any source included, goes to
         # the unit's reviewer: a delta re-review once the unit has been reviewed, else the first review.
         if task["packet"]["unit"] == ARCHIVE:
             return self.mark(task_id, gate="ready-for-ci")
@@ -2031,68 +2037,61 @@ class Driver:
         assignment_id = self.resume_for_responses(task, task_id, path, missing)
         self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
 
-    def converge(self, task_id, packet):
-        """Run converge for the unit's ticket: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
+    def gate_name(self):
+        """The gate that reads a plan: verify for a YAML plan, converge (verify's legacy path) for a Markdown one."""
+        return "verify" if self.plan_path.name.endswith(".plan.yaml") else "converge"
+
+    def gate(self, task_id, packet, report):
+        """The gate for a unit's report: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
         if self.plan_path.name.endswith(".plan.yaml"):
-            reason = "YAML plan: legacy converge reads Markdown; verify replaces this gate in a later ticket"
+            # The Markdown converge reads no YAML plan; verify's invariants gate a ticket. The archive's gate is its own.
+            reason = "YAML plan: verify gates this report; the Markdown converge does not run"
             self.log("converge-skipped", task=task_id, reason=reason)
             event(reason)
-            return "PASS", []
+            if packet["unit"] == ARCHIVE:
+                return "PASS", []
+            return self.verify_ticket(task_id, packet, report)
         if packet["unit"] == ARCHIVE:
             # The archive branch holds the plan with Status ARCHIVED; fall back to the driver's copy if it is untracked.
             copy = Path(packet["checkout"]) / self.plan_rel()
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(copy if copy.exists() else self.plan_path),
-                "--final",
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
+            plan, ticket = (copy if copy.exists() else self.plan_path), None
         else:
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(self.plan_path),
-                "--ticket",
-                packet["unit"].upper(),
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=300)
-        lines = [line for line in result.stdout.splitlines() if line.startswith("FAIL")]
-        if result.returncode == 0:
+            plan, ticket = self.plan_path, packet["unit"]
+        return verify.legacy_gate(
+            self.args.converge,
+            plan,
+            packet["checkout"],
+            self.args.base,
+            lambda: next_path(self.run_dir / task_id, "converge", ".log")[0],
+            ticket=ticket,
+        )
+
+    def verify_ticket(self, task_id, packet, report):
+        """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
+        ticket = packet["unit"].upper()
+        try:
+            findings = verify.invariants(
+                self.model,
+                ticket,
+                report,
+                repo=packet["checkout"],
+                base=self.args.base,
+                plan_rel=self.plan_rel(),
+            )
+        except verify.VerifyError as error:
+            return "error", [str(error)[:500]]
+        if not findings:
             return "PASS", []
-        if result.returncode == 1 and lines:
-            log = next_path(self.run_dir / task_id, "converge", ".log")[0]
-            log.write_text(result.stdout, encoding="utf-8")
-            command = " ".join(shlex.quote(part) for part in argv)
-            return "FAIL", [
-                {
-                    "id": "C%d" % number,
-                    "kind": "blocking",
-                    "source": "converge",
-                    "check": (
-                        (re.match(r"FAIL ([^:]+):", line) or [None, "converge"])[1] or "converge"
-                    ).strip(),
-                    "command": command,
-                    "exit": result.returncode,
-                    "excerpt": line,
-                    "log_path": str(log),
-                }
-                for number, line in enumerate(lines, 1)
-            ]
-        return "error", [
-            (
-                result.stderr.strip()
-                or result.stdout.strip()
-                or "converge exited %d" % result.returncode
-            )[:500]
-        ]
+        log = next_path(self.run_dir / task_id, "verify", ".log")[0]
+        log.write_text(
+            "".join("FAIL %(check)s: %(excerpt)s\n" % f for f in findings), encoding="utf-8"
+        )
+        command = "verify %s --repo %s --base %s" % (
+            ticket,
+            shlex.quote(str(packet["checkout"])),
+            shlex.quote(self.args.base),
+        )
+        return "FAIL", verify.items(findings, command, log)
 
     def fail_gate(self, task_id, report, source, items, checks_run=(), answer_ids=(), rebase=False):
         """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure."""
@@ -3783,6 +3782,10 @@ class Driver:
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
             return 0
+        if not self.model and not self.outcome_logged:
+            # A Markdown plan's outcome is never run: it completes unverified and cannot be accepted.
+            self.outcome_logged = True
+            self.log("plan-outcome", outcome=verify.legacy_outcome(True))
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
         if held and held["runtime_id"]:

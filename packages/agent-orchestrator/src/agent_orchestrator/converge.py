@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Deterministic converge gate: four checks on a repo against an approved plan.
 
+This is verify's legacy path, for a Markdown plan still in flight (see verify.py). A YAML plan never reaches it:
+verify's scope, integrity and covers invariants gate its tickets. It goes away with the Markdown reader.
+
 Usage: converge.py <plan.md> (--ticket T<n> | --final) [--base <ref>] [--repo <path>] [--specs docs/specs]
 One of --ticket / --final is required. --base defaults to the ref origin/HEAD points to, else `main`.
 
