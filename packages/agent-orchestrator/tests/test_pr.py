@@ -6,6 +6,7 @@ import json
 import unittest
 from unittest import mock
 
+import fake_gh
 import pytest
 from fixtures import (
     assignment,
@@ -145,6 +146,50 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertEqual((item["check"], item["kind"], item["exit"]), ("unit tests", "blocking", 1))
         self.assertIn("FAILED STEP LOG TAIL for run 77", item["excerpt"])
         self.assertEqual(self.gh_calls("run", "view")[0], ["run", "view", "77", "--log-failed"])
+
+    def test_S10_several_failing_checks_with_long_logs_carry_only_their_own_capped_excerpt(self):
+        """orchestrator-engine/R2: merged-unit-completes/S10"""
+
+        def job(name, marker):
+            return "\n".join(
+                "%s\tRun step\t2026-11-10T10:00:00Z %s line %d" % (name, marker, number)
+                for number in range(4000)
+            )
+
+        run_log = job("unit tests", "UNIT") + "\n" + job("lint", "LINT")
+        real = fake_gh.process
+
+        def answer(argv, timeout=None):
+            if argv[:2] == ["run", "view"]:
+                return fake_gh.Completed(argv, 0, run_log)
+            return real(argv, timeout=timeout)
+
+        self.checks([("fail", "unit tests", "lint"), "green"])
+        again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
+        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
+        self.waits(
+            [self.worker_done(tests=True), self.reviewer_done(), self.worker_done("t1r1"), again]
+        )
+        with mock.patch.object(fake_gh, "process", side_effect=answer):
+            self.run_driver()
+        findings_path = self.run_dir / "t1r1" / "findings.json"
+        self.assertLess(findings_path.stat().st_size, 64 * 1024)
+        items = {
+            item["check"]: item
+            for item in json.loads(findings_path.read_text(encoding="utf-8"))["items"]
+        }
+        self.assertEqual(set(items), {"unit tests", "lint"})
+        self.assertNotEqual(items["unit tests"]["log_path"], items["lint"]["log_path"])
+        for check, marker, other in (("unit tests", "UNIT", "LINT"), ("lint", "LINT", "UNIT")):
+            item = items[check]
+            self.assertIn(marker + " line 3999", item["excerpt"])
+            self.assertNotIn(other, item["excerpt"])
+            self.assertLess(len(item["excerpt"]), 4096)
+            with open(item["log_path"], encoding="utf-8") as log:
+                full = log.read()
+            self.assertIn(marker + " line 0\n", full)
+            self.assertIn(marker + " line 3999", full)
+            self.assertNotIn(other, full)
 
     def test_S21_a_second_unit_goes_on_while_the_first_waits_for_its_checks(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S21"""
