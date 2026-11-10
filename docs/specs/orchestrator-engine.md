@@ -78,6 +78,18 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R60** WHEN `wait` reports a unit's agent with `runtime_state: working`, THEN the idle tick does not count it and no request is raised, until it has been `working` for `--working-minutes`, when the request says how long. (from drive-restart-recovery/S8)
 - **R61** WHEN a unit's signature is unchanged for two ticks and its agent is not reported `working` (CI waiting, or no runtime observation), THEN the Lead is asked, as today. (from drive-restart-recovery/S8a)
 
+- **R62** WHEN an agent's turn ends while the runtime still lists its assignment as working (`runtime_state` idle or
+  done), THEN it is a live agent, not an exit: a reviewer advances only on its own `complete`, even with a valid
+  review file on disk; a worker stays pending, except that a valid report for its task already on disk advances it as
+  before; an answerer stays working. None is resumed, and none replaces its assignment. Only the timed idle watchdog
+  (baseline, then two unchanged ticks) asks the Lead: one `idle` request and one decision wake, naming the agent, the
+  file it owes, how long it has been quiet and `decide <plan> <unit> retry | answer | skip`. A failed, exited or
+  gone agent, a restart orphan, `unreported`/`error`, and a `blocked` or `decision` report are still handled at once.
+  The Lead's decision on such a unit (other than skip or mark blocked) fails an answers record still `working`, since the hand-over replaces that assignment. A `complete` that announces a file the driver cannot read keeps the R18 grace and capped recovery, and each
+  recovery message names the file to write or repair and says to report complete under the current assignment. The
+  reviewer brief says the reviewer may wait on background jobs, that ending a turn does not finish the review, and
+  that it writes the review after those jobs finish and then reports complete with the brief's assignment id. A
+  reviewer `complete` after its unit's request is open leaves the request open. (from orchestrator-silent-idle/S1–S14)
 
 ## Coverage
 
@@ -93,6 +105,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | S1 | R15 | `packages/agent-orchestrator/tests/test_run.py`: `test_S1_the_unit_brief_names_the_task_id_the_report_must_carry` |
 | S1, S2 | R17 | `packages/agent-orchestrator/tests/test_run_lock.py`: `test_S1_a_second_driver_of_the_same_plan_is_refused`, `test_S1_the_lock_holds_whatever_the_state_dir`, `test_S2_another_plan_in_the_same_repository_runs`, `test_S2_a_finished_run_releases_the_lock_and_names_itself` |
 | S1, S2, S3 | R18 | `packages/agent-orchestrator/tests/test_payload.py`: `test_S1_a_file_that_lands_inside_the_grace_is_read`, `test_S1_a_file_that_never_lands_ends_the_wait_at_the_deadline`; `packages/agent-orchestrator/tests/test_gates.py`: `test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead`, `test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead` |
+| S1–S14 | R62 | `packages/agent-orchestrator/tests/test_gates.py`: `SilentReviewerTests` (S1–S4, S9–S13); `packages/agent-orchestrator/tests/test_report_timing.py`: `test_S5_*`, `test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today`; `packages/agent-orchestrator/tests/test_decider.py`: `test_S5_a_worker_whose_turn_ended_idle_or_done_is_one_idle_request_from_the_watchdog`, `test_S11_blocked_and_decision_reports_are_handled_at_once`; `packages/agent-orchestrator/tests/test_envelope.py`: `test_S7_*`, `test_S8_*` (including the Lead's `answer` after an idle answerer); `packages/agent-orchestrator/tests/test_pr.py`: `test_S14_a_unit_waiting_for_its_merge_is_never_idle` |
 | S1 | R19 | `packages/agent-orchestrator/tests/test_routes_driver.py`: `test_S1_a_run_with_no_route_config_keeps_the_legacy_model_decisions`, `test_S1_a_legacy_run_says_the_legacy_config_is_deprecated`; `packages/agent-orchestrator/tests/test_routes.py`: `test_S1_the_legacy_table_answers_the_same_models_as_before` |
 | S2 | R20 | `packages/agent-orchestrator/tests/test_route_selection_run.py`: `test_S2_the_configured_backend_model_and_effort_are_chosen`, `test_S2_the_selected_route_is_logged_in_the_route_ledger`, `test_S2_the_selected_route_is_logged_in_the_event_log`, `test_S2_the_repository_policy_config_answers_when_no_file_is_named`, `test_S2_the_user_default_config_answers_when_no_other_config_is_named`, `test_S2_the_named_config_wins_over_the_repository_policy`, `test_S2_an_explicit_override_wins_over_the_config` |
 | S3 | R4 | the route refusal tests, listed under R4 below |
@@ -154,7 +167,7 @@ suite runs here, against the member, and the member answers the way the engine a
   `test_S4_a_run_without_a_notify_terminal_sends_nothing`, `test_S6_a_failed_send_is_logged_and_the_run_goes_on`
 - `packages/agent-orchestrator/tests/test_launch.py`: `test_S7_the_run_is_told_the_launching_terminal_to_alert`,
   `test_S7_a_run_launched_outside_a_terminal_alerts_no_one`
-- `packages/agent-orchestrator/tests/test_pr.py`: `test_S8_a_unit_waiting_for_its_merge_is_never_idle`
+- `packages/agent-orchestrator/tests/test_pr.py`: `test_S14_a_unit_waiting_for_its_merge_is_never_idle`
 
 ### R22–R37 — a merged unit always completes
 
