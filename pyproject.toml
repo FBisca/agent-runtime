@@ -11,7 +11,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["packages/agent-runtime", "packages/agent-orchestrator"]
+members = ["packages/agent-runtime", "packages/agent-orchestrator", "packages/agent-eval"]
 
 [dependency-groups]
 dev = [
@@ -27,7 +27,7 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests", "packages/agent-orchestrator/tests"]
+testpaths = ["tests", "packages/agent-orchestrator/tests", "packages/agent-eval/tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
 markers = [
