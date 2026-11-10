@@ -2,11 +2,13 @@
 
 import json
 import os
+import shutil
 import sys
 import unittest
 from unittest import mock
 
 import pytest
+from agent_orchestrator import driver
 from fixtures import load_script, plan_text, recorded_idles, report_wait, resume_id
 from test_gates import MAJOR, GateFixture
 
@@ -154,6 +156,68 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertIn("pytest", line[0])  # the reason names the failed check
         self.assertFalse((self.run_dir / "t1" / "request.json").exists())
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review", "demo-t2"])
+
+    def on_merged_view(self, act):
+        """Run `act` when the driver first reads the PR as MERGED: the world as it is at the merge, not before."""
+        real, fired = self.gh_process, []
+
+        def process(argv, timeout=None):
+            result = real(argv, timeout=timeout)
+            if argv[:2] == ["pr", "view"] and "MERGED" in result.stdout and not fired:
+                fired.append(1)
+                act()
+            return result
+
+        self.gh_process = process
+
+    def test_S8_a_merged_pr_completes_when_the_checkout_is_gone(self):
+        """orchestrator-engine/R2: merged-unit-completes/S8"""
+        gone = str(self.worktree)
+        self.prs(["OPEN", "MERGED"])
+        self.on_merged_view(lambda: shutil.rmtree(gone))
+        self.waits([self.worker_done(tests=True), self.reviewer_done()])
+        self.run_driver()
+        task = self.task()
+        self.assertEqual(task["status"], "COMPLETE")
+        self.assertIsNone(task["checkout_at_checkpoint"])
+        logged = [e for e in self.events() if gone in json.dumps(e) and "checkout" in json.dumps(e)]
+        self.assertTrue(logged, "no log line names the missing checkout")
+        self.assertNotEqual(task["gate"], "awaiting-merge")
+
+    def test_S9_cleanup_keeps_a_worktree_a_sibling_under_another_worker_still_uses(self):
+        """orchestrator-engine/R2: merged-unit-completes/S9"""
+
+        def edit_ledger(status):
+            path = self.state_dir / "demo.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if "t9" not in data["tasks"]:
+                sibling = json.loads(json.dumps(data["tasks"]["t1"]))
+                sibling["packet"].update(task_id="t9", worker="demo-other", unit="t9")
+                data["tasks"]["t9"] = sibling
+            data["tasks"]["t9"]["status"] = status
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+        # the sibling exists only while cleanup decides, so the run can still end
+        real_stop, real_mark = driver.Driver.stop_unit_agents, driver.Driver.mark
+
+        def stop(this, unit, reason):
+            real_stop(this, unit, reason)
+            edit_ledger("ACTIVE")
+
+        def mark(this, task_id, **fields):
+            real_mark(this, task_id, **fields)
+            if fields.get("gate") == "done":
+                edit_ledger("RELEASED")
+
+        self.prs(["OPEN", "MERGED"])
+        self.waits([self.worker_committed(), self.reviewer_done()])
+        with (
+            mock.patch.object(driver.Driver, "stop_unit_agents", stop),
+            mock.patch.object(driver.Driver, "mark", mark),
+        ):
+            self.run_driver()
+        self.assertTrue(self.worktree.exists())
+        self.assertIn("kept", self.task()["cleanup"])
 
     def test_S10_a_clean_pushed_checkout_is_stopped_and_removed_but_the_branch_stays(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S10"""

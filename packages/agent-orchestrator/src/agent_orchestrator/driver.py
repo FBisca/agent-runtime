@@ -280,7 +280,16 @@ def normalise_check(command):
     return " ".join(tokens)
 
 
-def checkpoint(data, task_id, report):
+def merged_snapshot(path):
+    """The checkout's snapshot, or None when the tree is gone: after a merge the snapshot is evidence, not a
+    precondition."""
+    try:
+        return checkout_snapshot(path)
+    except FileNotFoundError:
+        return None
+
+
+def checkpoint(data, task_id, report, merged=False):
     task = data["tasks"][task_id]
     require(isinstance(report, dict), "report must be an object")
     require(task["status"] not in ("COMPLETE", "RELEASED"), "assignment is closed")
@@ -336,7 +345,10 @@ def checkpoint(data, task_id, report):
         status=status,
         report=report,
         updated_at=now(),
-        checkout_at_checkpoint=checkout_snapshot(task["packet"]["checkout"]),
+        # A live worker with no tree is a real fault, so only the merge path tolerates a missing one.
+        checkout_at_checkpoint=(merged_snapshot if merged else checkout_snapshot)(
+            task["packet"]["checkout"]
+        ),
     )
     return task
 
@@ -351,7 +363,7 @@ def settle_merged(data, task_id, report):
         status="COMPLETE",
         report=report,
         updated_at=now(),
-        checkout_at_checkpoint=checkout_snapshot(task["packet"]["checkout"]),
+        checkout_at_checkpoint=merged_snapshot(task["packet"]["checkout"]),
     )
     return task
 
@@ -2788,10 +2800,14 @@ class Driver:
         not hold it back: the unit completes with the checks as reported, deferred.md says what went unverified, and no
         Lead is asked. False when the ledger refuses for another reason (a closed task); the Lead is asked then."""
         unverified = None
+        gone = self.task(task_id)["packet"]["checkout"]
+        if not Path(gone).exists():
+            self.log("merged-checkout-missing", task=task_id, checkout=gone)
+            event("%s merged, but its checkout %s no longer exists" % (task_id, gone))
         try:
             with self.book() as data:
                 try:
-                    checkpoint(data, task_id, report)
+                    checkpoint(data, task_id, report, merged=True)
                 except ValueError as error:
                     unverified = " ".join(str(error).split())
                     settle_merged(data, task_id, report)
@@ -2906,7 +2922,10 @@ class Driver:
             busy = [
                 t["packet"]["task_id"]
                 for t in data["tasks"].values()
-                if t["packet"]["worker"] == packet["worker"]
+                if (
+                    t["packet"]["worker"] == packet["worker"]
+                    or t["packet"]["checkout"] == packet["checkout"]
+                )
                 and t["status"] not in ("COMPLETE", "RELEASED")
             ]
         if busy:
