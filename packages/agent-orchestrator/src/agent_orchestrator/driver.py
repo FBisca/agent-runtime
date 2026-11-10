@@ -291,6 +291,35 @@ def merged_snapshot(path):
         return None
 
 
+def require_completable(task, report):
+    """The rules a report meets to be COMPLETE, apart from the ledger's own state. Raises ValueError naming the first
+    that fails; `checkpoint` and the report gate share it, so a report is refused for the same reason in both."""
+    # Total over a schema-valid report: the report gate runs before the ledger's structural checks, which
+    # turn a malformed `remaining` or check into the Lead request they always did.
+    checks = [c for c in report.get("checks") or [] if isinstance(c, dict)]
+    require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
+    require(not report.get("remaining"), "complete result has remaining work")
+    failed = [str(c.get("command")) for c in checks if c.get("outcome") == "failed"]
+    require(not failed, "complete result has failed checks: " + ", ".join(failed))
+    required = {normalise_check(c): c for c in task["packet"]["checks"]}
+    passed = {
+        normalise_check(c["command"])
+        for c in checks
+        if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
+    }
+    missing = [command for key, command in required.items() if key not in passed]
+    require(
+        not missing,
+        "required checks are not passed: " + ", ".join(sorted(missing)),
+    )
+    if routed(task["packet"]):
+        require("review_rounds" in report, "a routed task needs review_rounds")
+        require(
+            isinstance(report.get("usage"), str) and report["usage"].strip(),
+            "a routed task needs usage (the runtime's metric line, or unknown)",
+        )
+
+
 def checkpoint(data, task_id, report, merged=False):
     task = data["tasks"][task_id]
     require(isinstance(report, dict), "report must be an object")
@@ -317,26 +346,7 @@ def checkpoint(data, task_id, report, merged=False):
     )
     if status == "COMPLETE":
         require(task["runtime_id"], "bind the runtime agent before completion")
-        require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
-        require(not report["remaining"], "complete result has remaining work")
-        require(
-            all(c["outcome"] != "failed" for c in checks),
-            "complete result has failed checks: "
-            + ", ".join(c["command"] for c in checks if c["outcome"] == "failed"),
-        )
-        required = {normalise_check(c): c for c in task["packet"]["checks"]}
-        passed = {normalise_check(c["command"]) for c in checks if c["outcome"] == "passed"}
-        missing = [command for key, command in required.items() if key not in passed]
-        require(
-            not missing,
-            "required checks are not passed: " + ", ".join(sorted(missing)),
-        )
-        if routed(task["packet"]):
-            require("review_rounds" in report, "a routed task needs review_rounds")
-            require(
-                isinstance(report.get("usage"), str) and report["usage"].strip(),
-                "a routed task needs usage (the runtime's metric line, or unknown)",
-            )
+        require_completable(task, report)
         task["finished_at"] = now()
     elif status == "BLOCKED":
         require(
@@ -1988,6 +1998,28 @@ class Driver:
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
             return self.chase_responses(task_id, path, missing)
+        # The merge completes the unit by the same rules, so a report they refuse is the worker's to fix now, while
+        # it can still act: a fix round, not a Lead request, until the cap.
+        try:
+            require_completable(task, dict(report, review_rounds=0))
+        except ValueError as error:
+            return self.fail_gate(
+                task_id,
+                report,
+                "converge",
+                [
+                    {
+                        "id": "R1",
+                        "kind": "blocking",
+                        "source": "converge",
+                        "check": "report",
+                        "command": "the COMPLETE rules for %s" % path.name,
+                        "exit": 1,
+                        "excerpt": str(error),
+                        "log_path": str(path),
+                    }
+                ],
+            )
         verdict, lines = self.converge(task_id, task["packet"])
         if verdict == "error":
             return self.request(task_id, "converge", lines[0])

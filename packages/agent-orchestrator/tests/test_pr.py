@@ -334,21 +334,21 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
     ):
         """orchestrator-engine/R2: merged-unit-completes/S7"""
         self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
-        merged = self.flip(
-            self.working("demo-t1-review", id=spawn_id("demo-t1-review")),
-            "view-early.json",
-            ["MERGED"],
-        )
+        # The report omits the gate, so the report-time refusal sends t1 into a fix round before the merge.
+        merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
         self.waits([self.worker_done(tests=True), merged])
         self.run_driver("--gate", "scripts/checks.sh")
-        self.assertEqual(self.task()["status"], "COMPLETE")
+        self.assertEqual(self.task("t1")["status"], "RELEASED")
+        self.assertEqual(
+            self.task("t1r1")["status"], "COMPLETE"
+        )  # a merge completes the newest attempt
         self.assertIn("| COMPLETE 2026-", self.plan.read_text(encoding="utf-8"))
         deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
         line = [x for x in deferred.splitlines() if "[merged-unverified]" in x]
         self.assertEqual(len(line), 1, deferred)
-        self.assertTrue(line[0].startswith("- [merged-unverified] t1: "), line[0])
+        self.assertTrue(line[0].startswith("- [merged-unverified] t1r1: "), line[0])
         self.assertIn("scripts/checks.sh", line[0])
-        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
+        self.assertFalse((self.run_dir / "t1r1" / "request.json").exists())
         self.assertIn("demo-t2", self.spawned())
 
     def test_S24_a_merge_while_a_request_is_open_resolves_it_and_completes_the_unit(self):
