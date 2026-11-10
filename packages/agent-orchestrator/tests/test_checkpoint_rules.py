@@ -14,7 +14,7 @@ class CheckpointRulesTests(unittest.TestCase):
     def setUp(self):
         # checkout_snapshot reads git; these rules are about the ledger, not the tree.
         patcher = mock.patch.object(app, "checkout_snapshot", return_value={"head": "abc"})
-        patcher.start()
+        self.snapshot = patcher.start()
         self.addCleanup(patcher.stop)
         self.packet = {
             "task_id": "validation",
@@ -124,6 +124,16 @@ class CheckpointRulesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             app.checkpoint(self.data, "validation", self.report(checks))
         self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
+
+    def test_S8a_a_partial_checkpoint_raises_when_the_checkout_is_missing(self):
+        """orchestrator-engine/R2: merged-unit-completes/S8a"""
+        self.snapshot.side_effect = FileNotFoundError("/nonexistent")
+        with self.assertRaises(FileNotFoundError):
+            app.checkpoint(
+                self.data,
+                "validation",
+                self.report([], status="PARTIAL", remaining=["more work"]),
+            )
 
     def test_contract_states_the_check_rules_and_normalisation(self):
         """orchestrator-engine/R2"""
