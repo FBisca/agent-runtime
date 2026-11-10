@@ -529,6 +529,66 @@ class RecoveryTests(GateFixture, unittest.TestCase):
                     [c for c in self.calls()[before:] if c["tool"] in ("spawn", "resume")], []
                 )
 
+    def release(self, task_id="t1"):
+        data = self.ledger()
+        data["tasks"][task_id]["status"] = "RELEASED"
+        (self.state_dir / "demo.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def test_S4_a_released_unit_whose_worker_is_gone_is_dispatchable_from_in_progress(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S4"""
+        self.crashed()
+        self.release()
+        self.assertIn("| IN PROGRESS |", self.plan.read_text(encoding="utf-8"))
+        self.run_driver()
+        self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])
+        tasks = self.ledger()["tasks"]
+        self.assertEqual((tasks["t1"]["status"], tasks["t1r1"]["status"]), ("RELEASED", "ACTIVE"))
+        self.assertEqual(tasks["t1r1"]["packet"]["unit"], "t1")
+
+    def test_S4_a_released_unit_whose_worker_is_still_live_is_not_dispatched(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S4"""
+        self.crashed("working")
+        self.release()
+        self.run_driver()
+        self.assertEqual(self.spawned(), ["demo-t1"])
+
+    def test_S4_a_cell_with_no_attempt_in_the_ledger_stays_a_lock(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S4"""
+        self.plan.write_text(
+            self.plan.read_text(encoding="utf-8").replace("TO-DO", "IN PROGRESS"), encoding="utf-8"
+        )
+        self.run_driver()
+        self.assertEqual(self.spawned(), [])
+
+    def test_S5_a_failed_dispatch_raises_one_wake_and_the_lead_s_todo_retries_it(self):
+        """orchestrator-engine/R5: drive-restart-recovery/S5"""
+        self.refuse(["demo-t1"])
+        self.run_driver(expect=1)
+        (wake,) = self.wakes_of("not-dispatched")
+        self.assertEqual(wake["unit"], "t1")
+        self.assertIn("T1", wake["text"])
+        self.assertIn("TO-DO", wake["text"])
+        self.run_driver(expect=1)
+        self.assertEqual(len(self.wakes_of("not-dispatched")), 1)  # once per ticket and reason
+
+    def test_S5_the_lead_setting_the_cell_to_todo_takes_the_ticket_out_of_the_failed_set(self):
+        """orchestrator-engine/R5: drive-restart-recovery/S5"""
+        import re
+
+        self.refuse(["demo-t1"])
+        plan_path = str(self.plan)
+
+        def to_todo(text):
+            return re.sub(r"\| TO-DO[^|]*\|\s*$", "| TO-DO |", text, flags=re.M)
+
+        self.run_driver(expect=1)
+        cell = self.plan.read_text(encoding="utf-8")
+        self.assertIn("not dispatched", cell)
+        self.refuse([])
+        self.waits([wait_result(write=[[plan_path, to_todo(cell)]])])
+        self.run_driver()
+        self.assertEqual(self.task()["status"], "ACTIVE")
+
 
 if __name__ == "__main__":
     unittest.main()

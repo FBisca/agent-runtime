@@ -613,9 +613,12 @@ def is_agent(ticket):
     return ticket["Owner"].strip().lower() == "agent"
 
 
-def ready(ticket, by_id):
-    """A TO-DO ticket whose blockers are all COMPLETE."""
-    return ticket["Status"].strip().upper().startswith("TO-DO") and all(
+def ready(ticket, by_id, restartable=False):
+    """A TO-DO ticket (or an IN PROGRESS one with nothing alive behind it: `restartable`) whose blockers are all
+    COMPLETE."""
+    return (
+        restartable or ticket["Status"].strip().upper().startswith("TO-DO")
+    ) and all(
         is_done(by_id[b])
         for b in re.split(r"[,\s]+", ticket["Blocked by"].strip())
         if b and b.lower() != "none"
@@ -3955,24 +3958,71 @@ class Driver:
         count = 0
         for ticket in plan["tickets"]:
             task_id = ticket["#"].lower()
-            if not is_agent(ticket) or task_id in self.failed or not ready(ticket, by_id):
+            if not is_agent(ticket):
+                continue
+            if task_id in self.failed and ticket["Status"].strip().upper() == "TO-DO":
+                self.failed.discard(task_id)  # the Lead's answer to the wake: try it again
+            if task_id in self.failed:
                 continue
             held = tasks.get(task_id)
+            new_id = None
+            if ready(ticket, by_id, self.restartable(ticket, tasks)):
+                attempts = [t for t in tasks.values() if t["packet"].get("unit") == task_id]
+                if attempts and all(t["status"] == "RELEASED" for t in attempts):
+                    # every attempt is closed, and a closed id is never dispatched again
+                    new_id = next(
+                        "%sr%d" % (task_id, n)
+                        for n in range(1, 1000)
+                        if "%sr%d" % (task_id, n) not in tasks
+                    )
+                    held = None
+            else:
+                continue
             if held and held["runtime_id"]:
                 continue
             if not held and unfinished >= self.args.max_workers:
                 continue
             try:
-                self.dispatch(plan, ticket)
+                self.dispatch(plan, ticket, new_id)
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.failed.add(task_id)
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error)
                 unfinished += 0 if held else 1
                 continue
             unfinished += 0 if held else 1
             count += 1
         return count
+
+    def restartable(self, ticket, tasks):
+        """True when a ticket whose cell reads `IN PROGRESS` holds no live work: the ledger has an attempt of its
+        unit, every one is RELEASED, and the runtime answers definitively that its worker is not live. A cell with
+        no attempt in the ledger belongs to some other run and stays a lock; a failed lookup is not an answer."""
+        if not ticket["Status"].strip().upper().startswith("IN PROGRESS"):
+            return False
+        unit = ticket["#"].lower()
+        attempts = [t for t in tasks.values() if t["packet"].get("unit") == unit]
+        if not attempts or any(t["status"] != "RELEASED" for t in attempts):
+            return False
+        try:
+            return self.agent_gone(worker_name(self.slug, ticket["#"][1:]))[0]
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            event("%s: cannot tell whether its worker is live: %s" % (ticket["#"], error))
+            return False
+
+    def not_dispatched(self, ticket, error, what="not dispatched"):
+        """A dispatch that cannot happen asks the Lead, once per ticket and reason; the cell keeps the reason and
+        the ticket stays out of the rounds until the Lead sets its Status to TO-DO."""
+        task_id = ticket["#"].lower()
+        self.failed.add(task_id)
+        self.errors.append("%s: %s" % (ticket["#"], error))
+        event("%s %s: %s" % (ticket["#"], what, error))
+        self.write_status(ticket["#"], "TO-DO · %s: %s" % (what, cell(error, 120)))
+        self.wake(
+            "not-dispatched",
+            task_id,
+            "%s %s: %s -> fix that, then set the ticket's Status to TO-DO and the next round tries it again"
+            % (ticket["#"], what, cell(error, 300)),
+            key="%s:%s" % (task_id, error),
+        )
 
     # ---- reconciliation: an open task whose agent the runtime no longer lists -------------------------------------
     # A drive that restarts (or finds its worker gone) must not trust the ledger's `runtime_id`, and must not finish
@@ -4190,8 +4240,7 @@ class Driver:
             try:
                 self.dispatch(plan, ticket, "%sp%d" % (task["packet"]["unit"], attempt))
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not re-dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error, "not re-dispatched")
                 continue
             count += 1
         return count
