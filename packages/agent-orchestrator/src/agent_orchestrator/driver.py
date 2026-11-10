@@ -4192,6 +4192,36 @@ class Driver:
         the plan itself sits outside the repository."""
         return (PurePosixPath(self.plan_rel()).parent / Path(path).name).as_posix()
 
+    def held_requirements(self, spec):
+        """This plan's scenarios the spec already holds, each with its requirement: {"S3": "R220"}."""
+        try:
+            text = Path(spec).read_text(encoding="utf-8")
+        except OSError:
+            return {}
+        found = re.findall(
+            r"^- \*\*(R\d+)\*\*.*\(from %s/(S\w+)\)" % re.escape(self.slug), text, re.MULTILINE
+        )
+        return {sid: rid for rid, sid in found}
+
+    def scenario_steps(self, spec, plan):
+        """The brief's steps and scenario list: a ticket may have written its scenarios into the spec already, and
+        appending them again duplicates them."""
+        held = self.held_requirements(spec)
+        pending = [text for sid, text in plan["scenarios"].items() if sid not in held]
+        steps = []
+        if held:
+            steps.append(
+                "- Already in the spec with their provenance, keep as they are: %s."
+                % ", ".join("%s (%s)" % (sid, rid) for sid, rid in held.items())
+            )
+        if not pending:
+            return steps + ["- Every scenario is already in the spec: append none."], [""]
+        steps.append(
+            "- Append each scenario below as a requirement with the next free number and its provenance: "
+            "`- **R4** WHEN ..., THEN ... (from %s/S3)`." % self.slug
+        )
+        return steps, ["Scenarios, verbatim:", "", *pending, ""]
+
     def yaml_archive_text(self, model, plan, packet, task_dir):
         """The archive brief for a YAML plan: the plan's spec is the living spec; plan files and oracles are copied."""
         copies = "\n".join(
@@ -4202,6 +4232,7 @@ class Driver:
             "- Place byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
             for rel, source in self.yaml_places(model)
         )
+        steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / model.spec, plan)
         return "\n".join(
             [
                 "Contract: %s" % (self.run_dir / "contract.md"),
@@ -4217,8 +4248,7 @@ class Driver:
                 "Steps:",
                 "- The living spec is `%s`, named by plan.yaml. Do not create a new spec file."
                 % model.spec,
-                "- Append each scenario below as a requirement with the next free number and its provenance: "
-                "`- **R4** WHEN ..., THEN ... (from %s/S3)`." % self.slug,
+                *steps,
                 copies,
                 places,
                 "- Do not write a Status into plan.yaml, and rename no test.",
@@ -4228,10 +4258,7 @@ class Driver:
                     self.args.base.partition("/")[2],
                 ),
                 "",
-                "Scenarios, verbatim:",
-                "",
-                *plan["scenarios"].values(),
-                "",
+                *verbatim,
             ]
         )
 
@@ -4242,6 +4269,7 @@ class Driver:
         found = re.search(r"Living spec:\s*`([^`]+)`", text)
         spec = found.group(1) if found else "docs/specs/%s.md" % self.slug
         area = Path(spec).stem
+        steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / spec, plan)
         return "\n".join(
             [
                 "Contract: %s" % (self.run_dir / "contract.md"),
@@ -4259,8 +4287,7 @@ class Driver:
                 "- Create the living spec `%s` if it is missing. Its first lines are `# %s` and `Paths: src/area/, tests/area/**`: "
                 "the comma-separated code paths the area covers. Converge fails a spec without a parseable `Paths:` line."
                 % (spec, area.title()),
-                "- Append each scenario below as a requirement with the next free number and its provenance: "
-                "`- **R4** WHEN ..., THEN ... (from %s/S3)`." % self.slug,
+                *steps,
                 "- Rename each test's `S<n>` to `%s/R<m>`: in the test name, or in a Python test's docstring first line."
                 % area,
                 "- Set the plan's `Status: ARCHIVED %s`." % now()[:10],
@@ -4271,10 +4298,7 @@ class Driver:
                 ),
                 "The driver then runs `converge.py --final` on this branch; a FAIL comes back as a fix round.",
                 "",
-                "Scenarios, verbatim:",
-                "",
-                *plan["scenarios"].values(),
-                "",
+                *verbatim,
             ]
         )
 

@@ -188,3 +188,22 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
             "t1"
         ]
         self.assertEqual((t1["decider_calls"], t1["escalations"], t1["usage"]), (0, 1, "unknown"))
+
+
+class HeldRequirementTests(ArchiveFixture, unittest.TestCase):
+    def test_S29_a_markdown_plan_appends_only_the_scenarios_the_spec_lacks(self):
+        """A Markdown plan's archive keeps a requirement a ticket already wrote, and appends the rest."""
+        from test_archive_yaml import commit_spec
+
+        commit_spec(
+            self,
+            "# Demo\nPaths: src/a/\n\n- **R9** WHEN c THEN d. (from demo/S2)\n- **R4** WHEN a. (from other/S1)\n",
+        )
+        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.run_driver()
+        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
+        self.assertIn("keep as they are: S2 (R9).", task_md)
+        listed = task_md.split("Scenarios, verbatim:", 1)[1]
+        self.assertIn("**S1**", listed)
+        self.assertIn("**S3**", listed)
+        self.assertNotIn("**S2**", listed)
