@@ -7,7 +7,8 @@ case, so it can be judged after the harness deletes its transcripts. Claude dele
 after 30 days. `agent-eval capture` copies them, with the code change, into `<home>/cases/<slug>/`, where
 `<home>` is `$AGENT_EVALS_HOME` (default `~/.local/state/agent-evals`). Cases hold verbatim transcripts and
 code, so they stay on this machine: outside every git working tree, directories 0700, files 0600, never
-overwritten.
+overwritten. Git decides what a working tree is (`git rev-parse`), so a stray `.git` entry that git does
+not accept does not block the default home.
 
 `agent-eval` is its own workspace member, `packages/agent-eval/`, standard library only. It only reads
 the files of the orchestrator, the runtime and the harnesses; it imports none of them and opens none of
@@ -69,4 +70,4 @@ the size are of the original bytes, not of the gzip. The manifest also carries `
 | S6 | R212 | `test_S6_a_25_5_day_old_session_warns_with_days_left_and_is_still_captured`, `test_S6_a_24_9_day_old_session_does_not_warn`, `test_S6_the_days_left_count_down_with_the_age`, `test_S6_only_the_old_session_is_named`, `test_S6_past_the_deadline_says_zero_days_left_and_still_captures` |
 | S7 | R213 | `test_S7_the_patch_holds_the_pinned_diff_and_the_manifest_the_resolved_shas`, `test_S7_the_patch_does_not_depend_on_the_users_diff_config`, `test_S7_without_them_the_manifest_records_null_and_no_patch`, `test_S7_partial_arguments_are_a_usage_error_and_write_nothing`, `test_S7_an_unresolvable_revision_fails_and_writes_nothing` |
 | S7a | R214 | `test_S7a_one_id_under_two_project_directories_is_refused_naming_both`, `test_S7a_a_duplicate_reached_through_the_chain_is_refused_too` |
-| S11 | R215 | `test_S11_directories_0700_and_files_0600_home_and_parents_included`, `test_S11_a_home_inside_a_git_working_tree_is_refused_and_nothing_is_written`, `test_S11_the_default_home_is_under_the_user_state_dir`, `test_S11_nothing_is_left_behind_when_a_write_fails` |
+| S11 | R215 | `test_S11_directories_0700_and_files_0600_home_and_parents_included`, `test_S11_a_home_inside_a_git_working_tree_is_refused_and_nothing_is_written`, `test_S11_a_stray_dot_git_that_git_does_not_accept_is_not_a_working_tree`, `test_S11_a_home_inside_a_dot_git_directory_is_refused`, `test_S11_the_default_home_is_under_the_user_state_dir`, `test_S11_nothing_is_left_behind_when_a_write_fails` |

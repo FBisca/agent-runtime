@@ -434,6 +434,23 @@ class PermissionTests(CaptureCase):
         self.assertIn("git", result.stderr)
         self.assertEqual(sorted(p.name for p in repo.iterdir()), [".git"])
 
+    def test_S11_a_stray_dot_git_that_git_does_not_accept_is_not_a_working_tree(self):
+        """agent-eval-p0/S11: git is the authority on what a working tree is"""
+        stray = self.tmp / "stray"
+        (stray / ".git").mkdir(parents=True)
+        result = self.capture("--session", SOLO, home=stray / "evals")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((stray / "evals" / "cases" / SOLO / "manifest.json").is_file())
+
+    def test_S11_a_home_inside_a_dot_git_directory_is_refused(self):
+        """agent-eval-p0/S11"""
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        git(repo, "init", "-q")
+        result = self.capture("--session", SOLO, home=repo / ".git" / "evals")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list((repo / ".git").glob("evals*")), [])
+
     def test_S11_the_default_home_is_under_the_user_state_dir(self):
         """agent-eval-p0/S11"""
         from pathlib import Path

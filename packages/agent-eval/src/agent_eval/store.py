@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import os
 import re
+import subprocess
 from pathlib import Path
 
 from agent_eval.errors import CaptureError
@@ -19,12 +20,26 @@ def home() -> Path:
 
 
 def inside_git_tree(path: Path) -> bool:
-    """True when `path`, or an ancestor, holds a `.git` entry (a directory, or a worktree's file).
+    """True when git says `path` is in a working tree or in a `.git` directory.
 
-    A filesystem walk rather than `git rev-parse`: it needs no git, and a repository git refuses to
-    open (another owner) still counts as a place a case must not go.
+    Git decides, not the presence of a `.git` entry: a stray empty `.git` above the home is not a
+    repository. A repository git refuses to open for its owner (`dubious ownership`) still counts as
+    one, so a case never lands in it. Without git installed, a `.git` entry on the way up counts.
     """
-    return any((candidate / ".git").exists() for candidate in (path, *path.parents))
+    start = next(p for p in (path, *path.parents) if p.exists())
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        found = subprocess.run(
+            ["git", "-C", str(start), "rev-parse", "--is-inside-work-tree", "--is-inside-git-dir"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return any((candidate / ".git").exists() for candidate in (path, *path.parents))
+    if found.returncode != 0:
+        return "dubious ownership" in found.stderr
+    return "true" in found.stdout.split()
 
 
 def make_private_dirs(path: Path) -> None:
