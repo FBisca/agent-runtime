@@ -3,9 +3,8 @@ name = "agent-eval"
 version = "0.1.0"
 description = "Freeze a coding-agent run into a local, immutable case; read-only on the harnesses' files."
 requires-python = ">=3.11"
-# Standard library only: the capture reads orchestrator, runtime and harness files and needs no
-# dependency of the other members.
-dependencies = []
+# The capture is standard library only; the label model is Pydantic, as the orchestrator's contracts are.
+dependencies = ["pydantic>=2.7"]
 
 [project.scripts]
 agent-eval = "agent_eval.cli:main"
