@@ -184,6 +184,28 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertTrue(logged, "no log line names the missing checkout")
         self.assertNotEqual(task["gate"], "awaiting-merge")
 
+    def test_S8_a_merged_pr_that_fails_the_rules_completes_when_the_checkout_is_gone(self):
+        """orchestrator-engine/R2: merged-unit-completes/S8"""
+        gone = str(self.worktree)
+        failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
+        self.prs(["OPEN", "MERGED"])
+        self.on_merged_view(lambda: shutil.rmtree(gone))
+        self.waits(
+            [
+                self.worker_done(
+                    tests=True, report=self.report("t1", checks=[failed], review_rounds=0)
+                ),
+                self.reviewer_done(),
+            ]
+        )
+        self.run_driver()
+        task = self.task()
+        self.assertEqual(task["status"], "COMPLETE")
+        self.assertIsNone(task["checkout_at_checkpoint"])
+        deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
+        self.assertIn("- [merged-unverified] t1: ", deferred)
+        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
+
     def test_S9_cleanup_keeps_a_worktree_a_sibling_under_another_worker_still_uses(self):
         """orchestrator-engine/R2: merged-unit-completes/S9"""
 
