@@ -1081,7 +1081,8 @@ class Driver:
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
-        self.last_tick = time.monotonic()
+        self.last_tick = self.clock()
+        self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
 
     # ---- the event log: every state change is on disk before the next step -----------------------------------
 
@@ -1220,10 +1221,14 @@ class Driver:
         self.log("idle", interval=self.args.idle_interval)
         self.sleep(self.args.idle_interval)
 
+    clock = staticmethod(
+        time.monotonic
+    )  # a seam: the idle tick's tests move time without patching `time`
+
     def idle_ticks(self, assignments):
         """Every `--idle-minutes`, look at each unit: did its agent show anything new, did its CI move? A unit that
         shows nothing at two consecutive ticks needs the Lead."""
-        moment = time.monotonic()
+        moment = self.clock()
         if moment - self.last_tick < self.args.idle_minutes * 60:
             return
         self.last_tick = moment
@@ -1235,6 +1240,11 @@ class Driver:
                 continue  # the Lead already has it
             if task.get("gate") == "awaiting-merge":
                 continue  # the merge is a person's step, and the pr-ready wake already asked for it
+            working = self.working_minutes(task_id, assignments, moment)
+            if working is not None and working < self.args.working_minutes:
+                # A long test is one turn: the runtime says the agent is busy, so there is nothing to ask.
+                self.ticks.pop(task_id, None)
+                continue
             signature = self.idle_signature(task_id, assignments)
             previous = self.ticks.get(task_id)
             if previous is None or previous[0] != signature:
@@ -1248,8 +1258,27 @@ class Driver:
                 self.request(
                     task_id,
                     "idle",
-                    "idle: %s showed no new state or report for %d ticks" % (unit, streak),
+                    "idle: %s showed no new state or report for %d ticks" % (unit, streak)
+                    + (", working for %d minutes" % working if working is not None else ""),
                 )
+
+    def working_minutes(self, task_id, assignments, moment):
+        """How long the runtime has reported this unit's agent `working`, or None when it does not."""
+        unit = self.task(task_id)["packet"]["unit"]
+        with self.book() as data:
+            mine = {
+                a.get("assignment_id")
+                for a in (data.get("agents") or {}).values()
+                if a.get("unit") == unit
+            }
+        if not any(
+            a.get("assignment_id") in mine and a.get("runtime_state") == "working"
+            for a in assignments
+        ):
+            self.working_since.pop(task_id, None)
+            return None
+        since = self.working_since.setdefault(task_id, moment)
+        return (moment - since) / 60
 
     def idle_signature(self, task_id, assignments):
         """What a unit showed since the last tick: its gate, its report, its checks and its agents' state."""
@@ -4384,6 +4413,7 @@ def drive(args):
     require(args.max_fix_rounds >= 0, "--max-fix-rounds must not be negative")
     require(args.context_reserve >= 0, "--context-reserve must not be negative")
     require(args.idle_minutes >= 0, "--idle-minutes must not be negative")
+    require(args.working_minutes >= 0, "--working-minutes must not be negative")
     driver = Driver(args)
     slug = parse_plan(driver.plan_path.read_text(encoding="utf-8"))["slug"]
     with run_lock(driver.repo, slug, driver.plan_path):
@@ -4564,6 +4594,12 @@ def main(argv=None):
         default=10,
         help="Minutes between the idle ticks: a unit whose agent and CI show nothing new is logged idle, "
         "and at two ticks in a row the Lead is asked",
+    )
+    sub.add_argument(
+        "--working-minutes",
+        type=float,
+        default=120,
+        help="Minutes a unit's agent may be reported `working` by the runtime before the idle tick counts it",
     )
     sub = commands.add_parser(
         "await",

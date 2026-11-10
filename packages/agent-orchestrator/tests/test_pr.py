@@ -1,11 +1,21 @@
 """The pull request and CI loop: a draft PR polled during review, `gh pr ready` after the last pass, checks and merge
 polled without blocking, slots freed while a PR waits for merge, branch updates and conflicts, early merges, idle ticks."""
 
+import itertools
 import json
 import unittest
+from unittest import mock
 
 import pytest
-from fixtures import assignment, plan_text, report_wait, resume_id, spawn_id, wait_result
+from fixtures import (
+    assignment,
+    load_script,
+    plan_text,
+    report_wait,
+    resume_id,
+    spawn_id,
+    wait_result,
+)
 from test_gates import MAJOR, GateFixture
 
 pytestmark = pytest.mark.integration
@@ -345,6 +355,39 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertTrue(lines[0].startswith("decision t1: "), lines[0])
         self.assertIn("idle", lines[0])
+        self.assertEqual(self.request()["event"], "idle")
+
+    def test_S8_a_unit_whose_agent_the_runtime_reports_working_is_left_alone(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        self.waits([self.working(runtime_state="working")] * 5)
+        self.run_driver("--idle-minutes", "0")
+        self.assertEqual(self.idle_events(), [])
+        self.assertEqual(self.wake_lines("decision"), [])
+
+    def test_S8_a_unit_working_past_working_minutes_is_asked_with_how_long(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        self.waits([self.working(runtime_state="working")] * 4 + [self.decide_step("t1", "skip")])
+        self.run_driver("--idle-minutes", "0", "--working-minutes", "0")
+        self.assertEqual(self.request()["event"], "idle")
+        self.assertIn("working for", self.wake_lines("decision")[0])
+
+    def test_S8_a_working_agent_is_left_alone_until_working_minutes_have_passed(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S8"""
+        spec = load_script()
+        moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
+        self.waits([self.working(runtime_state="working")] * 6 + [self.decide_step("t1", "skip")])
+        with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: next(moments))):
+            self.run_driver("--idle-minutes", "10", "--working-minutes", "30")
+        self.assertTrue(all(e["ticks"] >= 1 for e in self.idle_events()))
+        text = self.wake_lines("decision")[0]
+        self.assertIn("working for 50 minutes", text)
+        self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
+
+    def test_S8a_an_agent_not_reported_working_is_asked_at_two_ticks_as_today(self):
+        """orchestrator-engine/R2: drive-restart-recovery/S8a"""
+        self.waits([self.working()] * 3 + [self.decide_step("t1", "skip")])
+        self.run_driver("--idle-minutes", "0")
+        self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
         self.assertEqual(self.request()["event"], "idle")
 
     def test_S6_a_new_state_between_ticks_resets_the_count(self):
