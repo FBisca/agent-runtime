@@ -37,7 +37,7 @@ class YamlArchiveTests(ArchiveFixture, unittest.TestCase):
         )
         return super().ticket_merged()
 
-    def test_S29_yaml_archive_brief_copies_plan_files_and_places_oracles(self):
+    def test_S29_yaml_archive_brief_names_the_spec_and_the_places_the_driver_filled(self):
         self.use_yaml_plan(oracle=True)
         narrative = self.plan.parent / "demo.plan.md"
         narrative.write_text("# demo\n", encoding="utf-8")
@@ -49,21 +49,12 @@ class YamlArchiveTests(ArchiveFixture, unittest.TestCase):
 
         task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
         owns = owns_of(task_md)
-        oracle_dir = self.plan.parent / "demo.oracle"
-        for needle in (
-            "docs/specs/demo.md",
-            str(self.plan),
-            str(narrative),
-            str(oracle_dir),
-            "byte-identical",
-        ):
-            self.assertIn(needle, task_md)
-        # The oracle is placed under its promoted name, never with the `.oracle` suffix: only then is it collected.
-        self.assertIn("to `src/a/test_oracle.py`.", task_md)
-        self.assertIn("src/a/test_oracle.py", owns)
+        # The driver places the oracles before the worker starts, so the worker's scope is the spec and those places.
+        self.assertIn("docs/specs/demo.md", task_md)
+        self.assertIn("Already placed by the driver", task_md)
+        self.assertIn("`src/a/test_oracle.py`", task_md)
+        self.assertEqual(owns, ["docs/specs/demo.md", "src/a/test_oracle.py"])
         self.assertNotIn("src/a/test_oracle.py.oracle", task_md)
-        self.assertIn("docs/specs/demo.md", owns)
-        self.assertNotIn("docs/specs/,", owns)
         self.assertNotIn("Status: ARCHIVED", task_md)
         self.assertNotIn("Rename each test", task_md)
         self.assertNotIn("Create the living spec", task_md)

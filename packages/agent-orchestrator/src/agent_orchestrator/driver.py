@@ -1093,10 +1093,8 @@ ARCHIVE_ACCEPTANCE = [
     "converge --final passes",
 ]
 YAML_ARCHIVE_ACCEPTANCE = [
-    "Every scenario is a requirement with provenance in the plan's spec; no new spec file is created",
-    "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies",
-    "Each promote oracle is byte-identical at its place",
-    "No test is renamed and no Status is written into plan.yaml",
+    "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
+    "The promoted oracles the driver placed are untouched, no test is renamed, and plan.yaml is untouched",
 ]
 
 
@@ -2206,7 +2204,7 @@ class Driver:
             self.log("converge-skipped", task=task_id, reason=reason)
             event(reason)
             if packet["unit"] == ARCHIVE:
-                return "PASS", []
+                return self.archive_evidence(task_id, packet)
             verdict, lines = self.verify_ticket(task_id, packet, report)
             if verdict != "PASS":
                 return verdict, lines
@@ -3147,6 +3145,9 @@ class Driver:
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
         self.mark(task_id, gate="cleanup", merge_commit=commit)
+        if self.model and self.task(task_id)["packet"]["unit"] == ARCHIVE:
+            with self.book() as data:  # the plan is ARCHIVED when its archive PR merges
+                enter_plan_state(data, "ARCHIVED")
         event("%s merged: %s" % (task_id, url))
 
     def complete_merged(self, task_id, report):
@@ -4207,6 +4208,31 @@ class Driver:
             return "error", [str(error)[:500]]
         return ("FAIL", items) if items else ("PASS", [])
 
+    def archive_evidence(self, task_id, packet):
+        """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
+        changed what the plan delivered. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round."""
+        try:
+            commit = verify.snapshot_commit(packet["checkout"])
+            tree = self.tree_of(commit)
+            model = self.contract()[0]
+            items = []
+            for scenario in verify.check_scenarios(model):
+                if scenario.id not in model.outcome:
+                    continue
+                result = self.run_evidence(scenario.id, "archive", commit)
+                if result.receipt["result"] != "PASS":
+                    items.append(self.evidence_item(len(items) + 1, scenario.id, result))
+            with self.book() as data:
+                data["archive"] = {
+                    "sha": commit,
+                    "tree": tree,
+                    "digest": self.contract()[1].digest,
+                    "at": now(),
+                }
+        except (runner.RunnerError, verify.VerifyError) as error:
+            return "error", [str(error)[:500]]
+        return ("FAIL", items) if items else ("PASS", [])
+
     def evidence_item(self, number, scenario_id, result):
         """A fix-round item for evidence that did not pass: the command and the tail of its log."""
         receipt = result.receipt
@@ -4434,11 +4460,9 @@ class Driver:
         effort = self.step_effort("archive", effort)
         checkout = self.worktree(name, "feat/" + name)
         if self.model:
-            owns = (
-                [self.model.spec]
-                + [rel for rel, _ in self.yaml_copies()]
-                + [rel for rel, _ in self.yaml_places(self.model)]
-            )
+            # The driver places the oracles itself: the worker's scope is the spec and those places only.
+            self.place_oracles(checkout)
+            owns = [self.model.spec] + [rel for rel, _ in self.yaml_places(self.model)]
             acceptance = YAML_ARCHIVE_ACCEPTANCE
         else:
             owns = ["docs/specs/", "docs/plans/"]
@@ -4493,6 +4517,20 @@ class Driver:
             data["tasks"][ARCHIVE]["assignment_id"] = assignment_id
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
+
+    def place_oracles(self, checkout):
+        """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
+        The worker starts after this, so it never has to copy a test it is not allowed to change."""
+        files = self.oracles()
+        for scenario in self.contract()[0].scenarios:
+            evidence = scenario.evidence
+            if evidence and evidence.promote and evidence.place:
+                for name in evidence.oracle:
+                    target = (
+                        Path(checkout) / evidence.place.rstrip("/") / name.removesuffix(".oracle")
+                    )
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(files[name])
 
     def narrative_path(self):
         """A YAML plan's Markdown narrative, beside it: <stem>.plan.md."""
@@ -4557,14 +4595,11 @@ class Driver:
         return steps, ["Scenarios, verbatim:", "", *pending, ""]
 
     def yaml_archive_text(self, model, plan, packet, task_dir):
-        """The archive brief for a YAML plan: the plan's spec is the living spec; plan files and oracles are copied."""
-        copies = "\n".join(
-            "- Copy byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
-            for rel, source in self.yaml_copies()
-        )
+        """The archive brief for a YAML plan: the plan's spec is the living spec; the driver has already placed the
+        oracles, and the worker writes requirements and a Coverage table."""
         places = "\n".join(
-            "- Place byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
-            for rel, source in self.yaml_places(model)
+            "- Already placed by the driver, byte-identical, do not edit: `%s`." % rel
+            for rel, _ in self.yaml_places(model)
         )
         steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / model.spec, plan)
         return "\n".join(
@@ -4583,14 +4618,17 @@ class Driver:
                 "- The living spec is `%s`, named by plan.yaml. Do not create a new spec file."
                 % model.spec,
                 *steps,
-                copies,
+                "- Give the spec a `Coverage` table: one row per requirement of this plan, with the test node ids "
+                "(`path::test_name`) that prove it. Take the node ids from the tickets' reports and the placed oracles.",
                 places,
-                "- Do not write a Status into plan.yaml, and rename no test.",
+                "- The driver placed the promoted oracles before you started. The archive renames no test, leaves "
+                "plan.yaml untouched, and writes no Status.",
                 "- Run before you report COMPLETE: %s. Then open a pull request against %s."
                 % (
                     "; ".join(packet["checks"]) or "the repository's full CI gate",
                     self.args.base.partition("/")[2],
                 ),
+                "The driver then re-runs the outcome evidence on your branch's head; a failure comes back as a fix round.",
                 "",
                 *verbatim,
             ]

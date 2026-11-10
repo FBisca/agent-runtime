@@ -400,6 +400,31 @@ def unverified_scenarios(data):
     return found
 
 
+def mark_archive(model, data, receipts_dir, digest, items):
+    """An ARCHIVED plan's outcome also holds on the archive head: each outcome item that passed at integration must
+    have a PASS receipt for the tree the archive recorded, else it is UNKNOWN (the archive was not verified)."""
+    pin = data.get("archive") or {}
+    for item in items:
+        sc = scenario_of(model, item["scenario"])
+        if (
+            item["state"] != "PASS"
+            or item["scenario"] not in model.outcome
+            or not sc.evidence.check
+        ):
+            continue
+        stems = receipt_stems(data, item["scenario"], "archive")
+        if not pin or pin.get("digest") != digest:
+            why = "the archive head was not verified for this approval digest"
+        elif not stems:
+            why = "no archive receipt"
+        else:
+            receipt, why = read_receipt(data, stems[-1], receipts_dir, digest, pin.get("tree"))
+            if receipt is not None and receipt.get("result") == "PASS":
+                continue
+            why = why or "the archive receipt is %s" % receipt.get("result")
+        item.update(state="UNKNOWN", reason=why)
+
+
 def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
     """What the receipts say about a plan: {"state", "items"}. Each item is {"scenario", "state", "reason"} with the
     state PASS, FAIL, UNKNOWN, HUMAN_ACCEPTED or AWAITING_HUMAN.
@@ -473,6 +498,8 @@ def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
         elif state != "PASS" and human:
             state, reason = "HUMAN_ACCEPTED", "accepted by %s over %s" % (record.get("by"), state)
         items.append({"scenario": sc.id, "state": state, "reason": reason})
+    if (data.get("plan") or {}).get("state") == "ARCHIVED":
+        mark_archive(model, data, receipts_dir, digest, items)
     states = {item["state"] for item in items}
     if states <= {"PASS"}:
         overall = "ACCEPTED"

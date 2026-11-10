@@ -307,7 +307,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self,
     ):
         self.delivered(archive=True)
-        self.assertEqual(self.history(), STATES + ["ACCEPTED"])
+        self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         (receipt,) = [r for r in self.receipts("integration") if r["scenario"] == "S1"]
         digest = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]["digest"]
         self.assertEqual(
@@ -382,7 +382,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.delivered(lands="almost")
         subprocess.run(self.land("done"), check=True, capture_output=True)
         self.drive([], archive=True)
-        self.assertEqual(self.history()[-1], "ACCEPTED")
+        self.assertEqual(self.history()[-1], "ARCHIVED")
         self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL", "PASS"])
 
 
