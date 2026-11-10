@@ -1,4 +1,4 @@
-"""`label/2`: a judge's label with the evidence behind every score (agent-eval-label-evidence/S1-S6).
+"""`label/2`: a judge's label with the evidence behind every score (agent-eval-label-evidence/R1-R6).
 
 Each test builds a small case (manifest, gzipped transcript, an orchestrate file, a patch) in a throwaway
 `AGENT_EVALS_HOME` and runs `agent-eval add-label` against it.
@@ -151,10 +151,10 @@ def refused(home, tmp_path, capsys, label, *needles) -> str:
     return err
 
 
-# --- S1: the shape ------------------------------------------------------------------------------
+# --- R1: the shape ------------------------------------------------------------------------------
 
 
-def test_S1_a_valid_label2_is_written_as_given(home, tmp_path, capsys):
+def test_R1_a_valid_label2_is_written_as_given(home, tmp_path, capsys):
     label = valid_label()
     code, err = run(tmp_path, label, capsys)
 
@@ -163,7 +163,7 @@ def test_S1_a_valid_label2_is_written_as_given(home, tmp_path, capsys):
     assert stat.S_IMODE(stored(home).stat().st_mode) == 0o600
 
 
-def test_S1_an_invalid_label2_names_each_failing_field_by_its_path(home, tmp_path, capsys):
+def test_R1_an_invalid_label2_names_each_failing_field_by_its_path(home, tmp_path, capsys):
     bad = valid_label()
     bad["dimensions"]["quality"]["findings"][0]["evidence"].append(ref(TRANSCRIPT, "x" * 301))
     bad["judge"]["rubric_sha256"] = "not-hex"
@@ -220,13 +220,13 @@ def test_S1_an_invalid_label2_names_each_failing_field_by_its_path(home, tmp_pat
         "line-zero",
     ],
 )
-def test_S1_each_shape_fault_is_refused_and_nothing_is_written(home, tmp_path, capsys, edit, field):
+def test_R1_each_shape_fault_is_refused_and_nothing_is_written(home, tmp_path, capsys, edit, field):
     bad = valid_label()
     edit(bad)
     refused(home, tmp_path, capsys, bad, field)
 
 
-# --- S2: the evidence refs ----------------------------------------------------------------------
+# --- R2: the evidence refs ----------------------------------------------------------------------
 
 
 def with_ref(evidence: dict) -> dict:
@@ -258,7 +258,7 @@ def with_ref(evidence: dict) -> dict:
         "the-whole-line",
     ],
 )
-def test_S2_a_ref_into_a_listed_file_with_a_verbatim_quote_is_accepted(
+def test_R2_a_ref_into_a_listed_file_with_a_verbatim_quote_is_accepted(
     home, tmp_path, capsys, evidence
 ):
     code, err = run(tmp_path, with_ref(evidence), capsys)
@@ -297,7 +297,7 @@ def test_S2_a_ref_into_a_listed_file_with_a_verbatim_quote_is_accepted(
         "patch-wrong-line",
     ],
 )
-def test_S2_a_ref_that_does_not_resolve_exits_2_naming_it(home, tmp_path, capsys, evidence, words):
+def test_R2_a_ref_that_does_not_resolve_exits_2_naming_it(home, tmp_path, capsys, evidence, words):
     err = refused(
         home,
         tmp_path,
@@ -310,7 +310,7 @@ def test_S2_a_ref_that_does_not_resolve_exits_2_naming_it(home, tmp_path, capsys
     assert err.count("evidence[0]") >= 1
 
 
-def test_S2_a_gate_ref_is_resolved_like_any_other(home, tmp_path, capsys):
+def test_R2_a_gate_ref_is_resolved_like_any_other(home, tmp_path, capsys):
     label = valid_label()
     label["verdict"] = "BLOCKED"
     label["gates"] = [
@@ -324,14 +324,14 @@ def test_S2_a_gate_ref_is_resolved_like_any_other(home, tmp_path, capsys):
     refused(home, tmp_path, capsys, label, "gates[0].evidence[0]", "not found")
 
 
-def test_S2_a_listed_file_that_is_gone_from_the_case_is_refused(home, tmp_path, capsys):
+def test_R2_a_listed_file_that_is_gone_from_the_case_is_refused(home, tmp_path, capsys):
     (home / "cases" / CASE / TOOL_RESULT).unlink()
     label = valid_label()
 
     refused(home, tmp_path, capsys, label, "dimensions.tests.findings[0].evidence[0]", TOOL_RESULT)
 
 
-# --- S3: the dimensions -------------------------------------------------------------------------
+# --- R3: the dimensions -------------------------------------------------------------------------
 
 
 def edited(edit) -> dict:
@@ -365,20 +365,20 @@ def edited(edit) -> dict:
         "scored-labelled-insufficient",
     ],
 )
-def test_S3_a_dimension_that_breaks_a_rule_exits_2_naming_it(
+def test_R3_a_dimension_that_breaks_a_rule_exits_2_naming_it(
     home, tmp_path, capsys, edit, dimension_name
 ):
     refused(home, tmp_path, capsys, edited(edit), f"dimensions.{dimension_name}")
 
 
-def test_S3_a_perfect_dimension_needs_evidence_but_no_deduction(home, tmp_path, capsys):
+def test_R3_a_perfect_dimension_needs_evidence_but_no_deduction(home, tmp_path, capsys):
     code, err = run(tmp_path, valid_label(), capsys)
 
     assert code == 0, err
     assert valid_label()["dimensions"]["efficiency"]["findings"][0]["deduction"] is False
 
 
-def test_S3_every_dimension_is_named_when_several_break(home, tmp_path, capsys):
+def test_R3_every_dimension_is_named_when_several_break(home, tmp_path, capsys):
     label = edited(
         lambda d: (
             d["quality"].update(findings=[]),
@@ -389,7 +389,7 @@ def test_S3_every_dimension_is_named_when_several_break(home, tmp_path, capsys):
     refused(home, tmp_path, capsys, label, "dimensions.quality", "dimensions.tests")
 
 
-# --- S4: the score and the verdict --------------------------------------------------------------
+# --- R4: the score and the verdict --------------------------------------------------------------
 
 
 def scored(**scores) -> dict:
@@ -431,7 +431,7 @@ def scored(**scores) -> dict:
         "all-weak",
     ],
 )
-def test_S4_the_recomputed_score_and_verdict_are_accepted(
+def test_R4_the_recomputed_score_and_verdict_are_accepted(
     home, tmp_path, capsys, scores, score, verdict
 ):
     label = scored(**scores)
@@ -447,7 +447,7 @@ def test_S4_the_recomputed_score_and_verdict_are_accepted(
     [(0.7, "0.69"), (None, "0.69"), (0.690000001, "0.69")],
     ids=["off-by-one-hundredth", "null-when-scored", "unrounded"],
 )
-def test_S4_a_wrong_score_exits_2_naming_the_expected_value(
+def test_R4_a_wrong_score_exits_2_naming_the_expected_value(
     home, tmp_path, capsys, score, expected
 ):
     label = valid_label()
@@ -456,7 +456,7 @@ def test_S4_a_wrong_score_exits_2_naming_the_expected_value(
     refused(home, tmp_path, capsys, label, "score", f"expected {expected}")
 
 
-def test_S4_a_score_where_nothing_is_scored_must_be_null(home, tmp_path, capsys):
+def test_R4_a_score_where_nothing_is_scored_must_be_null(home, tmp_path, capsys):
     label = scored(quality=None, tests=None, efficiency=None, communication=None)
     label["score"], label["verdict"] = 0.5, "INCOMPLETE"
 
@@ -466,7 +466,7 @@ def test_S4_a_score_where_nothing_is_scored_must_be_null(home, tmp_path, capsys)
 @pytest.mark.parametrize(
     ("verdict", "expected"), [("PASS", "FAIL"), ("INCOMPLETE", "FAIL"), ("BLOCKED", "FAIL")]
 )
-def test_S4_a_wrong_verdict_exits_2_naming_the_expected_value(
+def test_R4_a_wrong_verdict_exits_2_naming_the_expected_value(
     home, tmp_path, capsys, verdict, expected
 ):
     label = valid_label()
@@ -475,7 +475,7 @@ def test_S4_a_wrong_verdict_exits_2_naming_the_expected_value(
     refused(home, tmp_path, capsys, label, "verdict", f"expected {expected}")
 
 
-def test_S4_a_gate_makes_the_verdict_blocked_and_only_a_gate_does(home, tmp_path, capsys):
+def test_R4_a_gate_makes_the_verdict_blocked_and_only_a_gate_does(home, tmp_path, capsys):
     blocked = valid_label()
     blocked["gates"] = [
         {
@@ -491,17 +491,17 @@ def test_S4_a_gate_makes_the_verdict_blocked_and_only_a_gate_does(home, tmp_path
     assert code == 0, err
 
 
-def test_S4_a_blocked_verdict_without_a_gate_is_refused(home, tmp_path, capsys):
+def test_R4_a_blocked_verdict_without_a_gate_is_refused(home, tmp_path, capsys):
     label = valid_label()
     label["verdict"] = "BLOCKED"
 
     refused(home, tmp_path, capsys, label, "verdict", "expected FAIL")
 
 
-# --- S5: the subject and the source -------------------------------------------------------------
+# --- R5: the subject and the source -------------------------------------------------------------
 
 
-def test_S5_a_subject_that_is_not_a_session_of_the_manifest_exits_2_naming_it(
+def test_R5_a_subject_that_is_not_a_session_of_the_manifest_exits_2_naming_it(
     home, tmp_path, capsys
 ):
     label = valid_label()
@@ -512,13 +512,13 @@ def test_S5_a_subject_that_is_not_a_session_of_the_manifest_exits_2_naming_it(
     )
 
 
-def test_S5_a_label2_needs_a_readable_manifest(home, tmp_path, capsys):
+def test_R5_a_label2_needs_a_readable_manifest(home, tmp_path, capsys):
     (home / "cases" / CASE / "manifest.json").unlink()
 
     refused(home, tmp_path, capsys, valid_label(), "manifest.json")
 
 
-def test_S5_a_judged_label1_exits_2_saying_a_judged_label_is_label2(home, tmp_path, capsys):
+def test_R5_a_judged_label1_exits_2_saying_a_judged_label_is_label2(home, tmp_path, capsys):
     old = {
         "schema": "label/1",
         "kind": "agent-judge",
@@ -532,7 +532,7 @@ def test_S5_a_judged_label1_exits_2_saying_a_judged_label_is_label2(home, tmp_pa
     refused(home, tmp_path, capsys, old, "label/2")
 
 
-def test_S5_a_transcribed_label1_is_still_accepted(home, tmp_path, capsys):
+def test_R5_a_transcribed_label1_is_still_accepted(home, tmp_path, capsys):
     old = {
         "schema": "label/1",
         "kind": "agent-judge",
@@ -549,14 +549,14 @@ def test_S5_a_transcribed_label1_is_still_accepted(home, tmp_path, capsys):
     assert json.loads(stored(home).read_text(encoding="utf-8")) == old
 
 
-def test_S5_a_label2_of_another_kind_is_refused(home, tmp_path, capsys):
+def test_R5_a_label2_of_another_kind_is_refused(home, tmp_path, capsys):
     label = valid_label()
     label["kind"] = "someone-else"
 
     refused(home, tmp_path, capsys, label, "kind")
 
 
-def test_S5_an_existing_label_still_stays(home, tmp_path, capsys):
+def test_R5_an_existing_label_still_stays(home, tmp_path, capsys):
     assert run(tmp_path, valid_label(), capsys)[0] == 0
     before = stored(home).read_bytes()
 
@@ -567,7 +567,7 @@ def test_S5_an_existing_label_still_stays(home, tmp_path, capsys):
     assert stored(home).read_bytes() == before
 
 
-# --- S6: the help and the spec ------------------------------------------------------------------
+# --- R6: the help and the spec ------------------------------------------------------------------
 
 
 def help_text(capsys) -> str:
@@ -584,14 +584,14 @@ def spec_example(text: str) -> dict:
     return found[0]
 
 
-def test_S6_the_help_shows_where_the_label_goes_and_a_complete_label2(capsys):
+def test_R6_the_help_shows_where_the_label_goes_and_a_complete_label2(capsys):
     out = help_text(capsys)
 
     assert "labels/<kind>.json" in out
     assert json.dumps(EXAMPLE, indent=2) in out
 
 
-def test_S6_the_spec_case_layout_and_example_match_the_help(capsys):
+def test_R6_the_spec_case_layout_and_example_match_the_help(capsys):
     text = SPEC.read_text(encoding="utf-8")
     layout = text.split("## Case layout")[1].split("\n## ")[0]
 
@@ -599,14 +599,14 @@ def test_S6_the_spec_case_layout_and_example_match_the_help(capsys):
     assert spec_example(layout) == EXAMPLE
 
 
-def test_S6_the_spec_names_pydantic_as_the_one_dependency():
+def test_R6_the_spec_names_pydantic_as_the_one_dependency():
     text = SPEC.read_text(encoding="utf-8")
 
     assert "Pydantic" in text
     assert "standard library only" not in text.split("## Claude chain")[0]
 
 
-def test_S6_the_example_is_accepted_by_add_label_against_the_case_it_cites(
+def test_R6_the_example_is_accepted_by_add_label_against_the_case_it_cites(
     tmp_path, monkeypatch, capsys
 ):
     evals = tmp_path / "evals"
