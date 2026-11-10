@@ -301,7 +301,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         self,
     ):
         """orchestrator-engine/R31"""
-        for wrong in ("t1", "t1d1", "t1r1", "t1o3"):
+        for wrong in ("t1", "t1d1", "t1r1", "t1o3", "t1p1", "T1", "T1R1"):
             with self.subTest(wrong=wrong):
                 path = self.write_open_request(task="t1r2")
                 before = path.read_text(encoding="utf-8")
@@ -318,6 +318,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         """orchestrator-engine/R31"""
         for text in (
             "report under task_id t1r2",
+            "report under task_id T1R2",
             "see %s/t1r2/report.json" % self.run_dir,
             "ask demo-t1 and use port 5432; t2 is not yours",
         ):
