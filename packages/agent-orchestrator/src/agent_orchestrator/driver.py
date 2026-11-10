@@ -864,6 +864,23 @@ def runtime_call(lead, tool, arguments, timeout=120):
         raise ValueError(str(error)) from None
 
 
+class Unreadable(ValueError):
+    """`status` could not say whether an agent is gone."""
+
+
+def terminal_gone(error, name):
+    """True when the runtime's `unknown` says the terminal does not exist: hc's error kind `not_found`, or its
+    `no terminal "<name>"`. Any other error is a read that failed, and says nothing about the terminal."""
+    text = str(error or "")
+    try:
+        body = json.loads(text)
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        return body["error"].get("kind") == "not_found"
+    return text.strip() == 'no terminal "%s"' % name or "not_found" in text
+
+
 def assignment_of(result):
     """The assignment id a `spawn` or `resume` answered with: how `wait` names this agent from then on."""
     found = result.get("assignment_id")
@@ -1091,6 +1108,14 @@ class Driver:
         self.spawned = []
         self.failed = set()
         self.stuck = set()
+        self.stranded = (
+            set()
+        )  # tasks the last reconciliation could not settle: the run must not finish over them
+        self.unfinished = set()  # the assignment ids the runtime's last `wait` listed as unfinished
+        self.reconciled = False
+        self.touched = (
+            set()
+        )  # the agents this drive spawned, attached or resumed: no dead drive left them
         self.receipt = None
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
@@ -1199,7 +1224,10 @@ class Driver:
             else:  # the last valid plan keeps the work going; what the user's edit might have changed waits for a valid file
                 dispatched = self.dispatch_ready(plan)
             if idle and not dispatched and not acted and not self.awaiting():
-                return
+                # An open task whose agent the runtime no longer lists is work the run would otherwise drop.
+                dispatched = self.reconcile(finishing=True)
+                if not dispatched:
+                    return
             wait = {"target": "all", "timeout": self.args.wait_seconds}
             if self.receipt:
                 wait["receipt"] = self.receipt
@@ -1207,6 +1235,12 @@ class Driver:
             self.receipt = result.get("receipt")
             self.receive(result)
             self.idle_ticks(result.get("assignments") or [])
+            self.unfinished = {i for i in result.get("unfinished") or [] if isinstance(i, str)}
+            if (
+                not self.reconciled
+            ):  # a drive that starts on a ledger a dead one left looks at it once
+                self.reconciled = True
+                dispatched += self.reconcile()
             # `unfinished` lists assignment ids. A parked unit's assignment stays open in the runtime and makes `wait`
             # return at once: it is not work, so a run with only parked units left ends.
             parked = self.parked_assignments()
@@ -3118,6 +3152,7 @@ class Driver:
             data["agents"][name].update(
                 assignment_id=assignment_id, address=address, bound_at=now(), how=how
             )
+        self.touched.add(name)
         self.log("agent", name=name, role=role, unit=unit, how=how, assignment_id=assignment_id)
         return address, assignment_id
 
@@ -3325,6 +3360,7 @@ class Driver:
             with self.book() as data:
                 if name in (data.get("agents") or {}):
                     data["agents"][name]["assignment_id"] = assignment_id
+            self.touched.add(name)
             self.log(
                 "agent",
                 name=name,
@@ -3938,6 +3974,162 @@ class Driver:
             count += 1
         return count
 
+    # ---- reconciliation: an open task whose agent the runtime no longer lists -------------------------------------
+    # A drive that restarts (or finds its worker gone) must not trust the ledger's `runtime_id`, and must not finish
+    # over a unit nobody is working on. `status` answers `unknown` for a read that failed as well as for a terminal
+    # the runtime has none of, so only the shape of the answer says "gone" (`exited`, or `unknown` with `not_found`)
+    # and anything else is "cannot tell": nothing is released or spawned, and the Lead is told.
+
+    def in_flight(self):
+        """(task, role, agent name, assignment id) for every open, unparked task that has an agent working for it."""
+        found = []
+        with self.book() as data:
+            for task_id, task in data["tasks"].items():
+                gate, packet = task.get("gate"), task["packet"]
+                if task["status"] in ("COMPLETE", "RELEASED") or gate in PARKED:
+                    continue
+                answers, review = task.get("answers") or {}, task.get("review") or {}
+                if answers.get("state") == "working" and answers.get("assignment_id"):
+                    found.append((task_id, "answerer", packet["worker"], answers["assignment_id"]))
+                if gate == "reviewing" and review.get("assignment_id"):
+                    found.append((task_id, "reviewer", review["name"], review["assignment_id"]))
+                if not gate and task["status"] == "ACTIVE" and task.get("assignment_id"):
+                    found.append((task_id, "worker", packet["worker"], task["assignment_id"]))
+        return found
+
+    def agent_gone(self, name):
+        """(True, the answer) when the runtime says the agent is gone, (False, its state) when it is live. A `status`
+        that fails, or answers `unknown` for any other reason, raises `Unreadable`: that is not an answer."""
+        answer = runtime_call(self.lead, "status", {"name": name})
+        state = answer.get("state")
+        if state in ("exited", "finished"):
+            return True, state
+        if state != "unknown":
+            return False, state
+        error = (answer.get("native") or {}).get("error")
+        if terminal_gone(error, name):
+            return True, "unknown: not_found"
+        raise Unreadable(
+            "status answered unknown: %s" % (cell(error, 200) if error else "no reason given")
+        )
+
+    def bound_here(self, name):
+        """True when this drive spawned or attached the agent: the runtime has had no `wait` round to list it yet."""
+        return name in self.touched
+
+    def strand(self, task_id, name, error):
+        """The run cannot tell what became of this task's agent: the task stays open and the Lead hears of it."""
+        unit = self.unit_of(task_id)
+        self.stranded.add(task_id)
+        text = (
+            "stranded %s: the agent %s of task %s cannot be settled: %s -> nothing was released or spawned; "
+            "look at the terminal, then restart the drive" % (unit, name, task_id, cell(error, 300))
+        )
+        self.wake("stranded", unit, text, key="%s:%s" % (task_id, error))  # once per task and error
+        reason = "%s: %s" % (task_id, error)
+        if (
+            reason not in self.errors
+        ):  # the exit code follows what is stranded now, not what the Lead was told first
+            self.errors.append(reason)
+        self.log("stranded", unit=unit, task=task_id, name=name, error=str(error)[:500])
+        event("%s stranded: %s" % (task_id, error))
+
+    def reconcile(self, finishing=False):
+        """Settle every open task whose assignment `wait` does not list. Returns how many it acted on; a task it
+        cannot settle is left in `self.stranded`. At startup a live terminal is left alone (its message may still
+        come); when the run would finish, a terminal still at work that the runtime does not list, and that a
+        dead drive left behind, is a unit nobody waits on."""
+        self.stranded = set()
+        acted = 0
+        for task_id, role, name, assignment_id in self.in_flight():
+            if assignment_id in self.unfinished:
+                continue
+            try:
+                lost, said = self.agent_gone(name)
+            except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                self.strand(task_id, name, str(error))
+                continue
+            if not lost:
+                if finishing and not self.bound_here(name):
+                    # A live terminal that a dead drive left and that this run's `wait` does not list (its
+                    # assignment belongs to the dead drive's team). A turn that ended with its report on disk goes to
+                    # the gates; anything else nothing will ever settle, so the Lead is told.
+                    ended = said in ("idle", "done")
+                    if ended and role == "worker" and self.report_landed(task_id):
+                        self.log(
+                            "report-landed",
+                            unit=self.unit_of(task_id),
+                            task=task_id,
+                            assignment_id=assignment_id,
+                        )
+                        self.mark(task_id, gate="reported")
+                        acted += 1
+                    else:
+                        self.strand(
+                            task_id,
+                            name,
+                            "turn ended (%s) with no report for this attempt" % said
+                            if ended
+                            else "live but not an assignment of this run: %s" % said,
+                        )
+                continue
+            unit = self.unit_of(task_id)
+            self.log(
+                "orphaned",
+                unit=unit,
+                task=task_id,
+                role=role,
+                name=name,
+                assignment_id=assignment_id,
+                answer=said,
+            )
+            event("%s orphaned: %s (%s) answers %s" % (task_id, name, role, said))
+            if role != "worker":  # the path an agent the runtime reported as exited takes
+                self.on_agent_attention(
+                    assignment_id, "exited", "the runtime answered " + said, quiet=True
+                )
+                acted += 1
+            elif self.report_landed(task_id):
+                self.log("report-landed", unit=unit, task=task_id, assignment_id=assignment_id)
+                self.mark(task_id, gate="reported")
+                acted += 1
+            else:
+                acted += self.redispatch(task_id, said)
+        return acted
+
+    def redispatch(self, task_id, said):
+        """Release the orphaned attempt and put the unit's worker on a new one, in the same checkout and branch."""
+        task = self.task(task_id)
+        unit, name = task["packet"]["unit"], task["packet"]["worker"]
+        plan = self.last_plan
+        tickets = (
+            plan["tickets"] if plan else []
+        )  # a plan is read before the loop starts; the type allows none
+        ticket = next((t for t in tickets if t["#"].lower() == unit), None)
+        with self.book() as data:
+            taken = set(data["tasks"])
+            number = next(n for n in range(1, 1000) if "%so%d" % (unit, n) not in taken)
+            release(data, task_id, "orphaned: " + said)
+        new_id = "%so%d" % (unit, number)
+        note = "\n".join(
+            [
+                "This is a new attempt (%s) of %s: the agent of the earlier attempt (%s) was lost "
+                "(the runtime answered %s)." % (new_id, unit.upper(), task_id, said),
+                "Its work is in this checkout and on this branch: read `git status` and `git log`, and continue "
+                "from where it stands. Report with task_id `%s`." % new_id,
+                "",
+            ]
+        )
+        try:
+            if ticket is None:
+                raise ValueError("the plan no longer has ticket %s" % unit.upper())
+            self.dispatch(plan, ticket, new_id, note=note)
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            return 0
+        event("%s: dispatched again as %s after %s" % (unit.upper(), new_id, said))
+        return 1
+
     def attend_people(self, plan):
         """A person-owned ticket that becomes ready reads `needs you: <what it needs>` and waits for the user."""
         by_id = {t["#"]: t for t in plan["tickets"]}
@@ -4004,10 +4196,18 @@ class Driver:
             count += 1
         return count
 
-    def dispatch(self, plan, ticket, task_id=None):
+    def dispatch(self, plan, ticket, task_id=None, note=""):
         number = ticket["#"][1:]
         name = worker_name(plan["slug"], number)
         task_id = task_id or "t" + number
+        with self.book() as data:
+            closed = (data["tasks"].get(task_id) or {}).get("status")
+        if closed in ("COMPLETE", "RELEASED"):
+            # Before any spawn: the ledger would refuse the bind only after a worker had been started for it.
+            raise ValueError(
+                "task %s is %s in the ledger, and a closed task id is never dispatched again: "
+                "dispatch the unit under a new attempt id" % (task_id, closed)
+            )
         size, difficulty = ticket["Size"].strip(), ticket["Difficulty"].strip()
         klass, matrix_effort = MATRIX[(size, difficulty)]
         route = self.routes[klass]
@@ -4057,7 +4257,7 @@ class Driver:
         task_md = task_dir / "task.md"
         if not task_md.exists():
             task_md.write_text(
-                self.task_text(plan, ticket, packet, scenarios, task_dir), encoding="utf-8"
+                self.task_text(plan, ticket, packet, scenarios, task_dir) + note, encoding="utf-8"
             )
         runtime_id, assignment_id = self.ensure_agent(
             name,
@@ -4455,7 +4655,8 @@ def drive_locked(driver):
     driver.start()
     try:
         driver.loop()
-        driver.log("finish")
+        if not driver.stranded:  # a run that leaves a task it cannot settle has not finished
+            driver.log("finish")
     finally:
         try:
             driver.report_metrics()

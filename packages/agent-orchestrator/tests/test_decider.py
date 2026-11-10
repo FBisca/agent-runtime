@@ -386,15 +386,17 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
 
     def test_S13_it_waits_until_the_user_sets_it_complete(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S13"""
+        # exit 1 on every restart: T1's worker was left idle with no report, so each drive strands that unit; the
+        # point here is T4, which waits for the person
         self.run_driver()
-        self.run_driver()
+        self.run_driver(expect=1)
         self.assertEqual(self.plan_status("T4"), "needs you: sign-off")
         self.assertEqual(self.attention_md().count("sign-off"), 1)
         text = self.plan.read_text(encoding="utf-8").replace(
             "needs you: sign-off", "COMPLETE 2026-11-07"
         )
         self.plan.write_text(text, encoding="utf-8")
-        self.run_driver()
+        self.run_driver(expect=1)
         self.assertEqual(self.plan_status("T4"), "COMPLETE 2026-11-07")
         self.assertEqual(self.attention_md().count("sign-off"), 1)
 
