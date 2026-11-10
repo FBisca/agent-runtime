@@ -1,6 +1,7 @@
 """The pull request and CI loop: a draft PR polled during review, `gh pr ready` after the last pass, checks and merge
 polled without blocking, slots freed while a PR waits for merge, branch updates and conflicts, early merges, idle ticks."""
 
+import argparse
 import itertools
 import json
 import unittest
@@ -670,6 +671,45 @@ class IdleTests(PrFixture, unittest.TestCase):
         text = self.wake_lines("decision")[0]
         self.assertIn("working for 50 minutes", text)
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
+
+    def test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window(self):
+        """orchestrator-engine/R60: S13"""
+        spec = load_script()
+        moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
+        self.waits(
+            [self.working(runtime_state="working")] * 6
+            + [self.decide_step("t1", "answer", answer="carry on")]
+            + [self.working(runtime_state="working", id=resume_id("demo-t1", 1))] * 4
+            + [
+                report_wait(
+                    "demo-t1", "blocked", "cannot reach the database", id=resume_id("demo-t1", 1)
+                )
+            ]
+            + [self.decide_step("t1", "skip")]
+        )
+        with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: next(moments))):
+            self.run_driver("--idle-minutes", "10", "--working-minutes", "30")
+        # The unit came back to `working` after the Lead's answer: its window starts at that tick, so four
+        # ten-minute ticks (under the thirty-minute window) raise no second idle request. The blocked report
+        # that follows is a request of its own, which the Lead then skips to end the run.
+        idle = [w for w in self.wake_lines("decision") if "idle:" in w]
+        self.assertEqual(len(idle), 1, idle)
+        self.assertIn("working for 50 minutes", idle[0])
+
+    def test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it(self):
+        """orchestrator-engine/R60: S13a"""
+        spec = load_script()
+        args = argparse.Namespace(
+            plan=str(self.plan),
+            repo=str(self.repo),
+            state_dir=str(self.state_dir),
+            base="origin/main",
+        )
+        first = spec.Driver(args)
+        self.assertEqual(first.working_since, {})
+        first.working_since["t1"] = 0.0  # a window the first drive has been measuring
+        restarted = spec.Driver(args)
+        self.assertEqual(restarted.working_since, {}, "a restarted drive kept the old window")
 
     def test_S8a_an_agent_not_reported_working_is_asked_at_two_ticks_as_today(self):
         """orchestrator-engine/R33"""
