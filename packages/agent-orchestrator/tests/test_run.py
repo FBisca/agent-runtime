@@ -330,7 +330,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["status"], "ACTIVE")
 
     def test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished(self):
-        """orchestrator-engine/R23"""
+        """orchestrator-engine/R51, orchestrator-engine/R64"""
         self.crashed("working")
         self.run_driver(expect=1)
         self.assertEqual(len(self.events("finish")), 1, "only the first, healthy drive finished")
@@ -339,7 +339,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertIn("working", stranded["text"])
 
     def test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish(self):
-        """orchestrator-engine/R23"""
+        """orchestrator-engine/R51, orchestrator-engine/R65"""
         for state in ("idle", "done"):
             with self.subTest(state=state):
                 self.setUp()
@@ -612,7 +612,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
     def test_S12_a_not_dispatched_ticket_whose_cell_is_not_exactly_TO_DO_is_not_tried_again_in_the_run(
         self,
     ):
-        """orchestrator-engine/R57"""
+        """orchestrator-engine/R57, orchestrator-engine/R66"""
         self.refuse(["demo-t1"])
         retry = plan_text(rows=("T1",)).replace("TO-DO", "TO-DO · retry")
         self.waits(
@@ -633,7 +633,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
     def test_S12a_the_not_dispatched_wake_names_the_ticket_the_reason_and_the_exact_TO_DO_way_out(
         self,
     ):
-        """orchestrator-engine/R57"""
+        """orchestrator-engine/R57, orchestrator-engine/R67"""
         self.refuse(["demo-t1"])
         self.waits([wait_result(write=[[str(self.home / "refuse.json"), "[]"]])])
         self.run_driver(expect=1)
