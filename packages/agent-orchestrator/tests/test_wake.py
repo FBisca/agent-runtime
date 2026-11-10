@@ -300,7 +300,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
     def test_S7_an_answer_naming_another_attempt_exits_2_writes_nothing_and_names_the_expected_id(
         self,
     ):
-        """orchestrator-engine/R31"""
+        """orchestrator-engine/R59"""
         for wrong in ("t1", "t1d1", "t1r1", "t1o3", "t1p1", "T1", "T1R1"):
             with self.subTest(wrong=wrong):
                 path = self.write_open_request(task="t1r2")
@@ -315,7 +315,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
                 self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_S7_an_answer_naming_the_requests_attempt_or_no_attempt_is_written(self):
-        """orchestrator-engine/R31"""
+        """orchestrator-engine/R59"""
         for text in (
             "report under task_id t1r2",
             "report under task_id T1R2",
