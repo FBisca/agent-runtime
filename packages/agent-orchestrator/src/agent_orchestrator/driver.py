@@ -4071,7 +4071,10 @@ class Driver:
         task = self.task(task_id)
         unit, name = task["packet"]["unit"], task["packet"]["worker"]
         plan = self.last_plan
-        ticket = next((t for t in plan["tickets"] if t["#"].lower() == unit), None)
+        tickets = (
+            plan["tickets"] if plan else []
+        )  # a plan is read before the loop starts; the type allows none
+        ticket = next((t for t in tickets if t["#"].lower() == unit), None)
         with self.book() as data:
             taken = set(data["tasks"])
             number = next(n for n in range(1, 1000) if "%so%d" % (unit, n) not in taken)
