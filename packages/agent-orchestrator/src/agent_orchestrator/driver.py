@@ -924,12 +924,14 @@ PARKED = (
     "blocked",
     "skipped",
 )  # nothing runs for the unit until the user acts (`attention`: runs of the old driver)
-TURN_ENDED = (
+SILENT = (
     "idle",
     "done",
+)  # runtime_state of a `working` assignment whose turn ended: a live agent, maybe waiting on a background job
+TURN_ENDED = SILENT + (
     "unreported",
     "error",
-)  # runtime_state of a `working` assignment that needs a person
+)  # runtime_state of a `working` assignment that needs attention
 ATTENTION = {
     "blocked": "reported blocked",
     "decision": "asked for a decision",
@@ -1326,19 +1328,46 @@ class Driver:
             signature = self.idle_signature(task_id, assignments)
             previous = self.ticks.get(task_id)
             if previous is None or previous[0] != signature:
-                self.ticks[task_id] = [signature, 0]
+                self.ticks[task_id] = [signature, 0, moment]
                 continue
             streak = previous[1] + 1
-            self.ticks[task_id] = [signature, streak]
+            self.ticks[task_id] = [signature, streak, previous[2]]
             waiting = "ci" if task.get("gate") == "ready-for-ci" else "agent"
             self.log("idle", unit=unit, task=task_id, waiting=waiting, ticks=streak)
             if streak >= 2:
                 self.request(
                     task_id,
                     "idle",
-                    "idle: %s showed no new state or report for %d ticks" % (unit, streak)
-                    + (", working for %d minutes" % working if working is not None else ""),
+                    self.idle_reason(task, unit, streak, (moment - previous[2]) / 60, working),
                 )
+
+    def idle_reason(self, task, unit, streak, minutes, working):
+        """What the Lead reads when a unit showed nothing for two ticks: who it waits on, the file that agent owes,
+        how long it has been quiet and the way out."""
+        task_id = task["packet"]["task_id"]
+        answers = task.get("answers") or {}
+        owed = None
+        if answers.get("state") == "working":
+            owed = ("implementer", task["packet"]["worker"], self.report_file(answers["id"]))
+        elif task.get("gate") == "reviewing":
+            owed = ("reviewer", task["review"]["name"], task["review"]["path"])
+        elif not task.get("gate") and task["status"] == "ACTIVE":
+            owed = ("worker", task["packet"]["worker"], self.report_file(task_id))
+        text = "idle: %s showed no new state or report for %d ticks (%d minutes)" % (
+            unit,
+            streak,
+            minutes,
+        )
+        if working is not None:
+            text += ", working for %d minutes" % working
+        if owed:
+            text += (
+                "; %s %s is live but has not reported complete or written %s: "
+                "look at its terminal, then " % (owed[0], owed[1], owed[2])
+            )
+        else:
+            text += "; "
+        return text + "decide %s %s retry | answer | skip" % (self.plan_path, unit)
 
     def working_minutes(self, task_id, assignments, moment):
         """How long the runtime has reported this unit's agent `working`, or None when it does not."""
@@ -1433,7 +1462,7 @@ class Driver:
 
     def check_ended(self, assignments):
         """Attention from assignment states, as `wait` reports them: `failed`, `blocked` or `decision`, or `working`
-        with a `runtime_state` that says the turn ended (idle, done) or needs a person (unreported, error)."""
+        with a `runtime_state` that says the turn ended (idle, done: `silent`) or needs a person (unreported, error)."""
         for assignment in assignments:
             state, runtime = assignment.get("state"), assignment.get("runtime_state")
             if state in ("blocked", "decision"):
@@ -1443,7 +1472,13 @@ class Driver:
             else:
                 continue
             if assignment.get("assignment_id"):
-                self.on_agent_attention(assignment["assignment_id"], kind, text, quiet=True)
+                self.on_agent_attention(
+                    assignment["assignment_id"],
+                    kind,
+                    text,
+                    quiet=True,
+                    silent=state == "working" and runtime in SILENT,
+                )
 
     def parked_assignments(self):
         """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the runtime, not work."""
@@ -1456,11 +1491,15 @@ class Driver:
                 for agent in (task, task.get("review") or {}, task.get("decision") or {})
             } - {None} | ({gaps.get("assignment_id")} if gaps.get("ended") else set())
 
-    def on_agent_attention(self, assignment_id, kind, text="", quiet=False):
+    def on_agent_attention(self, assignment_id, kind, text="", quiet=False, silent=False):
         """An agent reported `blocked` or `decision`, or its assignment failed or ended with no report. Each event is
         handled once: a unit that already has a gate (reviewing, requested, ...) ignores it, except that a `blocked` or
-        `decision` from the worker of a unit with an open request is held (S7). A reviewer that ends silently moves its
-        gate on, so the missing file is reported as a contract error."""
+        `decision` from the worker of a unit with an open request is held (S7). A reviewer whose assignment ended
+        moves its gate on, so a missing file is reported as a contract error.
+
+        `silent` is a live agent whose turn ended (runtime idle or done): it may be waiting on a background job, so
+        it is not an exit. A worker whose report is already on disk advances; every other role keeps waiting for its
+        own `complete`, and only the idle watchdog asks the Lead (R22)."""
         hit = None
         with self.book() as data:
             for task_id, task in data["tasks"].items():
@@ -1500,6 +1539,8 @@ class Driver:
                 if kind in ("blocked", "decision")
                 else None
             )
+        if silent and role != "worker":
+            return None
         if role == "worker":
             if kind == "exited" and self.report_landed(task_id):
                 # The worker wrote its report and its turn ended before the runtime said so: the report is the
@@ -1511,6 +1552,8 @@ class Driver:
                     assignment_id=assignment_id,
                 )
                 return self.mark(task_id, gate="reported")
+            if silent:
+                return None
             return self.request(task_id, kind, reason)
         if role == "answerer":
             self.mark(task_id, answers=dict(self.task(task_id)["answers"], state="failed"))
@@ -1874,8 +1917,8 @@ class Driver:
             )
             return False
         text = (
-            "Your report reached the driver, but %s is not a payload it can read: %s. The driver reads the file, "
-            "not the report: write it again, then report again." % (path, reason)
+            "The driver cannot read %s: %s. Write or repair that file, then report complete under this assignment."
+            % (path, reason)
         )
         _, assignment_id = self.ensure_agent(
             name,
@@ -2226,6 +2269,9 @@ class Driver:
                 "Block only on MAJOR defects: wrong behaviour, data loss, or a scenario that is not really tested. "
                 "Everything else is a `concern`, `question`, `nit` or `deferred` item; it never blocks.",
                 "Touch nothing in the repository.",
+                "You may wait on background jobs (a long test run, a queued job). Ending a turn does not finish the "
+                "review: write the review after the jobs it needs finish, then report complete with the assignment id "
+                "this brief came with.",
                 "",
                 "Write %s as JSON, contract 2:" % review_path,
                 '{"contract":2,"verdict":"pass|block","items":[...],"checks_run":[{"command","exit","at_commit"}],'

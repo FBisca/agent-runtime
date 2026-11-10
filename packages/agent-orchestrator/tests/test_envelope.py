@@ -4,7 +4,7 @@ import json
 import unittest
 
 import pytest
-from fixtures import report_wait, resume_id
+from fixtures import assignment, report_wait, resume_id, wait_result
 from test_gates import BLOCKING, CONCERN, NIT, QUESTION, GateFixture
 
 pytestmark = pytest.mark.integration
@@ -328,6 +328,40 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
             self.worker_done(tests=True),
             self.reviewer_done(self.review2(items=[QUESTION, NIT])),
         ]
+
+    def silent_answerer(self, runtime_state="idle"):
+        """A wait step: the implementer's turn on the answers ended, under the assignment the answers resume gave."""
+        return wait_result(
+            [assignment("demo-t1", "working", runtime_state, id=resume_id("demo-t1", 1))]
+        )
+
+    def test_S7_an_answerer_whose_turn_ended_stays_working_and_its_complete_is_accepted(self):
+        """orchestrator-engine/R22: orchestrator-silent-idle/S7"""
+        self.waits(
+            self.passing_with_question()
+            + [
+                self.silent_answerer("idle"),
+                self.silent_answerer("done"),
+                self.answers_report([RESPONSE]),
+            ]
+        )
+        self.run_driver("--idle-minutes", "10")
+        self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1"])
+        self.assertEqual(self.events("escalation"), [])
+        self.assertEqual(self.task()["gate"], "done")
+        self.assertEqual(self.task()["answers"]["state"], "done")
+
+    def test_S8_an_answerer_that_never_reports_is_one_idle_request_and_the_pr_stays_blocked(self):
+        """orchestrator-engine/R22: orchestrator-silent-idle/S8"""
+        self.waits(
+            self.passing_with_question() + [self.silent_answerer("idle")] * 5 + [self.skipped()]
+        )
+        self.run_driver("--idle-minutes", "0")
+        self.assertEqual(self.request()["event"], "idle")
+        self.assertEqual(len(self.wake_lines("decision")), 1)
+        self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1"])
+        ready = [c for c in self.gh_calls("pr", "ready") if "--undo" not in c]
+        self.assertEqual(ready, [], "the PR was marked ready with the answers outstanding")
 
     def test_S17_a_pass_with_answer_required_items_goes_to_ci(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S17"""
