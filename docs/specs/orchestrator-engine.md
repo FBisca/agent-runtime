@@ -37,6 +37,22 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R19** WHEN a run finds no route config, THEN the 'Model classes' table answers with the model classes it always answered, and the run says that table is deprecated. (from orchestrator-routing-decoupling/S1)
 - **R20** WHEN a route names a backend, model and effort the driver can run, THEN dispatch chooses that combination — a command-line override first, then the named file, the repository's `.orchestrate/routes.*`, the user's `~/.config/orchestrate/routes.*` — and logs the chosen route in the route ledger and the event log. (from orchestrator-routing-decoupling/S2)
 - **R21** WHEN the provider or step routing changes, THEN the plan schema and the gate, review and pull-request state machine stay as they were. (from orchestrator-routing-decoupling/S4)
+- **R22** WHEN the packet requires `scripts/checks.sh` and the report's passed check is `bash scripts/checks.sh`, `./scripts/checks.sh` or `sh ./scripts/checks.sh`, THEN `checkpoint()` accepts COMPLETE (from merged-unit-completes/S1)
+- **R23** WHEN the packet requires `pytest` and the report's passed check is `uv run python -m pytest`, THEN `checkpoint()` accepts COMPLETE (from merged-unit-completes/S1a)
+- **R24** WHEN a required check appears only behind a prefix not on the strip list (e.g. `echo scripts/checks.sh`) or is absent, THEN `checkpoint()` refuses COMPLETE and names the missing check (from merged-unit-completes/S2)
+- **R25** WHEN a COMPLETE report carries a non-required check with `not_run` and a reason, THEN `checkpoint()` accepts it (from merged-unit-completes/S3)
+- **R26** WHEN a COMPLETE report carries a `not_run` check with no reason, THEN `checkpoint()` refuses it (from merged-unit-completes/S3a)
+- **R27** WHEN a required check is reported `not_run`, THEN `checkpoint()` refuses COMPLETE (from merged-unit-completes/S3b)
+- **R28** WHEN a COMPLETE report carries any `failed` check, THEN `checkpoint()` refuses COMPLETE (from merged-unit-completes/S4)
+- **R29** WHEN a worker reports its unit ready and the report fails the COMPLETE rules, THEN the driver messages that worker with the refusal reason, the ticket keeps its gate, one fix round is counted, and no Lead request is written (from merged-unit-completes/S5)
+- **R30** WHEN report-time refusals reach the fix-round cap, THEN the Lead is asked, as for any capped unit (from merged-unit-completes/S5a)
+- **R31** WHEN a PR is merged and its stored report fails the COMPLETE rules, THEN the ledger task is COMPLETE with its original checks, the plan cell is COMPLETE, deferred.md has a `[merged-unverified] <task>: <reason>` line, no Lead request is written, and the dependents become dispatchable (from merged-unit-completes/S6)
+- **R32** WHEN a PR merges early (`merged_early`) on a drive with a named `--gate`, THEN the unit completes as in S6 (from merged-unit-completes/S7)
+- **R33** WHEN a PR merges early, THEN the ledger task keeps the checks of the worker's stored report, not an empty list (from merged-unit-completes/S7a)
+- **R34** WHEN a PR is merged and `packet.checkout` no longer exists, THEN the task is COMPLETE with `checkout_at_checkpoint: null`, a log line names the missing path, and `(task, "awaiting-merge")` is not in the stuck set (from merged-unit-completes/S8)
+- **R35** WHEN a PARTIAL checkpoint runs and `packet.checkout` does not exist, THEN `checkpoint()` raises (from merged-unit-completes/S8a)
+- **R36** WHEN cleanup runs for a COMPLETE task whose checkout is also used by a non-closed task under a different worker name, THEN the worktree is kept (from merged-unit-completes/S9)
+- **R37** WHEN several CI checks fail with long logs, THEN each CI finding carries only its own job's capped excerpt, the full log is at `log_path`, and the fix-round findings file stays under 64 KiB (from merged-unit-completes/S10)
 
 ## Coverage
 
@@ -102,6 +118,13 @@ suite runs here, against the member, and the member answers the way the engine a
 - `packages/agent-orchestrator/tests/test_launch.py`: `test_S7_the_run_is_told_the_launching_terminal_to_alert`,
   `test_S7_a_run_launched_outside_a_terminal_alerts_no_one`
 - `packages/agent-orchestrator/tests/test_pr.py`: `test_S8_a_unit_waiting_for_its_merge_is_never_idle`
+
+### R22–R37 — a merged unit always completes
+
+- `packages/agent-orchestrator/tests/test_checkpoint_rules.py`: `test_S1_…`, `test_S1a_…`, `test_S2_…`, `test_S3_…`, `test_S3a_…`, `test_S3b_…`, `test_S4_…`, `test_S8a_…` — the pure COMPLETE rules (R22–R28, R35)
+- `packages/agent-orchestrator/tests/test_gates.py`: `test_S5_a_ready_report_that_fails…`, `test_S5a_report_refusals…`, `test_S5_a_report_the_ledger…` — the report-time refusal (R29, R30)
+- `packages/agent-orchestrator/tests/test_merge.py`: `test_S6_…`, `test_S8_…` (two), `test_S9_cleanup_keeps…` — the merge wins, the missing checkout, the busy check (R31, R34, R36)
+- `packages/agent-orchestrator/tests/test_pr.py`: `test_S7_…`, `test_S7a_…`, `test_S10_several_failing_checks…` — the early merge and the CI excerpt (R32, R33, R37)
 
 ## The ported suite
 

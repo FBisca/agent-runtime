@@ -148,7 +148,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.gh_calls("run", "view")[0], ["run", "view", "77", "--log-failed"])
 
     def test_S10_several_failing_checks_with_long_logs_carry_only_their_own_capped_excerpt(self):
-        """orchestrator-engine/R2: merged-unit-completes/S10"""
+        """orchestrator-engine/R37"""
 
         def job(name, marker):
             return "\n".join(
@@ -320,7 +320,7 @@ class BranchTests(PrFixture, unittest.TestCase):
 
 class EarlyMergeTests(PrFixture, unittest.TestCase):
     def test_S7a_a_merged_early_ledger_task_keeps_the_checks_of_the_stored_report(self):
-        """orchestrator-engine/R2: merged-unit-completes/S7a"""
+        """orchestrator-engine/R33"""
         check = {"command": "pytest", "outcome": "passed"}
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
         self.waits(
@@ -377,7 +377,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
     def test_S7_a_merge_on_a_drive_with_a_named_gate_completes_the_unit_as_a_merged_unverified_one(
         self,
     ):
-        """orchestrator-engine/R2: merged-unit-completes/S7"""
+        """orchestrator-engine/R32"""
         self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
         # The report omits the gate, so the report-time refusal sends t1 into a fix round before the merge.
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
