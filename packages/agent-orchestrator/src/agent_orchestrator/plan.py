@@ -663,3 +663,52 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
         if os.path.exists(temporary):
             os.unlink(temporary)
     return approval
+
+
+PLAN_SUFFIXES = (".plan.yaml", ".plan.md")
+
+
+def plan_entries(directory):
+    """The plan files directly in `directory`; nothing is created when it does not exist."""
+    if not directory.is_dir():
+        return []
+    return sorted(
+        (p for p in directory.iterdir() if p.is_file() and p.name.endswith(PLAN_SUFFIXES)),
+        key=lambda p: p.name,
+    )
+
+
+def discover(repo=None, explicit=None):
+    """Plans for the Lead, the skills and the panel: the explicit plan (or the plan directory it
+    names), else the one directory of the repository's tracked plan files.
+
+    Several directories refuse, naming each and the explicit-path way out; none is an empty list."""
+    if explicit is not None:
+        path = Path(explicit).expanduser().resolve()
+        if not path.exists():
+            raise PlanError(f"plans: {path} does not exist — pass an existing plan or directory")
+        directory = path if path.is_dir() else path.parent
+        files = set(plan_entries(directory))
+        if path.is_file():
+            files.add(path)
+    else:
+        root = repository(Path.cwd(), repo)
+        tracked = git(root, "ls-files").splitlines()
+        dirs = sorted({str(Path(f).parent) for f in tracked if f.endswith(PLAN_SUFFIXES)})
+        if len(dirs) > 1:
+            raise PlanError(
+                "plans: several plan directories in "
+                + str(root)
+                + ": "
+                + ", ".join(dirs)
+                + " — pass one plan path to choose: agent-orchestrator plans list --json <plan>"
+            )
+        files = set(plan_entries(root / dirs[0])) if dirs else set()
+    return [
+        {
+            "path": str(p),
+            "format": "yaml" if p.name.endswith(".plan.yaml") else "markdown",
+            "slug": p.name.removesuffix(".plan.yaml").removesuffix(".plan.md"),
+        }
+        for p in sorted(files)
+    ]
