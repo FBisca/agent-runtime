@@ -1,6 +1,7 @@
 """Pure `checkpoint()` COMPLETE rules over a dict ledger: check-name normalisation and `not_run` handling."""
 
 import unittest
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -21,7 +22,7 @@ class CheckpointRulesTests(unittest.TestCase):
             "checkout": "/nonexistent",
             "checks": ["scripts/checks.sh"],
         }
-        self.data = {
+        self.data: dict[str, Any] = {
             "version": 1,
             "tasks": {
                 "validation": {
