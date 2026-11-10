@@ -4432,11 +4432,29 @@ def pane_name(slug):
     return ("orchestrate-" + slug)[:32].rstrip("-")
 
 
+def forwarded(argv, option):
+    """The value of `option V` or `option=V` among arguments `launch` forwards to `run`, else None."""
+    for index, item in enumerate(argv):
+        if item == option and index + 1 < len(argv):
+            return argv[index + 1]
+        if item.startswith(option + "="):
+            return item[len(option) + 1 :]
+    return None
+
+
+def plan_slug(plan_path):
+    """The slug a Markdown or YAML plan names, read without validating it: a plan mid-edit still names its slug."""
+    path = Path(plan_path).resolve(strict=True)
+    if path.name.endswith(".plan.yaml"):
+        data = yaml_plan.read_yaml(path)[0]
+        slug = data.get("slug") if isinstance(data, dict) else None
+        return slug if isinstance(slug, str) else None
+    return parse_plan(path.read_text(encoding="utf-8"))["slug"]
+
+
 def launch(args, run_args):
     """Check the plan, then start `run` in a new Herdr terminal. A live driver of the same name is left alone."""
     plan_path = Path(args.plan).resolve(strict=True)
-    plan = parse_plan(plan_path.read_text(encoding="utf-8"))
-    check_plan(plan)
     repo = (
         Path(args.repo).resolve()
         if args.repo
@@ -4444,7 +4462,19 @@ def launch(args, run_args):
             run(["git", "-C", str(plan_path.parent), "rev-parse", "--show-toplevel"])
         ).resolve()
     )
-    name = pane_name(plan["slug"])
+    if plan_path.name.endswith(".plan.yaml"):
+        # The same check `run` makes first, so an unapproved or drifted contract starts no pane.
+        slug = yaml_plan.load(
+            plan_path,
+            repo=repo,
+            state_dir=forwarded(run_args, "--state-dir") or yaml_plan.DEFAULT_STATE,
+            require_approval=True,
+        ).slug
+    else:
+        plan = parse_plan(plan_path.read_text(encoding="utf-8"))
+        check_plan(plan)
+        slug = plan["slug"]
+    name = pane_name(slug)
     if name in live_terminals():
         return {"pane": name, "started": False}
     argv = [
@@ -4497,21 +4527,19 @@ def launch(args, run_args):
 def rebuild_metrics(args):
     """`metrics <plan>`: metrics.json rebuilt from the run's events.jsonl, which survives a crash. A run dir written
     before the log existed is read from its ledger instead."""
-    plan = parse_plan(
-        Path(args.plan).resolve(strict=True).read_text(encoding="utf-8")
-    )  # a plan mid-edit still names its slug
+    slug = plan_slug(args.plan)
     state_dir = Path(args.state_dir).expanduser()
-    run_dir = state_dir / plan["slug"]
+    run_dir = state_dir / slug
     rows = events.read(run_dir / "events.jsonl")
     if not rows:
-        ledger_path = state_dir / (plan["slug"] + ".json")
+        ledger_path = state_dir / (slug + ".json")
         require(
             ledger_path.exists(),
-            "no events.jsonl or ledger for %s under %s" % (plan["slug"], state_dir),
+            "no events.jsonl or ledger for %s under %s" % (slug, state_dir),
         )
         with ledger(ledger_path) as data:
             rows = [dict(row, kind="import") for row in legacy_imports(data)]
-    result = events.rollup(rows, plan["slug"])
+    result = events.rollup(rows, slug)
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     (run_dir / "metrics.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
@@ -4520,13 +4548,13 @@ def rebuild_metrics(args):
 def rebuild_evidence(args):
     """`evidence <plan>`: the run's attempts.jsonl rebuilt from its ledger and its events.jsonl, which survive a crash.
     The old metrics.json is left alone: the evidence is written beside it."""
-    plan = parse_plan(Path(args.plan).resolve(strict=True).read_text(encoding="utf-8"))
+    slug = plan_slug(args.plan)
     state_dir = Path(args.state_dir).expanduser()
-    run_dir = state_dir / plan["slug"]
-    ledger_path = state_dir / (plan["slug"] + ".json")
-    require(ledger_path.exists(), "no ledger for %s under %s" % (plan["slug"], state_dir))
+    run_dir = state_dir / slug
+    ledger_path = state_dir / (slug + ".json")
+    require(ledger_path.exists(), "no ledger for %s under %s" % (slug, state_dir))
     with ledger(ledger_path) as data:
-        records = evidence.attempts(data, events.read(run_dir / "events.jsonl"), plan["slug"])
+        records = evidence.attempts(data, events.read(run_dir / "events.jsonl"), slug)
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     evidence.write(run_dir / "attempts.jsonl", records)
     return records
@@ -4551,7 +4579,7 @@ class Refused(PlanError):
 
 def run_dir_of(args):
     """The run directory of the plan a Lead command names."""
-    slug = parse_plan(Path(args.plan).resolve(strict=True).read_text(encoding="utf-8"))["slug"]
+    slug = plan_slug(args.plan)
     if not slug:
         raise Refused("plan has no Slug")
     return Path(args.state_dir).expanduser() / slug
