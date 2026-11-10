@@ -17,6 +17,16 @@ def owns_of(task_md):
     return [item.strip() for item in line.split(": ", 1)[1].rstrip(".").split(",")]
 
 
+def commit_spec(case, text):
+    """Land `docs/specs/demo.md` on origin/main, as a merged ticket that wrote requirements would have."""
+    spec = case.repo / "docs" / "specs" / "demo.md"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(text, encoding="utf-8")
+    case.git(case.repo, "add", "docs/specs/demo.md")
+    case.git(case.repo, "commit", "-q", "-m", "spec")
+    case.git(case.repo, "push", "-q", "origin", "main")
+
+
 class YamlArchiveTests(ArchiveFixture, unittest.TestCase):
     def test_S29_yaml_archive_brief_copies_plan_files_and_places_oracles(self):
         self.use_yaml_plan(oracle=True)
@@ -48,6 +58,21 @@ class YamlArchiveTests(ArchiveFixture, unittest.TestCase):
         self.assertNotIn("Status: ARCHIVED", task_md)
         self.assertNotIn("Rename each test", task_md)
         self.assertNotIn("Create the living spec", task_md)
+
+    def test_S29_a_scenario_the_spec_already_holds_is_not_appended_again(self):
+        """A ticket that wrote its scenario into the spec leaves the archive nothing to append for it."""
+        commit_spec(
+            self,
+            "# Demo\nPaths: src/a/\n\n- **R7** WHEN a, THEN b. (from demo/S1)\n- **R8** WHEN x. (from other/S1)\n",
+        )
+        self.use_yaml_plan(oracle=True)
+        self.waits(self.ticket_merged() + [self.archive_done(complete=False), self.gaps_done()])
+        self.run_driver()
+        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
+        self.assertIn("keep as they are: S1 (R7).", task_md)
+        self.assertIn("append none", task_md)
+        self.assertNotIn("Append each scenario", task_md)
+        self.assertNotIn("Scenarios, verbatim", task_md)
 
     def test_S29_no_narrative_step_when_plan_md_is_missing(self):
         self.use_yaml_plan(oracle=True)
