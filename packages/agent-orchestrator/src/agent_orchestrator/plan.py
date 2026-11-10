@@ -5,11 +5,13 @@ safe_dump(sort_keys=True) after dropping approval: comments, key order and YAML
 presentation are preserved on disk but do not affect the contract digest.
 """
 
+import fcntl
 import hashlib
 import os
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -674,10 +676,54 @@ def state_paths(repo, slug, state_dir):
     return ledger, run_dir / "receipts"
 
 
+@contextmanager
+def run_lock(repo, slug):
+    """The plan's run lock, the file `driver.run_lock` holds for a whole run (`<git common dir>/agent-orchestrator/
+    <slug>.lock`, flock, non-blocking), so a live driver refuses approval and a driver refuses to start under one.
+    The protocol is the driver's; it is written here because the driver's helper runs git through a function its
+    callers replace."""
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    directory = common / "agent-orchestrator"
+    directory.mkdir(exist_ok=True, mode=0o700)
+    fd = os.open(directory / (slug + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = lock.read().strip() or "another driver"
+            raise PlanError(
+                "plan %s is being driven by %s; stop that driver (close its orchestrate-%s pane), then "
+                "run plan approve again" % (slug, holder, slug)
+            ) from None
+        lock.seek(0)
+        lock.truncate()
+        lock.write(
+            "plan approve, pid %d since %s\n"
+            % (os.getpid(), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        )
+        lock.flush()
+        yield
+
+
 def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
+    """Approve a plan: run its baseline, then write the receipts, their ledger hashes, the snapshot and the block.
+
+    Everything runs under the plan's run lock, so a live driver is never moved or raced; a held lock refuses before
+    anything is written."""
     path = Path(path).resolve()
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False)
+    with run_lock(repo, model.slug):
+        try:
+            return approve_locked(path, repo, model, state_dir, base)
+        except runner.RunnerError as error:
+            raise PlanError(
+                "approval: %s — the plan was not approved; fix that and run plan approve again"
+                % error
+            ) from None
+
+
+def approve_locked(path, repo, model, state_dir, base):
     data, _ = read_yaml(path)
     plan_bytes = canonical(data)
     files = payloads(oracle_dir(path))
@@ -685,8 +731,11 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
     sha = digest(identity(repo), base_sha, plan_bytes, files)
     # A refusal here leaves no file behind: the runner writes nothing until the runs are accepted.
     runs = baseline(model, repo, base_sha, sha, files)
-    # Before any write: importing an older ledger can refuse (a live driver holds it).
-    ledger, receipts = state_paths(repo, model.slug, state_dir) if runs else (None, None)
+    if runs:
+        ledger, receipts = state_paths(repo, model.slug, state_dir)
+        for run, calibration in runs:
+            runner.persist(run, receipts, calibration)
+        runner.record_receipts(ledger, [run for run, _ in runs])
     email = subprocess.run(
         ["git", "-C", str(repo), "config", "user.email"], capture_output=True, text=True, timeout=15
     ).stdout.strip()
@@ -720,10 +769,6 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
-    if runs:
-        for run, calibration in runs:
-            runner.persist(run, receipts, calibration)
-        runner.record_receipts(ledger, [run for run, _ in runs])
     fd, temporary = tempfile.mkstemp(prefix=".approval-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:

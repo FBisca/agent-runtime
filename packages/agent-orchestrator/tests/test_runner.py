@@ -3,6 +3,7 @@ UNKNOWN by rule, a negative patch must break the check, and `plan approve` refus
 
 Every test starts git and a shell, so all are integration tests."""
 
+import fcntl
 import hashlib
 import io
 import json
@@ -245,6 +246,14 @@ class Results(RepoCase):
         run = self.run_check('test -n "$EEC_UNDECLARED_VARIABLE"')
         self.assertEqual(self.result(run), "UNKNOWN (env)")
         self.assertIn("EEC_UNDECLARED_VARIABLE", run.receipt["detail"])
+
+    def test_S13_an_unbound_variable_in_a_script_the_check_runs_is_not_the_checks_own(self):
+        script = (
+            'printf \'set -u\\necho $EEC_NOPE\\n\' > "$TMPDIR/inner.sh"; bash "$TMPDIR/inner.sh"'
+        )
+        run = self.run_check(script, base_env={**os.environ, "TMPDIR": str(self.root)})
+        self.assertIn("unbound variable", run.log)
+        self.assertEqual(run.receipt["label"], "FAIL")
 
     def test_S13_an_unbound_variable_beside_junit_is_not_taken_for_a_missing_env(self):
         run = self.run_check(junit(PASSING + FAILING, tests=2, failures=1) + "exit 1")
@@ -490,6 +499,54 @@ class Baseline(RepoCase):
         self.assertEqual(data["tasks"], {"t1": task})
         self.assertEqual(list(data["receipts"]), ["S1.baseline.1"])
         self.assertFalse(old.exists(), "the old ledger was left behind")
+
+    def hold_run_lock(self, text="pid 4242 since 2026-11-10T09:00:00Z\n"):
+        common = Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        (common / "agent-orchestrator").mkdir(exist_ok=True)
+        lock = open(common / "agent-orchestrator" / "demo.lock", "w")
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock.write(text)
+        lock.flush()
+
+    def test_S12_approve_refuses_while_a_driver_holds_the_plans_run_lock_and_writes_nothing(self):
+        old = self.state / "demo.json"
+        old.parent.mkdir(parents=True)
+        task = {"packet": {"plan": str(self.plan), "checkout": str(self.repo)}}
+        old.write_text(json.dumps({"version": 1, "tasks": {"t1": task}}))
+        (self.state / "demo").mkdir()
+        (self.state / "demo" / "events.jsonl").write_text("{}\n")
+        self.write(
+            {"check": junit(PASSING + FAILING, tests=2, failures=1) + "exit 1", "baseline": "fail"}
+        )
+        before = {p: p.read_bytes() for p in (old, self.plan, self.state / "demo" / "events.jsonl")}
+        self.hold_run_lock()
+        code, message = self.approve()
+        self.assertEqual(code, 2, message)
+        self.assertIn("pid 4242", message)
+        self.assertIn("plan demo is being driven by", message)
+        self.assertIn("orchestrate-demo", message)
+        self.assertIn("plan approve", message)
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+        self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["demo", "demo.json"])
+
+    def test_S12_a_ledger_that_stays_busy_refuses_the_approval_instead_of_a_traceback(self):
+        ledger = self.ledger_path()
+        ledger.parent.mkdir(parents=True)
+        lock = open(ledger.with_name(ledger.name + ".lock"), "w")
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.write(
+            {"check": junit(PASSING + FAILING, tests=2, failures=1) + "exit 1", "baseline": "fail"}
+        )
+        before = self.plan.read_bytes()
+        with mock.patch.object(runner, "LEDGER_WAIT", 0.2):
+            code, message = self.approve()
+        self.assertEqual(code, 2, message)
+        self.assertIn("busy", message)
+        self.assertNotIn("Traceback", message)
+        self.assertEqual(self.plan.read_bytes(), before, "the plan was approved")
+        self.assertFalse(list(self.state.rglob("approvals")), "a snapshot was written")
 
     def test_S12_a_refused_approval_creates_no_ledger(self):
         self.refused({"check": "true", "baseline": "fail"}, "baseline", oracle=False)

@@ -156,7 +156,8 @@ def tool_versions(path):
 
 
 ASSERTION = re.compile(r"(?:assert\b|(?:[\w.]+\.)?AssertionError\b)")
-UNBOUND = re.compile(r"(\w+): unbound variable")
+# Only the check's own shell: `bash: line N: X: unbound variable` (or `bash: X: ...`); a script it runs names itself.
+UNBOUND = re.compile(r"^bash: (?:line \d+: )?(\w+): unbound variable$", re.MULTILINE)
 
 
 def is_assertion(failure):
