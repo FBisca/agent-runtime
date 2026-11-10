@@ -312,6 +312,28 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         self.assertFalse((self.run_dir / "deferred.md").exists())  # nothing was open
         self.assertEqual(self.gh_calls("pr", "update-branch"), [])
 
+    def test_S7_a_merge_on_a_drive_with_a_named_gate_completes_the_unit_as_a_merged_unverified_one(
+        self,
+    ):
+        """orchestrator-engine/R2: merged-unit-completes/S7"""
+        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
+        merged = self.flip(
+            self.working("demo-t1-review", id=spawn_id("demo-t1-review")),
+            "view-early.json",
+            ["MERGED"],
+        )
+        self.waits([self.worker_done(tests=True), merged])
+        self.run_driver("--gate", "scripts/checks.sh")
+        self.assertEqual(self.task()["status"], "COMPLETE")
+        self.assertIn("| COMPLETE 2026-", self.plan.read_text(encoding="utf-8"))
+        deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
+        line = [x for x in deferred.splitlines() if "[merged-unverified]" in x]
+        self.assertEqual(len(line), 1, deferred)
+        self.assertTrue(line[0].startswith("- [merged-unverified] t1: "), line[0])
+        self.assertIn("scripts/checks.sh", line[0])
+        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
+        self.assertIn("demo-t2", self.spawned())
+
     def test_S24_a_merge_while_a_request_is_open_resolves_it_and_completes_the_unit(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S24"""
         merged = self.flip(self.working(), "view-early.json", ["MERGED"])

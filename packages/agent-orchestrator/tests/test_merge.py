@@ -126,6 +126,35 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review", "demo-t2"])
         self.assertIn("| IN PROGRESS |", self.plan.read_text(encoding="utf-8"))
 
+    def test_S6_a_merged_pr_completes_a_unit_whose_report_fails_the_rules(self):
+        """orchestrator-engine/R2: merged-unit-completes/S6"""
+        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
+        failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
+        self.prs(["OPEN", "OPEN", "MERGED"])
+        self.waits(
+            [
+                self.worker_done(
+                    tests=True, report=self.report("t1", checks=[failed], review_rounds=0)
+                ),
+                self.reviewer_done(),
+            ]
+        )
+        self.run_driver()
+        task = self.task()
+        self.assertEqual(self.events("merged-early"), [])  # the merge poll, not an early merge
+        self.assertEqual(task["status"], "COMPLETE")
+        self.assertEqual(task["report"]["checks"], [failed])  # the evidence stays honest
+        text = self.plan.read_text(encoding="utf-8")
+        self.assertIn("| COMPLETE 2026-", text)
+        self.assertIn("merged " + PR, text)
+        deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
+        line = [x for x in deferred.splitlines() if "[merged-unverified]" in x]
+        self.assertEqual(len(line), 1, deferred)
+        self.assertTrue(line[0].startswith("- [merged-unverified] t1: "), line[0])
+        self.assertIn("pytest", line[0])  # the reason names the failed check
+        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
+        self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review", "demo-t2"])
+
     def test_S10_a_clean_pushed_checkout_is_stopped_and_removed_but_the_branch_stays(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S10"""
         self.waits([self.worker_committed(), self.reviewer_done()])

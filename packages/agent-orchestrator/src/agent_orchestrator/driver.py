@@ -341,6 +341,21 @@ def checkpoint(data, task_id, report):
     return task
 
 
+def settle_merged(data, task_id, report):
+    """A merged unit is COMPLETE whatever its report says: the merge is final. The checks stay as the worker reported
+    them; the caller records why the rules were not met."""
+    task = data["tasks"][task_id]
+    require(task["status"] not in ("COMPLETE", "RELEASED"), "assignment is closed")
+    task["finished_at"] = now()
+    task.update(
+        status="COMPLETE",
+        report=report,
+        updated_at=now(),
+        checkout_at_checkpoint=checkout_snapshot(task["packet"]["checkout"]),
+    )
+    return task
+
+
 def release(data, task_id, reason, cutoff=False):
     task = data["tasks"][task_id]
     require(reason.strip(), "release requires a reason")
@@ -2750,24 +2765,16 @@ class Driver:
             return self.request(task_id, "merge", "%s was closed without a merge" % url)
         if state.get("state") != "MERGED":
             return False
-        try:
-            with self.book() as data:
-                task = data["tasks"][task_id]
-                checkpoint(
-                    data,
-                    task_id,
-                    dict(
-                        task["report"],
-                        status="COMPLETE",
-                        remaining=[],
-                        acceptance_met=True,
-                        review_rounds=task["report"].get("review_rounds", 0),
-                    ),
-                )
-        except ValueError as error:
-            return self.request(
-                task_id, "merge", "merged, but the ledger rejected COMPLETE: %s" % error
-            )
+        stored = self.task(task_id)["report"]
+        report = dict(
+            stored,
+            status="COMPLETE",
+            remaining=[],
+            acceptance_met=True,
+            review_rounds=stored.get("review_rounds", 0),
+        )
+        if not self.complete_merged(task_id, report):
+            return
         commit = (state.get("mergeCommit") or {}).get("oid", "")
         self.put_status(
             task_id,
@@ -2775,6 +2782,27 @@ class Driver:
         )
         self.mark(task_id, gate="cleanup", merge_commit=commit)
         event("%s merged: %s" % (task_id, url))
+
+    def complete_merged(self, task_id, report):
+        """The ledger's COMPLETE for a merged unit. A merge is final, so a report that fails the COMPLETE rules does
+        not hold it back: the unit completes with the checks as reported, deferred.md says what went unverified, and no
+        Lead is asked. False when the ledger refuses for another reason (a closed task); the Lead is asked then."""
+        unverified = None
+        try:
+            with self.book() as data:
+                try:
+                    checkpoint(data, task_id, report)
+                except ValueError as error:
+                    unverified = " ".join(str(error).split())
+                    settle_merged(data, task_id, report)
+        except ValueError as error:
+            self.request(task_id, "merge", "merged, but the ledger rejected COMPLETE: %s" % error)
+            return False
+        if unverified:
+            unit = self.unit_of(task_id)
+            self.defer_unverified(task_id, unverified)
+            self.log("merged-unverified", unit=unit, task=task_id, reason=unverified)
+        return True
 
     def merged_early(self, task_id, state):
         """The pull request was merged while the unit was still working: a merge is final. The unit is complete, its
@@ -2787,14 +2815,8 @@ class Driver:
             self.defer_merged(unit, items, self.run_dir / unit)
         self.log("merged-early", unit=unit, task=task_id, pr=url, findings=len(items))
         self.close_request(task_id, "the pull request was merged before the unit finished")
-        report = self.merged_report(task_id, url)
-        try:
-            with self.book() as data:
-                checkpoint(data, task_id, report)
-        except ValueError as error:
-            return self.request(
-                task_id, "merge", "merged, but the ledger rejected COMPLETE: %s" % error
-            )
+        if not self.complete_merged(task_id, self.merged_report(task_id, url)):
+            return
         commit = (state.get("mergeCommit") or {}).get("oid", "")
         self.put_status(
             task_id,
@@ -2821,7 +2843,7 @@ class Driver:
             "decisions": [],
             "interfaces": [],
             "remaining": [],
-            "checks": [],
+            "checks": list((task.get("report") or {}).get("checks") or []),
             "review_rounds": 0,
             "usage": "unknown",
             "head": head,
@@ -2847,8 +2869,8 @@ class Driver:
                 return list(items)
         return []
 
-    def defer_merged(self, unit, items, source):
-        """The findings a merged-early unit never settled: deferred, tagged with the merge that ended it."""
+    def deferred_file(self):
+        """deferred.md, created with its header on first use."""
         deferred = self.run_dir / "deferred.md"
         if not deferred.exists():
             deferred.write_text(
@@ -2856,12 +2878,21 @@ class Driver:
                 % self.slug,
                 encoding="utf-8",
             )
-        with deferred.open("a", encoding="utf-8") as stream:
+        return deferred
+
+    def defer_merged(self, unit, items, source):
+        """The findings a merged-early unit never settled: deferred, tagged with the merge that ended it."""
+        with self.deferred_file().open("a", encoding="utf-8") as stream:
             for item in items:
                 stream.write(
                     "- %s %s [merged-early]: %s (%s)\n"
                     % (unit.upper(), item.get("id", "?"), item_text(item), source)
                 )
+
+    def defer_unverified(self, task_id, reason):
+        """A unit that merged without meeting the COMPLETE rules: the human reads what went unverified."""
+        with self.deferred_file().open("a", encoding="utf-8") as stream:
+            stream.write("- [merged-unverified] %s: %s\n" % (task_id, reason))
 
     def step_cleanup(self, task_id):
         """A merge is final: stop the unit's implementer and reviewer panes, then remove the worktree only when nothing
