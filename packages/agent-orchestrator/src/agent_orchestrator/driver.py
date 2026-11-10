@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import contracts, events, evidence, routes
+from . import contracts, events, evidence, routes, verify
 from . import plan as yaml_plan
 from .plan import PlanError
 from .runtime_client import CliRuntimeClient
@@ -291,6 +291,35 @@ def merged_snapshot(path):
         return None
 
 
+def require_completable(task, report):
+    """The rules a report meets to be COMPLETE, apart from the ledger's own state. Raises ValueError naming the first
+    that fails; `checkpoint` and the report gate share it, so a report is refused for the same reason in both."""
+    # Total over a schema-valid report: the report gate runs before the ledger's structural checks, which
+    # turn a malformed `remaining` or check into the Lead request they always did.
+    checks = [c for c in report.get("checks") or [] if isinstance(c, dict)]
+    require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
+    require(not report.get("remaining"), "complete result has remaining work")
+    failed = [str(c.get("command")) for c in checks if c.get("outcome") == "failed"]
+    require(not failed, "complete result has failed checks: " + ", ".join(failed))
+    required = {normalise_check(c): c for c in task["packet"]["checks"]}
+    passed = {
+        normalise_check(c["command"])
+        for c in checks
+        if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
+    }
+    missing = [command for key, command in required.items() if key not in passed]
+    require(
+        not missing,
+        "required checks are not passed: " + ", ".join(sorted(missing)),
+    )
+    if routed(task["packet"]):
+        require("review_rounds" in report, "a routed task needs review_rounds")
+        require(
+            isinstance(report.get("usage"), str) and report["usage"].strip(),
+            "a routed task needs usage (the runtime's metric line, or unknown)",
+        )
+
+
 def checkpoint(data, task_id, report, merged=False):
     task = data["tasks"][task_id]
     require(isinstance(report, dict), "report must be an object")
@@ -317,26 +346,7 @@ def checkpoint(data, task_id, report, merged=False):
     )
     if status == "COMPLETE":
         require(task["runtime_id"], "bind the runtime agent before completion")
-        require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
-        require(not report["remaining"], "complete result has remaining work")
-        require(
-            all(c["outcome"] != "failed" for c in checks),
-            "complete result has failed checks: "
-            + ", ".join(c["command"] for c in checks if c["outcome"] == "failed"),
-        )
-        required = {normalise_check(c): c for c in task["packet"]["checks"]}
-        passed = {normalise_check(c["command"]) for c in checks if c["outcome"] == "passed"}
-        missing = [command for key, command in required.items() if key not in passed]
-        require(
-            not missing,
-            "required checks are not passed: " + ", ".join(sorted(missing)),
-        )
-        if routed(task["packet"]):
-            require("review_rounds" in report, "a routed task needs review_rounds")
-            require(
-                isinstance(report.get("usage"), str) and report["usage"].strip(),
-                "a routed task needs usage (the runtime's metric line, or unknown)",
-            )
+        require_completable(task, report)
         task["finished_at"] = now()
     elif status == "BLOCKED":
         require(
@@ -543,6 +553,7 @@ CONTRACT = """# Contract for every task in this run
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
+- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node.
 - COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
@@ -623,9 +634,10 @@ def is_agent(ticket):
     return ticket["Owner"].strip().lower() == "agent"
 
 
-def ready(ticket, by_id):
-    """A TO-DO ticket whose blockers are all COMPLETE."""
-    return ticket["Status"].strip().upper().startswith("TO-DO") and all(
+def ready(ticket, by_id, restartable=False):
+    """A TO-DO ticket (or an IN PROGRESS one with nothing alive behind it: `restartable`) whose blockers are all
+    COMPLETE."""
+    return (restartable or ticket["Status"].strip().upper().startswith("TO-DO")) and all(
         is_done(by_id[b])
         for b in re.split(r"[,\s]+", ticket["Blocked by"].strip())
         if b and b.lower() != "none"
@@ -919,6 +931,28 @@ GATES = (
     "awaiting-merge",
     "cleanup",
 )  # ledger `gate` stages the loop acts on
+
+
+def merge_state(view):
+    """One word for what a pull request's merge state asks of the driver, in precedence order: merged, closed,
+    conflict, unknown, behind, open. A conflict wins over red checks (it can keep CI from starting). A draft reports
+    mergeStateStatus DRAFT, which hides BEHIND but not `mergeable: CONFLICTING`: it is open until it is readied."""
+    if view.get("error"):
+        return "unknown"
+    state = str(view.get("state") or "").upper()
+    if state in ("MERGED", "CLOSED"):
+        return state.lower()
+    status = str(view.get("mergeStateStatus") or "").upper()
+    mergeable = str(view.get("mergeable") or "").upper()
+    if status == "DIRTY" or mergeable == "CONFLICTING":
+        return "conflict"
+    if status in ("", "UNKNOWN") or mergeable == "UNKNOWN":
+        return "unknown"
+    if status == "BEHIND":
+        return "behind"
+    return "open"
+
+
 PARKED = (
     "attention",
     "blocked",
@@ -950,6 +984,25 @@ def next_path(directory, stem, suffix):
     raise ValueError("too many %s files in %s" % (stem, directory))
 
 
+# The tail of a failing job's log that a fix round shows; the full log is at log_path.
+CI_EXCERPT_CHARS = 2048
+
+
+def job_log(run_log, job):
+    """The lines of a `gh run view --log-failed` log that belong to one job: each opens with the job's name and a tab.
+    A log with no such line is taken whole (it names no job)."""
+    lines = [line for line in run_log.splitlines() if line.split("\t", 1)[0] == job]
+    return "\n".join(lines) if lines else run_log
+
+
+def log_tail(text, limit=CI_EXCERPT_CHARS):
+    """The last `limit` characters of a log, starting at a whole line."""
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    return tail.split("\n", 1)[1] if "\n" in tail else tail
+
+
 def cell(text, limit=160):
     """Text safe inside one plan table cell: one line, no pipes, cut at `limit`."""
     flat = " ".join(str(text).replace("|", "/").split())
@@ -968,7 +1021,7 @@ def describe(item):
     """The lines a fix round shows for one findings item (text lines of contract 1 are shown as they are)."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci", "conflict"):
+    if item.get("source") in ("converge", "verify", "ci", "conflict"):
         return "%s %s: %s (exit %s of `%s`; full log %s)" % (
             item["source"],
             item["check"],
@@ -1002,7 +1055,7 @@ def short(item):
     """A finding in a few words, for a request's reason and a ledger `remaining` line."""
     if not isinstance(item, dict):
         return str(item)
-    if item.get("source") in ("converge", "ci"):
+    if item.get("source") in ("converge", "verify", "ci"):
         return (
             item["excerpt"].splitlines()[0]
             if item["excerpt"]
@@ -1134,6 +1187,8 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
+        self.model = None  # the approved plan/1 model of a YAML plan
+        self.outcome_logged = False
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1177,6 +1232,9 @@ class Driver:
                 repo=self.repo,
                 state_dir=self.args.state_dir,
                 require_approval=True,
+            )
+            self.model = (
+                model  # verify gates a ticket against the approved plan, not the legacy table
             )
             ledger_path = Path(self.args.state_dir).expanduser() / (model.slug + ".json")
             statuses = {}
@@ -1265,15 +1323,20 @@ class Driver:
             self.receive(result)
             self.idle_ticks(result.get("assignments") or [])
             self.unfinished = {i for i in result.get("unfinished") or [] if isinstance(i, str)}
+            recovered = 0
             if (
                 not self.reconciled
             ):  # a drive that starts on a ledger a dead one left looks at it once
                 self.reconciled = True
-                dispatched += self.reconcile()
+                recovered = self.reconcile()
+                dispatched += recovered
             # `unfinished` lists assignment ids. A parked unit's assignment stays open in the runtime and makes `wait`
             # return at once: it is not work, so a run with only parked units left ends.
             parked = self.parked_assignments()
-            idle = not [entry for entry in result.get("unfinished") or [] if entry not in parked]
+            # An attempt recovered after this wait is one it could not list: the next wait settles it, not `status`.
+            idle = not recovered and not [
+                entry for entry in result.get("unfinished") or [] if entry not in parked
+            ]
             if not (dispatched or acted or self.received):
                 self.idle()
 
@@ -1499,7 +1562,7 @@ class Driver:
 
         `silent` is a live agent whose turn ended (runtime idle or done): it may be waiting on a background job, so
         it is not an exit. A worker whose report is already on disk advances; every other role keeps waiting for its
-        own `complete`, and only the idle watchdog asks the Lead (R22)."""
+        own `complete`, and only the idle watchdog asks the Lead (R50)."""
         hit = None
         with self.book() as data:
             for task_id, task in data["tasks"].items():
@@ -2031,16 +2094,38 @@ class Driver:
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
             return self.chase_responses(task_id, path, missing)
-        verdict, lines = self.converge(task_id, task["packet"])
+        # The merge completes the unit by the same rules, so a report they refuse is the worker's to fix now, while
+        # it can still act: a fix round, not a Lead request, until the cap.
+        try:
+            require_completable(task, dict(report, review_rounds=0))
+        except ValueError as error:
+            return self.fail_gate(
+                task_id,
+                report,
+                self.gate_name(),
+                [
+                    {
+                        "id": "R1",
+                        "kind": "blocking",
+                        "source": self.gate_name(),
+                        "check": "report",
+                        "command": "the COMPLETE rules for %s" % path.name,
+                        "exit": 1,
+                        "excerpt": str(error),
+                        "log_path": str(path),
+                    }
+                ],
+            )
+        verdict, lines = self.gate(task_id, task["packet"], report)
         if verdict == "error":
-            return self.request(task_id, "converge", lines[0])
+            return self.request(task_id, self.gate_name(), lines[0])
         try:
             if verdict == "FAIL":
-                return self.fail_gate(task_id, report, "converge", lines)
+                return self.fail_gate(task_id, report, lines[0]["source"], lines)
             self.record_report(task_id, report)
         except ValueError as error:
             return self.request(task_id, "report", "the ledger rejected the report: %s" % error)
-        # The archive is gated by converge --final alone. Every other report, a fix round of any source included, goes to
+        # The archive is gated by the converge --final path alone. Every other report, a fix round of any source included, goes to
         # the unit's reviewer: a delta re-review once the unit has been reviewed, else the first review.
         if task["packet"]["unit"] == ARCHIVE:
             return self.mark(task_id, gate="ready-for-ci")
@@ -2074,68 +2159,61 @@ class Driver:
         assignment_id = self.resume_for_responses(task, task_id, path, missing)
         self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
 
-    def converge(self, task_id, packet):
-        """Run converge for the unit's ticket: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
+    def gate_name(self):
+        """The gate that reads a plan: verify for a YAML plan, converge (verify's legacy path) for a Markdown one."""
+        return "verify" if self.plan_path.name.endswith(".plan.yaml") else "converge"
+
+    def gate(self, task_id, packet, report):
+        """The gate for a unit's report: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
         if self.plan_path.name.endswith(".plan.yaml"):
-            reason = "YAML plan: legacy converge reads Markdown; verify replaces this gate in a later ticket"
+            # The Markdown converge reads no YAML plan; verify's invariants gate a ticket. The archive's gate is its own.
+            reason = "YAML plan: verify gates this report; the Markdown converge does not run"
             self.log("converge-skipped", task=task_id, reason=reason)
             event(reason)
-            return "PASS", []
+            if packet["unit"] == ARCHIVE:
+                return "PASS", []
+            return self.verify_ticket(task_id, packet, report)
         if packet["unit"] == ARCHIVE:
             # The archive branch holds the plan with Status ARCHIVED; fall back to the driver's copy if it is untracked.
             copy = Path(packet["checkout"]) / self.plan_rel()
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(copy if copy.exists() else self.plan_path),
-                "--final",
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
+            plan, ticket = (copy if copy.exists() else self.plan_path), None
         else:
-            argv = [
-                sys.executable,
-                str(self.args.converge),
-                str(self.plan_path),
-                "--ticket",
-                packet["unit"].upper(),
-                "--repo",
-                packet["checkout"],
-                "--base",
-                self.args.base,
-            ]
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=300)
-        lines = [line for line in result.stdout.splitlines() if line.startswith("FAIL")]
-        if result.returncode == 0:
+            plan, ticket = self.plan_path, packet["unit"]
+        return verify.legacy_gate(
+            self.args.converge,
+            plan,
+            packet["checkout"],
+            self.args.base,
+            lambda: next_path(self.run_dir / task_id, "converge", ".log")[0],
+            ticket=ticket,
+        )
+
+    def verify_ticket(self, task_id, packet, report):
+        """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
+        ticket = packet["unit"].upper()
+        try:
+            findings = verify.invariants(
+                self.model,
+                ticket,
+                report,
+                repo=packet["checkout"],
+                base=self.args.base,
+                plan_rel=self.plan_rel(),
+            )
+        except verify.VerifyError as error:
+            return "error", [str(error)[:500]]
+        if not findings:
             return "PASS", []
-        if result.returncode == 1 and lines:
-            log = next_path(self.run_dir / task_id, "converge", ".log")[0]
-            log.write_text(result.stdout, encoding="utf-8")
-            command = " ".join(shlex.quote(part) for part in argv)
-            return "FAIL", [
-                {
-                    "id": "C%d" % number,
-                    "kind": "blocking",
-                    "source": "converge",
-                    "check": (
-                        (re.match(r"FAIL ([^:]+):", line) or [None, "converge"])[1] or "converge"
-                    ).strip(),
-                    "command": command,
-                    "exit": result.returncode,
-                    "excerpt": line,
-                    "log_path": str(log),
-                }
-                for number, line in enumerate(lines, 1)
-            ]
-        return "error", [
-            (
-                result.stderr.strip()
-                or result.stdout.strip()
-                or "converge exited %d" % result.returncode
-            )[:500]
-        ]
+        log = next_path(self.run_dir / task_id, "verify", ".log")[0]
+        log.write_text(
+            "".join("FAIL %(check)s: %(excerpt)s\n" % f for f in findings), encoding="utf-8"
+        )
+        command = "verify %s --repo %s --base %s" % (
+            ticket,
+            shlex.quote(str(packet["checkout"])),
+            shlex.quote(self.args.base),
+        )
+        return "FAIL", verify.items(findings, command, log)
 
     def fail_gate(self, task_id, report, source, items, checks_run=(), answer_ids=(), rebase=False):
         """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure."""
@@ -2157,7 +2235,14 @@ class Driver:
             "checks_run": list(checks_run),
             "answer_ids": list(answer_ids),
             "rebase": True if rebase else None,
+            "draft": None,
         }
+        if self.unit_flag(unit, "pr_ready"):
+            # the PR was readied: it goes back to draft before anyone changes its code, a capped one included
+            url = self.pr_of(task_id)
+            if url and not self.undraft(task_id, url):
+                # step_fix tries again and dispatches no worker until it is a draft
+                fix["draft"] = url
         self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
         for item in items:
             self.log_finding(
@@ -2576,18 +2661,24 @@ class Driver:
             if r["status"] == "disputed" and r.get("changes_code") is True
         ]
         if changing and task.get("gate") in ("ready-for-ci", "awaiting-merge"):
-            # the new commits go to a delta re-review before the unit goes on to CI again
+            # the new commits go to a delta re-review before the unit goes on to CI again; the PR goes back to
+            # draft (the poll's ensure_draft, once readiness is forgotten) and is readied again on its return
+            self.unready(self.unit_of(task_id))
+            reviewed = task.get("reviewed_commit")
             self.mark(
                 task_id,
                 answers=dict(answers, state="done"),
                 gate="converged",
                 review=None,
                 ci_green=None,
-                delta={"from": task["reviewed_commit"], "findings": answers["findings"]},
+                ci_state=None,
+                ci_rows=None,
+                ci_head=None,
+                delta={"from": reviewed, "findings": answers["findings"]},
             )
             return event(
                 "%s: %s disputed with changes_code; delta re-review from %s"
-                % (task_id, ", ".join(changing), task["reviewed_commit"][:7])
+                % (task_id, ", ".join(changing), (reviewed or "the base")[:7])
             )
         self.mark(task_id, answers=dict(answers, state="done"))
 
@@ -2636,10 +2727,16 @@ class Driver:
             return None
 
     def pr_view(self, url) -> dict[str, Any]:
-        """The pull request as `gh` sees it: {state, isDraft, mergeStateStatus, mergeable}. A `gh` that fails is no
-        state at all: the driver polls again rather than guessing."""
+        """The pull request as `gh` sees it: {state, isDraft, mergeStateStatus, mergeable, headRefOid}. A `gh` that
+        fails is no state at all: the driver polls again rather than guessing."""
         code, out, err = self.gh(
-            ["pr", "view", url, "--json", "state,isDraft,mergeStateStatus,mergeable,mergeCommit"]
+            [
+                "pr",
+                "view",
+                url,
+                "--json",
+                "state,isDraft,mergeStateStatus,mergeable,mergeCommit,headRefOid",
+            ]
         )
         if code != 0:
             return {"error": (err or out).strip()[:200]}
@@ -2692,22 +2789,28 @@ class Driver:
     def poll(self):
         """One non-blocking look at every unit's pull request: was it merged by hand, is it still a draft, how are
         its checks. A unit with no checks yet, or with checks still running, is looked at again on a later round: no
-        fix round is raised and no other unit waits."""
+        fix round is raised and no other unit waits. The view taken here is the one `step_ci` acts on this round."""
+        self.views = {}
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
             gate = task.get("gate")
             if (
                 task["status"] in ("COMPLETE", "RELEASED")
                 or gate in PARKED
-                or gate in ("awaiting-merge", "cleanup", "done")
+                or gate in ("cleanup", "done")
             ):
                 continue
             url = self.pr_of(task_id)
             if not url:
                 continue
+            if gate == "awaiting-merge":
+                # main moves after the PR is ready: red checks there are a fix round (`step_merge` reads the view)
+                self.poll_checks(task_id, url)
+                continue
             state = self.pr_view(url)
             if state.get("error"):
                 continue
+            self.views[url] = state
             if state.get("state") == "MERGED":
                 self.merged_early(task_id, state)
                 continue
@@ -2716,7 +2819,7 @@ class Driver:
             ):
                 self.ensure_draft(task_id, url, state)
             if gate in ("converged", "reviewing", "reviewed", "ready-for-ci"):
-                self.poll_checks(task_id, url)
+                self.poll_checks(task_id, url, state.get("headRefOid"))
 
     def ensure_draft(self, task_id, url, state):
         """The pull request is a draft while the review runs: a worker that opened it ready is put back."""
@@ -2731,12 +2834,44 @@ class Driver:
             event("%s: the pull request is a draft again (%s)" % (task_id, url))
         self.mark(task_id, draft_done=True)
 
-    def poll_checks(self, task_id, url):
-        """The pull request's checks, once per round. The state is kept on the task; nothing waits for it."""
+    def undraft(self, task_id, url):
+        """The pull request goes back to draft before its code changes again, so nobody merges it half-fixed. On
+        success readiness is cleared across the unit: `gh pr ready` runs again when the unit is back at ready-for-ci.
+        False when `gh` refused; the caller holds the round and tries again on a later round."""
+        unit = self.unit_of(task_id)
+        code, out, err = self.gh(["pr", "ready", url, "--undo"])
+        self.log(
+            "draft", unit=unit, task=task_id, pr=url, outcome="draft" if code == 0 else "failed"
+        )
+        if code != 0:
+            event(
+                "%s: could not put %s back to draft (%s); trying again on a later round"
+                % (task_id, url, (err or out).strip()[:200])
+            )
+            return False
+        self.unready(unit)
+        event("%s: the pull request is a draft again (%s)" % (task_id, url))
+        return True
+
+    def unready(self, unit):
+        """Forget that the unit's pull request was readied: `unit_flag` ORs every attempt, so every one is cleared."""
+        with self.book() as data:
+            for task in data["tasks"].values():
+                if task["packet"].get("unit") == unit:
+                    task.pop("pr_ready", None)
+                    task.pop("draft_done", None)
+
+    def poll_checks(self, task_id, url, head=None):
+        """The pull request's checks, once per round, and the head they were read on. The state is kept on the task;
+        nothing waits for it."""
         state, rows = self.pr_checks(url)
         task = self.task(task_id)
-        if task.get("ci_state") != state or task.get("ci_rows") != rows:
-            self.mark(task_id, ci_state=state, ci_rows=rows)
+        if (
+            task.get("ci_state") != state
+            or task.get("ci_rows") != rows
+            or task.get("ci_head") != head
+        ):
+            self.mark(task_id, ci_state=state, ci_rows=rows, ci_head=head)
         self.log(
             "ci",
             unit=self.unit_of(task_id),
@@ -2748,13 +2883,23 @@ class Driver:
         return state
 
     def step_ci(self, task_id):
-        """The unit's checks. Green and the last review passed: the pull request is marked ready and the unit waits
-        for the merge. A pull request behind its base is updated; a conflict is a fix round of its own."""
+        """The unit's merge state, then its checks. A conflict, a branch behind its base or a merge state GitHub has
+        not computed yet is handled before `gh pr ready`, so a pull request that cannot merge is never readied. Green
+        and the last review passed: the pull request is marked ready and the unit waits for the merge."""
         task = self.task(task_id)
         try:
             url = self.pr_url(task_id)[0]
         except (contracts.ContractError, ValueError) as error:
             return self.request(task_id, "ci", str(error))
+        view = getattr(self, "views", {}).pop(url, None) or self.pr_view(url)
+        kind = merge_state(view)
+        if kind == "merged":
+            return False  # the next poll completes it (merged_early)
+        if kind == "closed":
+            return self.request(task_id, "merge", "%s was closed without a merge" % url)
+        moved = self.merge_moved(task_id, url, view)
+        if moved is not None:
+            return moved
         state = task.get("ci_state")
         if state != "green":
             if state == "failed":
@@ -2768,6 +2913,11 @@ class Driver:
                 return self.request(task_id, "ci", "gh pr checks failed for %s" % url)
             event("%s: no checks yet, or they are still running; polling again" % task_id)
             return False  # no fix round: the unit is polled again on a later round
+        before = task.get("updated_from")
+        if before and task.get("ci_head") in (None, before):
+            # green read before GitHub moved the head is the old head's green, not the update's
+            event("%s: the checks are not yet those of the updated branch; polling again" % task_id)
+            return False
         waiting = (task.get("answers") or {}).get("state") in ("working", "reported")
         if waiting:  # green, but the implementer's answers may still change the code: pr-ready waits for them
             return False
@@ -2779,37 +2929,93 @@ class Driver:
                 )
             self.mark(task_id, pr_ready=True)
             event("%s: the pull request is ready for review (%s)" % (task_id, url))
-        view = self.pr_view(url)
-        if str(view.get("mergeStateStatus") or "").upper() == "BEHIND":
-            return self.update_branch(task_id, url)
         unit = self.unit_of(task_id)
-        head = contracts.load(self.task(task_id)["report_path"], contracts.validate_report)["head"]
+        # an update-branch moves the head without a new report: the live head keys the wake, so it is sent again
+        head = (
+            view.get("headRefOid")
+            or contracts.load(self.task(task_id)["report_path"], contracts.validate_report)["head"]
+        )
         self.wake("pr-ready", unit, "pr-ready %s: %s" % (unit, url), key="%s:%s" % (unit, head))
         self.put_status(task_id, "IN PROGRESS · awaiting merge (%s)" % url)
-        self.mark(task_id, gate="awaiting-merge", pr=url)
+        self.mark(task_id, gate="awaiting-merge", pr=url, updated_from=None)
 
-    def update_branch(self, task_id, url):
+    def merge_moved(self, task_id, url, view):
+        """What an open pull request's merge state asks for: a conflict round, an update, or another poll. None when
+        it can merge as it is and the caller goes on; True when the gate moved, False when nothing moves yet."""
+        kind = merge_state(view)
+        if kind == "conflict":
+            self.conflict(task_id, url, view)
+            return True
+        if kind == "unknown":
+            event(
+                "%s: the merge state of %s is not known yet (%s); polling again"
+                % (task_id, url, view.get("error") or "UNKNOWN")
+            )
+            return False
+        if kind == "behind":
+            return self.update_branch(task_id, url, view) is not False
+        return None
+
+    def update_branch(self, task_id, url, view):
         """The pull request is behind its base: `gh pr update-branch` brings it up to date. A clean update needs no
-        review (nobody wrote code); a conflict is a fix round of its own: a fresh worker rebases and the result goes
-        to a delta re-review."""
+        review (nobody wrote code): the unit is back at ready-for-ci, its checks run again and the PR stays ready. A
+        failed update is a conflict round only when the PR now conflicts; any other failure goes to the Lead, since no
+        rebase fixes an access or network error."""
+        before = view.get("headRefOid")
         code, out, err = self.gh(["pr", "update-branch", url])
         unit = self.unit_of(task_id)
         if code == 0:
             self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="updated")
             event("%s: the branch was updated; no review needed" % unit)
-            self.mark(task_id, ci_state=None, ci_rows=None)
+            self.mark(
+                task_id,
+                gate="ready-for-ci",
+                ci_state=None,
+                ci_rows=None,
+                ci_head=None,
+                updated_from=before,
+            )
             return False  # the new commits run CI again: polled on a later round
         excerpt = (err or out).strip()[:1500] or "gh pr update-branch exited %d" % code
-        self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="conflict")
-        log = next_path(self.run_dir / task_id, "update-branch", ".log")[0]
+        fresh = self.pr_view(url)
+        if merge_state(fresh) == "conflict":
+            self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="conflict")
+            evidence = ("update-branch", "gh pr update-branch %s" % url, code, excerpt)
+            return self.conflict(task_id, url, fresh, evidence)
+        self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="failed")
+        return self.request(
+            task_id,
+            "ci",
+            "gh pr update-branch failed for %s and the pull request does not conflict: %s. Fix the access or "
+            "update the branch by hand, then decide how the unit goes on." % (url, excerpt[:300]),
+        )
+
+    def conflict(self, task_id, url, view, evidence=None):
+        """The pull request conflicts with its base: a fix round of its own, where a fresh worker rebases and the
+        result goes to a delta re-review. The evidence is what `gh` said: the merge state, or the failed update."""
+        unit = self.unit_of(task_id)
+        status = "mergeStateStatus %s, mergeable %s" % (
+            view.get("mergeStateStatus"),
+            view.get("mergeable"),
+        )
+        check, command, code, excerpt = evidence or (
+            "merge-state",
+            "gh pr view %s --json mergeStateStatus,mergeable" % url,
+            0,
+            "the pull request conflicts with its base: %s" % status,
+        )
+        if evidence:
+            excerpt = "%s (%s)" % (excerpt, status)
+        log = next_path(self.run_dir / task_id, check, ".log")[0]
         log.write_text(excerpt + "\n", encoding="utf-8")
+        self.log("conflict", unit=unit, task=task_id, pr=url, state=status)
         report = contracts.load(self.task(task_id)["report_path"], contracts.validate_report)
         item = {
             "id": "BR1",
             "kind": "blocking",
             "source": "conflict",
-            "check": "update-branch",
-            "command": "gh pr update-branch %s" % url,
+            "check": check,
+            "command": command,
             "exit": code,
             "excerpt": excerpt,
             "log_path": str(log),
@@ -2817,50 +3023,43 @@ class Driver:
         return self.fail_gate(task_id, report, "conflict", [item], rebase=True)
 
     def ci_items(self, task_id, url, rows):
-        """The failing CI checks as evidence items: the check's name and the tail of its log (`gh run view`)."""
-        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
+        --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
         failing = [
             row
             for row in rows
             if str(row.get("bucket") or "").lower() in ("fail", "failing", "cancel", "cancelled")
         ]
+        runs = {}  # run id -> its failed-step log: every failing job of a run shares one fetch
         items = []
         for number, row in enumerate(failing, 1):
-            excerpt = str(row.get("description") or "").strip()
+            name = row.get("name") or "ci"
+            text = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
-                excerpt = (out or err).strip() or excerpt
-            items.append(
-                {
-                    "id": "CI%d" % number,
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": row.get("name") or "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": excerpt or "the check failed",
-                    "log_path": str(log),
-                }
-            )
+                if run.group(1) not in runs:
+                    _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
+                    runs[run.group(1)] = (out or err).strip()
+                text = job_log(runs[run.group(1)], name) or text
+            items.append(self.ci_item(task_id, url, "CI%d" % number, name, text))
         if not items:
-            items = [
-                {
-                    "id": "CI1",
-                    "kind": "blocking",
-                    "source": "ci",
-                    "check": "ci",
-                    "command": "gh pr checks %s" % url,
-                    "exit": 1,
-                    "excerpt": "the checks failed",
-                    "log_path": str(log),
-                }
-            ]
-        log.write_text(
-            "\n".join("%s: %s" % (item["check"], item["excerpt"]) for item in items) + "\n",
-            encoding="utf-8",
-        )
+            items.append(self.ci_item(task_id, url, "CI1", "ci", "the checks failed"))
         return items
+
+    def ci_item(self, task_id, url, item_id, check, text):
+        """One CI finding: the job's full text at `log_path`, its capped tail as the excerpt."""
+        log = next_path(self.run_dir / task_id, "ci", ".log")[0]
+        log.write_text(text + "\n", encoding="utf-8")
+        return {
+            "id": item_id,
+            "kind": "blocking",
+            "source": "ci",
+            "check": check,
+            "command": "gh pr checks %s" % url,
+            "exit": 1,
+            "excerpt": log_tail(text) or "the check failed",
+            "log_path": str(log),
+        }
 
     def put_status(self, task_id, status):
         """The ticket's Status cell; the archive unit has no row."""
@@ -2874,17 +3073,25 @@ class Driver:
         return self.task(task_id)["packet"]["unit"].upper()
 
     def step_merge(self, task_id):
-        """The unit waits for the merge: the driver polls `gh` for it, and the merge itself is the user's."""
+        """The unit waits for the merge, and the merge itself is the user's. The driver watches the pull request
+        while it waits: main moves on, so a PR that now conflicts, is behind or has red checks is acted on."""
         url = self.task(task_id).get("pr")
         if not url:
             return self.request(task_id, "merge", "no pull request to wait for")
         state = self.pr_view(url)
-        if state.get("error"):
-            event("%s: gh pr view failed (%s); polling again" % (task_id, state["error"]))
-            return False
-        if state.get("state") == "CLOSED":
+        kind = merge_state(state)
+        if kind == "closed":
             return self.request(task_id, "merge", "%s was closed without a merge" % url)
-        if state.get("state") != "MERGED":
+        if kind != "merged":
+            moved = self.merge_moved(task_id, url, state)
+            if moved is not None:
+                return moved
+            task = self.task(task_id)
+            if task.get("ci_state") == "failed":
+                report = contracts.load(task["report_path"], contracts.validate_report)
+                return self.fail_gate(
+                    task_id, report, "ci", self.ci_items(task_id, url, task.get("ci_rows") or [])
+                )
             return False
         stored = self.task(task_id)["report"]
         report = dict(
@@ -3366,6 +3573,11 @@ class Driver:
         """Hand the failing items to the unit's worker in a new task directory; a gone pane gets a fresh worker."""
         task = self.task(task_id)
         packet, fix = task["packet"], task["fix"]
+        if fix.get("draft"):
+            if not self.undraft(task_id, fix["draft"]):
+                return False  # a ready PR must not change under a reviewer's or a merger's eyes
+            fix = dict(fix, draft=None)
+            self.mark(task_id, fix=fix)
         unit, attempt = packet["unit"], fix["attempt"]
         new_id = "%sr%d" % (unit, attempt)
         new_dir = self.run_dir / new_id
@@ -3401,8 +3613,7 @@ class Driver:
         )
         if fix.get("rebase"):
             text = (
-                "Read %s and follow it. The pull request could not be updated because the branch conflicts with "
-                "its base: this is a rebase round, not a fix round. Rebase the branch onto the base, resolve the "
+                "Read %s and follow it. The pull request conflicts with its base: this is a rebase round, not a fix round. Rebase the branch onto the base, resolve the "
                 "conflicts, push the result to the same branch and open no new pull request. The round's brief is "
                 "at %s." % (task_md, task_md)
             )
@@ -3798,9 +4009,8 @@ class Driver:
                 "# Rebase %s (task %s): the branch conflicts with its base"
                 % (packet["unit"].upper(), new_id),
                 "",
-                "This is a rebase round: the pull request of %s could not be updated because the branch conflicts with "
-                "the base. Rebase the branch onto the base, resolve the conflicts, and push the result to the same "
-                "branch. What `gh pr update-branch` said (also in %s):"
+                "This is a rebase round: the pull request of %s conflicts with its base. Rebase the branch onto the "
+                "base, resolve the conflicts, and push the result to the same branch. What `gh` said (also in %s):"
                 % (packet["unit"].upper(), new_dir / "findings.json"),
                 "",
                 *["- " + describe(item) for item in findings["items"]],
@@ -3835,6 +4045,10 @@ class Driver:
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
             return 0
+        if not self.model and not self.outcome_logged:
+            # A Markdown plan's outcome is never run: it completes unverified and cannot be accepted.
+            self.outcome_logged = True
+            self.log("plan-outcome", outcome=verify.legacy_outcome(True))
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
         if held and held["runtime_id"]:
@@ -4070,24 +4284,84 @@ class Driver:
         count = 0
         for ticket in plan["tickets"]:
             task_id = ticket["#"].lower()
-            if not is_agent(ticket) or task_id in self.failed or not ready(ticket, by_id):
+            if not is_agent(ticket):
                 continue
-            held = tasks.get(task_id)
+            if task_id in self.failed and ticket["Status"].strip().upper() == "TO-DO":
+                self.failed.discard(task_id)  # the Lead's answer to the wake: try it again
+            if task_id in self.failed:
+                continue
+            if not ready(ticket, by_id, self.restartable(ticket, tasks)):
+                continue
+            attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == task_id}
+            open_ = {
+                k: t for k, t in attempts.items() if t["status"] not in ("COMPLETE", "RELEASED")
+            }
+            held, new_id = None, None
+            if any(t["status"] == "COMPLETE" for t in attempts.values()) or any(
+                t["runtime_id"] for t in open_.values()
+            ):
+                continue
+            if open_:
+                # a dispatch that failed after its claim left a reserved attempt: it is dispatched again under its
+                # own id (claim is idempotent for it), not as a fresh one
+                new_id, held = next(iter(open_.items()))
+            elif attempts:
+                # every attempt is closed, and a closed id is never dispatched again
+                new_id = next(
+                    "%sr%d" % (task_id, n)
+                    for n in range(1, 1000)
+                    if "%sr%d" % (task_id, n) not in tasks
+                )
             if held and held["runtime_id"]:
                 continue
             if not held and unfinished >= self.args.max_workers:
                 continue
             try:
-                self.dispatch(plan, ticket)
+                self.dispatch(plan, ticket, new_id)
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.failed.add(task_id)
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error)
                 unfinished += 0 if held else 1
                 continue
             unfinished += 0 if held else 1
+            # a failure the Lead has answered no longer fails the run
+            self.errors[:] = [e for e in self.errors if not e.startswith(ticket["#"] + ": ")]
             count += 1
         return count
+
+    def restartable(self, ticket, tasks):
+        """True when a ticket whose cell reads `IN PROGRESS` holds no live work: the ledger has an attempt of its
+        unit, every one is RELEASED, and the runtime answers definitively that its worker is not live. A cell with
+        no attempt in the ledger belongs to some other run and stays a lock; a failed lookup is not an answer: it
+        strands the unit (a wake and a non-zero exit) and nothing is spawned."""
+        if not ticket["Status"].strip().upper().startswith("IN PROGRESS"):
+            return False
+        unit = ticket["#"].lower()
+        attempts = {k: t for k, t in tasks.items() if t["packet"].get("unit") == unit}
+        if not attempts or any(t["status"] != "RELEASED" for t in attempts.values()):
+            return False
+        name = worker_name(self.slug, ticket["#"][1:])
+        try:
+            return self.agent_gone(name)[0]
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            self.strand(list(attempts)[-1], name, str(error))
+            return False
+
+    def not_dispatched(self, ticket, error, what="not dispatched"):
+        """A dispatch that cannot happen asks the Lead, once per ticket and reason; the cell keeps the reason and
+        the ticket stays out of this run's rounds until the Lead sets its Status to TO-DO (a restarted drive reads the cell
+        as TO-DO and tries it once more)."""
+        task_id = ticket["#"].lower()
+        self.failed.add(task_id)
+        self.errors.append("%s: %s" % (ticket["#"], error))
+        event("%s %s: %s" % (ticket["#"], what, error))
+        self.write_status(ticket["#"], "TO-DO · %s: %s" % (what, cell(error, 120)))
+        self.wake(
+            "not-dispatched",
+            task_id,
+            "%s %s: %s -> fix that, then set the ticket's Status to TO-DO and the next round tries it again"
+            % (ticket["#"], what, cell(error, 300)),
+            key="%s:%s" % (task_id, error),
+        )
 
     # ---- reconciliation: an open task whose agent the runtime no longer lists -------------------------------------
     # A drive that restarts (or finds its worker gone) must not trust the ledger's `runtime_id`, and must not finish
@@ -4240,7 +4514,10 @@ class Driver:
                 raise ValueError("the plan no longer has ticket %s" % unit.upper())
             self.dispatch(plan, ticket, new_id, note=note)
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            if ticket is None:
+                self.strand(task_id, name, "re-dispatch as %s failed: %s" % (new_id, error))
+            else:
+                self.not_dispatched(ticket, error, "not re-dispatched as " + new_id)
             return 0
         event("%s: dispatched again as %s after %s" % (unit.upper(), new_id, said))
         return 1
@@ -4305,8 +4582,7 @@ class Driver:
             try:
                 self.dispatch(plan, ticket, "%sp%d" % (task["packet"]["unit"], attempt))
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.errors.append("%s: %s" % (ticket["#"], error))
-                event("%s not re-dispatched: %s" % (ticket["#"], error))
+                self.not_dispatched(ticket, error, "not re-dispatched")
                 continue
             count += 1
         return count
@@ -4824,6 +5100,13 @@ def main(argv=None):
         "plan", help="Validate and approve plan/1 YAML contracts"
     ).add_subparsers(dest="plan_command", required=True)
     plan_commands.add_parser("schema", help="Print the plan/1 JSON Schema")
+    plans = commands.add_parser(
+        "plans", help="List the plans of a repository (or of an explicit plan's directory)"
+    ).add_subparsers(dest="plans_command", required=True)
+    listing = plans.add_parser("list")
+    listing.add_argument("path", nargs="?", help="A plan file, or the directory holding plans")
+    listing.add_argument("--repo", help="Repository root; default the current repository")
+    listing.add_argument("--json", action="store_true", help="Print the list as a JSON array")
     for verb in ("check", "approve"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
@@ -5047,6 +5330,11 @@ def main(argv=None):
             }
         model = yaml_plan.load(args.plan, repo=args.repo, state_dir=args.state_dir)
         return {"valid": True, "slug": model.slug}
+    if args.command == "plans":
+        found = yaml_plan.discover(args.repo, args.path)
+        if args.json:
+            return found
+        return "\n".join(entry["path"] for entry in found)
     if args.command == "run":
         return drive(args)
     if args.command == "await":

@@ -105,7 +105,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1").get("gate"), None)
 
     def test_S11_a_worker_the_runtime_reports_unreported_or_error_is_one_request_at_once(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11 — R22: only idle and done wait for the watchdog."""
+        """orchestrator-engine/R2: code-driven-orchestrator/S11 — R50: only idle and done wait for the watchdog."""
         for runtime_state in ("unreported", "error"):
             with self.subTest(runtime_state=runtime_state):
                 self.setUp()
@@ -121,7 +121,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 self.assertEqual(len(self.wakes()), 1)
 
     def test_S5_a_worker_whose_turn_ended_idle_or_done_is_one_idle_request_from_the_watchdog(self):
-        """orchestrator-engine/R22: orchestrator-silent-idle/S5"""
+        """orchestrator-engine/R50: orchestrator-silent-idle/S5"""
         for runtime_state in ("idle", "done"):
             with self.subTest(runtime_state=runtime_state):
                 self.setUp()
@@ -137,7 +137,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 self.assertEqual(request["event"], "idle")
 
     def test_S11_blocked_and_decision_reports_are_handled_at_once(self):
-        """orchestrator-engine/R22: orchestrator-silent-idle/S11"""
+        """orchestrator-engine/R50: orchestrator-silent-idle/S11"""
         for kind in ("blocked", "decision"):
             with self.subTest(kind=kind):
                 self.setUp()

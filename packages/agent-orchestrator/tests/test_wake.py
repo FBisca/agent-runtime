@@ -106,7 +106,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
     def test_S1_a_worker_whose_turn_ended_without_a_report_writes_an_idle_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1
 
-        R22: an ended turn is not an exit; the idle watchdog asks, naming the worker and the way out."""
+        R50: an ended turn is not an exit; the idle watchdog asks, naming the worker and the way out."""
         self.waits(
             [wait_result([assignment("demo-t1", "working", "idle")])] * 4
             + [self.decide_step("t1", "skip")]
@@ -118,7 +118,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
     def test_S1_a_reviewer_that_ends_without_a_review_writes_an_idle_request_with_no_warnings(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1
 
-        R22: an idle reviewer is a live reviewer: no warning resume replaces its assignment, and the watchdog asks
+        R50: an idle reviewer is a live reviewer: no warning resume replaces its assignment, and the watchdog asks
         the Lead once, naming the reviewer and the review file."""
         self.waits(
             [

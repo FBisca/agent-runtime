@@ -342,7 +342,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         )
 
     def test_S7_an_answerer_whose_turn_ended_stays_working_and_its_complete_is_accepted(self):
-        """orchestrator-engine/R22: orchestrator-silent-idle/S7"""
+        """orchestrator-engine/R50: orchestrator-silent-idle/S7"""
         self.waits(
             self.passing_with_question()
             + [
@@ -358,7 +358,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["answers"]["state"], "done")
 
     def test_S8_an_answerer_that_never_reports_is_one_idle_request_and_the_pr_stays_blocked(self):
-        """orchestrator-engine/R22: orchestrator-silent-idle/S8"""
+        """orchestrator-engine/R50: orchestrator-silent-idle/S8"""
         self.waits(
             self.passing_with_question() + [self.silent_answerer("idle")] * 5 + [self.skipped()]
         )
@@ -370,7 +370,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(ready, [], "the PR was marked ready with the answers outstanding")
 
     def test_S8_after_the_lead_answers_an_idle_answerer_the_unit_reaches_pr_ready_and_done(self):
-        """orchestrator-engine/R22: orchestrator-silent-idle/S8 — the Lead's decision replaces the silent answers
+        """orchestrator-engine/R50: orchestrator-silent-idle/S8 — the Lead's decision replaces the silent answers
         assignment, so the answers no longer hold pr-ready."""
         worker = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 2))
         worker["write"] = [[str(self.run_dir / "t1" / "report.2.json"), self.report("t1")]]
@@ -440,6 +440,26 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertIn(str(self.run_dir / "t1a1" / "findings.json"), text)
         self.assertEqual(self.task()["gate"], "done")
         self.assertGreaterEqual(len(self.checks_log()), 2)
+
+    def test_S8_a_disputed_change_drafts_the_pr_again_and_readies_it_after_the_re_review(self):
+        """orchestrator-engine/R30: orchestrator-pr-merge-state/S8"""
+        self.born_ready()  # the review's draft undo marks the unit; the dispute must not leave that mark behind
+        disputed = dict(RESPONSE, status="disputed", changes_code=True, note="the contract says no")
+        second = self.reviewer_done(self.review2())
+        second["write"][0][0] = str(self.run_dir / "t1" / "review.2.json")
+        second["assignments"][0]["assignment_id"] = "r1-demo-t1-review"
+        second["messages"][0]["assignment_id"] = "r1-demo-t1-review"
+        self.prs(["OPEN"])  # open while it is ready; merged once the re-review passed
+        second["write"].append([str(self.home / "prs.json"), json.dumps(["MERGED"])])
+        self.waits(self.passing_with_question() + [self.answers_report([disputed]), second])
+        self.run_driver()
+        pr = "https://github.com/o/r/pull/7"
+        self.assertEqual(
+            self.gh_calls("pr", "ready"), [["pr", "ready", pr, "--undo"], ["pr", "ready", pr]]
+        )
+        readied = [c for c in self.gh_log() if c["argv"] == ["pr", "ready", pr]][0]
+        self.assertTrue(any('"response"' in line for line in readied["events"]))
+        self.assertEqual(self.task()["gate"], "done")
 
     def test_S16_missing_answers_resume_the_worker_once_then_become_a_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S16"""

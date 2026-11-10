@@ -84,12 +84,47 @@ class ContractTests(unittest.TestCase):
             contracts.validate_report(report(pr="https://example.invalid/pr/1"))["head"], "abc1234"
         )
 
+    def test_S9_report_contract_3_carries_covers_mapping_scenarios_to_test_nodes(self):
+        covers = {"S1": ["tests/test_a.py::test_one", "tests/test_a.py::TestA::test_two"]}
+        validated = contracts.validate_report(report(contract=3, covers=covers))
+        self.assertEqual(validated["covers"], covers)
+        self.assertEqual(contracts.Report.model_validate(validated).covers, covers)
+
+    def test_S9_report_contract_3_without_covers_is_refused_naming_the_field(self):
+        self.rejects(contracts.validate_report, report(contract=3), "covers")
+
+    def test_S9_covers_belongs_to_contract_3_only(self):
+        self.rejects(
+            contracts.validate_report, report(contract=2, covers={"S1": ["a::b"]}), "contract 3"
+        )
+
+    def test_S9_a_malformed_covers_names_the_scenario_it_breaks(self):
+        for covers, needle in (
+            ({"one": ["a.py::t"]}, "one"),
+            ({"S1": "a.py::t"}, "S1"),
+            ({"S1": []}, "S1"),
+            ({"S1": ["a.py::t", ""]}, "S1"),
+        ):
+            self.rejects(contracts.validate_report, report(contract=3, covers=covers), needle)
+
+    def test_S9_a_verify_finding_is_a_gate_item_of_source_verify(self):
+        item = {
+            "kind": "blocking",
+            "source": "verify",
+            "check": "covers",
+            "command": "verify T1",
+            "exit": 1,
+            "excerpt": "S1: test node a.py::t does not exist",
+            "log_path": "/run/t1/verify.log",
+        }
+        self.assertEqual(contracts.make_findings("verify", 1, [item])["items"], [item])
+
     def test_S6a_report_rejects_a_missing_version_head_or_bad_pr(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
         bare = report()
         del bare["contract"]
         self.rejects(contracts.validate_report, bare, "contract")
-        self.rejects(contracts.validate_report, report(contract=3), "contract")
+        self.rejects(contracts.validate_report, report(contract=4), "contract")
         for key in ("head", "task_id", "summary"):
             broken = report()
             del broken[key]
