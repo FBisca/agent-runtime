@@ -216,6 +216,9 @@ tickets:
       - packages/agent-orchestrator/src/agent_orchestrator/verify.py
       - packages/agent-orchestrator/tests/test_acceptance.py
       - packages/agent-orchestrator/tests/test_merge.py
+      - packages/agent-orchestrator/tests/fixtures.py
+      - packages/agent-orchestrator/tests/test_archive.py
+      - packages/agent-orchestrator/tests/test_archive_yaml.py
     size: regular
     difficulty: complex
     risk: [state, concurrency]
@@ -281,6 +284,6 @@ tickets:
     difficulty: simple
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-10T16:20:08.090010+00:00'
-  base: bcc2fd6ebafa737bc78754c20ff1a6555c64c4b2
-  digest: 8464f534d43e6a1a8c2a485d1bcc0b499518dc4fdf3db29ffc00dddc0cf73d15
+  at: '2026-11-10T18:03:43.595103+00:00'
+  base: 4aba0ade9ec959ee8d5d3db733ec10b06d2f0d37
+  digest: 9be261f690b49f1ebf1fd6739262e1154783bc29aaf0b995ee9d62d859134df8
