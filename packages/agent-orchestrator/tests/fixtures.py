@@ -286,9 +286,10 @@ class RunFixture(_Case):
         {"name": "unit", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/55/job/8"}
     ]
 
-    def checks(self, answers, pr=None):
+    def checks(self, answers, pr=None, ready=False):
         """What `gh pr checks` answers on its next calls (the last repeats): "green", "pending", "none" (no checks
-        reported yet), "fail" or ("fail", <check name>). With `pr` (a number) only that PR is answered this way."""
+        reported yet), "fail" or ("fail", <check name>). With `pr` (a number) only that PR is answered this way; with
+        `ready`, only a PR that is ready (not a draft)."""
         rows = []
         for answer in answers:
             kind, *names = answer if isinstance(answer, tuple) else (answer, "unit tests")
@@ -309,13 +310,22 @@ class RunFixture(_Case):
                     "fail": [1, json.dumps(fails + [self.GREEN[0]]), ""],
                 }[kind]
             )
-        (self.home / ("checks.json" if pr is None else "checks-%s.json" % pr)).write_text(
-            json.dumps(rows), encoding="utf-8"
+        name = (
+            "checks-ready.json" if ready else "checks.json" if pr is None else "checks-%s.json" % pr
         )
+        (self.home / name).write_text(json.dumps(rows), encoding="utf-8")
 
     def prs(self, states):
         """The PR's states once `gh pr ready` has run: names or objects (mergeStateStatus ...); the last repeats."""
         (self.home / "prs.json").write_text(json.dumps(states), encoding="utf-8")
+
+    def drafts(self, states):
+        """The PR's states while it is a draft (OPEN when unscripted); the last repeats."""
+        (self.home / "view-draft.json").write_text(json.dumps(states), encoding="utf-8")
+
+    def undos(self, answers):
+        """What `gh pr ready --undo` answers: [exit code, stderr] per call (the last repeats)."""
+        (self.home / "undo.json").write_text(json.dumps(answers), encoding="utf-8")
 
     def early(self, states):
         """PR states `gh pr view` answers before and regardless of `gh pr ready` (a merge by hand)."""

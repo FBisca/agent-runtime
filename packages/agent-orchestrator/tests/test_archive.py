@@ -131,6 +131,29 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(self.task("archiver1")["status"], "COMPLETE")
 
 
+class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
+    def test_S12_a_conflicting_archive_pr_is_rebased_with_no_review(self):
+        """orchestrator-engine/R34: orchestrator-pr-merge-state/S12"""
+        dirty = {"state": "OPEN", "mergeStateStatus": "DIRTY", "mergeable": "CONFLICTING"}
+        self.prs(
+            ["MERGED", dirty, "MERGED"]
+        )  # T1 merges; the archive PR conflicts once, then merges
+        rebased = self.archive_done("archiver1", id=spawn_id(ARCHIVE, 2))
+        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done(), rebased])
+        self.run_driver()
+        findings = json.loads(
+            (self.run_dir / "archiver1" / "findings.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(findings["source"], "conflict")
+        archive_pr = "https://github.com/o/r/pull/9"
+        self.assertIn(["pr", "ready", archive_pr, "--undo"], self.gh_calls("pr", "ready"))
+        self.assertEqual(self.spawned().count(ARCHIVE), 2)  # the rebase worker is fresh
+        self.assertNotIn("demo-archive-review", self.spawned())
+        self.assertEqual(self.events("error"), [])
+        task = self.task("archiver1")
+        self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
+
+
 class MetricsTests(ArchiveFixture, unittest.TestCase):
     def with_usage(self, step, usage):
         step["assignments"][0]["usage"] = usage

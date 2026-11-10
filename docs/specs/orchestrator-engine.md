@@ -53,6 +53,18 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R35** WHEN a PARTIAL checkpoint runs and `packet.checkout` does not exist, THEN `checkpoint()` raises (from merged-unit-completes/S8a)
 - **R36** WHEN cleanup runs for a COMPLETE task whose checkout is also used by a non-closed task under a different worker name, THEN the worktree is kept (from merged-unit-completes/S9)
 - **R37** WHEN several CI checks fail with long logs, THEN each CI finding carries only its own job's capped excerpt, the full log is at `log_path`, and the fix-round findings file stays under 64 KiB (from merged-unit-completes/S10)
+- **R38** WHEN a unit is at `awaiting-merge` and its pull request turns `DIRTY` or `CONFLICTING`, THEN the PR goes back to draft and a conflict fix round gives a fresh worker a rebase brief quoting the merge state; the rebase goes through a delta re-review and CI, and `gh pr ready` runs again before the unit waits for its merge again. (from orchestrator-pr-merge-state/S1)
+- **R39** WHEN a unit at `ready-for-ci` has a `DIRTY` or `CONFLICTING` pull request, THEN neither `gh pr ready` nor `gh pr update-branch` runs: the PR stays a draft and the conflict fix round is raised directly. (from orchestrator-pr-merge-state/S2)
+- **R40** WHEN a unit's pull request is `BEHIND` its base at `ready-for-ci` or `awaiting-merge`, THEN `gh pr update-branch` runs, the unit goes back to `ready-for-ci` with its checks cleared and its PR still ready (no draft, no fix round), and only checks read on the moved head count as green; the new `pr-ready` wake is keyed on the PR's live `headRefOid`. (from orchestrator-pr-merge-state/S3)
+- **R41** WHEN the merge state is `UNKNOWN`, or `gh pr view` fails, at `ready-for-ci` or `awaiting-merge`, THEN no `gh pr ready`, no wake and no fix round: the unit is polled again. (from orchestrator-pr-merge-state/S4)
+- **R42** WHEN a unit is at `awaiting-merge` and its checks turn red, THEN the PR goes back to draft and a CI fix round is raised with the failed check's log. (from orchestrator-pr-merge-state/S5)
+- **R43** WHEN a unit at `awaiting-merge` has merge state `CLEAN`, `BLOCKED`, `UNSTABLE` or `HAS_HOOKS` and checks green or pending, THEN it keeps waiting with no mutating `gh` call, and R15 still holds. (from orchestrator-pr-merge-state/S6)
+- **R44** WHEN a pull request is `MERGED` or `CLOSED` while it also conflicts, is behind or has red checks, THEN the merge or close handling wins and no fix round is raised. (from orchestrator-pr-merge-state/S7)
+- **R45** WHEN a disputed answer with `changes_code` sends a unit back from `ready-for-ci` or `awaiting-merge`, THEN the unit's readiness is forgotten across its attempts and its checks cleared: the PR is a draft through the delta re-review and `gh pr ready` runs again on its return. (from orchestrator-pr-merge-state/S8)
+- **R46** WHEN `gh pr ready --undo` fails as a unit leaves for a fix round, THEN no fix worker is dispatched; the undo is logged and tried again on a later round. (from orchestrator-pr-merge-state/S9)
+- **R47** WHEN `gh pr update-branch` fails and a fresh `gh pr view` shows no conflict, THEN no conflict round is raised: the Lead is asked with the `gh` error and the way out. (from orchestrator-pr-merge-state/S10)
+- **R48** WHEN a unit's pull request conflicts after its fix rounds hit the cap, THEN it escalates to the Lead as other capped rounds do, and the PR is left a draft. (from orchestrator-pr-merge-state/S11)
+- **R49** WHEN the archive unit's pull request conflicts, THEN its conflict round goes fix, `converge --final`, `ready-for-ci` with no review, and the PR is a draft while it is rebased. (from orchestrator-pr-merge-state/S12)
 
 ## Coverage
 
@@ -72,6 +84,18 @@ suite runs here, against the member, and the member answers the way the engine a
 | S2 | R20 | `packages/agent-orchestrator/tests/test_route_selection_run.py`: `test_S2_the_configured_backend_model_and_effort_are_chosen`, `test_S2_the_selected_route_is_logged_in_the_route_ledger`, `test_S2_the_selected_route_is_logged_in_the_event_log`, `test_S2_the_repository_policy_config_answers_when_no_file_is_named`, `test_S2_the_user_default_config_answers_when_no_other_config_is_named`, `test_S2_the_named_config_wins_over_the_repository_policy`, `test_S2_an_explicit_override_wins_over_the_config` |
 | S3 | R4 | the route refusal tests, listed under R4 below |
 | S4 | R21 | `packages/agent-orchestrator/tests/test_route_selection_run.py`: `test_S4_the_gate_review_and_pr_state_machine_stays_stable_under_a_new_provider_route`, `test_S4_the_routed_run_really_dispatched_on_the_new_provider` |
+| S1 | R23 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S1_a_pr_that_conflicts_while_it_waits_for_its_merge_goes_back_to_draft_and_is_rebased` |
+| S2 | R24 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S2_a_conflicting_draft_at_ready_for_ci_is_never_readied_before_its_rebase` |
+| S3 | R25 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S3_a_pr_behind_while_it_waits_is_updated_stays_ready_and_wakes_again_on_its_new_head` |
+| S4 | R26 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S4_an_unknown_merge_state_is_polled_again_with_no_action` |
+| S5 | R27 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S5_red_checks_while_it_waits_are_a_ci_fix_round_on_a_draft` |
+| S6 | R28 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S6_a_blocked_unstable_or_hooked_pr_keeps_waiting_with_no_gh_change` |
+| S7 | R29 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S7_a_merge_wins_over_a_conflict_and_red_checks` |
+| S8 | R30 | `packages/agent-orchestrator/tests/test_envelope.py`: `test_S8_a_disputed_change_drafts_the_pr_again_and_readies_it_after_the_re_review` |
+| S9 | R31 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S9_a_failed_draft_undo_holds_the_fix_worker_until_it_succeeds` |
+| S10 | R32 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S10_an_update_branch_failure_that_is_no_conflict_goes_to_the_lead` |
+| S11 | R33 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S11_a_conflict_past_the_cap_goes_to_the_lead_and_leaves_the_pr_a_draft` |
+| S12 | R34 | `packages/agent-orchestrator/tests/test_archive.py`: `test_S12_a_conflicting_archive_pr_is_rebased_with_no_review` |
 
 ### R4 — the route refusals
 
@@ -134,22 +158,22 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | File | Requirement | Scenarios it answers |
 |---|---|---|
 | `test_agents.py` | R2, R5 | `orchestrate-lean-loop/S33` — a spawn that is refused or re-attached |
-| `test_archive.py` | R2 | `code-driven-orchestrator/S15`, `code-driven-orchestrator/S16` — the archive worker, the gaps reviewer, the metrics |
+| `test_archive.py` | R2, R34 | `code-driven-orchestrator/S15`, `code-driven-orchestrator/S16`, `orchestrator-pr-merge-state/S12` — the archive worker, the gaps reviewer, the metrics, the archive PR's conflict |
 | `test_baselines.py` | R2 | `orchestration-baselines/S0`, `orchestration-baselines/S3` — the repaired vertical slice, the bounded benchmark |
 | `test_compat.py` | R2 | `orchestrate-lean-loop/S34` — a run directory written by the previous version |
 | `test_contracts.py` | R2 | `code-driven-orchestrator/S6a`, `code-driven-orchestrator/S11`, `orchestrate-lean-loop/S1`, `orchestrate-lean-loop/S12`–`S17`, `orchestrate-lean-loop/S26` — the report, review and findings contracts |
 | `test_decider.py` | R2 | `code-driven-orchestrator/S11`–`S13` — the decider and the pause it causes |
-| `test_envelope.py` | R2 | `orchestrate-lean-loop/S10`, `orchestrate-lean-loop/S12`–`S17`, `orchestrate-lean-loop/S26` — the review envelope |
+| `test_envelope.py` | R2, R30 | `orchestrate-lean-loop/S10`, `orchestrate-lean-loop/S12`–`S17`, `orchestrate-lean-loop/S26`, `orchestrator-pr-merge-state/S8` — the review envelope |
 | `test_events.py` | R2 | `orchestrate-lean-loop/S27` — the event log |
 | `test_evidence.py` | R2 | `orchestration-baselines/S2` — the per-attempt evidence |
-| `test_fake_gh.py` | R2 | the fake `gh` — a draft PR that never goes ready |
+| `test_fake_gh.py` | R2 | the fake `gh` — a draft PR that never goes ready; scripted draft views, checks while ready and a failing draft undo |
 | `test_gates.py` | R2 | `code-driven-orchestrator/S5`–`S7` — the report, the review, the fix round |
 | `test_launch.py` | R2, R6 | `code-driven-orchestrator/S17`, `orchestrate-lean-loop/S49`, `orchestrate-lean-loop/S50` — the pane the run starts in |
 | `test_merge.py` | R2 | `code-driven-orchestrator/S6`, `code-driven-orchestrator/S6a`, `code-driven-orchestrator/S8`–`S10` — the merge and the cleanup |
 | `test_orchestrate.py` | R2 | the ledger: `claim`, `bind`, `checkpoint`, `release`, `show`, `context`, `metrics` |
 | `test_payload.py` | R18 | `orchestrator-payload-race/S1` — the bounded wait for a report's payload |
 | `test_pi_backend.py` | R2 | `pi-worker-driver/S1`–`S6` — the Pi worker backend |
-| `test_pr.py` | R2 | `orchestrate-lean-loop/S6`, `orchestrate-lean-loop/S20`–`S24` — the pull request and its checks |
+| `test_pr.py` | R2, R23–R29, R31–R33 | `orchestrate-lean-loop/S6`, `orchestrate-lean-loop/S20`–`S24`, `orchestrator-pr-merge-state/S1`–`S7`, `S9`–`S11` — the pull request, its checks and its merge state |
 | `test_reopen.py` | R2 | `code-driven-orchestrator/S4` — a ticket the plan sets back to TO-DO |
 | `test_report_timing.py` | R2 | `orchestration-baselines/S0` — the report that lands as the turn ends |
 | `test_reuse.py` | R2 | `orchestrate-lean-loop/S8`, `orchestrate-lean-loop/S9`, `orchestrate-lean-loop/S11` — the re-review and the panes it stops |

@@ -384,6 +384,26 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
         self.assertGreaterEqual(len(self.checks_log()), 2)
 
+    def test_S8_a_disputed_change_drafts_the_pr_again_and_readies_it_after_the_re_review(self):
+        """orchestrator-engine/R30: orchestrator-pr-merge-state/S8"""
+        self.born_ready()  # the review's draft undo marks the unit; the dispute must not leave that mark behind
+        disputed = dict(RESPONSE, status="disputed", changes_code=True, note="the contract says no")
+        second = self.reviewer_done(self.review2())
+        second["write"][0][0] = str(self.run_dir / "t1" / "review.2.json")
+        second["assignments"][0]["assignment_id"] = "r1-demo-t1-review"
+        second["messages"][0]["assignment_id"] = "r1-demo-t1-review"
+        self.prs(["OPEN"])  # open while it is ready; merged once the re-review passed
+        second["write"].append([str(self.home / "prs.json"), json.dumps(["MERGED"])])
+        self.waits(self.passing_with_question() + [self.answers_report([disputed]), second])
+        self.run_driver()
+        pr = "https://github.com/o/r/pull/7"
+        self.assertEqual(
+            self.gh_calls("pr", "ready"), [["pr", "ready", pr, "--undo"], ["pr", "ready", pr]]
+        )
+        readied = [c for c in self.gh_log() if c["argv"] == ["pr", "ready", pr]][0]
+        self.assertTrue(any('"response"' in line for line in readied["events"]))
+        self.assertEqual(self.task()["gate"], "done")
+
     def test_S16_missing_answers_resume_the_worker_once_then_become_a_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S16"""
         self.waits(
