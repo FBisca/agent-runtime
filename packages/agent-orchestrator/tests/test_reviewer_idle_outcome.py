@@ -27,7 +27,11 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         return [c for c in self.calls("resume") if c["args"].get("name") == REVIEWER]
 
     def payload_trouble(self):
-        return [e for e in self.events("payload-warning", "contract-error") if e.get("where") == "review"]
+        return [
+            e
+            for e in self.events("payload-warning", "contract-error")
+            if e.get("where") == "review"
+        ]
 
     def test_a_reviewer_idle_on_a_background_job_completes_when_it_reports(self):
         """S1: idle and done turns are not a finished review; the later complete under the original id is."""
@@ -41,11 +45,19 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assertEqual(self.recovery_resumes(), [], "a silent reviewer was resumed with a warning")
-        self.assertEqual(self.payload_trouble(), [], "a silent reviewer was treated as a missing payload")
+        self.assertEqual(
+            self.recovery_resumes(), [], "a silent reviewer was resumed with a warning"
+        )
+        self.assertEqual(
+            self.payload_trouble(), [], "a silent reviewer was treated as a missing payload"
+        )
         self.assertFalse((self.run_dir / "t1" / "request.json").exists(), "the Lead was asked")
         task = self.task()
-        self.assertEqual(task["review"]["assignment_id"], "a-" + REVIEWER, "the reviewer's assignment was replaced")
+        self.assertEqual(
+            task["review"]["assignment_id"],
+            "a-" + REVIEWER,
+            "the reviewer's assignment was replaced",
+        )
         self.assertIn("reviewed_commit", task, "the reviewer's verdict was not recorded")
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
 
@@ -62,8 +74,12 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
             ]
         )
         self.run_driver("--idle-minutes", "0")
-        self.assertEqual(self.recovery_resumes(), [], "a silent reviewer was resumed with a warning")
-        self.assertEqual(self.payload_trouble(), [], "a silent reviewer was treated as a missing payload")
+        self.assertEqual(
+            self.recovery_resumes(), [], "a silent reviewer was resumed with a warning"
+        )
+        self.assertEqual(
+            self.payload_trouble(), [], "a silent reviewer was treated as a missing payload"
+        )
         request = self.request()
         self.assertEqual(request["event"], "idle")
         self.assertIn(REVIEWER, request["reason"])
