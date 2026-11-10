@@ -22,8 +22,10 @@ def reminder(payload, hook_lib, who):
     if not found:
         return None
     if found["undelivered"] > 0 or (found["working"] > 0 and not found["seen"]):
-        return "agent-runtime: %d unfinished, %d undelivered — call wait(all)" % (found["unfinished"],
-                                                                                found["undelivered"])
+        return "agent-runtime: %d unfinished, %d undelivered — call wait(all)" % (
+            found["unfinished"],
+            found["undelivered"],
+        )
     if found["seen"] and found["attention"] > 0:
         return "agent-runtime: %d workers need you — check status" % found["attention"]
     return None
@@ -41,13 +43,22 @@ def main():
             pass
     line = reminder(payload, hook_lib, who) if payload else None
     if line:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": payload["hook_event_name"],
-                                                 "additionalContext": line}}))
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": payload["hook_event_name"],
+                        "additionalContext": line,
+                    }
+                }
+            )
+        )
 
 
 if __name__ == "__main__":
     try:
         import hook_lib
+
         hook_lib.fail_open(main)
     except Exception:  # an import error also prints nothing
         pass

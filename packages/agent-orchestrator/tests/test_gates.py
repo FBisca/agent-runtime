@@ -531,7 +531,7 @@ REVIEWER = "demo-t1-review"
 
 
 class SilentReviewerTests(GateFixture, unittest.TestCase):
-    """R50: a reviewer whose turn ended is still a live reviewer. The driver waits for its complete under the
+    """R62: a reviewer whose turn ended is still a live reviewer. The driver waits for its complete under the
     assignment it was given, and only the timed idle watchdog asks the Lead."""
 
     def silent(self, runtime_state="idle", write=()):
@@ -555,7 +555,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         return [e["gate"][1] for e in self.events("state") if e["task"] == "t1"]
 
     def test_S1_a_reviewer_that_ends_its_turn_idle_then_reports_complete_is_accepted(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S1"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S1"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -575,7 +575,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
 
     def test_S2_a_review_file_on_disk_without_a_complete_report_is_not_a_verdict(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S2"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S2"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -593,7 +593,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "idle")
 
     def test_S3_idle_observations_between_ticks_consume_no_ticks_and_raise_no_request(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S3"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S3"""
         spec = load_script()
         self.waits(
             [self.worker_done(tests=True)] + [self.silent("idle")] * 8 + [self.reviewer_done()]
@@ -606,7 +606,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S4_a_reviewer_that_never_reports_is_asked_about_once_by_the_idle_watchdog(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S4"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S4"""
         spec = load_script()
         moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
         self.waits([self.worker_done(tests=True)] + [self.silent("idle")] * 6 + [self.skipped()])
@@ -624,7 +624,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
     def test_S9_a_missing_review_is_recovered_with_text_that_does_not_claim_a_read_report(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S9"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S9"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -645,7 +645,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "review")
 
     def test_S10_a_reviewer_the_runtime_reports_failed_goes_straight_to_the_lead(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S10"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S10"""
         self.states({REVIEWER: "exited"})
         self.waits(
             [
@@ -660,7 +660,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertIn("no agent left to write it", self.request()["reason"])
 
     def test_S10_a_restart_orphaned_reviewer_with_a_valid_review_is_still_accepted(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S10"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S10"""
         self.waits([self.worker_done(tests=True)])
         self.run_driver()
         self.assertEqual(self.task()["gate"], "reviewing")
@@ -675,7 +675,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertIn("reviewed_commit", self.task())
 
     def test_S10_a_restart_orphaned_reviewer_without_a_review_goes_straight_to_the_lead(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S10"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S10"""
         self.waits([self.worker_done(tests=True)])
         self.run_driver()
         self.gone(REVIEWER)
@@ -685,7 +685,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "review")
 
     def test_S11_a_reviewer_the_runtime_reports_unreported_or_error_is_handled_at_once(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S11 — as before, not deferred to the idle watchdog."""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S11 — as before, not deferred to the idle watchdog."""
         for runtime_state in ("unreported", "error"):
             with self.subTest(runtime_state=runtime_state):
                 self.setUp()
@@ -698,7 +698,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
                 self.assertEqual(self.task()["gate"], "done")
 
     def test_S12_the_reviewer_brief_allows_background_jobs_and_names_the_report_order(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S12"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S12"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         brief = (self.run_dir / "t1-review" / "task.md").read_text(encoding="utf-8")
@@ -713,7 +713,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
     def test_S13_a_reviewer_complete_after_the_gate_moved_to_requested_leaves_the_request_open(
         self,
     ):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S13"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S13"""
         self.waits(
             [self.worker_done(tests=True)]
             + [self.silent("idle")] * 4

@@ -1,4 +1,5 @@
 """Spawn failures after hc run end the terminal; invalid spawns start none (hardening D4, D9)."""
+
 import json
 import sys
 import time
@@ -15,8 +16,12 @@ from agent_runtime.dispatch_store import Store, StoreError
 pytestmark = pytest.mark.integration
 
 
-ENV = {"CODEX_THREAD_ID": "lead-session", "HC_SCOPE": "lead-token", "HC_TERMINAL_SOCKET": "/hc/sock",
-       "AGENT_RUNTIME_DISPATCH": "1"}
+ENV = {
+    "CODEX_THREAD_ID": "lead-session",
+    "HC_SCOPE": "lead-token",
+    "HC_TERMINAL_SOCKET": "/hc/sock",
+    "AGENT_RUNTIME_DISPATCH": "1",
+}
 ARGS = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}
 
 
@@ -36,24 +41,32 @@ class SpawnCleanupTests(ToolCase):
         """S23 agent-runtime/R145: invalid JSON or invalid shape publishes built-ins and explains failed profile spawns."""
         path = self.dir / "profiles.json"
         lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
-        for body in ('{', '[]', '{}', '{"profiles": []}', '{"profiles": {"custom": null}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "literal-secret"}}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "literal-secret"}}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": 1}}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {"BAD=NAME": "x"}}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": "$"}}}}',
-                     # agent-runtime/R145: launch options are claude-only, a known mode, an absolute or ~/ path
-                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": "yolo"}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": 1}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": "relative.json"}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": "--settings"}}}',
-                     '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": 1}}}',
-                     '{"profiles": {"custom": {"cli": "codex", "env": {}, "permission_mode": "acceptEdits"}}}',
-                     '{"profiles": {"custom": {"cli": "codex", "env": {}, "settings": "/tmp/s.json"}}}'):
+        for body in (
+            "{",
+            "[]",
+            "{}",
+            '{"profiles": []}',
+            '{"profiles": {"custom": null}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_AUTH_TOKEN": "literal-secret"}}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "literal-secret"}}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": 1}}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {"BAD=NAME": "x"}}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": "$"}}}}',
+            # agent-runtime/R145: launch options are claude-only, a known mode, an absolute or ~/ path
+            '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": "yolo"}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": 1}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": "relative.json"}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": "--settings"}}}',
+            '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": 1}}}',
+            '{"profiles": {"custom": {"cli": "codex", "env": {}, "permission_mode": "acceptEdits"}}}',
+            '{"profiles": {"custom": {"cli": "codex", "env": {}, "settings": "/tmp/s.json"}}}',
+        ):
             with self.subTest(body=body):
                 path.write_text(body)
                 tools = lead.send("tools/list")["result"]["tools"]
-                self.assertEqual(tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi"])
+                self.assertEqual(
+                    tools[0]["inputSchema"]["properties"]["cli"]["enum"], ["claude", "codex", "pi"]
+                )
                 result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
                 self.assertTrue(result["isError"])
                 self.assertIn("invalid profile config", text)
@@ -75,11 +88,26 @@ class SpawnCleanupTests(ToolCase):
         """S25: profiles cannot rewrite runtime identity, dispatch or executable lookup."""
         path = self.dir / "profiles.json"
         lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
-        for variable in ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET", "HERDR_PANE_ID", "HERDR_ENV",
-                         "HERDR_SOCKET_PATH", "HERDR_SESSION", "AGENT_RUNTIME_DISPATCH", "PATH",
-                         "HC_SESSION", "HERDR_FUTURE_CONTROL", "HERDR_PLUGIN_TEST"):
+        for variable in (
+            "HC_TERMINAL_ID",
+            "HC_SCOPE",
+            "HC_TERMINAL_SOCKET",
+            "HERDR_PANE_ID",
+            "HERDR_ENV",
+            "HERDR_SOCKET_PATH",
+            "HERDR_SESSION",
+            "AGENT_RUNTIME_DISPATCH",
+            "PATH",
+            "HC_SESSION",
+            "HERDR_FUTURE_CONTROL",
+            "HERDR_PLUGIN_TEST",
+        ):
             with self.subTest(variable=variable):
-                path.write_text(json.dumps({"profiles": {"custom": {"cli": "claude", "env": {variable: "changed"}}}}))
+                path.write_text(
+                    json.dumps(
+                        {"profiles": {"custom": {"cli": "claude", "env": {variable: "changed"}}}}
+                    )
+                )
                 result, text = self.call(lead, "spawn", dict(ARGS, cli="custom"))
                 self.assertTrue(result["isError"])
                 self.assertIn("reserved", text)
@@ -119,7 +147,14 @@ class SpawnCleanupTests(ToolCase):
         """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0"), "sleep": 30}}, ENV)
         write = lambda m: (lead.proc.stdin.write(json.dumps(m) + "\n"), lead.proc.stdin.flush())
-        write({"jsonrpc": "2.0", "id": 70, "method": "tools/call", "params": {"name": "spawn", "arguments": ARGS}})
+        write(
+            {
+                "jsonrpc": "2.0",
+                "id": 70,
+                "method": "tools/call",
+                "params": {"name": "spawn", "arguments": ARGS},
+            }
+        )
         deadline = time.monotonic() + 5
         while not self.runs("get") or not [c for c in self.runs("get") if c[1] == "w1"]:
             self.assertLess(time.monotonic(), deadline)
@@ -143,12 +178,24 @@ class SpawnCleanupTests(ToolCase):
         store = Store({"HOME": str(self.dir / "home")})
         with store.transaction() as db:
             self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [1])
-        store.publish("/hc/sock", "t9", "t0", first["assignment_id"], "still here", "progress", caller_name="w1")
+        store.publish(
+            "/hc/sock",
+            "t9",
+            "t0",
+            first["assignment_id"],
+            "still here",
+            "progress",
+            caller_name="w1",
+        )
 
     def test_interrupted_hc_run_discards_only_an_orphan_we_started(self):
         """agent-runtime/R72"""
         self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+        }
         env.update(ENV)
         real_run = hc_tools.run
 
@@ -160,11 +207,15 @@ class SpawnCleanupTests(ToolCase):
         with mock.patch.object(hc_tools, "run", timing_out):
             with self.assertRaises(hc_tools.ToolError):
                 hc_tools.spawn(ARGS, env, hc_tools.Context())
-            self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])  # unbound orphan under our parent
+            self.assertEqual(
+                self.removed(), [["kill", "w1"], ["rm", "w1"]]
+            )  # unbound orphan under our parent
             self.log.write_text("")
             # An earlier live w1 already bound to that address is not an orphan.
             store = Store(env)
-            team = store.team(*hc_tools.dispatch_identity(env)[:1], "t0", hc_tools.dispatch_identity(env)[1])
+            team = store.team(
+                *hc_tools.dispatch_identity(env)[:1], "t0", hc_tools.dispatch_identity(env)[1]
+            )
             earlier = store.register(team, "w1")
             store.bind(earlier["assignment_id"], "t9", hc_tools.dispatch_identity(env)[0])
             with self.assertRaises(hc_tools.ToolError):
@@ -176,10 +227,16 @@ class SpawnCleanupTests(ToolCase):
     def test_bind_error_removes_the_terminal(self):
         """agent-runtime/R72"""
         self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+        }
         env.update(ENV)
         with mock.patch.object(Store, "bind", side_effect=StoreError("assignment is stale")):
-            with self.assertRaises(StoreError):  # the original error is re-raised (the server reports it)
+            with self.assertRaises(
+                StoreError
+            ):  # the original error is re-raised (the server reports it)
                 hc_tools.spawn(ARGS, env, hc_tools.Context())
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
@@ -201,8 +258,13 @@ class SpawnCleanupTests(ToolCase):
 
     def test_a_failed_unsent_spawn_can_be_spawned_again_with_the_same_name(self):
         """agent-runtime/R72"""
-        lead = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})},
-                           "get:w1": {"out": raw("w1", "t0")}}, ENV)
+        lead = self.start(
+            {
+                "run": {"out": json.dumps({"first_message": {"sent": False}})},
+                "get:w1": {"out": raw("w1", "t0")},
+            },
+            ENV,
+        )
         result, _ = self.call(lead, "spawn", ARGS)
         self.assertTrue(result["isError"])
         replies = json.loads((self.dir / "replies").read_text())
@@ -214,7 +276,11 @@ class SpawnCleanupTests(ToolCase):
     def test_failed_spawn_releases_its_linked_task(self):
         """agent-runtime/R72; agent-runtime/R69"""
         self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}}, ENV)
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+        }
         env.update(ENV)
         store = Store(env)
         real_register = Store.register
@@ -222,22 +288,33 @@ class SpawnCleanupTests(ToolCase):
         def register_with_task(self_, team, name, *rest, **more):
             identity = real_register(self_, team, name, *rest, **more)
             with self_.transaction() as db:
-                db.execute("INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
-                           (team, identity["worker_id"], identity["assignment_id"]))
+                db.execute(
+                    "INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
+                    (team, identity["worker_id"], identity["assignment_id"]),
+                )
             return identity
 
         with mock.patch.object(Store, "register", register_with_task):
             with self.assertRaises(hc_tools.ToolError):
                 hc_tools.spawn(ARGS, env, hc_tools.Context())
         with store.transaction() as db:
-            self.assertEqual(tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()), ("pending", None, None))
+            self.assertEqual(
+                tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()),
+                ("pending", None, None),
+            )
 
     def test_unresolvable_identity_starts_no_terminal_and_registers_nothing(self):
         """agent-runtime/R73"""
         self.start({}, ENV)
-        env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
+        env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+        }
         env.update(ENV)
-        with mock.patch.object(hc_tools, "dispatch_identity", side_effect=hc_tools.ToolError("no session")):
+        with mock.patch.object(
+            hc_tools, "dispatch_identity", side_effect=hc_tools.ToolError("no session")
+        ):
             with self.assertRaises(hc_tools.ToolError):
                 hc_tools.spawn(ARGS, env, hc_tools.Context())
         self.assertEqual(self.runs("run"), [])
@@ -257,7 +334,12 @@ class SpawnCleanupTests(ToolCase):
     def test_invalid_agent_starts_no_terminal_and_registers_nothing(self):
         """agent-runtime/R139 agent-runtime/R140"""
         lead = self.start({}, ENV)
-        for cli, agent in (("claude", "-x"), ("claude", 3), ("codex", "a/b"), ("codex", "plugin:x")):
+        for cli, agent in (
+            ("claude", "-x"),
+            ("claude", 3),
+            ("codex", "a/b"),
+            ("codex", "plugin:x"),
+        ):
             result, _ = self.call(lead, "spawn", dict(ARGS, cli=cli, agent=agent))
             self.assertTrue(result["isError"])
         self.assertEqual(self.runs("run"), [])
@@ -279,10 +361,21 @@ class SpawnCleanupTests(ToolCase):
         home = self.dir / "home"
         (home / "blank.md").write_text("   \n")
         lead = self.start({}, ENV)
-        for value in ("", "   ", 5, ["a"], True, "relative.md", str(home / "missing.md"),
-                      str(home / "blank.md"), str(self.dir)):
+        for value in (
+            "",
+            "   ",
+            5,
+            ["a"],
+            True,
+            "relative.md",
+            str(home / "missing.md"),
+            str(home / "blank.md"),
+            str(self.dir),
+        ):
             with self.subTest(value=value):
-                result, text = self.call(lead, "spawn", dict(ARGS, cli="codex", instructions_file=value))
+                result, text = self.call(
+                    lead, "spawn", dict(ARGS, cli="codex", instructions_file=value)
+                )
                 self.assertTrue(result["isError"])
                 self.assertIn("instructions_file", text)
         self.assertEqual(self.runs("run"), [])
@@ -294,7 +387,9 @@ class SpawnCleanupTests(ToolCase):
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
         lead = self.start({}, ENV)
-        result, text = self.call(lead, "spawn", dict(ARGS, cli="claude", instructions_file=str(home / "role.md")))
+        result, text = self.call(
+            lead, "spawn", dict(ARGS, cli="claude", instructions_file=str(home / "role.md"))
+        )
         self.assertTrue(result["isError"])
         self.assertIn("instructions_file", text)
         self.assertEqual(self.runs("run"), [])
@@ -306,7 +401,9 @@ class SpawnCleanupTests(ToolCase):
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
         lead = self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
-        result, text = self.call(lead, "spawn", dict(ARGS, cli="pi", instructions_file=str(home / "role.md")))
+        result, text = self.call(
+            lead, "spawn", dict(ARGS, cli="pi", instructions_file=str(home / "role.md"))
+        )
         self.assertFalse(result["isError"], text)
         program = unwrap(self.runs("run")[-1][10:])
         self.assertTrue(program[-1].startswith("ROLE FILE RULES"))
@@ -320,8 +417,11 @@ class SpawnCleanupTests(ToolCase):
         for cli in ("codex", "pi"):
             for agent in ("none", "reviewer"):
                 with self.subTest(cli=cli, agent=agent):
-                    result, text = self.call(lead, "spawn", dict(ARGS, cli=cli, agent=agent,
-                                                                 instructions_file=str(home / "role.md")))
+                    result, text = self.call(
+                        lead,
+                        "spawn",
+                        dict(ARGS, cli=cli, agent=agent, instructions_file=str(home / "role.md")),
+                    )
                     self.assertTrue(result["isError"])
                     self.assertIn("instructions_file", text)
         self.assertEqual(self.runs("run"), [])
@@ -345,7 +445,11 @@ class FastReportTests(ToolCase):
 
     def setUp(self):
         super().setUp()
-        self.env = {"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home"), "HC_TERMINAL_ID": "t0"}
+        self.env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+        }
         self.env.update(ENV)
 
     def spawn_with_fast_report(self, replies, kind, link_task=True):
@@ -359,29 +463,44 @@ class FastReportTests(ToolCase):
             seen.update(identity)
             if link_task:
                 with self_.transaction() as db:
-                    db.execute("INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
-                               (team, identity["worker_id"], identity["assignment_id"]))
+                    db.execute(
+                        "INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
+                        (team, identity["worker_id"], identity["assignment_id"]),
+                    )
             return identity
 
         def run(argv, env_, ctx, timeout=10):
             if argv[1] == "run":
                 scope = hc_tools.dispatch_identity(self.env)[0]
-                store.publish(scope, "t9", "t0", seen["assignment_id"], "early", kind, caller_name="w1")
+                store.publish(
+                    scope, "t9", "t0", seen["assignment_id"], "early", kind, caller_name="w1"
+                )
                 if replies.get("timeout"):
                     raise hc_tools.ToolError("hc run timed out")
             return real_run(argv, env_, ctx, timeout)
 
-        with mock.patch.object(Store, "register", register), mock.patch.object(hc_tools, "run", run):
+        with (
+            mock.patch.object(Store, "register", register),
+            mock.patch.object(hc_tools, "run", run),
+        ):
             with self.assertRaises(hc_tools.ToolError):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
         return store, seen
 
     def check_unsent(self, kind):
         store, seen = self.spawn_with_fast_report(
-            {"run": {"out": json.dumps({"first_message": {"sent": False}})}, "get:w1": {"out": raw("w1", "t0")}}, kind)
+            {
+                "run": {"out": json.dumps({"first_message": {"sent": False}})},
+                "get:w1": {"out": raw("w1", "t0")},
+            },
+            kind,
+        )
         with store.transaction() as db:
             self.assertEqual(db.execute("SELECT state FROM assignments").fetchone()[0], "failed")
-            self.assertEqual(tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()), ("pending", None, None))
+            self.assertEqual(
+                tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()),
+                ("pending", None, None),
+            )
             kinds = [json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")]
         self.assertEqual([k for k in kinds if k == "failed"], ["failed"])
 
@@ -395,18 +514,30 @@ class FastReportTests(ToolCase):
 
     def failed_count(self, store):
         with store.transaction() as db:
-            return [json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")].count("failed")
+            return [
+                json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")
+            ].count("failed")
 
     def lead_actor(self, store):
         scope, lead = hc_tools.dispatch_identity(self.env)[:2]
-        return scope, {"team_id": store.team(scope, "t0", lead), "recipient": "t0", "worker_id": None,
-                       "assignment_id": None, "scope": scope, "address": "t0", "parent": None}
+        return scope, {
+            "team_id": store.team(scope, "t0", lead),
+            "recipient": "t0",
+            "worker_id": None,
+            "assignment_id": None,
+            "scope": scope,
+            "address": "t0",
+            "parent": None,
+        }
 
     def test_timed_out_hc_run_after_a_fast_report_leaves_the_worker_inactive(self):
         """agent-runtime/R85; agent-runtime/R72"""
         store, seen = self.spawn_with_fast_report(
-            {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "progress", link_task=False)
-        self.assertEqual([c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]])
+            {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "progress", link_task=False
+        )
+        self.assertEqual(
+            [c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]]
+        )
         with store.transaction() as db:
             self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
         scope, actor = self.lead_actor(store)
@@ -426,10 +557,14 @@ class FastReportTests(ToolCase):
     def test_timed_out_hc_run_after_a_fast_blocked_report_releases_the_task(self):
         """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         store, seen = self.spawn_with_fast_report(
-            {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "blocked")
+            {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "blocked"
+        )
         with store.transaction() as db:
             self.assertEqual(db.execute("SELECT state FROM assignments").fetchone()[0], "failed")
-            self.assertEqual(tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()), ("pending", None, None))
+            self.assertEqual(
+                tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()),
+                ("pending", None, None),
+            )
         self.assertEqual(self.failed_count(store), 1)
 
     def test_a_live_worker_bound_by_a_concurrent_spawn_is_not_discarded(self):
@@ -442,7 +577,9 @@ class FastReportTests(ToolCase):
         first = real_register(store, team, "w1")  # spawn #1 registered, but has not bound yet
 
         def register(self_, team_, name, *rest, **more):
-            self_.bind(first["assignment_id"], "t9", scope)  # #1 binds after #2 read its earlier address
+            self_.bind(
+                first["assignment_id"], "t9", scope
+            )  # #1 binds after #2 read its earlier address
             return real_register(self_, team_, name, *rest, **more)
 
         def run(argv, env_, ctx, timeout=10):
@@ -450,7 +587,10 @@ class FastReportTests(ToolCase):
                 raise hc_tools.ToolError("hc run timed out")
             return real_run(argv, env_, ctx, timeout)
 
-        with mock.patch.object(Store, "register", register), mock.patch.object(hc_tools, "run", run):
+        with (
+            mock.patch.object(Store, "register", register),
+            mock.patch.object(hc_tools, "run", run),
+        ):
             with self.assertRaises(hc_tools.ToolError):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
         self.assertEqual([c for c in self.runs() if c[0] in ("kill", "rm")], [])
@@ -475,24 +615,41 @@ class FastReportTests(ToolCase):
             identity = real_register(self_, team_, name, *rest, **more)
             seen.update(identity)
             with self_.transaction() as db:
-                db.execute("INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
-                           (team_, identity["worker_id"], identity["assignment_id"]))
+                db.execute(
+                    "INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
+                    (team_, identity["worker_id"], identity["assignment_id"]),
+                )
             return identity
 
         def run(argv, env_, ctx, timeout=10):
             if argv[1] == "run":
-                store.publish(scope, "t9", "t0", seen["assignment_id"], "stuck", "blocked", caller_name="w1")
+                store.publish(
+                    scope, "t9", "t0", seen["assignment_id"], "stuck", "blocked", caller_name="w1"
+                )
                 raise hc_tools.ToolError("hc run timed out")
             return real_run(argv, env_, ctx, timeout)
 
-        with mock.patch.object(Store, "register", register), mock.patch.object(hc_tools, "run", run):
+        with (
+            mock.patch.object(Store, "register", register),
+            mock.patch.object(hc_tools, "run", run),
+        ):
             with self.assertRaises(hc_tools.ToolError):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
-        self.assertEqual([c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]])
+        self.assertEqual(
+            [c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]]
+        )
         with store.transaction() as db:
             self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
-            self.assertEqual(db.execute("SELECT state FROM assignments WHERE id=?", (seen["assignment_id"],)).fetchone()[0], "failed")
-            self.assertEqual(tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()), ("pending", None, None))
+            self.assertEqual(
+                db.execute(
+                    "SELECT state FROM assignments WHERE id=?", (seen["assignment_id"],)
+                ).fetchone()[0],
+                "failed",
+            )
+            self.assertEqual(
+                tuple(db.execute("SELECT status,owner,assignment FROM tasks").fetchone()),
+                ("pending", None, None),
+            )
         self.assertEqual(self.failed_count(store), 1)
 
     def test_a_store_error_in_the_orphan_check_keeps_the_original_error_and_still_fails(self):
@@ -505,12 +662,16 @@ class FastReportTests(ToolCase):
                 raise hc_tools.ToolError("hc run timed out")
             return real_run(argv, env_, ctx, timeout)
 
-        with mock.patch.object(hc_tools, "run", run), \
-                mock.patch.object(Store, "started_by_other", side_effect=StoreError("db locked")):
+        with (
+            mock.patch.object(hc_tools, "run", run),
+            mock.patch.object(Store, "started_by_other", side_effect=StoreError("db locked")),
+        ):
             with self.assertRaisesRegex(hc_tools.ToolError, "hc run timed out"):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
         with Store(self.env).transaction() as db:
-            self.assertEqual([r[0] for r in db.execute("SELECT state FROM assignments")], ["failed"])
+            self.assertEqual(
+                [r[0] for r in db.execute("SELECT state FROM assignments")], ["failed"]
+            )
 
     def test_a_completed_result_is_mentioned_when_hc_run_times_out(self):
         """agent-runtime/R95; agent-runtime/R72"""
@@ -526,17 +687,28 @@ class FastReportTests(ToolCase):
 
         def run(argv, env_, ctx, timeout=10):
             if argv[1] == "run":
-                store.publish(scope, "t9", "t0", seen["assignment_id"], "done", "complete", caller_name="w1")
+                store.publish(
+                    scope, "t9", "t0", seen["assignment_id"], "done", "complete", caller_name="w1"
+                )
                 raise hc_tools.ToolError("hc run timed out")
             return real_run(argv, env_, ctx, timeout)
 
-        with mock.patch.object(Store, "register", register), mock.patch.object(hc_tools, "run", run):
+        with (
+            mock.patch.object(Store, "register", register),
+            mock.patch.object(hc_tools, "run", run),
+        ):
             with self.assertRaisesRegex(hc_tools.ToolError, "result had already landed"):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
 
     def test_failure_after_the_exit_was_observed_adds_no_second_failed_message(self):
         """agent-runtime/R84; agent-runtime/R69"""
-        self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}, "get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.start(
+            {
+                "run": {"out": json.dumps({"first_message": {"sent": False}})},
+                "get:w1": {"out": raw("w1", "t0")},
+            },
+            ENV,
+        )
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
         seen = {}
@@ -548,11 +720,16 @@ class FastReportTests(ToolCase):
 
         def run(argv, env_, ctx, timeout=10):
             if argv[1] == "run":
-                store.publish(scope, "t9", "t0", seen["assignment_id"], "stuck", "blocked", caller_name="w1")
+                store.publish(
+                    scope, "t9", "t0", seen["assignment_id"], "stuck", "blocked", caller_name="w1"
+                )
                 store.fail_observed({seen["assignment_id"]: "exited"})
             return real_run(argv, env_, ctx, timeout)
 
-        with mock.patch.object(Store, "register", register), mock.patch.object(hc_tools, "run", run):
+        with (
+            mock.patch.object(Store, "register", register),
+            mock.patch.object(hc_tools, "run", run),
+        ):
             with self.assertRaises(hc_tools.ToolError):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
         self.assertEqual(self.failed_count(store), 1)
@@ -566,8 +743,10 @@ class FastReportTests(ToolCase):
         first = store.register(team, "w1")
         store.bind(first["assignment_id"], "t9", scope)
         with store.transaction() as db:
-            db.execute("INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
-                       (team, first["worker_id"], first["assignment_id"]))
+            db.execute(
+                "INSERT INTO tasks VALUES ('t1',?,'s','in_progress',?,?,'[]')",
+                (team, first["worker_id"], first["assignment_id"]),
+            )
         real_hc = hc_tools.hc
 
         def hc(argv, env_, ctx, timeout=10):
@@ -589,5 +768,7 @@ class FastReportTests(ToolCase):
             task = dict(db.execute("SELECT status,owner,assignment FROM tasks").fetchone())
             newest = db.execute("SELECT id FROM assignments ORDER BY rowid DESC").fetchone()[0]
         self.assertEqual(states[-1], "blocked")
-        self.assertEqual(task, {"status": "blocked", "owner": first["worker_id"], "assignment": newest})
+        self.assertEqual(
+            task, {"status": "blocked", "owner": first["worker_id"], "assignment": newest}
+        )
         self.assertEqual(self.failed_count(store), 0)

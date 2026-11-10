@@ -4,7 +4,7 @@ S0: WHEN a known orchestration failure is reproduced on an isolated fixture, THE
 passes afterwards under the same fixed acceptance criteria. The failure is the report timing one: the report is on
 disk, the runtime says the turn ended (`runtime state idle`), and the driver parks the ticket as `ended without a
 report` and asks a human about a report it already has. After the repair the driver reads the report and moves on;
-a turn that ended with no report at all is a live worker: only its complete or the idle watchdog moves it (R50).
+a turn that ended with no report at all is a live worker: only its complete or the idle watchdog moves it (R62).
 """
 
 import shlex
@@ -45,7 +45,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         return (self.run_dir / "t1" / "request.json").exists()
 
     def test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S6 — the report_landed shortcut is kept."""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S6 — the report_landed shortcut is kept."""
         self.waits([self.turn_ended(), self.answer(), self.worker_done()])
         self.run_driver()
         self.assertFalse(self.asked())
@@ -64,7 +64,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         )
 
     def test_S5_a_worker_whose_turn_ended_without_a_report_stays_pending_until_its_complete(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S5 — idle and done are a live worker, not an exit."""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S5 — idle and done are a live worker, not an exit."""
         spec = load_script()
         done = GateFixture.worker_done(self, tests=True)
         self.waits(
@@ -83,7 +83,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S5_a_worker_that_never_reports_is_asked_about_by_the_idle_watchdog(self):
-        """orchestrator-engine/R50: orchestrator-silent-idle/S5"""
+        """orchestrator-engine/R62: orchestrator-silent-idle/S5"""
         self.waits([self.turn_ended(report=False)] * 4 + [self.skipped()])
         self.run_driver("--idle-minutes", "0")
         request = self.request()

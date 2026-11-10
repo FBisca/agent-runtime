@@ -6,6 +6,7 @@ No model calls and no shell evaluation. Only `run` starts workers, and only thro
 import argparse
 import copy
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -1189,6 +1190,7 @@ class Driver:
         self.last_plan = None
         self.model = None  # the approved plan/1 model of a YAML plan
         self.outcome_logged = False
+        self.approval = None  # the approval block of the YAML plan the loop last read
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1236,7 +1238,10 @@ class Driver:
             self.model = (
                 model  # verify gates a ticket against the approved plan, not the legacy table
             )
-            ledger_path = Path(self.args.state_dir).expanduser() / (model.slug + ".json")
+            self.approval = model.approval
+            ledger_path = state_layout(self.args.state_dir, self.plan_path, self.repo, model.slug)[
+                0
+            ]
             statuses = {}
             if ledger_path.exists():
                 with ledger(ledger_path) as data:
@@ -1268,11 +1273,11 @@ class Driver:
                 else self.models
             )
         self.routes, self.step_routes = self.load_routes()
-        state_dir = Path(self.args.state_dir).expanduser()
-        state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.ledger_path = state_dir / (self.slug + ".json")
-        self.run_dir = state_dir / self.slug
-        self.run_dir.mkdir(exist_ok=True, mode=0o700)
+        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.ledger_path, self.run_dir = locate_state(
+            self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
+        )
+        self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         contract = self.run_dir / "contract.md"
         if not contract.exists():
             contract.write_text(CONTRACT, encoding="utf-8")
@@ -1282,6 +1287,13 @@ class Driver:
                 self.routes, self.route_source or "legacy", self.routes_file, self.step_routes
             )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
+            if is_yaml(
+                self.plan_path
+            ):  # the ledger owns the plan's state; the plan file is never written
+                if not data.get("plan"):
+                    enter_plan_state(data, "APPROVED", self.approval and self.approval.at)
+                if data["plan"]["state"] == "APPROVED":
+                    enter_plan_state(data, "RUNNING")
         for row in legacy:  # a run dir written before events.jsonl: its history enters the log once
             self.log("import", **row)
         self.log(
@@ -1562,7 +1574,7 @@ class Driver:
 
         `silent` is a live agent whose turn ended (runtime idle or done): it may be waiting on a background job, so
         it is not an exit. A worker whose report is already on disk advances; every other role keeps waiting for its
-        own `complete`, and only the idle watchdog asks the Lead (R50)."""
+        own `complete`, and only the idle watchdog asks the Lead (R62)."""
         hit = None
         with self.book() as data:
             for task_id, task in data["tasks"].items():
@@ -1901,8 +1913,13 @@ class Driver:
         path = self.run_dir / "attention.md"
         if not path.exists():
             path.write_text(
-                "# Needs you: %s\n\nThe ticket's Status in the plan carries the same reason.\n\n"
-                % self.slug,
+                "# Needs you: %s\n\n%s carries the same reason.\n\n"
+                % (
+                    self.slug,
+                    "`status <plan> --json`"
+                    if is_yaml(self.plan_path)
+                    else "The ticket's Status in the plan",
+                ),
                 encoding="utf-8",
             )
         with path.open("a", encoding="utf-8") as stream:
@@ -4667,7 +4684,10 @@ class Driver:
         with self.book() as data:
             bind(data, task_id, str(runtime_id))
             data["tasks"][task_id]["assignment_id"] = assignment_id
-        set_status(self.plan_path, ticket["#"], "IN PROGRESS")
+        if is_yaml(self.plan_path):
+            self.write_status(ticket["#"], "IN PROGRESS")
+        else:
+            set_status(self.plan_path, ticket["#"], "IN PROGRESS")
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, packet["model"], effort))
 
@@ -4770,6 +4790,220 @@ def forwarded(argv, option):
     return None
 
 
+def is_yaml(plan_path):
+    return Path(plan_path).name.endswith(".plan.yaml")
+
+
+def repo_root(plan_path, repo=None):
+    """The repository a plan belongs to: the one named, else the one holding the plan file."""
+    if repo:
+        return Path(repo).resolve()
+    return Path(
+        run(["git", "-C", str(Path(plan_path).resolve().parent), "rev-parse", "--show-toplevel"])
+    ).resolve()
+
+
+def repo_key(repo):
+    """The directory a repository's YAML plan state lives in under the state dir: its name for the eye, a hash of its
+    git common dir for uniqueness. A worktree of the repository has the repository's key, and two clones that share
+    a name do not share one."""
+    common = Path(yaml_plan.identity(Path(repo).resolve()))
+    home = common.parent if common.name == ".git" else common
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", home.name.removesuffix(".git")).strip("-.") or "repo"
+    return "%s-%s" % (name[:40], hashlib.sha256(str(common).encode("utf-8")).hexdigest()[:12])
+
+
+def state_layout(state_dir, plan_path, repo, slug):
+    """(ledger path, run directory) of a plan. A YAML plan's are under `<state>/<repo-key>/`, so two repositories
+    that run the same slug have two ledgers; a Markdown plan keeps `<state>/<slug>.json` until the format is gone."""
+    state = Path(state_dir).expanduser()
+    if not is_yaml(plan_path):
+        return state / (slug + ".json"), state / slug
+    keyed = state / repo_key(repo)
+    return keyed / (slug + ".json"), keyed / slug
+
+
+def owns_ledger(repo, data):
+    """Whether a ledger written under the old `<state>/<slug>.json` key belongs to `repo`: one of its tasks names the
+    plan file or the checkout inside the repository or its `.worktrees` directory. A ledger that names neither is
+    nobody's."""
+    repo = Path(os.path.realpath(repo))
+    roots = (repo, repo.parent / (repo.name + ".worktrees"))
+    for task in (data.get("tasks") or {}).values():
+        packet = task.get("packet") if isinstance(task, dict) else None
+        for field in ("plan", "checkout"):
+            value = (packet or {}).get(field)
+            if isinstance(value, str) and any(
+                Path(os.path.realpath(value)).is_relative_to(root) for root in roots
+            ):
+                return True
+    return False
+
+
+def old_ledger_of(state_dir, repo, slug):
+    """The ledger of the old `<state>/<slug>.json` key when `repo` owns it, else None."""
+    path = Path(state_dir).expanduser() / (slug + ".json")
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return path if isinstance(data, dict) and owns_ledger(repo, data) else None
+
+
+def import_old_ledger(state_dir, repo, slug, ledger_path, run_dir):
+    """Move a ledger and a run directory written under the old `<state>/<slug>` key into the repository that owns
+    them. Only a `run` does it, under the plan's run lock: a Lead command that moved them would pull the files out
+    from under a live driver. Once the repository's own ledger exists nothing is imported over it, and a repository
+    that does not own the old ledger leaves it alone for the one that does."""
+    state = Path(state_dir).expanduser()
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(state / ".import.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if ledger_path.exists():
+            return
+        old = old_ledger_of(state, repo, slug)
+        if old is None:
+            return
+        # The old ledger's own lock is what a driver holds while it updates that ledger.
+        old_fd = os.open(
+            old.with_name(old.name + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(old_fd, "w") as old_lock:
+            try:
+                fcntl.flock(old_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise PlanError(
+                    "plan '%s': a live driver is updating its old ledger %s; the ledger moves to %s "
+                    "when that driver has stopped — follow it with `await`, or stop it and run again"
+                    % (slug, old, ledger_path)
+                ) from None
+            ledger_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            old_run = state / slug
+            if old_run.is_dir() and not run_dir.exists():
+                os.replace(old_run, run_dir)
+            os.replace(old, ledger_path)
+
+
+def locate_state(state_dir, plan_path, repo, slug, importing=False):
+    """(ledger path, run directory) of a plan. A YAML plan's old ledger is imported only when `importing`, which is
+    `run` under the plan's run lock; every other caller reads the old key in place while the repository's own ledger
+    is absent and the repository owns the old one."""
+    ledger_path, run_dir = state_layout(state_dir, plan_path, repo, slug)
+    if is_yaml(plan_path):
+        if importing:
+            import_old_ledger(state_dir, repo, slug, ledger_path, run_dir)
+        elif not ledger_path.exists() and old_ledger_of(state_dir, repo, slug):
+            return Path(state_dir).expanduser() / (slug + ".json"), Path(
+                state_dir
+            ).expanduser() / slug
+    return ledger_path, run_dir
+
+
+def plan_home(args):
+    """(slug, ledger path, run directory) of the plan a Lead command names."""
+    plan_path = Path(args.plan).resolve(strict=True)
+    slug = plan_slug(plan_path)
+    if not slug:
+        raise Refused("plan has no Slug")
+    repo = repo_root(plan_path, getattr(args, "repo", None)) if is_yaml(plan_path) else None
+    return (slug, *locate_state(args.state_dir, plan_path, repo, slug))
+
+
+def enter_plan_state(data, state, at=None):
+    """The plan's state in the ledger, with its history: one entry per change, oldest first."""
+    plan = data.setdefault("plan", {"state": None, "history": []})
+    if plan["state"] != state:
+        plan["state"] = state
+        plan["history"].append({"state": state, "at": at or now()})
+
+
+def split_status(text):
+    """(state, reason) of a ticket Status: `IN PROGRESS · decision pending: why` is IN PROGRESS and its reason."""
+    text = " ".join((text or "TO-DO").split())
+    if text.lower().startswith("needs you:"):
+        return "needs you", text.split(":", 1)[1].strip() or None
+    head, _, reason = text.partition(" · ")
+    return re.sub(r"\s+\d{4}-\d{2}-\d{2}$", "", head), reason.strip() or None
+
+
+def plan_status(args):
+    """`status <plan> --json`: the plan's state and history, and each ticket's state, reason and pull request, read
+    from the ledger. It writes nothing, takes no lock and needs no run: before one, the plan is APPROVED (or DRAFT)
+    and every ticket TO-DO."""
+    plan_path = Path(args.plan).resolve(strict=True)
+    if is_yaml(plan_path):
+        repo = repo_root(plan_path, args.repo)
+        model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
+        slug, ids, statuses = model.slug, [t.id for t in model.tickets], {}
+        state = "APPROVED" if model.approval else "DRAFT"
+        history = [{"state": state, "at": model.approval.at}] if model.approval else []
+    else:
+        repo = None
+        plan = parse_plan(plan_path.read_text(encoding="utf-8"))
+        slug, ids = plan["slug"], [t["#"] for t in plan["tickets"]]
+        statuses = {t["#"]: t["Status"] for t in plan["tickets"]}
+        state, history = plan.get("status") or "DRAFT", []
+    ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
+    if is_yaml(plan_path) and not ledger_path.exists():
+        ledger_path = old_ledger_of(args.state_dir, repo, slug) or ledger_path
+    data = {}
+    if ledger_path.is_file():
+        data = read_ledger_file(ledger_path)
+        if is_yaml(plan_path):
+            statuses = data.get("ticket_status") or {}
+            moves = data.get("plan") or {}
+            state, history = moves.get("state") or state, moves.get("history") or history
+    tickets = []
+    for ticket_id in ids:
+        status, reason = split_status(statuses.get(ticket_id))
+        prs = [
+            task.get("pr")
+            for task in (data.get("tasks") or {}).values()
+            if (task.get("packet") or {}).get("unit") == ticket_id.lower() and task.get("pr")
+        ]
+        tickets.append(
+            {"id": ticket_id, "state": status, "reason": reason, "pr": prs[-1] if prs else None}
+        )
+    return {
+        "slug": slug,
+        "plan": str(plan_path),
+        "repo": str(repo) if repo else None,
+        "run_dir": str(run_dir),
+        "ledger": str(ledger_path),
+        "state": state,
+        "history": history,
+        "tickets": tickets,
+    }
+
+
+def read_ledger_file(path):
+    """A ledger read without its lock: every writer replaces the file whole, so a reader sees one version."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("cannot read the ledger %s: %s" % (path, error)) from None
+    require(isinstance(data, dict), "the ledger %s is not an object" % path)
+    return data
+
+
+def render_status(status):
+    lines = ["%s: %s" % (status["slug"], status["state"]), "run: " + status["run_dir"]]
+    for ticket in status["tickets"]:
+        lines.append(
+            "%s  %s%s%s"
+            % (
+                ticket["id"],
+                ticket["state"],
+                " · " + ticket["reason"] if ticket["reason"] else "",
+                "  " + ticket["pr"] if ticket["pr"] else "",
+            )
+        )
+    return "\n".join(lines)
+
+
 def plan_slug(plan_path):
     """The slug a Markdown or YAML plan names, read without validating it: a plan mid-edit still names its slug."""
     path = Path(plan_path).resolve(strict=True)
@@ -4855,15 +5089,12 @@ def launch(args, run_args):
 def rebuild_metrics(args):
     """`metrics <plan>`: metrics.json rebuilt from the run's events.jsonl, which survives a crash. A run dir written
     before the log existed is read from its ledger instead."""
-    slug = plan_slug(args.plan)
-    state_dir = Path(args.state_dir).expanduser()
-    run_dir = state_dir / slug
+    slug, ledger_path, run_dir = plan_home(args)
     rows = events.read(run_dir / "events.jsonl")
     if not rows:
-        ledger_path = state_dir / (slug + ".json")
         require(
             ledger_path.exists(),
-            "no events.jsonl or ledger for %s under %s" % (slug, state_dir),
+            "no events.jsonl or ledger for %s under %s" % (slug, run_dir.parent),
         )
         with ledger(ledger_path) as data:
             rows = [dict(row, kind="import") for row in legacy_imports(data)]
@@ -4876,11 +5107,8 @@ def rebuild_metrics(args):
 def rebuild_evidence(args):
     """`evidence <plan>`: the run's attempts.jsonl rebuilt from its ledger and its events.jsonl, which survive a crash.
     The old metrics.json is left alone: the evidence is written beside it."""
-    slug = plan_slug(args.plan)
-    state_dir = Path(args.state_dir).expanduser()
-    run_dir = state_dir / slug
-    ledger_path = state_dir / (slug + ".json")
-    require(ledger_path.exists(), "no ledger for %s under %s" % (slug, state_dir))
+    slug, ledger_path, run_dir = plan_home(args)
+    require(ledger_path.exists(), "no ledger for %s under %s" % (slug, run_dir.parent))
     with ledger(ledger_path) as data:
         records = evidence.attempts(data, events.read(run_dir / "events.jsonl"), slug)
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -4907,10 +5135,7 @@ class Refused(PlanError):
 
 def run_dir_of(args):
     """The run directory of the plan a Lead command names."""
-    slug = plan_slug(args.plan)
-    if not slug:
-        raise Refused("plan has no Slug")
-    return Path(args.state_dir).expanduser() / slug
+    return plan_home(args)[2]
 
 
 def numbered(directory, stem, suffix):
@@ -5156,7 +5381,10 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
+    )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
     )
     sub = commands.add_parser(
         "evidence", help="Rebuild a run's attempts.jsonl (the per-attempt evidence) from its ledger"
@@ -5165,7 +5393,10 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
+    )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
     )
     sub = commands.add_parser(
         "run", help="Dispatch an approved plan's ready agent tickets and wait for them"
@@ -5213,7 +5444,7 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
     )
     sub.add_argument(
         "--models-file",
@@ -5282,7 +5513,10 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
+    )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
     )
     sub.add_argument(
         "--poll-seconds", type=float, default=2, help="How often wakes.jsonl is read while waiting"
@@ -5300,8 +5534,19 @@ def main(argv=None):
     sub.add_argument(
         "--state-dir",
         default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
     )
+    sub.add_argument(
+        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
+    )
+    sub = commands.add_parser(
+        "status",
+        help="A plan's state and history and each ticket's state, reason and PR, from its ledger",
+    )
+    sub.add_argument("plan")
+    sub.add_argument("--json", action="store_true", help="Print the answer as JSON")
+    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
     sub = commands.add_parser(
         "launch", help="Check the plan and start `run` in a Herdr terminal named orchestrate-<slug>"
     )
@@ -5335,6 +5580,9 @@ def main(argv=None):
         if args.json:
             return found
         return "\n".join(entry["path"] for entry in found)
+    if args.command == "status":
+        status = plan_status(args)
+        return status if args.json else render_status(status)
     if args.command == "run":
         return drive(args)
     if args.command == "await":
