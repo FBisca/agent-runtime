@@ -1251,7 +1251,7 @@ class Driver:
         self.routes, self.step_routes = self.load_routes()
         Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
         self.ledger_path, self.run_dir = locate_state(
-            self.args.state_dir, self.plan_path, self.repo, self.slug
+            self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         contract = self.run_dir / "contract.md"
@@ -4641,8 +4641,9 @@ def old_ledger_of(state_dir, repo, slug):
 
 def import_old_ledger(state_dir, repo, slug, ledger_path, run_dir):
     """Move a ledger and a run directory written under the old `<state>/<slug>` key into the repository that owns
-    them. Only the first drive of that repository does it: once its own ledger exists nothing is imported over it,
-    and a repository that does not own the old ledger leaves it alone for the one that does."""
+    them. Only a `run` does it, under the plan's run lock: a Lead command that moved them would pull the files out
+    from under a live driver. Once the repository's own ledger exists nothing is imported over it, and a repository
+    that does not own the old ledger leaves it alone for the one that does."""
     state = Path(state_dir).expanduser()
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(state / ".import.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -4653,18 +4654,38 @@ def import_old_ledger(state_dir, repo, slug, ledger_path, run_dir):
         old = old_ledger_of(state, repo, slug)
         if old is None:
             return
-        ledger_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        old_run = state / slug
-        if old_run.is_dir() and not run_dir.exists():
-            os.replace(old_run, run_dir)
-        os.replace(old, ledger_path)
+        # The old ledger's own lock is what a driver holds while it updates that ledger.
+        old_fd = os.open(
+            old.with_name(old.name + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(old_fd, "w") as old_lock:
+            try:
+                fcntl.flock(old_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise PlanError(
+                    "plan '%s': a live driver is updating its old ledger %s; the ledger moves to %s "
+                    "when that driver has stopped — follow it with `await`, or stop it and run again"
+                    % (slug, old, ledger_path)
+                ) from None
+            ledger_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            old_run = state / slug
+            if old_run.is_dir() and not run_dir.exists():
+                os.replace(old_run, run_dir)
+            os.replace(old, ledger_path)
 
 
-def locate_state(state_dir, plan_path, repo, slug):
-    """(ledger path, run directory) of a plan, with the old ledger of a YAML plan imported first."""
+def locate_state(state_dir, plan_path, repo, slug, importing=False):
+    """(ledger path, run directory) of a plan. A YAML plan's old ledger is imported only when `importing`, which is
+    `run` under the plan's run lock; every other caller reads the old key in place while the repository's own ledger
+    is absent and the repository owns the old one."""
     ledger_path, run_dir = state_layout(state_dir, plan_path, repo, slug)
     if is_yaml(plan_path):
-        import_old_ledger(state_dir, repo, slug, ledger_path, run_dir)
+        if importing:
+            import_old_ledger(state_dir, repo, slug, ledger_path, run_dir)
+        elif not ledger_path.exists() and old_ledger_of(state_dir, repo, slug):
+            return Path(state_dir).expanduser() / (slug + ".json"), Path(
+                state_dir
+            ).expanduser() / slug
     return ledger_path, run_dir
 
 
