@@ -609,6 +609,40 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertIn("not dispatched", self.plan.read_text(encoding="utf-8"))
         self.assertEqual(len(self.wakes_of("not-dispatched")), 1)  # once per ticket and reason
 
+    def test_S12_a_not_dispatched_ticket_whose_cell_is_not_exactly_TO_DO_is_not_tried_again_in_the_run(
+        self,
+    ):
+        """orchestrator-engine/R57"""
+        self.refuse(["demo-t1"])
+        retry = plan_text(rows=("T1",)).replace("TO-DO", "TO-DO · retry")
+        self.waits(
+            [
+                wait_result(
+                    write=[
+                        [str(self.home / "refuse.json"), "[]"],
+                        [str(self.plan), retry],
+                    ]
+                )
+            ]
+        )
+        self.run_driver(expect=1)
+        self.assertEqual(self.spawned(), ["demo-t1"])  # the refused attempt only
+        self.assertEqual(len(self.wakes_of("not-dispatched")), 1)
+        self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RESERVED")
+
+    def test_S12a_the_not_dispatched_wake_names_the_ticket_the_reason_and_the_exact_TO_DO_way_out(
+        self,
+    ):
+        """orchestrator-engine/R57"""
+        self.refuse(["demo-t1"])
+        self.waits([wait_result(write=[[str(self.home / "refuse.json"), "[]"]])])
+        self.run_driver(expect=1)
+        (wake,) = self.wakes_of("not-dispatched")
+        self.assertEqual(wake["unit"], "t1")
+        self.assertIn("T1", wake["text"])
+        self.assertIn("name_taken", wake["text"])
+        self.assertIn("set the ticket's Status cell back to exactly TO-DO", wake["text"])
+
     def test_S5_a_refused_restart_attempt_is_dispatched_again_after_the_lead_s_todo(self):
         """orchestrator-engine/R29"""
         self.crashed()

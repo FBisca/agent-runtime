@@ -4365,8 +4365,8 @@ class Driver:
 
     def not_dispatched(self, ticket, error, what="not dispatched"):
         """A dispatch that cannot happen asks the Lead, once per ticket and reason; the cell keeps the reason and
-        the ticket stays out of this run's rounds until the Lead sets its Status to TO-DO (a restarted drive reads the cell
-        as TO-DO and tries it once more)."""
+        the ticket stays out of this run's rounds until the Lead sets its Status to exactly TO-DO (a restarted drive
+        reads a cell starting with TO-DO as TO-DO and tries it once more)."""
         task_id = ticket["#"].lower()
         self.failed.add(task_id)
         self.errors.append("%s: %s" % (ticket["#"], error))
@@ -4375,7 +4375,7 @@ class Driver:
         self.wake(
             "not-dispatched",
             task_id,
-            "%s %s: %s -> fix that, then set the ticket's Status to TO-DO and the next round tries it again"
+            "%s %s: %s -> fix that, then set the ticket's Status cell back to exactly TO-DO and the next round tries it again"
             % (ticket["#"], what, cell(error, 300)),
             key="%s:%s" % (task_id, error),
         )
