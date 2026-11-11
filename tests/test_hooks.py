@@ -432,11 +432,11 @@ class PlanContractTests(unittest.TestCase):
         )
         fake.chmod(0o755)
 
-    def hook(self, payload, role="lead", path=True):
+    def hook(self, payload, role="lead", path=True, home=None):
         """The hook run as `role` says the runtime resolves this session; `path=False` leaves no agent-runtime."""
         env = {
             "PATH": (str(self.bin) + os.pathsep if path else "") + "/usr/bin:/bin",
-            "HOME": self.temp.name,
+            "HOME": home or self.temp.name,
             "FAKE_ROLE": role,
             "FAKE_ASKED": str(self.asked),
         }
@@ -676,6 +676,27 @@ class PlanContractTests(unittest.TestCase):
             relative = {"tool_name": "Write", "tool_input": {"file_path": name}, "cwd": cwd}
             self.assertTrue(denied(self.hook(self.as_worker(relative))), name)
         self.assertIsNone(self.hook(self.as_worker(bash("cat %s/k/demo.json" % alias))))
+
+    def test_S5_S6_the_file_tools_are_denied_when_a_directory_name_has_a_space(self):
+        """runtime-audit-fixes/S5, S6: a path is one path, whatever characters its directories carry"""
+        spaced = Path(self.temp.name) / "my home (x)"
+        default = spaced / ".local/state/orchestrate/k/demo/receipts"
+        default.mkdir(parents=True)
+        marked = spaced / "marked root"
+        (marked / "k/demo/receipts").mkdir(parents=True)
+        (marked / "k/demo.json").write_text(json.dumps({"kind": "agent-orchestrator/ledger"}))
+        for target in (
+            default / "S1.json",
+            marked / "k/demo/receipts/S1.json",
+            marked / "k/demo.json",
+        ):
+            for tool in ("Write", "Edit"):
+                payload = {"tool_name": tool, "tool_input": {"file_path": str(target)}}
+                out = self.hook(self.as_worker(payload), home=str(spaced))
+                self.assertTrue(denied(out), (tool, str(target)))
+                self.assertIsNone(self.hook(payload, home=str(spaced)), str(target))
+            patch = self.patch("*** Add File: %s\n+x" % target)
+            self.assertTrue(denied(self.hook(patch, role="worker", home=str(spaced))), str(target))
 
     def test_S6_an_unmarked_ledger_outside_the_default_root_is_not_protected(self):
         """runtime-audit-fixes/S6: the documented gap until the orchestrator writes the marker"""

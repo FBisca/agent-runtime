@@ -507,7 +507,7 @@ def main(argv=()):
         name = data.get("tool_name", "Bash")
         if name in FILE_TOOLS | PATCH_TOOLS:
             paths = edited_paths(name, data.get("tool_input"), data.get("cwd"))
-            guarded = any(mentions_receipts(path) for path in paths) and (
+            guarded = any(guarded_path(path) for path in paths) and (
                 bool(data.get("agent_id")) or spawned_worker()
             )
             result = ("deny", RECEIPTS_REASON) if guarded else None
