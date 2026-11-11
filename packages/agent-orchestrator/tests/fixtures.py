@@ -27,6 +27,7 @@ MEMBER = Path(__file__).resolve().parents[1]
 REPO = Path(__file__).resolve().parents[3]
 DRIVER = [sys.executable, "-B", "-m", "agent_orchestrator"]
 TESTS = Path(__file__).resolve().parent
+UV_CACHE = str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "uv")
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))  # the fakes are imported by name
 
@@ -398,8 +399,13 @@ class RunFixture(_Case):
         return [r for r in rows if tool in (None, r["tool"])]
 
     def env(self):
+        """The environment of a subprocess the test starts: a home of its own, so a command that falls back to the
+        default state dir (`~/.local/state/orchestrate`) never writes into the real one (yaml-eec D27); the real uv
+        cache, so a placed oracle's `uv run` does not rebuild from nothing."""
         return dict(
             os.environ,
+            HOME=str(self.root / "home"),
+            UV_CACHE_DIR=os.environ.get("UV_CACHE_DIR") or UV_CACHE,
             PATH=str(self.home) + os.pathsep + os.environ["PATH"],
             PYTHONPATH=str(TESTS) + os.pathsep + os.environ.get("PYTHONPATH", ""),
             FAKE_RUNTIME_HOME=str(self.home),
