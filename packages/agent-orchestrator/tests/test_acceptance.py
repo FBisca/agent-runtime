@@ -17,6 +17,7 @@ import yaml
 from agent_orchestrator import plan as yaml_plan
 from agent_orchestrator import verify
 from fixtures import load_script, report_wait, spawn_id
+from test_archive import plan_copies
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -198,7 +199,9 @@ class AcceptanceFixture(GateFixture):
     def archive_steps(self):
         """The archive worker and the gaps reviewer of a plan that was accepted."""
         archiver = report_wait("demo-archive", "complete", id=spawn_id("demo-archive"))
-        archiver["write"] = [
+        archiver["write"] = plan_copies(
+            self.plan, self.root / "repo.worktrees" / "demo-archive"
+        ) + [
             [
                 str(self.run_dir / "archive" / "report.json"),
                 self.report("archive", pr="https://github.com/o/r/pull/9"),
@@ -319,7 +322,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self,
     ):
         self.delivered(archive=True)
-        self.assertEqual(self.history(), STATES + ["ACCEPTED"])
+        self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         (receipt,) = [r for r in self.receipts("integration") if r["scenario"] == "S1"]
         digest = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]["digest"]
         self.assertEqual(
@@ -395,7 +398,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.delivered(lands="almost")
         subprocess.run(self.land("done"), check=True, capture_output=True)
         self.drive([self.default_mutator()], archive=True)
-        self.assertEqual(self.history()[-1], "ACCEPTED")
+        self.assertEqual(self.history()[-1], "ARCHIVED")
         self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL", "PASS"])
 
 
@@ -452,6 +455,16 @@ class HumanTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.history()[-2:], ["REJECTED", "ACCEPTED_WITH_HUMAN"])
         self.assertEqual(self.ledger()["acceptance"]["S1"]["previous"]["result"], "FAIL")
+
+    def test_S25_a_plan_accepted_with_human_over_a_failing_outcome_archives_without_a_fix_round(
+        self,
+    ):
+        self.delivered(lands="almost")
+        self.assertEqual(self.accept("S1").returncode, 0)
+        self.drive([], archive=True)
+        self.assertEqual(self.history()[-2:], ["ACCEPTED_WITH_HUMAN", "ARCHIVED"])
+        self.assertEqual(self.spawned().count("demo-archive"), 1)
+        self.assertEqual(self.receipts("archive"), [], "an item a person accepted is not re-run")
 
     def test_S18_accept_refuses_an_item_that_passes_and_a_spawned_worker(self):
         self.delivered_with_human()

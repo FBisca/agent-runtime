@@ -39,7 +39,7 @@ class MutationCheckTests(MutationFixture, unittest.TestCase):
         self,
     ):
         self.mutated(KILLS, archive=True)
-        self.assertEqual(self.history(), STATES + ["ACCEPTED"])
+        self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         spawned = self.spawned()
         self.assertIn("demo-mut-s1-1", spawned)
         self.assertNotIn("demo-mut-s1-2", spawned)
@@ -56,7 +56,7 @@ class MutationCheckTests(MutationFixture, unittest.TestCase):
 
     def test_S21_an_ineffective_mutation_gets_one_more_attempt_with_a_fresh_reviewer(self):
         self.mutated(SURVIVES, KILLS, archive=True)
-        self.assertEqual(self.history(), STATES + ["ACCEPTED"])
+        self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         spawned = self.spawned()
         self.assertIn("demo-mut-s1-1", spawned)
         self.assertIn("demo-mut-s1-2", spawned, "the second attempt is another fresh reviewer")
@@ -100,7 +100,7 @@ class MutationCheckTests(MutationFixture, unittest.TestCase):
         self.write_plan([scenario("S1", {"check": "true", "baseline": "pass"})])
         self.merged_on_main("done")
         self.drive([self.worker("done"), self.reviewer()], archive=True)
-        self.assertEqual(self.history(), STATES + ["ACCEPTED"])
+        self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         self.assertFalse([n for n in self.spawned() if "-mut-" in n])
         self.assertEqual(self.mutation_receipts(), [])
 
