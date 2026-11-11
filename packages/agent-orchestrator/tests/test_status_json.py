@@ -84,6 +84,8 @@ class StatusJsonTests(StatusFixture, unittest.TestCase):
             (self.state_dir / self.key / "demo.json").exists()
         )  # reading creates nothing
 
+        # gh names a merge commit no repository has, so the plan stays RUNNING: this test is about the Status.
+        self.prs([{"state": "MERGED", "mergeCommit": {"oid": "f" * 40}}])
         self.waits(
             [
                 report_wait("demo-t1", "blocked", "cannot reach the database"),
