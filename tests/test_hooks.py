@@ -452,7 +452,9 @@ class PlanContractTests(unittest.TestCase):
 
     def test_C2_a_spawned_worker_without_agent_id_is_denied_by_the_runtimes_answer(self):
         """yaml-eec/S3: the runtime's role worker is a worker, whatever the payload says"""
-        path = str(Path.home() / ".local/state/orchestrate/k/demo/receipts/S1.integration.1.json")
+        path = str(
+            Path(self.temp.name) / ".local/state/orchestrate/k/demo/receipts/S1.integration.1.json"
+        )
         payloads = (
             bash("agent-orchestrator plan approve x.plan.yaml"),
             bash("echo '{}' > %s/S1.integration.1.json" % RECEIPTS),
@@ -550,7 +552,9 @@ class PlanContractTests(unittest.TestCase):
 
     def test_D17_a_worker_is_denied_the_file_tools_on_receipts(self):
         """yaml-eec/D17"""
-        path = str(Path.home() / ".local/state/orchestrate/k/demo/receipts/S1.integration.1.json")
+        path = str(
+            Path(self.temp.name) / ".local/state/orchestrate/k/demo/receipts/S1.integration.1.json"
+        )
         for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             payload = {"tool_name": tool, "tool_input": {"file_path": path, "content": "{}"}}
             self.assertTrue(
@@ -606,6 +610,79 @@ class PlanContractTests(unittest.TestCase):
         for payload in payloads:
             self.assertIsNone(self.hook(payload, role="worker"), payload)
         self.assertFalse(self.asked.exists())
+
+    def ledger_root(self, name="root", marked=True):
+        """A state root outside the default one, with `k/demo.json` beside `k/demo/receipts/`."""
+        root = Path(self.temp.name) / name
+        (root / "k/demo/receipts").mkdir(parents=True)
+        ledger = {"kind": "agent-orchestrator/ledger"} if marked else {"plan": "demo"}
+        (root / "k/demo.json").write_text(json.dumps(ledger))
+        return root
+
+    def as_worker(self, payload):
+        return {**payload, "agent_id": "sub-1", "agent_type": "worker"}
+
+    def test_S4_a_state_receipts_path_without_a_ledger_is_not_guarded(self):
+        """runtime-audit-fixes/S4"""
+        for path in ("src/state/receipts/slice.ts", "/repo/state/receipts/a.json"):
+            for command in ("echo x > %s" % path, "rm -f %s" % path, "cp a %s" % path):
+                self.assertIsNone(self.hook(self.as_worker(bash(command))), command)
+            write = {"tool_name": "Write", "tool_input": {"file_path": path}, "cwd": "/repo"}
+            self.assertIsNone(self.hook(self.as_worker(write)), path)
+        self.assertIsNone(
+            self.hook(
+                self.patch("*** Add File: src/state/receipts/a.ts\n+x", cwd="/repo"), role="worker"
+            )
+        )
+
+    def test_S5_a_receipts_subtree_under_the_default_root_is_denied_and_readable(self):
+        """runtime-audit-fixes/S5"""
+        default = Path(self.temp.name) / ".local/state/orchestrate/k/demo/receipts/S1.json"
+        for command in (
+            "echo x > %s" % default,
+            "rm %s" % default,
+            "cd %s && rm S1.json" % default.parent,
+        ):
+            out = self.hook(self.as_worker(bash(command)))
+            self.assertTrue(denied(out), command)
+            reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+            self.assertIn("driver", reason)
+            self.assertIn("re-run the evidence", reason)
+        self.assertIsNone(self.hook(self.as_worker(bash("cat %s" % default))))
+        self.assertIsNone(self.hook(self.as_worker(bash("ls %s" % default.parent))))
+
+    def test_S6_a_marked_ledgers_receipts_ledger_and_lock_are_denied_under_any_root(self):
+        """runtime-audit-fixes/S6"""
+        root = self.ledger_root()
+        alias = Path(self.temp.name) / "alias"
+        alias.symlink_to(root)
+        for base in (root, alias):
+            for target in (
+                "k/demo/receipts/S1.json",
+                "k/demo.json",
+                "k/demo.json.lock",
+                "k/demo.lock",
+            ):
+                path = base / target
+                for payload in (
+                    bash("echo x > %s" % path),
+                    {"tool_name": "Write", "tool_input": {"file_path": str(path)}},
+                ):
+                    out = self.hook(self.as_worker(payload))
+                    self.assertTrue(denied(out), str(path))
+                    self.assertIn("driver", out["hookSpecificOutput"]["permissionDecisionReason"])
+        cwd = str(root / "k/demo")
+        for name in ("receipts/S1.json", "../demo.json"):
+            relative = {"tool_name": "Write", "tool_input": {"file_path": name}, "cwd": cwd}
+            self.assertTrue(denied(self.hook(self.as_worker(relative))), name)
+        self.assertIsNone(self.hook(self.as_worker(bash("cat %s/k/demo.json" % alias))))
+
+    def test_S6_an_unmarked_ledger_outside_the_default_root_is_not_protected(self):
+        """runtime-audit-fixes/S6: the documented gap until the orchestrator writes the marker"""
+        root = self.ledger_root("other", marked=False)
+        for target in ("k/demo/receipts/S1.json", "k/demo.json", "k/demo.json.lock"):
+            command = "echo x > %s/%s" % (root, target)
+            self.assertIsNone(self.hook(self.as_worker(bash(command))), command)
 
 
 class WiringTests(unittest.TestCase):
