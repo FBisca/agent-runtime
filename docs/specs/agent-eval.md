@@ -63,6 +63,22 @@ record of each file is the session header; its `id` is the session's id and its 
 The folder name, which starts with `--` and encodes the cwd lossily, is never read back, and a file whose
 first line is not a header is skipped.
 
+## Naming a session
+
+`--session <ref>` is looked up in all three harnesses: the Claude transcripts under
+`$CLAUDE_CONFIG_DIR/projects`, the Codex sessions under `$CODEX_HOME/sessions` and the Pi sessions under
+`$PI_CODING_AGENT_DIR/sessions`. A ref is a full id or a unique prefix, and a full id wins over longer ids
+it prefixes. A Codex or Pi session has no job state to link it: it joins alone, with its transcript and, for
+Codex, its later rollout files, and with no subagent entry and no aux file of its own. The first `--session`'s
+session is the `root` and names the default case, whatever the other sessions' age (for a Claude session, the
+root is still the oldest session of its chain); a later `--session`'s session that no link joins to it has role
+`session`. A named session that is also a worker of the run joins once, with the role the naming gave it.
+`--exclude` leaves a named session out and lists it under `excluded`.
+
+A ref that matches no session, several sessions, or one session found under two harnesses exits 2 and writes
+nothing: an unknown ref names the directory it looked in for each harness, an ambiguous one every candidate
+with its harness, and a session under two harnesses the two places it was found.
+
 ## Case layout
 
 `manifest.json` (`schema: case/1`), `transcripts/<id>.jsonl.gz`,
@@ -73,7 +89,8 @@ rollouts, `orchestrate/<path>.gz` for a run directory, `changes.patch` when a re
 
 Manifest `sessions` carry `id`, `harness`, `role` (`root`, `continuation`, `fork`, `session`,
 `subagent`, `worker`), `parent`, `file`, `sha256`, `bytes`, `source`, `modified`, `cwd` and `assignment_id`
-(null unless the session joined as a worker, and then only when its first prompt carries one), and `files`:
+(the cwd of the session's own first record that carries one, and the id its own first prompt names; each null when
+the session does not say, whichever way it joined the case), and `files`:
 the session's other files, each `kind` (`meta`, `tool-result` or `rollout`), `file`, `sha256`, `bytes` and
 `source`. The digest and
 the size are of the original bytes, not of the gzip. The manifest also carries `case`, `captured`,
@@ -211,6 +228,8 @@ not follow from its gates and scores.
 - **R225** WHEN `agent-eval add-label --help` is read, or the spec's case layout, THEN both show `labels/<kind>.json` and a complete `label/2` example, and the spec names Pydantic as the package's one dependency. (from agent-eval-label-evidence/S6)
 - **R226** WHEN `score-agent` is given a case directory, THEN it judges from the case's own files, writes a `label/2` JSON whose every evidence ref points into the case with a verbatim quote, and prints its score block rendered from that label. (from agent-eval-label-evidence/S6a)
 - **R227** WHEN the case `orchestrator-silent-idle` is judged again, THEN `labels/agent-judge.json` holds a `label/2` from score-agent with `source: judged`, accepted by `add-label`, whose every deduction's quote can be found in the case. (from agent-eval-label-evidence/S7)
+- **R228** WHEN `agent-eval capture --session <ref>` names a Codex or Pi session, THEN the case holds its transcript (with its later rollout files, for Codex) and the manifest lists it with its harness, the cwd of its first record, its role and parent and no subagent entry or aux file of its own; the first `--session`'s session is the `root` and names the default case whatever the other sessions' age, a later one has role `session`, a named session that is also a worker of the run joins once with the role the naming gave it, and `--exclude` leaves it out and lists it; a ref that matches no session, several sessions, or one session under two harnesses exits 2 and writes nothing, naming the directory looked in for each harness, every candidate with its harness, or the two places it was found. (from agent-eval-named-capture/S1, S2, S3)
+- **R229** WHEN a session is captured, whichever road it entered the case by (named, in a chain, as a subagent or as a worker of a run), THEN the manifest records its `cwd` and its `assignment_id` when its own first prompt carries one, and null when it does not; the same session captured by name and as a worker records the same two fields. (from agent-eval-named-capture/S4)
 
 ## Coverage
 
@@ -237,3 +256,7 @@ not follow from its gates and scores.
 | agent-eval-label-evidence/S6 | R225 | `test_S6_the_help_shows_where_the_label_goes_and_a_complete_label2`, `test_S6_the_spec_case_layout_and_example_match_the_help`, `test_S6_the_spec_names_pydantic_as_the_one_dependency`, `test_S6_the_example_is_accepted_by_add_label_against_the_case_it_cites` |
 | agent-eval-label-evidence/S6a | R226 | human: score-agent's `case-mode.md` (agent-skills#72, merged); a run on a copy of `orchestrator-silent-idle` was accepted by `add-label` on its first try, 2026-11-10 |
 | agent-eval-label-evidence/S7 | R227 | human: `orchestrator-silent-idle/labels/agent-judge.json`, `label/2` FAIL 0.70, stored by `add-label` with mode 0600, 2026-11-10 |
+| agent-eval-named-capture/S1 | R228 | `packages/agent-eval/tests/test_capture_named.py`: `test_S1_a_named_codex_session_joins_with_its_rollouts`, `test_S1_a_named_pi_session_joins_with_its_cwd_and_no_aux_file`, `test_S1_a_unique_prefix_names_a_codex_or_pi_session` |
+| agent-eval-named-capture/S2 | R228 | `test_S2_an_unknown_ref_names_the_directory_looked_in_for_each_harness`, `test_S2_an_ambiguous_ref_names_every_candidate_with_its_harness`, `test_S2_a_session_under_two_harnesses_names_the_two_places`, `test_S2_a_bad_ref_beside_a_good_one_writes_nothing` |
+| agent-eval-named-capture/S3 | R228 | `test_S3_the_first_named_session_is_the_root_whatever_the_age`, `test_S3_a_codex_session_beside_a_claude_chain_is_a_later_session`, `test_S3_a_named_session_that_is_also_a_worker_joins_once_with_its_role`, `test_S3_exclude_leaves_a_named_session_out_and_lists_it`, `test_S3_a_named_session_alone_with_a_run_names_the_case_after_it` |
+| agent-eval-named-capture/S4 | R229 | `test_S4_a_named_session_records_its_cwd_and_assignment_id`, `test_S4_a_session_without_a_cwd_in_its_records_records_null`, `test_S4_the_same_session_by_name_and_as_a_worker_records_the_same_fields`, `test_S4_a_subagent_records_the_cwd_and_assignment_id_of_its_own_records` |
