@@ -5498,27 +5498,37 @@ def split_status(text):
 
 def legacy_markdown_view(plan_path):
     """(slug, ticket ids, ticket statuses, plan state) of a legacy Markdown plan, for `status` and the workbench
-    listing only: a Markdown plan is no longer run, so nothing else reads it, and it never writes."""
+    listing only: a Markdown plan is no longer run, so nothing else reads it, and it never writes. Tickets come
+    only from the table under `## Tickets` whose header has an ID and a Status column."""
     text = plan_path.read_text(encoding="utf-8")
     head = text.split("\n## ", 1)[0]
     slug = re.search(r"Slug:\s*`([^`]+)`", head)
     state = re.search(r"Status:\s*([A-Za-z-]+)", head)
-    ids, statuses, columns = [], {}, None
+    ids, statuses, columns, in_tickets = [], {}, None, False
     for line in text.splitlines():
+        if line.startswith("#"):
+            in_tickets = line.lstrip("#").strip().lower() == "tickets"
+            columns = None
+            continue
         cells = split_row(line)
         if cells is None:
             columns = columns if ids else None
             continue
+        if not in_tickets:
+            continue
         if columns is None:
-            if "#" in cells and "Status" in cells:
-                columns = (cells.index("#"), cells.index("Status"))
+            heads = [cell.lower() for cell in cells]
+            if ids:
+                continue  # a second table under the heading is not the ticket table
+            if ("#" in heads or "id" in heads) and "status" in heads:
+                columns = (heads.index("#" if "#" in heads else "id"), heads.index("status"))
             continue
         if set("".join(cells)) <= set("-: ") or len(cells) <= max(columns):
             continue
         ids.append(cells[columns[0]])
         statuses[cells[columns[0]]] = cells[columns[1]]
     return (
-        slug.group(1) if slug else None,
+        slug.group(1) if slug else yaml_plan.slug_of(plan_path),
         ids,
         statuses,
         state.group(1).upper() if state else "DRAFT",
@@ -5555,9 +5565,11 @@ def plan_status(args, model=None):
     data = {}
     if ledger_path.is_file():
         data = read_ledger_file(ledger_path)
-        statuses = data.get("ticket_status") or {}
-        moves = data.get("plan") or {}
-        state, history = moves.get("state") or state, moves.get("history") or history
+        if repo is not None:
+            # A legacy plan's Status column stays its source: its ledger never carried the ticket states.
+            statuses = data.get("ticket_status") or {}
+            moves = data.get("plan") or {}
+            state, history = moves.get("state") or state, moves.get("history") or history
     tickets = []
     for ticket_id in ids:
         status, reason = split_status(statuses.get(ticket_id))
