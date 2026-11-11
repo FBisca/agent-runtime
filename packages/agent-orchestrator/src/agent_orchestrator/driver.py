@@ -1093,10 +1093,8 @@ ARCHIVE_ACCEPTANCE = [
     "converge --final passes",
 ]
 YAML_ARCHIVE_ACCEPTANCE = [
-    "Every scenario is a requirement with provenance in the plan's spec; no new spec file is created",
-    "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies",
-    "Each promote oracle is byte-identical at its place",
-    "No test is renamed and no Status is written into plan.yaml",
+    "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
+    "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies; the oracles the driver placed are untouched; no test is renamed and no Status is written into plan.yaml",
 ]
 
 
@@ -1241,7 +1239,7 @@ class Driver:
 
     def read_plan(self):
         if self.plan_path.name.endswith(".plan.yaml"):
-            model = yaml_plan.load(
+            model = load_approved(
                 self.plan_path,
                 repo=self.repo,
                 state_dir=self.args.state_dir,
@@ -2206,7 +2204,7 @@ class Driver:
             self.log("converge-skipped", task=task_id, reason=reason)
             event(reason)
             if packet["unit"] == ARCHIVE:
-                return "PASS", []
+                return self.archive_evidence(task_id, packet)
             verdict, lines = self.verify_ticket(task_id, packet, report)
             if verdict != "PASS":
                 return verdict, lines
@@ -3146,8 +3144,16 @@ class Driver:
             task_id,
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
-        self.mark(task_id, gate="cleanup", merge_commit=commit)
+        self.mark_merged(task_id, merge_commit=commit)
         event("%s merged: %s" % (task_id, url))
+
+    def mark_merged(self, task_id, **fields):
+        """The unit's cleanup gate, and for the archive unit the plan's ARCHIVED, in one transaction: a crash between
+        them cannot leave a merged archive with an ACCEPTED plan."""
+        with self.book() as data:
+            data["tasks"][task_id].update(fields, gate="cleanup", updated_at=now())
+            if self.model and data["tasks"][task_id]["packet"]["unit"] == ARCHIVE:
+                enter_plan_state(data, "ARCHIVED")
 
     def complete_merged(self, task_id, report):
         """The ledger's COMPLETE for a merged unit. A merge is final, so a report that fails the COMPLETE rules does
@@ -3193,7 +3199,12 @@ class Driver:
             task_id,
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
-        self.mark(task_id, gate="cleanup", pr=url, merge_commit=commit)
+        if self.model and unit == ARCHIVE:
+            verdict, lines = self.archive_evidence(task_id, task["packet"])
+            self.log(
+                "archive-evidence-merged-early", task=task_id, verdict=verdict, items=len(lines)
+            )
+        self.mark_merged(task_id, pr=url, merge_commit=commit)
         self.stop_unit_agents(unit, "merged")
         event("%s merged early: %s" % (unit, url))
 
@@ -4126,7 +4137,7 @@ class Driver:
 
     def oracles(self):
         """The approved oracle bytes: the approval snapshot's, never the authored directory's."""
-        snapshot = yaml_plan.snapshot_path(self.contract()[1], self.args.state_dir).parent
+        snapshot = snapshot_dir(self.contract()[1], self.args.state_dir)
         return yaml_plan.payloads(snapshot / "oracle")
 
     def run_evidence(self, scenario_id, phase, commit):
@@ -4203,6 +4214,70 @@ class Driver:
                     }
                 if receipt["result"] != "PASS":
                     items.append(self.evidence_item(len(items) + 1, scenario_id, result))
+        except (runner.RunnerError, verify.VerifyError) as error:
+            return "error", [str(error)[:500]]
+        return ("FAIL", items) if items else ("PASS", [])
+
+    def archive_mismatches(self, checkout, model):
+        """Placed oracles on the archive head that are not the approval snapshot's bytes. Read before the runner
+        re-places anything, so an edit cannot be masked by the re-run. The copied plan files are the reviewer's."""
+        files = self.oracles()
+        root = Path(checkout)
+        bad = []
+        for rel, name in self.oracle_targets(model):
+            path = root / rel
+            if not path.is_file() or path.read_bytes() != files[name]:
+                bad.append(rel)
+        return bad
+
+    def archive_evidence(self, task_id, packet):
+        """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
+        changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set
+        verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can
+        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round."""
+        try:
+            commit = verify.snapshot_commit(packet["checkout"])
+            tree = self.tree_of(commit)
+            model = self.contract()[0]
+            items = []
+            mismatched = self.archive_mismatches(packet["checkout"], model)
+            log = self.run_dir / task_id / "approved-bytes.log"
+            if mismatched:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(
+                    "\n".join("differs: " + rel for rel in mismatched) + "\n", encoding="utf-8"
+                )
+            for rel in mismatched:
+                items.append(
+                    {
+                        "id": "E%d" % (len(items) + 1),
+                        "kind": "blocking",
+                        "source": "verify",
+                        "check": "approved bytes",
+                        "command": "cmp",
+                        "exit": 1,
+                        "excerpt": "%s differs from the approved bytes; restore it byte-identical"
+                        % rel,
+                        "log_path": str(log),
+                    }
+                )
+            with self.book() as data:
+                held = {
+                    i["scenario"] for i in self.acceptance_of(data)["items"] if i["state"] == "PASS"
+                }
+            for scenario in verify.check_scenarios(model):
+                if scenario.id not in model.outcome or scenario.id not in held:
+                    continue
+                result = self.run_evidence(scenario.id, "archive", commit)
+                if result.receipt["result"] != "PASS":
+                    items.append(self.evidence_item(len(items) + 1, scenario.id, result))
+            with self.book() as data:
+                data["archive"] = {
+                    "sha": commit,
+                    "tree": tree,
+                    "digest": self.contract()[1].digest,
+                    "at": now(),
+                }
         except (runner.RunnerError, verify.VerifyError) as error:
             return "error", [str(error)[:500]]
         return ("FAIL", items) if items else ("PASS", [])
@@ -4434,6 +4509,8 @@ class Driver:
         effort = self.step_effort("archive", effort)
         checkout = self.worktree(name, "feat/" + name)
         if self.model:
+            # The driver places the oracles itself: the worker's scope is the spec and those places only.
+            self.place_oracles(checkout)
             owns = (
                 [self.model.spec]
                 + [rel for rel, _ in self.yaml_copies()]
@@ -4494,6 +4571,28 @@ class Driver:
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
 
+    def oracle_targets(self, model):
+        """(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without
+        the `.oracle` suffix: only the promoted name is collected as a test. One derivation for the placing and the
+        brief, so they cannot disagree."""
+        targets = []
+        for scenario in model.scenarios:
+            evidence = scenario.evidence
+            if evidence and evidence.promote and evidence.place:
+                for name in evidence.oracle:
+                    placed = evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle")
+                    targets.append((placed, name))
+        return targets
+
+    def place_oracles(self, checkout):
+        """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
+        The worker starts after this, so it never has to copy a test it is not allowed to change."""
+        files = self.oracles()
+        for rel, name in self.oracle_targets(self.contract()[0]):
+            target = Path(checkout) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(files[name])
+
     def narrative_path(self):
         """A YAML plan's Markdown narrative, beside it: <stem>.plan.md."""
         return self.plan_path.with_name(self.plan_path.name.removesuffix(".plan.yaml") + ".plan.md")
@@ -4509,17 +4608,9 @@ class Driver:
         return copies
 
     def yaml_places(self, model):
-        """(repo-relative destination, approved source) for each promote oracle file, at its place. The oracle
-        keeps its source name without the `.oracle` suffix: only the promoted name is collected as a test."""
+        """(repo-relative destination, approved source) for each promote oracle file, at its place."""
         oracle = yaml_plan.oracle_dir(self.plan_path)
-        places = []
-        for scenario in model.scenarios:
-            evidence = scenario.evidence
-            if evidence and evidence.promote and evidence.place:
-                for name in evidence.oracle:
-                    placed = name.removesuffix(".oracle")
-                    places.append((evidence.place.rstrip("/") + "/" + placed, oracle / name))
-        return places
+        return [(rel, oracle / name) for rel, name in self.oracle_targets(model)]
 
     def beside_plan(self, path):
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
@@ -4557,14 +4648,15 @@ class Driver:
         return steps, ["Scenarios, verbatim:", "", *pending, ""]
 
     def yaml_archive_text(self, model, plan, packet, task_dir):
-        """The archive brief for a YAML plan: the plan's spec is the living spec; plan files and oracles are copied."""
+        """The archive brief for a YAML plan: the plan's spec is the living spec; the driver has already placed the
+        oracles, and the worker writes requirements and a Coverage table."""
         copies = "\n".join(
             "- Copy byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
             for rel, source in self.yaml_copies()
         )
         places = "\n".join(
-            "- Place byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
-            for rel, source in self.yaml_places(model)
+            "- Already placed by the driver, byte-identical, do not edit: `%s`." % rel
+            for rel, _ in self.yaml_places(model)
         )
         steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / model.spec, plan)
         return "\n".join(
@@ -4583,14 +4675,18 @@ class Driver:
                 "- The living spec is `%s`, named by plan.yaml. Do not create a new spec file."
                 % model.spec,
                 *steps,
+                "- Give the spec a `Coverage` table: one row per requirement of this plan, with the test node ids "
+                "(`path::test_name`) that prove it. Take the node ids from the tickets' reports and the placed oracles.",
                 copies,
                 places,
-                "- Do not write a Status into plan.yaml, and rename no test.",
+                "- The driver placed the promoted oracles before you started. The archive renames no test, leaves "
+                "plan.yaml untouched, and writes no Status.",
                 "- Run before you report COMPLETE: %s. Then open a pull request against %s."
                 % (
                     "; ".join(packet["checks"]) or "the repository's full CI gate",
                     self.args.base.partition("/")[2],
                 ),
+                "The driver then re-runs the outcome evidence on your branch's head; a failure comes back as a fix round.",
                 "",
                 *verbatim,
             ]
@@ -5248,6 +5344,27 @@ def forwarded(argv, option):
     return None
 
 
+def snapshot_dir(approval, state_dir):
+    """Where the approval snapshot lives: the run's state dir first, else the default one `plan approve` wrote to.
+
+    A snapshot is addressed by its digest and verified byte for byte, so its location carries no trust."""
+    here = yaml_plan.snapshot_path(approval, state_dir).parent
+    if (here / "plan.yaml").is_file():
+        return here
+    return yaml_plan.snapshot_path(approval, yaml_plan.DEFAULT_STATE).parent
+
+
+def load_approved(path, *, repo, state_dir, **kwargs):
+    """yaml_plan.load that finds a snapshot approved under the default state dir when the run uses another."""
+    try:
+        return yaml_plan.load(path, repo=repo, state_dir=state_dir, **kwargs)
+    except PlanError as error:
+        default = Path(yaml_plan.DEFAULT_STATE).expanduser()
+        if "snapshot missing" not in str(error) or Path(state_dir).expanduser() == default:
+            raise
+        return yaml_plan.load(path, repo=repo, state_dir=default, **kwargs)
+
+
 def is_yaml(plan_path):
     return Path(plan_path).name.endswith(".plan.yaml")
 
@@ -5430,7 +5547,8 @@ def plan_status(args):
         tickets.append(row)
     return {
         "slug": slug,
-        "plan": str(plan_path),
+        # The plan is an object (path, state, history) for a reader of the run; the flat keys stay for the existing ones.
+        "plan": {"path": str(plan_path), "state": state, "history": [h["state"] for h in history]},
         "repo": str(repo) if repo else None,
         "run_dir": str(run_dir),
         "ledger": str(ledger_path),
@@ -5450,7 +5568,7 @@ def acceptance_context(args):
         "never accepted; rewrite it as plan/1 YAML (plan check)" % plan_path,
     )
     repo = repo_root(plan_path, args.repo)
-    model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, require_approval=True)
+    model = load_approved(plan_path, repo=repo, state_dir=args.state_dir, require_approval=True)
     ledger_path, run_dir = locate_state(args.state_dir, plan_path, repo, model.slug)
     data = read_ledger_file(ledger_path) if ledger_path.is_file() else {}
     return model, repo, ledger_path, run_dir, data
@@ -5625,7 +5743,7 @@ def launch(args, run_args):
     )
     if plan_path.name.endswith(".plan.yaml"):
         # The same check `run` makes first, so an unapproved or drifted contract starts no pane.
-        slug = yaml_plan.load(
+        slug = load_approved(
             plan_path,
             repo=repo,
             state_dir=forwarded(run_args, "--state-dir") or yaml_plan.DEFAULT_STATE,
@@ -6193,7 +6311,7 @@ def main(argv=None):
                     args.plan, repo=args.repo, state_dir=args.state_dir, base=args.base
                 )
             }
-        model = yaml_plan.load(args.plan, repo=args.repo, state_dir=args.state_dir)
+        model = load_approved(args.plan, repo=args.repo, state_dir=args.state_dir)
         return {"valid": True, "slug": model.slug}
     if args.command == "plans":
         found = yaml_plan.discover(args.repo, args.path)
