@@ -6,6 +6,7 @@ import json
 import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -871,6 +872,19 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
             ["integrity"],
         )
         self.assertIn("src/a/test_oracle.py is an oracle place", self.found()[0][1])
+
+
+class IsolationTests(GateFixture, unittest.TestCase):
+    def test_D27_a_cli_approve_without_a_state_dir_writes_under_the_test_home(self):
+        """yaml-eec/D27"""
+        plan = self.approved_yaml_plan()
+        real = Path.home() / ".local" / "state" / "orchestrate" / "approvals"
+        before = sorted(real.iterdir()) if real.is_dir() else []
+        result = self.cli("plan", "approve", str(plan), "--repo", str(self.repo))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        isolated = self.root / "home" / ".local" / "state" / "orchestrate" / "approvals"
+        self.assertTrue(isolated.is_dir() and any(isolated.iterdir()))
+        self.assertEqual(sorted(real.iterdir()) if real.is_dir() else [], before)
 
 
 class LegacyGateTests(GateFixture, unittest.TestCase):

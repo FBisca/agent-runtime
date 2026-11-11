@@ -14,6 +14,7 @@ raises after 100 polls, exposing a missing transition without hanging the suite.
 import json
 import os
 import re
+import subprocess
 import sys
 
 
@@ -100,8 +101,36 @@ def process(argv, timeout=None):
     row.setdefault("isDraft", not os.path.exists(ready))
     row.setdefault("mergeStateStatus", "CLEAN")
     row.setdefault("mergeable", "MERGEABLE")
-    row.setdefault("mergeCommit", {"oid": "f" * 40} if row["state"] == "MERGED" else None)
+    if row["state"] == "MERGED":
+        # A merged PR keeps the merge commit it was first given: a scripted one sticks to later polls.
+        remembered = os.path.join(home, "merge-commit-%s.json" % number)
+        if "mergeCommit" in row:
+            with open(remembered, "w", encoding="utf-8") as stream:
+                json.dump(row["mergeCommit"], stream)
+        elif os.path.exists(remembered):
+            with open(remembered, encoding="utf-8") as stream:
+                row["mergeCommit"] = json.load(stream)
+        else:
+            row["mergeCommit"] = {"oid": merged_head()}
+    row.setdefault("mergeCommit", None)
     return Completed(argv, 0, json.dumps(row))
+
+
+def merged_head():
+    """The merge commit gh names for a merged PR. When the unit's checkout HEAD is what origin's main holds (its work
+    was pushed there, as a fast-forward merge leaves it), that commit; otherwise a placeholder no repository has."""
+    checkout = os.environ.get("FAKE_CHECKOUT", "")
+    if not checkout or not os.path.isdir(checkout):
+        return "f" * 40
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", checkout, *args], capture_output=True, text=True
+        ).stdout.split()
+
+    head = git("rev-parse", "HEAD")
+    main = git("ls-remote", "origin", "refs/heads/main")
+    return head[0] if head and main and main[0] == head[0] else "f" * 40
 
 
 def main(argv):

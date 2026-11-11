@@ -357,6 +357,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
 
     def test_S17_a_merge_commit_the_repository_does_not_have_is_not_contained_either(self):
         self.write_plan()
+        self.prs([{"state": "MERGED", "mergeCommit": {"oid": "f" * 40}}])
         self.drive(
             [self.worker("done"), self.reviewer()]
         )  # gh answers a merge commit that exists nowhere
