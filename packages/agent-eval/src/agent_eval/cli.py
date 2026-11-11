@@ -69,10 +69,17 @@ def build_parser() -> argparse.ArgumentParser:
     cap = commands.add_parser(
         "capture",
         help="freeze a run into a case",
+        usage="agent-eval capture [options]",
         epilog=CAPTURE_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    cap.add_argument("--session", action="append", default=[], metavar="ID")
+    cap.add_argument(
+        "--session",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="a Claude, Codex or Pi session id or unique prefix; repeatable",
+    )
     cap.add_argument("--case", metavar="SLUG")
     cap.add_argument("--exclude", action="append", default=[], metavar="ID")
     cap.add_argument("--repo", metavar="PATH")
