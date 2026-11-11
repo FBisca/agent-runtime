@@ -5496,6 +5496,35 @@ def split_status(text):
     return re.sub(r"\s+\d{4}-\d{2}-\d{2}$", "", head), reason.strip() or None
 
 
+def legacy_markdown_view(plan_path):
+    """(slug, ticket ids, ticket statuses, plan state) of a legacy Markdown plan, for `status` and the workbench
+    listing only: a Markdown plan is no longer run, so nothing else reads it, and it never writes."""
+    text = plan_path.read_text(encoding="utf-8")
+    head = text.split("\n## ", 1)[0]
+    slug = re.search(r"Slug:\s*`([^`]+)`", head)
+    state = re.search(r"Status:\s*([A-Za-z-]+)", head)
+    ids, statuses, columns = [], {}, None
+    for line in text.splitlines():
+        cells = split_row(line)
+        if cells is None:
+            columns = columns if ids else None
+            continue
+        if columns is None:
+            if "#" in cells and "Status" in cells:
+                columns = (cells.index("#"), cells.index("Status"))
+            continue
+        if set("".join(cells)) <= set("-: ") or len(cells) <= max(columns):
+            continue
+        ids.append(cells[columns[0]])
+        statuses[cells[columns[0]]] = cells[columns[1]]
+    return (
+        slug.group(1) if slug else None,
+        ids,
+        statuses,
+        state.group(1).upper() if state else "DRAFT",
+    )
+
+
 def plan_status(args, model=None):
     """`status <plan> --json`: the plan's state and history, and each ticket's state, reason and pull request, read
     from the ledger. It writes nothing, takes no lock and needs no run: before one, the plan is APPROVED (or DRAFT)
@@ -5504,17 +5533,26 @@ def plan_status(args, model=None):
     A caller that already holds the YAML plan model passes it: the workbench reads an approved plan's ledger under
     the approved snapshot's slug and ticket ids, not the edited file's."""
     plan_path = Path(args.plan).resolve(strict=True)
-    require_yaml(plan_path)
-    repo = repo_root(plan_path, args.repo)
-    if model is None:
-        model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
-    slug, ids = model.slug, [t.id for t in model.tickets]
-    state = "APPROVED" if model.approval else "DRAFT"
-    history = [{"state": state, "at": model.approval.at}] if model.approval else []
-    ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
-    if not ledger_path.exists():
-        ledger_path = old_ledger_of(args.state_dir, repo, slug) or ledger_path
-    data, statuses = {}, {}
+    if is_yaml(plan_path):
+        repo = repo_root(plan_path, args.repo)
+        if model is None:
+            model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
+        slug, ids, statuses = model.slug, [t.id for t in model.tickets], {}
+        state = "APPROVED" if model.approval else "DRAFT"
+        history = [{"state": state, "at": model.approval.at}] if model.approval else []
+    else:
+        repo = None
+        slug, ids, statuses, state = legacy_markdown_view(plan_path)
+        history = []
+    if repo is None:
+        # A legacy plan's ledger stays at the old `<state>/<slug>.json` key.
+        state_root = Path(args.state_dir).expanduser()
+        ledger_path, run_dir = state_root / (slug + ".json"), state_root / slug
+    else:
+        ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
+        if not ledger_path.exists():
+            ledger_path = old_ledger_of(args.state_dir, repo, slug) or ledger_path
+    data = {}
     if ledger_path.is_file():
         data = read_ledger_file(ledger_path)
         statuses = data.get("ticket_status") or {}
