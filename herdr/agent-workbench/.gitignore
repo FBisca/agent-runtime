@@ -1,0 +1,4 @@
+# Written by Herdr when it loads or checks a mod; not source.
+gpui-kit.d.ts
+herdr.d.ts
+jsconfig.json
