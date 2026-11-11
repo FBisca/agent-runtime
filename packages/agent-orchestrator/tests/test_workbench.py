@@ -202,7 +202,8 @@ class PlansTests(WorkbenchFixture):
     def error(self, *argv, **kwargs):
         code, out, err = self.workbench(*argv, **kwargs)
         self.assertEqual(code, 2, out + err)
-        shown = json.loads(out)
+        self.assertEqual(out, "", "a refusal prints no view on stdout")
+        shown = json.loads(err)
         self.assertEqual(shown["schema_version"], 1)
         self.assertNotIn("plans", shown)
         self.assertNotIn("tickets", shown)
@@ -214,16 +215,17 @@ class PlansTests(WorkbenchFixture):
         error = self.run_cli(
             "workbench", "plans", "--json", "--repo", str(elsewhere), "--state-dir", "x"
         )
-        shown = json.loads(error[1])["error"]
+        self.assertEqual(error[1], "")
+        shown = json.loads(error[2])["error"]
         self.assertEqual(error[0], 2)
         self.assertEqual(shown["kind"], "not_a_repo")
         self.assertIn("--repo", shown["way_out"])
         cwd = os.getcwd()
         os.chdir(elsewhere)
         self.addCleanup(os.chdir, cwd)
-        code, out, _ = self.run_cli("workbench", "plans", "--json", "--state-dir", "x")
-        self.assertEqual(code, 2)
-        self.assertEqual(json.loads(out)["error"]["kind"], "not_a_repo")
+        code, out, err = self.run_cli("workbench", "plans", "--json", "--state-dir", "x")
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual(json.loads(err)["error"]["kind"], "not_a_repo")
 
     def test_S3_a_repository_without_plans_is_no_plans_never_an_empty_list(self):
         error = self.error("plans")
@@ -334,7 +336,8 @@ class PlanTests(WorkbenchFixture):
         before = tree_digest(self.repo, self.state_dir)
         code, out, err = self.workbench("plan", str(path))
         self.assertNotEqual(code, 0)
-        shown = json.loads(out)
+        self.assertEqual(out, "", "a refusal prints no partial view model on stdout")
+        shown = json.loads(err)
         self.assertNotIn("tickets", shown)
         self.assertNotIn("slug", shown)
         self.assertEqual(shown["error"]["kind"], "invalid_plan")
@@ -445,6 +448,196 @@ class PlanTests(WorkbenchFixture):
                 "approved_at": None,
             },
         )
+
+
+def attempt_task(task_id, status="COMPLETE", unit="t1", **over):
+    """A ledger task as the driver writes it, without the bodies a reader must never print."""
+    task = {
+        "packet": {"unit": unit, "task_id": task_id, "worker": "bench-" + unit},
+        "status": status,
+        "runtime_id": "term-bench-" + unit,
+        "assignment_id": "a-" + task_id,
+        "started_at": "2026-11-11T10:00:00+00:00",
+    }
+    task.update(over)
+    return task
+
+
+def complete_report(**over):
+    report = {"status": "COMPLETE", "acceptance_met": True, "checks": [{"outcome": "passed"}]}
+    report.update(over)
+    return report
+
+
+class AttemptTests(WorkbenchFixture):
+    def attempts(self, tasks, ticket="T1"):
+        path = self.write_plan(graph([], ["T1"]))
+        self.write_ledger("bench", {"T1": "IN PROGRESS", "T2": "TO-DO"}, tasks=tasks)
+        (found,) = [t for t in self.view(path)["tickets"] if t["id"] == ticket]
+        return found["attempts"]
+
+    def test_S7_every_ledger_task_of_a_ticket_appears_once_and_the_newest_is_latest(self):
+        tasks = {
+            "t1": attempt_task("t1", "RELEASED", started_at="2026-11-11T10:00:00+00:00"),
+            "t1r1": attempt_task("t1r1", "RELEASED", started_at="2026-11-11T10:10:00+00:00"),
+            "t1d1": attempt_task("t1d1", "RELEASED", started_at="2026-11-11T10:20:00+00:00"),
+            "t1o1": attempt_task("t1o1", "RELEASED", started_at="2026-11-11T10:30:00+00:00"),
+            "t1p1": attempt_task(
+                "t1p1",
+                "ACTIVE",
+                started_at="2026-11-11T10:40:00+00:00",
+                review={"name": "bench-t1-review", "assignment_id": "a-t1p1-review"},
+            ),
+            "t2": attempt_task("t2", unit="t2"),
+        }
+        tasks["t1"]["finished_at"] = "2026-11-11T10:05:00+00:00"
+        found = self.attempts(tasks)
+        self.assertEqual(
+            [(a["task_id"], a["kind"], a["latest"]) for a in found],
+            [
+                ("t1", "worker", False),
+                ("t1r1", "fix", False),
+                ("t1d1", "retry", False),
+                ("t1o1", "orphan", False),
+                ("t1p1", "reopen", True),
+            ],
+        )
+        first = found[0]
+        self.assertEqual(
+            (first["status"], first["started_at"], first["finished_at"], first["assignment_id"]),
+            ("RELEASED", "2026-11-11T10:00:00+00:00", "2026-11-11T10:05:00+00:00", "a-t1"),
+        )
+        self.assertEqual(
+            sorted(first),
+            sorted(
+                [
+                    "task_id",
+                    "kind",
+                    "status",
+                    "started_at",
+                    "finished_at",
+                    "assignment_id",
+                    "address",
+                    "claimed",
+                    "latest",
+                ]
+            ),
+        )
+        self.assertIsNone(found[4]["finished_at"], "a running attempt has no end: null, not 0")
+
+    def test_S7_the_other_tickets_attempts_are_not_mixed_in_and_a_ticket_without_one_has_none(self):
+        found = self.attempts({"t2": attempt_task("t2", unit="t2")}, ticket="T1")
+        self.assertEqual(found, [])
+
+    def test_S7_attempts_keep_the_ledger_order_when_two_start_at_the_same_time(self):
+        same = "2026-11-11T10:00:00+00:00"
+        found = self.attempts(
+            {
+                "t1": attempt_task("t1", "RELEASED", started_at=same),
+                "t1r1": attempt_task("t1r1", "ACTIVE", started_at=same),
+            }
+        )
+        self.assertEqual(
+            [(a["task_id"], a["latest"]) for a in found], [("t1", False), ("t1r1", True)]
+        )
+
+    def test_S8_the_address_is_the_one_the_runtime_returned(self):
+        found = self.attempts({"t1": attempt_task("t1", address="t1sf", runtime_id="t1sf")})
+        self.assertEqual(found[0]["address"], "t1sf")
+
+    def test_S8_a_ledger_without_an_address_field_reads_the_runtime_id_unless_it_is_the_fallback(
+        self,
+    ):
+        tasks = {
+            "t1": attempt_task("t1", "RELEASED", runtime_id="t1sf"),
+            "t1r1": attempt_task("t1r1", "RELEASED", runtime_id="a-t1r1"),
+            "t1d1": attempt_task("t1d1", "RELEASED", runtime_id="bench-t1"),
+            "t1o1": attempt_task("t1o1", "RELEASED", runtime_id=None),
+            "t1p1": attempt_task("t1p1", "ACTIVE", runtime_id="  "),
+        }
+        found = {a["task_id"]: a["address"] for a in self.attempts(tasks)}
+        self.assertEqual(
+            found, {"t1": "t1sf", "t1r1": None, "t1d1": None, "t1o1": None, "t1p1": None}
+        )
+
+    def test_S8_the_agent_name_or_assignment_of_another_attempt_is_the_fallback_too(self):
+        tasks = {
+            "t1": attempt_task("t1", "RELEASED", runtime_id="a-t1"),
+            "t1r1": attempt_task("t1r1", "ACTIVE", runtime_id="a-t1"),
+        }
+        found = {a["task_id"]: a["address"] for a in self.attempts(tasks)}
+        self.assertEqual(found, {"t1": None, "t1r1": None})
+
+    def test_S8_a_recorded_null_address_is_null_whatever_the_runtime_id_holds(self):
+        found = self.attempts({"t1": attempt_task("t1", address=None, runtime_id="term-bench-t1")})
+        self.assertIsNone(found[0]["address"])
+
+    def test_S8_an_address_is_never_taken_from_another_attempt(self):
+        tasks = {
+            "t1": attempt_task("t1", "RELEASED", address="t1sf"),
+            "t1r1": attempt_task("t1r1", "ACTIVE", address=None, runtime_id="a-t1r1"),
+        }
+        found = {a["task_id"]: a["address"] for a in self.attempts(tasks)}
+        self.assertEqual(found, {"t1": "t1sf", "t1r1": None})
+
+    def test_S9_a_worker_that_reported_complete_over_failed_evidence_is_claimed_not_verified(self):
+        path = self.write_plan(graph([], ["T1"]))
+        ledger = self.write_ledger(
+            "bench",
+            {"T1": "COMPLETE", "T2": "TO-DO"},
+            tasks={"t1": attempt_task("t1", report=complete_report(summary=BODY))},
+        )
+        data = json.loads(ledger.read_text(encoding="utf-8"))
+        data["ticket_evidence"] = {
+            "T1": {"S1": {"result": "FAIL", "receipt": "S1.ticket.1", "commit": "abc"}}
+        }
+        data["unverified"] = {
+            "T1": {"scenarios": ["S1"], "reason": "merged with its evidence failed", "at": "t"}
+        }
+        receipts = ledger.with_suffix("") / "receipts"
+        receipts.mkdir(parents=True)
+        text = json.dumps({"result": "FAIL", "reason": "exit", "label": "FAIL (exit 1)"})
+        (receipts / "S1.ticket.1.json").write_text(text, encoding="utf-8")
+        data["receipts"] = {"S1.ticket.1": hashlib.sha256(text.encode()).hexdigest()}
+        ledger.write_text(json.dumps(data), encoding="utf-8")
+        shown = self.view(path)
+        t1, t2 = shown["tickets"]
+        self.assertEqual(t1["state"], "COMPLETE")
+        self.assertIs(t1["verified"], False)
+        self.assertIs(t1["unverified"], True)
+        self.assertEqual(
+            t1["gates"],
+            [{"scenario": "S1", "phase": "ticket", "result": "FAIL", "reason": "FAIL (exit 1)"}],
+        )
+        self.assertIs(t1["attempts"][0]["claimed"], True)
+        self.assertNotIn(BODY, json.dumps(shown))
+        self.assertIs(t2["verified"], False)
+        self.assertEqual(t2["gates"], [])
+
+    def test_S9_a_ticket_whose_gates_passed_and_nothing_was_merged_past_is_verified(self):
+        path = self.write_plan(graph([]))
+        ledger = self.write_ledger(
+            "bench", {"T1": "COMPLETE"}, tasks={"t1": attempt_task("t1", report=complete_report())}
+        )
+        data = json.loads(ledger.read_text(encoding="utf-8"))
+        data["ticket_evidence"] = {"T1": {"S1": {"result": "PASS", "receipt": "S1.ticket.1"}}}
+        ledger.write_text(json.dumps(data), encoding="utf-8")
+        (t1,) = self.view(path)["tickets"]
+        self.assertIs(t1["verified"], True)
+        self.assertIs(t1["unverified"], False)
+        self.assertEqual(
+            t1["gates"],
+            [{"scenario": "S1", "phase": "ticket", "result": "PASS", "reason": None}],
+            "a gate whose receipt cannot be read has an unknown reason: null",
+        )
+
+    def test_S9_an_attempt_still_running_claims_nothing_yet(self):
+        found = self.attempts({"t1": attempt_task("t1", "ACTIVE")})
+        self.assertIsNone(found[0]["claimed"])
+
+    def test_S9_an_attempt_that_ended_without_a_complete_report_claims_nothing(self):
+        found = self.attempts({"t1": attempt_task("t1", "RELEASED")})
+        self.assertIs(found[0]["claimed"], False)
 
 
 class ReadOnlyTests(WorkbenchFixture):
