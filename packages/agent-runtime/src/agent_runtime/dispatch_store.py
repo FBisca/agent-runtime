@@ -263,16 +263,17 @@ class Store:
             ).fetchone()
             worker = row[0] if row else uid()
             if not row or not row[1]:
-                # The slot is reserved here, in the transaction that activates the worker, so
-                # concurrent registrations cannot pass the check together. An active worker
-                # already holds its slot: resuming it takes no new one.
+                # The slot is reserved here, in the transaction that registers the assignment, so
+                # concurrent registrations cannot pass the check together. An active worker already
+                # holds its slot. A stopped worker holds one only while an assignment is pending
+                # (the reservation); _bind activates it, and a failed launch leaves it stopped.
                 count = db.execute(
-                    "SELECT COUNT(*) FROM workers WHERE team=? AND active=1", (team,)
+                    "SELECT COUNT(*) FROM workers w WHERE w.team=? AND w.id<>? AND (w.active=1 OR EXISTS "
+                    "(SELECT 1 FROM assignments a WHERE a.worker=w.id AND a.state='pending'))",
+                    (team, worker),
                 ).fetchone()[0]
                 if count >= MAX_WORKERS:
                     raise StoreError(TEAM_LIMIT)
-                if row:
-                    db.execute("UPDATE workers SET active=1 WHERE id=?", (worker,))
             if not row:
                 db.execute("INSERT INTO workers VALUES (?,?,?,NULL,1)", (worker, team, name))
             assignment = uid()
