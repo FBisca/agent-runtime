@@ -15,7 +15,6 @@ from fixtures import (
     RunFixture,
     assignment,
     load_script,
-    plan_text,
     report_wait,
     resume_id,
     spawn_id,
@@ -69,8 +68,8 @@ class GateFixture(RunFixture):
 
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
-        self.run_dir = self.state_dir / "demo"
+        self.set_plan(("T1",))
+        self.run_dir = self.state_dir / load_script().repo_key(self.repo) / "demo"
         self.worktree = self.root / "repo.worktrees" / "demo-t1"
 
     extra_files = None  # worktree path -> text the worker also writes
@@ -122,7 +121,7 @@ class GateFixture(RunFixture):
         return step
 
     def use_yaml_plan(self, paths=("src/a/",), oracle=False):
-        """Swap the Markdown plan for an approved YAML plan with one ticket (and, with `oracle`, an oracle placed
+        """Replace the plan with an approved one-ticket plan (and, with `oracle`, an oracle placed
         under src/a/)."""
         evidence = {"human": "confirm"}
         if oracle:
@@ -235,7 +234,7 @@ class GateFixture(RunFixture):
 
 
 class GateTests(GateFixture, unittest.TestCase):
-    def test_S5_failing_converge_resumes_the_worker_in_a_new_task_directory(self):
+    def test_S5_failing_verify_resumes_the_worker_in_a_new_task_directory(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S5"""
         self.waits([self.worker_done()])
         self.run_driver()
@@ -248,15 +247,15 @@ class GateTests(GateFixture, unittest.TestCase):
         )
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
         self.assertEqual(
-            (findings["contract"], findings["source"], findings["attempt"]), (2, "converge", 1)
+            (findings["contract"], findings["source"], findings["attempt"]), (2, "verify", 1)
         )
         self.assertEqual(
-            [(i["source"], i["check"], i["excerpt"]) for i in findings["items"]],
-            [("converge", "coverage", "FAIL coverage: S1")],
+            [(i["source"], i["check"]) for i in findings["items"]],
+            [("verify", "covers")],
         )
         task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
         for needle in (
-            "FAIL coverage: S1",
+            "S1: test node src/a/test_a.py::test_a does not exist",
             str(self.run_dir / "t1r1" / "report.json"),
             "t1r1",
             "findings.json",
@@ -411,7 +410,7 @@ class GateTests(GateFixture, unittest.TestCase):
         task = self.task()
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
         self.assertEqual(task["report_path"], str(self.run_dir / "t1" / "report.json"))
-        self.assertIn("| COMPLETE ", self.plan.read_text(encoding="utf-8"))
+        self.assertTrue(self.ticket_status("T1").startswith("COMPLETE "))
 
     def test_S7_a_fix_round_for_a_dead_pane_spawns_a_fresh_worker_with_the_original_task(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S7"""
@@ -885,21 +884,3 @@ class IsolationTests(GateFixture, unittest.TestCase):
         isolated = self.root / "home" / ".local" / "state" / "orchestrate" / "approvals"
         self.assertTrue(isolated.is_dir() and any(isolated.iterdir()))
         self.assertEqual(sorted(real.iterdir()) if real.is_dir() else [], before)
-
-
-class LegacyGateTests(GateFixture, unittest.TestCase):
-    def test_S11_a_markdown_plan_gets_the_converge_verdicts_and_completes_unverified(self):
-        self.waits([self.worker_done()])
-        self.run_driver()
-        findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
-        self.assertEqual(
-            [(i["source"], i["check"], i["excerpt"]) for i in findings["items"]],
-            [("converge", "coverage", "FAIL coverage: S1")],
-        )
-
-    def test_S11_a_markdown_plan_that_finishes_is_complete_outcome_unverified_never_accepted(self):
-        self.waits([self.worker_done(tests=True), self.reviewer_done()])
-        self.run_driver()
-        outcomes = [e for e in self.events() if e["kind"] == "plan-outcome"]
-        self.assertEqual([e["outcome"] for e in outcomes], ["COMPLETE (outcome unverified)"])
-        self.assertNotIn("ACCEPTED", json.dumps(self.events()))

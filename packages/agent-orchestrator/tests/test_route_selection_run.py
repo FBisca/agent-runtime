@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 import pytest
-from fixtures import RunFixture, plan_text, report_wait, spawn_id  # noqa: E402
+from fixtures import RunFixture, load_script, report_wait, spawn_id  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
@@ -237,15 +237,20 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
 
     def lifecycle(self, slug, extra=(), pr=7):
         """One unit's whole life: worker, reviewer, CI gate, merge. What the run did, in order."""
-        plan = self.root / ("%s.plan.md" % slug)
-        text = plan_text(rows=("T1",)).replace("Slug: `demo`", "Slug: `%s`" % slug)
-        plan.write_text(text, encoding="utf-8")
         state = self.root / ("state-" + slug)
-        run_dir = state / slug
+        plan = self.approved_yaml_plan(
+            ("T1",),
+            name="%s.plan.yaml" % slug,
+            mutate=lambda data: data.update(slug=slug),
+            state_dir=state,
+        )
+        keyed = state / load_script().repo_key(self.repo)
+        run_dir = keyed / slug
         worker, reviewer = "%s-t1" % slug, "%s-t1-review" % slug
         report = json.dumps(
             {
-                "contract": 1,
+                "contract": 3,
+                "covers": {"S1": ["src/a/test_a.py::test_a"]},
                 "task_id": "t1",
                 "status": "COMPLETE",
                 "summary": "done",
@@ -301,14 +306,15 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             )
         finally:
             self.env = base_env
-        log = state / slug / "events.jsonl"
+        log = run_dir / "events.jsonl"
         rows = (
             [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
             if log.exists()
             else []
         )
         gates = [row["gate"][1] for row in rows if row["kind"] == "state"]
-        return {"gates": gates, "plan": plan.read_text(encoding="utf-8"), "state": state}
+        ledger = json.loads((keyed / (slug + ".json")).read_text(encoding="utf-8"))
+        return {"gates": gates, "plan": ledger["ticket_status"]["T1"], "state": state}
 
     def test_S4_the_gate_review_and_pr_state_machine_stays_stable_under_a_new_provider_route(self):
         """orchestrator-engine/R2: P4/S4 — routing the worker to another provider and the reviewer to another role moves nothing else."""
@@ -325,8 +331,8 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             "demo2", extra=("--routes-file", path, "--brain-cli", "codex"), pr=8
         )
         self.assertEqual(legacy["gates"], routed["gates"])
-        self.assertIn("| COMPLETE ", legacy["plan"])
-        self.assertIn("| COMPLETE ", routed["plan"])
+        self.assertIn("COMPLETE ", legacy["plan"])
+        self.assertIn("COMPLETE ", routed["plan"])
         self.assertIn("merged https://github.com/o/r/pull/7", legacy["plan"])
         self.assertIn("merged https://github.com/o/r/pull/8", routed["plan"])
 

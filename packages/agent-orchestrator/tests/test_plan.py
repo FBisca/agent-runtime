@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -41,6 +42,7 @@ def contract():
 class PlanTests(RunFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
+        shutil.rmtree(self.state_dir)  # the fixture's own approval is not this test's
         self.plan = self.plan.with_suffix(".yaml")
         self.oracles = self.plan.with_name("demo.oracle")
         self.oracles.mkdir()
