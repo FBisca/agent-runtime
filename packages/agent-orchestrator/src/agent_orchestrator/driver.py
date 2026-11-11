@@ -5777,14 +5777,18 @@ def split_status(text):
     return re.sub(r"\s+\d{4}-\d{2}-\d{2}$", "", head), reason.strip() or None
 
 
-def plan_status(args):
+def plan_status(args, model=None):
     """`status <plan> --json`: the plan's state and history, and each ticket's state, reason and pull request, read
     from the ledger. It writes nothing, takes no lock and needs no run: before one, the plan is APPROVED (or DRAFT)
-    and every ticket TO-DO."""
+    and every ticket TO-DO.
+
+    A caller that already holds the YAML plan model passes it: the workbench reads an approved plan's ledger under
+    the approved snapshot's slug and ticket ids, not the edited file's."""
     plan_path = Path(args.plan).resolve(strict=True)
     if is_yaml(plan_path):
         repo = repo_root(plan_path, args.repo)
-        model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
+        if model is None:
+            model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
         slug, ids, statuses = model.slug, [t.id for t in model.tickets], {}
         state = "APPROVED" if model.approval else "DRAFT"
         history = [{"state": state, "at": model.approval.at}] if model.approval else []

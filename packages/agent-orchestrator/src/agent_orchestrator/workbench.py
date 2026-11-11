@@ -21,6 +21,7 @@ class WorkbenchError(PlanError):
 
     def __init__(self, kind, message, way_out, **extra):
         super().__init__(message)
+        self.kind = kind
         self.output = {
             "schema_version": SCHEMA_VERSION,
             "error": {"kind": kind, "message": message, "way_out": way_out, **extra},
@@ -70,13 +71,23 @@ def counts(tickets):
     return {"total": len(tickets), "by_state": dict(sorted(by_state.items()))}
 
 
-def status_of(path, repo, args):
-    """The ledger's answer for one plan, through the driver's own read-only `status` reader."""
+def status_of(path, repo, args, source=None):
+    """The ledger's answer for one plan, through the driver's own read-only `status` reader. `source` is the YAML plan
+    model whose slug and ticket ids key the ledger: the approved one, not the edited file's."""
     from . import driver
 
     return driver.plan_status(
-        SimpleNamespace(plan=str(path), repo=str(repo), state_dir=args.state_dir)
+        SimpleNamespace(plan=str(path), repo=str(repo), state_dir=args.state_dir), source
     )
+
+
+def approved_view(path, repo, args):
+    """(revision, source model, ledger status) of a YAML plan: what the plan was approved as, and what the ledger
+    says of it. Raises PlanError for a plan that does not load."""
+    model = yaml_plan.load(path, repo=repo, state_dir=args.state_dir, verify=False)
+    authored = yaml_plan.read_yaml(path)[0]
+    revision, source = revision_of(model, authored, path, repo, args)
+    return revision, source, status_of(path, repo, args, source)
 
 
 def listing(entry, repo, args):
@@ -90,13 +101,13 @@ def listing(entry, repo, args):
         "legacy": markdown,
     }
     try:
-        status = status_of(entry["path"], repo, args)
+        if markdown:
+            status = status_of(entry["path"], repo, args)
+        else:
+            status = approved_view(Path(entry["path"]), repo, args)[2]
     except (PlanError, ValueError, KeyError, OSError) as error:
-        shown.update(
-            state=None,
-            tickets=None,
-            error={"kind": "invalid_plan", "message": str(error)},
-        )
+        kind = error.kind if isinstance(error, WorkbenchError) else "invalid_plan"
+        shown.update(state=None, tickets=None, error={"kind": kind, "message": str(error)})
         return shown
     shown.update(slug=status["slug"], state=status["state"], tickets=counts(status["tickets"]))
     return shown
@@ -182,7 +193,8 @@ def revision_of(model, authored, path, repo, args):
                 "run agent-orchestrator plan approve %s" % path,
                 path=str(path),
             )
-        source = yaml_plan.Plan.model_validate(data)
+        # The snapshot omits the approval block; the approved plan is still approved.
+        source = yaml_plan.Plan.model_validate(data).model_copy(update={"approval": approval})
     return (
         {
             "approved": True,
@@ -218,10 +230,7 @@ def plan(args):
         )
     repo = repository_of(args, path)
     try:
-        model = yaml_plan.load(path, repo=repo, state_dir=args.state_dir, verify=False)
-        authored = yaml_plan.read_yaml(path)[0]
-        status = status_of(path, repo, args)
-        revision, source = revision_of(model, authored, path, repo, args)
+        revision, source, status = approved_view(path, repo, args)
     except WorkbenchError:
         raise
     except PlanError as error:

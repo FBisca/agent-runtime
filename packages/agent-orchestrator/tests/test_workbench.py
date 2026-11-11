@@ -353,6 +353,37 @@ class PlanTests(WorkbenchFixture):
         self.assertTrue(shown["revision"]["drift"])
         self.assertEqual([t["id"] for t in shown["tickets"]], ["T1"])
 
+    def drifted_ledger(self):
+        path = self.write_plan(graph([], []))
+        self.write_ledger(
+            "bench",
+            {"T1": "COMPLETE 2026-11-11", "T2": "COMPLETE 2026-11-11"},
+            plan_state="RUNNING",
+        )
+        return path
+
+    def test_S6_a_slug_edited_after_approval_keeps_the_ledger_state_of_the_approved_plan(self):
+        path = self.drifted_ledger()
+        self.edit(path, lambda data: data.update(slug="renamed"))
+        shown = self.view(path)
+        self.assertTrue(shown["revision"]["drift"])
+        self.assertEqual((shown["slug"], shown["state"]), ("bench", "RUNNING"))
+        self.assertEqual([t["state"] for t in shown["tickets"]], ["COMPLETE", "COMPLETE"])
+        listed = json.loads(self.workbench("plans")[1])["plans"][0]
+        self.assertEqual((listed["slug"], listed["state"]), ("bench", "RUNNING"))
+        self.assertEqual(listed["tickets"], {"total": 2, "by_state": {"COMPLETE": 2}})
+
+    def test_S6_a_ticket_removed_after_approval_keeps_its_ledger_state(self):
+        path = self.drifted_ledger()
+        self.edit(path, lambda data: data["tickets"].pop())
+        shown = self.view(path)
+        self.assertTrue(shown["revision"]["drift"])
+        self.assertEqual(
+            {t["id"]: t["state"] for t in shown["tickets"]}, {"T1": "COMPLETE", "T2": "COMPLETE"}
+        )
+        listed = json.loads(self.workbench("plans")[1])["plans"][0]
+        self.assertEqual(listed["tickets"], {"total": 2, "by_state": {"COMPLETE": 2}})
+
     def test_S6_a_draft_plan_has_no_approval_to_drift_from(self):
         path = self.write_plan(graph([]), approve=False)
         shown = self.view(path)
