@@ -110,9 +110,9 @@ scenarios:
       timeout: 900
   - id: S24
     when: a small real YAML plan in a scratch repository is planned with start-planning, approved, orchestrated with real agents, verified and archived
-    then: the Herdr panel and `status --json` show it ARCHIVED, its receipts exist, and `plan check` still accepts its approval digest
+    then: "`status --json` shows it ARCHIVED, its receipts exist, and `plan check` still accepts its approval digest"
     evidence:
-      human: "Run the scratch plan end to end; confirm the panel row, the receipts and `plan check` after archive"
+      human: "Run the scratch plan end to end; confirm `status --json`, the receipts and `plan check` after archive"
 
   # T8: archive
   - id: S25
@@ -126,9 +126,6 @@ scenarios:
   - id: S30
     when: start-planning writes a Python oracle for a repository whose formatter is configured (ruff format in pyproject.toml)
     then: "the oracle is formatted as that formatter formats its promoted path (`ruff format --stdin-filename <place>/<name>.py`) before `plan check` and `plan approve`, so the byte-identical copy promoted at archive passes the repository's format gate"
-  - id: S27
-    when: the Herdr Plans panel shows a repository's plans
-    then: it reads them from `plans list --json`, shows YAML and Markdown plans with their ledger state, and parses no plan file
 
   # Removal
   - id: S28
@@ -257,18 +254,10 @@ tickets:
       - skills/converge/
       - README.md
       - docs/workflow.md
-  - id: T10
-    delivers: "herdr-app-mods: the Plans panel reads `plans list --json`"
-    satisfies: [S27, S24]
-    blocked_by: [T2, T3, T9]
-    owner: lead
-    repo: ../herdr-app-mods
-    paths:
-      - plans/mods/plans/
   - id: T11
     delivers: "Remove the Markdown reader, the converge adapter and the plan-cell writer, once `plans list` shows no Markdown plan in flight"
-    satisfies: [S28]
-    blocked_by: [T7, T10]
+    satisfies: [S28, S24]
+    blocked_by: [T7, T9]
     paths:
       - packages/agent-orchestrator/src/agent_orchestrator/driver.py
       - packages/agent-orchestrator/src/agent_orchestrator/converge.py
@@ -287,6 +276,6 @@ tickets:
     difficulty: simple
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-11T08:39:23.351087+00:00'
+  at: '2026-11-11T10:26:31.980970+00:00'
   base: a16104a82df522ccefd583dbd16505ae1748ff8c
-  digest: 83ae6cde62487a7eff238c99e7b1ec671acdbce4b7fc721258dee3ceecd553b5
+  digest: 1334c94d64deda45132e31ad0b6b5c45f9efc897ebaf8db6771a779d587dc5a3
