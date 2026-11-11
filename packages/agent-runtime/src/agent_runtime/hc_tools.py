@@ -241,6 +241,33 @@ def discard(name, env):
             pass
 
 
+# What a store failure leaves behind, by tool, when it escapes the handler before the tool's external effect:
+# every pending change was a transaction the store already rolled back, so retrying the call is safe.
+STORE_DOWN = {
+    "spawn": "nothing was started",
+    "resume": "nothing was sent",
+    "message": "the message was not delivered",
+    "report": "the report was not recorded",
+    "stop": "nothing was stopped",
+    "task": "the task was not changed",
+}
+
+
+def store_down(name, error):
+    return ToolError("store failure (%s): %s; retry the %s" % (error, STORE_DOWN[name], name))
+
+
+def settle(store, assignment, **kwargs):
+    """Fail an assignment after its launch or send went wrong; returns the store error that stopped it, never raises.
+
+    The caller is already reporting a failure of its own: a second one must not replace it."""
+    try:
+        store.fail(assignment, **kwargs)
+    except (sqlite3.Error, dispatch.StoreError) as error:
+        return error
+    return None
+
+
 def row_state(raw):
     status = raw.get("status")
     return status.get("state") if isinstance(status, dict) else status
@@ -633,11 +660,14 @@ def spawn(arguments, env, ctx):
                 orphan = False  # keep the original error; fail below still runs
             # Without an orphan the terminal is not removed (hc get failed, the worker exited, or another spawn owns
             # it), so a report that landed first stands until a later wait observes the exit.
-            try:
-                store.fail(mine, inactive=orphan)
-            finally:
-                if orphan:
-                    discard(name, env)
+            stuck = settle(store, mine, inactive=orphan)
+            if orphan:
+                discard(name, env)
+            if stuck:
+                raise ToolError(
+                    "%s; store failure (%s) left assignment %s pending%s"
+                    % (error, stuck, mine, "; the terminal was removed" if orphan else "")
+                ) from stuck
             if not orphan and not str(error).startswith("cannot run"):
                 record()  # the terminal was not discarded: the worker may still be running
             try:
@@ -650,18 +680,36 @@ def spawn(arguments, env, ctx):
             discard(name, env)
         raise
     if code != 0:  # hc refused (name_taken, ...): nothing was started, so nothing is discarded
+        refusal = err.strip() or out.strip() or "hc run failed"
         if store:
-            store.fail(identity["assignment_id"])
-        raise ToolError(err.strip() or out.strip() or "hc run failed")
+            stuck = settle(store, identity["assignment_id"])
+            if stuck:
+                raise ToolError(
+                    "%s; store failure (%s) left assignment %s pending; nothing was started"
+                    % (refusal, stuck, identity["assignment_id"])
+                ) from stuck
+        raise ToolError(refusal)
     out = out.strip()
 
     def undo(error):
         """Every failure after a successful hc run ends the terminal, fails the assignment, leaves the worker inactive."""
-        try:
-            if store:
-                store.fail(identity["assignment_id"], inactive=True)
-        finally:
-            discard(name, env)
+        stuck = settle(store, identity["assignment_id"], inactive=True) if store else None
+        discard(name, env)  # even when the store cannot fail the assignment
+        removed = "worker %s's terminal was removed" % name
+        if stuck:
+            raise ToolError(
+                "%s; %s, but store failure (%s) left assignment %s pending"
+                % (error, removed, stuck, identity["assignment_id"])
+            ) from error
+        if isinstance(error, sqlite3.Error):
+            raise ToolError(
+                "store failure (%s): %s and its assignment was failed; spawn it again"
+                % (error, removed)
+            ) from error
+        if isinstance(error, dispatch.StoreError):
+            raise dispatch.StoreError(
+                "%s; %s and its assignment was failed; spawn it again" % (error, removed)
+            ) from error
         raise error
 
     if store and ctx.cancelled.is_set():
@@ -760,9 +808,13 @@ def resume(arguments, env, ctx):
             % (task, identity["assignment_id"])
         )
         prompt += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
+        assignment = identity["assignment_id"]
+        delivered = (
+            False  # the send is the irreversible step: after it, the worker holds the assignment
+        )
         try:
             mode = "ended" if row_state(raw) in ("done", "idle") else "working"
-            store.mark_resume(identity["assignment_id"], raw.get("turn"), mode)
+            store.mark_resume(assignment, raw.get("turn"), mode)
             out = hc(["send", name, prompt], env, ctx)
             try:
                 sent = json.loads(out)
@@ -772,18 +824,47 @@ def resume(arguments, env, ctx):
                 sent.get("sent") is False or (sent.get("first_message") or {}).get("sent") is False
             ):
                 raise ToolError("resume task was not sent; no blind resend")
+            delivered = True
             if ctx.cancelled.is_set():
                 raise ToolError("cancelled")
             store.bind(
-                identity["assignment_id"],
+                assignment,
                 raw["address"],
                 ctx.actor["scope"],
                 ctx.ack,
                 raw.get("turn"),
                 mode,
             )
-        except (ToolError, dispatch.StoreError):
-            store.fail(identity["assignment_id"], restore=prior)
+        except sqlite3.Error as error:
+            if delivered:
+                # Failing it would refuse the report of a worker that is already working on it; left pending,
+                # that report binds it.
+                raise ToolError(
+                    "the resume task was sent to %s but store failure (%s) stopped binding assignment %s: "
+                    "it is left pending and binds when %s reports; wait for that report, or stop %s and "
+                    "resume it again" % (name, error, assignment, name, name)
+                ) from error
+            stuck = settle(store, assignment, restore=prior)
+            if stuck:
+                raise ToolError(
+                    "store failure (%s) before the task was sent, and store failure (%s) left assignment %s "
+                    "pending; nothing was sent; retry the resume" % (error, stuck, assignment)
+                ) from error
+            raise ToolError(
+                "store failure (%s) before the task was sent: the pending assignment was failed and its "
+                "task released; nothing was sent; retry the resume" % error
+            ) from error
+        except (ToolError, dispatch.StoreError) as error:
+            stuck = settle(store, assignment, restore=prior)
+            if stuck:
+                raise ToolError(
+                    "%s; store failure (%s) left assignment %s pending" % (error, stuck, assignment)
+                ) from error
+            if delivered and isinstance(error, dispatch.StoreError):
+                raise dispatch.StoreError(
+                    "%s; the task was already sent to %s and its assignment was failed"
+                    % (error, name)
+                ) from error
             raise
         return result(
             dict(identity, name=name, address=raw["address"], parent=raw["parent"]), structured=True
@@ -1003,10 +1084,20 @@ def stop(arguments, env, ctx):
         note = " (%s; terminal untouched)" % reason
     try:
         store.stopped(team, name, ctx.ack)
-    except dispatch.StoreError:
-        if reason == "not your child":
+    except (dispatch.StoreError, sqlite3.Error) as error:
+        if reason == "not your child" and isinstance(error, dispatch.StoreError):
             raise ToolError("%s is not your child; refusing" % name)
-        raise
+        # The kill is irreversible; the record update was one transaction, so it is rolled back. A retry
+        # finds the terminal gone and only reconciles the record.
+        effect = (
+            "the terminal was killed and removed"
+            if reason is None
+            else "the terminal was not touched (%s)" % reason
+        )
+        raise ToolError(
+            "%s: %s, and the store failure (%s) left %s still recorded active; retry the stop"
+            % ("stop %s" % name, effect, error, name)
+        ) from error
     return result("stopped %s%s" % (name, note))
 
 
@@ -1174,6 +1265,10 @@ def call(name, arguments, env, ctx):
         except (sqlite3.Error, OSError, dispatch.StorageError, DiagnosticUnavailable) as error:
             if name in DIAGNOSTICS and dispatch_enabled(env):
                 return diagnostic(name, arguments, env, ctx, error)
+            # A handler names a failure that came after its external effect itself; one that reaches this
+            # point came before it, where the store already rolled the pending change back.
+            if name in STORE_DOWN and dispatch_enabled(env) and isinstance(error, sqlite3.Error):
+                raise store_down(name, error) from error
             raise
     except (ToolError, dispatch.StoreError) as error:
         return result(str(error), True)
@@ -1251,16 +1346,23 @@ def call_dispatch(name, arguments, env, ctx):
         return outcome  # no inbox read, ack or receipt row
     # The inbox page budgets against the already-bounded base, then receipt/pin/ack commit together.
     reserve = len(json.dumps(payload, separators=(",", ":")).encode()) + len(',"inbox":')
-    inbox = ctx.store.read(
-        ctx.actor["team_id"],
-        ctx.actor["recipient"],
-        "any",
-        assignment_ids=[],
-        inbox=True,
-        ack=ctx.ack,
-        pin=ctx.actor.get("pin"),
-        reserve=reserve,
-    )
+    try:
+        inbox = ctx.store.read(
+            ctx.actor["team_id"],
+            ctx.actor["recipient"],
+            "any",
+            assignment_ids=[],
+            inbox=True,
+            ack=ctx.ack,
+            pin=ctx.actor.get("pin"),
+            reserve=reserve,
+        )
+    except (sqlite3.Error, dispatch.StoreError):
+        if name not in STORE_DOWN:
+            raise
+        # The handler's effect is committed (a report, a task, a message, a started worker): the inbox only
+        # piggybacks, and unread messages wait for the next call. An error here would make the caller redo it.
+        return outcome
     if inbox["messages"] or inbox["more"]:
         return result(dict(payload, inbox=inbox), structured=True)
     return outcome
