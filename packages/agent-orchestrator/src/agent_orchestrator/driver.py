@@ -3144,11 +3144,16 @@ class Driver:
             task_id,
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
-        self.mark(task_id, gate="cleanup", merge_commit=commit)
-        if self.model and self.task(task_id)["packet"]["unit"] == ARCHIVE:
-            with self.book() as data:  # the plan is ARCHIVED when its archive PR merges
-                enter_plan_state(data, "ARCHIVED")
+        self.mark_merged(task_id, merge_commit=commit)
         event("%s merged: %s" % (task_id, url))
+
+    def mark_merged(self, task_id, **fields):
+        """The unit's cleanup gate, and for the archive unit the plan's ARCHIVED, in one transaction: a crash between
+        them cannot leave a merged archive with an ACCEPTED plan."""
+        with self.book() as data:
+            data["tasks"][task_id].update(fields, gate="cleanup", updated_at=now())
+            if self.model and data["tasks"][task_id]["packet"]["unit"] == ARCHIVE:
+                enter_plan_state(data, "ARCHIVED")
 
     def complete_merged(self, task_id, report):
         """The ledger's COMPLETE for a merged unit. A merge is final, so a report that fails the COMPLETE rules does
@@ -3194,7 +3199,12 @@ class Driver:
             task_id,
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
-        self.mark(task_id, gate="cleanup", pr=url, merge_commit=commit)
+        if self.model and unit == ARCHIVE:
+            verdict, lines = self.archive_evidence(task_id, task["packet"])
+            self.log(
+                "archive-evidence-merged-early", task=task_id, verdict=verdict, items=len(lines)
+            )
+        self.mark_merged(task_id, pr=url, merge_commit=commit)
         self.stop_unit_agents(unit, "merged")
         event("%s merged early: %s" % (unit, url))
 
@@ -4208,16 +4218,66 @@ class Driver:
             return "error", [str(error)[:500]]
         return ("FAIL", items) if items else ("PASS", [])
 
+    def archive_mismatches(self, checkout, model):
+        """Files on the archive head that are not the approved bytes: each placed oracle against the approval
+        snapshot, and each copied plan file against its source. Read before the runner re-places anything, so an
+        edit cannot be masked by the re-run."""
+        files = self.oracles()
+        root = Path(checkout)
+        bad = []
+        for rel, name in self.oracle_targets(model):
+            path = root / rel
+            if not path.is_file() or path.read_bytes() != files[name]:
+                bad.append(rel)
+        for rel, source in self.yaml_copies():
+            if source.is_dir():
+                for child in sorted(p for p in source.rglob("*") if p.is_file()):
+                    path = root / rel.rstrip("/") / child.relative_to(source).as_posix()
+                    if not path.is_file() or path.read_bytes() != child.read_bytes():
+                        bad.append(path.relative_to(root).as_posix())
+            else:
+                path = root / rel
+                if not path.is_file() or path.read_bytes() != source.read_bytes():
+                    bad.append(rel)
+        return bad
+
     def archive_evidence(self, task_id, packet):
         """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
-        changed what the plan delivered. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round."""
+        changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set
+        verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can
+        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round."""
         try:
             commit = verify.snapshot_commit(packet["checkout"])
             tree = self.tree_of(commit)
             model = self.contract()[0]
             items = []
+            mismatched = self.archive_mismatches(packet["checkout"], model)
+            log = self.run_dir / task_id / "approved-bytes.log"
+            if mismatched:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(
+                    "\n".join("differs: " + rel for rel in mismatched) + "\n", encoding="utf-8"
+                )
+            for rel in mismatched:
+                items.append(
+                    {
+                        "id": "E%d" % (len(items) + 1),
+                        "kind": "blocking",
+                        "source": "verify",
+                        "check": "approved bytes",
+                        "command": "cmp",
+                        "exit": 1,
+                        "excerpt": "%s differs from the approved bytes; restore it byte-identical"
+                        % rel,
+                        "log_path": str(log),
+                    }
+                )
+            with self.book() as data:
+                held = {
+                    i["scenario"] for i in self.acceptance_of(data)["items"] if i["state"] == "PASS"
+                }
             for scenario in verify.check_scenarios(model):
-                if scenario.id not in model.outcome:
+                if scenario.id not in model.outcome or scenario.id not in held:
                     continue
                 result = self.run_evidence(scenario.id, "archive", commit)
                 if result.receipt["result"] != "PASS":
@@ -4522,19 +4582,27 @@ class Driver:
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
 
+    def oracle_targets(self, model):
+        """(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without
+        the `.oracle` suffix: only the promoted name is collected as a test. One derivation for the placing and the
+        brief, so they cannot disagree."""
+        targets = []
+        for scenario in model.scenarios:
+            evidence = scenario.evidence
+            if evidence and evidence.promote and evidence.place:
+                for name in evidence.oracle:
+                    placed = evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle")
+                    targets.append((placed, name))
+        return targets
+
     def place_oracles(self, checkout):
         """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
         The worker starts after this, so it never has to copy a test it is not allowed to change."""
         files = self.oracles()
-        for scenario in self.contract()[0].scenarios:
-            evidence = scenario.evidence
-            if evidence and evidence.promote and evidence.place:
-                for name in evidence.oracle:
-                    target = (
-                        Path(checkout) / evidence.place.rstrip("/") / name.removesuffix(".oracle")
-                    )
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(files[name])
+        for rel, name in self.oracle_targets(self.contract()[0]):
+            target = Path(checkout) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(files[name])
 
     def narrative_path(self):
         """A YAML plan's Markdown narrative, beside it: <stem>.plan.md."""
@@ -4551,17 +4619,9 @@ class Driver:
         return copies
 
     def yaml_places(self, model):
-        """(repo-relative destination, approved source) for each promote oracle file, at its place. The oracle
-        keeps its source name without the `.oracle` suffix: only the promoted name is collected as a test."""
+        """(repo-relative destination, approved source) for each promote oracle file, at its place."""
         oracle = yaml_plan.oracle_dir(self.plan_path)
-        places = []
-        for scenario in model.scenarios:
-            evidence = scenario.evidence
-            if evidence and evidence.promote and evidence.place:
-                for name in evidence.oracle:
-                    placed = name.removesuffix(".oracle")
-                    places.append((evidence.place.rstrip("/") + "/" + placed, oracle / name))
-        return places
+        return [(rel, oracle / name) for rel, name in self.oracle_targets(model)]
 
     def beside_plan(self, path):
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when

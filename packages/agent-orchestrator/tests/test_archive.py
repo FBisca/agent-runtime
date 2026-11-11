@@ -4,7 +4,7 @@ import json
 import unittest
 
 import pytest
-from fixtures import load_script, report_wait, resume_id, spawn_id
+from fixtures import assignment, load_script, report_wait, resume_id, spawn_id, wait_result
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -18,6 +18,26 @@ Paths: src/a/
 - **R3** WHEN e THEN f. (from demo/S3)
 """
 TESTS = "".join('def test_%s():\n    """demo/R%d"""\n\n' % (n, i) for i, n in enumerate("abc", 1))
+
+
+def plan_copies(plan, tree):
+    """The write steps of an archive worker that copied a YAML plan's files byte-identical: the plan, its narrative
+    and its oracle directory, beside the plan in the archive checkout."""
+    if not plan.name.endswith(".plan.yaml"):
+        return []
+    beside = tree / "docs" / "plans"
+    stem = plan.name.removesuffix(".plan.yaml")
+    writes = [[str(beside / plan.name), plan.read_text(encoding="utf-8")]]
+    narrative = plan.with_name(stem + ".plan.md")
+    if narrative.exists():
+        writes.append([str(beside / narrative.name), narrative.read_text(encoding="utf-8")])
+    oracle = plan.with_name(stem + ".oracle")
+    if oracle.is_dir():
+        for child in sorted(oracle.iterdir()):
+            writes.append(
+                [str(beside / oracle.name / child.name), child.read_text(encoding="utf-8")]
+            )
+    return writes
 
 
 class ArchiveFixture(GateFixture):
@@ -43,6 +63,7 @@ class ArchiveFixture(GateFixture):
                 self.report(task_id, pr="https://github.com/o/r/pull/9"),
             ]
         ]
+        step["write"] += plan_copies(self.plan, self.archive_tree)
         if complete:
             step["write"] += [
                 [str(self.archive_tree / "docs/specs/demo.md"), SPEC],
@@ -234,7 +255,7 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(placed.read_bytes(), oracle.read_bytes())
         self.assertIn("Already placed", task_md)
 
-    def test_S25_the_archive_worker_owns_the_spec_and_the_places_only(self):
+    def test_S25_the_archive_worker_owns_the_spec_the_copied_plan_files_and_the_places(self):
         task_md = self.archive_run()
         line = next(line for line in task_md.splitlines() if line.startswith("Owns"))
         owns = [item.strip() for item in line.split(": ", 1)[1].rstrip(".").split(",")]
@@ -288,3 +309,39 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
             model, stripped, self.run_dir / "receipts", digest=ledger["integration"]["digest"]
         )
         self.assertEqual(again["state"], "REJECTED")
+
+    def edited(self):
+        step = self.archive_done(complete=False)
+        step["write"].append(
+            [str(self.archive_tree / "src/a/test_oracle.py"), "def test_o():\n    assert 1\n"]
+        )
+        return step
+
+    def test_S25_an_edited_placed_oracle_is_a_fix_round_not_a_masked_rerun(self):
+        self.use_yaml_plan(oracle=True)
+        restored = self.archive_done("archiver1", complete=False, id=resume_id(ARCHIVE, 1))
+        restored["write"].append(
+            [
+                str(self.archive_tree / "src/a/test_oracle.py"),
+                (self.plan.parent / "demo.oracle" / "test_oracle.py.oracle").read_text(
+                    encoding="utf-8"
+                ),
+            ]
+        )
+        self.waits(self.ticket_merged() + [self.edited(), restored, self.gaps_done()])
+        self.run_driver()
+        findings = (self.run_dir / "archiver1" / "findings.json").read_text(encoding="utf-8")
+        self.assertIn("src/a/test_oracle.py", findings)
+        self.assertIn(
+            "S1.archive.1", self.ledger()["receipts"]
+        )  # evidence ran only after the restore
+
+    def test_S25_an_archive_pr_merged_during_a_fix_round_still_archives_the_plan(self):
+        self.use_yaml_plan(oracle=True)
+        merged = wait_result([assignment(ARCHIVE, "working", None, id=resume_id(ARCHIVE, 1))])
+        merged.setdefault("write", []).append([str(self.home / "view-early.json"), '["MERGED"]'])
+        self.waits(self.ticket_merged() + [self.edited(), merged, self.gaps_done()])
+        self.run_driver()
+        history = [h["state"] for h in self.ledger()["plan"]["history"]]
+        self.assertEqual(history[-2:], ["ACCEPTED", "ARCHIVED"])
+        self.assertEqual(self.events("merged-early")[-1]["unit"], "archive")
