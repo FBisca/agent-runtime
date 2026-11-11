@@ -178,7 +178,7 @@ class CallerIdentityTests(unittest.TestCase):
 
 class HookExceptionDocsTests(unittest.TestCase):
     def test_S18_agents_md_and_spec_name_the_one_hook_only_exception(self):
-        """agent-runtime/R173"""
+        """agent-runtime/R176"""
         root = Path(__file__).resolve().parents[1]
         for doc in (root / "AGENTS.md", root / "docs" / "specs" / "agent-runtime.md"):
             text = " ".join(doc.read_text().split())
