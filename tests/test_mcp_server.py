@@ -446,6 +446,7 @@ class CallLimitTests(unittest.TestCase):
         self.addCleanup(self.server.close)
 
     def test_S9_a_non_scalar_id_is_invalid_and_the_server_keeps_serving(self):
+        """agent-runtime/R248"""
         for bad in ([1], {"a": 1}, True, False):
             self.server.send(
                 {
@@ -472,6 +473,7 @@ class CallLimitTests(unittest.TestCase):
         self.assertFalse(self.server.reply_for("after")["result"]["isError"])
 
     def test_S10_finished_call_threads_are_not_retained(self):
+        """agent-runtime/R249"""
         for number in range(40):
             self.server.call(number, "status")
         for number in range(40):
@@ -487,6 +489,7 @@ class CallLimitTests(unittest.TestCase):
         self.assertEqual(len(held), 0, "finished call threads are still referenced")
 
     def test_S11_the_wait_and_total_caps_refuse_at_once_and_retryably(self):
+        """agent-runtime/R250"""
         for number in range(56):
             self.server.call("w%d" % number, "wait")
         self.server.wait_started(56)

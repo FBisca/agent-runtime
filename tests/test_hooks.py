@@ -432,7 +432,7 @@ class PlanContractTests(unittest.TestCase):
         )
         fake.chmod(0o755)
 
-    def hook(self, payload, role="lead", path=True, home=None):
+    def hook(self, payload, role="lead", path=True, home=None, timeout=20, extra_env=None):
         """The hook run as `role` says the runtime resolves this session; `path=False` leaves no agent-runtime."""
         env = {
             "PATH": (str(self.bin) + os.pathsep if path else "") + "/usr/bin:/bin",
@@ -440,12 +440,13 @@ class PlanContractTests(unittest.TestCase):
             "FAKE_ROLE": role,
             "FAKE_ASKED": str(self.asked),
         }
+        env.update(extra_env or {})
         done = subprocess.run(
             [sys.executable, "-B", str(PRE)],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=timeout,
             env=env,
         )
         return json.loads(done.stdout) if done.stdout.strip() else None
@@ -619,6 +620,41 @@ class PlanContractTests(unittest.TestCase):
         (root / "k/demo.json").write_text(json.dumps(ledger))
         return root
 
+    def test_S6_a_fifo_candidate_never_blocks_lead_or_worker(self):
+        """agent-runtime/R259"""
+        fifo = Path(self.temp.name) / "candidate.json"
+        os.mkfifo(fifo)
+        for role in ("lead", "worker"):
+            self.assertIsNone(self.hook(bash("jq . " + str(fifo)), role=role, timeout=2))
+            self.assertIsNone(self.hook(self.as_worker(bash("rm " + str(fifo))), timeout=2))
+
+    def test_S6_a_large_ledger_is_identified_from_its_prefix(self):
+        """agent-runtime/R259"""
+        ledger = Path(self.temp.name) / "large.json"
+        with ledger.open("wb") as handle:
+            handle.write(b'{"kind": "agent-orchestrator/ledger", "data": "')
+            handle.seek(90 * 1024 * 1024)
+            handle.write(b'"}')
+        self.assertTrue(denied(self.hook(self.as_worker(bash("rm " + str(ledger))), timeout=2)))
+
+    def test_S6_the_lead_does_not_read_a_candidate_ledger(self):
+        """agent-runtime/R259"""
+        ledger = Path(self.temp.name) / "candidate.json"
+        ledger.write_text('{"kind": "agent-orchestrator/ledger"}')
+        log = Path(self.temp.name) / "reads"
+        (Path(self.temp.name) / "sitecustomize.py").write_text(
+            "import sys\n"
+            "def audit(event, args):\n"
+            f"    if event == 'open' and str(args[0]) == {str(ledger.resolve())!r}:\n"
+            f"        with open({str(log)!r}, 'a') as f: f.write('read\\n')\n"
+            "sys.addaudithook(audit)\n"
+        )
+        extra = {"PYTHONPATH": self.temp.name}
+        self.assertIsNone(self.hook(bash("rm " + str(ledger)), extra_env=extra))
+        self.assertFalse(log.exists())
+        self.assertTrue(denied(self.hook(bash("rm " + str(ledger)), role="worker", extra_env=extra)))
+        self.assertTrue(log.exists())
+
     def as_worker(self, payload):
         return {**payload, "agent_id": "sub-1", "agent_type": "worker"}
 
@@ -650,6 +686,16 @@ class PlanContractTests(unittest.TestCase):
             self.assertIn("re-run the evidence", reason)
         self.assertIsNone(self.hook(self.as_worker(bash("cat %s" % default))))
         self.assertIsNone(self.hook(self.as_worker(bash("ls %s" % default.parent))))
+
+    def test_S5_home_spellings_guard_shell_and_file_edits(self):
+        """agent-runtime/R258"""
+        for home in ("$HOME", "${HOME}", "~"):
+            path = home + "/.local/state/orchestrate/k/demo/receipts/S1.json"
+            for payload in (
+                bash("rm " + path),
+                {"tool_name": "Write", "tool_input": {"file_path": path}},
+            ):
+                self.assertTrue(denied(self.hook(self.as_worker(payload))), (home, payload))
 
     def test_S6_a_marked_ledgers_receipts_ledger_and_lock_are_denied_under_any_root(self):
         """runtime-audit-fixes/S6"""

@@ -36,7 +36,7 @@ class PolicyFileTests(unittest.TestCase):
         return path
 
     def test_no_policy_means_no_rules(self):
-        """agent-runtime/R177"""
+        """harness-adapters/R177"""
         self.assertEqual(host_policy.rules_for(self.env, "pi"), {})
 
     def test_a_policy_is_read(self):
@@ -45,7 +45,7 @@ class PolicyFileTests(unittest.TestCase):
         self.assertEqual(host_policy.rules_for(self.env, "pi")["backends"], ["pi"])
 
     def test_a_broken_policy_is_refused_without_echoing_it(self):
-        """agent-runtime/R177"""
+        """harness-adapters/R177"""
         path = self.write("{")
         with self.assertRaises(host_policy.Refused) as error:
             host_policy.load(self.env)
@@ -102,13 +102,13 @@ class ScopeTests(unittest.TestCase):
     """Where a worker may run, and which calls change durable state."""
 
     def test_a_path_below_an_authorised_root_is_inside_it(self):
-        """agent-runtime/R174"""
+        """harness-adapters/R174"""
         roots = [os.path.realpath("/tmp/checkout")]
         self.assertTrue(host_policy.within("/tmp/checkout/src/a.py", roots))
         self.assertTrue(host_policy.within("/tmp/checkout", roots))
 
     def test_a_path_outside_the_authorised_roots_is_outside_them(self):
-        """agent-runtime/R174"""
+        """harness-adapters/R174"""
         roots = [os.path.realpath("/tmp/checkout")]
         self.assertFalse(host_policy.within("/tmp/elsewhere", roots))
         self.assertFalse(host_policy.within("/tmp/checkout-other", roots))
