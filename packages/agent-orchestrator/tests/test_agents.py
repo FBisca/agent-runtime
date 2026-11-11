@@ -128,7 +128,7 @@ class AddressRecordTests(RunFixture, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_plan(rows=("T1",))
 
     def runtime_returns_no_address(self):
         real = self.runtime_process
