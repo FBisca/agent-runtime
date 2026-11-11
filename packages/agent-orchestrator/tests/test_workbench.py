@@ -253,6 +253,52 @@ class PlansTests(WorkbenchFixture):
         error = self.error("plan", str(self.plans / "nope.plan.yaml"))
         self.assertEqual(error["kind"], "no_such_plan")
 
+    LEGACY_TICKETS = (
+        "## Tickets\n\n"
+        "| # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+        "| T1 | first | S1 | none | src/a/ | small | simple | agent | COMPLETE |\n"
+        "| T2 | second | S1 | T1 | src/b/ | small | simple | agent | COMPLETE |\n"
+        "| T3 | third | S1 | T2 | src/c/ | small | simple | agent | TO-DO |\n"
+    )
+
+    def legacy_listing(self, name, text):
+        self.plans.mkdir(parents=True, exist_ok=True)
+        (self.plans / name).write_text(text, encoding="utf-8")
+        self.git(self.repo, "add", str(self.plans / name))
+        code, out, err = self.workbench("plans")
+        self.assertEqual(code, 0, err)
+        return {entry["path"]: entry for entry in json.loads(out)["plans"]}[str(self.plans / name)]
+
+    def test_S2_a_legacy_ledger_without_ticket_status_keeps_the_plan_files_statuses(self):
+        ledger = self.state_dir / "old.json"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(json.dumps({"version": 1, "tasks": {}}), encoding="utf-8")
+        entry = self.legacy_listing(
+            "2026-11-01-old.plan.md",
+            "# Plan: old\n\nSlug: `old`. Status: APPROVED 2026-11-01.\n\n" + self.LEGACY_TICKETS,
+        )
+        self.assertEqual(entry["tickets"], {"total": 3, "by_state": {"COMPLETE": 2, "TO-DO": 1}})
+
+    def test_S2_a_second_table_with_id_and_status_columns_yields_no_tickets(self):
+        entry = self.legacy_listing(
+            "2026-11-02-twotables.plan.md",
+            "# Plan: two\n\nSlug: `two`. Status: APPROVED 2026-11-02.\n\n"
+            + self.LEGACY_TICKETS
+            + "\n## Risks\n\n| # | a | b | c | d | e | f | g | Status |\n|---|---|---|---|---|---|---|---|---|\n"
+            "| R1 | slow | x | x | x | x | x | x | open |\n",
+        )
+        self.assertEqual(entry["tickets"], {"total": 3, "by_state": {"COMPLETE": 2, "TO-DO": 1}})
+
+    def test_S2_a_legacy_plan_without_a_slug_line_lists_under_its_file_name(self):
+        entry = self.legacy_listing(
+            "2026-11-03-noslug.plan.md",
+            "# Plan: none\n\nStatus: APPROVED 2026-11-03.\n\n" + self.LEGACY_TICKETS,
+        )
+        self.assertEqual(entry["slug"], "2026-11-03-noslug")
+        self.assertIsNone(entry.get("error"))
+        self.assertEqual(entry["tickets"]["total"], 3)
+
 
 class PlanTests(WorkbenchFixture):
     def test_S4_every_ticket_has_its_blocked_by_edges_and_a_layer_ordered_by_layer_then_plan(self):

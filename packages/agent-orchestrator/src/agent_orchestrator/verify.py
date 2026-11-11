@@ -1,15 +1,11 @@
 """verify: the one gate. A ticket's report is checked against built-in invariants the plan never declares.
 
-A YAML plan (`plan/1`) is gated by three invariants, each a rule a worker cannot argue with:
+A plan (`plan/1`) is gated by three invariants, each a rule a worker cannot argue with:
 
 scope      every file the ticket changed is inside the ticket's paths
 integrity  no ticket touches the plan, an oracle file or an oracle place (where the driver puts an oracle)
 covers     every scenario the ticket satisfies maps, in the report's `covers`, to test nodes that exist and
            changed in the ticket; that they pass is the CI green check on the same head
-
-A Markdown plan in flight keeps the legacy path: `converge.py`, whose name-based coverage verdicts are the ones it
-gave before. A Markdown plan can finish as `COMPLETE (outcome unverified)` and never as accepted: nothing ran its
-outcome. The Markdown reader and this path go together.
 
 Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items.
 
@@ -24,14 +20,11 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-UNVERIFIED = "COMPLETE (outcome unverified)"
 HUNK = re.compile(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@")
 NODE_PARAMS = re.compile(r"\[.*\]$")
 
@@ -223,49 +216,6 @@ def items(findings, command, log_path):
         }
         for number, finding in enumerate(findings, 1)
     ]
-
-
-def legacy_gate(script, plan, checkout, base, log_file, *, ticket=None):
-    """A Markdown plan's gate: converge, run as before. ("PASS" | "FAIL" | "error", items or the reason).
-    `ticket` T<n> gates one ticket; None is `--final`, the archive."""
-    argv = [sys.executable, str(script), str(plan)]
-    argv += ["--ticket", ticket.upper()] if ticket else ["--final"]
-    argv += ["--repo", str(checkout), "--base", base]
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=300)
-    lines = [line for line in result.stdout.splitlines() if line.startswith("FAIL")]
-    if result.returncode == 0:
-        return "PASS", []
-    if result.returncode == 1 and lines:
-        log = log_file()
-        log.write_text(result.stdout, encoding="utf-8")
-        command = " ".join(shlex.quote(part) for part in argv)
-        return "FAIL", [
-            {
-                "id": "C%d" % number,
-                "kind": "blocking",
-                "source": "converge",
-                "check": (
-                    (re.match(r"FAIL ([^:]+):", line) or [None, "converge"])[1] or "converge"
-                ).strip(),
-                "command": command,
-                "exit": result.returncode,
-                "excerpt": line,
-                "log_path": str(log),
-            }
-            for number, line in enumerate(lines, 1)
-        ]
-    return "error", [
-        (
-            result.stderr.strip()
-            or result.stdout.strip()
-            or "converge exited %d" % result.returncode
-        )[:500]
-    ]
-
-
-def legacy_outcome(complete):
-    """What a Markdown plan can be once its tickets are done: complete with an unverified outcome, never accepted."""
-    return UNVERIFIED if complete else None
 
 
 # ---- evidence: which items run at a ticket's gate, and whether a plan's receipts add up to acceptance ----------

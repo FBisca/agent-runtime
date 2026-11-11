@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 
@@ -169,11 +170,14 @@ SESSION_TOOLS = {"wait"}  # subagents may not block on the lead's inbox
 TOOL_NAME = re.compile(r"^mcp__(?:plugin_agent-runtime_)?agent-runtime__(\w+)$")
 
 
-# A plan's receipts are the driver's evidence (yaml-eec D17): `<state>/<repo-key>/<slug>/receipts/`. The state
-# directory is `orchestrate` or a `state` directory; a repository's own `receipts/` folder is not matched.
-RECEIPTS = re.compile(
-    r"(?:orchestrate|\.local/state|(?:^|/)state)/(?:[^\s'\"]*/)?receipts(?:[/'\"\s]|$)"
-)
+# A plan's receipts are the driver's evidence (yaml-eec D17): `<root>/<repo-key>/<slug>/receipts/`, beside the
+# ledger `<slug>.json` and its lock. Under the default root every such path is the driver's; under any other root
+# only when the ledger carries the orchestrator's marker, so a repository's own `state/receipts` is never matched.
+DEFAULT_ROOT = "~/.local/state/orchestrate"
+LEDGER_KIND = "agent-orchestrator/ledger"
+LOCK_SUFFIXES = (".json.lock", ".lock")
+PATH_WORD = re.compile(r"[^\s'\"();,<>|&=`]+")
+REDIRECT_TARGET = re.compile(r">>?\s*['\"]?([^\s&|;'\"]+)")
 RECEIPTS_REASON = (
     "A plan's receipts are written only by the driver's evidence runner, never by an agent: a receipt you "
     "write is not evidence. Read them freely; to change a result, fix the code and let the driver "
@@ -226,16 +230,95 @@ READERS = {
 }
 
 
-def mentions_receipts(text):
-    return bool(RECEIPTS.search(os.path.expanduser(text).replace("$HOME", os.path.expanduser("~"))))
+def marked_ledger(path):
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return False
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return False
+            prefix = handle.read(4096)
+    except OSError:
+        return False
+    return bool(re.search(rb'"kind"\s*:\s*"' + re.escape(LEDGER_KIND.encode()) + rb'"', prefix))
 
 
-def receipts_verdict(command):
+def ledger_of(path):
+    """The ledger a path is, or is the lock of; None for any other path."""
+    if path.endswith(".json"):
+        return path
+    for suffix in LOCK_SUFFIXES:
+        if path.endswith(suffix):
+            return path[: -len(suffix)] + ".json"
+    return None
+
+
+def guarded_path(path):
+    """Whether a path (resolved through symlinks and `..`) is a plan's receipts, ledger or lock."""
+    try:
+        resolved = os.path.realpath(path)
+        root = os.path.realpath(expand_home(DEFAULT_ROOT))
+    except (OSError, ValueError):
+        return False
+    if resolved.startswith(root + os.sep):
+        parts = resolved[len(root) + 1 :].split(os.sep)
+        if "receipts" in parts[2:] or (len(parts) == 2 and ledger_of(parts[1])):
+            return True
+    current = resolved
+    while current != os.path.dirname(current):
+        if os.path.basename(current) == "receipts" and marked_ledger(
+            os.path.dirname(current) + ".json"
+        ):
+            return True
+        current = os.path.dirname(current)
+    ledger = ledger_of(resolved)
+    return bool(ledger) and marked_ledger(ledger)
+
+
+def possible_guarded_path(path):
+    """Check path metadata only before deciding whether role resolution is needed."""
+    try:
+        resolved = os.path.realpath(path)
+        root = os.path.realpath(expand_home(DEFAULT_ROOT))
+        if resolved.startswith(root + os.sep):
+            parts = resolved[len(root) + 1 :].split(os.sep)
+            if "receipts" in parts[2:] or (len(parts) == 2 and ledger_of(parts[1])):
+                return True
+        current = resolved
+        while current != os.path.dirname(current):
+            if os.path.basename(current) == "receipts" and os.path.lexists(
+                os.path.dirname(current) + ".json"
+            ):
+                return True
+            current = os.path.dirname(current)
+        ledger = ledger_of(resolved)
+        return bool(ledger) and os.path.lexists(ledger)
+    except (OSError, ValueError):
+        return False
+
+
+def expand_home(word):
+    return os.path.expanduser(
+        re.sub(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])", lambda _: os.path.expanduser("~"), word)
+    )
+
+
+def expand(word, cwd):
+    word = expand_home(word)
+    return word if os.path.isabs(word) else os.path.join(cwd or os.getcwd(), word)
+
+
+def mentions_receipts(text, cwd=None):
+    return any(guarded_path(expand(word, cwd)) for word in PATH_WORD.findall(text) if word != "-")
+
+
+def receipts_verdict(command, cwd=None):
     """A reason when a command may write under a plan's receipts: the path appears and something that is not a
     reader runs, or a redirection targets it."""
-    if not isinstance(command, str) or not mentions_receipts(command):
+    if not isinstance(command, str) or not mentions_receipts(command, cwd):
         return None
-    if re.search(r">>?\s*['\"]?[^\s&|;]*receipts", command):
+    if any(guarded_path(expand(target, cwd)) for target in REDIRECT_TARGET.findall(command)):
         return RECEIPTS_REASON
     for program, _ in invocations(command):
         if program not in READERS:
@@ -279,7 +362,7 @@ def edited_paths(name, tool_input, cwd):
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
         paths = [path] if isinstance(path, str) else []
     base = cwd if isinstance(cwd, str) else ""
-    return [os.path.join(base, os.path.expanduser(path)) for path in paths]
+    return [os.path.join(base, expand_home(path)) for path in paths]
 
 
 def spawned_worker():
@@ -288,7 +371,7 @@ def spawned_worker():
     A spawned worker is its own session with no agent_id, so the runtime's public answer is the only signal. Any
     failure reads as "not a worker": the hook is defence in depth and the CLI is the authority (D26)."""
     home = os.environ.get("AGENT_RUNTIME_HOME")
-    script = os.path.join(os.path.expanduser(home), "server", "agent_runtime.py") if home else None
+    script = os.path.join(expand_home(home), "server", "agent_runtime.py") if home else None
     argv = [sys.executable, script] if script and os.path.isfile(script) else ["agent-runtime"]
     try:
         done = subprocess.run(
@@ -300,14 +383,21 @@ def spawned_worker():
     return isinstance(answer, dict) and answer.get("role") == "worker"
 
 
-def contract_verdict(command, is_subagent):
+def contract_verdict(command, is_subagent, cwd=None):
     """A reason when a worker (a native subagent, or a session the runtime resolves as a spawned worker) tries
     `plan approve` or a write under receipts. The runtime is asked only once a command looks like either."""
-    reason = approve_verdict(command) or receipts_verdict(command)
-    return reason if reason and (is_subagent or spawned_worker()) else None
+    if not isinstance(command, str):
+        return None
+    approval = approve_verdict(command)
+    candidate = any(
+        possible_guarded_path(expand(word, cwd)) for word in PATH_WORD.findall(command) if word != "-"
+    )
+    if not (approval or candidate) or not (is_subagent or spawned_worker()):
+        return None
+    return approval or receipts_verdict(command, cwd)
 
 
-def verdict(command, is_subagent):
+def verdict(command, is_subagent, cwd=None):
     """(decision, reason) or None."""
     if not isinstance(command, str):
         command = json.dumps(command)
@@ -326,7 +416,7 @@ def verdict(command, is_subagent):
                 "Cannot parse this command and it mentions hc: use the agent-runtime tools.",
             )
     result = None
-    reason = contract_verdict(command, is_subagent)
+    reason = contract_verdict(command, is_subagent, cwd)
     if reason:
         return "deny", reason
     for program, args in invocations(command):
@@ -458,13 +548,16 @@ def main(argv=()):
         name = data.get("tool_name", "Bash")
         if name in FILE_TOOLS | PATCH_TOOLS:
             paths = edited_paths(name, data.get("tool_input"), data.get("cwd"))
-            guarded = any(mentions_receipts(path) for path in paths) and (
-                bool(data.get("agent_id")) or spawned_worker()
+            candidate = any(possible_guarded_path(path) for path in paths)
+            guarded = candidate and (bool(data.get("agent_id")) or spawned_worker()) and any(
+                guarded_path(path) for path in paths
             )
             result = ("deny", RECEIPTS_REASON) if guarded else None
         elif name == "Bash":
             result = verdict(
-                data.get("tool_input", {}).get("command", ""), bool(data.get("agent_id"))
+                data.get("tool_input", {}).get("command", ""),
+                bool(data.get("agent_id")),
+                data.get("cwd") if isinstance(data.get("cwd"), str) else None,
             )
         else:
             reason = tool_verdict(name, bool(data.get("agent_id")), data.get("tool_input"))

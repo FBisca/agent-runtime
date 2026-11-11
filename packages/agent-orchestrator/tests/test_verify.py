@@ -247,15 +247,3 @@ class ScopeAndIntegrityTests(VerifyFixture):
             sorted(c for c, _ in self.found(self.gate({"S1": ["tests/test_a.py::test_new"]}))),
             ["covers", "integrity", "scope"],
         )
-
-
-class LegacyPathTests(unittest.TestCase):
-    def test_S11_a_markdown_plan_that_completes_is_complete_outcome_unverified(self):
-        self.assertEqual(verify.legacy_outcome(True), "COMPLETE (outcome unverified)")
-
-    def test_S11_a_markdown_plan_with_open_tickets_has_no_outcome_yet(self):
-        self.assertIsNone(verify.legacy_outcome(False))
-
-    def test_S11_the_legacy_path_never_reports_accepted(self):
-        for complete in (True, False):
-            self.assertNotIn("ACCEPTED", verify.legacy_outcome(complete) or "")

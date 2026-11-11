@@ -1,82 +1,44 @@
-"""YAML tickets enter the existing Markdown dispatch loop unchanged."""
+"""A YAML plan dispatches its agent tickets with the class, effort, model and blocking order its rows name."""
 
-import io
 import json
-import os
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
-from unittest import mock
 
 import pytest
-import yaml
-from fixtures import load_script, plan_text, spawn_id
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
 
 
-class DispatchFixture(GateFixture, unittest.TestCase):
-    def exercise(self, use_yaml):
-        self.setUp()
-        self.plan.write_text(plan_text(rows=("T1", "T2", "T3", "T5")))
-        if use_yaml:
-            parsed = load_script().parse_plan(self.plan.read_text())
-            self.plan = self.plan.with_suffix(".yaml")
-            data = {
-                "schema": "plan/1",
-                "slug": "demo",
-                "goal": "deliver",
-                "spec": "docs/specs/demo.md",
-                "outcome": ["S1"],
-                "scenarios": [
-                    dict(id=s, when="a", then="b", evidence={"human": "confirm"})
-                    for s in parsed["scenarios"]
-                ],
-                "tickets": [
-                    dict(
-                        id=t["#"],
-                        delivers=t["What it delivers"],
-                        satisfies=t["Satisfies"].split(","),
-                        paths=t["Paths"].split(","),
-                        size=t["Size"],
-                        difficulty=t["Difficulty"],
-                        blocked_by=[] if t["Blocked by"] == "none" else [t["Blocked by"]],
-                        max_fix_rounds=3,
-                    )
-                    for t in parsed["tickets"]
-                ],
-            }
-            self.plan.write_text(yaml.safe_dump(data, sort_keys=False))
-            out = io.StringIO()
-            with (
-                mock.patch.object(load_script(), "resolve_runtime", return_value={"role": "lead"}),
-                mock.patch.dict(
-                    os.environ,
-                    {"XDG_STATE_HOME": str(self.root / "xdg"), "HC_TERMINAL_ID": "test-lead"},
-                ),
-                redirect_stdout(out),
-                redirect_stderr(out),
-            ):
-                code = load_script().run_cli(
-                    [
-                        "plan",
-                        "approve",
-                        str(self.plan),
-                        "--repo",
-                        str(self.repo),
-                        "--state-dir",
-                        str(self.state_dir),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
+class PlanDispatchTests(GateFixture, unittest.TestCase):
+    def test_S4_names_routes_and_blocking_order_follow_the_rows_and_the_plan_stays_immutable(self):
+        def capped(data):
+            for ticket in data["tickets"]:
+                ticket["max_fix_rounds"] = 3
+
+        self.set_plan(("T1", "T2", "T3", "T5"), mutate=capped)
         before = self.plan.read_bytes()
         first = self.worker_done(tests=True)
-        self.assertEqual(first["messages"][0]["assignment_id"], spawn_id("demo-t1"))
         self.waits([first, self.reviewer_done()])
-        result = self.run_driver("--cli", "codex", "--repo", str(self.repo), "--max-workers", "4")
+        self.run_driver("--cli", "codex", "--repo", str(self.repo), "--max-workers", "4")
         spawns = [c["args"] for c in self.calls("spawn")]
-        names = [c["name"] for c in spawns]
-        self.assertEqual(names, ["demo-t1", "demo-t3", "demo-t5", "demo-t1-review", "demo-t2"])
+        # T2 is blocked by T1: it dispatches only after T1 is COMPLETE, after the other ready tickets.
+        self.assertEqual(
+            [s["name"] for s in spawns],
+            ["demo-t1", "demo-t3", "demo-t5", "demo-t1-review", "demo-t2"],
+        )
+        self.assertEqual(
+            {
+                s["name"]: (s["cli"], s["model"], s["effort"])
+                for s in spawns
+                if "review" not in s["name"]
+            },
+            {
+                "demo-t1": ("codex", "gpt-s", "low"),
+                "demo-t3": ("codex", "gpt-m", "medium"),
+                "demo-t5": ("codex", "gpt-m", "medium"),
+                "demo-t2": ("codex", "gpt-m", "high"),
+            },
+        )
         self.assertEqual(self.task()["status"], "COMPLETE")
         t2 = next(c for c in self.calls("spawn") if c["args"]["name"] == "demo-t2")
         self.assertTrue(
@@ -86,26 +48,4 @@ class DispatchFixture(GateFixture, unittest.TestCase):
                 for e in t2["events"]
             )
         )
-        if use_yaml:
-            self.assertEqual(self.plan.read_bytes(), before)
-            self.assertTrue(any(e["kind"] == "converge-skipped" for e in self.events()))
-            self.assertIn("YAML", result.stderr)
-        return (
-            [(c["name"], c["cli"], c["model"], c["effort"]) for c in spawns],
-            {
-                k: (v["packet"]["class"], v["packet"]["effort"], v["packet"]["model"])
-                for k, v in self.ledger()["tasks"].items()
-            },
-        )
-
-
-class PlanDispatchTests(unittest.TestCase):
-    def test_S4_same_names_routes_and_blocking_order_and_immutable_yaml(self):
-        observations = []
-        for use_yaml in (False, True):
-            fixture = DispatchFixture()
-            try:
-                observations.append(fixture.exercise(use_yaml))
-            finally:
-                fixture.doCleanups()
-        self.assertEqual(observations[0], observations[1])
+        self.assertEqual(self.plan.read_bytes(), before)

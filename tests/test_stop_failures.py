@@ -1,18 +1,22 @@
 """Stop and observed worker failures never strand later waits (hardening D1, D2, D9, D12, D13)."""
 
 import json
+import os
+import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import test_event_wait as event_helpers
 from test_mcp_server import RUNTIME_SRC, SERVER
-from test_tools import ToolCase
+from test_tools import ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
-from agent_runtime.dispatch_store import Store
+from agent_runtime import hc_tools
+from agent_runtime.dispatch_store import Store, StorageError, StoreError
 
 pytestmark = pytest.mark.integration
 
@@ -250,6 +254,106 @@ class StoreTaskReleaseTests(unittest.TestCase):
             db.execute("UPDATE tasks SET status='complete'")
         self.store.stopped(self.team, "w1")
         self.assertEqual(task_row(self.store)["status"], "complete")
+
+
+class StopStoreFailureTests(ToolCase):
+    """A store failure after the terminal was killed names the kill and the record left to reconcile."""
+
+    ENV = {
+        "CODEX_THREAD_ID": "lead-session",
+        "HC_SCOPE": "lead-token",
+        "HC_TERMINAL_SOCKET": "/hc/sock",
+        "AGENT_RUNTIME_DISPATCH": "1",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.start({"get:w1": {"out": raw("w1", "t0")}}, self.ENV)
+        self.env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+        }
+        self.env.update(self.ENV)
+        # The identity lookup runs the hc binary with the process PATH, not the call's env.
+        patched = mock.patch.dict(os.environ, {"PATH": self.env["PATH"]})
+        patched.start()
+        self.addCleanup(patched.stop)
+        self.store = Store(self.env)
+        scope, generation = hc_tools.dispatch_identity(self.env)[:2]
+        self.team = self.store.team(scope, "t0", generation)
+        first = self.store.register(self.team, "w1")
+        self.store.bind(first["assignment_id"], "t9", scope)
+
+    def stop(self):
+        out = hc_tools.call("stop", {"name": "w1"}, self.env, hc_tools.Context())
+        return out, out["content"][0]["text"]
+
+    def record(self):
+        with self.store.transaction() as db:
+            return db.execute("SELECT active FROM workers WHERE name='w1'").fetchone()[0]
+
+    def test_S8_stop_store_failure_after_the_kill_names_the_kill_and_the_record(self):
+        """agent-runtime/R247"""
+        for error in (
+            sqlite3.OperationalError("database is locked"),
+            StorageError("store is busy"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                with mock.patch.object(Store, "stopped", side_effect=error):
+                    result, text = self.stop()
+                self.assertTrue(result["isError"])
+                self.assertIn(str(error), text)
+                self.assertIn("terminal was killed and removed", text)
+                self.assertIn("still recorded active", text)
+                self.assertIn("retry the stop", text)
+                self.assertEqual(self.record(), 1)
+
+    def test_S8_stop_store_refusal_after_the_kill_names_the_kill_and_gives_no_retry(self):
+        """agent-runtime/R247: a refusal answers the same on every retry, so it carries no retry advice."""
+        refusal = StoreError("invalid receipt")
+        with mock.patch.object(Store, "stopped", side_effect=refusal):
+            result, text = self.stop()
+        self.assertTrue(result["isError"])
+        self.assertIn("terminal was killed and removed", text)
+        self.assertIn("invalid receipt", text)
+        self.assertNotIn("still recorded active", text)
+        self.assertNotIn("retry", text)
+
+    def test_S8_stop_of_an_unregistered_name_whose_terminal_is_gone_keeps_the_stores_refusal(self):
+        """agent-runtime/R247"""
+        replies = json.loads((self.dir / "replies").read_text())
+        replies["get:ghost"] = {"rc": 1, "err": NOT_FOUND}
+        (self.dir / "replies").write_text(json.dumps(replies))
+        for _ in range(2):  # a retry answers the same
+            out = hc_tools.call("stop", {"name": "ghost"}, self.env, hc_tools.Context())
+            text = out["content"][0]["text"]
+            self.assertTrue(out["isError"])
+            self.assertEqual(text, "worker is not registered in this team")
+        self.assertEqual([c for c in self.runs() if c[0] in ("kill", "rm")], [])
+
+    def test_S8_stop_retry_after_a_store_failure_reconciles_the_record(self):
+        """agent-runtime/R247"""
+        with mock.patch.object(Store, "stopped", side_effect=sqlite3.OperationalError("locked")):
+            self.stop()
+        replies = json.loads((self.dir / "replies").read_text())
+        replies["get:w1"] = {"rc": 1, "err": NOT_FOUND}  # the terminal is gone now
+        (self.dir / "replies").write_text(json.dumps(replies))
+        result, text = self.stop()
+        self.assertFalse(result["isError"], text)
+        self.assertEqual(self.record(), 0)
+
+    def test_S8_stop_store_failure_with_the_terminal_untouched_says_so(self):
+        """agent-runtime/R247"""
+        other = json.loads(raw("w1", "t7"))
+        replies = json.loads((self.dir / "replies").read_text())
+        replies["get:w1"] = {"out": json.dumps(other)}  # another lead owns this name
+        (self.dir / "replies").write_text(json.dumps(replies))
+        with mock.patch.object(Store, "stopped", side_effect=sqlite3.OperationalError("locked")):
+            result, text = self.stop()
+        self.assertTrue(result["isError"])
+        self.assertIn("terminal was not touched", text)
+        self.assertEqual([c for c in self.runs() if c[0] in ("kill", "rm")], [])
 
 
 if __name__ == "__main__":

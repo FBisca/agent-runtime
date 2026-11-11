@@ -12,7 +12,6 @@ from agent_orchestrator import driver
 from fixtures import (
     assignment,
     load_script,
-    plan_text,
     recorded_idles,
     report_wait,
     resume_id,
@@ -80,12 +79,12 @@ class MergeTests(GateFixture, unittest.TestCase):
         views = [c for c in self.gh_log() if c["argv"][:2] == ["pr", "view"]]
         self.assertGreaterEqual(len(views), 3)
         self.assertTrue(
-            [c for c in views if "| IN PROGRESS · awaiting merge (%s) |" % PR in c["plan"]],
+            [c for c in views if "awaiting merge (%s)" % PR in c["plan"]],
             "the ticket never read awaiting merge",
         )
-        text = self.plan.read_text(encoding="utf-8")
-        self.assertIn("| COMPLETE 2026-", text)
-        self.assertIn("merged " + PR, text)
+        status = self.ticket_status("T1")
+        self.assertIn("COMPLETE 2026-", status)
+        self.assertIn("merged " + PR, status)
         self.assertEqual(self.task()["status"], "COMPLETE")
         self.assertTrue(self.checks_log())
 
@@ -94,11 +93,12 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.prs(["OPEN"] * 6 + ["MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         spec = load_script()
+        self.alias_state(self.plan)
         env = dict(
             os.environ,
             PATH=str(self.home) + os.pathsep + os.environ["PATH"],
             FAKE_RUNTIME_HOME=str(self.home),
-            FAKE_PLAN=str(self.plan),
+            FAKE_PLAN=str(self.state_dir / "demo.json"),
             FAKE_CHECKOUT=str(self.worktree),
         )
         argv = [
@@ -129,12 +129,12 @@ class MergeTests(GateFixture, unittest.TestCase):
 
     def test_S9_a_merged_ticket_makes_its_dependents_dispatchable(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S9"""
-        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
+        self.set_plan(("T1", "T2"))
         self.prs(["OPEN", "MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review", "demo-t2"])
-        self.assertIn("| IN PROGRESS |", self.plan.read_text(encoding="utf-8"))
+        self.assertEqual(self.ticket_status("T2"), "IN PROGRESS")
 
     def refused_then_merged(self, failed):
         """Wait steps: the report-time refusal releases t1 into a fix round, then the PR is merged by hand."""
@@ -149,7 +149,7 @@ class MergeTests(GateFixture, unittest.TestCase):
 
     def test_S6_a_merged_pr_completes_a_unit_whose_report_fails_the_rules(self):
         """orchestrator-engine/R31"""
-        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
+        self.set_plan(("T1", "T2"))
         failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
         self.waits(self.refused_then_merged(failed))
         self.run_driver()
@@ -158,9 +158,9 @@ class MergeTests(GateFixture, unittest.TestCase):
         task = self.task("t1r1")
         self.assertEqual(task["status"], "COMPLETE")
         self.assertEqual(task["report"]["checks"], [failed])  # the evidence stays honest
-        text = self.plan.read_text(encoding="utf-8")
-        self.assertIn("| COMPLETE 2026-", text)
-        self.assertIn("merged " + PR, text)
+        status = self.ticket_status("T1")
+        self.assertIn("COMPLETE 2026-", status)
+        self.assertIn("merged " + PR, status)
         deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
         line = [x for x in deferred.splitlines() if "[merged-unverified]" in x]
         self.assertEqual(len(line), 1, deferred)

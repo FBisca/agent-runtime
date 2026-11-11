@@ -3,7 +3,6 @@
 import unittest
 
 import pytest
-from fixtures import plan_text
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -62,12 +61,19 @@ class RoundCapTests(GateFixture, unittest.TestCase):
 
 
 class PlanCapTests(GateFixture, unittest.TestCase):
-    def with_cap(self, line, rows=("T1",)):
-        self.plan.write_text(plan_text(rows=rows) + "\n" + line + "\n", encoding="utf-8")
+    def with_cap(self, caps, rows=("T1",)):
+        """The plan with `max_fix_rounds` on the tickets `caps` names: {"T1": 3}."""
 
-    def test_S32_a_plan_line_sets_the_cap_of_one_ticket(self):
+        def cap(data):
+            for ticket in data["tickets"]:
+                if ticket["id"] in caps:
+                    ticket["max_fix_rounds"] = caps[ticket["id"]]
+
+        self.set_plan(rows, mutate=cap)
+
+    def test_S32_a_ticket_field_sets_the_cap_of_one_ticket(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S32"""
-        self.with_cap("Max fix rounds: T1=3")
+        self.with_cap({"T1": 3})
         self.waits(
             [self.worker_done()]
             + [self.worker_done("t1r%d" % n) for n in (1, 2, 3)]
@@ -79,7 +85,7 @@ class PlanCapTests(GateFixture, unittest.TestCase):
 
     def test_S32_other_tickets_keep_the_default(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S32"""
-        self.with_cap("Max fix rounds: T2=3", rows=("T1", "T2"))
+        self.with_cap({"T2": 3}, rows=("T1", "T2"))
         self.waits(
             [self.worker_done(), self.worker_done("t1r1"), self.worker_done("t1r2"), self.skipped()]
         )
@@ -87,20 +93,13 @@ class PlanCapTests(GateFixture, unittest.TestCase):
         self.assertEqual(len(self.calls("resume")), 2)
         self.assertEqual(self.request()["task"], "t1r2")
 
-    def test_S32_the_line_may_list_several_tickets_and_beats_the_flag_for_its_own(self):
+    def test_S32_several_tickets_may_carry_a_cap_and_beats_the_flag_for_its_own(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S32"""
-        self.with_cap("Max fix rounds: T1=1, T2=5", rows=("T1", "T2"))
+        self.with_cap({"T1": 1, "T2": 5}, rows=("T1", "T2"))
         self.waits([self.worker_done(), self.worker_done("t1r1"), self.skipped()])
         self.run_driver("--max-fix-rounds", "4")
         self.assertEqual(len(self.calls("resume")), 1)
         self.assertEqual(self.request()["task"], "t1r1")
-
-    def test_S32_a_line_naming_an_unknown_ticket_or_a_bad_number_is_a_plan_error(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S32"""
-        for line in ("Max fix rounds: T9=2", "Max fix rounds: T1=two", "Max fix rounds: T1"):
-            self.with_cap(line)
-            result = self.run_driver(expect=2)
-            self.assertIn("Max fix rounds", result.stderr)
 
 
 if __name__ == "__main__":

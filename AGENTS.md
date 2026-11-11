@@ -45,7 +45,9 @@ integration test, whatever it is called.
 ## The hooks and the CLI are the boundary
 
 - The PreToolUse hooks are defence in depth; the CLI and the server are the authority. Never make the
-  hook the only thing that refuses something.
+  hook the only thing that refuses something. The one exception: a native in-process subagent cannot be
+  told from its Lead outside the host hook, so R74 and R89 stay hook-only. No other refusal is an
+  exception.
 - A refusal names the reason and the way out. "This is not allowed" is not a refusal.
 - Never log a secret, a token or a full environment; the tests check for leaks.
 

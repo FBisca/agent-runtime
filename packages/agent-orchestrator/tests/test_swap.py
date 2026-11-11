@@ -104,7 +104,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(
             [(r["name"], r["role"]) for r in self.events("swap")], [("demo-t1-review", "reviewer")]
         )
-        self.assertEqual({w["kind"] for w in self.wakes()}, {"pr-ready"})
+        self.assertEqual({w["kind"] for w in self.wakes()} - {"integration-waits"}, {"pr-ready"})
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
     def test_S19_unknown_usage_resumes_and_logs_context_unknown(self):

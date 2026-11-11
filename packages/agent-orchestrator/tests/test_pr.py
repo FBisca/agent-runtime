@@ -12,7 +12,6 @@ import pytest
 from fixtures import (
     assignment,
     load_script,
-    plan_text,
     report_wait,
     resume_id,
     spawn_id,
@@ -194,11 +193,15 @@ class ChecksTests(PrFixture, unittest.TestCase):
 
     def test_S21_a_second_unit_goes_on_while_the_first_waits_for_its_checks(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S21"""
-        self.plan.write_text(plan_text(rows=("T1", "T3")), encoding="utf-8")
+        self.set_plan(("T1", "T3"))
         self.checks(["pending"], pr=7)
         self.checks(["green"], pr=9)
         first = self.worker_done(tests=True)
-        third = self.worker_done("t3", name="demo-t3", report=self.report("t3", pr=PR9))
+        third = self.worker_done(
+            "t3",
+            name="demo-t3",
+            report=self.report("t3", pr=PR9, covers={"S3": ["src/c/test_c.py::test_c"]}),
+        )
         third["write"].append(
             [
                 str(self.root / "repo.worktrees" / "demo-t3" / "src" / "c" / "test_c.py"),
@@ -218,7 +221,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
 class SlotTests(PrFixture, unittest.TestCase):
     def test_S22_a_unit_waiting_for_merge_does_not_count_toward_max_workers(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S22"""
-        self.plan.write_text(plan_text(rows=("T1", "T3")), encoding="utf-8")
+        self.set_plan(("T1", "T3"))
         self.prs(["OPEN"])
         blocked = report_wait("demo-t3", "blocked", text="stop here")
         self.flip(blocked, "prs.json", ["MERGED"])
@@ -251,7 +254,7 @@ class SlotTests(PrFixture, unittest.TestCase):
 
     def test_S22_a_unit_still_in_review_holds_its_slot(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S22"""
-        self.plan.write_text(plan_text(rows=("T1", "T3")), encoding="utf-8")
+        self.set_plan(("T1", "T3"))
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -553,7 +556,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
-        self.assertIn("COMPLETE", self.plan.read_text(encoding="utf-8"))
+        self.assertIn("COMPLETE", self.ticket_status("T1"))
         deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
         self.assertIn("merged-early", deferred)
         self.assertIn("drops the last row", deferred)
@@ -583,7 +586,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         self,
     ):
         """orchestrator-engine/R32"""
-        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
+        self.set_plan(("T1", "T2"))
         # The report omits the gate, so the report-time refusal sends t1 into a fix round before the merge.
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
         self.waits([self.worker_done(tests=True), merged])
@@ -592,7 +595,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         self.assertEqual(
             self.task("t1r1")["status"], "COMPLETE"
         )  # a merge completes the newest attempt
-        self.assertIn("| COMPLETE 2026-", self.plan.read_text(encoding="utf-8"))
+        self.assertIn("COMPLETE 2026-", self.ticket_status("T1"))
         deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
         line = [x for x in deferred.splitlines() if "[merged-unverified]" in x]
         self.assertEqual(len(line), 1, deferred)

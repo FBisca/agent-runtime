@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 
 import pytest
-from fixtures import ROWS, RunFixture, assignment, load_script, plan_text, wait_result
+import yaml
+from fixtures import RunFixture, assignment, load_script, plan_data, wait_result
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -54,7 +55,7 @@ class RunTests(RunFixture, unittest.TestCase):
     def test_S1_the_unit_brief_names_the_task_id_the_report_must_carry(self):
         """orchestrator-engine/R15: orchestrator-report-task-id/S1"""
         self.run_driver()
-        brief = (self.state_dir / "demo" / "t1" / "task.md").read_text(encoding="utf-8")
+        brief = (self.run_dir_of("demo") / "t1" / "task.md").read_text(encoding="utf-8")
         self.assertIn("task_id `t1`", brief)
 
     def test_S1_dispatches_ready_agent_tickets_up_to_the_cap(self):
@@ -69,7 +70,7 @@ class RunTests(RunFixture, unittest.TestCase):
         )
         second = spawns[1]["args"]
         self.assertEqual((second["model"], second["effort"]), ("sonnet", "medium"))
-        run_dir = self.state_dir / "demo"
+        run_dir = self.run_dir_of("demo")
         self.assertEqual(first["task"], "Read %s and follow it." % (run_dir / "t1" / "task.md"))
         worktree = Path(first["cwd"])
         self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), self.base)
@@ -79,7 +80,7 @@ class RunTests(RunFixture, unittest.TestCase):
             "contract.md",
             str(run_dir / "t1" / "report.json"),
             "S1",
-            "WHEN a THEN b.",
+            "WHEN a, THEN b",
             "red-first",
             "src/a/",
             str(worktree),
@@ -129,7 +130,7 @@ class RunTests(RunFixture, unittest.TestCase):
             "local",
         )
         self.assertNotEqual(self.git(self.repo, "rev-parse", "origin/main"), remote_head)
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_plan(("T1",))
         self.run_driver()
         worktree = Path(self.calls("spawn")[0]["args"]["cwd"])
         self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), remote_head)
@@ -140,9 +141,7 @@ class RunTests(RunFixture, unittest.TestCase):
         """orchestrator-engine/R2: code-driven-orchestrator/S1"""
         slug = "parallel-wait-and-cli-profiles"
         self.assertEqual(len(slug), 30)
-        self.plan.write_text(
-            plan_text(rows=("T1", "T3")).replace("`demo`", "`%s`" % slug), encoding="utf-8"
-        )
+        self.set_plan(("T1", "T3"), mutate=lambda data: data.update(slug=slug))
         self.run_driver()
         names = [c["args"]["name"] for c in self.calls("spawn")]
         self.assertEqual(len(names), 2)
@@ -167,89 +166,22 @@ class RunTests(RunFixture, unittest.TestCase):
 
     def test_S2_unapproved_plan_exits_2_and_spawns_nothing(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S2"""
-        self.plan.write_text(plan_text(status="DRAFT"), encoding="utf-8")
+        data = plan_data(("T1",))
+        self.plan.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         result = self.run_driver(expect=2)
-        self.assertIn("APPROVED", result.stderr)
+        self.assertIn("plan approve", result.stderr)
         self.assertEqual(self.calls(), [])
         self.assertFalse((self.state_dir / "demo.json").exists())
 
-    def test_S2_missing_field_names_the_ticket_and_field(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S2"""
-        broken = plan_text().replace("| src/a/ | small |", "| src/a/ | |")
-        self.plan.write_text(broken, encoding="utf-8")
-        result = self.run_driver(expect=2)
-        self.assertIn("T1", result.stderr)
-        self.assertIn("Size", result.stderr)
-        self.assertEqual(self.calls(), [])
-
-    def test_S2_unknown_scenario_and_missing_table_exit_2(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S2"""
-        self.plan.write_text(
-            plan_text().replace("| S1 | none |", "| S9 | none |"), encoding="utf-8"
-        )
-        self.assertIn("S9", self.run_driver(expect=2).stderr)
-        self.plan.write_text("# Plan\n\nSlug: `demo`. Status: APPROVED.\n", encoding="utf-8")
-        self.assertIn("Tickets", self.run_driver(expect=2).stderr)
-        self.assertEqual(self.calls(), [])
-
-    def test_S3_dispatch_changes_only_the_status_cell_of_dispatched_and_person_rows(self):
+    def test_S3_dispatch_writes_the_ledger_and_leaves_the_plan_untouched(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S3"""
-        before = self.plan.read_text(encoding="utf-8").splitlines()
+        before = self.plan.read_bytes()
         self.run_driver("--max-workers", "2")
-        after = self.plan.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(before), len(after))
-        changed = {b: a for b, a in zip(before, after) if a != b}
+        self.assertEqual(self.plan.read_bytes(), before)
         self.assertEqual(
-            changed,
-            {
-                ROWS["T1"]: ROWS["T1"].replace("TO-DO", "IN PROGRESS"),
-                ROWS["T3"]: ROWS["T3"].replace("TO-DO", "IN PROGRESS"),
-                ROWS["T4"]: ROWS["T4"].replace("TO-DO", "needs you: sign-off"),
-            },
+            {t: self.ticket_status(t) for t in ("T1", "T3", "T4")},
+            {"T1": "IN PROGRESS", "T3": "IN PROGRESS", "T4": "needs you: sign-off"},
         )
-
-    def test_S3_pause_and_complete_write_one_row_too(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S3"""
-        spec = load_script()
-        for status in ("IN PROGRESS · needs you: pick a name", "COMPLETE 2026-11-07"):
-            before = self.plan.read_text(encoding="utf-8").splitlines()
-            spec.set_status(self.plan, "T2", status)
-            after = self.plan.read_text(encoding="utf-8").splitlines()
-            diff = [(b, a) for b, a in zip(before, after) if a != b]
-            self.assertEqual(len(before), len(after))
-            self.assertEqual(len(diff), 1)
-            self.assertTrue(
-                diff[0][1].startswith(
-                    "| T2 | second | S2 | T1 | src/b/ | regular | complex | agent | " + status
-                )
-            )
-
-    def test_S4_next_iteration_acts_on_the_edited_plan(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S4"""
-        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
-        new_row = ROWS["T3"].replace("| T3 | third", "| T6 | sixth")
-        self.waits(
-            [
-                wait_result(
-                    [assignment("demo-t1")],
-                    replace=[
-                        [
-                            str(self.plan),
-                            "| T1 | first | S1 | none | src/a/ | small | simple | agent | IN PROGRESS |",
-                            "| T1 | first | S1 | none | src/a/ | small | simple | agent | COMPLETE 2026-11-07 |\n"
-                            + new_row,
-                        ]
-                    ],
-                ),
-                wait_result(),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(
-            sorted(c["args"]["name"] for c in self.calls("spawn")),
-            ["demo-t1", "demo-t2", "demo-t6"],
-        )
-        self.assertEqual(len(self.calls("wait")), 2)
 
     def test_S14_restart_reuses_the_lead_and_spawns_nothing_bound(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S14"""
@@ -260,9 +192,7 @@ class RunTests(RunFixture, unittest.TestCase):
         data = self.ledger()
         data["lead"] = "orchestrate:stored"
         (self.state_dir / "demo.json").write_text(json.dumps(data), encoding="utf-8")
-        self.plan.write_text(
-            self.plan.read_text(encoding="utf-8").replace("IN PROGRESS", "TO-DO"), encoding="utf-8"
-        )
+        self.reset_status("IN PROGRESS", "TO-DO")
         self.calls_reset = len(self.calls())
         self.run_driver(
             expect=1
@@ -275,9 +205,7 @@ class RunTests(RunFixture, unittest.TestCase):
     def test_S14_restart_with_status_reset_to_todo_does_not_respawn_a_bound_ticket(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S14"""
         self.run_driver("--max-workers", "1")
-        self.plan.write_text(
-            self.plan.read_text(encoding="utf-8").replace("IN PROGRESS", "TO-DO"), encoding="utf-8"
-        )
+        self.reset_status("IN PROGRESS", "TO-DO")
         self.run_driver("--max-workers", "1", expect=1)  # stranded: see above
         names = [c["args"]["name"] for c in self.calls("spawn")]
         self.assertEqual(names.count("demo-t1"), 1)
@@ -285,11 +213,11 @@ class RunTests(RunFixture, unittest.TestCase):
     def test_a_refused_spawn_keeps_the_reservation_and_exits_1(self):
         """orchestrator-engine/R5: code-driven-orchestrator/S14"""
         self.refuse(["demo-t1"])
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_plan(("T1",))
         result = self.run_driver(expect=1)
         self.assertIn("T1 not dispatched", result.stderr)
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RESERVED")
-        self.assertIn("not dispatched", self.plan.read_text(encoding="utf-8"))
+        self.assertIn("not dispatched", self.ticket_status("T1"))
         self.refuse([])
         self.run_driver()
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "ACTIVE")
@@ -478,7 +406,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertEqual((second["name"], second["cwd"]), (first["name"], first["cwd"]))
         self.assertEqual(self.git(second["cwd"], "branch", "--show-current"), "feat/demo-t1")
         self.assertEqual(self.calls("resume"), [])
-        self.assertIn("| IN PROGRESS |", self.plan.read_text(encoding="utf-8"))
+        self.assertEqual(self.ticket_status("T1"), "IN PROGRESS")
 
     def test_S3_the_attempt_dispatched_again_is_waited_on_before_the_run_may_finish(self):
         """orchestrator-engine/R2: drive-restart-recovery/S3
@@ -552,7 +480,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         """orchestrator-engine/R28"""
         self.crashed()
         self.release()
-        self.assertIn("| IN PROGRESS |", self.plan.read_text(encoding="utf-8"))
+        self.assertEqual(self.ticket_status("T1"), "IN PROGRESS")
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])
         tasks = self.ledger()["tasks"]
@@ -568,20 +496,13 @@ class RecoveryTests(GateFixture, unittest.TestCase):
 
     def test_S4_a_cell_with_no_attempt_in_the_ledger_stays_a_lock(self):
         """orchestrator-engine/R28"""
-        self.plan.write_text(
-            self.plan.read_text(encoding="utf-8").replace("TO-DO", "IN PROGRESS"), encoding="utf-8"
-        )
+        self.seed_status(**{t: "IN PROGRESS" for t in ("T1", "T2", "T3", "T4", "T5")})
         self.run_driver()
         self.assertEqual(self.spawned(), [])
 
     def lead_answers(self):
         """A wait step during which the cause is fixed and the Lead sets the ticket's cell back to TO-DO."""
-        return wait_result(
-            write=[
-                [str(self.home / "refuse.json"), "[]"],
-                [str(self.plan), plan_text(rows=("T1",))],
-            ]
-        )
+        return self.lead_sets(T1="TO-DO")
 
     def test_S5_a_failed_dispatch_raises_one_wake_and_the_lead_s_todo_retries_it_in_the_same_run(
         self,
@@ -606,7 +527,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.run_driver(expect=1)
         self.assertEqual(self.spawned(), ["demo-t1"])  # the refused attempt only
         self.assertEqual(len(self.wakes_of("not-dispatched")), 1)
-        self.assertIn("not dispatched", self.plan.read_text(encoding="utf-8"))
+        self.assertIn("not dispatched", self.ticket_status("T1"))
         self.assertEqual(len(self.wakes_of("not-dispatched")), 1)  # once per ticket and reason
 
     def test_S12_a_not_dispatched_ticket_whose_cell_is_not_exactly_TO_DO_is_not_tried_again_in_the_run(
@@ -614,17 +535,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
     ):
         """orchestrator-engine/R57, orchestrator-engine/R66"""
         self.refuse(["demo-t1"])
-        retry = plan_text(rows=("T1",)).replace("TO-DO", "TO-DO · retry")
-        self.waits(
-            [
-                wait_result(
-                    write=[
-                        [str(self.home / "refuse.json"), "[]"],
-                        [str(self.plan), retry],
-                    ]
-                )
-            ]
-        )
+        self.waits([self.lead_sets(T1="TO-DO · retry")])
         self.run_driver(expect=1)
         self.assertEqual(self.spawned(), ["demo-t1"])  # the refused attempt only
         self.assertEqual(len(self.wakes_of("not-dispatched")), 1)
@@ -673,7 +584,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.wakes_of("stranded"), [])
         self.assertEqual(self.ledger()["tasks"]["t1o1"]["status"], "RESERVED")
         self.refuse([])
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_plan(("T1",))
         self.run_driver()
         tasks = self.ledger()["tasks"]
         self.assertEqual(tasks["t1o1"]["status"], "ACTIVE")
