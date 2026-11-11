@@ -83,6 +83,15 @@ class DiscoveryTests(DiscoveryFixture):
         self.track(".plans/2026-01-02-b.plan.yaml")
         self.assertEqual(self.listing(str(docs)), [str(docs.resolve())])
 
+    def test_S5_without_repo_the_current_directory_is_the_repository(self):
+        plan = self.track("docs/plans/2026-01-01-a.plan.yaml")
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, cwd)
+        code, out, err = self.run_cli("plans", "list", "--json")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([entry["path"] for entry in json.loads(out)], [str(plan.resolve())])
+
     def test_S5_no_plans_is_an_empty_list_and_creates_nothing(self):
         self.track("README.md", "x\n")
         self.assertEqual(self.listing(), [])

@@ -808,7 +808,12 @@ def discover(repo=None, explicit=None):
         if path.is_file():
             files.add(path)
     else:
-        root = repository(Path.cwd(), repo)
+        # `repository` resolves from a file's parent; here the current directory is the place itself.
+        root = (
+            Path(repo).resolve()
+            if repo
+            else Path(git(Path.cwd(), "rev-parse", "--show-toplevel")).resolve()
+        )
         tracked = git(root, "ls-files").splitlines()
         dirs = sorted({str(Path(f).parent) for f in tracked if f.endswith(PLAN_SUFFIXES)})
         if len(dirs) > 1:
