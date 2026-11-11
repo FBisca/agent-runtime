@@ -239,14 +239,19 @@ def resolve(env, cli=None, hc_runner=hc_get):
     return {"runtime": "native", "role": "lead", "cli": cli}
 
 
-def hc_terminals():
-    """Every hc terminal as `hc ls` reports it; [] when hc cannot be read."""
+def live_terminal_addresses():
+    """Addresses of the live terminals (`ls` rows carry no pid); [] when hc cannot be read. Only live
+    ones, so a finished terminal's recycled pid cannot verify anyone."""
     try:
         listing = json.loads(run_command(["hc", "ls", "--all", "--json"]))
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
         return []
-    terminals = listing.get("terminals") if isinstance(listing, dict) else None
-    return [t for t in terminals or [] if isinstance(t, dict)]
+    rows = listing.get("terminals") if isinstance(listing, dict) else None
+    return [
+        r["address"]
+        for r in rows or []
+        if isinstance(r, dict) and r.get("state") == "live" and isinstance(r.get("address"), str)
+    ]
 
 
 def ancestor_pids():
@@ -271,12 +276,24 @@ def caller_identity(env, info):
     is inherited and forgeable, so it gives a kind at most, never `verified`."""
     ancestors = ancestor_pids()
     if ancestors:
-        by_pid = {t.get("pid"): t for t in hc_terminals() if isinstance(t.get("pid"), int)}
-        for pid in ancestors:  # nearest first
-            terminal = by_pid.get(pid)
-            if terminal:
-                kind = "lead" if terminal.get("parent") is None else "worker"
-                return {"kind": kind, "verified": True}
+        own = env.get("HC_TERMINAL_ID")
+        # the env id is only a lead to check: it counts when its pid is really an ancestor
+        candidates = [own] if own else []
+        scanned = False
+        while True:
+            for address in candidates:
+                try:
+                    reply = hc_get(address)
+                except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                    continue
+                pid = reply.get("pid") if isinstance(reply, dict) else None
+                if isinstance(pid, int) and not isinstance(pid, bool) and pid in ancestors:
+                    kind = "lead" if reply.get("parent") is None else "worker"
+                    return {"kind": kind, "verified": True}
+            if scanned:
+                break
+            scanned = True
+            candidates = [a for a in live_terminal_addresses() if a != own]
     if env.get("HC_TERMINAL_ID") and info.get("role") in ("lead", "worker"):
         return {"kind": info["role"], "verified": False}
     return {"kind": "unknown", "verified": False}
