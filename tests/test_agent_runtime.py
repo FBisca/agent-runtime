@@ -147,6 +147,18 @@ class CallerIdentityTests(unittest.TestCase):
         self.assertEqual(self.caller({}, []), {"kind": "unknown", "verified": False})
 
 
+class HookExceptionDocsTests(unittest.TestCase):
+    def test_S18_agents_md_and_spec_name_the_one_hook_only_exception(self):
+        """agent-runtime/R173"""
+        root = Path(__file__).resolve().parents[1]
+        for doc in (root / "AGENTS.md", root / "docs" / "specs" / "agent-runtime.md"):
+            text = " ".join(doc.read_text().split())
+            self.assertIn("native in-process subagent cannot be told from its Lead", text, doc.name)
+            self.assertIn("R74", text, doc.name)
+            self.assertIn("R89", text, doc.name)
+            self.assertIn("no other refusal is an exception", text.lower(), doc.name)
+
+
 class CliTests(unittest.TestCase):
     """Run the symlinked executable with a controlled env and a fake hc on PATH."""
 
