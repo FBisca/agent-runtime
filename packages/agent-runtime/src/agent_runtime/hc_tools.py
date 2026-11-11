@@ -1085,8 +1085,20 @@ def stop(arguments, env, ctx):
     try:
         store.stopped(team, name, ctx.ack)
     except (dispatch.StoreError, sqlite3.Error) as error:
-        if reason == "not your child" and isinstance(error, dispatch.StoreError):
+        # Only an outage of the store can be retried. A refusal ("not registered", a foreign receipt) answers
+        # the same every time, so it carries no retry advice.
+        refused = isinstance(error, dispatch.StoreError) and not isinstance(
+            error, dispatch.StorageError
+        )
+        if refused and reason == "not your child":
             raise ToolError("%s is not your child; refusing" % name)
+        if refused:
+            if reason is None:
+                raise ToolError(
+                    "stop %s: the terminal was killed and removed, but the store refused to record it: %s"
+                    % (name, error)
+                ) from error
+            raise
         # The kill is irreversible; the record update was one transaction, so it is rolled back. A retry
         # finds the terminal gone and only reconciles the record.
         effect = (

@@ -16,7 +16,7 @@ from test_tools import ToolCase, raw
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
 from agent_runtime import hc_tools
-from agent_runtime.dispatch_store import Store, StoreError
+from agent_runtime.dispatch_store import Store, StorageError, StoreError
 
 pytestmark = pytest.mark.integration
 
@@ -295,7 +295,10 @@ class StopStoreFailureTests(ToolCase):
 
     def test_S8_stop_store_failure_after_the_kill_names_the_kill_and_the_record(self):
         """agent-runtime/R247"""
-        for error in (sqlite3.OperationalError("database is locked"), StoreError("worker is gone")):
+        for error in (
+            sqlite3.OperationalError("database is locked"),
+            StorageError("store is busy"),
+        ):
             with self.subTest(error=type(error).__name__):
                 with mock.patch.object(Store, "stopped", side_effect=error):
                     result, text = self.stop()
@@ -305,6 +308,29 @@ class StopStoreFailureTests(ToolCase):
                 self.assertIn("still recorded active", text)
                 self.assertIn("retry the stop", text)
                 self.assertEqual(self.record(), 1)
+
+    def test_S8_stop_store_refusal_after_the_kill_names_the_kill_and_gives_no_retry(self):
+        """agent-runtime/R247: a refusal answers the same on every retry, so it carries no retry advice."""
+        refusal = StoreError("invalid receipt")
+        with mock.patch.object(Store, "stopped", side_effect=refusal):
+            result, text = self.stop()
+        self.assertTrue(result["isError"])
+        self.assertIn("terminal was killed and removed", text)
+        self.assertIn("invalid receipt", text)
+        self.assertNotIn("still recorded active", text)
+        self.assertNotIn("retry", text)
+
+    def test_S8_stop_of_an_unregistered_name_whose_terminal_is_gone_keeps_the_stores_refusal(self):
+        """agent-runtime/R247"""
+        replies = json.loads((self.dir / "replies").read_text())
+        replies["get:ghost"] = {"rc": 1, "err": NOT_FOUND}
+        (self.dir / "replies").write_text(json.dumps(replies))
+        for _ in range(2):  # a retry answers the same
+            out = hc_tools.call("stop", {"name": "ghost"}, self.env, hc_tools.Context())
+            text = out["content"][0]["text"]
+            self.assertTrue(out["isError"])
+            self.assertEqual(text, "worker is not registered in this team")
+        self.assertEqual([c for c in self.runs() if c[0] in ("kill", "rm")], [])
 
     def test_S8_stop_retry_after_a_store_failure_reconciles_the_record(self):
         """agent-runtime/R247"""
