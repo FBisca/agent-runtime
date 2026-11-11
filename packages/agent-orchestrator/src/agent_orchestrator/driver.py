@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import contracts, events, evidence, routes, runner, verify
+from . import contracts, events, evidence, routes, runner, verify, workbench
 from . import plan as yaml_plan
 from .plan import PlanError
 from .runtime_client import CliRuntimeClient
@@ -5795,14 +5795,18 @@ def split_status(text):
     return re.sub(r"\s+\d{4}-\d{2}-\d{2}$", "", head), reason.strip() or None
 
 
-def plan_status(args):
+def plan_status(args, model=None):
     """`status <plan> --json`: the plan's state and history, and each ticket's state, reason and pull request, read
     from the ledger. It writes nothing, takes no lock and needs no run: before one, the plan is APPROVED (or DRAFT)
-    and every ticket TO-DO."""
+    and every ticket TO-DO.
+
+    A caller that already holds the YAML plan model passes it: the workbench reads an approved plan's ledger under
+    the approved snapshot's slug and ticket ids, not the edited file's."""
     plan_path = Path(args.plan).resolve(strict=True)
     if is_yaml(plan_path):
         repo = repo_root(plan_path, args.repo)
-        model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
+        if model is None:
+            model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, verify=False)
         slug, ids, statuses = model.slug, [t.id for t in model.tickets], {}
         state = "APPROVED" if model.approval else "DRAFT"
         history = [{"state": state, "at": model.approval.at}] if model.approval else []
@@ -6390,6 +6394,25 @@ def main(argv=None):
     listing.add_argument("path", nargs="?", help="A plan file, or the directory holding plans")
     listing.add_argument("--repo", help="Repository root; default the current repository")
     listing.add_argument("--json", action="store_true", help="Print the list as a JSON array")
+    bench = commands.add_parser(
+        "workbench",
+        help="Read-only JSON views of plans for the Herdr workbench: nothing is written",
+    ).add_subparsers(dest="workbench_command", required=True)
+    for verb, what in (
+        ("plans", "Every plan of a repository with its state and ticket counts"),
+        ("plan", "One YAML plan's ticket graph: blocked_by edges, layers, states and revision"),
+    ):
+        sub = bench.add_parser(verb, help=what)
+        sub.add_argument(
+            "path" if verb == "plans" else "plan",
+            nargs="?" if verb == "plans" else None,
+            help="A plan file, or the directory holding plans"
+            if verb == "plans"
+            else "The plan file",
+        )
+        sub.add_argument("--repo", help="Repository root; default the current repository")
+        sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
+        sub.add_argument("--json", action="store_true", help="Accepted; the answer is always JSON")
     for verb in ("check", "approve"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
@@ -6651,6 +6674,8 @@ def main(argv=None):
             }
         model = load_approved(args.plan, repo=args.repo, state_dir=args.state_dir)
         return {"valid": True, "slug": model.slug}
+    if args.command == "workbench":
+        return workbench.run(args)
     if args.command == "plans":
         found = yaml_plan.discover(args.repo, args.path)
         if args.json:
@@ -6714,6 +6739,11 @@ def run_cli(argv=None):
         output = main(argv)
         print(output if isinstance(output, str) else json.dumps(output, separators=(",", ":")))
         return 1 if isinstance(output, dict) and output.get("errors") else 0
+    except workbench.WorkbenchError as error:
+        # The pane reads stdout: a refusal is one JSON object there too, and the reason once on stderr.
+        print(json.dumps(error.output, separators=(",", ":")))
+        print("workbench: %s" % error, file=sys.stderr)
+        return 2
     except PlanError as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 2

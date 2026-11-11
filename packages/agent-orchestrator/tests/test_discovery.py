@@ -177,3 +177,29 @@ class ExternalPlanTests(DiscoveryFixture):
         self.assertEqual(driver.repo, self.repo.resolve())
         self.assertEqual(self.outside.read_bytes(), before)
         self.assertFalse((self.repo / "docs" / "plans").exists())
+
+
+class SlugTests(DiscoveryFixture):
+    """The listing names a YAML plan by the `slug:` field, which is the key its ledger lives under."""
+
+    def slugs(self, *extra):
+        code, out, err = self.run_cli("plans", "list", "--json", "--repo", str(self.repo), *extra)
+        self.assertEqual(code, 0, err)
+        return {entry["path"].rsplit("/", 1)[1]: entry["slug"] for entry in json.loads(out)}
+
+    def test_S1_a_yaml_plan_is_listed_under_its_slug_field_not_its_dated_file_name(self):
+        data = contract()
+        data["slug"] = "agent-workbench"
+        self.track("docs/plans/2026-11-11-agent-workbench-plan.plan.yaml", yaml.safe_dump(data))
+        self.track("docs/plans/2026-11-09-legacy-name.plan.md")
+        self.assertEqual(
+            self.slugs(),
+            {
+                "2026-11-11-agent-workbench-plan.plan.yaml": "agent-workbench",
+                "2026-11-09-legacy-name.plan.md": "2026-11-09-legacy-name",
+            },
+        )
+
+    def test_S1_a_yaml_plan_that_does_not_parse_keeps_its_file_derived_slug(self):
+        self.track("docs/plans/2026-11-11-broken.plan.yaml", "slug: [unclosed\n")
+        self.assertEqual(self.slugs(), {"2026-11-11-broken.plan.yaml": "2026-11-11-broken"})
