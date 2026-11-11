@@ -42,6 +42,12 @@ def read_lines(path):
         return stream.read().splitlines()
 
 
+def write_text(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as stream:
+        stream.write(text)
+
+
 def read_json(path, default=None) -> Any:
     """The file's JSON, or the default when it is not there."""
     if not os.path.exists(path):
@@ -120,21 +126,12 @@ def process(argv, timeout=None):
         queue = read_json(queue_path)
         step = queue.pop(0) if queue else {}
         write_json(queue_path, queue)
-        for path, text in step.pop("write", []):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            if (
-                "@HEAD" in text
-            ):  # the sha the unit's checkout is at now, as a reviewer would read it
-                text = text.replace(
-                    "@HEAD",
-                    subprocess.run(
-                        ["git", "-C", os.environ["FAKE_CHECKOUT"], "rev-parse", "HEAD"],
-                        capture_output=True,
-                        text=True,
-                    ).stdout.strip(),
-                )
-            with open(path, "w", encoding="utf-8") as stream:
-                stream.write(text)
+        # A step's files land first and its commands run next; a file naming `@HEAD` is written last, with the sha
+        # the checkout is at once those commands ran, as a reviewer who reviewed that commit would record it.
+        writes = step.pop("write", [])
+        for path, text in writes:
+            if "@HEAD" not in text:
+                write_text(path, text)
         for path, old, new in step.pop("replace", []):
             with open(path, encoding="utf-8") as stream:
                 text = stream.read()
@@ -143,6 +140,14 @@ def process(argv, timeout=None):
                 stream.write(text.replace(old, new, 1))
         for command in step.pop("run", []):
             subprocess.run(command, check=True, capture_output=True)
+        for path, text in writes:
+            if "@HEAD" in text:
+                head = subprocess.run(
+                    ["git", "-C", os.environ["FAKE_CHECKOUT"], "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                write_text(path, text.replace("@HEAD", head))
         return Completed(argv, 0, json.dumps(wait_answer(home, step)))
     if tool == "status":
         states = read_json(os.path.join(home, "states.json"))
