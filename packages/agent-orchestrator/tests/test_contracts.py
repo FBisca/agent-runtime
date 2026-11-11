@@ -433,7 +433,7 @@ class EvidenceReasonTests(unittest.TestCase):
 
         receipt = {"label": "FAIL", "check": "pytest", "exit": 1, "detail": detail}
         result = SimpleNamespace(receipt=receipt, log=log, path=Path("/r/S23.ticket.1.json"))
-        return driver, driver.Driver.evidence_item(None, 1, "S23", result)
+        return driver, driver.Driver.__new__(driver.Driver).evidence_item(1, "S23", result)
 
     def test_the_reason_names_the_failing_test(self):
         log = "collected 3\n_ test_x _\nE   AssertionError: 1 != 2\nFAILED t.py::test_x - AssertionError\n1 failed\n"
