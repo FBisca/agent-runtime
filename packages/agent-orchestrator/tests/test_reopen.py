@@ -4,7 +4,6 @@ anything else holds."""
 import unittest
 
 import pytest
-from fixtures import plan_text
 from test_decider import DeciderFixture
 
 pytestmark = pytest.mark.integration
@@ -12,15 +11,14 @@ pytestmark = pytest.mark.integration
 
 class ReopenTests(DeciderFixture, unittest.TestCase):
     def pause(self, rows=("T1",)):
-        self.plan.write_text(plan_text(rows=rows), encoding="utf-8")
+        self.set_plan(rows)
         self.waits([self.blocked(), self.decided("mark blocked", reason="which way?")])
         self.run_driver()
         self.assertEqual(self.task()["gate"], "blocked")
 
     def set_status(self, new):
-        text = self.plan.read_text(encoding="utf-8").replace("BLOCKED · which way?", new)
-        self.assertIn(new, text)
-        self.plan.write_text(text, encoding="utf-8")
+        self.assertEqual(self.ticket_status("T1"), "BLOCKED · which way?")
+        self.set_ticket_status("T1", new)
 
     def stops(self):
         return [c["args"]["name"] for c in self.calls("stop")]
@@ -50,7 +48,7 @@ class ReopenTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(wake["unit"], "t1")
         self.assertEqual(self.ledger()["tasks"]["t1p1"]["status"], "RESERVED")
         self.refuse([])
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_ticket_status("T1", "TO-DO")
         self.waits([])
         self.run_driver()
         tasks = self.ledger()["tasks"]

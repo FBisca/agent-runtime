@@ -69,14 +69,14 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         )
 
     @pytest.mark.integration
-    def test_S27_converge_failures_and_ci_lines_are_findings_too(self):
+    def test_S27_verify_failures_and_ci_lines_are_findings_too(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
         self.waits([self.worker_done(), self.worker_done("t1r1", tests=True)])
         self.run_driver()
         found = self.events("finding")
         self.assertTrue(
             found
-            and all(e["source"] == "converge" and e["finding_kind"] == "blocking" for e in found)
+            and all(e["source"] == "verify" and e["finding_kind"] == "blocking" for e in found)
         )
 
     @pytest.mark.integration

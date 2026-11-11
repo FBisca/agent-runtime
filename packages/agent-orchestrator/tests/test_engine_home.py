@@ -46,7 +46,7 @@ class EngineHomeTests(unittest.TestCase):
             names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
             if "parse_plan" in names and "check_plan" in names:
                 copies.append(path.relative_to(REPO).as_posix())
-        self.assertEqual(copies, ["packages/agent-orchestrator/src/agent_orchestrator/driver.py"])
+        self.assertEqual(copies, [])  # the Markdown plan reader is gone: no source defines it
 
     def test_S3_ci_runs_the_member_suite_and_the_tracked_budgets(self):
         """orchestrator-engine/R3"""

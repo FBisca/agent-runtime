@@ -8,11 +8,9 @@ from unittest import mock
 
 import pytest
 from fixtures import (
-    ROWS,
     RunFixture,
     assignment,
     load_script,
-    plan_text,
     recorded_idles,
     report_wait,
     resume_id,
@@ -26,8 +24,8 @@ pytestmark = pytest.mark.integration
 class DeciderFixture(RunFixture):
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
-        self.run_dir = self.state_dir / "demo"
+        self.set_plan(("T1",))
+        self.run_dir = self.state_dir / load_script().repo_key(self.repo) / "demo"
         self.worktree = self.root / "repo.worktrees" / "demo-t1"
 
     def report(self, task_id, **over):
@@ -78,9 +76,7 @@ class DeciderFixture(RunFixture):
         return [c["args"]["name"] for c in self.calls("spawn")]
 
     def plan_status(self, row="T1"):
-        for line in self.plan.read_text(encoding="utf-8").splitlines():
-            if line.startswith("| %s |" % row):
-                return line.rstrip(" |").rsplit("|", 1)[1].strip()
+        return self.ticket_status(row)
 
     def attention_md(self):
         path = self.run_dir / "attention.md"
@@ -175,7 +171,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
             "Read %s and follow it." % (self.run_dir / "t1r3" / "task.md"),
         )
         findings = json.loads((self.run_dir / "t1r3" / "findings.json").read_text(encoding="utf-8"))
-        self.assertEqual((findings["source"], findings["attempt"]), ("converge", 3))
+        self.assertEqual((findings["source"], findings["attempt"]), ("verify", 3))
         self.assertEqual(
             (self.task("t1r3")["status"], self.task("t1r2")["status"]), ("ACTIVE", "RELEASED")
         )
@@ -269,7 +265,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
 class RequestPauseTests(DeciderFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1", "T3")), encoding="utf-8")
+        self.set_plan(("T1", "T3"))
 
     def assert_requested(self, needle):
         self.assertEqual(len(self.wake_lines("decision")), 1)
@@ -283,18 +279,14 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
                     sys.executable,
                     "-c",
                     "import sys,shutil;shutil.copy(sys.argv[1], sys.argv[2])",
-                    str(self.plan),
-                    str(self.root / "open.md"),
+                    str(self.state_dir / "demo.json"),
+                    str(self.root / "open.json"),
                 ]
             ]
         )
         self.waits([self.blocked(), probe, self.decided("skip")])
         self.run_driver()
-        rows = {
-            line.split("|")[1].strip(): line.rstrip(" |").rsplit("|", 1)[1].strip()
-            for line in (self.root / "open.md").read_text(encoding="utf-8").splitlines()
-            if line.startswith("| T")
-        }
+        rows = json.loads((self.root / "open.json").read_text(encoding="utf-8"))["ticket_status"]
         self.assertTrue(rows["T1"].startswith("IN PROGRESS · decision pending: "), rows["T1"])
         self.assertEqual(rows["T3"], "IN PROGRESS")
         self.assertEqual(self.task("t3")["status"], "ACTIVE")
@@ -338,22 +330,19 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.run_driver()
         self.assert_requested("report.json")
 
-    def test_S12_a_request_status_stays_one_table_cell(self):
+    def test_S12_a_request_status_stays_one_line(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S12"""
         self.waits([self.blocked(text="a | b\nc " + "x" * 400), self.decided("skip")])
         self.run_driver()
         self.assertEqual(len(self.wake_lines("decision")), 1)
         self.assertNotIn("\n", self.wake_lines("decision")[0])
-        self.assertEqual(
-            len(self.plan.read_text(encoding="utf-8").splitlines()),
-            len(plan_text(rows=("T1", "T3")).splitlines()),
-        )
+        self.assertNotIn("\n", self.ticket_status("T1"))
 
     def test_S12_a_waiting_unit_neither_spins_the_loop_nor_gets_a_second_request(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S12"""
         parked = wait_result([assignment("demo-t1", "blocked")])
         again = report_wait("demo-t1", "blocked", "still blocked")
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_plan(("T1",))
         self.waits([self.blocked(), parked, again, parked, parked, self.decided("skip")])
         self.run_driver()
         self.assertEqual(len(self.wake_lines("decision")), 1)
@@ -399,7 +388,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
 class PersonOwnedTests(DeciderFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1", "T4")), encoding="utf-8")
+        self.set_plan(("T1", "T4"))
 
     def test_S13_a_ready_person_owned_ticket_reads_needs_you_and_is_logged(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S13"""
@@ -418,18 +407,16 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.run_driver(expect=1)
         self.assertEqual(self.plan_status("T4"), "needs you: sign-off")
         self.assertEqual(self.attention_md().count("sign-off"), 1)
-        text = self.plan.read_text(encoding="utf-8").replace(
-            "needs you: sign-off", "COMPLETE 2026-11-07"
-        )
-        self.plan.write_text(text, encoding="utf-8")
+        self.set_ticket_status("T4", "COMPLETE 2026-11-07")
         self.run_driver(expect=1)
         self.assertEqual(self.plan_status("T4"), "COMPLETE 2026-11-07")
         self.assertEqual(self.attention_md().count("sign-off"), 1)
 
     def test_S13_a_person_ticket_with_open_blockers_stays_to_do(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S13"""
-        row = ROWS["T4"].replace("| none | none |", "| none | T1 |")
-        self.plan.write_text(plan_text(rows=("T1",)) + row + "\n", encoding="utf-8")
+        self.set_plan(
+            ("T1", "T4"), mutate=lambda data: data["tickets"][1].update(blocked_by=["T1"])
+        )
         self.run_driver()
         self.assertEqual(self.plan_status("T4"), "TO-DO")
         self.assertEqual(self.attention_md(), "")

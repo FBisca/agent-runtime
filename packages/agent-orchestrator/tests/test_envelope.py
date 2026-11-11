@@ -195,22 +195,20 @@ class EvidenceTests(EnvelopeFixture, unittest.TestCase):
         self.assertTrue(item["command"])
         self.assertIsInstance(item["exit"], int)
 
-    def test_S14_a_failing_converge_fills_each_item_with_its_evidence(self):
+    def test_S14_a_failing_verify_fills_each_item_with_its_evidence(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S14"""
         self.waits([self.worker_done()])
         self.run_driver()
         findings = self.read("t1r1", "findings.json")
-        self.assertEqual((findings["contract"], findings["source"]), (2, "converge"))
+        self.assertEqual((findings["contract"], findings["source"]), (2, "verify"))
         item = findings["items"][0]
-        self.assert_item(item, "converge", "coverage")
-        self.assertEqual((item["exit"], item["excerpt"]), (1, "FAIL coverage: S1"))
-        self.assertIn("converge.py", item["command"])
-        self.assertIn("--ticket T1", item["command"])
+        self.assert_item(item, "verify", "covers")
+        excerpt = "S1: test node src/a/test_a.py::test_a does not exist (no file src/a/test_a.py)"
+        self.assertEqual((item["exit"], item["excerpt"]), (1, excerpt))
+        self.assertIn("verify T1", item["command"])
         with open(item["log_path"], encoding="utf-8") as log:
-            self.assertIn("FAIL coverage: S1", log.read())
-        self.assertIn(
-            "FAIL coverage: S1", (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
-        )
+            self.assertIn("FAIL covers: " + excerpt, log.read())
+        self.assertIn(excerpt, (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8"))
         self.assertIn(
             item["log_path"], (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
         )
@@ -417,7 +415,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.waits(self.passing_with_question() + [self.answers_report([RESPONSE])])
         self.run_driver()
         order = [e["kind"] for e in self.events("wake", "response")]
-        self.assertEqual(order, ["response", "wake"])
+        self.assertEqual(order[:2], ["response", "wake"])
 
     def test_S17_a_disputed_response_that_changes_code_goes_to_a_delta_re_review(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S17"""

@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 
 import pytest
-from fixtures import RunFixture, load_script, plan_text, resume_id, spawn_id
+from fixtures import RunFixture, load_script, resume_id, spawn_id
 
 pytestmark = pytest.mark.integration
 
@@ -14,18 +14,19 @@ pytestmark = pytest.mark.integration
 class EnsureAgentTests(RunFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_plan(("T1",))
 
     def crash_after_spawn(self, point="bind"):
         """Run the driver in this process and die right after the spawn: `assignment_of` is the first step after it
         (the intent is still open), `bind` the ledger bind of the task (the agent record is already written)."""
         spec = load_script()
+        self.alias_state(self.plan)
         env = dict(
             os.environ,
             PATH=str(self.home) + os.pathsep + os.environ["PATH"],
             FAKE_RUNTIME_HOME=str(self.home),
-            FAKE_PLAN=str(self.plan),
-            FAKE_EVENTS=str(self.state_dir / "demo" / "events.jsonl"),
+            FAKE_PLAN=str(self.state_dir / "demo.json"),
+            FAKE_EVENTS=str(self.run_dir_of() / "events.jsonl"),
         )
         argv = [
             "orchestrate",
@@ -89,9 +90,7 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
     def test_S33_a_run_that_finished_binding_never_spawns_a_second_agent_with_the_name(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S33"""
         self.run_driver()
-        self.plan.write_text(
-            self.plan.read_text(encoding="utf-8").replace("IN PROGRESS", "TO-DO"), encoding="utf-8"
-        )
+        self.reset_status("IN PROGRESS", "TO-DO")
         # exit 1: the first drive left the worker idle with no report, and the restart strands that unit
         # instead of finishing over it; the point here is that it spawns no second agent under the name
         self.run_driver(expect=1)

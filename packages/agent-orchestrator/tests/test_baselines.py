@@ -99,6 +99,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
 
     def drive(self, budget=25.0, label="", records=None):
         """The driver run under a budget: a run that overruns it is terminated and recorded as a failure."""
+        self.alias_state(self.plan)
         argv = [
             *DRIVER,
             "run",
@@ -150,7 +151,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
         task = self.task()
         self.assertEqual(task.get("status"), "COMPLETE", task)
         self.assertEqual(task.get("gate"), "done", task)
-        self.assertIn("| COMPLETE ", self.plan.read_text(encoding="utf-8"))
+        self.assertIn("COMPLETE ", self.ticket_status("T1"))
 
     def test_S0_a_restart_after_the_report_landed_still_finishes_the_ticket(self):
         """orchestrator-engine/R2: P3.T1/S0 — the driver died with the report on disk; the restart finishes the ticket, nobody is asked."""

@@ -44,38 +44,26 @@ def wrapper(module):
     )
 
 
-HEADER = """# Plan: demo
-
-Slug: `demo`. Living spec: `docs/specs/demo.md`. Status: {status} 2026-11-06.
-
-## Decisions
-
-| # | Choice |
-|---|---|
-| D1 | keep it small |
-
-## Scenarios
-
-- **S1** WHEN a THEN b.
-- **S2** WHEN c THEN d.
-- **S3** WHEN e THEN f.
-
-## Seams
-
-- the CLI.
-
-## Tickets
-
-| # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |
-|---|---|---|---|---|---|---|---|---|
-"""
-
+SCENARIOS = ("S1", "S2", "S3")
 ROWS = {
-    "T1": "| T1 | first | S1 | none | src/a/ | small | simple | agent | TO-DO |",
-    "T2": "| T2 | second | S2 | T1 | src/b/ | regular | complex | agent | TO-DO |",
-    "T3": "| T3 | third | S3 | none | src/c/ | regular | simple | agent | TO-DO |",
-    "T4": "| T4 | sign-off | none | none | | | | Felippe | TO-DO |",
-    "T5": "| T5 | fifth | S1 | none | src/e/ | small | complex | agent | TO-DO |",
+    "T1": dict(
+        delivers="first", satisfies=["S1"], paths=["src/a/"], size="small", difficulty="simple"
+    ),
+    "T2": dict(
+        delivers="second",
+        satisfies=["S2"],
+        paths=["src/b/"],
+        size="regular",
+        difficulty="complex",
+        blocked_by=["T1"],
+    ),
+    "T3": dict(
+        delivers="third", satisfies=["S3"], paths=["src/c/"], size="regular", difficulty="simple"
+    ),
+    "T4": dict(delivers="sign-off", satisfies=["S1"], paths=["docs/"], owner="Felippe"),
+    "T5": dict(
+        delivers="fifth", satisfies=["S1"], paths=["src/e/"], size="small", difficulty="complex"
+    ),
 }
 
 
@@ -170,8 +158,19 @@ def report_wait(name, kind="complete", text=None, id=None, **extra):
     return wait_result([entry], [envelope(entry, kind, text)], **extra)
 
 
-def plan_text(rows=("T1", "T2", "T3", "T4", "T5"), status="APPROVED"):
-    return HEADER.format(status=status) + "\n".join(ROWS[r] for r in rows) + "\n"
+def plan_data(rows=("T1", "T2", "T3", "T4", "T5")):
+    """The fixture plan as a plan/1 mapping: the rows' tickets and three scenarios (human evidence only)."""
+    return {
+        "schema": "plan/1",
+        "slug": "demo",
+        "goal": "deliver",
+        "spec": "docs/specs/demo.md",
+        "outcome": ["S1"],
+        "scenarios": [
+            dict(id=sid, when="a", then="b", evidence={"human": "confirm"}) for sid in SCENARIOS
+        ],
+        "tickets": [dict(id=name, **ROWS[name]) for name in rows],
+    }
 
 
 TEMPLATE = None
@@ -249,9 +248,6 @@ class RunFixture(_Case):
         shutil.copytree(template / "repo", self.repo)
         self.git(self.repo, "remote", "set-url", "origin", str(self.origin))
         self.base = self.git(self.repo, "rev-parse", "HEAD")
-        self.plan = self.repo / "docs" / "plans" / "demo.plan.md"
-        self.plan.parent.mkdir(parents=True)
-        self.plan.write_text(plan_text(), encoding="utf-8")
         self.state_dir = self.root / "state"
         self.home = self.root / "fake"
         self.home.mkdir()
@@ -275,6 +271,12 @@ class RunFixture(_Case):
             encoding="utf-8",
         )
         self.models = models
+        self.set_plan()
+
+    def set_plan(self, rows=("T1", "T2", "T3", "T4", "T5"), **kwargs):
+        """The plan this test runs: the fixture rows, approved. Called again, it replaces the plan and its approval."""
+        self.plan = self.approved_yaml_plan(rows, **kwargs)
+        return self.plan
 
     def git(self, cwd, *args):
         # A CI runner has no git identity: every commit a test makes names its own.
@@ -409,9 +411,9 @@ class RunFixture(_Case):
             PATH=str(self.home) + os.pathsep + os.environ["PATH"],
             PYTHONPATH=str(TESTS) + os.pathsep + os.environ.get("PYTHONPATH", ""),
             FAKE_RUNTIME_HOME=str(self.home),
-            FAKE_PLAN=str(self.plan),
+            FAKE_PLAN=str(self.state_dir / "demo.json"),
             FAKE_CHECKOUT=str(self.root / "repo.worktrees" / "demo-t1"),
-            FAKE_EVENTS=str(self.state_dir / "demo" / "events.jsonl"),
+            FAKE_EVENTS=str(self.run_dir_of() / "events.jsonl"),
         )
 
     def runtime_process(self, argv, timeout=None):
@@ -508,7 +510,7 @@ class RunFixture(_Case):
         return wait_result(run=[self.decide_argv(unit, action, reason, answer)], **extra)
 
     def wakes(self):
-        path = self.state_dir / "demo" / "wakes.jsonl"
+        path = self.run_dir_of() / "wakes.jsonl"
         rows = (
             [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
             if path.exists()
@@ -532,35 +534,16 @@ class RunFixture(_Case):
         if not alias.is_symlink():
             alias.symlink_to(".")
 
-    def approved_yaml_plan(self, rows=("T1",), repo=None, name="demo.plan.yaml"):
-        """The Markdown fixture plan's tickets as an approved plan/1 YAML file in `repo`; its path."""
+    def approved_yaml_plan(
+        self, rows=("T1",), repo=None, name="demo.plan.yaml", mutate=None, state_dir=None
+    ):
+        """The fixture rows as an approved plan/1 YAML file in `repo`; its path. `mutate` edits the mapping first."""
         repo = repo or self.repo
-        parsed = load_script().parse_plan(plan_text(rows=rows))
         path = repo / "docs" / "plans" / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "schema": "plan/1",
-            "slug": "demo",
-            "goal": "deliver",
-            "spec": "docs/specs/demo.md",
-            "outcome": ["S1"],
-            "scenarios": [
-                dict(id=s, when="a", then="b", evidence={"human": "confirm"})
-                for s in parsed["scenarios"]
-            ],
-            "tickets": [
-                dict(
-                    id=t["#"],
-                    delivers=t["What it delivers"],
-                    satisfies=t["Satisfies"].split(","),
-                    paths=t["Paths"].split(","),
-                    size=t["Size"],
-                    difficulty=t["Difficulty"],
-                    blocked_by=[] if t["Blocked by"] == "none" else [t["Blocked by"]],
-                )
-                for t in parsed["tickets"]
-            ],
-        }
+        data = plan_data(rows)
+        if mutate:
+            mutate(data)
         path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         out = io.StringIO()
         spec = load_script()
@@ -580,7 +563,7 @@ class RunFixture(_Case):
                     "--repo",
                     str(repo),
                     "--state-dir",
-                    str(self.state_dir),
+                    str(state_dir or self.state_dir),
                 ]
             )
         self.assertEqual(code, 0, out.getvalue())
@@ -610,9 +593,57 @@ class RunFixture(_Case):
     def ledger(self):
         return json.loads((self.state_dir / "demo.json").read_text(encoding="utf-8"))
 
+    def run_dir_of(self, slug="demo"):
+        """The run directory the driver names: under the repository's key in the state directory."""
+        return self.state_dir / load_script().repo_key(self.repo) / slug
+
+    def seed_status(self, **statuses):
+        """A ledger that already says `T1="IN PROGRESS"`, as an earlier run left it."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        (self.state_dir / "demo.json").write_text(
+            json.dumps({"version": 1, "tasks": {}, "ticket_status": statuses}), encoding="utf-8"
+        )
+
+    def reset_status(self, old, new):
+        """What a person does by hand: every ticket Status that starts with `old` becomes `new`."""
+        for ticket, status in dict(self.ledger().get("ticket_status") or {}).items():
+            if status.startswith(old):
+                self.set_ticket_status(ticket, new)
+
+    def lead_sets(self, **statuses):
+        """A wait step during which the Lead writes ticket Statuses into the ledger: `T1="TO-DO"`."""
+        script = (
+            "import json,sys\n"
+            "p=sys.argv[1]; d=json.load(open(p)); d.setdefault('ticket_status',{}).update(json.loads(sys.argv[2]))\n"
+            "open(p,'w').write(json.dumps(d))"
+        )
+        return wait_result(
+            run=[
+                [
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(self.state_dir / "demo.json"),
+                    json.dumps(statuses),
+                ]
+            ],
+            write=[[str(self.home / "refuse.json"), "[]"]],
+        )
+
+    def ticket_status(self, ticket="T1"):
+        """A ticket's Status as the ledger holds it: the ledger owns status, the plan file never carries it."""
+        return (self.ledger().get("ticket_status") or {}).get(ticket, "TO-DO")
+
+    def set_ticket_status(self, ticket, status):
+        """What a person does by hand between two runs: write a ticket's Status into the ledger."""
+        path = self.state_dir / "demo.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.setdefault("ticket_status", {})[ticket] = status
+        path.write_text(json.dumps(data), encoding="utf-8")
+
     def events(self, *kinds):
         """The run's events.jsonl as dicts, optionally only the given kinds."""
-        path = self.state_dir / "demo" / "events.jsonl"
+        path = self.run_dir_of() / "events.jsonl"
         rows = (
             [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
             if path.exists()

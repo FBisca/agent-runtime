@@ -1,4 +1,4 @@
-"""The archive unit, the gaps reviewer, `converge --final`, and the run metrics."""
+"""The archive unit, the gaps reviewer, the outcome evidence on the archive head, and the run metrics."""
 
 import json
 import unittest
@@ -43,14 +43,21 @@ def plan_copies(plan, tree):
 class ArchiveFixture(GateFixture):
     def setUp(self):
         super().setUp()
+        self.use_yaml_plan(oracle=True)
         self.archive_tree = self.root / "repo.worktrees" / ARCHIVE
 
     def ticket_merged(self):
-        """Waits that take T1 through review, CI and the merge."""
+        """Waits that take T1 through review, CI and the merge. The merge lands on origin's default branch and gh
+        names it: a plan verifies there before it archives."""
+        self.git(self.repo, "commit", "-q", "--allow-empty", "-m", "t1")
+        self.git(self.repo, "push", "-q", "origin", "HEAD:main")
+        self.prs(
+            [{"state": "MERGED", "mergeCommit": {"oid": self.git(self.repo, "rev-parse", "HEAD")}}]
+        )
         return [self.worker_done(tests=True), self.reviewer_done()]
 
-    def archive_done(self, task_id="archive", complete=True, id=None):
-        """The archive worker wrote spec, renamed tests, set the plan ARCHIVED and reported (or left tests untouched)."""
+    def archive_done(self, task_id="archive", id=None):
+        """The archive worker copied the plan files byte-identical and reported; the driver placed the oracles."""
         fix_round = int(task_id.split("r")[-1]) if task_id != "archive" else 0
         step = report_wait(
             ARCHIVE,
@@ -64,17 +71,6 @@ class ArchiveFixture(GateFixture):
             ]
         ]
         step["write"] += plan_copies(self.plan, self.archive_tree)
-        if complete:
-            step["write"] += [
-                [str(self.archive_tree / "docs/specs/demo.md"), SPEC],
-                [str(self.archive_tree / "src/a/test_demo.py"), TESTS],
-                [
-                    str(self.archive_tree / "docs/plans/demo.plan.md"),
-                    self.plan.read_text(encoding="utf-8").replace(
-                        "Status: APPROVED", "Status: ARCHIVED"
-                    ),
-                ],
-            ]
         return step
 
     def gaps_done(self):
@@ -84,36 +80,6 @@ class ArchiveFixture(GateFixture):
 
 
 class ArchiveTests(ArchiveFixture, unittest.TestCase):
-    def test_S15_all_tickets_complete_spawns_the_archive_worker_and_the_gaps_reviewer(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S15"""
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
-        self.run_driver()
-        self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review", ARCHIVE, "demo-gaps"])
-        archive, gaps = self.calls("spawn")[2]["args"], self.calls("spawn")[3]["args"]
-        self.assertEqual(
-            (archive["model"], archive["effort"], archive["cwd"]),
-            ("haiku", "low", str(self.archive_tree)),
-        )
-        self.assertEqual((gaps["model"], gaps["kind"]), ("sonnet", "worker"))
-        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
-        for needle in (
-            "Paths:",
-            "(from demo/S",
-            "demo/R",
-            "ARCHIVED",
-            "docs/specs/demo.md",
-            "pull request",
-            str(self.run_dir / "archive" / "report.json"),
-        ):
-            self.assertIn(needle, task_md)
-        gaps_md = (self.run_dir / "gaps-task.md").read_text(encoding="utf-8")
-        self.assertIn(str(self.run_dir / "gaps.md"), gaps_md)
-        self.assertIn(str(self.plan), gaps_md)
-        task = self.task("archive")
-        self.assertEqual(
-            (task["packet"]["size"], task["packet"]["difficulty"]), ("small", "simple")
-        )
-
     def test_S15_nothing_archives_while_an_agent_ticket_is_unfinished(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S15"""
         self.waits(
@@ -123,7 +89,7 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
         self.run_driver()
         self.assertNotIn(ARCHIVE, self.spawned())
 
-    def test_S15_converge_final_passing_hands_the_archive_to_ci_and_merge(self):
+    def test_S15_a_passing_archive_goes_to_ci_and_merge(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S15"""
         self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
         self.run_driver()
@@ -136,31 +102,21 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(self.calls("resume"), [])
         self.assertNotIn("demo-archive-review", self.spawned())
 
-    def test_S15_converge_final_failing_is_a_fix_round_for_the_archive_worker(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S15"""
-        self.waits(
-            self.ticket_merged()
-            + [self.archive_done(complete=False), self.archive_done("archiver1"), self.gaps_done()]
-        )
-        self.run_driver()
-        findings = json.loads(
-            (self.run_dir / "archiver1" / "findings.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual((findings["source"], findings["attempt"]), ("converge", 1))
-        self.assertTrue(any(i["excerpt"].startswith("FAIL") for i in findings["items"]))
-        self.assertEqual([r["args"]["name"] for r in self.calls("resume")], [ARCHIVE])
-        self.assertEqual(self.task("archiver1")["status"], "COMPLETE")
-
 
 class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
     def test_S12_a_conflicting_archive_pr_is_rebased_with_no_review(self):
         """orchestrator-engine/R34: orchestrator-pr-merge-state/S12"""
         dirty = {"state": "OPEN", "mergeStateStatus": "DIRTY", "mergeable": "CONFLICTING"}
+        merged = self.ticket_merged()
+        merged_t1 = {
+            "state": "MERGED",
+            "mergeCommit": {"oid": self.git(self.repo, "rev-parse", "HEAD")},
+        }
         self.prs(
-            ["MERGED", dirty, "MERGED"]
+            [merged_t1, dirty, "MERGED"]
         )  # T1 merges; the archive PR conflicts once, then merges
         rebased = self.archive_done("archiver1", id=spawn_id(ARCHIVE, 2))
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done(), rebased])
+        self.waits(merged + [self.archive_done(), self.gaps_done(), rebased])
         self.run_driver()
         findings = json.loads(
             (self.run_dir / "archiver1" / "findings.json").read_text(encoding="utf-8")
@@ -212,38 +168,27 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
 
 
 class HeldRequirementTests(ArchiveFixture, unittest.TestCase):
-    def test_S29_a_markdown_plan_appends_only_the_scenarios_the_spec_lacks(self):
-        """A Markdown plan's archive keeps a requirement a ticket already wrote, and appends the rest."""
+    def test_S29_the_archive_appends_only_the_scenarios_the_spec_lacks(self):
+        """The archive keeps a requirement a ticket already wrote, and appends the rest."""
         from test_archive_yaml import commit_spec
 
         commit_spec(
             self,
-            "# Demo\nPaths: src/a/\n\n- **R9** WHEN c THEN d. (from demo/S2)\n- **R4** WHEN a. (from other/S1)\n",
+            "# Demo\nPaths: src/a/\n\n- **R9** WHEN a THEN b. (from demo/S1)\n- **R4** WHEN a. (from other/S1)\n",
         )
         self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
         self.run_driver()
         task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("keep as they are: S2 (R9).", task_md)
-        listed = task_md.split("Scenarios, verbatim:", 1)[1]
-        self.assertIn("**S1**", listed)
-        self.assertIn("**S3**", listed)
-        self.assertNotIn("**S2**", listed)
+        self.assertIn("keep as they are: S1 (R9).", task_md)
+        self.assertIn("Every scenario is already in the spec: append none.", task_md)
+        self.assertNotIn("Scenarios, verbatim:", task_md)
 
 
 class PromotionTests(ArchiveFixture, unittest.TestCase):
     """A YAML plan archives by promotion: the driver places the oracles, the worker writes the spec."""
 
-    def ticket_merged(self):
-        self.git(self.repo, "commit", "-q", "--allow-empty", "-m", "t1")
-        self.git(self.repo, "push", "-q", "origin", "HEAD:main")
-        self.prs(
-            [{"state": "MERGED", "mergeCommit": {"oid": self.git(self.repo, "rev-parse", "HEAD")}}]
-        )
-        return super().ticket_merged()
-
     def archive_run(self):
-        self.use_yaml_plan(oracle=True)
-        self.waits(self.ticket_merged() + [self.archive_done(complete=False), self.gaps_done()])
+        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
         self.run_driver()
         return (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
 
@@ -311,15 +256,14 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(again["state"], "REJECTED")
 
     def edited(self):
-        step = self.archive_done(complete=False)
+        step = self.archive_done()
         step["write"].append(
             [str(self.archive_tree / "src/a/test_oracle.py"), "def test_o():\n    assert 1\n"]
         )
         return step
 
     def test_S25_an_edited_placed_oracle_is_a_fix_round_not_a_masked_rerun(self):
-        self.use_yaml_plan(oracle=True)
-        restored = self.archive_done("archiver1", complete=False, id=resume_id(ARCHIVE, 1))
+        restored = self.archive_done("archiver1", id=resume_id(ARCHIVE, 1))
         restored["write"].append(
             [
                 str(self.archive_tree / "src/a/test_oracle.py"),
@@ -337,7 +281,6 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         )  # evidence ran only after the restore
 
     def test_S25_an_archive_pr_merged_during_a_fix_round_still_archives_the_plan(self):
-        self.use_yaml_plan(oracle=True)
         merged = wait_result([assignment(ARCHIVE, "working", None, id=resume_id(ARCHIVE, 1))])
         merged.setdefault("write", []).append([str(self.home / "view-early.json"), '["MERGED"]'])
         self.waits(self.ticket_merged() + [self.edited(), merged, self.gaps_done()])
