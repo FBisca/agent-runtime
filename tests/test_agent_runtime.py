@@ -92,8 +92,59 @@ class ResolveTests(unittest.TestCase):
         with patch.dict(app.os.environ, {}, clear=True), redirect_stdout(buf):
             self.assertEqual(app.main(["resolve", "--json", "--cli", "codex"]), 0)
         self.assertEqual(
-            json.loads(buf.getvalue()), {"runtime": "native", "role": "lead", "cli": "codex"}
+            json.loads(buf.getvalue()),
+            {
+                "runtime": "native",
+                "role": "lead",
+                "cli": "codex",
+                "caller": {"kind": "unknown", "verified": False},
+            },
         )
+
+
+class CallerIdentityTests(unittest.TestCase):
+    """S16: resolve --json reports who the caller is, proved by the process ancestry."""
+
+    CHAIN = {50: (40, "bash"), 40: (30, "node worker"), 30: (1, "claude")}
+
+    def caller(self, env, terminals, hc=None):
+        real_resolve = app.resolve
+        buf = io.StringIO()
+        with (
+            patch.dict(app.os.environ, env, clear=True),
+            patch.object(app.os, "getppid", return_value=50),
+            patch.object(app, "ps_entry", side_effect=self.CHAIN.get),
+            patch.object(app, "hc_terminals", return_value=terminals),
+            patch.object(
+                app, "resolve", side_effect=lambda e, c: real_resolve(e, c, hc or hc_failing)
+            ),
+            redirect_stdout(buf),
+        ):
+            app.main(["resolve", "--json", "--cli", "claude"])
+        return json.loads(buf.getvalue())["caller"]
+
+    def test_S16_ancestry_in_a_child_terminal_is_a_verified_worker(self):
+        """agent-runtime/R177"""
+        terminals = [{"address": "t1", "pid": 40, "parent": "tX"}]
+        self.assertEqual(
+            self.caller({}, terminals),
+            {"kind": "worker", "verified": True},
+            "observed worker ancestry wins over missing markers",
+        )
+
+    def test_S16_ancestry_in_a_parentless_terminal_is_a_verified_lead(self):
+        """agent-runtime/R177"""
+        terminals = [{"address": "t1", "pid": 40, "parent": None}]
+        self.assertEqual(self.caller({}, terminals), {"kind": "lead", "verified": True})
+
+    def test_S16_worker_markers_alone_are_never_verified(self):
+        """agent-runtime/R177"""
+        caller = self.caller({"HC_TERMINAL_ID": "t1"}, [], hc_returning("tX"))
+        self.assertEqual(caller, {"kind": "worker", "verified": False})
+
+    def test_S16_no_marker_and_no_ancestry_is_unknown(self):
+        """agent-runtime/R177"""
+        self.assertEqual(self.caller({}, []), {"kind": "unknown", "verified": False})
 
 
 class CliTests(unittest.TestCase):

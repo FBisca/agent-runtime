@@ -239,6 +239,49 @@ def resolve(env, cli=None, hc_runner=hc_get):
     return {"runtime": "native", "role": "lead", "cli": cli}
 
 
+def hc_terminals():
+    """Every hc terminal as `hc ls` reports it; [] when hc cannot be read."""
+    try:
+        listing = json.loads(run_command(["hc", "ls", "--all", "--json"]))
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return []
+    terminals = listing.get("terminals") if isinstance(listing, dict) else None
+    return [t for t in terminals or [] if isinstance(t, dict)]
+
+
+def ancestor_pids():
+    """The pids from this process's parent up to init; stops on an unreadable entry or a loop."""
+    deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
+    pid, seen = os.getppid(), []
+    for _ in range(MAX_ANCESTOR_HOPS):
+        if pid <= 1 or pid in seen or time.monotonic() > deadline:
+            break
+        seen.append(pid)
+        entry = ps_entry(pid)
+        if not entry:
+            break
+        pid = entry[0]
+    return seen
+
+
+def caller_identity(env, info):
+    """Who is calling, and whether the process ancestry proves it. `verified` is true only when an
+    ancestor is the root process of a live hc terminal: that terminal's parent (from hc, not the
+    environment) says worker or lead, and it wins over missing markers. A marker in the environment
+    is inherited and forgeable, so it gives a kind at most, never `verified`."""
+    ancestors = ancestor_pids()
+    if ancestors:
+        by_pid = {t.get("pid"): t for t in hc_terminals() if isinstance(t.get("pid"), int)}
+        for pid in ancestors:  # nearest first
+            terminal = by_pid.get(pid)
+            if terminal:
+                kind = "lead" if terminal.get("parent") is None else "worker"
+                return {"kind": kind, "verified": True}
+    if env.get("HC_TERMINAL_ID") and info.get("role") in ("lead", "worker"):
+        return {"kind": info["role"], "verified": False}
+    return {"kind": "unknown", "verified": False}
+
+
 def format_line(info):
     return " ".join("%s=%s" % (key, info[key]) for key in FIELDS if key in info)
 
@@ -653,6 +696,8 @@ def list_children(runtime, env):
 
 def cmd_resolve(args):
     info = resolve(os.environ, args.cli)
+    if args.json:
+        info = dict(info, caller=caller_identity(os.environ, info))
     print(json.dumps(info) if args.json else format_line(info))
     return 0
 
