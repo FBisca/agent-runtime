@@ -1,6 +1,6 @@
 """Versioned same-user dispatch store. No terminal text is a delivery mechanism.
 
-Limits: 32 registered workers per team, 32 messages / 128 KiB per compact JSON
+Limits: 32 active workers per team, 32 messages / 128 KiB per compact JSON
 message array (UTF-8, ensure_ascii=True, separators=(',', ':'), including brackets
 and commas), 65536 bytes per report (UTF-8 and JSON-encoded text). Oversize publication
 fails explicitly; reads never truncate or acknowledge implicitly. A receipt names
@@ -22,6 +22,7 @@ from . import dispatch_events
 from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
 
 MAX_WORKERS = MAX_MESSAGES = 32
+TEAM_LIMIT = "team limit is 32 active workers: stop an active worker, then retry"
 MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
 # D22: the canonical compact-JSON result (every user-visible field, before the host's text +
 # structuredContent copies) stays under MAX_RESPONSE_BYTES. A base payload (tool result before an
@@ -258,15 +259,22 @@ class Store:
     def register(self, team, name, task_id=None, transfer=False):
         with self.transaction() as db:
             row = db.execute(
-                "SELECT id FROM workers WHERE team=? AND name=?", (team, name)
+                "SELECT id,active FROM workers WHERE team=? AND name=?", (team, name)
             ).fetchone()
             worker = row[0] if row else uid()
-            if not row:
-                count = db.execute("SELECT COUNT(*) FROM workers WHERE team=?", (team,)).fetchone()[
-                    0
-                ]
+            if not row or not row[1]:
+                # The slot is reserved here, in the transaction that registers the assignment, so
+                # concurrent registrations cannot pass the check together. An active worker already
+                # holds its slot. A stopped worker holds one only while an assignment is pending
+                # (the reservation); _bind activates it, and a failed launch leaves it stopped.
+                count = db.execute(
+                    "SELECT COUNT(*) FROM workers w WHERE w.team=? AND w.id<>? AND (w.active=1 OR EXISTS "
+                    "(SELECT 1 FROM assignments a WHERE a.worker=w.id AND a.state='pending'))",
+                    (team, worker),
+                ).fetchone()[0]
                 if count >= MAX_WORKERS:
-                    raise StoreError("team limit is 32 registered workers")
+                    raise StoreError(TEAM_LIMIT)
+            if not row:
                 db.execute("INSERT INTO workers VALUES (?,?,?,NULL,1)", (worker, team, name))
             assignment = uid()
             db.execute(
