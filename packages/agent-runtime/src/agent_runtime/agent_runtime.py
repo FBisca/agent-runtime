@@ -271,29 +271,24 @@ def ancestor_pids():
 
 def caller_identity(env, info):
     """Who is calling, and whether the process ancestry proves it. `verified` is true only when an
-    ancestor is the root process of a live hc terminal: that terminal's parent (from hc, not the
-    environment) says worker or lead, and it wins over missing markers. A marker in the environment
+    ancestor is the root process of a live hc terminal (the nearest one, when several are): that
+    terminal's parent (from hc, not the environment) says worker or lead, and it wins over missing
+    markers; a marker naming a terminal is never trusted, live or finished. A marker in the environment
     is inherited and forgeable, so it gives a kind at most, never `verified`."""
     ancestors = ancestor_pids()
-    if ancestors:
-        own = env.get("HC_TERMINAL_ID")
-        # the env id is only a lead to check: it counts when its pid is really an ancestor
-        candidates = [own] if own else []
-        scanned = False
-        while True:
-            for address in candidates:
-                try:
-                    reply = hc_get(address)
-                except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
-                    continue
-                pid = reply.get("pid") if isinstance(reply, dict) else None
-                if isinstance(pid, int) and not isinstance(pid, bool) and pid in ancestors:
-                    kind = "lead" if reply.get("parent") is None else "worker"
-                    return {"kind": kind, "verified": True}
-            if scanned:
-                break
-            scanned = True
-            candidates = [a for a in live_terminal_addresses() if a != own]
+    nearest = None  # (hops from this process, kind): the closest live terminal root wins
+    for address in live_terminal_addresses() if ancestors else []:
+        try:
+            reply = hc_get(address)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+            continue
+        pid = reply.get("pid") if isinstance(reply, dict) else None
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid in ancestors:
+            hops = ancestors.index(pid)
+            if nearest is None or hops < nearest[0]:
+                nearest = (hops, "lead" if reply.get("parent") is None else "worker")
+    if nearest:
+        return {"kind": nearest[1], "verified": True}
     if env.get("HC_TERMINAL_ID") and info.get("role") in ("lead", "worker"):
         return {"kind": info["role"], "verified": False}
     return {"kind": "unknown", "verified": False}

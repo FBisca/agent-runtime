@@ -140,7 +140,7 @@ class CallerIdentityTests(unittest.TestCase):
         return json.loads(buf.getvalue())["caller"]
 
     def test_S16_ancestry_in_a_child_terminal_is_a_verified_worker(self):
-        """agent-runtime/R177"""
+        """agent-runtime/R255"""
         self.assertEqual(
             self.caller({}, {"t1": {"pid": 40, "parent": "tX"}}),
             {"kind": "worker", "verified": True},
@@ -148,37 +148,55 @@ class CallerIdentityTests(unittest.TestCase):
         )
 
     def test_S16_ancestry_in_a_parentless_terminal_is_a_verified_lead(self):
-        """agent-runtime/R177"""
+        """agent-runtime/R255"""
         self.assertEqual(
             self.caller({}, {"t1": {"pid": 40, "parent": None}}), {"kind": "lead", "verified": True}
         )
 
     def test_S16_own_terminal_id_is_verified_when_its_pid_is_an_ancestor(self):
-        """agent-runtime/R177"""
+        """agent-runtime/R255"""
         terminals = {"t1": {"pid": 30, "parent": "tX"}}
         self.assertEqual(
             self.caller({"HC_TERMINAL_ID": "t1"}, terminals), {"kind": "worker", "verified": True}
         )
 
     def test_S16_worker_markers_alone_are_never_verified(self):
-        """agent-runtime/R177"""
+        """agent-runtime/R255"""
         terminals = {"t1": {"pid": 999, "parent": "tX"}}
         caller = self.caller({"HC_TERMINAL_ID": "t1"}, terminals)
         self.assertEqual(caller, {"kind": "worker", "verified": False})
 
     def test_S16_a_finished_terminal_with_an_ancestor_pid_never_verifies(self):
-        """agent-runtime/R177"""
-        terminals = {"t1": {"pid": 40, "parent": "tX", "state": "exited"}}
+        """agent-runtime/R255"""
+        terminals = {"t1": {"pid": 40, "parent": "tX", "state": "finished"}}
         self.assertEqual(self.caller({}, terminals), {"kind": "unknown", "verified": False})
 
+    def test_S16_a_marker_naming_a_finished_terminal_never_verifies(self):
+        """agent-runtime/R255"""
+        terminals = {"t1": {"pid": 30, "parent": "tX", "state": "finished"}}
+        self.assertEqual(
+            self.caller({"HC_TERMINAL_ID": "t1"}, terminals), {"kind": "worker", "verified": False}
+        )
+
+    def test_S16_the_nearest_live_ancestor_terminal_decides_the_kind(self):
+        """agent-runtime/R255"""
+        terminals = {
+            "far": {"pid": 30, "parent": None},
+            "near": {"pid": 40, "parent": "far"},
+        }
+        self.assertEqual(self.caller({}, terminals), {"kind": "worker", "verified": True})
+        self.assertEqual(
+            self.caller({"HC_TERMINAL_ID": "far"}, terminals), {"kind": "worker", "verified": True}
+        )
+
     def test_S16_no_marker_and_no_ancestry_is_unknown(self):
-        """agent-runtime/R177"""
+        """agent-runtime/R255"""
         self.assertEqual(self.caller({}, {}), {"kind": "unknown", "verified": False})
 
 
 class HookExceptionDocsTests(unittest.TestCase):
     def test_S18_agents_md_and_spec_name_the_one_hook_only_exception(self):
-        """agent-runtime/R176"""
+        """agent-runtime/R257"""
         root = Path(__file__).resolve().parents[1]
         for doc in (root / "AGENTS.md", root / "docs" / "specs" / "agent-runtime.md"):
             text = " ".join(doc.read_text().split())
