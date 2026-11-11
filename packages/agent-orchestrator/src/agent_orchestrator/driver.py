@@ -3538,14 +3538,28 @@ class Driver:
                         data["agents"].pop(name, None)
             raise
         assignment_id = assignment_of(result)
-        address = result.get("address") or result.get("assignment_id") or name
+        returned = result.get("address")
+        if not returned and how == "attach":
+            returned = (known or {}).get(
+                "address"
+            )  # the same terminal, resumed: its address has not changed
         with self.book() as data:
+            # Only what the runtime returned is an address; a reader must never take a fallback for a terminal.
             data["agents"][name].update(
-                assignment_id=assignment_id, address=address, bound_at=now(), how=how
+                assignment_id=assignment_id, address=returned, bound_at=now(), how=how
             )
         self.touched.add(name)
         self.log("agent", name=name, role=role, unit=unit, how=how, assignment_id=assignment_id)
-        return address, assignment_id
+        # What a task binds under (`runtime_id`) must be set, so it falls back to the assignment or the name; that
+        # key is not an address and the ledger does not call it one.
+        return returned or result.get("assignment_id") or name, assignment_id
+
+    @staticmethod
+    def keep_address(data, task_id, name):
+        """Record on the task the address the runtime returned for the agent `name` (None when it returned none)."""
+        data["tasks"][task_id]["address"] = ((data.get("agents") or {}).get(name) or {}).get(
+            "address"
+        )
 
     def swap_due(self, name, role, unit, assignment_id):
         """True when the agent is below the context reserve, judged from the usage the runtime last reported for its
@@ -3721,6 +3735,7 @@ class Driver:
             with self.book() as data:
                 bind(data, new_id, str(runtime_id))
                 data["tasks"][new_id]["assignment_id"] = assignment_id
+                self.keep_address(data, new_id, successor["worker"])
 
     def hand_over(self, task, successor, task_md, text, fresh=False, answer=None):
         name, unit = successor["worker"], successor["unit"]
@@ -3755,6 +3770,8 @@ class Driver:
             with self.book() as data:
                 if name in (data.get("agents") or {}):
                     data["agents"][name]["assignment_id"] = assignment_id
+                    if resumed.get("address"):
+                        data["agents"][name]["address"] = resumed["address"]
             self.touched.add(name)
             self.log(
                 "agent",
@@ -3865,6 +3882,7 @@ class Driver:
                 answered_at=now(),
                 updated_at=now(),
             )
+            self.keep_address(data, task_id, packet["worker"])
         self.replay_held(task, task_id)
         event("answer for %s: %s resumed on the same task id" % (task_id, packet["worker"]))
 
@@ -4859,6 +4877,7 @@ class Driver:
         with self.book() as data:
             bind(data, ARCHIVE, str(address))
             data["tasks"][ARCHIVE]["assignment_id"] = assignment_id
+            self.keep_address(data, ARCHIVE, name)
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
 
@@ -5529,6 +5548,7 @@ class Driver:
         with self.book() as data:
             bind(data, task_id, str(runtime_id))
             data["tasks"][task_id]["assignment_id"] = assignment_id
+            self.keep_address(data, task_id, name)
         if is_yaml(self.plan_path):
             self.write_status(ticket["#"], "IN PROGRESS")
         else:
@@ -5813,7 +5833,8 @@ def plan_status(args, model=None):
     else:
         repo = None
         plan = parse_plan(plan_path.read_text(encoding="utf-8"))
-        slug, ids = plan["slug"], [t["#"] for t in plan["tickets"]]
+        # A Markdown plan without a `Slug:` line is keyed by its file name, as discovery names it.
+        slug, ids = plan["slug"] or yaml_plan.slug_of(plan_path), [t["#"] for t in plan["tickets"]]
         statuses = {t["#"]: t["Status"] for t in plan["tickets"]}
         state, history = plan.get("status") or "DRAFT", []
     ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
@@ -6740,9 +6761,9 @@ def run_cli(argv=None):
         print(output if isinstance(output, str) else json.dumps(output, separators=(",", ":")))
         return 1 if isinstance(output, dict) and output.get("errors") else 0
     except workbench.WorkbenchError as error:
-        # The pane reads stdout: a refusal is one JSON object there too, and the reason once on stderr.
-        print(json.dumps(error.output, separators=(",", ":")))
-        print("workbench: %s" % error, file=sys.stderr)
+        # stdout holds a view or nothing: a refusal is one JSON object on stderr, so a reader never mistakes it for
+        # a partial view.
+        print(json.dumps(error.output, separators=(",", ":")), file=sys.stderr)
         return 2
     except PlanError as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
