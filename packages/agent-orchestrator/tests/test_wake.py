@@ -7,8 +7,9 @@ import time
 import unittest
 
 import pytest
+import yaml
 from agent_orchestrator import contracts
-from fixtures import DRIVER, assignment, load_script, plan_text, report_wait, resume_id, wait_result
+from fixtures import DRIVER, assignment, load_script, plan_data, report_wait, resume_id, wait_result
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -101,7 +102,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.assertEqual(
             len(self.calls("resume")), 2, "two warnings to the worker that announced the file"
         )
-        self.assert_request("report", "report.json")
+        self.assert_request("report", "report.json", whole=False)
 
     def test_S1_a_worker_whose_turn_ended_without_a_report_writes_an_idle_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S1
@@ -142,8 +143,8 @@ class RequestTests(WakeFixture, unittest.TestCase):
                     sys.executable,
                     "-c",
                     "import sys,shutil;shutil.copy(sys.argv[1], sys.argv[2])",
-                    str(self.plan),
-                    str(self.root / "plan-while-open.md"),
+                    str(self.state_dir / "demo.json"),
+                    str(self.root / "plan-while-open.json"),
                 ]
             ]
         )
@@ -151,7 +152,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(len(self.wake_lines("decision")), 1)  # polled again, still one wake
         self.assertIn(
-            "decision pending", (self.root / "plan-while-open.md").read_text(encoding="utf-8")
+            "decision pending", (self.root / "plan-while-open.json").read_text(encoding="utf-8")
         )
 
 
@@ -414,7 +415,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         resumes = self.calls("resume")
         self.assertEqual(len(resumes), 3)  # two fix rounds, then the answer
         self.assertIn("name the test S1", resumes[2]["args"]["task"])
-        self.assertIn("FAIL coverage: S1", (self.run_dir / "t1r2" / "answer.md").read_text())
+        self.assertIn("S1: test node", (self.run_dir / "t1r2" / "answer.md").read_text())
         self.assertNotIn("t1r3", self.ledger()["tasks"])
         self.assertEqual(self.task("t1r2")["status"], "ACTIVE")
 
@@ -463,7 +464,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
 class QueueTests(WakeFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1", "T3")), encoding="utf-8")
+        self.set_plan(("T1", "T3"))
 
     def test_S4_other_units_keep_dispatching_and_gating_while_one_request_is_open(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S4"""
@@ -605,42 +606,9 @@ class PrReadyTests(WakeFixture, unittest.TestCase):
 
 
 class PlanInvalidTests(WakeFixture, unittest.TestCase):
-    def test_S31_a_broken_plan_wakes_the_lead_once_per_distinct_error(self):
+    def test_S31_a_plan_that_is_unapproved_before_the_run_starts_still_exits_2(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S31"""
-        self.plan.write_text(plan_text(rows=("T1", "T2")), encoding="utf-8")
-        first = self.worker_done(tests=True)
-        first["replace"] = [[str(self.plan), "| S2 | T1 |", "| S2 | T98 |"]]
-        second = self.reviewer_done()
-        second["replace"] = [[str(self.plan), "| S2 | T98 |", "| S2 | T99 |"]]
-        self.waits([first, second])
-        self.run_driver()
-        lines = self.wake_lines("plan-invalid")
-        self.assertEqual(len(lines), 2, lines)
-        self.assertIn("T98", lines[0])
-        self.assertIn("T99", lines[1])
-        for line in lines:
-            self.assertTrue(line.startswith("plan-invalid plan: "), line)
-            self.assertTrue(line.endswith(" -> %s" % self.plan), line)
-        self.assertEqual(
-            self.task()["status"], "COMPLETE"
-        )  # the unit went on to merge on the last valid plan
-
-    def test_S31_a_cycle_in_blocked_by_is_a_plan_error(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S31"""
-        spec = load_script()
-        text = (
-            plan_text(rows=("T1", "T3"))
-            .replace("| S1 | none |", "| S1 | T3 |", 1)
-            .replace("| S3 | none |", "| S3 | T1 |", 1)
-        )
-        with self.assertRaises(spec.PlanError) as caught:
-            spec.check_plan(spec.parse_plan(text))
-        self.assertIn("cycle", str(caught.exception))
-        self.assertIn("T1", str(caught.exception))
-
-    def test_S31_a_plan_that_is_invalid_before_the_run_starts_still_exits_2(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S31"""
-        self.plan.write_text(plan_text(status="DRAFT"), encoding="utf-8")
+        self.plan.write_text(yaml.safe_dump(plan_data(), sort_keys=False), encoding="utf-8")
         self.assertEqual(self.run_driver(expect=2).returncode, 2)
         self.assertEqual(self.wakes(), [])
 

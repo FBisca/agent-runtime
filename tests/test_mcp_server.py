@@ -1,13 +1,19 @@
 """MCP server driven over stdio with a fake hc on PATH, and plugin wiring checks."""
 
+import gc
+import io
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+import weakref
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -351,6 +357,168 @@ class ToolCallTests(ServerCase):
         session.handshake()
         reply = session.send("tools/call", {"name": "bogus", "arguments": {}})
         self.assertEqual(reply["error"]["code"], -32602)
+
+
+class InProcessServer:
+    """`serve` on a queue-fed stdin in this process, with `hc_tools.call` replaced by a fake whose
+    calls block until released, so the number of calls in flight is under the test's control."""
+
+    def __init__(self):
+        sys.path.insert(0, str(RUNTIME_SRC))
+        from agent_runtime import mcp_server
+
+        self.mcp_server = mcp_server
+        self.lines = queue.Queue()
+        self.out = io.StringIO()
+        self.release = threading.Event()
+        self.started = []
+        self.threads = weakref.WeakSet()
+        self.patches = []
+
+        def fake_call(name, arguments, env, ctx):
+            self.started.append(name)
+            if name != "status":
+                self.release.wait(10)
+            return {"content": [{"type": "text", "text": "ok"}], "isError": False}
+
+        real_thread = threading.Thread
+        tracked = self.threads
+
+        class Tracked(real_thread):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                tracked.add(self)
+
+        self.patches = [
+            mock.patch.object(mcp_server.hc_tools, "call", fake_call),
+            mock.patch.object(mcp_server.threading, "Thread", Tracked),
+        ]
+        for patch in self.patches:
+            patch.start()
+        feed = iter(self.lines.get, None)
+        self.server = real_thread(target=mcp_server.serve, args=(feed, self.out, {}), daemon=True)
+        self.server.start()
+
+    def send(self, message):
+        self.lines.put(json.dumps(message) + "\n")
+
+    def call(self, request_id, name):
+        self.send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": {}},
+            }
+        )
+
+    def replies(self):
+        return [json.loads(line) for line in self.out.getvalue().splitlines()]
+
+    def reply_for(self, request_id, timeout=5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for reply in self.replies():
+                if reply.get("id") == request_id:
+                    return reply
+            time.sleep(0.01)
+        raise AssertionError("no reply for %r in %s" % (request_id, self.out.getvalue()))
+
+    def wait_started(self, count, timeout=5):
+        deadline = time.time() + timeout
+        while len(self.started) < count and time.time() < deadline:
+            time.sleep(0.01)
+        self.assert_started = len(self.started) >= count
+        if not self.assert_started:
+            raise AssertionError("only %d calls started" % len(self.started))
+
+    def close(self):
+        self.release.set()
+        self.lines.put(None)
+        self.server.join(15)
+        for patch in self.patches:
+            patch.stop()
+
+
+class CallLimitTests(unittest.TestCase):
+    def setUp(self):
+        self.server = InProcessServer()
+        self.addCleanup(self.server.close)
+
+    def test_S9_a_non_scalar_id_is_invalid_and_the_server_keeps_serving(self):
+        """agent-runtime/R248"""
+        for bad in ([1], {"a": 1}, True, False):
+            self.server.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": bad,
+                    "method": "tools/call",
+                    "params": {"name": "status", "arguments": {}},
+                }
+            )
+        # a cancellation naming an unhashable request id is a notification: no reply, no crash
+        self.server.send(
+            {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": [1]}}
+        )
+        self.server.send({"jsonrpc": "2.0", "id": 7, "method": "ping"})
+        self.assertEqual(self.server.reply_for(7)["result"], {})
+        replies = self.server.replies()
+        errors = [r for r in replies if "error" in r]
+        self.assertEqual(len(errors), 4)
+        for reply in errors:
+            self.assertEqual(reply["error"]["code"], -32600)
+            self.assertIsNone(reply["id"])
+        self.assertEqual(len(replies), 5)
+        self.server.call("after", "status")
+        self.assertFalse(self.server.reply_for("after")["result"]["isError"])
+
+    def test_S10_finished_call_threads_are_not_retained(self):
+        """agent-runtime/R249"""
+        for number in range(40):
+            self.server.call(number, "status")
+        for number in range(40):
+            self.server.reply_for(number)
+        self.server.send({"jsonrpc": "2.0", "id": "p", "method": "ping"})
+        self.server.reply_for("p")
+        deadline = time.time() + 5
+        held = [None]
+        while held and time.time() < deadline:
+            gc.collect()
+            held = list(self.server.threads)
+            time.sleep(0.05)
+        self.assertEqual(len(held), 0, "finished call threads are still referenced")
+
+    def test_S11_the_wait_and_total_caps_refuse_at_once_and_retryably(self):
+        """agent-runtime/R250"""
+        for number in range(56):
+            self.server.call("w%d" % number, "wait")
+        self.server.wait_started(56)
+        self.server.call("w-extra", "wait")
+        refusal = self.server.reply_for("w-extra", timeout=2)
+        self.assertTrue(refusal["result"]["isError"])
+        self.assertIn("retry", refusal["result"]["content"][0]["text"])
+        for number in range(8):
+            self.server.call("s%d" % number, "task")
+        self.server.wait_started(64)
+        self.server.call("s-extra", "task")
+        refusal = self.server.reply_for("s-extra", timeout=2)
+        self.assertTrue(refusal["result"]["isError"])
+        self.assertIn("retry", refusal["result"]["content"][0]["text"])
+        self.assertEqual(len(self.server.started), 64, "a refused call never started")
+        # ping and cancellation stay outside the cap
+        self.server.send({"jsonrpc": "2.0", "id": "p", "method": "ping"})
+        self.assertEqual(self.server.reply_for("p", timeout=2)["result"], {})
+        self.server.send(
+            {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "w0"}}
+        )
+        # finishing calls frees slots: a later call is served
+        self.server.release.set()
+        self.server.reply_for("w1")
+        deadline = time.time() + 5
+        while time.time() < deadline and len(self.server.replies()) < 64 + 2:
+            time.sleep(0.01)
+        self.server.call("again", "wait")
+        self.assertFalse(self.server.reply_for("again")["result"]["isError"])
 
 
 class WiringTests(unittest.TestCase):

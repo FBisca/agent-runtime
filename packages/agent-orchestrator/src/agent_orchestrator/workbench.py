@@ -7,9 +7,13 @@ an `error` that names its kind and the way out. A count, token or duration nothi
 The driver owns the ledger and the state layout, and imports this module; the helpers it owns are imported late.
 """
 
+import hashlib
+import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
+from . import evidence, verify
 from . import plan as yaml_plan
 from .plan import DiscoveryError, PlanError
 
@@ -109,7 +113,10 @@ def listing(entry, repo, args):
         kind = error.kind if isinstance(error, WorkbenchError) else "invalid_plan"
         shown.update(state=None, tickets=None, error={"kind": kind, "message": str(error)})
         return shown
-    shown.update(slug=status["slug"], state=status["state"], tickets=counts(status["tickets"]))
+    shown.update(slug=status["slug"], state=status["state"])
+    # A Markdown plan whose table lists no ticket has nothing to count: no counts, not a zero.
+    if status["tickets"] or not markdown:
+        shown["tickets"] = counts(status["tickets"])
     return shown
 
 
@@ -147,6 +154,229 @@ def layers_of(tickets):
     for ticket_id in blockers:
         layer(ticket_id)
     return layers
+
+
+# The letter after a unit's id in an attempt's task id says why the attempt exists (driver: fix `r`, retry `d`,
+# orphan `o`, reopen `p`, answer `a`); the unit's own id is its first worker.
+ATTEMPT_KINDS = {
+    "": "worker",
+    "r": "fix",
+    "d": "retry",
+    "o": "orphan",
+    "p": "reopen",
+    "a": "answer",
+}
+
+
+def kind_of(task_id, unit):
+    match = re.fullmatch(r"%s([a-z]?)\d*" % re.escape(unit), task_id.lower())
+    return ATTEMPT_KINDS.get(match.group(1), "other") if match else "other"
+
+
+def fallbacks_of(data):
+    """The strings the driver wrote as an agent's address when the runtime returned none: an agent's name or an
+    assignment id (of any attempt). None of them is a terminal, so a reader must not offer to open one."""
+    names = set()
+    for name, agent in (data.get("agents") or {}).items():
+        names.add(name)
+        names.add((agent or {}).get("assignment_id"))
+    for task in (data.get("tasks") or {}).values():
+        names.add(task.get("assignment_id"))
+        names.add((task.get("packet") or {}).get("worker"))
+        for part in ("review", "decision", "answers"):
+            if isinstance(task.get(part), dict):
+                names.add(task[part].get("assignment_id"))
+    names.discard(None)
+    return names
+
+
+def address_of(task, fallbacks):
+    """The address the runtime returned for this attempt, else None.
+
+    A ledger written since the driver records only what the runtime returned holds it as `address`. An older one
+    holds the binding key `runtime_id`, which is the address or, when the runtime returned none, the fallback the
+    driver wrote. Nothing else (a terminal name, another attempt, a timestamp) is ever read as an address."""
+    bound = task.get("runtime_id")
+    found = task["address"] if "address" in task else bound
+    # A binding key that is the fallback wins over a recorded address: the two disagree, so nothing is known.
+    if not isinstance(found, str) or not found.strip() or bound in fallbacks:
+        return None
+    return found
+
+
+def claimed_of(task):
+    """Whether the worker claimed completion: its own report said complete, met its acceptance and passed every
+    check. The ledger keeps the driver's checkpoint of that report (PARTIAL until the merge), so the worker's file is
+    read for the claim and nothing of it is printed; without the file the ledger's copy is the claim.
+
+    A claim is the worker's word, not evidence: `verified` is what says the gates passed."""
+    path = task.get("report_path")
+    if isinstance(path, str):
+        try:
+            report = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            report = None
+        if isinstance(report, dict) and report.get("status"):
+            return evidence.claimed({"report": report})
+    return evidence.claimed(task)
+
+
+def attempts_of(ticket_id, data):
+    """Every ledger task of the ticket, oldest first (start time, then ledger order), the newest marked latest."""
+    unit = ticket_id.lower()
+    fallbacks = fallbacks_of(data)
+    mine = [
+        (task.get("started_at") or "", index, task_id, task)
+        for index, (task_id, task) in enumerate((data.get("tasks") or {}).items())
+        if (task.get("packet") or {}).get("unit") == unit
+    ]
+    shown = []
+    for _, _, task_id, task in sorted(mine, key=lambda item: item[:2]):
+        finished = task.get("finished_at")
+        if not finished and task.get("status") in evidence.TERMINAL:
+            finished = task.get("updated_at")
+        shown.append(
+            {
+                "task_id": task_id,
+                "kind": kind_of(task_id, unit),
+                "status": task.get("status"),
+                "started_at": task.get("started_at"),
+                "finished_at": finished,
+                "assignment_id": task.get("assignment_id"),
+                "address": address_of(task, fallbacks),
+                "claimed": claimed_of(task),
+                "latest": False,
+            }
+        )
+    if shown:
+        shown[-1]["latest"] = True
+    return shown
+
+
+def receipt_reason(stem, data, receipts_dir):
+    """Why a receipt is not a pass, in its own words: its label (else its reason). None when the receipt cannot be
+    read; its log and detail are never read."""
+    path = Path(receipts_dir) / (stem + ".json")
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(raw).hexdigest() != (data.get("receipts") or {}).get(stem):
+        return "%s.json no longer matches the sha256 the ledger holds" % stem
+    try:
+        receipt = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(receipt, dict) or receipt.get("result") == "PASS":
+        return None
+    return receipt.get("label") or receipt.get("reason")
+
+
+def gates_of(ticket_id, source, data, receipts_dir):
+    """The evidence that ran at the ticket's gate, in plan order: scenario, phase, result and the receipt's reason."""
+    ran = (data.get("ticket_evidence") or {}).get(ticket_id) or {}
+    order = [s.id for s in source.scenarios]
+    wanted = sorted(ran, key=lambda sid: (order.index(sid) if sid in order else len(order), sid))
+    return [
+        {
+            "scenario": sid,
+            "phase": "ticket",
+            "result": ran[sid].get("result"),
+            "reason": receipt_reason(ran[sid].get("receipt") or "", data, receipts_dir),
+        }
+        for sid in wanted
+    ]
+
+
+def problem_of(data, digest, tree_of):
+    """(freshness, why) of the integration run itself, else None: what `verify` checks before it reads a receipt."""
+    pin = data.get("integration") or {}
+    if not pin:
+        return "missing", "the plan has not been verified on a pinned default-branch commit"
+    if pin.get("digest") != digest:
+        return "stale", "the integration run was for another approval digest"
+    actual = tree_of(pin.get("sha"))
+    if actual != pin.get("tree"):
+        return "stale", "the pinned commit holds another tree than the recorded one"
+    return None
+
+
+def receipt_freshness(data, sid, phase, receipts_dir, digest, tree):
+    """((freshness, why), receipt) of the newest receipt of one item and phase, by `verify`'s own reading: `fresh`
+    counts for this digest and tree, `missing` is no receipt (or no file), `stale` is one that does not count."""
+    stems = verify.receipt_stems(data, sid, phase)
+    if not stems:
+        return ("missing", "no %s receipt" % phase), None
+    if not (Path(receipts_dir) / (stems[-1] + ".json")).is_file():
+        return ("missing", "its receipt %s.json is missing" % stems[-1]), None
+    receipt, why = verify.read_receipt(data, stems[-1], receipts_dir, digest, tree)
+    if receipt is None:
+        return ("stale", why), None
+    return ("fresh", None), receipt
+
+
+def item_freshness(source, scenario, data, receipts_dir, digest, tree_of):
+    """`fresh`, `missing` or `stale` for one outcome item, and why: which receipt `verify` counts for it."""
+    problem = problem_of(data, digest, tree_of)
+    record = (data.get("acceptance") or {}).get(scenario.id) or {}
+    if scenario.evidence.human:
+        if problem:
+            return problem
+        if verify.holds_acceptance(record, digest, (data.get("integration") or {}).get("tree")):
+            return "fresh", None
+        if record:
+            return "stale", "the acceptance was given for another approval digest or tree"
+        return "missing", "no person has accepted it yet"
+    if problem:
+        return problem
+    pin = data.get("integration") or {}
+    found, receipt = receipt_freshness(
+        data, scenario.id, "integration", receipts_dir, digest, pin.get("tree")
+    )
+    archived = (data.get("plan") or {}).get("state") == "ARCHIVED"
+    if found[0] != "fresh" or not archived or scenario.id not in source.outcome:
+        return found
+    if receipt.get("result") != "PASS":
+        return found
+    # An archived plan's passing item also needs a receipt for the archive head.
+    head = data.get("archive") or {}
+    if not head or head.get("digest") != digest:
+        return "stale", "the archive head was not verified for this approval digest"
+    return receipt_freshness(data, scenario.id, "archive", receipts_dir, digest, head.get("tree"))[
+        0
+    ]
+
+
+def outcome_of(source, repo, data, receipts_dir):
+    """The plan's outcome as `verify <plan>` computes it (state and each item's state and reason) from the
+    receipts and the ledger, with each item's freshness. Acceptance is verify's word, never inferred from tickets.
+    None for a plan that was never approved: it has no contract to verify."""
+    from . import driver
+
+    approval = source.approval
+    if approval is None:
+        return None
+    tree_of = driver.tree_in(repo)
+    result = driver.acceptance(source, data, receipts_dir, digest=approval.digest, tree_of=tree_of)
+    items = []
+    for item in result["items"]:
+        scenario = verify.scenario_of(source, item["scenario"])
+        freshness, _ = item_freshness(
+            source, scenario, data, receipts_dir, approval.digest, tree_of
+        )
+        items.append(
+            {
+                "scenario": item["scenario"],
+                "state": item["state"],
+                "freshness": freshness,
+                "reason": item["reason"],
+            }
+        )
+    return {
+        "state": result["state"],
+        "integration": (data.get("integration") or {}).get("sha"),
+        "items": items,
+    }
 
 
 def revision_of(model, authored, path, repo, args):
@@ -241,10 +471,17 @@ def plan(args):
             path=str(path),
         ) from None
     known = {t["id"]: t for t in status["tickets"]}
+    ledger_path = Path(status["ledger"])
+    data = driver.read_ledger_file(ledger_path) if ledger_path.is_file() else {}
+    receipts_dir = Path(status["run_dir"]) / "receipts"
+    unverified = data.get("unverified") or {}
     layers = layers_of(source.tickets)
     tickets = []
     for index, ticket in enumerate(source.tickets):
         ledger = known.get(ticket.id) or {}
+        state = ledger.get("state", "TO-DO")
+        gates = gates_of(ticket.id, source, data, receipts_dir)
+        flagged = ticket.id in unverified
         tickets.append(
             (
                 layers[ticket.id],
@@ -260,9 +497,18 @@ def plan(args):
                     "difficulty": ticket.difficulty,
                     "risk": list(ticket.risk),
                     "paths": list(ticket.paths),
-                    "state": ledger.get("state", "TO-DO"),
+                    "state": state,
                     "reason": ledger.get("reason"),
                     "pr": ledger.get("pr"),
+                    # Verified is the evidence's word, not the worker's: complete, merged past nothing, every gate
+                    # that ran passed.
+                    "verified": state == "COMPLETE"
+                    and not flagged
+                    and all(gate["result"] == "PASS" for gate in gates),
+                    "unverified": flagged,
+                    "unverified_reason": (unverified.get(ticket.id) or {}).get("reason"),
+                    "attempts": attempts_of(ticket.id, data),
+                    "gates": gates,
                 },
             )
         )
@@ -279,6 +525,7 @@ def plan(args):
         "revision": revision,
         "counts": counts(shown),
         "tickets": shown,
+        "outcome": outcome_of(source, repo, data, receipts_dir),
     }
 
 

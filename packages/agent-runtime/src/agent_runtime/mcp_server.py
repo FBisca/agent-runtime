@@ -181,11 +181,20 @@ def rpc_error(request_id, code, message):
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
+def valid_id(request_id):
+    """A JSON-RPC id is a string, a number or null; an array, object or boolean is not an id."""
+    return request_id is None or (
+        isinstance(request_id, (str, int, float)) and not isinstance(request_id, bool)
+    )
+
+
 def handle(message, env):
     """Reply dict for a request, None for notifications and stray responses."""
     if not isinstance(message, dict):
         return rpc_error(None, -32600, "invalid request")
     method, request_id = message.get("method"), message.get("id")
+    if not valid_id(request_id):
+        return rpc_error(None, -32600, "invalid request: id must be a string or a number")
     if not isinstance(method, str):
         if "result" in message or "error" in message:
             return None
@@ -242,24 +251,56 @@ def dispatch(method, request_id, params, env):
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
-def start_call(message, env, reply, calls, session):
-    """Run one tools/call on its own thread so waits never block ping or cancellation."""
+MAX_CALLS = 64  # live tools/call threads of one server process
+MAX_WAITS = 56  # of those, the waits: the other slots stay free for non-wait tools
+
+
+def busy(request_id, reason):
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": tool_result("server busy: %s; retry shortly" % reason, True),
+    }
+
+
+def start_call(message, env, reply, calls, session, live):
+    """Run one tools/call on its own thread so waits never block ping or cancellation.
+
+    `live` holds the threads in flight and the waits among them; a call over the cap is refused at
+    once, never queued, because a queued wait would hold its caller's turn with no reply.
+    """
     request_id = message["id"]
+    params = message.get("params")
+    is_wait = isinstance(params, dict) and params.get("name") == "wait"
+    with live["lock"]:
+        if len(live["threads"]) >= MAX_CALLS:
+            refusal = "%d calls are in flight" % MAX_CALLS
+        elif is_wait and live["waits"] >= MAX_WAITS:
+            refusal = "%d waits are in flight" % MAX_WAITS
+        else:
+            refusal = None
+            live["waits"] += is_wait
+    if refusal:
+        reply(busy(request_id, refusal))
+        return
     ctx = hc_tools.Context(session)  # the session's state is shared by every call of this process
     calls[request_id] = ctx
 
     def work():
         try:
-            params = message.get("params")
             outcome = hc_tools_dispatch(message, params, env, ctx)
         finally:
             calls.pop(request_id, None)
+            with live["lock"]:
+                live["threads"].discard(threading.current_thread())
+                live["waits"] -= is_wait
         if outcome is not None and not ctx.cancelled.is_set():
             reply(outcome)
 
     thread = threading.Thread(target=work, daemon=True)
+    with live["lock"]:
+        live["threads"].add(thread)
     thread.start()
-    return thread
 
 
 def hc_tools_dispatch(message, params, env, ctx):
@@ -284,7 +325,8 @@ def serve(stdin=None, stdout=None, env=None):
     )
     stdout = stdout or sys.stdout
     env = dict(os.environ if env is None else env)
-    lock, calls, threads = threading.Lock(), {}, []
+    lock, calls = threading.Lock(), {}
+    live = {"lock": threading.Lock(), "threads": set(), "waits": 0}
     session = {}  # what one server process shares: the session's identity is resolved once
 
     def reply(payload):
@@ -307,19 +349,27 @@ def serve(stdin=None, stdout=None, env=None):
             and "id" not in message
         ):
             params = message.get("params")
-            ctx = calls.get(params.get("requestId")) if isinstance(params, dict) else None
+            asked = params.get("requestId") if isinstance(params, dict) else None
+            ctx = calls.get(asked) if isinstance(asked, (str, int)) else None  # unhashable: no call
             if ctx:
                 ctx.cancel()
             continue
-        if isinstance(message, dict) and message.get("method") == "tools/call" and "id" in message:
-            threads.append(start_call(message, env, reply, calls, session))
+        if (
+            isinstance(message, dict)
+            and message.get("method") == "tools/call"
+            and "id" in message
+            and valid_id(message["id"])
+        ):
+            start_call(message, env, reply, calls, session, live)
             continue
         outcome = handle(message, env)
         if outcome is not None:
             reply(outcome)
     for ctx in list(calls.values()):
         ctx.cancel()
-    for thread in threads:
+    with live["lock"]:
+        pending = list(live["threads"])
+    for thread in pending:
         thread.join(timeout=10)
     return 0
 

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -41,6 +42,7 @@ def contract():
 class PlanTests(RunFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
+        shutil.rmtree(self.state_dir)  # the fixture's own approval is not this test's
         self.plan = self.plan.with_suffix(".yaml")
         self.oracles = self.plan.with_name("demo.oracle")
         self.oracles.mkdir()
@@ -194,6 +196,24 @@ class PlanTests(RunFixture, unittest.TestCase):
         (self.repo / "x.py").write_text("occupied")
         data["scenarios"][0]["evidence"].update(oracle=["x.py.oracle"], negative=None, place=".")
         self.write(data)
+        self.assertIn("already exists", self.command("check")[1])
+
+    def test_S24_an_archived_plan_whose_oracle_was_promoted_still_checks(self):
+        (self.oracles / "x.py.oracle").write_text("def test_x():\n    assert True\n")
+        data = contract()
+        data["scenarios"][0]["evidence"] = {
+            "check": "true",
+            "baseline": "pass",
+            "oracle": ["x.py.oracle"],
+            "place": ".",
+        }
+        self.write(data)
+        self.approve()
+        # the archive promotes the oracle byte for byte onto its place
+        shutil.copyfile(self.oracles / "x.py.oracle", self.repo / "x.py")
+        code, message = self.command("check")
+        self.assertEqual(code, 0, message)
+        (self.repo / "x.py").write_text("edited after promotion")
         self.assertIn("already exists", self.command("check")[1])
 
     def test_S2_digest_snapshot_comments_and_idempotence(self):

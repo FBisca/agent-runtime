@@ -1,12 +1,13 @@
 """ensure_agent: every spawn records an intent first, and a restart re-attaches by the stable name."""
 
+import json
 import os
 import sys
 import unittest
 from unittest import mock
 
 import pytest
-from fixtures import RunFixture, load_script, plan_text, resume_id, spawn_id
+from fixtures import RunFixture, load_script, resume_id, spawn_id
 
 pytestmark = pytest.mark.integration
 
@@ -14,18 +15,19 @@ pytestmark = pytest.mark.integration
 class EnsureAgentTests(RunFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.plan.write_text(plan_text(rows=("T1",)), encoding="utf-8")
+        self.set_plan(("T1",))
 
     def crash_after_spawn(self, point="bind"):
         """Run the driver in this process and die right after the spawn: `assignment_of` is the first step after it
         (the intent is still open), `bind` the ledger bind of the task (the agent record is already written)."""
         spec = load_script()
+        self.alias_state(self.plan)
         env = dict(
             os.environ,
             PATH=str(self.home) + os.pathsep + os.environ["PATH"],
             FAKE_RUNTIME_HOME=str(self.home),
-            FAKE_PLAN=str(self.plan),
-            FAKE_EVENTS=str(self.state_dir / "demo" / "events.jsonl"),
+            FAKE_PLAN=str(self.state_dir / "demo.json"),
+            FAKE_EVENTS=str(self.run_dir_of() / "events.jsonl"),
         )
         argv = [
             "orchestrate",
@@ -89,9 +91,7 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
     def test_S33_a_run_that_finished_binding_never_spawns_a_second_agent_with_the_name(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S33"""
         self.run_driver()
-        self.plan.write_text(
-            self.plan.read_text(encoding="utf-8").replace("IN PROGRESS", "TO-DO"), encoding="utf-8"
-        )
+        self.reset_status("IN PROGRESS", "TO-DO")
         # exit 1: the first drive left the worker idle with no report, and the restart strands that unit
         # instead of finishing over it; the point here is that it spawns no second agent under the name
         self.run_driver(expect=1)
@@ -121,6 +121,47 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
             [c["args"]["name"] for c in fixture.calls("spawn")], ["demo-t1", "demo-t1"]
         )
         fixture.assert_intents_precede_spawns()
+
+
+class AddressRecordTests(RunFixture, unittest.TestCase):
+    """The driver records an address only when the runtime returned one (agent-workbench/S8)."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_plan(rows=("T1",))
+
+    def runtime_returns_no_address(self):
+        real = self.runtime_process
+
+        def answer(argv, timeout=None):
+            done = real(argv, timeout)
+            body = json.loads(done.stdout) if done.stdout else None
+            if isinstance(body, dict) and "address" in body:
+                body.pop("address")
+                return type(done)(argv, done.returncode, json.dumps(body))
+            return done
+
+        self.runtime_process = answer
+
+    def test_S8_the_address_the_runtime_returned_is_recorded_on_the_agent_and_its_task(self):
+        self.run_driver()
+        data = self.ledger()
+        self.assertEqual(data["agents"]["demo-t1"]["address"], "term-demo-t1")
+        self.assertEqual(data["tasks"]["t1"]["address"], "term-demo-t1")
+
+    def test_S8_a_runtime_that_returned_no_address_leaves_none_not_the_assignment_or_the_name(self):
+        self.runtime_returns_no_address()
+        self.run_driver()
+        data = self.ledger()
+        self.assertIsNone(data["agents"]["demo-t1"]["address"])
+        self.assertIsNone(data["tasks"]["t1"]["address"])
+        task = data["tasks"]["t1"]
+        self.assertEqual(
+            (task["status"], task["assignment_id"]),
+            ("ACTIVE", spawn_id("demo-t1")),
+            "the task is still bound, under a key that is not shown as an address",
+        )
+        self.assertNotIn(task["runtime_id"], ("", None))
 
 
 if __name__ == "__main__":

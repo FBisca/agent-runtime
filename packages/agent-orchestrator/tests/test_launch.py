@@ -7,7 +7,7 @@ import unittest
 
 import pytest
 import yaml
-from fixtures import DRIVER, RunFixture, plan_text
+from fixtures import DRIVER, RunFixture, plan_data
 
 pytestmark = pytest.mark.integration
 
@@ -72,7 +72,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
         if bad_parent:
             env["FAKE_HC_BAD_PARENT"] = "1"
         result = subprocess.run(
-            [*DRIVER, "launch", str(plan or self.plan)],
+            [*DRIVER, "launch", str(plan or self.plan), "--state-dir", str(self.state_dir)],
             capture_output=True,
             text=True,
             env=env,
@@ -134,9 +134,9 @@ class LaunchTests(RunFixture, unittest.TestCase):
 
     def test_S17_invalid_plan_exits_2_and_starts_nothing(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S17"""
-        self.plan.write_text(plan_text(status="DRAFT"), encoding="utf-8")
+        self.plan.write_text(yaml.safe_dump(plan_data(), sort_keys=False), encoding="utf-8")
         result = self.launch(expect=2)
-        self.assertIn("not APPROVED", result.stderr)
+        self.assertIn("plan approve", result.stderr)
         self.assertEqual([c for c in self.hc_calls() if c[0] == "run"], [])
 
     def test_S17_live_driver_is_not_started_twice(self):
@@ -197,7 +197,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_an_approved_yaml_plan_starts_run_in_its_named_pane(self):
-        """An approved YAML plan is launched like a Markdown one: one pane running `run <plan.yaml>`."""
+        """An approved YAML plan is launched in one pane running `run <plan.yaml>`."""
         self.yaml_plan()
         result = subprocess.run(
             [*DRIVER, "launch", str(self.plan), "--state-dir", str(self.state_dir)],

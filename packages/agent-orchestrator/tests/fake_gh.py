@@ -51,8 +51,12 @@ def process(argv, timeout=None):
     if events_path and os.path.exists(events_path):
         with open(events_path, encoding="utf-8") as stream:
             events = stream.read().splitlines()
-    with open(os.environ["FAKE_PLAN"], encoding="utf-8") as plan:
-        plan_text = plan.read()
+    # FAKE_PLAN names the file whose text each call records: the run's ledger, which owns the tickets' Status.
+    try:
+        with open(os.environ["FAKE_PLAN"], encoding="utf-8") as plan:
+            plan_text = plan.read()
+    except FileNotFoundError:
+        plan_text = ""
     with open(os.path.join(home, "gh.log"), "a", encoding="utf-8") as log:
         log.write(json.dumps({"argv": argv, "plan": plan_text, "events": events}) + "\n")
     match = re.search(r"/pull/(\d+)", argv[2] if len(argv) > 2 else "")

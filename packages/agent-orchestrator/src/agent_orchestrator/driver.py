@@ -534,17 +534,6 @@ def resolve_runtime():
         return {"runtime": "unknown"}
 
 
-TICKET_COLUMNS = (
-    "#",
-    "What it delivers",
-    "Satisfies",
-    "Blocked by",
-    "Paths",
-    "Size",
-    "Difficulty",
-    "Owner",
-    "Status",
-)
 MATRIX = {
     ("small", "simple"): ("small", "low"),
     ("small", "complex"): ("medium", "medium"),
@@ -578,55 +567,6 @@ def split_row(line):
     if not (line.startswith("|") and line.endswith("|")):
         return None
     return [cell.strip() for cell in line[1:-1].split("|")]
-
-
-def parse_plan(text):
-    """Slug, status, scenarios and the Tickets table (with each row's line index) of a plan."""
-    lines = text.splitlines()
-    head = text.split("\n## ", 1)[0]
-    slug = re.search(r"Slug:\s*`([^`]+)`", head)
-    status = re.search(r"Status:\s*([A-Za-z-]+)", head)
-    scenarios = {}
-    for line in lines:
-        found = re.match(r"- \*\*(S\d+[a-z]?)\*\*\s", line)
-        if found:
-            scenarios[found.group(1)] = line
-    tickets, columns = [], None
-    for index, line in enumerate(lines):
-        cells = split_row(line)
-        if cells is None:
-            columns = columns if tickets else None
-            continue
-        if columns is None:
-            if all(name in cells for name in TICKET_COLUMNS):
-                columns = {name: cells.index(name) for name in TICKET_COLUMNS}
-            continue
-        if set("".join(cells)) <= set("-: "):
-            continue
-        if len(cells) == len(columns) or len(cells) > max(columns.values()):
-            tickets.append({"line": index, **{name: cells[at] for name, at in columns.items()}})
-    caps, cap_problems = {}, []
-    for line in lines:
-        found = re.match(r"Max fix rounds:\s*(.*?)\s*$", line)
-        if not found:
-            continue
-        for entry in [e for e in found.group(1).split(",") if e.strip()] or [""]:
-            pair = re.fullmatch(r"\s*(T\d+)\s*=\s*(\d+)\s*", entry)
-            if pair:
-                caps[pair.group(1)] = int(pair.group(2))
-            else:
-                cap_problems.append(
-                    "`Max fix rounds:` entry %r is not T<n>=<whole number>" % entry.strip()
-                )
-    return {
-        "slug": slug.group(1) if slug else None,
-        "status": status.group(1).upper() if status else None,
-        "scenarios": scenarios,
-        "tickets": tickets,
-        "has_table": bool(tickets) or columns is not None,
-        "caps": caps,
-        "cap_problems": cap_problems,
-    }
 
 
 def is_done(ticket):
@@ -667,133 +607,6 @@ def satisfied(ticket, scenarios):
             ids = [token] if token in scenarios else []
         (found if ids else missing).extend(ids or [token])
     return found, missing
-
-
-def check_plan(plan):
-    """Every reason `run` cannot start, so one exit names them all."""
-    problems = []
-    if plan["status"] != "APPROVED":
-        problems.append("plan Status is %s, not APPROVED" % (plan["status"] or "missing"))
-    if not plan["slug"] or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", plan["slug"]):
-        problems.append("plan has no valid Slug (lowercase letters, digits, hyphens)")
-    if not plan["tickets"]:
-        problems.append(
-            "plan has no Tickets table with the fixed columns (" + " | ".join(TICKET_COLUMNS) + ")"
-        )
-    seen = set()
-    for ticket in plan["tickets"]:
-        name = ticket["#"]
-        if not re.fullmatch(r"T\d+", name) or name in seen:
-            problems.append("ticket id %r is not a unique T<n>" % name)
-        seen.add(name)
-    for ticket in plan["tickets"]:
-        if not is_agent(ticket) or is_done(ticket):
-            continue
-        name = ticket["#"]
-        found, missing = satisfied(ticket, plan["scenarios"])
-        if not found and not missing:
-            problems.append("%s: Satisfies is empty" % name)
-        problems += ["%s: scenario %s is not in the plan" % (name, sid) for sid in missing]
-        paths = [p.strip() for p in ticket["Paths"].split(",") if p.strip()]
-        if not paths:
-            problems.append("%s: Paths is empty" % name)
-        for path in paths:
-            if (
-                any(c in path for c in "*?[]")
-                or Path(path).is_absolute()
-                or ".." in Path(path).parts
-            ):
-                problems.append(
-                    "%s: Paths entry %r must be a literal path inside the repository" % (name, path)
-                )
-        for column, allowed in (
-            ("Size", ("small", "regular")),
-            ("Difficulty", ("simple", "complex")),
-        ):
-            value = ticket[column].strip()
-            if not value:
-                problems.append("%s: %s is empty" % (name, column))
-            elif value not in allowed + (("big",) if column == "Size" else ()):
-                problems.append(
-                    "%s: %s %r is not one of %s" % (name, column, value, ", ".join(allowed))
-                )
-        if ticket["Size"].strip() == "big":
-            problems.append(
-                "%s: a big ticket needs chunked dispatch, which `run` does not do; split it" % name
-            )
-        for blocker in re.split(r"[,\s]+", ticket["Blocked by"].strip()):
-            if (
-                blocker
-                and blocker.lower() != "none"
-                and blocker not in {t["#"] for t in plan["tickets"]}
-            ):
-                problems.append("%s: Blocked by %s is not a ticket" % (name, blocker))
-    problems += plan.get("cap_problems", [])
-    problems += [
-        "`Max fix rounds:` names %s, which is not a ticket" % name
-        for name in plan.get("caps", {})
-        if name not in seen
-    ]
-    problems += cycles(plan["tickets"])
-    if problems:
-        raise PlanError("; ".join(problems))
-
-
-def cycles(tickets):
-    """One problem per cycle in the Blocked by graph, named by the tickets on it."""
-    edges = {
-        t["#"]: [
-            b for b in re.split(r"[,\s]+", t["Blocked by"].strip()) if b and b.lower() != "none"
-        ]
-        for t in tickets
-    }
-    found, state = [], {}
-
-    def walk(name, path):
-        state[name] = "open"
-        for blocker in edges.get(name, []):
-            if state.get(blocker) == "open":
-                loop = (
-                    path[path.index(blocker) :] + [blocker] if blocker in path else [name, blocker]
-                )
-                found.append("Blocked by has a cycle: " + " -> ".join(loop))
-            elif blocker in edges and blocker not in state:
-                walk(blocker, path + [blocker])
-        state[name] = "done"
-
-    for name in edges:
-        if name not in state:
-            walk(name, [name])
-    return found
-
-
-def set_status(plan_path, ticket_id, status):
-    """Rewrite one ticket row's Status cell; every other line stays byte-identical."""
-    require("|" not in status and "\n" not in status, "status must be one table cell")
-    path = Path(plan_path)
-    if path.name.endswith(".plan.yaml"):
-        return  # YAML contracts are immutable; Driver.write_status owns the ledger copy.
-    with path.open(encoding="utf-8", newline="") as stream:
-        text = stream.read()
-    ticket = next((t for t in parse_plan(text)["tickets"] if t["#"] == ticket_id), None)
-    if ticket is None:
-        raise ValueError("plan has no ticket " + ticket_id)
-    lines = text.splitlines(keepends=True)
-    line = lines[ticket["line"]]
-    body = line.rstrip("\r\n")
-    eol = line[len(body) :]
-    trimmed = body.rstrip()
-    cut = trimmed.rfind("|", 0, len(trimmed) - 1)
-    lines[ticket["line"]] = trimmed[: cut + 1] + " " + status + " |" + body[len(trimmed) :] + eol
-    tmp_fd, tmp_path = tempfile.mkstemp(prefix=".orchestrate-", dir=path.parent)
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="") as stream:
-            stream.write("".join(lines))
-        shutil.copymode(path, tmp_path)
-        os.replace(tmp_path, path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
 
 
 MODEL_COLUMNS = {"claude": 1, "codex": 2, "pi": 3}
@@ -975,7 +788,6 @@ ATTENTION = {
     "exited": "ended without a report",
 }
 ARCHIVE = "archive"  # the unit (and task id) of the archive worker
-CONVERGE = Path(__file__).resolve().with_name("converge.py")
 
 
 def next_path(directory, stem, suffix):
@@ -1101,12 +913,6 @@ def check_commit(claimed, head, what="review.json"):
     )
 
 
-ARCHIVE_ACCEPTANCE = [
-    "The living spec exists with a `Paths:` line and every scenario as a requirement with provenance",
-    "Every test is renamed from S<n> to <area>/R<m>",
-    "The plan's Status is ARCHIVED",
-    "converge --final passes",
-]
 YAML_ARCHIVE_ACCEPTANCE = [
     "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
     "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies; the oracles the driver placed are untouched; no test is renamed and no Status is written into plan.yaml",
@@ -1212,7 +1018,6 @@ class Driver:
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
         self.model: yaml_plan.Plan | None = None  # the approved plan/1 model of a YAML plan
-        self.outcome_logged = False
         self.approval: yaml_plan.Approval | None = (
             None  # the approval block of the YAML plan the loop last read
         )
@@ -1253,28 +1058,21 @@ class Driver:
                 )
 
     def read_plan(self):
-        if self.plan_path.name.endswith(".plan.yaml"):
-            model = load_approved(
-                self.plan_path,
-                repo=self.repo,
-                state_dir=self.args.state_dir,
-                require_approval=True,
-            )
-            self.model = (
-                model  # verify gates a ticket against the approved plan, not the legacy table
-            )
-            self.approval = model.approval
-            ledger_path = state_layout(self.args.state_dir, self.plan_path, self.repo, model.slug)[
-                0
-            ]
-            statuses = {}
-            if ledger_path.exists():
-                with ledger(ledger_path) as data:
-                    statuses = dict(data.get("ticket_status", {}))
-            return model.legacy(statuses)
-        plan = parse_plan(self.plan_path.read_text(encoding="utf-8"))
-        check_plan(plan)
-        return plan
+        require_yaml(self.plan_path)
+        model = load_approved(
+            self.plan_path,
+            repo=self.repo,
+            state_dir=self.args.state_dir,
+            require_approval=True,
+        )
+        self.model = model  # verify gates a ticket against the approved plan
+        self.approval = model.approval
+        ledger_path = state_layout(self.args.state_dir, self.plan_path, self.repo, model.slug)[0]
+        statuses = {}
+        if ledger_path.exists():
+            with ledger(ledger_path) as data:
+                statuses = dict(data.get("ticket_status", {}))
+        return model.legacy(statuses)
 
     def start(self):
         plan = self.last_plan = self.read_plan()
@@ -1312,14 +1110,12 @@ class Driver:
                 self.routes, self.route_source or "legacy", self.routes_file, self.step_routes
             )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
-            if is_yaml(
-                self.plan_path
-            ):  # the ledger owns the plan's state; the plan file is never written
-                if not data.get("plan"):
-                    enter_plan_state(data, "APPROVED", self.approval and self.approval.at)
-                if data["plan"]["state"] == "APPROVED":
-                    enter_plan_state(data, "RUNNING")
-                self.resume_plan_state(data)
+            # the ledger owns the plan's state; the plan file is never written
+            if not data.get("plan"):
+                enter_plan_state(data, "APPROVED", self.approval and self.approval.at)
+            if data["plan"]["state"] == "APPROVED":
+                enter_plan_state(data, "RUNNING")
+            self.resume_plan_state(data)
         for row in legacy:  # a run dir written before events.jsonl: its history enters the log once
             self.log("import", **row)
         self.log(
@@ -1333,8 +1129,7 @@ class Driver:
     def loop(self):
         idle = False
         while True:
-            if self.plan_path.name.endswith(".plan.yaml"):
-                self.read_plan()  # Integrity precedes gates, which can also spawn workers.
+            self.read_plan()  # Integrity precedes gates, which can also spawn workers.
             acted = (
                 self.advance()
             )  # before the plan is read: a merge it makes unblocks work in this same round
@@ -1380,22 +1175,10 @@ class Driver:
                 self.idle()
 
     def current_plan(self):
-        """(plan, valid): the plan file as it stands, or the last valid one with a `plan-invalid` wake for the error.
-        The same error wakes the Lead once; a different one wakes it again."""
-        try:
-            self.last_plan = self.read_plan()
-            return self.last_plan, True
-        except PlanError as error:
-            if self.plan_path.name.endswith(".plan.yaml"):
-                raise  # A stale approval must never fall back to dispatching the last valid plan.
-            event("plan not runnable, running on the last valid plan: %s" % error)
-            self.wake(
-                "plan-invalid",
-                "plan",
-                "plan-invalid plan: %s -> %s" % (cell(error, 300), self.plan_path),
-                key=str(error),
-            )
-            return self.last_plan, False
+        """(plan, valid): the plan file as it stands. A stale approval or a plan edited since is an error: it never
+        falls back to dispatching the last valid plan."""
+        self.last_plan = self.read_plan()
+        return self.last_plan, True
 
     def idle(self):
         """Back off after an iteration that dispatched, advanced and handled nothing: the runtime's wait returns
@@ -1940,15 +1723,8 @@ class Driver:
     def write_status(self, ticket_id, status):
         if ticket_id == ARCHIVE.upper():
             return  # the archive unit has no ticket row
-        if self.plan_path.name.endswith(".plan.yaml"):
-            with self.book() as data:
-                data.setdefault("ticket_status", {})[ticket_id] = status
-            return
-        try:
-            set_status(self.plan_path, ticket_id, status)
-        except (ValueError, OSError) as error:
-            self.errors.append("%s: plan Status not written: %s" % (ticket_id, error))
-            event("%s: plan Status not written: %s" % (ticket_id, error))
+        with self.book() as data:
+            data.setdefault("ticket_status", {})[ticket_id] = status
 
     def note_attention(self, ticket_id, kind, reason):
         path = self.run_dir / "attention.md"
@@ -1957,9 +1733,7 @@ class Driver:
                 "# Needs you: %s\n\n%s carries the same reason.\n\n"
                 % (
                     self.slug,
-                    "`status <plan> --json`"
-                    if is_yaml(self.plan_path)
-                    else "The ticket's Status in the plan",
+                    "`status <plan> --json`",
                 ),
                 encoding="utf-8",
             )
@@ -2183,7 +1957,7 @@ class Driver:
             self.record_report(task_id, report)
         except ValueError as error:
             return self.request(task_id, "report", "the ledger rejected the report: %s" % error)
-        # The archive is gated by the converge --final path alone. Every other report, a fix round of any source included, goes to
+        # The archive is gated by the outcome evidence alone. Every other report, a fix round of any source included, goes to
         # the unit's reviewer: a delta re-review once the unit has been reviewed, else the first review.
         if task["packet"]["unit"] == ARCHIVE:
             return self.mark(task_id, gate="ready-for-ci")
@@ -2218,36 +1992,18 @@ class Driver:
         self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
 
     def gate_name(self):
-        """The gate that reads a plan: verify for a YAML plan, converge (verify's legacy path) for a Markdown one."""
-        return "verify" if self.plan_path.name.endswith(".plan.yaml") else "converge"
+        """The gate that reads a plan: verify."""
+        return "verify"
 
     def gate(self, task_id, packet, report):
         """The gate for a unit's report: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
-        if self.plan_path.name.endswith(".plan.yaml"):
-            # The Markdown converge reads no YAML plan; verify's invariants gate a ticket. The archive's gate is its own.
-            reason = "YAML plan: verify gates this report; the Markdown converge does not run"
-            self.log("converge-skipped", task=task_id, reason=reason)
-            event(reason)
-            if packet["unit"] == ARCHIVE:
-                return self.archive_evidence(task_id, packet)
-            verdict, lines = self.verify_ticket(task_id, packet, report)
-            if verdict != "PASS":
-                return verdict, lines
-            return self.ticket_evidence(task_id, packet)
+        # The archive's gate is its own; a ticket is gated by verify's invariants, then its evidence.
         if packet["unit"] == ARCHIVE:
-            # The archive branch holds the plan with Status ARCHIVED; fall back to the driver's copy if it is untracked.
-            copy = Path(packet["checkout"]) / self.plan_rel()
-            plan, ticket = (copy if copy.exists() else self.plan_path), None
-        else:
-            plan, ticket = self.plan_path, packet["unit"]
-        return verify.legacy_gate(
-            self.args.converge,
-            plan,
-            packet["checkout"],
-            self.args.base,
-            lambda: next_path(self.run_dir / task_id, "converge", ".log")[0],
-            ticket=ticket,
-        )
+            return self.archive_evidence(task_id, packet)
+        verdict, lines = self.verify_ticket(task_id, packet, report)
+        if verdict != "PASS":
+            return verdict, lines
+        return self.ticket_evidence(task_id, packet)
 
     def verify_ticket(self, task_id, packet, report):
         """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
@@ -3125,10 +2881,7 @@ class Driver:
     def put_status(self, task_id, status):
         """The ticket's Status cell; the archive unit has no row."""
         if self.task(task_id)["packet"]["unit"] != ARCHIVE:
-            if self.plan_path.name.endswith(".plan.yaml"):
-                self.write_status(self.ticket_name(task_id), status)
-            else:
-                set_status(self.plan_path, self.ticket_name(task_id), status)
+            self.write_status(self.ticket_name(task_id), status)
 
     def ticket_name(self, task_id):
         return self.task(task_id)["packet"]["unit"].upper()
@@ -3177,7 +2930,7 @@ class Driver:
         them cannot leave a merged archive with an ACCEPTED plan."""
         with self.book() as data:
             data["tasks"][task_id].update(fields, gate="cleanup", updated_at=now())
-            if self.model and data["tasks"][task_id]["packet"]["unit"] == ARCHIVE:
+            if data["tasks"][task_id]["packet"]["unit"] == ARCHIVE:
                 enter_plan_state(data, "ARCHIVED")
 
     def complete_merged(self, task_id, report):
@@ -3224,7 +2977,7 @@ class Driver:
             task_id,
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
-        if self.model and unit == ARCHIVE:
+        if unit == ARCHIVE:
             verdict, lines = self.archive_evidence(task_id, task["packet"])
             self.log(
                 "archive-evidence-merged-early", task=task_id, verdict=verdict, items=len(lines)
@@ -3538,14 +3291,28 @@ class Driver:
                         data["agents"].pop(name, None)
             raise
         assignment_id = assignment_of(result)
-        address = result.get("address") or result.get("assignment_id") or name
+        returned = result.get("address")
+        if not returned and how == "attach":
+            returned = (known or {}).get(
+                "address"
+            )  # the same terminal, resumed: its address has not changed
         with self.book() as data:
+            # Only what the runtime returned is an address; a reader must never take a fallback for a terminal.
             data["agents"][name].update(
-                assignment_id=assignment_id, address=address, bound_at=now(), how=how
+                assignment_id=assignment_id, address=returned, bound_at=now(), how=how
             )
         self.touched.add(name)
         self.log("agent", name=name, role=role, unit=unit, how=how, assignment_id=assignment_id)
-        return address, assignment_id
+        # What a task binds under (`runtime_id`) must be set, so it falls back to the assignment or the name; that
+        # key is not an address and the ledger does not call it one.
+        return returned or result.get("assignment_id") or name, assignment_id
+
+    @staticmethod
+    def keep_address(data, task_id, name):
+        """Record on the task the address the runtime returned for the agent `name` (None when it returned none)."""
+        data["tasks"][task_id]["address"] = ((data.get("agents") or {}).get(name) or {}).get(
+            "address"
+        )
 
     def swap_due(self, name, role, unit, assignment_id):
         """True when the agent is below the context reserve, judged from the usage the runtime last reported for its
@@ -3721,6 +3488,7 @@ class Driver:
             with self.book() as data:
                 bind(data, new_id, str(runtime_id))
                 data["tasks"][new_id]["assignment_id"] = assignment_id
+                self.keep_address(data, new_id, successor["worker"])
 
     def hand_over(self, task, successor, task_md, text, fresh=False, answer=None):
         name, unit = successor["worker"], successor["unit"]
@@ -3755,6 +3523,8 @@ class Driver:
             with self.book() as data:
                 if name in (data.get("agents") or {}):
                     data["agents"][name]["assignment_id"] = assignment_id
+                    if resumed.get("address"):
+                        data["agents"][name]["address"] = resumed["address"]
             self.touched.add(name)
             self.log(
                 "agent",
@@ -3865,6 +3635,7 @@ class Driver:
                 answered_at=now(),
                 updated_at=now(),
             )
+            self.keep_address(data, task_id, packet["worker"])
         self.replay_held(task, task_id)
         event("answer for %s: %s resumed on the same task id" % (task_id, packet["worker"]))
 
@@ -4335,7 +4106,7 @@ class Driver:
     def flag_unverified_evidence(self, task_id):
         """A person merged the ticket. If its gate evidence failed or never ran, the ticket is COMPLETE and flagged
         unverified: the plan cannot be accepted until that evidence passes at integration (D12)."""
-        if not self.model or self.task(task_id)["packet"]["unit"] == ARCHIVE:
+        if self.task(task_id)["packet"]["unit"] == ARCHIVE:
             return
         unit = self.ticket_name(task_id)
         plan = self.read_plan()
@@ -4357,8 +4128,6 @@ class Driver:
     def integrate(self, plan):
         """A YAML plan whose every agent ticket is COMPLETE is DELIVERED, verified on one pinned default-branch
         commit and accepted, or rejected. Steps taken (state changes), 0 for a plan that is not there yet."""
-        if not self.model:
-            return 0
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents):
             return 0
@@ -4678,8 +4447,6 @@ class Driver:
     def advance_mutations(self):
         """Read each finished reviewer's patch and apply it; a killed mutation settles the item, an ineffective one
         asks for one more attempt, then the item is human. The plan settles when no check is left running."""
-        if not self.model:
-            return 0
         with self.book() as data:
             ready = [
                 (sid, copy.deepcopy(record))
@@ -4757,9 +4524,9 @@ class Driver:
             )
         self.log("acceptance", state=result["state"], items=result["items"])
 
-    # ---- archive: one more worker unit, a gaps review, then converge --final ----------------------------------
+    # ---- archive: one more worker unit, a gaps review, then the outcome evidence ----------------------------------
     # When every agent ticket is COMPLETE the driver claims unit `archive` (small, simple) like a ticket and starts
-    # a medium gaps reviewer beside it. The archive's report is gated by `converge --final` alone (a failure is a
+    # a medium gaps reviewer beside it. The archive's report is gated by the outcome evidence alone (a failure is a
     # fix round), then the normal CI and merge gates. The gaps review is advisory: `<run>/gaps.md`, never a gate.
 
     def plan_rel(self):
@@ -4772,12 +4539,8 @@ class Driver:
         agents = [t for t in plan["tickets"] if is_agent(t)]
         if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
             return 0
-        if self.model and self.plan_state() not in ACCEPTED_STATES:
+        if self.plan_state() not in ACCEPTED_STATES:
             return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
-        if not self.model and not self.outcome_logged:
-            # A Markdown plan's outcome is never run: it completes unverified and cannot be accepted.
-            self.outcome_logged = True
-            self.log("plan-outcome", outcome=verify.legacy_outcome(True))
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
         if held and held["runtime_id"]:
@@ -4799,24 +4562,16 @@ class Driver:
         model = self.step_model("archive", self.routes[klass].model)
         effort = self.step_effort("archive", effort)
         checkout = self.worktree(name, "feat/" + name)
-        if self.model:
-            # The driver places the oracles itself: the worker's scope is the spec and those places only.
-            self.place_oracles(checkout)
-            owns = (
-                [self.model.spec]
-                + [rel for rel, _ in self.yaml_copies()]
-                + [rel for rel, _ in self.yaml_places(self.model)]
-            )
-            acceptance = YAML_ARCHIVE_ACCEPTANCE
-        else:
-            owns = ["docs/specs/", "docs/plans/"]
-            for ticket in agents:
-                owns += [
-                    p.strip()
-                    for p in ticket["Paths"].split(",")
-                    if p.strip() and p.strip() not in owns
-                ]
-            acceptance = ARCHIVE_ACCEPTANCE
+        # The driver places the oracles itself: the worker's scope is the spec and those places only.
+        plan_model = self.model
+        assert plan_model is not None  # read_plan sets it before any unit is dispatched
+        self.place_oracles(checkout)
+        owns = (
+            [plan_model.spec]
+            + [rel for rel, _ in self.yaml_copies()]
+            + [rel for rel, _ in self.yaml_places(plan_model)]
+        )
+        acceptance = YAML_ARCHIVE_ACCEPTANCE
         packet = {
             "task_id": ARCHIVE,
             "worker": name,
@@ -4859,6 +4614,7 @@ class Driver:
         with self.book() as data:
             bind(data, ARCHIVE, str(address))
             data["tasks"][ARCHIVE]["assignment_id"] = assignment_id
+            self.keep_address(data, ARCHIVE, name)
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
 
@@ -4984,44 +4740,7 @@ class Driver:
         )
 
     def archive_text(self, plan, packet, task_dir):
-        if self.model:
-            return self.yaml_archive_text(self.model, plan, packet, task_dir)
-        text = self.plan_path.read_text(encoding="utf-8")
-        found = re.search(r"Living spec:\s*`([^`]+)`", text)
-        spec = found.group(1) if found else "docs/specs/%s.md" % self.slug
-        area = Path(spec).stem
-        steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / spec, plan)
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (task_dir / "report.json"),
-                "",
-                "# Archive %s into its living spec" % self.slug,
-                "",
-                "Plan: %s (repo path `%s`)." % (self.plan_path, self.plan_rel()),
-                "Checkout: %s on branch feat/%s (new, from %s). Work only here. If the plan file is not tracked there, "
-                "copy it from the path above first."
-                % (packet["checkout"], packet["worker"], self.args.base),
-                "Owns (edit nothing else): %s." % ", ".join(packet["owns"]),
-                "",
-                "Steps:",
-                "- Create the living spec `%s` if it is missing. Its first lines are `# %s` and `Paths: src/area/, tests/area/**`: "
-                "the comma-separated code paths the area covers. Converge fails a spec without a parseable `Paths:` line."
-                % (spec, area.title()),
-                *steps,
-                "- Rename each test's `S<n>` to `%s/R<m>`: in the test name, or in a Python test's docstring first line."
-                % area,
-                "- Set the plan's `Status: ARCHIVED %s`." % now()[:10],
-                "- Run before you report COMPLETE: %s. Then open a pull request against %s."
-                % (
-                    "; ".join(packet["checks"]) or "the repository's full CI gate",
-                    self.args.base.partition("/")[2],
-                ),
-                "The driver then runs `converge.py --final` on this branch; a FAIL comes back as a fix round.",
-                "",
-                *verbatim,
-            ]
-        )
+        return self.yaml_archive_text(self.model, plan, packet, task_dir)
 
     def start_gaps(self, _plan):
         """Spawn the advisory gaps reviewer once. Its failure never blocks anything."""
@@ -5529,10 +5248,8 @@ class Driver:
         with self.book() as data:
             bind(data, task_id, str(runtime_id))
             data["tasks"][task_id]["assignment_id"] = assignment_id
-        if is_yaml(self.plan_path):
-            self.write_status(ticket["#"], "IN PROGRESS")
-        else:
-            set_status(self.plan_path, ticket["#"], "IN PROGRESS")
+            self.keep_address(data, task_id, name)
+        self.write_status(ticket["#"], "IN PROGRESS")
         self.spawned.append(name)
         event("spawned %s (%s, %s, %s)" % (name, klass, packet["model"], effort))
 
@@ -5660,6 +5377,16 @@ def is_yaml(plan_path):
     return Path(plan_path).name.endswith(".plan.yaml")
 
 
+def require_yaml(plan_path):
+    """A plan is a plan/1 YAML file; a Markdown plan is refused with the way out."""
+    if not is_yaml(plan_path):
+        raise PlanError(
+            "%s is not a plan/1 YAML plan (<name>.plan.yaml): the Markdown plan format is no longer read. "
+            "Rewrite it as plan/1 YAML and run `plan check <plan.yaml>`, then `plan approve`"
+            % plan_path
+        )
+
+
 def repo_root(plan_path, repo=None):
     """The repository a plan belongs to: the one named, else the one holding the plan file."""
     if repo:
@@ -5681,11 +5408,8 @@ def repo_key(repo):
 
 def state_layout(state_dir, plan_path, repo, slug):
     """(ledger path, run directory) of a plan. A YAML plan's are under `<state>/<repo-key>/`, so two repositories
-    that run the same slug have two ledgers; a Markdown plan keeps `<state>/<slug>.json` until the format is gone."""
-    state = Path(state_dir).expanduser()
-    if not is_yaml(plan_path):
-        return state / (slug + ".json"), state / slug
-    keyed = state / repo_key(repo)
+    that run the same slug have two ledgers."""
+    keyed = Path(state_dir).expanduser() / repo_key(repo)
     return keyed / (slug + ".json"), keyed / slug
 
 
@@ -5758,13 +5482,10 @@ def locate_state(state_dir, plan_path, repo, slug, importing=False):
     `run` under the plan's run lock; every other caller reads the old key in place while the repository's own ledger
     is absent and the repository owns the old one."""
     ledger_path, run_dir = state_layout(state_dir, plan_path, repo, slug)
-    if is_yaml(plan_path):
-        if importing:
-            import_old_ledger(state_dir, repo, slug, ledger_path, run_dir)
-        elif not ledger_path.exists() and old_ledger_of(state_dir, repo, slug):
-            return Path(state_dir).expanduser() / (slug + ".json"), Path(
-                state_dir
-            ).expanduser() / slug
+    if importing:
+        import_old_ledger(state_dir, repo, slug, ledger_path, run_dir)
+    elif not ledger_path.exists() and old_ledger_of(state_dir, repo, slug):
+        return Path(state_dir).expanduser() / (slug + ".json"), Path(state_dir).expanduser() / slug
     return ledger_path, run_dir
 
 
@@ -5774,7 +5495,7 @@ def plan_home(args):
     slug = plan_slug(plan_path)
     if not slug:
         raise Refused("plan has no Slug")
-    repo = repo_root(plan_path, getattr(args, "repo", None)) if is_yaml(plan_path) else None
+    repo = repo_root(plan_path, getattr(args, "repo", None))
     return (slug, *locate_state(args.state_dir, plan_path, repo, slug))
 
 
@@ -5795,6 +5516,45 @@ def split_status(text):
     return re.sub(r"\s+\d{4}-\d{2}-\d{2}$", "", head), reason.strip() or None
 
 
+def legacy_markdown_view(plan_path):
+    """(slug, ticket ids, ticket statuses, plan state) of a legacy Markdown plan, for `status` and the workbench
+    listing only: a Markdown plan is no longer run, so nothing else reads it, and it never writes. Tickets come
+    only from the table under `## Tickets` whose header has an ID and a Status column."""
+    text = plan_path.read_text(encoding="utf-8")
+    head = text.split("\n## ", 1)[0]
+    slug = re.search(r"Slug:\s*`([^`]+)`", head)
+    state = re.search(r"Status:\s*([A-Za-z-]+)", head)
+    ids, statuses, columns, in_tickets = [], {}, None, False
+    for line in text.splitlines():
+        if line.startswith("#"):
+            in_tickets = line.lstrip("#").strip().lower() == "tickets"
+            columns = None
+            continue
+        cells = split_row(line)
+        if cells is None:
+            columns = columns if ids else None
+            continue
+        if not in_tickets:
+            continue
+        if columns is None:
+            heads = [cell.lower() for cell in cells]
+            if ids:
+                continue  # a second table under the heading is not the ticket table
+            if ("#" in heads or "id" in heads) and "status" in heads:
+                columns = (heads.index("#" if "#" in heads else "id"), heads.index("status"))
+            continue
+        if set("".join(cells)) <= set("-: ") or len(cells) <= max(columns):
+            continue
+        ids.append(cells[columns[0]])
+        statuses[cells[columns[0]]] = cells[columns[1]]
+    return (
+        slug.group(1) if slug else yaml_plan.slug_of(plan_path),
+        ids,
+        statuses,
+        state.group(1).upper() if state else "DRAFT",
+    )
+
+
 def plan_status(args, model=None):
     """`status <plan> --json`: the plan's state and history, and each ticket's state, reason and pull request, read
     from the ledger. It writes nothing, takes no lock and needs no run: before one, the plan is APPROVED (or DRAFT)
@@ -5812,17 +5572,21 @@ def plan_status(args, model=None):
         history = [{"state": state, "at": model.approval.at}] if model.approval else []
     else:
         repo = None
-        plan = parse_plan(plan_path.read_text(encoding="utf-8"))
-        slug, ids = plan["slug"], [t["#"] for t in plan["tickets"]]
-        statuses = {t["#"]: t["Status"] for t in plan["tickets"]}
-        state, history = plan.get("status") or "DRAFT", []
-    ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
-    if is_yaml(plan_path) and not ledger_path.exists():
-        ledger_path = old_ledger_of(args.state_dir, repo, slug) or ledger_path
+        slug, ids, statuses, state = legacy_markdown_view(plan_path)
+        history = []
+    if repo is None:
+        # A legacy plan's ledger stays at the old `<state>/<slug>.json` key.
+        state_root = Path(args.state_dir).expanduser()
+        ledger_path, run_dir = state_root / (slug + ".json"), state_root / slug
+    else:
+        ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
+        if not ledger_path.exists():
+            ledger_path = old_ledger_of(args.state_dir, repo, slug) or ledger_path
     data = {}
     if ledger_path.is_file():
         data = read_ledger_file(ledger_path)
-        if is_yaml(plan_path):
+        if repo is not None:
+            # A legacy plan's Status column stays its source: its ledger never carried the ticket states.
             statuses = data.get("ticket_status") or {}
             moves = data.get("plan") or {}
             state, history = moves.get("state") or state, moves.get("history") or history
@@ -5857,11 +5621,7 @@ def acceptance_context(args):
     """(plan model, repo, ledger path, run directory, ledger data) of the YAML plan a Lead command names. The model is
     the approved one: a plan or oracle edited since approval is refused here, as everywhere."""
     plan_path = Path(args.plan).resolve(strict=True)
-    require(
-        is_yaml(plan_path),
-        "%s is a Markdown plan: its outcome is never run, so it can finish COMPLETE (outcome unverified) and is "
-        "never accepted; rewrite it as plan/1 YAML (plan check)" % plan_path,
-    )
+    require_yaml(plan_path)
     repo = repo_root(plan_path, args.repo)
     model = load_approved(plan_path, repo=repo, state_dir=args.state_dir, require_approval=True)
     ledger_path, run_dir = locate_state(args.state_dir, plan_path, repo, model.slug)
@@ -6064,13 +5824,12 @@ def render_status(status):
 
 
 def plan_slug(plan_path):
-    """The slug a Markdown or YAML plan names, read without validating it: a plan mid-edit still names its slug."""
+    """The slug a YAML plan names, read without validating it: a plan mid-edit still names its slug."""
     path = Path(plan_path).resolve(strict=True)
-    if path.name.endswith(".plan.yaml"):
-        data = yaml_plan.read_yaml(path)[0]
-        slug = data.get("slug") if isinstance(data, dict) else None
-        return slug if isinstance(slug, str) else None
-    return parse_plan(path.read_text(encoding="utf-8"))["slug"]
+    require_yaml(path)
+    data = yaml_plan.read_yaml(path)[0]
+    slug = data.get("slug") if isinstance(data, dict) else None
+    return slug if isinstance(slug, str) else None
 
 
 def launch(args, run_args):
@@ -6083,18 +5842,14 @@ def launch(args, run_args):
             run(["git", "-C", str(plan_path.parent), "rev-parse", "--show-toplevel"])
         ).resolve()
     )
-    if plan_path.name.endswith(".plan.yaml"):
-        # The same check `run` makes first, so an unapproved or drifted contract starts no pane.
-        slug = load_approved(
-            plan_path,
-            repo=repo,
-            state_dir=forwarded(run_args, "--state-dir") or yaml_plan.DEFAULT_STATE,
-            require_approval=True,
-        ).slug
-    else:
-        plan = parse_plan(plan_path.read_text(encoding="utf-8"))
-        check_plan(plan)
-        slug = plan["slug"]
+    require_yaml(plan_path)
+    # The same check `run` makes first, so an unapproved or drifted contract starts no pane.
+    slug = load_approved(
+        plan_path,
+        repo=repo,
+        state_dir=forwarded(run_args, "--state-dir") or yaml_plan.DEFAULT_STATE,
+        require_approval=True,
+    ).slug
     name = pane_name(slug)
     if name in live_terminals():
         return {"pane": name, "started": False}
@@ -6351,12 +6106,9 @@ def drive(args):
     require(args.context_reserve >= 0, "--context-reserve must not be negative")
     require(args.idle_minutes >= 0, "--idle-minutes must not be negative")
     require(args.working_minutes >= 0, "--working-minutes must not be negative")
+    require_yaml(args.plan)
     driver = Driver(args)
-    slug = (
-        driver.read_plan()["slug"]
-        if driver.plan_path.name.endswith(".plan.yaml")
-        else parse_plan(driver.plan_path.read_text(encoding="utf-8"))["slug"]
-    )
+    slug = driver.read_plan()["slug"]
     with run_lock(driver.repo, slug, driver.plan_path):
         return drive_locked(driver)
 
@@ -6554,9 +6306,6 @@ def main(argv=None):
         "implementer, reviewer, gaps and archive. It wins over the route config and over --brain-cli",
     )
     sub.add_argument(
-        "--converge", default=str(CONVERGE), help="converge.py used to gate each report"
-    )
-    sub.add_argument(
         "--notify-terminal",
         default=None,
         help="hc terminal told about each new wake (`launch` passes its own); unset: wakes.jsonl only",
@@ -6740,9 +6489,9 @@ def run_cli(argv=None):
         print(output if isinstance(output, str) else json.dumps(output, separators=(",", ":")))
         return 1 if isinstance(output, dict) and output.get("errors") else 0
     except workbench.WorkbenchError as error:
-        # The pane reads stdout: a refusal is one JSON object there too, and the reason once on stderr.
-        print(json.dumps(error.output, separators=(",", ":")))
-        print("workbench: %s" % error, file=sys.stderr)
+        # stdout holds a view or nothing: a refusal is one JSON object on stderr, so a reader never mistakes it for
+        # a partial view.
+        print(json.dumps(error.output, separators=(",", ":")), file=sys.stderr)
         return 2
     except PlanError as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
