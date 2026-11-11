@@ -1006,6 +1006,21 @@ def log_tail(text, limit=CI_EXCERPT_CHARS):
     return tail.split("\n", 1)[1] if "\n" in tail else tail
 
 
+FAILURE_LINE = re.compile(r"^(FAILED |ERROR |E\s+\S)|Error\b")
+
+
+def failure_line(text):
+    """The log line that names the failure, so a one-line reason is not just a header: pytest's last
+    FAILED/ERROR summary, else its last `E` line, else the last line mentioning an Error."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for prefix in ("FAILED ", "ERROR "):
+        found = [line for line in lines if line.startswith(prefix)]
+        if found:
+            return found[-1]
+    found = [line for line in lines if FAILURE_LINE.search(line)]
+    return found[-1] if found else ""
+
+
 def cell(text, limit=160):
     """Text safe inside one plan table cell: one line, no pipes, cut at `limit`."""
     flat = " ".join(str(text).replace("|", "/").split())
@@ -4297,6 +4312,9 @@ class Driver:
         receipt = result.receipt
         text = log_tail(result.log).strip()
         detail = ": " + receipt["detail"] if receipt.get("detail") else ""
+        # A request's reason shows only the excerpt's first line, so the failing line goes there.
+        if not detail and failure_line(text):
+            detail = ": " + failure_line(text)
         return {
             "id": "E%d" % number,
             "kind": "blocking",

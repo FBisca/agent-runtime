@@ -423,6 +423,34 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class EvidenceReasonTests(unittest.TestCase):
+    """A request's reason is the excerpt's first line, so it names the failing test, not a bare header."""
+
+    def item(self, log, detail=None):
+        from types import SimpleNamespace
+
+        from agent_orchestrator import driver
+
+        receipt = {"label": "FAIL", "check": "pytest", "exit": 1, "detail": detail}
+        result = SimpleNamespace(receipt=receipt, log=log, path=Path("/r/S23.ticket.1.json"))
+        return driver, driver.Driver.evidence_item(None, 1, "S23", result)
+
+    def test_the_reason_names_the_failing_test(self):
+        log = "collected 3\n_ test_x _\nE   AssertionError: 1 != 2\nFAILED t.py::test_x - AssertionError\n1 failed\n"
+        driver, item = self.item(log)
+        self.assertEqual(
+            driver.short(item), "S23 FAIL: FAILED t.py::test_x - AssertionError — log tail:"
+        )
+
+    def test_a_receipt_detail_still_wins(self):
+        driver, item = self.item("FAILED t.py::test_x\n", detail="snapshot missing")
+        self.assertEqual(driver.short(item), "S23 FAIL: snapshot missing — log tail:")
+
+    def test_a_log_without_a_failure_line_keeps_the_header(self):
+        driver, item = self.item("nothing useful\n")
+        self.assertEqual(driver.short(item), "S23 FAIL — log tail:")
+
+
 class DescribeTests(unittest.TestCase):
     """A review item that is not blocking may name a file without a line: the fix round shows it as is."""
 
