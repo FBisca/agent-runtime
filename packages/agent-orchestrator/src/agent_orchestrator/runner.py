@@ -301,7 +301,19 @@ def tail(path):
         return ""
 
 
-def attempt(repo, commit, *, check, oracles, place_dir, env_names, timeout, base_env, patch=None):
+def attempt(
+    repo,
+    commit,
+    *,
+    check,
+    oracles,
+    place_dir,
+    env_names,
+    timeout,
+    base_env,
+    patch=None,
+    patch_name="negative patch",
+):
     """One execution of `check` in a fresh worktree: (facts, log text). `patch` is applied before the oracles and
     skips the dirty-tree rule, since the patch itself dirties the tree."""
     scratch = Path(tempfile.mkdtemp(prefix="eec-"))
@@ -329,7 +341,7 @@ def attempt(repo, commit, *, check, oracles, place_dir, env_names, timeout, base
             if applied.returncode:
                 facts.update(
                     result="UNKNOWN",
-                    reason="negative patch does not apply",
+                    reason="%s does not apply" % patch_name,
                     detail=applied.stderr.strip()[-300:],
                 )
                 return facts, ""
@@ -375,6 +387,114 @@ def attempt(repo, commit, *, check, oracles, place_dir, env_names, timeout, base
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+def fails_on_assertion(facts):
+    """True when an attempt failed because a case asserted: not a collection error, a timeout or a missing tool. A
+    check that writes no JUnit can only show a non-zero exit, which counts."""
+    return (
+        facts["result"] == "FAIL"
+        and facts["reason"] is None
+        and (facts["junit"] is None or bool(facts["junit"]["assertions"]))
+    )
+
+
+def receipt_of(
+    facts,
+    *,
+    scenario,
+    phase,
+    digest,
+    commit,
+    tree_sha,
+    check,
+    place,
+    oracles,
+    env_names,
+    timeout,
+    base_env,
+    started_at,
+):
+    """The receipt of one attempt's facts (S12), without its label: the callers add what is theirs first."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "scenario": scenario,
+        "phase": phase,
+        "digest": digest,
+        "commit": commit,
+        "tree": tree_sha,
+        "check": check,
+        "place": place,
+        "oracles": {name: sha256(content) for name, content in sorted(oracles.items())},
+        "env": list(env_names),
+        "timeout": timeout,
+        "tools": tool_versions(clean_path(base_env.get("PATH", ""), base_env.get("VIRTUAL_ENV"))),
+        "started_at": started_at,
+        "exit": facts["exit"],
+        "junit": facts["junit"],
+        "exit_code_only": facts["exit_code_only"],
+        "result": facts["result"],
+        "reason": facts["reason"],
+        "detail": facts["detail"],
+        "seconds": facts["seconds"],
+    }
+
+
+def run_mutation(
+    repo,
+    commit,
+    *,
+    scenario,
+    digest,
+    check,
+    patch,
+    oracles=None,
+    place=None,
+    env_names=(),
+    timeout=600,
+    attempt_number=1,
+    base_env=None,
+):
+    """Apply one reviewer-written behavioural mutation (a patch of the delivered code) at `commit` and run the check
+    on it once. The mutation is killed (`receipt["mutation"]["killed"]`) only when the check fails on an assertion;
+    a check that still passes, or that dies for another reason, leaves it standing. The receipt is not written."""
+    repo = Path(repo)
+    oracles = dict(oracles or {})
+    base_env = dict(os.environ if base_env is None else base_env)
+    commit = git("-C", str(repo), "rev-parse", "--verify", commit + "^{commit}").stdout.strip()
+    tree_sha = git("-C", str(repo), "rev-parse", commit + "^{tree}").stdout.strip()
+    started_at = now()
+    facts, log = attempt(
+        repo,
+        commit,
+        check=check,
+        oracles=oracles,
+        place_dir=place,
+        env_names=list(env_names),
+        timeout=timeout,
+        base_env=base_env,
+        patch=patch,
+        patch_name="the mutation",
+    )
+    killed = fails_on_assertion(facts)
+    receipt = receipt_of(
+        facts,
+        scenario=scenario,
+        phase="mutation",
+        digest=digest,
+        commit=commit,
+        tree_sha=tree_sha,
+        check=check,
+        place=place,
+        oracles=oracles,
+        env_names=env_names,
+        timeout=timeout,
+        base_env=base_env,
+        started_at=started_at,
+    )
+    receipt["mutation"] = {"sha256": sha256(patch), "attempt": attempt_number, "killed": killed}
+    receipt["label"] = label(receipt["result"], receipt["reason"])
+    return Run(receipt, log)
+
+
 def run_evidence(
     repo,
     commit,
@@ -411,28 +531,21 @@ def run_evidence(
         base_env=base_env,
     )
     facts, log = attempt(repo, commit, **wanted)
-    receipt = {
-        "schema_version": SCHEMA_VERSION,
-        "scenario": scenario,
-        "phase": phase,
-        "digest": digest,
-        "commit": commit,
-        "tree": tree_sha,
-        "check": check,
-        "place": place,
-        "oracles": {name: sha256(content) for name, content in sorted(oracles.items())},
-        "env": list(env_names),
-        "timeout": timeout,
-        "tools": tool_versions(clean_path(base_env.get("PATH", ""), base_env.get("VIRTUAL_ENV"))),
-        "started_at": started_at,
-        "exit": facts["exit"],
-        "junit": facts["junit"],
-        "exit_code_only": facts["exit_code_only"],
-        "result": facts["result"],
-        "reason": facts["reason"],
-        "detail": facts["detail"],
-        "seconds": facts["seconds"],
-    }
+    receipt = receipt_of(
+        facts,
+        scenario=scenario,
+        phase=phase,
+        digest=digest,
+        commit=commit,
+        tree_sha=tree_sha,
+        check=check,
+        place=place,
+        oracles=oracles,
+        env_names=env_names,
+        timeout=timeout,
+        base_env=base_env,
+        started_at=started_at,
+    )
     if negative is not None and facts["result"] == "PASS":
         name, patch = negative
         second, _ = attempt(repo, commit, patch=patch, **wanted)
@@ -448,11 +561,7 @@ def run_evidence(
             receipt.update(
                 result="FAIL", reason="vacuous", detail="the check passes with %s applied" % name
             )
-        elif (
-            second["result"] == "FAIL"
-            and second["reason"] is None
-            and (second["junit"] is None or second["junit"]["assertions"])
-        ):
+        elif fails_on_assertion(second):
             pass  # the check fails on the broken copy on an assertion: the control holds
         else:
             receipt.update(

@@ -184,6 +184,18 @@ class AcceptanceFixture(GateFixture):
         step["write"] = [[str(self.run_dir / "t1" / "review.json"), self.review2()]]
         return step
 
+    def default_mutator(self, attempt=1, patch=None):
+        """A wait step: the fresh mutation reviewer of an uncalibrated oracle writes a behavioural patch."""
+        step = report_wait("demo-mut-s1-%d" % attempt, "complete")
+        step["write"] = [
+            [
+                str(self.run_dir / "mutation" / ("S1.%d.patch" % attempt)),
+                patch
+                or "--- a/src/a/feature.txt\n+++ b/src/a/feature.txt\n@@ -1 +1 @@\n-done\n+nope\n",
+            ]
+        ]
+        return step
+
     def archive_steps(self):
         """The archive worker and the gaps reviewer of a plan that was accepted."""
         archiver = report_wait("demo-archive", "complete", id=spawn_id("demo-archive"))
@@ -211,7 +223,7 @@ class AcceptanceFixture(GateFixture):
         self.write_plan(scenarios, tickets)
         if lands:
             self.merged_on_main(lands)
-        self.drive([self.worker(gate), self.reviewer()], archive)
+        self.drive([self.worker(gate), self.reviewer(), self.default_mutator()], archive)
 
     def receipts(self, phase=None):
         found = [
@@ -300,7 +312,7 @@ class TicketGateTests(AcceptanceFixture, unittest.TestCase):
             [ticket("T1", ("S2",)), ticket("T2", ("S1",), blocked_by=["T1"])],
         )
         self.COVERS = {"S2": ["src/a/test_feature.py::test_feature"]}
-        self.waits([self.worker("done"), self.reviewer()])
+        self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
         self.run_driver("--repo", str(self.repo))
         self.assertEqual(self.receipts("ticket"), [])
 
@@ -348,7 +360,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
             "HEAD^{tree}",
         )
         self.prs([{"state": "MERGED", "mergeCommit": {"oid": orphan}}])
-        self.drive([self.worker("done"), self.reviewer()])
+        self.drive([self.worker("done"), self.reviewer(), self.default_mutator()])
         self.assertEqual(
             self.history(),
             ["APPROVED", "RUNNING"],
@@ -362,7 +374,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.write_plan()
         self.prs([{"state": "MERGED", "mergeCommit": {"oid": "f" * 40}}])
         self.drive(
-            [self.worker("done"), self.reviewer()]
+            [self.worker("done"), self.reviewer(), self.default_mutator()]
         )  # gh answers a merge commit that exists nowhere
         self.assertEqual(self.history(), ["APPROVED", "RUNNING"])
         self.assertEqual(self.receipts("integration"), [])
@@ -372,7 +384,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.write_plan()
         self.merged_on_main("done")
         self.prs([{"state": "MERGED", "mergeCommit": None}])  # gh names no merge commit
-        self.drive([self.worker("done"), self.reviewer()])
+        self.drive([self.worker("done"), self.reviewer(), self.default_mutator()])
         self.assertEqual(
             self.history(),
             ["APPROVED", "RUNNING"],
@@ -385,7 +397,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
     def test_S17_a_new_run_verifies_a_rejected_plan_again(self):
         self.delivered(lands="almost")
         subprocess.run(self.land("done"), check=True, capture_output=True)
-        self.drive([], archive=True)
+        self.drive([self.default_mutator()], archive=True)
         self.assertEqual(self.history()[-1], "ARCHIVED")
         self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL", "PASS"])
 
