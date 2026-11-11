@@ -390,7 +390,9 @@ def contract_verdict(command, is_subagent, cwd=None):
         return None
     approval = approve_verdict(command)
     candidate = any(
-        possible_guarded_path(expand(word, cwd)) for word in PATH_WORD.findall(command) if word != "-"
+        possible_guarded_path(expand(word, cwd))
+        for word in PATH_WORD.findall(command)
+        if word != "-"
     )
     if not (approval or candidate) or not (is_subagent or spawned_worker()):
         return None
@@ -549,8 +551,10 @@ def main(argv=()):
         if name in FILE_TOOLS | PATCH_TOOLS:
             paths = edited_paths(name, data.get("tool_input"), data.get("cwd"))
             candidate = any(possible_guarded_path(path) for path in paths)
-            guarded = candidate and (bool(data.get("agent_id")) or spawned_worker()) and any(
-                guarded_path(path) for path in paths
+            guarded = (
+                candidate
+                and (bool(data.get("agent_id")) or spawned_worker())
+                and any(guarded_path(path) for path in paths)
             )
             result = ("deny", RECEIPTS_REASON) if guarded else None
         elif name == "Bash":

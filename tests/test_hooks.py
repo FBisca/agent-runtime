@@ -652,7 +652,9 @@ class PlanContractTests(unittest.TestCase):
         extra = {"PYTHONPATH": self.temp.name}
         self.assertIsNone(self.hook(bash("rm " + str(ledger)), extra_env=extra))
         self.assertFalse(log.exists())
-        self.assertTrue(denied(self.hook(bash("rm " + str(ledger)), role="worker", extra_env=extra)))
+        self.assertTrue(
+            denied(self.hook(bash("rm " + str(ledger)), role="worker", extra_env=extra))
+        )
         self.assertTrue(log.exists())
 
     def as_worker(self, payload):
