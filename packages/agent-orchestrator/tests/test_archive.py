@@ -192,6 +192,21 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         self.run_driver()
         return (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
 
+    def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_receipts_and_a_valid_digest(
+        self,
+    ):
+        self.archive_run()
+        argv = ["--repo", str(self.repo), "--state-dir", str(self.state_dir)]
+        status = self.cli("status", str(self.plan), "--json", *argv)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(json.loads(status.stdout)["plan"]["state"], "ARCHIVED")
+        stems = list(self.ledger()["receipts"])
+        self.assertTrue(stems)
+        for stem in stems:
+            self.assertTrue((self.run_dir / "receipts" / (stem + ".json")).is_file(), stem)
+        check = self.cli("plan", "check", str(self.plan), *argv)
+        self.assertEqual(check.returncode, 0, check.stderr + check.stdout)
+
     def test_S25_the_driver_places_each_promote_oracle_before_the_archive_worker_starts(self):
         task_md = self.archive_run()
         oracle = self.plan.parent / "demo.oracle" / "test_oracle.py.oracle"
