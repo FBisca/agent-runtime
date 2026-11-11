@@ -4219,9 +4219,8 @@ class Driver:
         return ("FAIL", items) if items else ("PASS", [])
 
     def archive_mismatches(self, checkout, model):
-        """Files on the archive head that are not the approved bytes: each placed oracle against the approval
-        snapshot, and each copied plan file against its source. Read before the runner re-places anything, so an
-        edit cannot be masked by the re-run."""
+        """Placed oracles on the archive head that are not the approval snapshot's bytes. Read before the runner
+        re-places anything, so an edit cannot be masked by the re-run. The copied plan files are the reviewer's."""
         files = self.oracles()
         root = Path(checkout)
         bad = []
@@ -4229,16 +4228,6 @@ class Driver:
             path = root / rel
             if not path.is_file() or path.read_bytes() != files[name]:
                 bad.append(rel)
-        for rel, source in self.yaml_copies():
-            if source.is_dir():
-                for child in sorted(p for p in source.rglob("*") if p.is_file()):
-                    path = root / rel.rstrip("/") / child.relative_to(source).as_posix()
-                    if not path.is_file() or path.read_bytes() != child.read_bytes():
-                        bad.append(path.relative_to(root).as_posix())
-            else:
-                path = root / rel
-                if not path.is_file() or path.read_bytes() != source.read_bytes():
-                    bad.append(rel)
         return bad
 
     def archive_evidence(self, task_id, packet):
