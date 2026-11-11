@@ -190,6 +190,6 @@ Under structured dispatch (`AGENT_RUNTIME_DISPATCH=1`, enabled in both Claude an
 ||||||| parent of b5ba505 (fix(runtime): the team limit counts active workers and the slot is reserved atomically)
 =======
 - **R240** WHEN a team has 32 registered workers, 31 of them stopped, and the lead spawns a new name, THEN the spawn succeeds: the team limit counts active workers only. (from runtime-audit-fixes/S1)
-- **R241** WHEN a team has 32 active workers and the lead spawns a new name or resumes a stopped name, THEN the call is refused before anything launches with "team limit is 32 active workers: stop an active worker, then retry"; the slot is reserved in the transaction that activates the worker, so concurrent spawns cannot exceed 32. (from runtime-audit-fixes/S2)
+- **R241** WHEN a team has 32 active workers and the lead spawns a new name or resumes a stopped name, THEN the call is refused before anything launches with "team limit is 32 active workers: stop an active worker, then retry"; the slot is reserved in the transaction that registers the assignment, so concurrent spawns cannot exceed 32, and a launch that fails before binding leaves a stopped worker stopped. (from runtime-audit-fixes/S2)
 - **R242** WHEN a team has 32 active workers and the lead resumes a worker that is already active, THEN the resume succeeds and consumes no new slot. (from runtime-audit-fixes/S3)
 >>>>>>> b5ba505 (fix(runtime): the team limit counts active workers and the slot is reserved atomically)
