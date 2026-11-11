@@ -4387,10 +4387,12 @@ class Driver:
     def uncalibrated_outcomes(self, passed):
         """Outcome scenarios among `passed` whose new oracle was uncalibrated at the approval baseline."""
         found = []
+        model = self.model
+        assert model is not None
         with self.book() as data:
-            for scenario in self.model.scenarios:
+            for scenario in model.scenarios:
                 item = scenario.evidence
-                if scenario.id not in passed or scenario.id not in self.model.outcome:
+                if scenario.id not in passed or scenario.id not in model.outcome:
                     continue
                 if item is None or not (item.check and item.oracle) or item.baseline != "fail":
                     continue
@@ -5783,7 +5785,7 @@ def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
             continue
         held = True
         accepted = (data.get("acceptance") or {}).get(item["scenario"])
-        if verify.holds_acceptance(accepted, digest, pin.get("tree")):
+        if accepted and verify.holds_acceptance(accepted, digest, pin.get("tree")):
             item.update(
                 state="HUMAN_ACCEPTED",
                 reason="accepted by %s over an unkilled mutation" % accepted.get("by"),
