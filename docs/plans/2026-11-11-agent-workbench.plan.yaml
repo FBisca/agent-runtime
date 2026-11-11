@@ -1,0 +1,261 @@
+schema: plan/1
+slug: agent-workbench
+goal: >-
+  From one native Herdr pane, a person sees a plan's real ticket graph, every attempt with the worker that ran it and a
+  way to open its terminal, the evidence each ticket and the plan's outcome rest on, and live unplanned workers; the
+  view reads the orchestrator's own plan loader and ledger through read-only JSON commands, writes nothing, guesses no
+  join, and replaces the herdr-app-mods Plans panel.
+spec: docs/specs/agent-workbench.md
+outcome: [S21, S22]
+
+scenarios:
+  # Read side: agent-orchestrator workbench commands
+  - id: S1
+    when: '`agent-orchestrator plans list --json` discovers a YAML plan whose file is `<date>-<name>.plan.yaml`'
+    then: >-
+      its `slug` is the plan's `slug:` field (the ledger key), not the date-prefixed file name; a Markdown plan keeps
+      its file-derived slug
+  - id: S2
+    when: '`agent-orchestrator workbench plans [path] [--repo R] --json` runs in a repository holding YAML and Markdown plans'
+    then: >-
+      stdout is one JSON object with `schema_version` and one entry per plan: slug, format, path, state (from the
+      ledger, else APPROVED or DRAFT from the approval block), ticket counts by state; a Markdown plan carries
+      `legacy: true` and no graph
+  - id: S3
+    when: 'the workbench commands run outside a repository, in one with no plan directory, or in one with several'
+    then: >-
+      each case is a distinct JSON error kind (`not_a_repo`, `no_plans`, `ambiguous` naming every directory) with the
+      way out (an explicit path or `--repo`), never a crash and never an empty list standing in for an error
+  - id: S4
+    when: '`agent-orchestrator workbench plan <plan> --json` runs on an approved YAML plan'
+    then: >-
+      every ticket carries exactly its `blocked_by` edges and a topological layer (0 for no blockers, else one more
+      than its deepest blocker), tickets are ordered by layer then plan order, and two runs over the same inputs print
+      byte-identical stdout
+  - id: S5
+    when: 'the plan file has a cycle, a duplicate ticket id, a reference to a missing ticket, or malformed YAML'
+    then: >-
+      the command exits non-zero with the loader's error naming the YAML path and the offending ids, prints no partial
+      view model, and writes nothing
+  - id: S6
+    when: 'the authored plan file or an oracle changed after approval'
+    then: >-
+      the view model shows the approved snapshot's tickets with `revision.drift: true` and both digests, instead of
+      failing or presenting the edited file as approved
+  - id: S7
+    when: 'a ticket has several attempts (fix rounds, retries, orphans, reopens) and a review'
+    then: >-
+      each ledger task of the ticket appears once with task_id, kind, status, started_at, finished_at, assignment_id
+      and claimed; the newest is marked latest and no earlier attempt is dropped or overwritten
+  - id: S8
+    when: >-
+      an attempt's ledger task holds no runtime address, or holds the fallback the driver writes when the runtime
+      returned none (the assignment id or the agent name)
+    then: >-
+      its `address` is null; the address is never taken from a terminal name, another attempt or a timestamp; and from
+      this plan on the driver records an address only when the runtime returned one
+  - id: S9
+    when: 'a worker reported complete but the ticket evidence failed or was unknown, or the ticket was merged by hand while unverified'
+    then: >-
+      the ticket shows `verified: false` with each ticket-phase receipt result and reason, and the attempt still shows
+      `claimed: true`; a ticket is verified only when its gates passed
+  - id: S10
+    when: 'the plan reached integration and its outcome items have receipts'
+    then: >-
+      `outcome.state` and each item's state are what `verify <plan>` computes, each item names its freshness (`fresh`,
+      `missing`, `stale` with the reason: another tree, another digest, a sha256 mismatch), and plan acceptance is
+      never inferred from every ticket being complete
+  - id: S11
+    when: 'any workbench command runs'
+    then: >-
+      it writes nothing under the repository or the state directory (no ledger import, no lock, no file), its output
+      holds no report or message bodies and no environment values, and an unmeasured count, token or duration is null,
+      never 0
+
+  # Herdr mod: herdr/agent-workbench
+  - id: S12
+    when: 'the agent-workbench mod is shown for a space whose folder is a repository with plans'
+    then: >-
+      it lists the plans (YAML with state and progress, Markdown marked legacy); selecting a YAML plan shows its
+      tickets as a layered list with blocked-by chips and one inspector for the selected ticket: delivers, blockers,
+      state, verified, attempts and gates
+  - id: S13
+    when: 'the workbench command fails, times out, prints no JSON, returns a scoped plan error, or finds no plans'
+    then: >-
+      the mod shows that state scoped to the plan or project with the way out (and for no plans, `/start-planning`),
+      other plans stay usable, and no placeholder data is drawn
+  - id: S14
+    when: 'the mod is narrower than its layout threshold'
+    then: 'it shows a compact single-column ticket list and the inspector as a drill-in; at full width it shows layers and the inspector side by side'
+  - id: S15
+    when: 'the selected plan''s ledger or run directory changes, or the 30-second fallback timer fires'
+    then: >-
+      the mod refreshes with at most one fetch in flight, drops any answer older than the latest request, runs the
+      workbench command with a fixed argv (no shell) in the space folder, and writes nothing
+  - id: S16
+    when: 'the inspector shows an attempt'
+    then: >-
+      an attempt whose address is a live terminal in `terminals()` offers Open, which focuses that terminal; a null
+      address, a terminal that is no longer live, or a remote space shows `unknown` or `not live` and offers no Open
+  - id: S17
+    when: 'live agent terminals exist that no attempt of the shown plans names'
+    then: 'a Runtime section lists them with their parent tree from `terminals()` and offers Open; no plan or ticket is made up for them'
+  - id: S18
+    when: 'the repository suite runs the mod''s pure modules'
+    then: '`node --test` runs them from a pytest integration test, and a missing `node` fails that test naming node instead of skipping'
+
+  # Install
+  - id: S19
+    when: '`sh install.sh --components herdr` runs'
+    then: >-
+      from a checkout it symlinks herdr/agent-workbench into ~/.config/herdr-app/mods/agent-workbench (a release
+      copies it) and adds the opt-in `workbench` layout without switching to it; `--dry-run` changes nothing; a rerun
+      is idempotent; an existing mod of that name that it did not install is refused with a preview; uninstall removes
+      only what it installed
+
+  # Graph spike, acceptance and retirement
+  - id: S20
+    when: 'a prototype mod draws dependency edges between positioned ticket nodes with PathBuilder and paint_path in a real Herdr window'
+    then: >-
+      the finding (edges drawable and positionable, or not, and why) is recorded with a `herdr-app shot` screenshot,
+      and decides whether a drawn-graph view gets a plan of its own
+    evidence:
+      human: >-
+        Felippe reads docs/plans/2026-11-11-agent-workbench.spike.md and its screenshot and accepts the finding.
+  - id: S21
+    when: >-
+      the outcome oracle drives a fixture plan through the real driver with fake runtime and gh (a ticket accepted
+      end to end, a ticket merged by hand after its evidence failed, a cycle, a ledger holding the address fallback)
+      and reads it with the workbench commands
+    then: >-
+      the YAML slug is the plan field, the edges and layers are exactly `blocked_by`, the output is stable, a cycle is
+      a scoped error, the attempt maps to its assignment and real address, the fallback maps to null, the failed
+      ticket is claimed but not verified and the plan is not accepted, the accepted plan's outcome is what `verify`
+      says, no report body appears, and the repository and state directory are byte-identical before and after
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_workbench_outcome.py
+        -m integration -q --junitxml="$EEC_JUNIT"
+      oracle: [test_workbench_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 600
+  - id: S22
+    when: 'the installed mod is opened in a real Herdr window on this repository at full-tab and narrow widths'
+    then: >-
+      `herdr-app check` passes and the screenshots show this repository's plans, a YAML plan's layered tickets, the
+      inspector with attempts and evidence, an Open that lands on the right terminal, and the empty and error states
+    evidence:
+      human: >-
+        Felippe runs `herdr-app check ~/.config/herdr-app/mods/agent-workbench`, opens the workbench at full-tab and
+        narrow widths, takes `herdr-app shot` of each, follows one Open, and accepts what he sees.
+  - id: S23
+    when: 'the workbench is accepted'
+    then: >-
+      the plans, plans-files and plans-tabs mods and the plans layout are gone from ~/.config/herdr-app, Herdr runs on
+      the workbench layout or its default, and the herdr-app-mods repository is archived
+
+tickets:
+  - id: T1
+    delivers: >-
+      `workbench plans` and `workbench plan` in a new read-only module, built on plan.load and the ledger reader: plan
+      list with states and counts, the layered graph, approval revision and drift, discovery error kinds; the
+      `plans list` slug fix; the living spec docs/specs/agent-workbench.md
+    satisfies: [S1, S2, S3, S4, S5, S6, S11]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/workbench.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/tests/test_workbench.py
+      - packages/agent-orchestrator/tests/test_discovery.py
+      - docs/specs/agent-workbench.md
+    size: regular
+    difficulty: complex
+  - id: T2
+    delivers: >-
+      Attempts, gates and outcome in `workbench plan`: every ledger task per ticket with assignment id, claimed and
+      the runtime address (null for the fallback), the driver recording an address only when the runtime returned one,
+      ticket receipts and the unverified flag, outcome items and freshness from verify; the outcome test
+    satisfies: [S7, S8, S9, S10, S21]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/workbench.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_workbench.py
+      - packages/agent-orchestrator/tests/test_workbench_execution.py
+      - packages/agent-orchestrator/tests/test_agents.py
+      - docs/specs/agent-workbench.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+    risk: [state]
+  - id: T3
+    delivers: >-
+      The herdr/agent-workbench mod foundation: mod.json (place none), main.js, data.js (fetch, one in flight, stale
+      guard, refresh), model.js (pure), views/ and ui.js on the theme; plan list, layered ticket list, inspector, empty
+      and error states, narrow layout; RECIPE.md; model.js tests under node --test run from pytest
+    satisfies: [S12, S13, S14, S15, S18]
+    paths:
+      - herdr/agent-workbench/
+      - tests/test_workbench_mod.py
+      - docs/specs/agent-workbench.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+  - id: T4
+    delivers: >-
+      Execution in the mod: attempts in the inspector joined to live terminals() by address, Open focusing the
+      terminal, unknown and not-live states, the Runtime section for unplanned live agents
+    satisfies: [S16, S17]
+    paths:
+      - herdr/agent-workbench/
+      - tests/test_workbench_mod.py
+      - docs/specs/agent-workbench.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T2, T3]
+  - id: T5
+    delivers: >-
+      The `herdr` installer component: symlink from a checkout, copy from a release, the opt-in workbench layout,
+      dry-run, idempotent rerun, conflict refusal with a preview, uninstall; installer-contract requirements
+    satisfies: [S19]
+    paths:
+      - install.sh
+      - scripts/
+      - tests/installer/
+      - herdr/layouts/
+      - docs/specs/installer-contract.md
+    size: regular
+    difficulty: simple
+    blocked_by: [T3]
+  - id: T6
+    delivers: >-
+      The drawn-edge spike: a throwaway prototype outside the repository and its finding with a screenshot in
+      docs/plans/2026-11-11-agent-workbench.spike.md
+    satisfies: [S20]
+    paths:
+      - docs/plans/2026-11-11-agent-workbench.spike.md
+    size: small
+    difficulty: simple
+    blocked_by: [T3]
+  - id: T7
+    delivers: Felippe's acceptance of the installed workbench in a real Herdr window at full and narrow widths
+    satisfies: [S22]
+    paths:
+      - herdr/agent-workbench/
+    owner: felippe
+    blocked_by: [T4, T5]
+  - id: T8
+    delivers: >-
+      Retirement of the old Plans panel: remove plans, plans-files, plans-tabs and the plans layout from
+      ~/.config/herdr-app and archive herdr-app-mods, only once yaml-eec is archived (its S24 reads that panel)
+    satisfies: [S23]
+    paths:
+      - README.md
+    owner: felippe
+    repo: herdr-app-mods
+    blocked_by: [T7]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-11T10:11:43.512329+00:00'
+  base: 675d62668d0c6e6b6107e6cbcf6dc2e5e3509d96
+  digest: dce361d17bebc9b5a7ef3013205563ee3d7647ae0bfe09bb05a77db65ddb0e45
