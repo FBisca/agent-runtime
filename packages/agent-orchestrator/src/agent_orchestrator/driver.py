@@ -1239,7 +1239,7 @@ class Driver:
 
     def read_plan(self):
         if self.plan_path.name.endswith(".plan.yaml"):
-            model = yaml_plan.load(
+            model = load_approved(
                 self.plan_path,
                 repo=self.repo,
                 state_dir=self.args.state_dir,
@@ -4127,7 +4127,7 @@ class Driver:
 
     def oracles(self):
         """The approved oracle bytes: the approval snapshot's, never the authored directory's."""
-        snapshot = yaml_plan.snapshot_path(self.contract()[1], self.args.state_dir).parent
+        snapshot = snapshot_dir(self.contract()[1], self.args.state_dir)
         return yaml_plan.payloads(snapshot / "oracle")
 
     def run_evidence(self, scenario_id, phase, commit):
@@ -5295,6 +5295,27 @@ def forwarded(argv, option):
     return None
 
 
+def snapshot_dir(approval, state_dir):
+    """Where the approval snapshot lives: the run's state dir first, else the default one `plan approve` wrote to.
+
+    A snapshot is addressed by its digest and verified byte for byte, so its location carries no trust."""
+    here = yaml_plan.snapshot_path(approval, state_dir).parent
+    if (here / "plan.yaml").is_file():
+        return here
+    return yaml_plan.snapshot_path(approval, yaml_plan.DEFAULT_STATE).parent
+
+
+def load_approved(path, *, repo, state_dir, **kwargs):
+    """yaml_plan.load that finds a snapshot approved under the default state dir when the run uses another."""
+    try:
+        return yaml_plan.load(path, repo=repo, state_dir=state_dir, **kwargs)
+    except PlanError as error:
+        default = Path(yaml_plan.DEFAULT_STATE).expanduser()
+        if "snapshot missing" not in str(error) or Path(state_dir).expanduser() == default:
+            raise
+        return yaml_plan.load(path, repo=repo, state_dir=default, **kwargs)
+
+
 def is_yaml(plan_path):
     return Path(plan_path).name.endswith(".plan.yaml")
 
@@ -5477,7 +5498,8 @@ def plan_status(args):
         tickets.append(row)
     return {
         "slug": slug,
-        "plan": str(plan_path),
+        # The plan is an object (path, state, history) for a reader of the run; the flat keys stay for the existing ones.
+        "plan": {"path": str(plan_path), "state": state, "history": [h["state"] for h in history]},
         "repo": str(repo) if repo else None,
         "run_dir": str(run_dir),
         "ledger": str(ledger_path),
@@ -5497,7 +5519,7 @@ def acceptance_context(args):
         "never accepted; rewrite it as plan/1 YAML (plan check)" % plan_path,
     )
     repo = repo_root(plan_path, args.repo)
-    model = yaml_plan.load(plan_path, repo=repo, state_dir=args.state_dir, require_approval=True)
+    model = load_approved(plan_path, repo=repo, state_dir=args.state_dir, require_approval=True)
     ledger_path, run_dir = locate_state(args.state_dir, plan_path, repo, model.slug)
     data = read_ledger_file(ledger_path) if ledger_path.is_file() else {}
     return model, repo, ledger_path, run_dir, data
@@ -5672,7 +5694,7 @@ def launch(args, run_args):
     )
     if plan_path.name.endswith(".plan.yaml"):
         # The same check `run` makes first, so an unapproved or drifted contract starts no pane.
-        slug = yaml_plan.load(
+        slug = load_approved(
             plan_path,
             repo=repo,
             state_dir=forwarded(run_args, "--state-dir") or yaml_plan.DEFAULT_STATE,
@@ -6240,7 +6262,7 @@ def main(argv=None):
                     args.plan, repo=args.repo, state_dir=args.state_dir, base=args.base
                 )
             }
-        model = yaml_plan.load(args.plan, repo=args.repo, state_dir=args.state_dir)
+        model = load_approved(args.plan, repo=args.repo, state_dir=args.state_dir)
         return {"valid": True, "slug": model.slug}
     if args.command == "plans":
         found = yaml_plan.discover(args.repo, args.path)

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from fixtures import load_script
@@ -140,3 +141,30 @@ class YamlArchiveDestinationTests(unittest.TestCase):
                 "src/a/test_oracle.py",
             ],
         )
+
+
+class SnapshotLocationTests(unittest.TestCase):
+    """The approval snapshot is found by digest wherever `plan approve` wrote it."""
+
+    def setUp(self):
+        self.driver = load_script()
+        self.default = Path(self.driver.yaml_plan.DEFAULT_STATE).expanduser()
+
+    def fake_load(self, present_in):
+        def load(path, *, repo, state_dir, **kwargs):
+            if Path(state_dir).expanduser() != present_in:
+                raise self.driver.PlanError(f"approval: snapshot missing at {state_dir} — approve")
+            return "model"
+
+        return load
+
+    def test_S23_a_snapshot_approved_under_the_default_state_dir_loads_for_another_state_dir(self):
+        with mock.patch.object(self.driver.yaml_plan, "load", self.fake_load(self.default)):
+            got = self.driver.load_approved("p", repo="r", state_dir="/elsewhere/state")
+        self.assertEqual(got, "model")
+
+    def test_S23_a_snapshot_missing_in_both_places_still_refuses(self):
+        with mock.patch.object(self.driver.yaml_plan, "load", self.fake_load(Path("/nowhere"))):
+            with self.assertRaises(self.driver.PlanError) as caught:
+                self.driver.load_approved("p", repo="r", state_dir="/elsewhere/state")
+        self.assertIn("snapshot missing", str(caught.exception))
