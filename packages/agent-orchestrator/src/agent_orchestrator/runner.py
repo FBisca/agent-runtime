@@ -6,7 +6,6 @@ env names the plan declares. The result is PASS, FAIL or UNKNOWN by rule (D16); 
 run never yields a receipt, because only the driver calls this module. Stdlib only.
 """
 
-import fcntl
 import hashlib
 import json
 import os
@@ -20,6 +19,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+
+from . import ledger as ledgers
 
 SCHEMA_VERSION = 1
 LOG_LIMIT = 1_000_000
@@ -615,55 +616,26 @@ def record_in_ledger(data, run):
     return data
 
 
-LEDGER_WAIT = 10
+LEDGER_WAIT = ledgers.DEADLINE  # the driver's deadline: one rule for every writer of the ledger
 
 
 def record_receipts(ledger_path, runs):
     """Record the sha256 of each persisted run's receipt in the plan's ledger file, creating the ledger when absent.
 
-    The write takes the ledger's own `<ledger>.lock` and replaces the file whole, as the driver's does, so a driver
-    updating the ledger and this call never interleave; it waits a few seconds for a busy lock. The ledger's other
-    keys are kept as they are."""
-    path = Path(ledger_path).absolute()
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if path.is_symlink():
-        raise RunnerError("the ledger %s must not be a symlink" % path)
-    lock_fd = os.open(
-        path.with_name(path.name + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
-    )
-    with os.fdopen(lock_fd, "w") as lock:
-        deadline = time.monotonic() + LEDGER_WAIT
-        while True:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() > deadline:
-                    raise RunnerError(
-                        "the ledger %s is busy; retry when the other update is done" % path
-                    ) from None
-                time.sleep(0.05)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-        except (OSError, ValueError) as error:
-            raise RunnerError("cannot read the ledger %s: %s" % (path, error)) from None
-        if data is None:
-            data = {"version": 1, "tasks": {}}
-        if not isinstance(data, dict) or data.get("version") != 1:
-            raise RunnerError("the ledger %s is not a version 1 ledger" % path)
-        for run in runs:
-            record_in_ledger(data, run)
-        fd, temporary = tempfile.mkstemp(prefix=".orchestrate-", dir=path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(data, stream, indent=2)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+    The write takes the ledger's own lock through the module the driver uses, so the two never interleave and wait under
+    the same deadline; the ledger's other keys are kept as they are."""
+    try:
+        with ledgers.locked(ledger_path, wait=LEDGER_WAIT) as data:
+            data.setdefault("receipts", {})
+            for run in runs:
+                record_in_ledger(data, run)
+    except ledgers.LedgerBusy:
+        raise RunnerError(
+            "the ledger %s is busy; retry when the other update is done"
+            % Path(ledger_path).absolute()
+        ) from None
+    except ledgers.LedgerError as error:
+        raise RunnerError(str(error)) from None
 
 
 def judge_baseline(receipt, expected, has_oracle):

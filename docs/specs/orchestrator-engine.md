@@ -99,6 +99,12 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R68** WHEN a unit the idle tick skipped (its gate was `requested`, `awaiting-merge` or parked) returns to `working`, THEN its working window starts again at that tick, and the idle tick does not count it until another `--working-minutes` have passed. (from drive-restart-recovery-gaps/S13)
 - **R69** WHEN a drive starts, THEN the working window starts empty: `--working-minutes` is measured from the first tick that sees the agent `working`, and a restart resets it. (from drive-restart-recovery-gaps/S13a)
 - **R70** WHEN the archive brief is written for a YAML plan, THEN every scenario the plan's spec already carries in a requirement's provenance is kept as it is and the brief appends none of them again: a requirement that names several scenarios at once (`(from <slug>/S1, S2, S3)`) holds every one of them, not only the first. (from yaml-eec/S29)
+- **R71** WHEN the driver books a change while a Lead command holds the ledger lock, THEN it waits with jittered backoff (0.2 s growing to 5 s) under one monotonic deadline of 60 s that counts the lock waits and the sleeps alike, then books the change; a busy ledger is not an error of the step that met it, and the drive does not exit. (from orchestrator-audit-fixes/S1)
+- **R72** WHEN the ledger stays busy past that deadline, or any other exception escapes the driver during startup, the loop or the finalization, THEN the driver logs `crashed <reason>` (`crashed ledger busy >60s` for the ledger), writes a `crash` wake without taking the ledger lock, and exits non-zero; a `run` refused because another driver holds the run lock logs no crash. (from orchestrator-audit-fixes/S2, S3)
+- **R73** WHEN the driver and the evidence runner both write the ledger, THEN they take the same lock through one shared helper (`ledger.locked`) and the same deadline rule. (from orchestrator-audit-fixes/S6)
+- **R74** WHEN the orchestrator creates a ledger, or makes its next locked write to a ledger that lacks the marker, THEN the ledger carries `"kind": "agent-orchestrator/ledger"` beside its existing `version: 1`, on disk before any file a worker reads (the contract, a brief) exists; a ledger of another kind is refused. (from orchestrator-audit-fixes/S7)
+- **R75** WHEN a Lead read command (`show`, the read half of `accept` and `evidence`) runs during a drive, THEN it reads an unlocked snapshot of the ledger; any write it then makes takes the lock and revalidates against the current ledger, refusing with a reason (`the ledger changed since it was read`) when the keys it decided on moved, and writes nothing. (from orchestrator-audit-fixes/S5)
+- **R76** WHEN `await` runs while no driver holds the run lock and the run has not finished, THEN it returns `crashed -> <log line>` when the run's driver logged a crash, and `driver gone without a crash log` when a driver started for the run (a `start` line with a pid) and died without one; a wake the Lead has not seen is printed first; a run whose driver has not started yet, or whose driver holds the run lock, is still awaited. (from orchestrator-audit-fixes/S4)
 
 ## Coverage
 
@@ -141,6 +147,13 @@ suite runs here, against the member, and the member answers the way the engine a
 | drive-restart-recovery-gaps/S13 | R68 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window` |
 | drive-restart-recovery-gaps/S13a | R69 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it` |
 | yaml-eec/S29 | R70 | `packages/agent-orchestrator/tests/test_archive_yaml.py`: `test_S29_a_requirement_naming_several_scenarios_keeps_all_of_them` |
+| orchestrator-audit-fixes/S1 | R71 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S1_a_held_ledger_is_waited_out_with_jittered_backoff_and_then_booked`, `test_S1_the_backoff_grows_to_5_seconds_and_no_further`, `test_S1_the_driver_waits_for_a_ledger_a_lead_command_holds_and_books_the_change` |
+| orchestrator-audit-fixes/S2 | R72 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S2_*`; `packages/agent-orchestrator/tests/test_await.py`: `CrashGuardTests.test_S2_*` |
+| orchestrator-audit-fixes/S3 | R72 | `packages/agent-orchestrator/tests/test_await.py`: `CrashGuardTests.test_S3_*` |
+| orchestrator-audit-fixes/S4 | R76 | `packages/agent-orchestrator/tests/test_await.py`: `AwaitTests.test_S4_*` |
+| orchestrator-audit-fixes/S5 | R75 | `packages/agent-orchestrator/tests/test_ledger.py`: `SnapshotTests.test_S5_*`, `AcceptsRevalidateTests.test_S5_accept_refuses_when_the_ledger_moved_after_it_was_read` |
+| orchestrator-audit-fixes/S6 | R73 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S6_*` |
+| orchestrator-audit-fixes/S7 | R74 | `packages/agent-orchestrator/tests/test_ledger.py`: `KindMarkerTests.test_S7_*`, `RunMarkerTests.test_S7_a_run_creates_its_ledger_with_the_marker_before_any_file_a_worker_reads` |
 
 ### R4 — the route refusals
 
@@ -213,6 +226,8 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | `test_evidence.py` | R2 | `orchestration-baselines/S2` — the per-attempt evidence |
 | `test_fake_gh.py` | R2 | the fake `gh` — a draft PR that never goes ready; scripted draft views, checks while ready and a failing draft undo |
 | `test_gates.py` | R2 | `code-driven-orchestrator/S5`–`S7` — the report, the review, the fix round |
+| `test_ledger.py` | R71–R75 | `orchestrator-audit-fixes/S1`, `S2`, `S5`–`S7` — the shared ledger lock, its deadline, the snapshot and the kind marker |
+| `test_await.py` | R72, R76 | `orchestrator-audit-fixes/S2`–`S4` — the crash guard and what `await` says of a run whose driver died |
 | `test_launch.py` | R2, R6 | `code-driven-orchestrator/S17`, `orchestrate-lean-loop/S49`, `orchestrate-lean-loop/S50` — the pane the run starts in |
 | `test_merge.py` | R2 | `code-driven-orchestrator/S6`, `code-driven-orchestrator/S6a`, `code-driven-orchestrator/S8`–`S10` — the merge and the cleanup |
 | `test_orchestrate.py` | R2 | the ledger: `claim`, `bind`, `checkpoint`, `release`, `show`, `context`, `metrics` |
