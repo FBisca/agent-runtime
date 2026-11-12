@@ -419,7 +419,19 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.set_ticket_status("T4", "COMPLETE 2026-11-07")
         self.run_driver(expect=1)
         self.assertEqual(self.plan_status("T4"), "COMPLETE 2026-11-07")
-        self.assertEqual(self.attention_md().count("sign-off"), 1)
+        self.assertEqual(self.attention_md().count("sign-off"), 0)
+
+    def test_S4_attention_md_is_rebuilt_from_the_ledger_on_every_tick(self):
+        """yaml-eec-gaps/S4"""
+        self.run_driver()
+        self.run_driver(expect=1)
+        self.assertEqual(self.attention_md().count("T4"), 1)
+        self.set_ticket_status("T4", "COMPLETE 2026-11-07")
+        self.run_driver(expect=1)
+        text = self.attention_md()
+        self.assertNotIn("T4", text)
+        self.assertTrue(text.startswith("# Needs you:"))
+        self.assertEqual([l for l in text.splitlines() if l.startswith("- ")], [])
 
     def test_S13_a_person_ticket_with_open_blockers_stays_to_do(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S13"""
@@ -428,7 +440,7 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(self.plan_status("T4"), "TO-DO")
-        self.assertEqual(self.attention_md(), "")
+        self.assertNotIn("- ", self.attention_md())
 
 
 if __name__ == "__main__":

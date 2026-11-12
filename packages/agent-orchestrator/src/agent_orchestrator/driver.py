@@ -1142,6 +1142,7 @@ class Driver:
                     + self.attend_people(plan)
                     + self.start_archive(plan)
                 )
+                self.refresh_attention()
             else:  # the last valid plan keeps the work going; what the user's edit might have changed waits for a valid file
                 dispatched = self.dispatch_ready(plan)
             if idle and not dispatched and not acted and not self.awaiting():
@@ -1726,19 +1727,20 @@ class Driver:
         with self.book() as data:
             data.setdefault("ticket_status", {})[ticket_id] = status
 
-    def note_attention(self, ticket_id, kind, reason):
-        path = self.run_dir / "attention.md"
-        if not path.exists():
-            path.write_text(
-                "# Needs you: %s\n\n%s carries the same reason.\n\n"
-                % (
-                    self.slug,
-                    "`status <plan> --json`",
-                ),
-                encoding="utf-8",
-            )
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write("- %s %s (%s): %s\n" % (now(), ticket_id, kind, " ".join(reason.split())))
+    def refresh_attention(self):
+        """Rewrite attention.md from the ledger's `needs you` tickets. Appending left a completed ticket's line
+        behind, so the file is rebuilt on every tick and never edited."""
+        with self.book() as data:
+            statuses = dict(data.get("ticket_status") or {})
+        lines = [
+            "- %s (person): %s" % (ticket_id, " ".join(text.split(":", 1)[1].split()))
+            for ticket_id, text in statuses.items()
+            if str(text).lower().startswith("needs you:")
+        ]
+        body = "# Needs you: %s\n\n`status <plan> --json` carries the same reason.\n\n" % self.slug
+        (self.run_dir / "attention.md").write_text(
+            body + "".join(line + "\n" for line in lines), encoding="utf-8"
+        )
 
     def record_report(self, task_id, report, **changes):
         """Checkpoint the worker's report as PARTIAL: the unit is not COMPLETE until CI and the merge."""
@@ -5111,7 +5113,6 @@ class Driver:
             if is_agent(ticket) or not ready(ticket, by_id):
                 continue
             needs = cell(ticket["What it delivers"] or "your action")
-            self.note_attention(ticket["#"], "person", needs)
             self.write_status(ticket["#"], "needs you: " + needs)
             event("%s needs you: %s" % (ticket["#"], needs))
             # attention.md and the pane are not read by a Lead that ended its turn; only a wake reaches it.
