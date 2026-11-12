@@ -27,12 +27,18 @@ decides is how an answer, or the lack of one, reads (`readPlans`, `notice`).
 
 ## Rules
 
-- Never call `writeTextFile`, a shell or any command but the two workbench verbs. The one Herdr command it runs is
-  `agent.focus` (Open); an attempt joins a terminal by exact address, never by name, and a remote space joins nothing.
+- Never call `writeTextFile`, a shell or any command but the two workbench verbs. The Herdr commands it runs are
+  `agent.focus` (Open) and the panel button's `layout.select`, `layout.show` and `layout.hide`; an attempt joins a terminal by exact address, never by name, and a remote space joins nothing.
 - An unknown value is shown as unknown (or its own text), never filled in; a failure is shown where it belongs
   (project or plan) with its way out; nothing is drawn when there is no data.
 - Refresh: the state directory watcher marks the view dirty (flushed every `FLUSH_MS`), and a `FALLBACK_MS` timer
   fetches regardless. Never poll Herdr's live state: `render` already follows it.
+
+## The tab bar button
+
+Herdr's tabs mod draws Files and Changes only, so the workbench layout puts this mod beside it with props
+`{ toggle: true }`: that instance draws the Workbench button (`views/toggle.js`, logic in `panelToggle` and
+`panelsWith`) and fetches nothing.
 
 ## Try it
 
