@@ -3,6 +3,7 @@
 import json
 import unittest
 
+import fake_gh
 import pytest
 from fixtures import load_script, report_wait
 from test_gates import GateFixture
@@ -70,15 +71,18 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
 class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
     def test_S5_a_conflicting_archive_pr_asks_the_lead_and_spawns_no_worker(self):
         """orchestrator-engine/R34: the archive has no worker to rebase it."""
-        dirty = {"state": "OPEN", "mergeStateStatus": "DIRTY", "mergeable": "CONFLICTING"}
-        merged = self.ticket_merged()  # scripts the PR queue: the conflict is queued after it
-        merged_t1 = {
-            "state": "MERGED",
-            "mergeCommit": {"oid": self.git(self.repo, "rev-parse", "HEAD")},
-        }
-        self.prs([merged_t1])
-        self.drafts([dirty])  # the archive PR is a draft when CI finds it conflicting
-        self.waits(merged + [self.gaps_done(), self.decide_step("archive", "skip")])
+        real = self.gh_process
+
+        def conflicting(argv, timeout=None, **kw):
+            # only the archive's PR conflicts: the ticket's PR (7) answers as the fake always does
+            if argv[:3] == ["pr", "view", "https://github.com/o/r/pull/9"]:
+                row = {"state": "OPEN", "isDraft": True, "mergeStateStatus": "DIRTY"}
+                row.update(mergeable="CONFLICTING", mergeCommit=None)
+                return fake_gh.Completed(argv, 0, json.dumps(row))
+            return real(argv, timeout=timeout, **kw)
+
+        self.gh_process = conflicting
+        self.waits(self.ticket_merged() + [self.gaps_done(), self.decide_step("archive", "skip")])
         self.run_driver()
         self.assertEqual(self.spawned().count(ARCHIVE), 0)
         request = self.request("archive")
