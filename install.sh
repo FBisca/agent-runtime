@@ -2,7 +2,7 @@
 # Link the agent-runtime shims into BIN_DIR, and wire the components the user names.
 # Idempotent: re-running refreshes the links and changes nothing else.
 #
-# The components are runtime, orchestrator, claude, codex and pi. The runtime is the base: the
+# The components are runtime, orchestrator, claude, codex, pi and herdr. The runtime is the base: the
 # orchestrator and every harness adapter need it, so it always comes along with them.
 #
 # Run from a checkout without arguments it keeps the original behaviour: link the shims and print
@@ -58,6 +58,11 @@ shims='agent-runtime agent-runtime-hook agent-runtime-mcp agent-runtime-profile'
 install_home=${AGENT_RUNTIME_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-runtime}
 manifest_path=$install_home/install-manifest.json
 tab=$(printf '\t')
+# Herdr reads its mods and layouts from here. The component adds to them and never edits Herdr's
+# own settings, so the layout it adds is shown only when the person switches to it.
+herdr_home=${HERDR_APP_HOME:-$HOME/.config/herdr-app}
+herdr_mod=$herdr_home/mods/agent-workbench
+herdr_layout=$herdr_home/layouts/workbench.json
 
 usage() {
   cat <<EOT
@@ -85,7 +90,8 @@ options:
                        download itself; the payload is installed only if it matches
   --version            print the release of this installer
 
-The orchestrator and every harness adapter need the runtime, so it is installed with them.
+The orchestrator and every harness adapter need the runtime, so it is installed with them; the
+Herdr mod reads the orchestrator, so it brings that along.
 Run from a checkout without --components the original behaviour runs: link the shims and print
 the Claude and Codex wiring. Streamed through a shell there is no checkout: the installer asks
 for the components on the terminal (/dev/tty) when there is one, and otherwise needs
@@ -97,6 +103,7 @@ sh install.sh --components ... from the file.
 
 environment:
   BIN_DIR                    where the shims are linked (default ~/.local/bin)
+  HERDR_APP_HOME             where the herdr component installs the mod and layout (default ~/.config/herdr-app)
   AGENT_RUNTIME_INSTALL_DIR  where the install manifest lives (default ~/.local/share)
   AGENT_RUNTIME_RELEASE      the release this install must be (same as --release)
   AGENT_RUNTIME_SHA256       the trusted payload checksum (same as --sha256)
@@ -109,7 +116,7 @@ EOT
 }
 
 # The component registry: the components the installer knows, in the order it handles them.
-component_order='runtime orchestrator claude codex pi'
+component_order='runtime orchestrator claude codex pi herdr'
 
 # What a component is, for the menu and the usage text.
 component_summary() {
@@ -119,6 +126,7 @@ component_summary() {
     claude) printf 'the Claude Code plugin wiring\n' ;;
     codex) printf 'the Codex shims and config wiring\n' ;;
     pi) printf 'the Pi integration\n' ;;
+    herdr) printf 'the agent-workbench mod for Herdr and its opt-in workbench layout\n' ;;
   esac
 }
 
@@ -128,6 +136,7 @@ component_dependencies() {
   case $1 in
     runtime) return 0 ;;
     orchestrator|claude|codex|pi) printf 'runtime\n' ;;
+    herdr) printf 'orchestrator\n' ;;
     *) return 1 ;;
   esac
 }
@@ -714,8 +723,130 @@ install_pi() {
   manifest add pi "$release" "$root"
 }
 
+# Whether the herdr component copies instead of linking: a staged release is the installer's own
+# directory, so a link into it would point at something nobody edits and an uninstall deletes.
+herdr_copies() {
+  staged_release "$root"
+}
+
+herdr_verb() {
+  if herdr_copies; then printf 'copy\n'; else printf 'link\n'; fi
+}
+
+# Whether this installer put the path there: it is listed in the manifest. The manifest is read
+# once the component is installed; before that nothing is ours.
+herdr_listed() {
+  while IFS= read -r owned; do
+    [ "$owned" != "$1" ] || return 0
+  done <<EOF
+$(manifest files herdr)
+EOF
+  return 1
+}
+
+# Refuse what the component would clobber, before anything is changed. A mod or layout of that name
+# that this installer did not put there is the person's, and the refusal shows what it would do.
+check_herdr() {
+  if [ -z "$root" ] || [ ! -d "$root/herdr/agent-workbench" ] || [ ! -f "$root/herdr/layouts/workbench.json" ]; then
+    echo "cannot install herdr: this checkout or release has no herdr/agent-workbench mod and herdr/layouts/workbench.json" >&2
+    exit 1
+  fi
+  verb=$(herdr_verb)
+  if [ -L "$herdr_mod" ]; then
+    target=$(readlink "$herdr_mod")
+    if ! under "$target" "$root" && ! owned_by_the_installer "$target" && ! herdr_listed "$herdr_mod"; then
+      echo "refusing to replace $herdr_mod: it points at $target, which this install does not own" >&2
+      echo "  would $verb $herdr_mod -> $root/herdr/agent-workbench" >&2
+      echo "  move it away or remove it, then run the install again" >&2
+      exit 1
+    fi
+  elif [ -e "$herdr_mod" ] && ! herdr_listed "$herdr_mod"; then
+    echo "refusing to replace $herdr_mod: a mod of that name is there and this install did not put it there" >&2
+    echo "  would $verb $herdr_mod -> $root/herdr/agent-workbench" >&2
+    echo "  move it away or remove it, then run the install again" >&2
+    exit 1
+  fi
+  if [ -e "$herdr_layout" ] || [ -L "$herdr_layout" ]; then
+    if ! herdr_listed "$herdr_layout" && ! cmp -s "$herdr_layout" "$root/herdr/layouts/workbench.json"; then
+      echo "refusing to replace $herdr_layout: a layout of that name is there and this install did not put it there" >&2
+      echo "  would copy $root/herdr/layouts/workbench.json -> $herdr_layout" >&2
+      echo "  move it away or remove it, then run the install again" >&2
+      exit 1
+    fi
+  fi
+}
+
+# A copy is made beside its place and moved over it, so a reader sees the old one or the new one.
+install_herdr() {
+  mkdir -p "$herdr_home/mods" "$herdr_home/layouts"
+  if herdr_copies; then
+    temporary=$herdr_home/mods/.agent-workbench.new.$$
+    rm -rf "$temporary"
+    cp -R "$root/herdr/agent-workbench" "$temporary"
+    rm -rf "$herdr_mod"
+    mv "$temporary" "$herdr_mod"
+    printf 'copied %s\n' "$herdr_mod"
+  else
+    # A copy from an earlier release is ours to replace; a link is swapped in one step.
+    if [ -d "$herdr_mod" ] && [ ! -L "$herdr_mod" ]; then rm -rf "$herdr_mod"; fi
+    swap_link "$root/herdr/agent-workbench" "$herdr_mod" || exit 1
+    printf 'linked %s\n' "$herdr_mod"
+  fi
+  temporary=$herdr_home/layouts/.workbench.json.new.$$
+  cp "$root/herdr/layouts/workbench.json" "$temporary"
+  mv "$temporary" "$herdr_layout"
+  printf 'added the workbench layout %s (not switched to: pick it with layout.switch)\n' "$herdr_layout"
+  manifest add herdr "$release" "$root" "$herdr_mod" "$herdr_layout"
+}
+
+# Remove what the component put in Herdr's home, and only while it is still what it put there: a
+# link into the install, a copy nobody edited, a layout nobody changed. Anything else stays.
+uninstall_herdr() {
+  source=$(manifest source herdr)
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    if [ -L "$file" ]; then
+      target=$(readlink "$file")
+      if under "$target" "$root" || under "$target" "$source"; then
+        herdr_remove "$file"
+      else
+        printf 'kept %s: it points at %s, which this install does not own\n' "$file" "$target"
+      fi
+    elif [ -d "$file" ]; then
+      if diff -r "$file" "$source/herdr/agent-workbench" >/dev/null 2>&1; then
+        herdr_remove "$file"
+      else
+        printf 'kept %s: it is not the copy this installer made\n' "$file"
+      fi
+    elif [ -f "$file" ]; then
+      if cmp -s "$file" "$source/herdr/layouts/workbench.json"; then
+        herdr_remove "$file"
+      else
+        printf 'kept %s: it is not the file this installer created\n' "$file"
+      fi
+    else
+      printf 'already gone: %s\n' "$file"
+    fi
+  done <<EOF
+$(manifest files herdr)
+EOF
+  if [ "$dry_run" -eq 1 ]; then printf 'would uninstall herdr\n'; return 0; fi
+  manifest remove herdr
+  printf 'uninstalled herdr\n'
+}
+
+herdr_remove() {
+  if [ "$dry_run" -eq 1 ]; then
+    printf 'would remove %s\n' "$1"
+  else
+    rm -rf "$1"
+    printf 'removed %s\n' "$1"
+  fi
+}
+
 install_component() {
   case $1 in
+    herdr) install_herdr ;;
     runtime) install_runtime ;;
     orchestrator) install_orchestrator ;;
     claude) install_claude ;;
@@ -732,6 +863,7 @@ uninstall_component() {
     printf '%s: not installed\n' "$component"
     return 0
   fi
+  if [ "$component" = herdr ]; then uninstall_herdr; return 0; fi
   source=$(manifest source "$component")
   while IFS= read -r file; do
     [ -n "$file" ] || continue
@@ -990,6 +1122,10 @@ print_plan() {
         [ -z "$root" ] || wire=$root
         plan_adapter pi '.config/agent-runtime/hosts.json' "$pi_hosts" '"pi"' "$wire" 'print the Pi host policy for ~/.config/agent-runtime/hosts.json, no config is written'
         printf 'pi: Pi itself comes from its official installer; this one does not run it\n'
+        ;;
+      herdr)
+        printf 'herdr: %s %s -> %s\n' "$(herdr_verb)" "$herdr_mod" "${root:-the release payload}/herdr/agent-workbench"
+        printf 'herdr: copy %s from %s/herdr/layouts/workbench.json (opt-in, not switched to)\n' "$herdr_layout" "${root:-the release payload}"
         ;;
     esac
     printf '%s: record in the manifest\n' "$component"
@@ -1544,7 +1680,13 @@ if [ "$command" = uninstall ]; then
     printf 'command: uninstall\ncomponents: %s\n' "$(comma_list "$(canonical_components "$requested")")"
   fi
   confirm_choice
+  # The Herdr mod is compared with the release it came from, so it goes before the runtime that
+  # may own that release.
+  case " $requested " in
+    *" herdr "*) uninstall_component herdr ;;
+  esac
   for component in $(canonical_components "$requested"); do
+    [ "$component" != herdr ] || continue
     uninstall_component "$component"
   done
   exit 0
@@ -1557,10 +1699,16 @@ if [ "$dry_run" -eq 1 ]; then
   case " $selection " in
     *" runtime "*) check_shims selective ;;
   esac
+  case " $selection " in
+    *" herdr "*) if [ "$streamed" -eq 0 ]; then check_herdr; fi ;;
+  esac
   print_plan
   exit 0
 fi
 
+case " $selection " in
+  *" herdr "*) if [ "$streamed" -eq 0 ]; then check_herdr; fi ;;
+esac
 confirm_choice
 print_selection
 
