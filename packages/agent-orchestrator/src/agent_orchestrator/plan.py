@@ -400,11 +400,32 @@ def semantic_problems(data, path, repo):
     for sid in edges:
         if sid not in state:
             visit(sid, [sid])
+    # D14: a risk-tagged ticket that is not waived must prove its scenarios with a negative control, since a
+    # baseline pass alone cannot show that the oracle would catch the behaviour breaking.
+    risk_gated = {
+        s
+        for ticket in tickets
+        if isinstance(ticket, dict) and ticket.get("risk") and not ticket.get("evidence_waiver")
+        for s in (ticket.get("satisfies") if isinstance(ticket.get("satisfies"), list) else [])
+        if isinstance(s, str)
+    }
     for i, scenario in enumerate(scenarios):
         ev = scenario.get("evidence") if isinstance(scenario, dict) else None
         if not isinstance(ev, dict):
             continue
         prefix = f"scenarios[{i}].evidence"
+        if (
+            ev.get("check")
+            and ev.get("baseline") == "pass"
+            and ev.get("negative") is None
+            and scenario.get("id") in risk_gated
+        ):
+            defect(
+                prefix,
+                "risk-tagged ticket relies on baseline-pass evidence with no negative control",
+                "add a negative patch that breaks the behaviour (set negative to its oracle file), "
+                "set baseline: fail, or add evidence_waiver to the ticket",
+            )
         if bool(ev.get("human")) == bool(ev.get("check")):
             defect(
                 prefix,
