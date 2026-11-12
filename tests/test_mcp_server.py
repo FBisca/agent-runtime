@@ -313,6 +313,23 @@ class ToolListTests(ServerCase):
 
 
 class ToolCallTests(ServerCase):
+    def test_operation_is_refused_by_both_mcp_dispatch_paths(self):
+        """agent-runtime/R262: operation is available only through the call CLI."""
+        from agent_runtime import mcp_server
+
+        params = {"name": "operation", "arguments": {"operation_id": "private-key"}}
+        with mock.patch.object(mcp_server, "call_tool") as handler:
+            reply = mcp_server.dispatch("tools/call", 1, params, {})
+        self.assertEqual(reply["error"]["code"], -32602)
+        self.assertIn("unknown tool: operation", reply["error"]["message"])
+        handler.assert_not_called()
+        session = self.start()
+        session.handshake()
+        reply = session.send("tools/call", params)
+        self.assertEqual(reply["error"]["code"], -32602)
+        self.assertIn("unknown tool: operation", reply["error"]["message"])
+        self.assertEqual(session.send("ping")["result"], {})
+
     def call(self, session, name, arguments):
         return session.send("tools/call", {"name": name, "arguments": arguments})["result"]
 

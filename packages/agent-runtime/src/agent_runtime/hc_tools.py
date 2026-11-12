@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 import subprocess
 import threading
 import time
@@ -362,9 +363,26 @@ def operation_id(arguments, env, required=False):
 
 
 def operation_owner(env, caller):
-    """Whose keys these are: the lead terminal on this hc server, which outlives its session generations, so a
-    restarted orchestrator finds the keys it used. Never empty: a NULL owner would make every key unique."""
-    return "%s\n%s" % (hc_server(env), caller)
+    """The terminal on one bound hc socket, independent of orchestrator generations.
+
+    Path and terminal addresses can both be reused after restart. Device/inode/ctime identify
+    the socket incarnation; no session marker or path-only fallback can prove that identity.
+    """
+    socket = env.get("HC_TERMINAL_SOCKET")
+    if not socket:
+        raise OSError(
+            "cannot identify the hc server instance; restore HC_TERMINAL_SOCKET and retry"
+        )
+    info = os.stat(socket)
+    if not stat.S_ISSOCK(info.st_mode):
+        raise OSError("cannot identify the hc server instance; restore its Unix socket and retry")
+    return "%s\n%s\nsocket:%s:%s:%s" % (
+        hc_server(env),
+        caller,
+        info.st_dev,
+        info.st_ino,
+        info.st_ctime_ns,
+    )
 
 
 def operation_fingerprint(verb, **fields):
@@ -960,14 +978,15 @@ def operation(arguments, env, ctx):
     acknowledges a report, so it takes no receipt and returns no inbox."""
     key = operation_id(arguments, env, required=True)
     _, caller = require_hc(env)
-    store = getattr(ctx, "store", None) or dispatch.Store(env)
     try:
+        store = getattr(ctx, "store", None) or dispatch.Store(env)
         found = store.operation(operation_owner(env, caller), key)
-    except sqlite3.Error as error:
+    except (sqlite3.Error, OSError, dispatch.StoreError) as error:
         found = {
             "state": "unknown",
             "assignment_id": None,
-            "reason": "the store could not be read (%s); retry the lookup" % error,
+            "reason": "the store could not be read (%s); restore access to the store and retry the lookup"
+            % error,
         }
     return result(dict(found, operation_id=key), structured=True)
 
