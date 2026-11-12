@@ -566,7 +566,7 @@ def validate_request(request):
     return request
 
 
-def make_request(unit, task, event, reason, evidence, created_at=None):
+def make_request(unit, task, event, reason, evidence, created_at=None, menu=None):
     return validate_request(
         {
             "contract": VERSION,
@@ -575,7 +575,7 @@ def make_request(unit, task, event, reason, evidence, created_at=None):
             "event": event,
             "reason": reason,
             "evidence": list(evidence),
-            "menu": list(ACTIONS),
+            "menu": list(menu or ACTIONS),
             "status": "open",
             "decision": None,
             "created_at": created_at or datetime.now(timezone.utc).isoformat(),

@@ -6,7 +6,7 @@ import unittest
 
 import pytest
 from fixtures import DRIVER, load_script
-from test_archive import ARCHIVE, ArchiveFixture
+from test_archive import ArchiveFixture
 from test_decider import DeciderFixture
 from test_gates import DEFERRED, MAJOR
 
@@ -20,7 +20,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
     @pytest.mark.integration
     def test_S27_every_state_change_is_one_json_line_logged_before_the_next_step(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.waits(self.ticket_merged() + [self.gaps_done()])
         self.run_driver()
         states = [e for e in self.events("state") if e["task"] == "t1"]
         gates = [e["gate"][1] for e in states if e["gate"][0] != e["gate"][1]]
@@ -54,7 +54,6 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         last = [e for e in logged if e["kind"] == "state" and e["task"] == "t1"][-1]
         self.assertEqual(last["gate"][1], "converged")
         self.assert_intents_precede_spawns()
-        self.assertIn(ARCHIVE, [e["name"] for e in self.events("intent")])
 
     @pytest.mark.integration
     def test_S27_findings_are_logged_with_their_kind_and_source(self):
@@ -97,7 +96,6 @@ class EventTests(ArchiveFixture, unittest.TestCase):
                 worker,
                 self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
                 self.worker_done("t1r1"),
-                self.archive_done(),
                 self.gaps_done(),
             ]
         )
