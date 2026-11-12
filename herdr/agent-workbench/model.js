@@ -376,7 +376,7 @@ export function panelToggle(root, restorePx = null) {
 /** The expand over the terminals: while the panel shows the workbench beside the terminals, `expand` hides them and
  *  gives the panel the whole work area (weight 1); once expanded, `commands` collapse back to `restorePx` (520 when
  *  unknown). `width` is the panel's px now, the one to remember before expanding; null when Herdr sizes it by weight.
- *  Null when the layout has no panel holding the workbench. */
+ *  Null when no expand is offered: the panel does not show the workbench, or no terminals sit beside it. */
 export function panelExpand(root, restorePx = null) {
   const shown = showingWorkbench(root);
   if (!shown) return null;
@@ -389,10 +389,11 @@ export function panelExpand(root, restorePx = null) {
     };
   }
   const beside = (findNode(root, "work-body")?.children ?? []).some((c) => c.id === MAIN);
+  if (!on || !beside) return null;
   const px = panel.size?.px;
   return {
     expanded: false,
-    offer: on && beside,
+    offer: true,
     commands: [["layout.hide", { id: MAIN }], ["layout.resize", { id: "panel", weight: 1 }]],
     width: typeof px === "number" ? px : null,
   };

@@ -41,10 +41,10 @@ test("S33 closing while expanded shows main and restores the width before hiding
 });
 
 test("S33 no expand is offered when the panel does not show the workbench or has no terminals beside it", () => {
-  assert.equal(panelExpand(work({ panel: { hidden: true } }), null).offer, false, "a hidden panel");
-  assert.equal(panelExpand(work({ body: { active: "files" } }), null).offer, false, "a panel on another panel");
+  assert.equal(panelExpand(work({ panel: { hidden: true } }), null), null, "a hidden panel");
+  assert.equal(panelExpand(work({ body: { active: "files" } }), null), null, "a panel on another panel");
   const noTerminals = work();
   noTerminals.children[0].children[0].children = noTerminals.children[0].children[0].children.filter((c) => c.id !== "main");
-  assert.equal(panelExpand(noTerminals, null).offer, false, "no terminals beside the panel");
+  assert.equal(panelExpand(noTerminals, null), null, "no terminals beside the panel");
   assert.equal(panelExpand(null, null), null, "a layout with no panel");
 });

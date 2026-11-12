@@ -81,6 +81,18 @@ export default class AgentWorkbench extends View {
     return toggleView(toggle, { t: theme(), onToggle });
   }
 
+  // The expand is the header's button: it hides the terminals and gives the panel the work area, and collapses back.
+  expandFor() {
+    const expand = panelExpand(herdrLayout(), shared(RESTORE_PX));
+    if (!expand) return null;
+    const onClick = (cx) => {
+      if (!expand.expanded) setShared(RESTORE_PX, expand.width ?? PANEL_PX);
+      runAll(expand.commands);
+      cx.notify();
+    };
+    return { expanded: expand.expanded, onClick };
+  }
+
   render(cx) {
     if (this.toggle) return this.renderToggle();
     if (this.syncSpace()) this.fetch(cx);
