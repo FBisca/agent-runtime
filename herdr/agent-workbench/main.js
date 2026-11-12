@@ -6,7 +6,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, watchFolder, home, theme, terminals, run } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents,
+  layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { planList } from "./views/plans.js";
@@ -116,7 +116,7 @@ export default class AgentWorkbench extends View {
     const all = terminals();
     const live = liveTerminals(all, machine);
     const onOpen = (open, cx) => { run(open.command, open.args); cx.notify(); };
-    const runtime = runtimeView(runtimeAgents(all, state.loaded, machine), { t, onOpen });
+    const runtime = runtimeView(runtimeAgents(all, state.loaded, machine), { t, onOpen }, runtimeNote(machine));
     const ctx = { t, selected, kin: relatives(tickets, selected), onSelect: select };
     const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live) : null;
     const screen = screenFor(layout, this.drilled, Boolean(selected));

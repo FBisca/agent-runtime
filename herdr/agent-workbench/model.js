@@ -229,18 +229,23 @@ export function attemptTerminal(address, live) {
 
 const isAgent = (t) => Boolean(t.program?.agent) || (t.status !== null && t.status !== undefined && t.status !== "");
 
+/** What the Runtime section says instead of a list when it cannot tell: an attempt's address records no machine, so
+ *  in a space on another machine nothing says which live agents an attempt names. Null when it can tell. */
+export const runtimeNote = (machine) =>
+  machine ? "Cannot tell which live agents a plan names in a space on another machine." : null;
+
 /** The live agent terminals no attempt of the given plans names, as rows in tree order (a terminal under the one that
- *  started it, depth 0 for the first of each tree). Nothing is made up for them: no plan, no ticket. Scoped to the
- *  shown space's machine: bare addresses on this computer, `machine/` ones on another. */
+ *  started it, depth 0 for the first of each tree). Nothing is made up for them: no plan, no ticket. Only on this
+ *  computer (bare addresses): in a space on another machine it lists none, see `runtimeNote`. */
 export function runtimeAgents(terminals, plans, machine) {
-  if (!Array.isArray(terminals)) return [];
+  if (!Array.isArray(terminals) || machine) return [];
   const named = new Set();
   for (const plan of plans ?? []) {
     for (const ticket of plan.tickets ?? []) {
       for (const a of ticket.attempts ?? []) if (a.address) named.add(a.address);
     }
   }
-  const here = (address) => (machine ? address.startsWith(machine + "/") : !address.includes("/"));
+  const here = (address) => !address.includes("/");
   const agents = terminals.filter((t) =>
     t && t.state === "live" && typeof t.address === "string" && here(t.address) && isAgent(t) && !named.has(t.address));
   const listed = new Set(agents.map((t) => t.address));

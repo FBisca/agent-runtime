@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspector, runtimeAgents, liveTerminals } from "../model.js";
+import { inspector, runtimeAgents, runtimeNote, liveTerminals } from "../model.js";
 import { PLAN } from "./fixtures.js";
 
 // A terminal as Herdr's terminals() describes it: address, state, parent, status, program. Local addresses are bare.
@@ -91,10 +91,12 @@ test("S17 an attempt of any shown plan names its terminal, and none are listed w
   assert.deepEqual(runtimeAgents(all, [...plans("t1"), ...plans("t2")], null), []);
 });
 
-test("S17 in a space on a machine, only that machine's terminals are listed, and in a local one only the bare ones", () => {
+test("S17 a local space lists only the bare addresses; a space on another machine lists none, since no attempt address can be told from its terminals", () => {
   const all = [term("t1"), term("box/t2"), term("other/t3")];
   assert.deepEqual(runtimeAgents(all, [], null).map((r) => r.address), ["t1"]);
-  assert.deepEqual(runtimeAgents(all, [], "box").map((r) => r.address), ["box/t2"]);
+  assert.deepEqual(runtimeAgents(all, [], "box"), [], "attempts record no machine: listing box/t2 could list a worker an attempt names");
+  assert.match(runtimeNote("box"), /another machine/);
+  assert.equal(runtimeNote(null), null);
 });
 
 test("S17 a parent cycle or a parent that is not listed still lists every agent once", () => {

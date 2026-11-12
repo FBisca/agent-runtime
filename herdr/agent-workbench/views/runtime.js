@@ -15,8 +15,9 @@ function agentRow(a, ctx) {
     .child(control(`open-runtime-${a.address}`, "Open", (_e, cx) => onOpen(a.open, cx), t));
 }
 
-/** Nothing is drawn when there is no unplanned live agent. */
-export function runtimeView(agents, ctx) {
+/** Nothing is drawn when there is no unplanned live agent, and no note to give. */
+export function runtimeView(agents, ctx, note = null) {
+  if (note) return v_flex().id("runtime").p(8).child(section("Runtime", ctx.t, div().text_size(11).text_color(ctx.t.dim).child(note)));
   if (!agents.length) return div();
   return v_flex().id("runtime").p(8).child(section("Runtime", ctx.t,
     div().text_size(11).text_color(ctx.t.dim).child("live agents no attempt of these plans names"),
