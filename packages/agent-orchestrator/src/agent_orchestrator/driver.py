@@ -5114,6 +5114,10 @@ class Driver:
             self.note_attention(ticket["#"], "person", needs)
             self.write_status(ticket["#"], "needs you: " + needs)
             event("%s needs you: %s" % (ticket["#"], needs))
+            # attention.md and the pane are not read by a Lead that ended its turn; only a wake reaches it.
+            self.wake(
+                "person", ticket["#"], "person %s: %s" % (ticket["#"], needs), key=ticket["#"]
+            )
             count += 1
         return count
 
