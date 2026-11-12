@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import contracts, events, evidence, routes, runner, verify, workbench
+from . import ledger as ledgers
 from . import plan as yaml_plan
 from .plan import PlanError
 from .runtime_client import CliRuntimeClient
@@ -122,42 +123,11 @@ def owned_paths(packet):
 
 
 @contextmanager
-def ledger(path):
-    path = Path(path).absolute()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    require(not path.is_symlink(), "ledger must not be a symlink")
-    lock_path = path.with_name(path.name + ".lock")
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError("ledger busy; inspect or retry after the other update") from None
-        if path.exists():
-            with path.open(encoding="utf-8") as stream:
-                try:
-                    data = json.load(stream)
-                except ValueError as error:
-                    raise ValueError(
-                        "the ledger %s is not valid JSON: %s" % (path, error)
-                    ) from None
-        else:
-            data = {"version": 1, "tasks": {}}
-        require(data.get("version") == 1 and isinstance(data.get("tasks"), dict), "invalid ledger")
-        before = json.dumps(data, sort_keys=True)
+def ledger(path, **options):
+    """The ledger under its lock, through the module the evidence runner shares: a busy ledger is waited out under one
+    deadline, and a ledger without the kind marker gets it before the block runs."""
+    with ledgers.locked(path, **options) as data:
         yield data
-        if json.dumps(data, sort_keys=True) != before:
-            tmp_fd, tmp_path = tempfile.mkstemp(prefix=".orchestrate-", dir=path.parent)
-            try:
-                with os.fdopen(tmp_fd, "w", encoding="utf-8") as stream:
-                    json.dump(data, stream, indent=2)
-                    stream.write("\n")
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(tmp_path, path)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
 
 
 ROUTE = {
@@ -1069,9 +1039,9 @@ class Driver:
         self.approval = model.approval
         ledger_path = state_layout(self.args.state_dir, self.plan_path, self.repo, model.slug)[0]
         statuses = {}
-        if ledger_path.exists():
-            with ledger(ledger_path) as data:
-                statuses = dict(data.get("ticket_status", {}))
+        data = ledgers.snapshot(ledger_path)  # a read: it never waits for a writer
+        if data is not None:
+            statuses = dict(data.get("ticket_status", {}))
         return model.legacy(statuses)
 
     def start(self):
@@ -1101,9 +1071,7 @@ class Driver:
             self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        contract = self.run_dir / "contract.md"
-        if not contract.exists():
-            contract.write_text(CONTRACT, encoding="utf-8")
+        # The ledger first: it carries the kind marker before any file a worker can read exists.
         with ledger(self.ledger_path) as data:
             self.lead = data.setdefault("lead", "orchestrate:" + self.slug)
             data["routes"] = routes.record(
@@ -1116,6 +1084,9 @@ class Driver:
             if data["plan"]["state"] == "APPROVED":
                 enter_plan_state(data, "RUNNING")
             self.resume_plan_state(data)
+        contract = self.run_dir / "contract.md"
+        if not contract.exists():
+            contract.write_text(CONTRACT, encoding="utf-8")
         for row in legacy:  # a run dir written before events.jsonl: its history enters the log once
             self.log("import", **row)
         self.log(
@@ -4851,8 +4822,8 @@ class Driver:
     def report_evidence(self):
         """The run's attempt evidence: one schema-versioned record per attempt, written beside metrics.json (which
         keeps its own shape). A measurement that was not taken is null, never 0."""
-        with ledger(self.ledger_path) as data:
-            records = evidence.attempts(data, events.read(self.run_dir / "events.jsonl"), self.slug)
+        data = ledgers.snapshot(self.ledger_path) or {}
+        records = evidence.attempts(data, events.read(self.run_dir / "events.jsonl"), self.slug)
         return evidence.write(self.run_dir / "attempts.jsonl", records)
 
     def dispatch_ready(self, plan):
@@ -5733,7 +5704,7 @@ def accept_item(args):
             "session); ask the Lead to run accept" % caller.get("parent", "unknown")
         )
     require(args.note.strip(), "accept needs a --note saying what you checked")
-    model, repo, ledger_path, run_dir, _ = acceptance_context(args)
+    model, repo, ledger_path, run_dir, seen = acceptance_context(args)
     scenario = verify.scenario_of(model, args.scenario)
     if scenario is None or scenario.evidence is None:
         raise Refused("accept: %s is not a scenario with evidence" % args.scenario)
@@ -5748,55 +5719,68 @@ def accept_item(args):
         or os.environ.get("USER")
         or "unknown"
     )
-    with ledger(ledger_path) as data:
-        state = (data.get("plan") or {}).get("state")
-        pin = data.get("integration") or {}
-        if state not in ("VERIFYING", "REJECTED") or pin.get("digest") != model.approval.digest:
-            raise Refused(
-                "accept: the plan is %s; a person accepts an item once integration ran for this contract "
-                "(verified or rejected)" % (state or "not started")
-            )
-        flagged = verify.unverified_scenarios(data).get(args.scenario)
-        if flagged and scenario.evidence.check:
-            raise Refused(
-                "accept: %s merged with %s's evidence unverified, so it must pass at integration; fix it and run "
-                "again — a person cannot accept it" % (flagged, args.scenario)
-            )
-        result = acceptance(
-            model,
-            data,
-            run_dir / "receipts",
-            digest=model.approval.digest,
-            tree_of=tree_in(repo),
+    try:
+        with ledger(ledger_path, snapshot=seen, keys=ACCEPT_READS) as data:
+            return accepted(args, model, repo, run_dir, scenario, who, data)
+    except ledgers.LedgerStale as error:
+        raise Refused("accept: %s" % error) from None
+
+
+# What `accept` decides on. A change to any of these while it ran makes its read stale; the driver's bookings to
+# `tasks` and the rest never do.
+ACCEPT_READS = ("plan", "integration", "unverified", "acceptance", "mutation", "receipts")
+
+
+def accepted(args, model, repo, run_dir, scenario, who, data):
+    """The write half of `accept`, on the ledger under its lock."""
+    state = (data.get("plan") or {}).get("state")
+    pin = data.get("integration") or {}
+    if state not in ("VERIFYING", "REJECTED") or pin.get("digest") != model.approval.digest:
+        raise Refused(
+            "accept: the plan is %s; a person accepts an item once integration ran for this contract "
+            "(verified or rejected)" % (state or "not started")
         )
-        item = next(i for i in result["items"] if i["scenario"] == args.scenario)
-        if item["state"] == "PASS":
-            raise Refused(
-                "accept: %s passes at integration; there is nothing to accept" % args.scenario
-            )
-        if item["state"] == "HUMAN_ACCEPTED":
-            raise Refused("accept: %s is already accepted: %s" % (args.scenario, item["reason"]))
-        data.setdefault("acceptance", {})[args.scenario] = {
-            "state": "HUMAN_ACCEPTED",
-            "by": who,
-            "at": now(),
-            "scope": "%s: THEN %s (%s at integration on %s)"
-            % (args.scenario, scenario.then, item["state"], pin["sha"][:12]),
-            "tree": pin["tree"],
-            "sha": pin["sha"],
-            "digest": model.approval.digest,
-            "note": args.note.strip(),
-            "previous": {"result": item["state"], "reason": item["reason"]},
-        }
-        outcome = acceptance(
-            model,
-            data,
-            run_dir / "receipts",
-            digest=model.approval.digest,
-            tree_of=tree_in(repo),
+    flagged = verify.unverified_scenarios(data).get(args.scenario)
+    if flagged and scenario.evidence.check:
+        raise Refused(
+            "accept: %s merged with %s's evidence unverified, so it must pass at integration; fix it and run "
+            "again — a person cannot accept it" % (flagged, args.scenario)
         )
-        if outcome["state"] == "ACCEPTED_WITH_HUMAN":
-            enter_plan_state(data, "ACCEPTED_WITH_HUMAN")
+    result = acceptance(
+        model,
+        data,
+        run_dir / "receipts",
+        digest=model.approval.digest,
+        tree_of=tree_in(repo),
+    )
+    item = next(i for i in result["items"] if i["scenario"] == args.scenario)
+    if item["state"] == "PASS":
+        raise Refused(
+            "accept: %s passes at integration; there is nothing to accept" % args.scenario
+        )
+    if item["state"] == "HUMAN_ACCEPTED":
+        raise Refused("accept: %s is already accepted: %s" % (args.scenario, item["reason"]))
+    data.setdefault("acceptance", {})[args.scenario] = {
+        "state": "HUMAN_ACCEPTED",
+        "by": who,
+        "at": now(),
+        "scope": "%s: THEN %s (%s at integration on %s)"
+        % (args.scenario, scenario.then, item["state"], pin["sha"][:12]),
+        "tree": pin["tree"],
+        "sha": pin["sha"],
+        "digest": model.approval.digest,
+        "note": args.note.strip(),
+        "previous": {"result": item["state"], "reason": item["reason"]},
+    }
+    outcome = acceptance(
+        model,
+        data,
+        run_dir / "receipts",
+        digest=model.approval.digest,
+        tree_of=tree_in(repo),
+    )
+    if outcome["state"] == "ACCEPTED_WITH_HUMAN":
+        enter_plan_state(data, "ACCEPTED_WITH_HUMAN")
     return {
         "scenario": args.scenario,
         "state": "HUMAN_ACCEPTED",
@@ -5808,11 +5792,8 @@ def accept_item(args):
 
 def read_ledger_file(path):
     """A ledger read without its lock: every writer replaces the file whole, so a reader sees one version."""
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise ValueError("cannot read the ledger %s: %s" % (path, error)) from None
-    require(isinstance(data, dict), "the ledger %s is not an object" % path)
+    data = ledgers.snapshot(path)
+    require(data is not None, "cannot read the ledger %s: no such file" % path)
     return data
 
 
@@ -5918,8 +5899,9 @@ def rebuild_metrics(args):
             ledger_path.exists(),
             "no events.jsonl or ledger for %s under %s" % (slug, run_dir.parent),
         )
-        with ledger(ledger_path) as data:
-            rows = [dict(row, kind="import") for row in legacy_imports(data)]
+        rows = [
+            dict(row, kind="import") for row in legacy_imports(ledgers.snapshot(ledger_path) or {})
+        ]
     result = events.rollup(rows, slug)
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     (run_dir / "metrics.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
@@ -5931,8 +5913,9 @@ def rebuild_evidence(args):
     The old metrics.json is left alone: the evidence is written beside it."""
     slug, ledger_path, run_dir = plan_home(args)
     require(ledger_path.exists(), "no ledger for %s under %s" % (slug, run_dir.parent))
-    with ledger(ledger_path) as data:
-        records = evidence.attempts(data, events.read(run_dir / "events.jsonl"), slug)
+    records = evidence.attempts(
+        ledgers.snapshot(ledger_path) or {}, events.read(run_dir / "events.jsonl"), slug
+    )
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     evidence.write(run_dir / "attempts.jsonl", records)
     return records
@@ -6053,27 +6036,91 @@ def take_wake(run_dir):
         return wakes[seen]["text"]
 
 
+DRIVER_MARKS = ("start", "finish", "crash")
+
+
+def last_mark(run_dir):
+    """The newest of the driver's `start`, `finish` and `crash` events, as its row, or None before any."""
+    marks = [row for row in events.read(run_dir / "events.jsonl") if row["kind"] in DRIVER_MARKS]
+    return marks[-1] if marks else None
+
+
 def run_finished(run_dir):
-    """True when the newest of the driver's `start` and `finish` events is `finish`."""
-    marks = [
-        row["kind"]
-        for row in events.read(run_dir / "events.jsonl")
-        if row["kind"] in ("start", "finish")
-    ]
-    return bool(marks) and marks[-1] == "finish"
+    """True when the newest of the driver's `start`, `finish` and `crash` events is `finish`."""
+    mark = last_mark(run_dir)
+    return bool(mark) and mark["kind"] == "finish"
+
+
+def crash_line(run_dir, text):
+    """What the Lead is told of a crashed driver: where the log is and the line the guard wrote."""
+    return "crashed -> %s: %s" % (run_dir / "events.jsonl", text)
+
+
+def driver_gone(run_dir, lock_path):
+    """What a run whose driver is not running left behind, as the line `await` prints; None when a driver may still
+    come or still be there. The run lock is the proof of life: `flock` dies with the process, so no lock held and a
+    `start` with no `finish` or `crash` after it is a driver that was killed. A run that never logged a `start` has no
+    driver yet, and a `start` without a pid was written by a version that cannot be judged this way."""
+    mark = last_mark(run_dir)
+    if mark is None or mark["kind"] == "finish" or lock_path is None or lock_held(lock_path):
+        return None
+    if mark["kind"] == "crash":
+        return crash_line(run_dir, mark.get("text") or "crashed " + str(mark.get("reason")))
+    return "driver gone without a crash log" if mark.get("pid") else None
+
+
+def lock_held(path):
+    """True when some process holds the flock on `path`; a lock that is not there is not held."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    with os.fdopen(fd) as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        return False
 
 
 def await_wake(args):
     """`await <plan>`: print the next wake the Lead has not seen and return; `finished -> <run>/retro.md` once the run
-    has ended and every wake is printed. Waits (polling, no tokens) while there is neither."""
+    has ended and every wake is printed; `crashed -> <log line>` when its driver crashed and `driver gone without a crash
+    log` when it was killed. Waits (polling, no tokens) while there is none of these, which includes a run whose driver
+    has not started yet."""
     run_dir = run_dir_of(args)
+    lock_path = await_lock_path(args)
     while True:
         line = take_wake(run_dir)
         if line:
             return line
         if run_finished(run_dir):
             return "finished -> %s" % (run_dir / "retro.md")
+        gone = driver_gone(run_dir, lock_path)
+        if gone:
+            return gone
         time.sleep(args.poll_seconds)
+
+
+def await_lock_path(args):
+    """The run lock of the plan `await` names, or None when it cannot be located (the check is then not made)."""
+    try:
+        plan_path = Path(args.plan).resolve(strict=True)
+        slug = plan_slug(plan_path)
+        return (
+            run_lock_path(repo_root(plan_path, getattr(args, "repo", None)), slug) if slug else None
+        )
+    except (ValueError, OSError):
+        return None
+
+
+def run_lock_path(repo, slug):
+    """`<git common dir>/agent-orchestrator/<slug>.lock`: it lives in the repository, not the state dir, because two
+    drivers of one plan collide on its worktrees, branches and plan file whatever `--state-dir` each names."""
+    common = Path(
+        run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    )
+    return common / "agent-orchestrator" / (slug + ".lock")
 
 
 @contextmanager
@@ -6083,12 +6130,9 @@ def run_lock(repo, slug, plan_path):
     It lives in the git common dir, not the state dir: two drivers of one plan collide on its worktrees, branches
     and plan file whatever `--state-dir` each names. `flock` dies with the process, so a crash leaves no stale lock.
     """
-    common = Path(
-        run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"])
-    )
-    directory = common / "agent-orchestrator"
-    directory.mkdir(exist_ok=True, mode=0o700)
-    fd = os.open(directory / (slug + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    path = run_lock_path(repo, slug)
+    path.parent.mkdir(exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "r+", encoding="utf-8") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -6116,28 +6160,65 @@ def drive(args):
     require(args.working_minutes >= 0, "--working-minutes must not be negative")
     require_yaml(args.plan)
     driver = Driver(args)
-    slug = driver.read_plan()["slug"]
+    slug = driver.slug = driver.read_plan()["slug"]
     with run_lock(driver.repo, slug, driver.plan_path):
         return drive_locked(driver)
 
 
 def drive_locked(driver):
-    driver.start()
+    """The run, under its lock. An exception that escapes it, from startup, the loop or the finalization, is logged as
+    `crashed <reason>` and the Lead is woken before it goes on to end the process: `await` then reports the crash instead
+    of polling a run nobody drives."""
     try:
-        driver.loop()
-        if not driver.stranded:  # a run that leaves a task it cannot settle has not finished
-            driver.log("finish")
-    finally:
+        driver.start()
         try:
-            driver.report_metrics()
+            driver.loop()
+            if not driver.stranded:  # a run that leaves a task it cannot settle has not finished
+                driver.log("finish")
         finally:
-            driver.report_evidence()
+            try:
+                driver.report_metrics()
+            finally:
+                driver.report_evidence()
+    except Exception as error:
+        report_crash(driver, error)
+        raise
     return {
         "slug": driver.slug,
         "lead": driver.lead,
         "spawned": driver.spawned,
         "errors": driver.errors,
     }
+
+
+def report_crash(driver, error):
+    """Log the crash, wake the Lead and say it on stderr. It takes no ledger lock and books nothing in the ledger: the
+    crash may be the ledger itself, and the guard must not wait for what failed. A step of it that fails is said on
+    stderr and the rest still happens."""
+    reason = (
+        str(error)
+        if isinstance(error, ledgers.LedgerBusy)
+        else "%s: %s" % (type(error).__name__, error)
+    )
+    reason = " ".join(reason.split())[:500]
+    text = "crashed " + reason
+    print(text, file=sys.stderr, flush=True)
+    try:
+        if getattr(driver, "run_dir", None) is None:  # it crashed before it knew its run directory
+            driver.run_dir = locate_state(
+                driver.args.state_dir, driver.plan_path, driver.repo, driver.slug
+            )[1]
+            driver.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        driver.log("crash", reason=reason, text=text)
+        driver.wake(
+            "crash",
+            None,
+            crash_line(driver.run_dir, text),
+        )
+    except (
+        Exception
+    ) as failed:  # the original error is the news; this one only says the Lead may not have heard
+        print("could not log the crash: %s" % failed, file=sys.stderr, flush=True)
 
 
 def main(argv=None):
@@ -6468,6 +6549,17 @@ def main(argv=None):
             return rebuild_metrics(args)
         require(args.samples, "metrics needs a plan file (rebuild its metrics.json) or --samples")
         return metrics(read_json(args.samples))
+    if args.command == "show":
+        # A read: the snapshot needs no lock, so `show` never waits for the driver or makes it wait.
+        found = ledgers.snapshot(args.state)
+        data = ledgers.validate(found, args.state) if found is not None else ledgers.new()
+        if args.unit:
+            return unit_summary(data, args.unit)
+        return (
+            data["tasks"][args.task]
+            if args.task
+            else [task_summary(t) for t in data["tasks"].values()]
+        )
     with ledger(args.state) as data:
         if args.command == "claim":
             result = claim(data, read_json(args.packet))
@@ -6479,13 +6571,6 @@ def main(argv=None):
         if args.command == "release":
             require(args.stopped, "release requires --stopped")
             return task_summary(release(data, args.task, args.reason, args.cutoff))
-        if args.unit:
-            return unit_summary(data, args.unit)
-        return (
-            data["tasks"][args.task]
-            if args.task
-            else [task_summary(t) for t in data["tasks"].values()]
-        )
 
 
 def run_cli(argv=None):
@@ -6504,7 +6589,7 @@ def run_cli(argv=None):
     except PlanError as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 2
-    except (ValueError, KeyError, OSError, subprocess.TimeoutExpired) as error:
+    except (ValueError, KeyError, OSError, subprocess.TimeoutExpired, ledgers.LedgerBusy) as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 1
 
