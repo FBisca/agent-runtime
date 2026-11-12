@@ -466,6 +466,14 @@ def semantic_problems(data, path, repo):
                 "human evidence cannot carry check options",
                 "keep only human or use check + baseline",
             )
+        declared = ev.get("env", [])
+        for name in declared if isinstance(declared, list) else []:
+            if isinstance(name, str) and (name in ("HOME", "PATH") or name.startswith("XDG_")):
+                defect(
+                    prefix + ".env",
+                    f"{name} is reserved: the runner owns the check's HOME, PATH and XDG_* variables",
+                    "drop the name; the runner supplies a scratch value",
+                )
         names = ev.get("oracle", [])
         names = names if isinstance(names, list) else []
         if names and not ev.get("place"):

@@ -170,6 +170,23 @@ class PlanTests(RunFixture, unittest.TestCase):
         for path in ("tickets[0].repo", "tickets[0].max_fix_rounds", "tickets[0].extra"):
             self.assertIn(path, message)
 
+    def test_S17_check_and_approve_refuse_an_env_naming_home_path_or_xdg(self):
+        for name in ("HOME", "PATH", "XDG_CACHE_HOME"):
+            with self.subTest(name=name):
+                data = contract()
+                data["scenarios"][0]["evidence"] = {
+                    "check": "true",
+                    "baseline": "pass",
+                    "env": [name],
+                }
+                self.write(data)
+                for verb in ("check", "approve"):
+                    code, message = self.command(verb)
+                    self.assertEqual(code, 2, message)
+                    self.assertIn(name, message)
+                    self.assertIn("scratch", message)
+                    self.assertIn("drop", message)
+
     def test_S1_oracle_placement_and_missing_payloads(self):
         for place in ("/tmp/out", "../out", "escape"):
             with self.subTest(place=place):
