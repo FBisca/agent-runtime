@@ -117,6 +117,20 @@ class AwaitFixture(GateFixture):
             timeout=timeout,
         )
 
+    def assert_await_polls(self):
+        spec = load_script()
+
+        class PollObserved(Exception):
+            pass
+
+        clock = mock.Mock(wraps=spec.time)
+        clock.sleep.side_effect = PollObserved
+        with (
+            mock.patch.object(spec, "time", clock),
+            self.assertRaises(PollObserved),
+        ):
+            self.await_once()
+
     def awaited(self, want, attempts=4):
         """`await` called until it prints a line starting with `want`; each call must return. The lines it printed."""
         lines = []
@@ -262,21 +276,17 @@ class AwaitTests(AwaitFixture, unittest.TestCase):
 
     def test_S4_await_keeps_waiting_for_a_run_whose_driver_has_not_started_yet(self):
         """orchestrator-engine/R76"""
-        with self.assertRaises(subprocess.TimeoutExpired):
-            self.await_once(timeout=2)
+        self.assert_await_polls()
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        with self.assertRaises(subprocess.TimeoutExpired):
-            self.await_once(timeout=2)
+        self.assert_await_polls()
 
     def test_S4_await_keeps_waiting_while_a_driver_holds_the_run_lock(self):
         """orchestrator-engine/R76: a driver that is alive is neither crashed nor gone, whatever the log says."""
         self.log(self.START)
         self.hold_run_lock()
-        with self.assertRaises(subprocess.TimeoutExpired):
-            self.await_once(timeout=2)
+        self.assert_await_polls()
         self.log({"kind": "crash", "reason": "old", "text": "crashed old"}, self.START)
-        with self.assertRaises(subprocess.TimeoutExpired):
-            self.await_once(timeout=2)
+        self.assert_await_polls()
 
     def test_S4_the_newest_start_or_crash_decides_not_the_oldest(self):
         """orchestrator-engine/R76: a restarted run that finished is finished, whatever an earlier drive did."""
@@ -302,8 +312,7 @@ class AwaitTests(AwaitFixture, unittest.TestCase):
     def test_S4_a_start_without_a_pid_is_a_run_the_check_cannot_judge_and_await_waits(self):
         """orchestrator-engine/R76: a run directory the previous version wrote has no pid in its start line."""
         self.log({"kind": "start"})
-        with self.assertRaises(subprocess.TimeoutExpired):
-            self.await_once(timeout=2)
+        self.assert_await_polls()
 
     def test_S4_await_returns_the_crash_of_a_driver_that_really_crashed(self):
         """orchestrator-engine/R76"""
