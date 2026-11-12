@@ -42,13 +42,14 @@ TOOLS = [
                 "kind": {"type": "string", "enum": ["worker", "lookup"]},
                 "cli": {"type": "string", "enum": list(profiles.BUILTINS)},
                 "name": text("unique a-z 0-9 - _, max 32"),
-                "task": text("complete task text"),
+                "task": text("task text"),
                 "cwd": text("checkout directory"),
                 "task_id": text("ready task to link"),
                 "model": text("optional model"),
                 "effort": {"type": "string", "enum": list(hc_tools.EFFORTS)},
                 "agent": text("role: none by default; named roles need report"),
                 "instructions_file": text("codex only: role text path"),
+                "operation_id": text("idempotency key"),
             },
             ["kind", "name", "task", "cwd"],
         ),
@@ -73,7 +74,8 @@ TOOLS = [
             {
                 "name": text("worker name"),
                 "task": text("what to do next"),
-                "task_id": text("task to move to this assignment"),
+                "task_id": text("task to move here"),
+                "operation_id": text("idempotency key"),
             },
             ["name", "task"],
         ),
@@ -116,7 +118,7 @@ TOOLS = [
     ),
     (
         "report",
-        "Worker only: send progress or your result to your parent. kind=progress|complete|blocked|decision; kind and assignment_id are required under dispatch.",
+        "Worker only: send progress or result to your parent. kind=progress|complete|blocked|decision; kind and assignment_id are required under dispatch.",
         schema(
             {
                 "text": text("result; max 65536 bytes"),

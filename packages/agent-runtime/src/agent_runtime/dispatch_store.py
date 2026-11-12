@@ -256,8 +256,42 @@ class Store:
             "assignment": row["assignment"],
         }
 
-    def register(self, team, name, task_id=None, transfer=False):
+    # Operation keys live in a side table that the first keyed call creates: a store whose lead never uses an
+    # operation_id keeps exactly the tables it had, older servers neither read nor write it, and user_version
+    # stays 2. The owner is never NULL, so the primary key really is unique per owner.
+    OPERATIONS = (
+        "CREATE TABLE IF NOT EXISTS operations (team TEXT NOT NULL, owner TEXT NOT NULL, "
+        "operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL, assignment_id TEXT NOT NULL, "
+        "PRIMARY KEY(owner,operation_id))"
+    )
+
+    def register(self, team, name, task_id=None, transfer=False, operation=None):
+        """Register a pending assignment. operation=(owner, operation_id, fingerprint) records the key in the same
+        transaction, so a key and its assignment exist together or not at all. A key this owner already used with
+        the same fingerprint registers nothing and returns that assignment's identity with `_replay` set; with
+        another fingerprint it is refused."""
         with self.transaction() as db:
+            if operation:
+                owner, operation_id, fingerprint = operation
+                db.execute(self.OPERATIONS)
+                used = db.execute(
+                    "SELECT o.team,o.fingerprint,o.assignment_id,a.worker FROM operations o "
+                    "LEFT JOIN assignments a ON a.id=o.assignment_id WHERE o.owner=? AND o.operation_id=?",
+                    (owner, operation_id),
+                ).fetchone()
+                if used and used["fingerprint"] != fingerprint:
+                    raise StoreError(
+                        "operation_id %s conflicts with an earlier call that carried other arguments: "
+                        "use a new operation_id (or repeat the original call exactly); nothing was started"
+                        % operation_id
+                    )
+                if used:
+                    return {
+                        "team_id": used["team"],
+                        "worker_id": used["worker"],
+                        "assignment_id": used["assignment_id"],
+                        "_replay": True,
+                    }
             row = db.execute(
                 "SELECT id,active FROM workers WHERE team=? AND name=?", (team, name)
             ).fetchone()
@@ -281,6 +315,11 @@ class Store:
                 "INSERT INTO assignments VALUES (?,?,?,'pending',0)", (assignment, team, worker)
             )
             identity = {"team_id": team, "worker_id": worker, "assignment_id": assignment}
+            if operation:
+                db.execute(
+                    "INSERT INTO operations VALUES (?,?,?,?,?)",
+                    (team, owner, operation_id, fingerprint, assignment),
+                )
             if task_id is not None:
                 identity["_prior"] = self._link_task(
                     db, team, worker, assignment, task_id, transfer
@@ -392,6 +431,65 @@ class Store:
                     (address, assignment, assignment),
                 ).fetchone()
             )
+
+    def operation(self, owner, operation_id):
+        """What this owner's operation_id stands for, read-only: {state, assignment_id, worker_id, name} with state
+        absent, pending, bound, working, blocked, decision, complete, failed or unknown (then `reason` says what
+        to do). Reads never acknowledge or change anything."""
+        with self.transaction() as db:
+            used = None
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
+            ).fetchone():
+                used = db.execute(
+                    "SELECT assignment_id FROM operations WHERE owner=? AND operation_id=?",
+                    (owner, operation_id),
+                ).fetchone()
+            if not used:
+                return {"state": "absent", "assignment_id": None}
+            return self.assignment_view(db, used["assignment_id"])
+
+    def assignment_info(self, assignment):
+        with self.transaction() as db:
+            return self.assignment_view(db, assignment)
+
+    @staticmethod
+    def assignment_view(db, assignment):
+        found = db.execute(
+            "SELECT a.state,a.current,a.worker,w.name,w.active FROM assignments a "
+            "JOIN workers w ON w.id=a.worker WHERE a.id=?",
+            (assignment,),
+        ).fetchone()
+        view = {"assignment_id": assignment}
+        if not found:
+            return dict(
+                view,
+                state="unknown",
+                reason="the assignment is no longer in the store: the operation cannot be resumed, "
+                "so start the work again with a new operation_id",
+            )
+        view.update(worker_id=found["worker"], name=found["name"])
+        state = found["state"]
+        if state in ("complete", "failed", "pending"):
+            return dict(view, state=state)
+        if state in ("working", "blocked", "decision"):
+            if not found["current"] or not found["active"]:
+                return dict(
+                    view, state="failed"
+                )  # superseded or its terminal is gone, as read() says
+            if state == "working":
+                reported = db.execute(
+                    'SELECT 1 FROM messages WHERE assignment=? AND body LIKE \'%"kind":"progress"%\'',
+                    (assignment,),
+                ).fetchone()
+                state = "working" if reported else "bound"
+            return dict(view, state=state)
+        return dict(
+            view,
+            state="unknown",
+            reason="the assignment is in state %r, which this runtime does not know: "
+            "check it with status, or start again with a new operation_id" % state,
+        )
 
     def assignment_state(self, assignment):
         with self.transaction() as db:
