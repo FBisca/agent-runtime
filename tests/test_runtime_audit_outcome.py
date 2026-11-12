@@ -28,7 +28,7 @@ from unittest import mock
 
 import pytest
 from test_mcp_server import RUNTIME_SRC, SERVER
-from test_tools import FAKE, ToolCase, raw
+from test_tools import FAKE, ToolCase, hc_in_process, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 from agent_runtime import hc_tools, mcp_server  # noqa: E402
@@ -99,10 +99,29 @@ class FakeHc(ToolCase):
 
 
 class TeamLimitOutcome(FakeHc):
-    """runtime-audit-fixes/S1-S3 over the real MCP server: the limit counts active workers."""
+    """runtime-audit-fixes/S1-S3: the limit counts active workers. A team of 32 is 60-odd calls, so they run on the
+    server's own call path in this process with hc answered in process; the race for the last slot, which needs the
+    server's threads, runs wholly over the real MCP server (a lead resolved here and one resolved by the server can
+    differ on a loaded machine, so the two paths never share a team)."""
 
     def lead(self):
-        return self.start(worker_rows(), ENV)
+        self.install(worker_rows())
+        self.env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+            **ENV,
+        }
+        self.session = {}
+        self.enterContext(hc_in_process(self.dir / "bin" / "hc"))
+        return None  # the session is this process: `call` runs the server's call path here
+
+    def call(self, session, tool, arguments):
+        if session is not None:
+            return super().call(session, tool, arguments)
+        with mock.patch.dict(os.environ, {"PATH": self.env["PATH"]}):
+            result = mcp_server.call_tool(tool, arguments, self.env, hc_tools.Context(self.session))
+        return result, result["content"][0]["text"]
 
     def spawn(self, session, index):
         return self.call(
@@ -185,7 +204,7 @@ class TeamLimitOutcome(FakeHc):
     def test_S2_a_reactivation_racing_a_new_spawn_for_the_last_slot_takes_it_once(self):
         """runtime-audit-fixes/S2: 31 active and one stopped name; the stopped name's resume and a new spawn race
         for the one free slot. The slot is reserved atomically, so exactly one wins and the other is refused."""
-        session = self.lead()
+        session = self.start(worker_rows(), ENV)
         self.fill(session, range(LIMIT))
         self.stop(session, 0)
         resumed, spawned = self.concurrently(

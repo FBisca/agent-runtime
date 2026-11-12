@@ -17,10 +17,12 @@ observed for them (`idle` when the turn ended without a message). The ids come f
 out, so a step keeps naming the right agent after a resume.
 """
 
+import io
 import json
 import os
 import subprocess
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from typing import Any
 
 
@@ -88,6 +90,24 @@ def answer(name, assignment_id):
     }
 
 
+def run_command(command):
+    """A command the Lead runs during a wait step. The engine's own CLI runs in this process: a process per `decide`
+    cost a wake test seconds, and the CLI's exit code and output are the same either way."""
+    if command[1:4] == ["-B", "-m", "agent_orchestrator"]:
+        from agent_orchestrator import driver
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = driver.run_cli(command[4:])
+            except SystemExit as exit:
+                code = exit.code if isinstance(exit.code, int) else int(exit.code is not None)
+        if code:
+            raise subprocess.CalledProcessError(code, command, out.getvalue(), err.getvalue())
+        return
+    subprocess.run(command, check=True, capture_output=True)
+
+
 def process(argv, timeout=None):
     """The answer to one `agent-runtime call <tool> --lead <lead> --json <arguments>` argv (without the program name)."""
     del timeout  # the seam passes one; the fake answers at once, so there is nothing to time out
@@ -139,7 +159,7 @@ def process(argv, timeout=None):
             with open(path, "w", encoding="utf-8") as stream:
                 stream.write(text.replace(old, new, 1))
         for command in step.pop("run", []):
-            subprocess.run(command, check=True, capture_output=True)
+            run_command(command)
         for path, text in writes:
             if "@HEAD" in text:
                 head = subprocess.run(

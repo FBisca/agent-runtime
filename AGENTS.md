@@ -29,7 +29,7 @@ sets the environment up from a fresh checkout; `uv run pytest` is the canonical 
 |---|---|
 | `uv run pytest` | the fast suite: the `unit` tests, in process (under 3 seconds) |
 | `uv run pytest -m integration` | the `integration` tests: the real boundaries, fakes behind them |
-| `uv run pytest -n 4` | the whole suite, in parallel |
+| `uv run pytest -n auto` | the whole suite, one worker per core |
 | `uv run pytest --durations=20` | the whole suite, with the slowest tests |
 
 Run the fast suite while you work, and the whole suite before you report a change done. Name a file or

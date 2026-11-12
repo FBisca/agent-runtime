@@ -468,6 +468,12 @@ class RunFixture(_Case):
                 ):
                     codes.append(spec.run_cli(argv))
             except (
+                SystemExit
+            ) as exit:  # argparse's refusal: the exit code a process would have returned
+                codes.append(
+                    exit.code if isinstance(exit.code, int) else int(exit.code is not None)
+                )
+            except (
                 BaseException
             ) as error:  # the run's own failure belongs to the test that asked for it
                 errors.append(error)
@@ -486,10 +492,10 @@ class RunFixture(_Case):
         )
 
     def cli(self, *args, timeout=60):
-        """A subcommand of the script run as the Lead would run it; the caller checks the exit code."""
-        return subprocess.run(
-            [*DRIVER, *args], capture_output=True, text=True, env=self.env(), timeout=timeout
-        )
+        """A subcommand of the script, as the Lead would run it, in this process; the caller checks the exit code.
+
+        A test of the process boundary itself starts `DRIVER` on its own."""
+        return self.in_process(load_script(), list(args), timeout=timeout)
 
     def decide_argv(self, unit, action, reason="because", answer=None):
         return [

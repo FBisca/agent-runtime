@@ -6,6 +6,7 @@ presentation are preserved on disk but do not affect the contract digest.
 """
 
 import fcntl
+import functools
 import hashlib
 import os
 import shutil
@@ -269,13 +270,25 @@ def repository(path, repo=None):
     return (
         Path(repo).resolve()
         if repo is not None
-        else Path(git(Path(path).parent, "rev-parse", "--show-toplevel")).resolve()
+        else Path(_toplevel(str(Path(path).parent.resolve()))).resolve()
     )
 
 
 def identity(repo):
+    return _identity(str(Path(repo).resolve()))
+
+
+# A checkout's top level and git common dir do not change while it exists, and a driver tick asks for them dozens of
+# times: one git process each was a large share of a tick. A failure raises, so it is never cached.
+@functools.lru_cache(maxsize=256)
+def _toplevel(directory):
+    return git(directory, "rev-parse", "--show-toplevel")
+
+
+@functools.lru_cache(maxsize=256)
+def _identity(repo):
     common = Path(git(repo, "rev-parse", "--git-common-dir"))
-    return str((repo / common).resolve())
+    return str((Path(repo) / common).resolve())
 
 
 def semantic_problems(data, path, repo):

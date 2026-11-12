@@ -1,5 +1,6 @@
 """Tool behaviour over stdio with a fake hc on PATH that logs argv; no real hc mutation."""
 
+import io
 import json
 import os
 import subprocess
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -81,6 +83,70 @@ sys.stdout.write(reply.get("out", ""))
 sys.stderr.write(reply.get("err", ""))
 sys.exit(reply.get("rc", 0))
 """
+
+
+class FakeHcProcess:
+    """One `hc` call answered by the fake's own script in this process: the same log, replies and exit code as the
+    program, without a process per call."""
+
+    def __init__(self, argv, code, text):
+        out, err, saved = io.StringIO(), io.StringIO(), sys.argv
+        sys.argv = list(argv)
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                exec(code, {"__name__": "__main__"})
+            self.returncode = 0
+        except SystemExit as exit:
+            self.returncode = (
+                exit.code if isinstance(exit.code, int) else int(exit.code is not None)
+            )
+        finally:
+            sys.argv = saved
+        self.args, self.pid = argv, 0
+        self.out, self.err = out.getvalue(), err.getvalue()
+        if not text:
+            self.out, self.err = self.out.encode(), self.err.encode()
+
+    def communicate(self, input=None, timeout=None):
+        return self.out, self.err
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        pass
+
+    terminate = kill
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@contextmanager
+def hc_in_process(fake):
+    """Every `hc` the code under test starts, bare or behind the `env -u` scrub, is answered in this process by the
+    fake script at `fake`; any other program still starts for real. The process boundary has its own tests."""
+    source = Path(fake).read_text().split("\n", 1)[1]  # the fake's body, without its shebang
+    code = compile(source, str(fake), "exec")
+    real = subprocess.Popen
+
+    def popen(argv, *args, **kwargs):
+        command = unwrap([str(a) for a in argv]) if isinstance(argv, (list, tuple)) else []
+        if command[:1] and os.path.basename(command[0]) == "hc":
+            text = kwargs.get("text") or kwargs.get("universal_newlines") or kwargs.get("encoding")
+            return FakeHcProcess(["hc", *command[1:]], code, text)
+        return real(argv, *args, **kwargs)
+
+    with mock.patch.object(subprocess, "Popen", popen):
+        yield
+
+
 TOML = 'name = "implementer"\ndeveloper_instructions = """\nCODEX IMPLEMENTER RULES\n"""\n'
 
 
