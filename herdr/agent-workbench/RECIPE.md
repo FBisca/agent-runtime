@@ -28,8 +28,7 @@ decides is how an answer, or the lack of one, reads (`readPlans`, `notice`).
 ## Rules
 
 - Never call `writeTextFile`, a shell or any command but the two workbench verbs. The Herdr commands it runs are
-  `agent.focus` (Open), the panel button's `layout.select`, `layout.show` and `layout.hide`, and the header's expand
-  (`layout.hide` and `layout.resize` on the terminals and the panel); an attempt joins a terminal by exact address, never by name, and a remote space joins nothing.
+  `agent.focus` (Open) and the panel button's `layout.select`, `layout.show` and `layout.hide`; an attempt joins a terminal by exact address, never by name, and a remote space joins nothing.
 - An unknown value is shown as unknown (or its own text), never filled in; a failure is shown where it belongs
   (project or plan) with its way out; nothing is drawn when there is no data.
 - Refresh: the state directory watcher marks the view dirty (flushed every `FLUSH_MS`), and a `FALLBACK_MS` timer
