@@ -1,0 +1,7 @@
+# The repo's plan engine config: where plans live, where promoted acceptance tests go, how a plan archives.
+plans:
+  dir: docs/plans
+acceptance:
+  dir: acceptance
+archive:
+  mode: promote
