@@ -589,6 +589,23 @@ class VerifyTests(AcceptanceFixture, unittest.TestCase):
         self.assertIn("S1", reason)
         self.assertIn("sha256", reason)
 
+    def test_S3_a_receipt_rewritten_in_place_keeping_digest_tree_and_result_does_not_count(self):
+        """A Pi worker has no hooks: it can rewrite a receipt, keeping its digest, tree and result, and the ledger must still refuse it."""
+        self.delivered(archive=True)
+        path = self.receipt_path()
+        original = json.loads(path.read_text(encoding="utf-8"))
+        rewritten = json.dumps(original, indent=4, sort_keys=False) + "\n\n"
+        self.assertNotEqual(rewritten, path.read_text(encoding="utf-8"))
+        path.write_text(rewritten, encoding="utf-8")
+        for field in ("digest", "tree", "result"):
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))[field], original[field])
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        (reason,) = self.reasons(result)
+        self.assertIn("S1", reason)
+        self.assertIn("sha256", reason)
+        self.assertEqual(json.loads(result.stdout)["items"][0]["state"], "UNKNOWN")
+
     def test_S20_a_plan_that_never_reached_integration_is_not_accepted(self):
         self.write_plan()
         result = self.verify()
