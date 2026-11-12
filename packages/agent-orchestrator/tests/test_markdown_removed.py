@@ -1,6 +1,7 @@
 """The Markdown plan path is gone: `run` refuses a Markdown plan and names the YAML format and `plan check`."""
 
 import contextlib
+import importlib.util
 import io
 import tempfile
 import unittest
@@ -36,3 +37,21 @@ class MarkdownRemovedTests(unittest.TestCase):
         self.assertFalse(hasattr(spec, "set_status"))
         self.assertFalse(hasattr(spec, "parse_plan"))
         self.assertNotIn("--converge", (PACKAGE / "driver.py").read_text(encoding="utf-8"))
+
+
+class WaitChecksRemovedTests(unittest.TestCase):
+    def test_S5_the_wait_checks_module_does_not_exist_and_nothing_under_packages_names_it(self):
+        name = "wait" + "_checks"
+        self.assertIsNone(importlib.util.find_spec(f"agent_orchestrator.{name}"))
+        self.assertFalse((PACKAGE / f"{name}.py").exists())
+        packages = PACKAGE.parents[1]
+        this_file = Path(__file__).resolve()
+        named = [
+            str(path.relative_to(packages.parent))
+            for path in packages.rglob("*")
+            if path.is_file()
+            and path.resolve() != this_file
+            and path.suffix not in {".pyc", ".so"}
+            and name in path.read_text(encoding="utf-8", errors="ignore")
+        ]
+        self.assertEqual(named, [], "wait_checks is removed; nothing under packages/ may name it")
