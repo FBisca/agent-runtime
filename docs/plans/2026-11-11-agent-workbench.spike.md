@@ -15,4 +15,6 @@ Screenshot (`herdr-app shot`): `docs/plans/2026-11-11-agent-workbench.spike.png`
 
 ## Decision
 
-Edges are drawable, so a drawn-graph view is feasible. Whether it gets its own plan is for Felippe to decide on acceptance (S20 human evidence). The shipped workbench keeps the layered list (D6) until he accepts.
+Edges are drawable, so a drawn-graph view is feasible.
+
+Accepted by Felippe 2026-11-12: the S20 finding stands as written. Decision: a drawn-graph view gets no plan of its own. The layered list (D6) stays.
