@@ -129,9 +129,10 @@ def check_env(base, names, scratch, junit):
             env[name] = base[name]
     env.update(real_defaults(home))
     env.update({name: base[name] for name in CACHE_NAMES if name in base})
+    env.update({name: base[name] for name in names})
+    # Last, so no declaration can point a check's HOME or state at the real ones.
     env["HOME"] = str(scratch / "home")
     env["XDG_STATE_HOME"] = str(scratch / "state")
-    env.update({name: base[name] for name in names})
     env["EEC_JUNIT"] = str(junit)
     for name in ("HOME", "XDG_STATE_HOME"):
         os.makedirs(env[name], exist_ok=True)
@@ -332,10 +333,29 @@ def drop_worktree(repo, path):
     git("-C", str(repo), "worktree", "prune", check=False)
 
 
+class EvidenceError(Exception):
+    """An oracle cannot be placed safely; the message names the path."""
+
+
 def place_oracles(tree, place_dir, oracles):
+    """Write each oracle under `tree`, refusing any target that leaves it or passes through a symlink (the patch
+    under test can add one, and a write through it would land outside the scratch tree)."""
+    root = Path(os.path.realpath(tree))
     for name, content in oracles.items():
-        target = Path(tree) / (place_dir or ".") / name.removesuffix(".oracle")
+        relative = Path(place_dir or ".") / name.removesuffix(".oracle")
+        target = Path(tree) / relative
+        if not Path(os.path.realpath(target)).is_relative_to(root):
+            raise EvidenceError("oracle target %s resolves outside the scratch tree" % relative)
+        walked = Path(tree)
+        for part in relative.parts:
+            walked = walked / part
+            if walked.is_symlink():
+                raise EvidenceError(
+                    "oracle target %s passes through a symlink at %s" % (relative, part)
+                )
         target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.parent.resolve().is_relative_to(root):
+            raise EvidenceError("oracle target %s resolves outside the scratch tree" % relative)
         target.write_bytes(content)
 
 
@@ -399,7 +419,11 @@ def attempt(
                     detail=applied.stderr.strip()[-300:],
                 )
                 return facts, ""
-        place_oracles(tree, place_dir, oracles)
+        try:
+            place_oracles(tree, place_dir, oracles)
+        except (EvidenceError, OSError) as error:
+            facts.update(result="UNKNOWN", reason="evidence error", detail=str(error)[:300])
+            return facts, ""
         log_path = scratch / "check.log"
         code, timed_out = execute(check, tree, env, timeout, log_path)
         facts["exit"] = code

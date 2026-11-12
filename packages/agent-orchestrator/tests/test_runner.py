@@ -206,6 +206,57 @@ class EvidenceRunner(RepoCase):
         self.assertEqual(data["receipts"]["S1.integration.1"], run.sha256)
 
 
+class Containment(RepoCase):
+    def test_S18_the_scratch_home_and_state_home_are_applied_after_the_declared_variables(self):
+        scratch = self.root / "scratch"
+        base = {"PATH": os.environ["PATH"], "HOME": "/real/home", "XDG_STATE_HOME": "/real/state"}
+        env, missing = runner.check_env(
+            base, ["HOME", "XDG_STATE_HOME"], scratch, scratch / "junit.xml"
+        )
+        self.assertEqual(missing, [])
+        self.assertEqual(env["HOME"], str(scratch / "home"))
+        self.assertEqual(env["XDG_STATE_HOME"], str(scratch / "state"))
+
+    def outside_link(self, name="checks"):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.repo / name).symlink_to(outside)
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "link")
+        return outside, git(self.repo, "rev-parse", "HEAD")
+
+    def test_S19_a_symlinked_place_directory_is_an_evidence_error_and_writes_nothing_outside(self):
+        outside, commit = self.outside_link()
+        run = self.run_check(
+            "true", commit=commit, oracles={"probe.txt.oracle": b"x"}, place="checks/"
+        )
+        self.assertEqual(run.receipt["result"], "UNKNOWN")
+        self.assertEqual(run.receipt["reason"], "evidence error")
+        self.assertIn("checks", run.receipt["detail"])
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_S19_a_symlink_at_the_oracle_target_is_an_evidence_error(self):
+        victim = self.root / "victim.txt"
+        victim.write_text("keep")
+        (self.repo / "probe.txt").symlink_to(victim)
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "link")
+        run = self.run_check(
+            "true",
+            commit=git(self.repo, "rev-parse", "HEAD"),
+            oracles={"probe.txt.oracle": b"x"},
+            place=".",
+        )
+        self.assertEqual(run.receipt["reason"], "evidence error")
+        self.assertIn("probe.txt", run.receipt["detail"])
+        self.assertEqual(victim.read_text(), "keep")
+
+    def test_S19_an_oracle_name_that_resolves_outside_the_tree_is_an_evidence_error(self):
+        run = self.run_check("true", oracles={"../../escape.txt.oracle": b"x"}, place="checks/")
+        self.assertEqual(run.receipt["reason"], "evidence error")
+        self.assertIn("escape.txt", run.receipt["detail"])
+
+
 class Results(RepoCase):
     def result(self, run):
         return run.receipt["label"]

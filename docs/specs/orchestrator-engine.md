@@ -105,6 +105,9 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R74** WHEN the orchestrator creates a ledger, or makes its next locked write to a ledger that lacks the marker, THEN the ledger carries `"kind": "agent-orchestrator/ledger"` beside its existing `version: 1`, on disk before any file a worker reads (the contract, a brief) exists; a ledger of another kind is refused. (from orchestrator-audit-fixes/S7)
 - **R75** WHEN a Lead read command (`show`, the read half of `accept` and `evidence`) runs during a drive, THEN it reads an unlocked snapshot of the ledger; any write it then makes takes the lock and revalidates against the current ledger, refusing with a reason (`the ledger changed since it was read`) when the keys it decided on moved, and writes nothing. (from orchestrator-audit-fixes/S5)
 - **R76** WHEN `await` runs while no driver holds the run lock and the run has not finished, THEN it returns `crashed -> <log line>` when the run's driver logged a crash, and `driver gone without a crash log` when a driver started for the run (a `start` line with a pid) and died without one; a wake the Lead has not seen is printed first; a run whose driver has not started yet, or whose driver holds the run lock, is still awaited. (from orchestrator-audit-fixes/S4)
+- **R77** WHEN `plan check` or `plan approve` reads an evidence `env` naming HOME, PATH or any XDG_* variable, THEN it refuses with the reason and the way out (drop the name; the runner supplies a scratch value). (from orchestrator-audit-fixes/S17)
+- **R78** WHEN the evidence runner builds a check environment, THEN the scratch HOME and XDG_STATE_HOME are applied after the declared variables, so no declaration can override them. (from orchestrator-audit-fixes/S18)
+- **R79** WHEN an oracle target resolves outside the scratch tree, or a component of its path is a symlink (e.g. one added by the patch under test), THEN the receipt is an evidence error naming the path, nothing is written outside the scratch tree, and the driver does not crash. (from orchestrator-audit-fixes/S19)
 
 ## Coverage
 
@@ -154,6 +157,9 @@ suite runs here, against the member, and the member answers the way the engine a
 | orchestrator-audit-fixes/S5 | R75 | `packages/agent-orchestrator/tests/test_ledger.py`: `SnapshotTests.test_S5_*`, `AcceptsRevalidateTests.test_S5_accept_refuses_when_the_ledger_moved_after_it_was_read` |
 | orchestrator-audit-fixes/S6 | R73 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S6_*` |
 | orchestrator-audit-fixes/S7 | R74 | `packages/agent-orchestrator/tests/test_ledger.py`: `KindMarkerTests.test_S7_*`, `RunMarkerTests.test_S7_a_run_creates_its_ledger_with_the_marker_before_any_file_a_worker_reads` |
+| orchestrator-audit-fixes/S17 | R77 | `packages/agent-orchestrator/tests/test_plan.py`: `PlanTests.test_S17_*` |
+| orchestrator-audit-fixes/S18 | R78 | `packages/agent-orchestrator/tests/test_runner.py`: `Containment.test_S18_*` |
+| orchestrator-audit-fixes/S19 | R79 | `packages/agent-orchestrator/tests/test_runner.py`: `Containment.test_S19_*` |
 
 ### R4 — the route refusals
 
