@@ -1,6 +1,6 @@
 # Compatibility baseline — the pre-workspace tree (2026-11-07)
 
-Plan: `docs/plans/2026-11-07-uv-workspace-python-standards.plan.md` (T1, scenarios S2, S3, S7, S8).
+Plan: `uv-workspace-python-standards`, archived into `docs/specs/python-workspace-contracts.md` (T1, scenarios S2, S3, S7, S8).
 
 This is the inventory the compatibility contract tests assert on. It describes what the repository
 exposes **today**, before the runtime and the orchestrator move into a uv workspace. Nothing here is
