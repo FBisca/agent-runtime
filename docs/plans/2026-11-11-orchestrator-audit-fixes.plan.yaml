@@ -1,0 +1,241 @@
+schema: plan/1
+slug: orchestrator-audit-fixes
+goal: >-
+  The orchestrator defects found by the 2026-11-11 static audit are fixed at their class. A busy ledger no longer
+  kills a drive, and `await` reports a dead driver instead of polling forever. Every agent kind is watched for silent
+  idleness, and the four #116 follow-ups are closed. A restart never re-sends an effect whose delivery it cannot
+  establish. The evidence runner cannot be pointed outside its scratch tree. `plan approve` refuses workers at the CLI,
+  not only in the hook.
+spec: docs/specs/orchestrator-engine.md
+outcome: [S22]
+
+scenarios:
+  # Ledger lock and crash visibility
+  - id: S1
+    when: 'a Lead command holds the ledger lock while the driver books a change'
+    then: >-
+      the driver waits with jittered backoff (0.2 s growing to 5 s) under one monotonic deadline of 60 s that includes
+      lock waits and sleeps, then books the change; the drive does not exit
+  - id: S2
+    when: 'the ledger stays busy past the 60 s deadline'
+    then: >-
+      the driver logs `crashed ledger busy >60s`, writes a wake without taking the ledger lock, and exits non-zero
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py -m integration
+        -k "LedgerContention or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_orchestrator_audit_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+  - id: S3
+    when: 'an unhandled exception escapes the driver during startup, the loop or finalization'
+    then: 'the driver logs `crashed <reason>`, writes a wake without taking the ledger lock, and exits non-zero'
+  - id: S4
+    when: '`await` runs while no driver holds the run lock and the run has not finished'
+    then: >-
+      it returns `crashed -> <log line>` when the run's driver logged a crash, and `driver gone without a crash log`
+      when a driver started for the run and died without one (SIGKILL); a run whose driver has not started yet is
+      still awaited, as today
+  - id: S5
+    when: 'a Lead read command (`show`, the read half of `accept` and `evidence`) runs during a drive'
+    then: >-
+      it reads an unlocked snapshot of the ledger; any write it then makes takes the lock and revalidates against
+      the current ledger, refusing with a reason when the snapshot went stale
+  - id: S6
+    when: 'the driver and the evidence runner both write the ledger'
+    then: 'they take the same lock through one shared helper with the same deadline rule'
+  - id: S7
+    when: 'the orchestrator creates a ledger, or makes its next locked write to a ledger that lacks the marker'
+    then: >-
+      the ledger carries `"kind": "agent-orchestrator/ledger"` beside its existing `version: 1`, written before any
+      worker-visible output exists
+
+  # Supervision of every agent kind (#116)
+  - id: S8
+    when: 'a mutation reviewer or a gaps reviewer ends its turn without `report complete` and its output for the current attempt is on disk'
+    then: 'the driver treats it as done and validates the output exactly as for a reported completion'
+  - id: S9
+    when: 'a mutation reviewer or a gaps reviewer ends its turn silent with no output for the current attempt'
+    then: 'it gets the same idle request as a silent task agent; the plan neither hangs in VERIFYING nor marks the agent ended at once'
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py -m integration
+        -k "SilentReviewer or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_orchestrator_audit_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+  - id: S10
+    when: 'an escalated reviewer reports `complete` while its idle request is still undecided'
+    then: >-
+      the review finishes and the request closes as resolved by the worker; once the Lead has decided, a late
+      `complete` is ignored (supersedes the silent-idle plan's S13)
+  - id: S11
+    when: 'the idle request names the file a worker owes'
+    then: 'it names the next write-once path (e.g. `report.2.json` on a second try), not the newest file already on disk'
+  - id: S12
+    when: 'the Lead decides a request that did not name a busy answerer (e.g. `fresh worker` on a `ci` request)'
+    then: >-
+      the answerer's record is not failed; its later `complete` is received; when answers are dropped, an event says
+      why pr-ready stopped waiting on them
+  - id: S13
+    when: 'a worker names an attempt id with any round suffix (`r`, `d`, `o`, `p` or `a`)'
+    then: 'the driver recognizes it as an attempt id through one shared pattern, so `use t1a1` in an answer for t1a2 is refused as foreign'
+
+  # Intents across restart
+  - id: S14
+    when: 'the driver is about to spawn or resume an agent'
+    then: >-
+      it books an intent with a fresh UUID operation_id (the readable unit/attempt/operation path as metadata)
+      before calling the runtime with that operation_id; a runtime without operation support gets no unkeyed send
+      and the Lead gets a request instead
+  - id: S15
+    when: 'the driver restarts with an open intent and looks its operation_id up'
+    then: >-
+      absent: it acts again; bound, working, blocked, decision, complete or failed: it adopts that assignment;
+      pending or unknown: it raises a Lead request ("the resume may or may not have reached <worker>: retry or
+      skip") and never re-sends on its own
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py -m integration
+        -k "IntentRestart or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_orchestrator_audit_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+  - id: S16
+    when: 'a gate fails'
+    then: >-
+      the round increment, the next phase and the pending external actions are booked in one ledger write before
+      any git or gh call; a restart after a crash in between counts the round once
+
+  # Evidence runner containment
+  - id: S17
+    when: '`plan check` or `plan approve` reads an evidence `env` naming HOME, PATH or any XDG_* variable'
+    then: 'it refuses with the reason and the way out (drop the name; the runner supplies a scratch value)'
+  - id: S18
+    when: 'the evidence runner builds a check environment'
+    then: 'the scratch HOME and XDG_STATE_HOME are applied after the declared variables, so no declaration can override them'
+  - id: S19
+    when: 'an oracle target resolves outside the scratch tree, or a component of its path is a symlink (e.g. one added by the patch under test)'
+    then: 'the receipt is an evidence error naming the path, nothing is written outside the scratch tree, and the driver does not crash'
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py -m integration
+        -k "RunnerContainment or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_orchestrator_audit_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+
+  # Approve gate at the CLI
+  - id: S20
+    when: '`plan approve` runs and the runtime reports the caller as a worker, or as unknown inside an hc or managed host, or the runtime lookup fails while agent markers are present'
+    then: 'it refuses with the reason and the way out (the Lead approves: ask the Lead), and writes no approval'
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py -m integration
+        -k "ApproveGate or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_orchestrator_audit_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+  - id: S21
+    when: '`plan approve` runs from a plain terminal or CI with no host markers, or the runtime verifies the caller as the Lead'
+    then: 'it approves as it does today'
+
+  # Outcome
+  - id: S22
+    when: >-
+      the outcome oracle drives fixture plans through the real driver with a fake runtime and gh, one drive per case:
+      a Lead command holds the ledger lock across a booking, the driver is killed, a mutation reviewer goes silent
+      after writing its output, the driver restarts with a resume intent whose assignment is pending, and a worker
+      runs `plan approve`
+    then: >-
+      the drive survives the held lock; `await` returns the crash instead of polling; the silent reviewer's output
+      is accepted; the restart raises a Lead request and the fake runtime saw no second send; the worker's approve
+      is refused and the plan stays unapproved
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py
+        -m integration -q --junitxml="$EEC_JUNIT"
+      oracle: [test_orchestrator_audit_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 600
+
+tickets:
+  - id: T1
+    delivers: >-
+      A ledger module shared by driver and runner: the bounded lock, unlocked snapshots with write-time revalidation,
+      the ledger kind marker; the driver's crash guard and lock-free wake; `await` that tells crashed, never started
+      and gone apart; requirements from R70
+    satisfies: [S1, S2, S3, S4, S5, S6, S7]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/ledger.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/runner.py
+      - packages/agent-orchestrator/tests/test_ledger.py
+      - packages/agent-orchestrator/tests/test_await.py
+      - docs/specs/orchestrator-engine.md
+    size: regular
+    difficulty: complex
+    risk: [concurrency, state]
+  - id: T2
+    delivers: >-
+      One idle watchdog over task, mutation and gaps agents with output-present-and-turn-ended completion; #116 C1,
+      C2, C3 and C5; the shared attempt-id pattern
+    satisfies: [S8, S9, S10, S11, S12, S13]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_silent_idle.py
+      - packages/agent-orchestrator/tests/test_answers.py
+      - docs/specs/orchestrator-engine.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+    risk: [state]
+  - id: T3
+    delivers: >-
+      Intents keyed by runtime operation_id for every spawn and resume (chase, answers, hand-over, ensure_agent),
+      restart reconciliation through `call operation`, and fail_gate's single booking; the outcome oracle
+    satisfies: [S14, S15, S16, S22]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/runtime_client.py
+      - packages/agent-orchestrator/tests/test_intents.py
+      - packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py
+      - packages/agent-orchestrator/tests/fixtures.py
+      - docs/specs/orchestrator-engine.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T2, T4, T5]
+    risk: [retry-idempotency, state, external]
+  - id: T4
+    delivers: >-
+      Evidence runner containment: reserved env names refused at check and approve, scratch HOME and XDG_STATE_HOME
+      applied last, oracle placement confined to the scratch tree with no symlink components
+    satisfies: [S17, S18, S19]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/runner.py
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/tests/test_runner.py
+      - packages/agent-orchestrator/tests/test_plan.py
+      - docs/specs/orchestrator-engine.md
+    size: small
+    difficulty: complex
+    blocked_by: [T1]
+    risk: [security]
+  - id: T5
+    delivers: '`plan approve` asks the runtime CLI for the verified caller and refuses workers and unverified agents; plain terminal and CI keep working'
+    satisfies: [S20, S21]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/runtime_client.py
+      - packages/agent-orchestrator/tests/test_plan.py
+      - docs/specs/orchestrator-engine.md
+    size: small
+    difficulty: complex
+    blocked_by: [T4]
+    risk: [security]

@@ -1,0 +1,269 @@
+schema: plan/1
+slug: runtime-audit-fixes
+goal: >-
+  The runtime defects found by the 2026-11-11 static audit are fixed at their class. A long-lived lead is limited by
+  its active workers, not its history. The receipts guard protects only real orchestrator state. Every tool handler
+  that fails on the store either rolls back or names what it already did. The MCP server survives malformed ids and
+  stops accumulating call threads. Spawn and resume take an idempotent operation key that the orchestrator can look up
+  after a restart. The CLI reports a verified caller identity that a gate can trust.
+spec: docs/specs/agent-runtime.md
+outcome: [S17]
+
+scenarios:
+  # Team limit (#34)
+  - id: S1
+    when: 'a team has 32 registered workers, 31 of them stopped, and the lead spawns a new name'
+    then: 'the spawn succeeds: the team limit counts active workers only'
+  - id: S2
+    when: 'a team has 32 active workers and the lead spawns a new name or resumes a stopped name'
+    then: >-
+      the call is refused before anything launches with "team limit is 32 active workers: stop an active worker,
+      then retry"; the slot is reserved atomically, in the same transaction that activates the worker, so concurrent
+      spawns cannot exceed 32
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_runtime_audit_outcome.py -m integration
+        -k "TeamLimit or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_runtime_audit_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 300
+  - id: S3
+    when: 'a team has 32 active workers and the lead resumes a worker that is already active'
+    then: 'the resume succeeds and consumes no new slot'
+
+  # Receipts guard
+  - id: S4
+    when: >-
+      a worker or subagent writes, edits or runs a mutating command on a path that has a `state/receipts` component
+      but no orchestrator ledger beside it (e.g. `src/state/receipts/slice.ts`)
+    then: 'the PreToolUse hook allows it'
+  - id: S5
+    when: 'a worker or subagent mutates a path in a `receipts/` subtree under the default root `~/.local/state/orchestrate/`'
+    then: >-
+      the hook denies it with a reason and the way out (fix the code and let the driver re-run the evidence); reading
+      the same path is allowed
+  - id: S6
+    when: >-
+      a worker or subagent mutates a `<root>/<repo-key>/<slug>/receipts/` path, the sibling ledger `<slug>.json`, or
+      its `.lock`, under any root, where the ledger carries `"kind": "agent-orchestrator/ledger"`
+    then: >-
+      the hook denies it, whether the path is written relative, absolute or through a symlink alias; outside the
+      default root, an unmarked ledger is not protected (the documented gap until the orchestrator writes the marker)
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_runtime_audit_outcome.py -m integration
+        -k "ReceiptsGuard or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_runtime_audit_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 300
+
+  # Store failures in tool handlers
+  - id: S7
+    when: '`resume` raises `sqlite3.Error` after registering its pending assignment and before the send'
+    then: >-
+      the pending assignment is failed, a task moved to it is released back to its previous assignment, and the
+      error names the store failure and the way out (retry the resume)
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_runtime_audit_outcome.py -m integration
+        -k "ResumeRollback or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_runtime_audit_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 300
+  - id: S8
+    when: >-
+      any tool handler in hc_tools.py (spawn, resume, message, report, stop, task) raises `sqlite3.Error` or
+      `StoreError`
+    then: >-
+      before its external effect, every reversible pending store change is rolled back; after an irreversible effect
+      (a sent message, a killed terminal), the result names the effect that happened and the store state left to
+      reconcile, and a committed report is never discarded
+
+  # MCP server
+  - id: S9
+    when: 'a `tools/call` request carries an id that is an array, an object or a boolean'
+    then: >-
+      the server answers JSON-RPC error -32600 with `id: null` and keeps serving the next request; valid
+      notifications keep their semantics
+  - id: S10
+    when: 'many tool calls have completed in one server process'
+    then: 'the threads of the completed calls are no longer held: the number of retained call threads returns to the number in flight'
+  - id: S11
+    when: '56 `wait` calls are in flight and another `wait` arrives, or 64 calls of any kind are in flight and another call arrives'
+    then: >-
+      the extra call is refused at once with a retryable reason (never queued); the 8 slots above 56 stay available
+      to non-wait tools; `ping` and cancellation are outside the cap
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_runtime_audit_outcome.py -m integration
+        -k "McpServer or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_runtime_audit_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 300
+
+  # Operation keys
+  - id: S12
+    when: '`spawn` or `resume` carries an `operation_id` it has not seen for this owner'
+    then: >-
+      one row (team, non-null owner key, operation_id, fingerprint, assignment_id) is written in the same transaction
+      that registers the assignment, before anything is sent; the fingerprint covers every normalized argument that
+      changes behaviour (verb, name, cli, task text, cwd, model, effort, profile, instructions, task link)
+  - id: S13
+    when: 'the same owner repeats an `operation_id` with the same fingerprint'
+    then: 'the call returns the existing assignment and its state and sends nothing'
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_runtime_audit_outcome.py -m integration
+        -k "OperationKey or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_runtime_audit_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 300
+  - id: S14
+    when: 'the same owner repeats an `operation_id` with a different fingerprint'
+    then: 'the call is refused naming the conflict and the way out (use a new operation_id); nothing is registered or sent'
+  - id: S15
+    when: "`agent-runtime call operation --json '{\"operation_id\": ...}'` runs"
+    then: >-
+      it prints the owner-scoped state (absent, pending, bound, working, blocked, decision, complete, failed or
+      unknown) with the assignment id; it never acknowledges a report; `unknown` carries an actionable reason; the
+      store's user_version stays 2 and a server without the operations table keeps working
+
+  # Caller identity
+  - id: S16
+    when: '`agent-runtime resolve --json` runs'
+    then: >-
+      its output carries `caller: {kind: lead|worker|unknown, verified: bool}` from the process-ancestry walk; worker
+      environment markers alone never make `verified` true, and observed worker ancestry wins over missing markers
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_runtime_audit_outcome.py -m integration
+        -k "CallerIdentity or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_runtime_audit_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 300
+
+  # Outcome
+  - id: S17
+    when: >-
+      the outcome oracle runs the real MCP server and CLI over stdio against a fake hc: a team with 32 registered and
+      31 stopped workers, a hook payload for `src/state/receipts/x.ts` and one for a default-root receipt, a malformed
+      request id, and a spawn repeated with the same operation_id
+    then: >-
+      the new spawn succeeds and the 33rd active worker is refused with the way out; the repository path is allowed
+      and the receipt is denied; the server answers -32600 and serves the next call; the repeated spawn returns the
+      first assignment and the fake hc saw exactly one launch
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_runtime_audit_outcome.py -m integration -q
+        --junitxml="$EEC_JUNIT"
+      oracle: [test_runtime_audit_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 600
+
+  # Documentation of the one hook-only refusal
+  - id: S18
+    when: 'AGENTS.md and the agent-runtime spec are read'
+    then: >-
+      they state the one exception to "the hook is never the only refuser": a native in-process subagent cannot be
+      told from its Lead outside the host hook, so R74/R89 stay hook-only; no other refusal is named as an exception
+
+tickets:
+  - id: T1
+    delivers: >-
+      The team limit counts active workers; the slot is reserved atomically for a new name and for a stopped name's
+      reactivation; an active resume takes no slot; the refusal names the way out; requirements from R240
+    satisfies: [S1, S2, S3]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/dispatch_store.py
+      - packages/agent-runtime/src/agent_runtime/hc_tools.py
+      - tests/test_team_limit.py
+      - tests/test_pi_lead.py
+      - docs/specs/agent-runtime.md
+    size: small
+    difficulty: complex
+    risk: [concurrency, state]
+  - id: T2
+    delivers: >-
+      The receipts guard matches only a receipts subtree, ledger or lock under the default root or beside a ledger
+      marked `agent-orchestrator/ledger`, after canonical resolution; generic `state/receipts` is gone
+    satisfies: [S4, S5, S6]
+    paths:
+      - hooks/pre_tool_use.py
+      - hooks/hook_lib.py
+      - tests/test_hooks.py
+      - docs/specs/agent-runtime.md
+    size: small
+    difficulty: complex
+    risk: [security]
+  - id: T3
+    delivers: >-
+      Every hc_tools handler's failure path, audited by side-effect phase: resume and every other uncovered handler
+      roll back reversible pending changes on sqlite3.Error or StoreError, and report irreversible effects; one test
+      per defect found
+    satisfies: [S7, S8]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/hc_tools.py
+      - packages/agent-runtime/src/agent_runtime/dispatch_store.py
+      - tests/test_spawn_cleanup.py
+      - tests/test_stop_failures.py
+      - docs/specs/agent-runtime.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+    risk: [state, retry-idempotency]
+  - id: T4
+    delivers: >-
+      The MCP server rejects non-scalar ids with -32600, reaps finished call threads, and caps live calls at 64 (56
+      waits) with an immediate retryable refusal
+    satisfies: [S9, S10, S11]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/mcp_server.py
+      - tests/test_mcp_server.py
+      - docs/specs/agent-runtime.md
+    size: small
+    difficulty: complex
+    risk: [concurrency]
+  - id: T5
+    delivers: >-
+      Operation keys: the additive operations table at user_version 2, `operation_id` on spawn and resume (MCP and
+      `call`) with replay and conflict, the owner-scoped `call operation` lookup, tool descriptions within the
+      400-word cap; and the outcome oracle
+    satisfies: [S12, S13, S14, S15, S17]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/dispatch_store.py
+      - packages/agent-runtime/src/agent_runtime/hc_tools.py
+      - packages/agent-runtime/src/agent_runtime/mcp_server.py
+      - packages/agent-runtime/src/agent_runtime/agent_runtime.py
+      - tests/test_operations.py
+      - tests/test_runtime_audit_outcome.py
+      - tests/test_budgets.py
+      - docs/specs/agent-runtime.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T1, T2, T3, T4]
+    risk: [retry-idempotency, migration, concurrency]
+  - id: T6
+    delivers: >-
+      `resolve --json` reports a verified caller identity from the ancestry walk; AGENTS.md and the spec record the
+      native-subagent exception
+    satisfies: [S16, S18]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/agent_runtime.py
+      - tests/test_agent_runtime.py
+      - AGENTS.md
+      - docs/specs/agent-runtime.md
+    size: small
+    difficulty: complex
+    risk: [security]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-11T12:22:05.609456+00:00'
+  base: b5ff683ad28dd984680cb389375e3c6c176fbb2b
+  digest: d7a69bee601d9261c291923d7b205477c88bdddd5ace12c0385d6e52f8b6b992
