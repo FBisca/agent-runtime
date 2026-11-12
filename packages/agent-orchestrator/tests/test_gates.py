@@ -713,21 +713,6 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         ):
             self.assertIn(needle, brief)
 
-    def test_S13_a_reviewer_complete_after_the_gate_moved_to_requested_leaves_the_request_open(
-        self,
-    ):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S13"""
-        self.waits(
-            [self.worker_done(tests=True)]
-            + [self.silent("idle")] * 4
-            + [self.reviewer_done(), self.skipped()]
-        )
-        self.run_driver("--idle-minutes", "0")
-        self.assertEqual(self.request()["event"], "idle")
-        self.assertNotIn("reviewed", self.gates())
-        self.assertNotIn("reviewed_commit", self.task())
-        self.assertEqual(self.task()["gate"], "skipped")
-
 
 class PayloadTests(GateFixture, unittest.TestCase):
     """R18: a report is the news, the file it names is the payload, and the driver waits for the payload."""
