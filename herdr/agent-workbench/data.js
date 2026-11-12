@@ -100,7 +100,8 @@ export function createData({ exec }) {
 
     state() {
       const shown = plans.status === "ok" && selected ? answers.get(selected) ?? { status: "loading" } : null;
-      return { scope, plans, selected, plan: shown };
+      const loaded = [...answers.values()].filter((a) => a.status === "ok").map((a) => a.value);
+      return { scope, plans, selected, plan: shown, loaded };
     },
   };
 }

@@ -32,6 +32,12 @@ Herdr mod that draws them is specified beside them as it lands.
 - **R15** WHEN the selected plan's ledger or run directory changes (the watcher marks the view dirty and a 2-second flush turns any number of changes into one fetch), or the 30-second fallback timer fires, THEN the mod refreshes with at most one fetch in flight, drops any answer older than the latest request (a different space or plan was asked for meanwhile), runs the workbench command with a fixed argv (no shell, the plan path one argument) in the space folder, and writes nothing: the only commands it runs are `workbench plans` and `workbench plan`. (from agent-workbench/S15)
 - **R16** WHEN the repository suite runs the mod's pure modules, THEN `node --test` runs them from a pytest integration test, each scenario's test requiring that its S-ID's node tests ran and none failed, and a missing `node` fails that test naming node instead of skipping. (from agent-workbench/S18)
 
+- **R17** WHEN the inspector shows an attempt, THEN it is joined to Herdr's live `terminals()` by its exact address only (never by name, by position or by another attempt): an attempt whose address is a live terminal shows `live` and offers Open, which runs `agent.focus` for that terminal; a null address, or no `terminals()` to ask, or a space on another machine (the runtime records no machine, so no join is safe) shows `unknown`; a local address that is no longer a live terminal shows `not live`; the last three offer no Open. (from agent-workbench/S16)
+- **R18** WHEN live agent terminals exist that no attempt of the loaded plans names, THEN a Runtime section lists them in tree order from `terminals()` (each under the terminal that started it, the first of each tree showing its parent), scoped to the shown space's machine, each offering Open; no plan or ticket is made up for them, nothing is drawn when there are none, and the mod reads `terminals()` live without a timer. (from agent-workbench/S17)
+
+Open is the one command the mod gives Herdr beyond the two `workbench` reads (R15 limits what it `exec`s, not this); it
+changes no file and no ledger.
+
 ## Coverage
 
 | Scenario | Requirement | Test |
@@ -51,4 +57,6 @@ Herdr mod that draws them is specified beside them as it lands.
 | S13 | R13 | `tests/test_workbench_mod.py`: `test_S13_a_failure_is_shown_in_its_scope_with_the_way_out_and_no_placeholder_data` (the `S13` tests of `model.test.js` and `data.test.js`) |
 | S14 | R14 | `tests/test_workbench_mod.py`: `test_S14_a_narrow_mod_shows_one_column_and_a_drill_in_inspector` (the `S14` tests of `model.test.js`) |
 | S15 | R15 | `tests/test_workbench_mod.py`: `test_S15_a_refresh_runs_one_fixed_argv_fetch_in_flight_and_drops_stale_answers` (the `S15` tests of `data.test.js`), `test_S15_the_mod_runs_no_shell_and_writes_nothing` |
+| S16 | R17 | `tests/test_workbench_mod.py`: `test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address` (the `S16` tests of `herdr/agent-workbench/test/execution.test.js`), `test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling` |
+| S17 | R18 | `tests/test_workbench_mod.py`: `test_S17_a_Runtime_section_lists_live_agents_no_attempt_names` (the `S17` tests of `execution.test.js` and `data.test.js`) |
 | S18 | R16 | `tests/test_workbench_mod.py`: `test_S18_node_test_runs_the_mods_pure_modules_from_pytest`, `test_S18_a_missing_node_fails_naming_node_instead_of_skipping` |

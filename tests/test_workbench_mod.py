@@ -85,10 +85,31 @@ def test_S15_the_mod_runs_no_shell_and_writes_nothing():
     assert "FALLBACK_MS" in main
 
 
+def test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address():
+    scenario("S16", 6)
+
+
+def test_S17_a_Runtime_section_lists_live_agents_no_attempt_names():
+    scenario("S17", 6)
+
+
+def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling():
+    files = [MOD / name for name in ("main.js", "data.js", "model.js", "ui.js")]
+    files += sorted((MOD / "views").glob("*.js"))
+    for file in files:
+        text = file.read_text()
+        for command in re.findall(
+            r"[\"'](?:agent|pane|terminal|space|tab|layout)\.[a-z_]+[\"']", text
+        ):
+            assert command == '"agent.focus"', (file.name, command)
+    assert "setInterval" not in source("main.js")
+    assert "terminals()" in source("main.js")
+
+
 def test_S18_node_test_runs_the_mods_pure_modules_from_pytest():
     passed, failed, output = node_tests()
     assert failed == 0, output
-    assert passed >= 12, output
+    assert passed >= 24, output
 
 
 def test_S18_a_missing_node_fails_naming_node_instead_of_skipping(tmp_path):

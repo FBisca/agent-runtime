@@ -201,8 +201,72 @@ export function relatives(tickets, id) {
 
 const GATE_TONE = { PASS: "done", FAIL: "blocked" };
 
-/** Everything the one inspector shows for a ticket. Attempts and gates are null when the answer does not carry them. */
-export function inspector(ticket, tickets) {
+// ---- execution: attempts and live terminals --------------------------------------------------------------------
+
+/** The command that takes a person to a terminal. It is data so a test can read it; the view runs it. */
+export const openTerminal = (address) => ({ command: "agent.focus", args: { terminal: address } });
+
+/** What `terminals()` says is live in the shown space's machine, or null when it was not asked. An attempt's address
+ *  is the one the runtime returned and it records no machine, so a space on another machine joins nothing. */
+export function liveTerminals(terminals, machine) {
+  if (!Array.isArray(terminals)) return null;
+  const live = new Map();
+  for (const t of terminals) if (t && t.state === "live" && typeof t.address === "string") live.set(t.address, t);
+  return { machine: machine ?? null, live };
+}
+
+/** Where an attempt's terminal stands. `live` is a terminal in `terminals()` at exactly its address; a null address, a
+ *  remote space or no terminals() at all is `unknown` (we cannot tell), and only a local address that is not live is
+ *  `not live`. Only `live` offers Open. */
+export function attemptTerminal(address, live) {
+  const unknown = (why) => ({ state: "unknown", word: "unknown", why, open: null });
+  if (address === null || address === undefined) return unknown("the runtime returned no address for this attempt");
+  if (!live) return unknown("Herdr's terminals are not available");
+  if (live.machine !== null) return unknown("this space is on another machine");
+  if (live.live.has(address)) return { state: "live", word: "live", why: null, open: openTerminal(address) };
+  return { state: "not live", word: "not live", why: "no live terminal has this address", open: null };
+}
+
+const isAgent = (t) => Boolean(t.program?.agent) || (t.status !== null && t.status !== undefined && t.status !== "");
+
+/** The live agent terminals no attempt of the given plans names, as rows in tree order (a terminal under the one that
+ *  started it, depth 0 for the first of each tree). Nothing is made up for them: no plan, no ticket. Scoped to the
+ *  shown space's machine: bare addresses on this computer, `machine/` ones on another. */
+export function runtimeAgents(terminals, plans, machine) {
+  if (!Array.isArray(terminals)) return [];
+  const named = new Set();
+  for (const plan of plans ?? []) {
+    for (const ticket of plan.tickets ?? []) {
+      for (const a of ticket.attempts ?? []) if (a.address) named.add(a.address);
+    }
+  }
+  const here = (address) => (machine ? address.startsWith(machine + "/") : !address.includes("/"));
+  const agents = terminals.filter((t) =>
+    t && t.state === "live" && typeof t.address === "string" && here(t.address) && isAgent(t) && !named.has(t.address));
+  const listed = new Set(agents.map((t) => t.address));
+  const rows = [];
+  const seen = new Set();
+  const add = (t, depth) => {
+    if (seen.has(t.address)) return;
+    seen.add(t.address);
+    rows.push({
+      address: t.address,
+      name: t.name || t.program?.name || t.address,
+      status: t.status ?? null,
+      parent: t.parent ?? null,
+      depth,
+      open: openTerminal(t.address),
+    });
+    for (const kid of agents) if (kid.parent === t.address) add(kid, depth + 1);
+  };
+  for (const t of agents) if (!t.parent || !listed.has(t.parent)) add(t, 0);
+  for (const t of agents) add(t, 0); // a parent cycle has no root: every agent is still listed, once
+  return rows;
+}
+
+/** Everything the one inspector shows for a ticket. Attempts and gates are null when the answer does not carry them.
+ *  `live` (from `liveTerminals`) joins each attempt to its terminal by address; without it every terminal is unknown. */
+export function inspector(ticket, tickets, live = null) {
   const known = byId(tickets);
   const attempts = Array.isArray(ticket.attempts) ? ticket.attempts : null;
   const gates = Array.isArray(ticket.gates) ? ticket.gates : null;
@@ -223,6 +287,7 @@ export function inspector(ticket, tickets) {
       finishedAt: a.finished_at ?? null,
       assignmentId: a.assignment_id ?? null,
       address: a.address ?? null,
+      terminal: attemptTerminal(a.address ?? null, live),
       claimed: Boolean(a.claimed),
       latest: Boolean(a.latest),
     })),

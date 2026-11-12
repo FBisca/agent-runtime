@@ -3,15 +3,16 @@
 // writes nothing. Layout is the model's (model.js); the views only draw what it hands them.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, exec, watchFolder, home, theme } from "herdr";
+import { spaces, exec, watchFolder, home, theme, terminals, run } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice,
+  layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { planList } from "./views/plans.js";
 import { layeredList, compactList } from "./views/tickets.js";
 import { inspectorView } from "./views/inspector.js";
+import { runtimeView } from "./views/runtime.js";
 import { noticeView, loadingView } from "./views/notices.js";
 
 // The orchestrator's ledger and run directories live under here; a change in any of them is a reason to refresh.
@@ -57,6 +58,7 @@ export default class AgentWorkbench extends View {
     this.ticket = null;
     this.drilled = false;
     this.project = space?.name ?? null;
+    this.machine = space?.machine ?? null;
     if (space) this.data.setScope({ folder: space.folder, machine: space.machine });
     return true;
   }
@@ -109,16 +111,22 @@ export default class AgentWorkbench extends View {
     const selected = pickTicket(tickets, this.ticket);
     const layers = ticketLayers(tickets);
     const select = (id, cx) => { this.ticket = id; this.drilled = true; cx.notify(); };
+    // terminals() is live: render runs again when Herdr's terminals change, so nothing here polls it.
+    const machine = this.machine;
+    const all = terminals();
+    const live = liveTerminals(all, machine);
+    const onOpen = (open, cx) => { run(open.command, open.args); cx.notify(); };
+    const runtime = runtimeView(runtimeAgents(all, state.loaded, machine), { t, onOpen });
     const ctx = { t, selected, kin: relatives(tickets, selected), onSelect: select };
-    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets) : null;
+    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live) : null;
     const screen = screenFor(layout, this.drilled, Boolean(selected));
     if (screen === "inspector") {
-      return show(inspectorView(detail, { t, onBack: (cx) => { this.drilled = false; cx.notify(); } }));
+      return show(inspectorView(detail, { t, onOpen, onBack: (cx) => { this.drilled = false; cx.notify(); } }));
     }
-    if (screen === "list") return show(compactList(layers, ctx));
+    if (screen === "list") return show(v_flex().child(compactList(layers, ctx)).child(runtime));
     return root.child(h_flex().id("body").flex_1().min_h(0)
-      .child(div().id("layers").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(layeredList(layers, ctx)))
+      .child(div().id("layers").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(layeredList(layers, ctx)).child(runtime))
       .child(div().id("detail").w(360).flex_none().h_full().overflow_y_scrollbar().border_l(1).border_color(t.border)
-        .when(Boolean(detail), (el) => el.child(inspectorView(detail, { t, onBack: null })))));
+        .when(Boolean(detail), (el) => el.child(inspectorView(detail, { t, onOpen, onBack: null })))));
   }
 }
