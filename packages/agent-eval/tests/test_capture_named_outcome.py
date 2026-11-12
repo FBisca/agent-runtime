@@ -7,6 +7,7 @@ import pytest
 from claude_fixture import CHAIN, FORKED, RESUMED, CaptureCase, job
 from harness_fixture import (
     ASSIGNMENT,
+    CODEX_INJECTED,
     PROMPT,
     claude_session,
     codex_rollout,
@@ -287,6 +288,22 @@ class ManifestFieldTests(NamedCase):
         entries = self.entries(PI_ID)
         self.assertIsNone(entries[PI_ID]["assignment_id"])
         self.assertIsNone(entries[CODEX_ID]["assignment_id"])
+
+    def test_R237_a_codex_prompt_that_starts_with_a_bracket_keeps_its_assignment_id(self):
+        """R237: only Codex's own injected messages are skipped"""
+        codex_rollout(
+            self.codex,
+            "2026/11/10",
+            "a",
+            CODEX_ID,
+            "/work/demo",
+            "2026-11-10T10:00:00Z",
+            "<task>\n" + PROMPT % ASSIGNMENT,
+            injected=CODEX_INJECTED,
+        )
+        result = self.capture("--session", CODEX_ID)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.entries(CODEX_ID)[CODEX_ID]["assignment_id"], ASSIGNMENT)
 
 
 class ControlTests(NamedCase):
