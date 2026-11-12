@@ -431,7 +431,7 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         text = self.attention_md()
         self.assertNotIn("T4", text)
         self.assertTrue(text.startswith("# Needs you:"))
-        self.assertEqual([l for l in text.splitlines() if l.startswith("- ")], [])
+        self.assertEqual([x for x in text.splitlines() if x.startswith("- ")], [])
 
     def test_S13_a_person_ticket_with_open_blockers_stays_to_do(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S13"""
