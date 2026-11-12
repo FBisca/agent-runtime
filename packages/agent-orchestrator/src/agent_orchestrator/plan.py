@@ -917,7 +917,7 @@ def discover(repo=None, explicit=None):
     return [
         {
             "path": str(p),
-            "format": "yaml" if p.name.endswith(".plan.yaml") else "markdown",
+            "format": "markdown" if p.name.endswith(".plan.md") else "yaml",
             "slug": slug_of(p),
         }
         for p in sorted(files)

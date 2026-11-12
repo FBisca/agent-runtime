@@ -125,6 +125,7 @@ class ConfiguredDiscoveryTests(DiscoveryFixture):
         legacy = self.track("docs/plans/2026-01-02-b.plan.yaml")
         found = {e["path"]: e for e in self.entries()}
         self.assertEqual(found[str(plan.resolve())]["slug"], "a")
+        self.assertEqual(found[str(plan.resolve())]["format"], "yaml")
         self.assertIn(str(legacy.resolve()), found)
 
     def test_S2_a_plans_dir_outside_the_repository_lists_its_folders(self):
@@ -158,6 +159,44 @@ class ConfiguredDiscoveryTests(DiscoveryFixture):
     def test_S2_a_missing_config_lists_docs_plans_folders(self):
         plan = self.folder(self.repo / "docs" / "plans", "2026-01-01-a")
         self.assertEqual([e["path"] for e in self.entries()], [str(plan.resolve())])
+
+
+class ConfigReadByEveryCommandTests(DiscoveryFixture):
+    """S1: every command that names a plan reads the repo config first."""
+
+    def bad(self, text):
+        path = self.repo / ".orchestrate" / "config.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_S1_each_plan_command_refuses_a_bad_config_naming_its_dotted_path(self):
+        plan = self.repo / "x.plan.yaml"
+        plan.write_text("slug: x\n", encoding="utf-8")  # never parsed: the config refuses first
+        state = str(self.root / "state")
+        for text, dotted in (
+            ("plans:\n  colour: red\n", "plans.colour"),
+            ("archive:\n  mode: keep\n", "archive.mode"),
+        ):
+            self.bad(text)
+            for verb in (
+                ("plan", "check"),
+                ("plan", "approve"),
+                ("status",),
+                ("verify",),
+                ("run",),
+            ):
+                with self.subTest(config=dotted, verb=verb):
+                    code, out, err = self.run_cli(
+                        *verb, str(plan), "--repo", str(self.repo), "--state-dir", state
+                    )
+                    self.assertEqual(code, 2, err)
+                    self.assertIn(dotted, err)
+                    self.assertEqual(out, "")
+
+    def test_S1_plan_schema_needs_no_repo_config(self):
+        self.bad("colour: red\n")
+        code, _, err = self.run_cli("plan", "schema")
+        self.assertEqual(code, 0, err)
 
 
 class ExternalPlanTests(DiscoveryFixture):
