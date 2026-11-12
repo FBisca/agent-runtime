@@ -1,6 +1,7 @@
 """Tool implementations for the agent-runtime MCP server. Each tool resolves the runtime and runs
 the runtime's command itself. Terminal mutations go through hc; durable reports use the private store."""
 
+import hashlib
 import json
 import os
 import re
@@ -343,6 +344,55 @@ def linked_task(arguments, env):
     return task_id
 
 
+OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+
+def operation_id(arguments, env, required=False):
+    """The caller's idempotency key, or None. It lives in the durable store, so it needs dispatch."""
+    key = arguments.get("operation_id")
+    if key is None and not required:
+        return None
+    if not isinstance(key, str) or not OPERATION_ID.fullmatch(key):
+        raise ToolError(
+            "operation_id must be 1-128 characters of A-Z a-z 0-9 . _ : - starting with a letter or digit"
+        )
+    if not dispatch_enabled(env):
+        raise ToolError("operation_id requires AGENT_RUNTIME_DISPATCH=1")
+    return key
+
+
+def operation_owner(env, caller):
+    """Whose keys these are: the lead terminal on this hc server, which outlives its session generations, so a
+    restarted orchestrator finds the keys it used. Never empty: a NULL owner would make every key unique."""
+    return "%s\n%s" % (hc_server(env), caller)
+
+
+def operation_fingerprint(verb, **fields):
+    """Every argument that changes what a spawn or resume does, normalized; a replay must match it exactly."""
+    body = json.dumps(dict(fields, verb=verb), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def replayed(store, identity, name, caller, address=None):
+    """The answer to a repeated operation_id: the first call's assignment and where it stands now. Nothing is sent."""
+    view = store.assignment_info(identity["assignment_id"])
+    payload = dict(
+        identity,
+        name=view.get("name") or name,
+        address=address or store.worker_address(identity["team_id"], view.get("name") or name),
+        parent=caller,
+        state=view["state"],
+        replayed=True,
+    )
+    if view["state"] == "failed":
+        payload["reason"] = (
+            "this operation_id already failed: start the work again with a new operation_id"
+        )
+    elif view.get("reason"):
+        payload["reason"] = view["reason"]
+    return result(payload, structured=True)
+
+
 # Effort levels every CLI accepts: claude --effort, codex model_reasoning_effort, pi --thinking.
 # Pi knows off and minimal as well; the runtime never sends a level a CLI does not take.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -511,6 +561,7 @@ def spawn(arguments, env, ctx):
     name, task, cwd = need(arguments, "name", "task", "cwd")
     worker_name(name)
     task_id = linked_task(arguments, env)
+    key = operation_id(arguments, env)
     model = spawn_model(arguments) + spawn_effort(arguments, cli)
     agent = spawn_agent(arguments, cli)
     instructions = spawn_instructions(arguments, env)
@@ -590,7 +641,28 @@ def spawn(arguments, env, ctx):
         earlier = store.worker_address(
             team, name
         )  # a fast report may bind the new address before we look
-        identity = store.register(team, name, task_id)
+        keyed = None
+        if key:
+            keyed = (
+                operation_owner(env, caller),
+                key,
+                operation_fingerprint(
+                    "spawn",
+                    name=name,
+                    cli=cli,
+                    profile=profile,
+                    task=task,
+                    cwd=os.path.normpath(cwd),
+                    model=arguments.get("model"),
+                    effort=arguments.get("effort"),
+                    agent=agent,
+                    instructions=instructions,
+                    task_id=task_id,
+                ),
+            )
+        identity = store.register(team, name, task_id, operation=keyed)
+        if identity.pop("_replay", None):
+            return replayed(store, identity, name, caller)
         identity.pop("_prior", None)
         suffix = (
             " Include assignment_id=%s and kind=progress|complete|blocked|decision."
@@ -795,13 +867,23 @@ def message(arguments, env, ctx):
 def resume(arguments, env, ctx):
     name, task = need(arguments, "name", "task")
     task_id = linked_task(arguments, env)
+    key = operation_id(arguments, env)
     if dispatch_enabled(env):
         worker_name(name)
         raw = require_child(name, env, ctx)
         if not raw.get("address"):
             raise ToolError("worker address unavailable")
         store, team = lead_store(env, ctx)
-        identity = store.register(team, name, task_id, transfer=True)
+        keyed = None
+        if key:
+            keyed = (
+                operation_owner(env, require_hc(env)[1]),
+                key,
+                operation_fingerprint("resume", name=name, task=task, task_id=task_id),
+            )
+        identity = store.register(team, name, task_id, transfer=True, operation=keyed)
+        if identity.pop("_replay", None):
+            return replayed(store, identity, name, raw["parent"], raw["address"])
         prior = identity.pop("_prior", None)
         prompt = (
             "%s\n\nUse assignment_id=%s for report(kind=progress|complete|blocked|decision)."
@@ -871,6 +953,23 @@ def resume(arguments, env, ctx):
         )
     out = send(["--wait", "--timeout", str(WAIT_DEFAULT)], name, task, env, ctx, WAIT_DEFAULT + 10)
     return result(out or "turn ended")
+
+
+def operation(arguments, env, ctx):
+    """Where a spawn or resume with this operation_id stands, for the lead that made it. Read-only: it never
+    acknowledges a report, so it takes no receipt and returns no inbox."""
+    key = operation_id(arguments, env, required=True)
+    _, caller = require_hc(env)
+    store = getattr(ctx, "store", None) or dispatch.Store(env)
+    try:
+        found = store.operation(operation_owner(env, caller), key)
+    except sqlite3.Error as error:
+        found = {
+            "state": "unknown",
+            "assignment_id": None,
+            "reason": "the store could not be read (%s); retry the lookup" % error,
+        }
+    return result(dict(found, operation_id=key), structured=True)
 
 
 def legacy_wait_seconds(arguments):
@@ -1189,6 +1288,7 @@ HANDLERS = {
     "stop": stop,
     "report": report,
     "task": task,
+    "operation": operation,  # a `call` verb only: the MCP tool list stays the ten tools
 }
 
 
@@ -1292,6 +1392,10 @@ def call_dispatch(name, arguments, env, ctx):
         return HANDLERS[name](arguments, env, ctx)
     if name in ("status", "list", "collect") and lib.resolve(env)["runtime"] != "hc":
         return HANDLERS[name](arguments, env, ctx)
+    if name == "operation":
+        return operation(
+            arguments, env, ctx
+        )  # before the inbox: a lookup must not acknowledge anything
     info, caller = require_hc(env)
     diagnostic_call = name in DIAGNOSTICS
     # D15: read tools piggyback the inbox only when the call carries a receipt (subagents are denied receipts).
