@@ -28,7 +28,7 @@ from pydantic import (
     model_validator,
 )
 
-from . import runner
+from . import config, runner
 
 DEFAULT_STATE = "~/.local/state/orchestrate"
 ScenarioId = Annotated[str, Field(pattern=r"^S\d+[a-z]?$")]
@@ -847,7 +847,9 @@ def slug_of(path):
     A Markdown plan, or a YAML plan whose file cannot be read, keeps the file-derived slug: a listing never fails on
     the plan it lists."""
     derived = path.name.removesuffix(".plan.yaml").removesuffix(".plan.md")
-    if not path.name.endswith(".plan.yaml"):
+    if path.name == "plan.yaml":
+        derived = path.parent.name  # a folder plan is named by its folder
+    elif not path.name.endswith(".plan.yaml"):
         return derived
     try:
         data = read_yaml(path)[0]
@@ -855,6 +857,21 @@ def slug_of(path):
         return derived
     slug = data.get("slug") if isinstance(data, dict) else None
     return slug if isinstance(slug, str) and slug else derived
+
+
+def repo_config(root):
+    """The repo config as a PlanError, so every command refuses it the way it refuses a plan."""
+    try:
+        return config.load(root)
+    except config.ConfigError as error:
+        raise PlanError(f"config: {error}") from error
+
+
+def folder_plans(directory):
+    """`<directory>/<folder>/plan.yaml` for each folder that has one; nothing is created."""
+    if not directory.is_dir():
+        return []
+    return sorted(p / "plan.yaml" for p in directory.iterdir() if (p / "plan.yaml").is_file())
 
 
 def repository_root(cwd, repo=None):
@@ -894,6 +911,7 @@ def discover(repo=None, explicit=None):
             files.add(path)
     else:
         root = repository_root(Path.cwd(), repo)
+        configured = folder_plans(repo_config(root).plans_dir)
         tracked = git(root, "ls-files").splitlines()
         dirs = sorted({str(Path(f).parent) for f in tracked if f.endswith(PLAN_SUFFIXES)})
         if len(dirs) > 1:
@@ -908,10 +926,11 @@ def discover(repo=None, explicit=None):
                 directories=dirs,
             )
         files = set(plan_entries(root / dirs[0])) if dirs else set()
+        files.update(configured)
     return [
         {
             "path": str(p),
-            "format": "yaml" if p.name.endswith(".plan.yaml") else "markdown",
+            "format": "markdown" if p.name.endswith(".plan.md") else "yaml",
             "slug": slug_of(p),
         }
         for p in sorted(files)

@@ -5375,6 +5375,26 @@ def repo_root(plan_path, repo=None):
     ).resolve()
 
 
+def read_repo_config(args):
+    """Every command that names a plan reads the repo's config, so a bad key refuses before any work.
+
+    A plan outside any repository, with no --repo, has no config to read."""
+    plan = getattr(args, "plan", None)
+    if args.command == "plan" and getattr(args, "plan_command", None) == "schema":
+        return
+    if not plan or args.command not in ("plan", "status", "verify", "run", "accept", "launch"):
+        return
+    where = Path(args.repo).resolve() if args.repo else Path(plan).resolve().parent
+    found = subprocess.run(
+        ["git", "-C", str(where), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if found.returncode == 0:
+        yaml_plan.repo_config(Path(found.stdout.strip()).resolve())
+
+
 def repo_key(repo):
     """The directory a repository's YAML plan state lives in under the state dir: its name for the eye, a hash of its
     git common dir for uniqueness. A worktree of the repository has the repository's key, and two clones that share
@@ -6492,6 +6512,7 @@ def main(argv=None):
     args, extra = parser.parse_known_args(argv)
     if extra and args.command != "launch":
         parser.error("unrecognized arguments: " + " ".join(extra))
+    read_repo_config(args)
     if args.command == "launch":
         return launch(args, extra)  # unknown options are forwarded to `run`, which validates them
     if args.command == "plan":
