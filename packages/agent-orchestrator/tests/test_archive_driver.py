@@ -142,12 +142,12 @@ class ArchiveRouteRefusal(ArchiveFixture, unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        result = self.run_driver("--routes-file", str(path), expect=1)
+        result = self.run_driver("--routes-file", str(path), expect=2)
         self.assertRegex(result.stderr, r"archive.*no agent.*remove the `archive` route")
         self.assertEqual(self.calls("spawn"), [])
 
     def test_S7_a_step_override_naming_the_archive_step_is_refused_before_any_spawn(self):
-        result = self.run_driver("--step", "archive=claude/haiku", expect=1)
+        result = self.run_driver("--step", "archive=claude/haiku", expect=2)
         self.assertRegex(result.stderr, r"archive.*no agent.*remove the `archive` route")
         self.assertEqual(self.calls("spawn"), [])
 

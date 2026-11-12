@@ -71,7 +71,9 @@ class FakeGhTests(unittest.TestCase):
 
     def test_S1_pr_create_prints_the_url_of_the_new_pull_request(self):
         with tempfile.TemporaryDirectory() as home:
-            with mock.patch.dict(os.environ, {"FAKE_RUNTIME_HOME": home}, clear=True):
+            with mock.patch.dict(
+                os.environ, {"FAKE_RUNTIME_HOME": home, "FAKE_PLAN": ""}, clear=True
+            ):
                 made = fake_gh.process(["pr", "create", "--draft"])
         self.assertEqual((made.returncode, made.stdout), (0, "https://github.com/o/r/pull/9\n"))
 

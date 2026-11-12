@@ -76,7 +76,8 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
             "state": "MERGED",
             "mergeCommit": {"oid": self.git(self.repo, "rev-parse", "HEAD")},
         }
-        self.prs([merged_t1, dirty])
+        self.prs([merged_t1])
+        self.drafts([dirty])  # the archive PR is a draft when CI finds it conflicting
         self.waits(merged + [self.gaps_done(), self.decide_step("archive", "skip")])
         self.run_driver()
         self.assertEqual(self.spawned().count(ARCHIVE), 0)
@@ -146,9 +147,11 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
 
     def test_S25_the_driver_places_each_promote_oracle_in_the_archive_worktree(self):
         self.archive_run()
-        oracle = self.plan.parent / "demo.oracle" / "test_oracle.py.oracle"
-        placed = self.archive_tree / "src" / "a" / "test_oracle.py"
-        self.assertEqual(placed.read_bytes(), oracle.read_bytes())
+        oracle = (self.plan.parent / "demo.oracle" / "test_oracle.py.oracle").read_text()
+        # the worktree is gone after the merge: the pushed branch is what holds the placed file
+        self.assertEqual(
+            self.git(self.origin, "show", "feat/demo-archive:src/a/test_oracle.py") + "\n", oracle
+        )
 
     def test_S25_the_driver_reruns_outcome_evidence_on_the_archive_head(self):
         self.archive_run()

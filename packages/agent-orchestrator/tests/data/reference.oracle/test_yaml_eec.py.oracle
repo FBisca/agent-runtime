@@ -187,22 +187,9 @@ class YamlPlanFixture(GateFixture):
         ]
         steps = [worker, reviewer]
         if archive:
-            archiver = report_wait("demo-archive", "complete", id=spawn_id("demo-archive"))
-            archiver["write"] = [
-                [
-                    str(run_dir / "archive" / "report.json"),
-                    self.report("archive", pr="https://github.com/o/r/pull/9"),
-                ],
-                [
-                    str(self.archive_tree / "docs" / "specs" / "demo.md"),
-                    "# Demo\nPaths: src/a/\n\n- **R1** WHEN the feature is delivered, THEN src/a/feature.txt reads"
-                    " done. (from demo/S1)\n\n## Coverage\n\n| Requirement | Test |\n|---|---|\n"
-                    "| R1 | `src/a/test_feature.py::test_feature` |\n",
-                ],
-            ]
             gaps = report_wait("demo-gaps", "complete")
             gaps["write"] = [[str(run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-            steps += [archiver, gaps]
+            steps += [gaps]
         return steps
 
     def run_yaml(self, steps):
@@ -252,9 +239,9 @@ class Lifecycle(YamlPlanFixture, unittest.TestCase):
             ],
             "the outcome was not re-verified on the archive head",
         )
-        promoted = self.archive_tree / "checks" / "probe.txt"
+        # the archive worktree is removed after the merge: the pushed branch holds the promoted file
         self.assertEqual(
-            promoted.read_text(encoding="utf-8"),
+            self.git(self.origin, "show", "feat/demo-archive:checks/probe.txt") + "\n",
             PROBE,
             "the oracle was not promoted byte-identical",
         )
@@ -323,7 +310,9 @@ class Rejections(YamlPlanFixture, unittest.TestCase):
         status = self.status()
         self.assertEqual([t["state"] for t in status["tickets"]], ["COMPLETE"])
         self.assertEqual(status["plan"]["state"], "REJECTED")
-        self.assertNotIn("demo-archive", self.spawned(), "a plan whose outcome failed was archived")
+        self.assertEqual(
+            self.gh_calls("pr", "create"), [], "a plan whose outcome failed was archived"
+        )
         integration = self.receipts(run_dir, "integration")
         self.assertEqual([r["result"] for r in integration if r["scenario"] == "S1"], ["FAIL"])
         self.assertNotEqual(self.verify().returncode, 0)

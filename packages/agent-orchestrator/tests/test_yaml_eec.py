@@ -239,9 +239,9 @@ class Lifecycle(YamlPlanFixture, unittest.TestCase):
             ],
             "the outcome was not re-verified on the archive head",
         )
-        promoted = self.archive_tree / "checks" / "probe.txt"
+        # the archive worktree is removed after the merge: the pushed branch holds the promoted file
         self.assertEqual(
-            promoted.read_text(encoding="utf-8"),
+            self.git(self.origin, "show", "feat/demo-archive:checks/probe.txt") + "\n",
             PROBE,
             "the oracle was not promoted byte-identical",
         )
