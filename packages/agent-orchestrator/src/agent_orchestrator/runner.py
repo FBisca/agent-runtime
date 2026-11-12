@@ -1,9 +1,10 @@
 """The evidence runner: the one place a plan's `check` runs, and the one author of a receipt.
 
-A check runs once, under `bash -euo pipefail`, in a disposable detached worktree at the target commit with the
-oracles placed, a temporary HOME and XDG_STATE_HOME, the real cache directories, no virtualenv on PATH and only the
-env names the plan declares. The result is PASS, FAIL or UNKNOWN by rule (D16); nothing is rerun, and an agent's own
-run never yields a receipt, because only the driver calls this module. Stdlib only.
+A check runs once, under `bash -euo pipefail`, in a disposable detached worktree at the target commit (or a shared
+one reset to it, see Workspace) with the oracles placed, a temporary HOME and XDG_STATE_HOME, the real cache
+directories, no virtualenv on PATH and only the env names the plan declares. The result is PASS, FAIL or UNKNOWN by
+rule (D16); nothing is rerun, and an agent's own run never yields a receipt, because only the driver calls this
+module. Stdlib only.
 """
 
 import hashlib
@@ -278,6 +279,53 @@ def worktree(repo, commit, scratch, name):
     return path
 
 
+class Workspace:
+    """One detached worktree at one commit that several checks run in, one after another.
+
+    Each check starts from the commit's tree: tracked files reset, everything untracked or ignored removed, except
+    the root `.venv`. Keeping that venv is the point: `uv run` builds it once, not once per check."""
+
+    KEEP = "/.venv"
+
+    def __init__(self, repo, commit):
+        self.repo = Path(repo)
+        self.commit = git(
+            "-C", str(repo), "rev-parse", "--verify", commit + "^{commit}"
+        ).stdout.strip()
+        self.scratch = Path(tempfile.mkdtemp(prefix="eec-shared-"))
+        self.tree = None
+        try:
+            self.tree = worktree(self.repo, self.commit, self.scratch, "tree")
+        except BaseException:
+            self.close()
+            raise
+
+    def fresh(self, commit):
+        """The tree, reset to the commit; a check at another commit is a caller's mistake, refused."""
+        if (
+            git("-C", str(self.repo), "rev-parse", "--verify", commit + "^{commit}").stdout.strip()
+            != self.commit
+        ):
+            raise RunnerError(
+                "the shared worktree is at %s, not %s" % (self.commit[:12], commit[:12])
+            )
+        git("-C", str(self.tree), "reset", "--hard", "--quiet", self.commit)
+        git("-C", str(self.tree), "clean", "-ffdxq", "-e", self.KEEP)
+        return self.tree
+
+    def close(self):
+        if self.tree is not None:
+            drop_worktree(self.repo, self.tree)
+            self.tree = None
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
 def drop_worktree(repo, path):
     git("-C", str(repo), "worktree", "remove", "--force", str(path), check=False)
     shutil.rmtree(path, ignore_errors=True)
@@ -314,9 +362,10 @@ def attempt(
     base_env,
     patch=None,
     patch_name="negative patch",
+    workspace=None,
 ):
-    """One execution of `check` in a fresh worktree: (facts, log text). `patch` is applied before the oracles and
-    skips the dirty-tree rule, since the patch itself dirties the tree."""
+    """One execution of `check` in a fresh worktree, or in `workspace` reset to the commit: (facts, log text).
+    `patch` is applied before the oracles and skips the dirty-tree rule, since the patch itself dirties the tree."""
     scratch = Path(tempfile.mkdtemp(prefix="eec-"))
     started = time.monotonic()
     facts = {"exit": None, "junit": None, "exit_code_only": False, "detail": None}
@@ -332,7 +381,11 @@ def attempt(
                 % ("s" if len(missing) > 1 else "", ", ".join(missing)),
             )
             return facts, ""
-        tree = worktree(repo, commit, scratch, "tree")
+        tree = (
+            workspace.fresh(commit)
+            if workspace is not None
+            else worktree(repo, commit, scratch, "tree")
+        )
         if patch is not None:
             patch_file = scratch / "negative.patch"
             patch_file.write_bytes(patch)
@@ -383,7 +436,7 @@ def attempt(
         return facts, redact(tail(log_path), [base_env.get(name, "") for name in env_names])
     finally:
         facts["seconds"] = round(time.monotonic() - started, 3)
-        if tree is not None:
+        if tree is not None and workspace is None:
             drop_worktree(repo, tree)
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -511,8 +564,9 @@ def run_evidence(
     negative=None,
     base_env=None,
     receipts_dir=None,
+    workspace=None,
 ):
-    """Run one evidence item once at `commit` and return its Run.
+    """Run one evidence item once at `commit` and return its Run; with `workspace`, in that shared worktree.
 
     `oracles` maps oracle file names to their approved bytes, placed under `place`. `negative` is
     `(file name, patch bytes)`: when the check passes, it must fail on a scratch copy with the patch applied, or the
@@ -530,6 +584,7 @@ def run_evidence(
         env_names=list(env_names),
         timeout=timeout,
         base_env=base_env,
+        workspace=workspace,
     )
     facts, log = attempt(repo, commit, **wanted)
     receipt = receipt_of(
