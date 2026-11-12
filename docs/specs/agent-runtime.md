@@ -1,7 +1,7 @@
 # Agent runtime
 Paths: .claude-plugin/, packages/agent-runtime/src/agent_runtime/, packages/agent-runtime/tests/, server/, hooks/, bin/, install.sh
 
-> **Repository move (2026-11-03).** The runtime now lives in its own repository, which supersedes D1 of the archived [follow-ups plan](../plans/2026-10-30-agent-runtime-followups.plan.md) ("the runtime stays in dotfiles"). Earlier plans and requirements below refer to the original layout.
+> **Repository move (2026-11-03).** The runtime now lives in its own repository, which supersedes D1 of the archived `agent-runtime-followups` plan ("the runtime stays in dotfiles"). Earlier plans and requirements below refer to the original layout.
 
 The agent runtime contract gives skills one set of delegation verbs (spawn, message, resume, report, wait, task, collect, stop, status, list) that per-runtime adapters (hc, herdmates, native) implement. `agent-runtime resolve` picks the runtime deterministically: `HERDR_PANE_ID` (Claude to herdmates, Codex to native) beats `HC_TERMINAL_ID` (hc, role from `hc get`), which beats native.
 
