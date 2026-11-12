@@ -2,7 +2,7 @@
 
 `uv run pytest` runs the fast suite (the tests marked `unit`): in-process, isolated, deterministic.
 `uv run pytest -m integration` runs the tests that drive a real boundary (a subprocess, a socket, the
-filesystem). `uv run pytest -n 4` runs everything.
+filesystem). `uv run pytest -n auto` runs everything.
 
 The selection follows the command line: an explicit `-m` wins, and asking for parallelism (or for
 durations) means the whole suite. A worker of xdist takes the selection from the controller.

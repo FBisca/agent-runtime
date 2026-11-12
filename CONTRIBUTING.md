@@ -20,7 +20,7 @@ nothing but uv:
 uv sync --frozen --all-packages  # the environment (pytest, pytest-xdist) and both members
 uv run pytest           # the fast suite: the unit tests, in process (under 3 seconds)
 uv run pytest -m integration   # the tests that drive a real boundary (a subprocess, a socket)
-uv run pytest -n 4      # the whole suite, in parallel
+uv run pytest -n auto   # the whole suite, one worker per core
 uv run pytest --durations=20  # the whole suite, with the slowest tests
 ```
 
@@ -29,7 +29,7 @@ pytest is how they are run. Every test file carries a marker that says what it d
 in-process, isolated, deterministic tests (no subprocess, no server) and `integration` for the tests
 that drive a real component boundary - a subprocess, an IPC pipe, the filesystem - even when the
 dependency behind that boundary is faked. `uv run pytest` runs the unit tests; the integration tests run
-with `-m integration`, and the whole suite runs with `-n 4` (or any `-n`). The suite drives the server
+with `-m integration`, and the whole suite runs with `-n auto` (or any `-n`). The suite drives the server
 over stdio against a fake `hc`. The live mixed-CLI acceptance run is opt-in (`AGENT_RUNTIME_LIVE=1`).
 
 CI runs the suite on Python 3.11 to 3.13 on Linux and macOS, and runs shellcheck on `install.sh` and
