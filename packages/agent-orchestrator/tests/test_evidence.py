@@ -186,6 +186,64 @@ class EvidenceTests(unittest.TestCase):
         self.assertIsNone(evidence.attempts(data, rows, "demo")[0]["tokens"]["input"])
 
     @pytest.mark.unit
+    def test_S13_metrics_and_attempts_sum_what_both_report_and_null_what_one_lacks(self):
+        """worker-usage/S13"""
+        from agent_orchestrator import events
+
+        evidence = load_evidence()
+        worker = {
+            "input_tokens": 117,
+            "cached_input_tokens": 2100,
+            "cache_write_tokens": 50,
+            "output_tokens": 53,
+            "model_calls": 3,
+            "tool_calls": 4,
+            "cost_usd": 0.25,
+        }
+        reviewer = {
+            "input_tokens": 700,
+            "cached_input_tokens": 1800,
+            "cache_write_tokens": 0,
+            "output_tokens": 120,
+            "model_calls": 2,
+            "tool_calls": 2,
+        }
+        data = {"version": 1, "tasks": {"t1": task(review={"assignment_id": "a-rev"})}}
+
+        def written(worker_usage, reviewer_usage):
+            rows = [
+                row("state", unit="t1", route={"size": "small"}),
+                row("usage", unit="t1", assignment_id="a-demo-t1", usage=worker_usage),
+                row("usage", unit="t1", assignment_id="a-rev", usage=reviewer_usage),
+            ]
+            metrics = events.rollup(rows, "demo")["tickets"]["t1"]["usage"]
+            return metrics, evidence.attempts(data, rows, "demo")[0]
+
+        metrics, record = written(worker, reviewer)
+        self.assertEqual(
+            (metrics["input_tokens"], metrics["output_tokens"], metrics["cached_input_tokens"]),
+            (817, 173, 3900),
+        )
+        self.assertEqual((metrics["model_calls"], metrics["tool_calls"]), (5, 6))
+        self.assertIsNone(metrics["cost_usd"])
+        self.assertEqual(record["schema_version"], 3)
+        self.assertEqual(
+            record["tokens"],
+            {"input": 817, "output": 173, "cached": 3900, "cache_write": 50, "reasoning": None},
+        )
+        self.assertEqual(
+            (record["counters"]["model_calls"], record["counters"]["tool_calls"]), (5, 6)
+        )
+        self.assertIsNone(record["cost_usd"])
+
+        metrics, record = written(
+            dict(worker, reasoning_tokens=0), dict(reviewer, reasoning_tokens=40, cost_usd=0.5)
+        )
+        self.assertAlmostEqual(metrics["cost_usd"], 0.75)
+        self.assertAlmostEqual(record["cost_usd"], 0.75)
+        self.assertEqual(record["tokens"]["reasoning"], 40)
+
+    @pytest.mark.unit
     def test_S2_the_evidence_manifest_names_the_fields_the_records_carry(self):
         """orchestrator-engine/R2: P3.T3/S2"""
         evidence = load_evidence()
