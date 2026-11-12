@@ -224,3 +224,19 @@ test("S13 a command that fails to start or times out is a project error with no 
   assert.equal(shown.plan, null);
   assert.equal(h.calls.length, 1, "no plan is fetched without a list");
 });
+
+test("S17 the plans whose answers are held are handed over, so a Runtime section knows every attempt it can see", async () => {
+  const h = harness();
+  const data = createData({ exec: h.exec });
+  data.setScope(SCOPE);
+  const done = data.refresh();
+  await tick();
+  assert.deepEqual(data.state().loaded, [], "nothing is loaded before an answer");
+  h.calls[0].resolve(ok(PLANS));
+  await tick();
+  h.calls[1].resolve(ok(PLAN));
+  await done;
+  assert.deepEqual(data.state().loaded.map((p) => p.slug), ["agent-workbench"]);
+  data.setScope({ folder: "/elsewhere", machine: null });
+  assert.deepEqual(data.state().loaded, [], "another folder holds none of them");
+});

@@ -6,7 +6,7 @@ import { badge, chip, colorOf, control, section } from "../ui.js";
 
 const when = (iso) => (iso ? String(iso).replace("T", " ").slice(0, 16) : "—");
 
-function attemptRow(a, t) {
+function attemptRow(a, t, onOpen) {
   return v_flex().gap(1).py(2)
     .child(h_flex().gap(8).items_center()
       .child(div().text_size(12).font_semibold().child(a.taskId))
@@ -14,7 +14,11 @@ function attemptRow(a, t) {
       .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).truncate().child(a.status ?? "unknown"))
       .when(a.latest, (el) => el.child(badge("latest", "working", t)))
       .child(div().flex_none().text_size(11).text_color(a.claimed ? t.foreground : t.dim).child(a.claimed ? "claimed" : "not claimed")))
-    .child(div().text_size(11).text_color(t.dim).child(`${when(a.startedAt)} → ${when(a.finishedAt)} · terminal ${a.address ?? "unknown"}`));
+    .child(h_flex().gap(8).items_center()
+      .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim)
+        .child(`${when(a.startedAt)} → ${when(a.finishedAt)} · terminal ${a.address ?? "unknown"} · ${a.terminal.word}`))
+      .when(Boolean(a.terminal.open), (el) => el.child(control(`open-${a.taskId}`, "Open", (_e, cx) => onOpen(a.terminal.open, cx), t))))
+    .when(Boolean(a.terminal.why), (el) => el.child(div().text_size(10).text_color(t.dim).child(a.terminal.why)));
 }
 
 function gateRow(g, t) {
@@ -26,7 +30,7 @@ function gateRow(g, t) {
 }
 
 export function inspectorView(view, ctx) {
-  const { t, onBack } = ctx;
+  const { t, onBack, onOpen } = ctx;
   const none = (text) => div().text_size(12).text_color(t.dim).child(text);
   return v_flex().id("inspector").gap(12).p(12)
     .when(Boolean(onBack), (el) => el.child(control("inspector-back", "← tickets", (_e, cx) => onBack(cx), t)))
@@ -44,7 +48,7 @@ export function inspectorView(view, ctx) {
       div().text_size(12).text_color(t.muted).child(view.dependents.join(", ")))))
     .child(section("Attempts", t, ...(view.attempts === null
       ? [none("this agent-orchestrator does not report attempts")]
-      : view.attempts.length ? view.attempts.map((a) => attemptRow(a, t)) : [none("none yet")])))
+      : view.attempts.length ? view.attempts.map((a) => attemptRow(a, t, onOpen)) : [none("none yet")])))
     .child(section("Gates", t, ...(view.gates === null
       ? [none("this agent-orchestrator does not report gates")]
       : view.gates.length ? view.gates.map((g) => gateRow(g, t)) : [none("none yet")])));
