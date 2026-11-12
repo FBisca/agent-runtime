@@ -357,3 +357,44 @@ class PlanTests(RunFixture, unittest.TestCase):
         code, message = self.command("check")
         self.assertEqual(code, 2, message)
         self.assertIn("scenarios[0].evidence.oracle[0]", message)
+
+    def test_S1_risk_tagged_baseline_pass_needs_a_negative(self):
+        (self.oracles / "x.patch.oracle").write_text("--- a\n+++ b\n")
+
+        def risky(evidence, ticket_extra=None, risk=("state",)):
+            data = contract()
+            data["scenarios"][0]["evidence"] = evidence
+            data["tickets"][0].update(ticket_extra or {})
+            if risk:
+                data["tickets"][0]["risk"] = list(risk)
+            return data
+
+        baseline_pass = {"check": "true", "baseline": "pass"}
+        self.write(risky(baseline_pass))
+        code, message = self.command("check")
+        self.assertEqual(code, 2, message)
+        self.assertIn("scenarios[0].evidence", message)
+        self.assertIn("negative", message)
+
+        valid = {
+            "negative_present": risky(dict(baseline_pass, negative="x.patch.oracle")),
+            "baseline_fail": risky({"check": "true", "baseline": "fail"}),
+            "human": risky({"human": "confirm b"}, risk=("state",)),
+            "untagged": risky(baseline_pass, risk=()),
+            "waiver": risky(baseline_pass, ticket_extra={"evidence_waiver": "verified by outcome"}),
+        }
+        for name, data in valid.items():
+            with self.subTest(case=name):
+                self.write(data)
+                code, message = self.command("check")
+                self.assertEqual(code, 0, message)
+
+    def test_S2_plan_schema_is_a_closed_plan_v1_schema(self):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = load_script().run_cli(["plan", "schema"])
+        self.assertEqual(code, 0, err.getvalue())
+        schema = json.loads(out.getvalue())
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertIn("scenarios", schema["properties"])
+        self.assertIn("tickets", schema["properties"])
