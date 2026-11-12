@@ -35,39 +35,43 @@ def claude_session(
     )
 
 
-def codex_rollout(
-    codex: Path, day: str, stamp: str, sid: str, cwd: str, at: str, prompt: str | None = None
-) -> Path:
-    """One rollout file: `session_meta` first, an injected AGENTS.md context, then the prompt."""
-    meta = {
-        "type": "session_meta",
-        "payload": {"session_id": sid, "id": sid, "cwd": cwd, "timestamp": at},
-    }
-    context = {
+# What Codex itself writes as user messages before the user's own prompt; the decoy marker shows a
+# capture that took one of them for the prompt.
+CODEX_INJECTED = (
+    "# AGENTS.md instructions for /repo\n\nassignment_id=" + "0" * 32,
+    "<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>",
+)
+
+
+def codex_message(text: str) -> dict:
+    return {
         "type": "response_item",
         "payload": {
             "type": "message",
             "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "# AGENTS.md instructions for /repo\n\nassignment_id=" + "0" * 32,
-                }
-            ],
+            "content": [{"type": "input_text", "text": text}],
         },
     }
-    records = [meta, context]
+
+
+def codex_rollout(
+    codex: Path,
+    day: str,
+    stamp: str,
+    sid: str,
+    cwd: str,
+    at: str,
+    prompt: str | None = None,
+    injected: tuple[str, ...] = CODEX_INJECTED[:1],
+) -> Path:
+    """One rollout file: `session_meta` first, Codex's injected context, then the prompt."""
+    meta = {
+        "type": "session_meta",
+        "payload": {"session_id": sid, "id": sid, "cwd": cwd, "timestamp": at},
+    }
+    records = [meta, *(codex_message(text) for text in injected)]
     if prompt is not None:
-        records.append(
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": prompt}],
-                },
-            }
-        )
+        records.append(codex_message(prompt))
     return write(codex / "sessions" / day / f"rollout-{stamp}-{sid}.jsonl", lines(records))
 
 

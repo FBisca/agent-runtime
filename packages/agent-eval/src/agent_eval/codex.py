@@ -10,8 +10,19 @@ from pathlib import Path
 from agent_eval.sessions import Aux, Found, Transcript, epoch, first_record, head, regular, text_of
 from agent_eval.store import SLUG
 
-# What Codex injects before the user's own prompt: project instructions and the environment.
-INJECTED = ("# AGENTS.md instructions", "<")
+# What Codex itself writes as user messages before the user's own prompt, by their opening. A bare "<"
+# would also swallow a prompt that starts with a tag, and that prompt's assignment_id with it.
+INJECTED = (
+    "# AGENTS.md instructions",
+    "<environment_context>",
+    "<user_instructions>",
+    "<guardian_tool_descriptions>",
+    "<no retained transcript delta entries>",
+)
+
+
+def injected(text: str) -> bool:
+    return text.startswith(INJECTED)
 
 
 def codex_dir() -> Path:
@@ -26,7 +37,7 @@ def prompt_of(path: Path) -> str:
         if payload.get("type") != "message" or payload.get("role") != "user":
             continue
         text = text_of(payload.get("content")).strip()
-        if text and not text.startswith(INJECTED):
+        if text and not injected(text):
             return text
     return ""
 
