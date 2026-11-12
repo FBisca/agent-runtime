@@ -863,7 +863,8 @@ def cmd_call(args):
         hc_tools.lib.FORCED_LEAD = True
     out: dict
     try:
-        live = live_lead_conflict(hc_tools, env)
+        # Keys belong to the terminal across lead generations; lookup cannot mutate its live team.
+        live = None if args.tool == "operation" else live_lead_conflict(hc_tools, env)
         if live:
             print(
                 "this terminal's live lead generation is %s with unfinished assignments or unacknowledged reports; "
