@@ -5,6 +5,7 @@ renamed or deleted JS test turns its scenario red instead of passing silently. A
 naming node: the mod's logic is only proven when its tests run.
 """
 
+import json
 import os
 import re
 import shutil
@@ -93,6 +94,10 @@ def test_S17_a_Runtime_section_lists_live_agents_no_attempt_names():
     scenario("S17", 6)
 
 
+# Open, and the tab bar's panel button (R19).
+ALLOWED_COMMANDS = {'"agent.focus"', '"layout.select"', '"layout.show"', '"layout.hide"'}
+
+
 def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling():
     files = [MOD / name for name in ("main.js", "data.js", "model.js", "ui.js")]
     files += sorted((MOD / "views").glob("*.js"))
@@ -101,7 +106,7 @@ def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_pol
         for command in re.findall(
             r"[\"'](?:agent|pane|terminal|space|tab|layout)\.[a-z_]+[\"']", text
         ):
-            assert command == '"agent.focus"', (file.name, command)
+            assert command in ALLOWED_COMMANDS, (file.name, command)
     assert "setInterval" not in source("main.js")
     assert "terminals()" in source("main.js")
 
@@ -117,3 +122,27 @@ def test_S18_a_missing_node_fails_naming_node_instead_of_skipping(tmp_path):
     with pytest.raises(pytest.fail.Exception, match="node"):
         node_tests(path=empty)
     assert os.path.isdir(empty)
+
+
+def test_S24_the_tab_bar_opens_and_closes_the_workbench_panel():
+    scenario("S24", 4)
+
+
+def test_S24_the_workbench_layout_puts_the_button_beside_herdrs_tabs():
+    layout = json.loads((MOD.parent / "layouts" / "workbench.json").read_text())
+
+    def nodes(node):
+        yield node
+        for child in node.get("children", []):
+            yield from nodes(child)
+
+    by_id = {n["id"]: n for n in nodes(layout)}
+    bar = by_id["tab-bar"]
+    assert [c["id"] for c in bar["children"]] == ["tabs", "workbench-toggle"]
+    assert by_id["tabs"]["content"] == {"mod": "tabs"}
+    assert by_id["workbench-toggle"]["content"] == {
+        "mod": "agent-workbench",
+        "props": {"toggle": True},
+    }
+    assert "workbench" in [c["id"] for c in by_id["panel-body"]["children"]]
+    assert (MOD / "workbench.svg").is_file()
