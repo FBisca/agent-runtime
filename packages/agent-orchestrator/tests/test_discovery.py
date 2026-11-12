@@ -100,6 +100,66 @@ class DiscoveryTests(DiscoveryFixture):
         self.assertFalse((self.repo / ".orchestrate").exists())
 
 
+class ConfiguredDiscoveryTests(DiscoveryFixture):
+    """S2: folder plans from the configured dir, beside the legacy listing."""
+
+    def config(self, text):
+        path = self.repo / ".orchestrate" / "config.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def folder(self, base, name, slug=None):
+        plan = base / name / "plan.yaml"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(f"slug: {slug}\n" if slug else "goal: x\n", encoding="utf-8")
+        return plan
+
+    def entries(self, *extra):
+        code, out, err = self.run_cli("plans", "list", "--json", "--repo", str(self.repo), *extra)
+        self.assertEqual(code, 0, err)
+        return json.loads(out)
+
+    def test_S2_a_plans_dir_inside_the_repository_untracked_lists_its_folders(self):
+        self.config("plans:\n  dir: work\n")
+        plan = self.folder(self.repo / "work", "2026-01-01-a", slug="a")
+        legacy = self.track("docs/plans/2026-01-02-b.plan.yaml")
+        found = {e["path"]: e for e in self.entries()}
+        self.assertEqual(found[str(plan.resolve())]["slug"], "a")
+        self.assertIn(str(legacy.resolve()), found)
+
+    def test_S2_a_plans_dir_outside_the_repository_lists_its_folders(self):
+        outside = self.root / "elsewhere"
+        self.config(f"plans:\n  dir: {outside}\n")
+        plan = self.folder(outside, "2026-01-01-a")
+        self.folder(outside, "2026-01-02-b", slug="bee")
+        (outside / "loose.txt").write_text("x", encoding="utf-8")
+        (outside / "no-plan").mkdir()
+        found = {e["path"]: e["slug"] for e in self.entries()}
+        self.assertEqual(
+            found,
+            {
+                str(plan.resolve()): "2026-01-01-a",
+                str((outside / "2026-01-02-b" / "plan.yaml").resolve()): "bee",
+            },
+        )
+
+    def test_S2_an_unknown_config_key_fails_the_command_naming_it(self):
+        self.config("plans:\n  dir: work\n  colour: red\n")
+        code, out, err = self.run_cli("plans", "list", "--json", "--repo", str(self.repo))
+        self.assertEqual(code, 2)
+        self.assertIn("plans.colour", err)
+        self.assertEqual(out, "")
+
+    def test_S2_listing_creates_no_directory_or_file(self):
+        self.config("plans:\n  dir: nowhere/plans\n")
+        self.assertEqual(self.entries(), [])
+        self.assertFalse((self.repo / "nowhere").exists())
+
+    def test_S2_a_missing_config_lists_docs_plans_folders(self):
+        plan = self.folder(self.repo / "docs" / "plans", "2026-01-01-a")
+        self.assertEqual([e["path"] for e in self.entries()], [str(plan.resolve())])
+
+
 class ExternalPlanTests(DiscoveryFixture):
     """S6: a plan outside the repository is checked, approved and run with `--repo`."""
 
