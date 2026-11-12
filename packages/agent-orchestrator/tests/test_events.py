@@ -175,6 +175,31 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(ticket["usage"], {"input_tokens": 7})
         self.assertEqual(ticket["route"]["model"], "haiku")
 
+    @pytest.mark.unit
+    def test_S10_a_key_is_summed_when_every_assignment_reports_it_else_null(self):
+        """worker-usage/S10"""
+        spec = load_script()
+        at = "2026-11-07T00:00:00+00:00"
+
+        def usage(assignment, figures):
+            return {
+                "at": at,
+                "kind": "usage",
+                "unit": "t1",
+                "assignment_id": assignment,
+                "usage": figures,
+            }
+
+        rows = [
+            {"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}},
+            usage("a1", {"input_tokens": 1, "cost_usd": 0.5, "tool_calls": 2}),
+            usage("a2", {"input_tokens": 2, "tool_calls": 3}),
+        ]
+        ticket = spec.events.rollup(rows, "demo")["tickets"]["t1"]
+        self.assertEqual(ticket["usage"], {"input_tokens": 3, "cost_usd": None, "tool_calls": 5})
+        rows = [{"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}}]
+        self.assertEqual(spec.events.rollup(rows, "demo")["tickets"]["t1"]["usage"], "unknown")
+
 
 class DecisionEventTests(DeciderFixture, unittest.TestCase):
     @pytest.mark.integration

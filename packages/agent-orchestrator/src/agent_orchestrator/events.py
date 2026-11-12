@@ -67,18 +67,27 @@ def read(path):
     return events
 
 
+def reported(value):
+    return type(value) in (int, float)
+
+
 def sum_usage(values):
-    """One ticket's usage from the runtime's per-assignment values: numeric fields summed, else the values as listed;
-    `unknown` when the runtime reported none."""
+    """One ticket's usage from the runtime's per-assignment values: each key is the sum over the assignments when every
+    one reported it as a number, and `None` when any did not (a ticket total never hides a missing figure); the values
+    as listed when they are not numeric dicts; `unknown` when the runtime reported none."""
     if not values:
         return "unknown"
     if all(
-        isinstance(v, dict) and all(type(x) in (int, float) for x in v.values()) for v in values
+        isinstance(v, dict) and all(reported(x) or x is None for x in v.values()) for v in values
     ):
         total = {}
         for value in values:
-            for key, number in value.items():
-                total[key] = total.get(key, 0) + number
+            for key in value:
+                total[key] = (
+                    sum(v[key] for v in values)
+                    if all(reported(v.get(key)) for v in values)
+                    else None
+                )
         return total
     return values if len(values) > 1 else values[0]
 

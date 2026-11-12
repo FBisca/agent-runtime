@@ -63,18 +63,26 @@ class EvidenceTests(unittest.TestCase):
         counted = evidence.tokens(
             {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 5}
         )
-        self.assertEqual(counted, {"input": 100, "output": 20, "cached": 5})
         self.assertEqual(
-            evidence.tokens({"input_tokens": 3}), {"input": 3, "output": None, "cached": None}
+            counted,
+            {"input": 100, "output": 20, "cached": 5, "cache_write": None, "reasoning": None},
+        )
+        self.assertEqual(
+            evidence.tokens({"input_tokens": 3}),
+            {"input": 3, "output": None, "cached": None, "cache_write": None, "reasoning": None},
         )
 
     @pytest.mark.unit
     def test_S2_an_unmeasured_figure_is_null_and_never_zero(self):
         """orchestrator-engine/R2: P3.T3/S2"""
         evidence = load_evidence()
-        self.assertEqual(evidence.tokens(None), {"input": None, "output": None, "cached": None})
         self.assertEqual(
-            evidence.tokens("unknown"), {"input": None, "output": None, "cached": None}
+            evidence.tokens(None),
+            {"input": None, "output": None, "cached": None, "cache_write": None, "reasoning": None},
+        )
+        self.assertEqual(
+            evidence.tokens("unknown"),
+            {"input": None, "output": None, "cached": None, "cache_write": None, "reasoning": None},
         )
 
     @pytest.mark.unit
@@ -110,7 +118,10 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(record["counters"]["human_rescues"], 1)
         self.assertIsNone(record["counters"]["tool_calls"])
         self.assertIsNone(record["counters"]["model_calls"])
-        self.assertEqual(record["tokens"], {"input": 100, "output": 20, "cached": None})
+        self.assertEqual(
+            record["tokens"],
+            {"input": 100, "output": 20, "cached": None, "cache_write": None, "reasoning": None},
+        )
         self.assertEqual([g["source"] for g in record["gates"]], ["converge"])
 
     @pytest.mark.unit
@@ -122,7 +133,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertNotIn("verified", record)
         self.assertNotIn("verified", evidence.FIELDS)
         self.assertIn("claimed", record)
-        self.assertEqual(record["schema_version"], 2)
+        self.assertEqual(record["schema_version"], 3)
 
     @pytest.mark.unit
     def test_S2_an_attempt_that_ended_without_a_verified_report_is_not_verified(self):
@@ -134,6 +145,45 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(record["outcome"], "RELEASED")
         self.assertEqual(record["finished_at"], "2026-11-07T00:01:30+00:00")
         self.assertEqual(record["elapsed_seconds"], 90.0)
+
+    @pytest.mark.unit
+    def test_S11_a_record_sums_usage_and_nulls_what_any_assignment_lacks(self):
+        """worker-usage/S11"""
+        evidence = load_evidence()
+        full = {
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "cached_input_tokens": 3,
+            "cache_write_tokens": 4,
+            "reasoning_tokens": 5,
+            "model_calls": 6,
+            "tool_calls": 7,
+            "cost_usd": 0.5,
+        }
+        data = {
+            "version": 1,
+            "tasks": {"t1": task(review={"assignment_id": "a-rev"})},
+        }
+        rows = [
+            row("usage", unit="t1", assignment_id="a-demo-t1", usage=full),
+            row("usage", unit="t1", assignment_id="a-rev", usage=dict(full, cost_usd=None)),
+        ]
+        record = evidence.attempts(data, rows, "demo")[0]
+        self.assertEqual(
+            record["tokens"],
+            {"input": 2, "output": 4, "cached": 6, "cache_write": 8, "reasoning": 10},
+        )
+        self.assertEqual(
+            (record["counters"]["model_calls"], record["counters"]["tool_calls"]), (12, 14)
+        )
+        self.assertIsNone(record["cost_usd"])
+        rows[1]["usage"]["cost_usd"] = 0.25
+        record = evidence.attempts(data, rows, "demo")[0]
+        self.assertAlmostEqual(record["cost_usd"], 0.75)
+        del rows[1]["usage"]["tool_calls"]
+        self.assertIsNone(evidence.attempts(data, rows, "demo")[0]["counters"]["tool_calls"])
+        del rows[1]
+        self.assertIsNone(evidence.attempts(data, rows, "demo")[0]["tokens"]["input"])
 
     @pytest.mark.unit
     def test_S2_the_evidence_manifest_names_the_fields_the_records_carry(self):
@@ -164,7 +214,9 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
         """orchestrator-engine/R2: P3.T3/S2"""
         worker = self.worker_done(tests=True)
         worker["assignments"][0]["usage"] = {"input_tokens": 100, "output_tokens": 20}
-        self.waits([worker, self.reviewer_done()])
+        reviewer = self.reviewer_done()
+        reviewer["assignments"][0]["usage"] = {"input_tokens": 0, "output_tokens": 0}
+        self.waits([worker, reviewer])
         self.run_driver()
         records = self.attempts()
         self.assertIn("t1", [r["task_id"] for r in records])
@@ -175,7 +227,10 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
         self.assertGreaterEqual(record["elapsed_seconds"], 0)
         self.assertEqual(record["harness"], "claude")
         self.assertEqual(record["provider"], "haiku")
-        self.assertEqual(record["tokens"], {"input": 100, "output": 20, "cached": None})
+        self.assertEqual(
+            record["tokens"],
+            {"input": 100, "output": 20, "cached": None, "cache_write": None, "reasoning": None},
+        )
         self.assertEqual(record["counters"]["retries"], 0)
         self.assertEqual(record["counters"]["interventions"], 0)
         self.assertIsNone(record["counters"]["tool_calls"])
@@ -194,7 +249,10 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
         self.assertIs(record["claimed"], False)
         self.assertEqual(record["counters"]["interventions"], 1)
         self.assertEqual(record["counters"]["human_rescues"], 1)
-        self.assertEqual(record["tokens"], {"input": None, "output": None, "cached": None})
+        self.assertEqual(
+            record["tokens"],
+            {"input": None, "output": None, "cached": None, "cache_write": None, "reasoning": None},
+        )
 
     @pytest.mark.integration
     def test_S2_the_evidence_can_be_rebuilt_after_the_run_died(self):
