@@ -82,8 +82,7 @@
       "last_wait",
       "stall_progress",
       "resume_marks",
-      "tasks",
-      "operations"
+      "tasks"
     ]
   },
   "runtime_dependencies": [],

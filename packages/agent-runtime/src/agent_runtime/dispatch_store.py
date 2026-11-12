@@ -196,9 +196,6 @@ class Store:
                 "CREATE INDEX IF NOT EXISTS idx_messages_assignment_acked ON messages(assignment,acked)",
                 "CREATE INDEX IF NOT EXISTS idx_tasks_team_status ON tasks(team,status)",
                 "CREATE INDEX IF NOT EXISTS idx_tasks_assignment ON tasks(assignment)",
-                # Operation keys are a side table too: older servers neither read nor write it, and user_version
-                # stays 2. The owner is never NULL, so the primary key really is unique per owner.
-                "CREATE TABLE IF NOT EXISTS operations (team TEXT NOT NULL, owner TEXT NOT NULL, operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL, assignment_id TEXT NOT NULL, PRIMARY KEY(owner,operation_id))",
             ):
                 db.execute(statement)
             db.execute("PRAGMA user_version=2")
@@ -259,6 +256,15 @@ class Store:
             "assignment": row["assignment"],
         }
 
+    # Operation keys live in a side table that the first keyed call creates: a store whose lead never uses an
+    # operation_id keeps exactly the tables it had, older servers neither read nor write it, and user_version
+    # stays 2. The owner is never NULL, so the primary key really is unique per owner.
+    OPERATIONS = (
+        "CREATE TABLE IF NOT EXISTS operations (team TEXT NOT NULL, owner TEXT NOT NULL, "
+        "operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL, assignment_id TEXT NOT NULL, "
+        "PRIMARY KEY(owner,operation_id))"
+    )
+
     def register(self, team, name, task_id=None, transfer=False, operation=None):
         """Register a pending assignment. operation=(owner, operation_id, fingerprint) records the key in the same
         transaction, so a key and its assignment exist together or not at all. A key this owner already used with
@@ -267,6 +273,7 @@ class Store:
         with self.transaction() as db:
             if operation:
                 owner, operation_id, fingerprint = operation
+                db.execute(self.OPERATIONS)
                 used = db.execute(
                     "SELECT o.team,o.fingerprint,o.assignment_id,a.worker FROM operations o "
                     "LEFT JOIN assignments a ON a.id=o.assignment_id WHERE o.owner=? AND o.operation_id=?",
@@ -430,10 +437,14 @@ class Store:
         absent, pending, bound, working, blocked, decision, complete, failed or unknown (then `reason` says what
         to do). Reads never acknowledge or change anything."""
         with self.transaction() as db:
-            used = db.execute(
-                "SELECT assignment_id FROM operations WHERE owner=? AND operation_id=?",
-                (owner, operation_id),
-            ).fetchone()
+            used = None
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
+            ).fetchone():
+                used = db.execute(
+                    "SELECT assignment_id FROM operations WHERE owner=? AND operation_id=?",
+                    (owner, operation_id),
+                ).fetchone()
             if not used:
                 return {"state": "absent", "assignment_id": None}
             return self.assignment_view(db, used["assignment_id"])

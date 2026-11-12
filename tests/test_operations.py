@@ -7,19 +7,80 @@ process, so every behaviour here is observable the way an MCP client or `agent-r
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import pytest
 from test_mcp_server import RUNTIME_SRC
-from test_runtime_audit_outcome import ENV, FakeHc, name, worker_rows
+from test_tools import FAKE, ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 from agent_runtime import hc_tools, mcp_server  # noqa: E402
 from agent_runtime.dispatch_store import Store, StoreError  # noqa: E402
 
 pytestmark = pytest.mark.integration
+
+PLUGIN = Path(__file__).resolve().parents[1]
+HOOK = PLUGIN / "hooks" / "pre_tool_use.py"
+CLI = PLUGIN / "server" / "agent_runtime.py"
+
+LIMIT = 32
+LIMIT_TEXT = "team limit is 32 active workers: stop an active worker, then retry"
+ENV = {
+    "CODEX_THREAD_ID": "lead-session",
+    "HC_SCOPE": "lead-token",
+    "HC_TERMINAL_SOCKET": "/hc/sock",
+    "AGENT_RUNTIME_DISPATCH": "1",
+}
+
+
+def name(index):
+    return "w%02d" % index
+
+
+def worker_rows(count=40):
+    """Fake hc replies for `count` children of t0, each with an address of its own, plus the live-name model."""
+    replies = {"get:t0": {"out": raw("lead", None)}, "live": []}
+    for index in range(count):
+        row = {
+            "address": "t%d" % (100 + index),
+            "name": name(index),
+            "parent": "t0",
+            "status": "idle",
+        }
+        replies["get:" + row["name"]] = {"out": json.dumps(row)}
+        replies["get:" + row["address"]] = {"out": json.dumps(row)}
+    return replies
+
+
+class FakeHc(ToolCase):
+    """ToolCase's fake hc (argv log + replies file) without a server, for in-process and CLI callers."""
+
+    def install(self, replies):
+        replies = dict(replies)
+        replies.setdefault("get:t0", {"out": raw("lead", None)})
+        (self.dir / "replies").write_text(json.dumps(replies))
+        hc = self.dir / "bin" / "hc"
+        hc.write_text(
+            FAKE
+            % {
+                "python": sys.executable,
+                "log": str(self.log),
+                "replies": str(self.dir / "replies"),
+                "overlay": str(self.dir / "overlay"),
+            }
+        )
+        hc.chmod(0o755)
+
+    def sent_to(self, worker):
+        return [c for c in self.runs("send") if len(c) > 1 and c[1] == worker]
+
+    def launched(self, worker):
+        return [c for c in self.runs("run") if worker in c]
+
 
 SPAWN = {"kind": "worker", "name": name(0), "task": "work", "cwd": "/tmp"}
 
@@ -51,6 +112,10 @@ class Operations(FakeHc):
 
     def rows(self, table="operations"):
         with self.store().transaction() as db:
+            if not db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone():
+                return []  # the operations table is created by the first keyed call
             return [tuple(r) for r in db.execute("SELECT * FROM %s ORDER BY rowid" % table)]
 
     def owner(self):
@@ -414,12 +479,22 @@ class OperationStoreTests(unittest.TestCase):
             store = Store({"HOME": home})
             self.assertEqual(store.team("s", "l", "g"), "t")
             store.register("t", "w")
+            self.assertEqual(
+                store.operation("o", "k")["state"], "absent"
+            )  # a lookup creates nothing
+
+            def tables():
+                with sqlite3.connect(path) as db:
+                    return {
+                        r[0]
+                        for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                    }
+
+            self.assertNotIn("operations", tables())  # unused, the table is not even there
+            store.register("t", "w2", operation=("o", "k", "f"))
             with sqlite3.connect(path) as db:
                 self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
-                tables = {
-                    r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                }
-                self.assertIn("operations", tables)
+                self.assertIn("operations", tables())
                 columns = [r[1] for r in db.execute("PRAGMA table_info(operations)")]
                 self.assertEqual(
                     columns, ["team", "owner", "operation_id", "fingerprint", "assignment_id"]
@@ -450,3 +525,236 @@ class DescriptionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- Operation keys -----------------------------------------------------------------------------------------------
+
+# sh and awk, not python: the ancestry walk gives each ps a short timeout (as test_agent_runtime's FAKE_PS)
+FAKE_PS = """#!/bin/sh
+[ "$1 $2" = "-o ppid=,args=" ] && [ "$3" = "-p" ] || exit 1
+awk -v pid="$4" '$1 == pid { found = 1; $1 = ""; sub(/^ /, ""); print } END { exit !found }' %(table)s
+"""
+
+
+class OperationOutcomeTests(FakeHc):
+    """runtime-audit-fixes/S13-S15: spawn with an operation_id over MCP, and the owner-scoped `call operation`."""
+
+    SPAWN = {"kind": "worker", "name": "w00", "task": "work", "cwd": "/tmp"}
+
+    def lead(self):
+        return self.start(worker_rows(4), ENV)
+
+    def assignments(self):
+        with Store({"HOME": str(self.dir / "home")}).transaction() as db:
+            return [r[0] for r in db.execute("SELECT id FROM assignments ORDER BY rowid")]
+
+    def test_S13_a_repeated_operation_id_returns_the_first_assignment_and_launches_once(self):
+        """runtime-audit-fixes/S13, S17"""
+        session = self.lead()
+        first, text = self.call(session, "spawn", dict(self.SPAWN, operation_id="op-13"))
+        self.assertFalse(first["isError"], text)
+        again, text = self.call(session, "spawn", dict(self.SPAWN, operation_id="op-13"))
+        self.assertFalse(again["isError"], "the replay was refused: %s" % text)
+        self.assertEqual(
+            again["structuredContent"]["assignment_id"], first["structuredContent"]["assignment_id"]
+        )
+        self.assertEqual(len(self.runs("run")), 1, "the fake hc saw more than one launch")
+        self.assertEqual(self.runs("send"), [])
+        self.assertEqual(len(self.assignments()), 1)
+
+    def test_S14_a_changed_fingerprint_is_refused_naming_the_conflict_and_nothing_is_registered(
+        self,
+    ):
+        """runtime-audit-fixes/S14"""
+        session = self.lead()
+        first, text = self.call(session, "spawn", dict(self.SPAWN, operation_id="op-14"))
+        self.assertFalse(first["isError"], text)
+        changed = (
+            ("task", dict(self.SPAWN, task="other work", operation_id="op-14")),
+            ("name", dict(self.SPAWN, name="w01", operation_id="op-14")),
+        )
+        refusals = {}
+        for label, arguments in changed:
+            result, text = self.call(session, "spawn", arguments)
+            refusals[label] = (
+                result["isError"],
+                "conflict" in text.lower(),
+                "operation_id" in text,
+            )
+        self.assertEqual(refusals, {label: (True, True, True) for label, _ in changed}, refusals)
+        self.assertEqual(len(self.runs("run")), 1, "a conflicting operation launched a worker")
+        self.assertEqual(
+            len(self.assignments()), 1, "a conflicting operation registered an assignment"
+        )
+
+    # `agent-runtime call` runs in a plain hc terminal: a fake ps table whose ancestry reaches the terminal's root
+    # process (pid 6000, from `hc get t0`) without any agent CLI on the way.
+
+    def cli_env(self):
+        table = self.dir / "ps-table"
+        chain = [
+            (os.getpid(), "python3 -m pytest"),
+            (5000, "/bin/zsh -l"),
+            (6000, "/usr/local/bin/hc-term"),
+        ]
+        lines = [
+            "%d %d %s" % (pid, (chain[i + 1][0] if i + 1 < len(chain) else 1), args)
+            for i, (pid, args) in enumerate(chain)
+        ]
+        table.write_text("\n".join(lines) + "\n")
+        (self.dir / "bin" / "ps").write_text(FAKE_PS % {"table": str(table)})
+        (self.dir / "bin" / "ps").chmod(0o755)
+        return {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "XDG_STATE_HOME": str(self.dir / "state"),
+            "XDG_CONFIG_HOME": str(self.dir / "config"),
+            "HC_TERMINAL_ID": "t0",
+        }
+
+    def cli_hc(self):
+        replies = worker_rows(4)
+        replies["get:t0"] = {
+            "out": json.dumps({"address": "t0", "name": "lead", "parent": None, "pid": 6000})
+        }
+        replies["run"] = {"out": json.dumps({"first_message": {"sent": True}})}
+        self.install(replies)
+
+    def run_call(self, tool, arguments):
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(CLI),
+                "call",
+                tool,
+                "--lead",
+                "L1",
+                "--json",
+                json.dumps(arguments),
+            ],
+            env=self.cli_env(),
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=60,
+        )
+        return done.returncode, done.stdout, done.stderr
+
+    def test_S15_call_operation_prints_the_owner_scoped_state_and_assignment(self):
+        """runtime-audit-fixes/S15"""
+        self.cli_hc()
+        code, out, err = self.run_call(
+            "spawn", dict(self.SPAWN, cwd=str(self.dir), operation_id="op-15")
+        )
+        self.assertEqual(code, 0, "setup: the keyed spawn failed: %s %s" % (out, err))
+        spawned = json.loads(out)
+        code, out, err = self.run_call("operation", {"operation_id": "op-15"})
+        self.assertEqual(code, 0, "call operation failed: %s %s" % (out, err))
+        found = json.loads(out)
+        self.assertIn(found.get("state"), ("bound", "working"), found)
+        self.assertEqual(found.get("assignment_id"), spawned["assignment_id"])
+        code, out, err = self.run_call("operation", {"operation_id": "op-never-used"})
+        self.assertEqual(code, 0, "call operation failed for an unknown id: %s %s" % (out, err))
+        self.assertEqual(json.loads(out).get("state"), "absent")
+        database = self.dir / "state" / "agent-runtime" / "dispatch.sqlite3"
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
+
+    def test_control_a_spawn_without_an_operation_id_launches_once(self):
+        session = self.lead()
+        result, text = self.call(session, "spawn", self.SPAWN)
+        self.assertFalse(result["isError"], text)
+        self.assertEqual(len(self.runs("run")), 1)
+
+    def test_control_call_spawn_runs_in_a_plain_hc_terminal(self):
+        self.cli_hc()
+        code, out, err = self.run_call("spawn", dict(self.SPAWN, cwd=str(self.dir)))
+        self.assertEqual(code, 0, "%s %s" % (out, err))
+        self.assertTrue(json.loads(out)["assignment_id"])
+        self.assertEqual(len(self.runs("run")), 1)
+
+
+# --- The outcome --------------------------------------------------------------------------------------------------
+
+
+class OutcomeScenario(FakeHc):
+    """runtime-audit-fixes/S17: one lead session over stdio, one fake hc, every fixed defect in the same run."""
+
+    def hook_decision(self, payload):
+        """The real PreToolUse hook as a spawned worker would meet it (a fake agent-runtime answers `worker`)."""
+        fake = self.dir / "bin" / "agent-runtime"
+        fake.write_text('#!/bin/sh\nprintf \'{"runtime": "hc", "role": "worker"}\'\n')
+        fake.chmod(0o755)
+        done = subprocess.run(
+            [sys.executable, "-B", str(HOOK)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={"PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"), "HOME": str(self.dir / "home")},
+        )
+        out = json.loads(done.stdout) if done.stdout.strip() else None
+        return out["hookSpecificOutput"]["permissionDecision"] if out else "allow"
+
+    def test_S17_the_fixed_runtime_serves_a_long_lived_lead(self):
+        """runtime-audit-fixes/S17"""
+        session = self.start(worker_rows(), ENV)
+        spawn = {"kind": "worker", "task": "work", "cwd": "/tmp"}
+        # A team of 32 registered workers, 31 of them stopped.
+        for index in range(LIMIT):
+            result, text = self.call(session, "spawn", dict(spawn, name=name(index)))
+            self.assertFalse(result["isError"], "setup: %s" % text)
+        for index in range(1, LIMIT):
+            result, text = self.call(session, "stop", {"name": name(index)})
+            self.assertFalse(result["isError"], "setup: %s" % text)
+        # The new spawn succeeds; the 33rd active worker is refused with the way out.
+        fresh, text = self.call(session, "spawn", dict(spawn, name=name(LIMIT)))
+        self.assertFalse(
+            fresh["isError"], "a new name was refused with 2 active workers: %s" % text
+        )
+        for index in range(1, LIMIT - 1):
+            result, text = self.call(session, "resume", {"name": name(index), "task": "again"})
+            self.assertFalse(result["isError"], "setup: %s" % text)
+        refused, text = self.call(session, "spawn", dict(spawn, name=name(LIMIT + 1)))
+        self.assertTrue(refused["isError"], "the 33rd active worker was spawned")
+        self.assertIn(LIMIT_TEXT, text)
+        # The repository path is allowed, the default-root receipt is denied.
+        repo = self.dir / "repo"
+        (repo / "src" / "state" / "receipts").mkdir(parents=True)
+        source = repo / "src" / "state" / "receipts" / "x.ts"
+        receipts = (
+            self.dir / "home" / ".local" / "state" / "orchestrate" / "k" / "demo" / "receipts"
+        )
+        receipts.mkdir(parents=True)
+
+        def write(path):
+            return {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": "{}"}}
+
+        self.assertEqual(self.hook_decision(write(source)), "allow")
+        self.assertEqual(self.hook_decision(write(receipts / "S1.integration.1.json")), "deny")
+        # A malformed request id is answered with -32600 and the server serves the next call.
+        malformed = {
+            "jsonrpc": "2.0",
+            "id": [1],
+            "method": "tools/call",
+            "params": {"name": "status", "arguments": {"name": "w00"}},
+        }
+        session.proc.stdin.write(json.dumps(malformed) + "\n")
+        session.proc.stdin.flush()
+        error = json.loads(session.proc.stdout.readline())
+        self.assertEqual((error.get("id"), error["error"]["code"]), (None, -32600), error)
+        self.assertFalse(self.call(session, "status", {"name": "w00"})[0]["isError"])
+        # A spawn repeated with the same operation_id returns the first assignment; the fake hc launched once.
+        stopped, text = self.call(session, "stop", {"name": name(LIMIT)})
+        self.assertFalse(stopped["isError"], text)
+        keyed = dict(spawn, name=name(LIMIT + 2), operation_id="op-17")
+        before = len(self.runs("run"))
+        first, text = self.call(session, "spawn", keyed)
+        self.assertFalse(first["isError"], text)
+        again, text = self.call(session, "spawn", keyed)
+        self.assertFalse(again["isError"], "the replay was refused: %s" % text)
+        self.assertEqual(
+            again["structuredContent"]["assignment_id"], first["structuredContent"]["assignment_id"]
+        )
+        self.assertEqual(len(self.runs("run")) - before, 1, "the fake hc saw more than one launch")
