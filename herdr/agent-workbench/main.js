@@ -3,10 +3,11 @@
 // writes nothing. Layout is the model's (model.js); the views only draw what it hands them.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, exec, watchFolder, home, theme, terminals, run } from "herdr";
+import { spaces, exec, watchFolder, home, theme, terminals, run, layout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
   layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
+  panelToggle, panelsWith,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { planList } from "./views/plans.js";
@@ -14,6 +15,7 @@ import { layeredList, compactList } from "./views/tickets.js";
 import { inspectorView } from "./views/inspector.js";
 import { runtimeView } from "./views/runtime.js";
 import { noticeView, loadingView } from "./views/notices.js";
+import { toggleView } from "./views/toggle.js";
 
 // The orchestrator's ledger and run directories live under here; a change in any of them is a reason to refresh.
 const STATE_DIR = "/.local/state/orchestrate";
@@ -21,7 +23,10 @@ const STATE_DIR = "/.local/state/orchestrate";
 const activeSpace = () => spaces().find((s) => s.active) ?? null;
 
 export default class AgentWorkbench extends View {
-  init(_props, cx) {
+  init(initial, cx) {
+    // The tab bar's button is this mod too (props `{ toggle: true }`): it fetches nothing and watches nothing.
+    this.toggle = Boolean((initial ?? props())?.toggle);
+    if (this.toggle) return;
     this.data = createData({ exec });
     this.size = null;
     this.drilled = false; // narrow only: the inspector replaces the list
@@ -63,7 +68,16 @@ export default class AgentWorkbench extends View {
     return true;
   }
 
+  renderToggle() {
+    const missing = panelsWith(shared("workspace.panels"));
+    if (missing) setShared("workspace.panels", missing);
+    const toggle = panelToggle(layout());
+    const onToggle = (cx) => { for (const [command, args] of toggle.commands) run(command, args); cx.notify(); };
+    return toggleView(toggle, { t: theme(), onToggle });
+  }
+
   render(cx) {
+    if (this.toggle) return this.renderToggle();
     if (this.syncSpace()) this.fetch(cx);
     const t = theme();
     const layout = layoutFor(this.size?.width);

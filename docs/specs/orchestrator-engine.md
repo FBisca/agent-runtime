@@ -98,6 +98,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R67** WHEN a dispatch fails, THEN the `not-dispatched` wake names the ticket, the reason, and the way out "set the ticket's Status cell back to exactly `TO-DO`". (from drive-restart-recovery-gaps/S12a)
 - **R68** WHEN a unit the idle tick skipped (its gate was `requested`, `awaiting-merge` or parked) returns to `working`, THEN its working window starts again at that tick, and the idle tick does not count it until another `--working-minutes` have passed. (from drive-restart-recovery-gaps/S13)
 - **R69** WHEN a drive starts, THEN the working window starts empty: `--working-minutes` is measured from the first tick that sees the agent `working`, and a restart resets it. (from drive-restart-recovery-gaps/S13a)
+- **R70** WHEN the archive brief is written for a YAML plan, THEN every scenario the plan's spec already carries in a requirement's provenance is kept as it is and the brief appends none of them again: a requirement that names several scenarios at once (`(from <slug>/S1, S2, S3)`) holds every one of them, not only the first. (from yaml-eec/S29)
 
 ## Coverage
 
@@ -139,6 +140,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | drive-restart-recovery-gaps/S12a | R67 | `packages/agent-orchestrator/tests/test_run.py`: `test_S12a_the_not_dispatched_wake_names_the_ticket_the_reason_and_the_exact_TO_DO_way_out` |
 | drive-restart-recovery-gaps/S13 | R68 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window` |
 | drive-restart-recovery-gaps/S13a | R69 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it` |
+| yaml-eec/S29 | R70 | `packages/agent-orchestrator/tests/test_archive_yaml.py`: `test_S29_a_requirement_naming_several_scenarios_keeps_all_of_them` |
 
 ### R4 — the route refusals
 

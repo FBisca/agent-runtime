@@ -1,0 +1,13 @@
+diff --git a/packages/agent-orchestrator/src/agent_orchestrator/verify.py b/packages/agent-orchestrator/src/agent_orchestrator/verify.py
+index 8684561..76a092a 100644
+--- a/packages/agent-orchestrator/src/agent_orchestrator/verify.py
++++ b/packages/agent-orchestrator/src/agent_orchestrator/verify.py
+@@ -312,8 +312,6 @@ def read_receipt(data, stem, receipts_dir, digest, tree):
+     if not recorded:
+         return None, "the ledger holds no sha256 for %s.json" % stem
+     raw = path.read_bytes()
+-    if hashlib.sha256(raw).hexdigest() != recorded:
+-        return None, "%s.json no longer matches the sha256 the ledger holds" % stem
+     try:
+         receipt = json.loads(raw)
+     except ValueError:

@@ -6,6 +6,7 @@ process, so every behaviour here is observable the way an MCP client or `agent-r
 
 import json
 import os
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -59,6 +60,17 @@ def worker_rows(count=40):
 class FakeHc(ToolCase):
     """ToolCase's fake hc (argv log + replies file) without a server, for in-process and CLI callers."""
 
+    def setUp(self):
+        super().setUp()
+        self.socket_path = self.dir / "hc.sock"
+        self.bind_socket()
+
+    def bind_socket(self):
+        listener = socket.socket(socket.AF_UNIX)
+        self.addCleanup(listener.close)
+        listener.bind(str(self.socket_path))
+        return listener
+
     def install(self, replies):
         replies = dict(replies)
         replies.setdefault("get:t0", {"out": raw("lead", None)})
@@ -100,6 +112,7 @@ class Operations(FakeHc):
             },
             **ENV,
         )
+        self.env["HC_TERMINAL_SOCKET"] = str(self.socket_path)
 
     def call_tool(self, tool, arguments):
         # the resolver's `hc get` runs on the process PATH: point it at the fake hc, never a real one
@@ -206,6 +219,66 @@ class OperationRowTests(Operations):
 
 
 class OperationReplayTests(Operations):
+    def test_hc_restart_makes_old_spawn_and_resume_keys_unknown_and_never_replays(self):
+        """agent-runtime/R263: replacing the hc listener retires both kinds of operation keys."""
+        self.spawned("old-spawn")
+        resume = {"name": name(0), "task": "again", "operation_id": "old-resume"}
+        self.assertFalse(self.call_tool("resume", resume)[0]["isError"])
+        old_owner = self.owner()
+        self.socket_path.unlink()
+        self.bind_socket()
+        self.session = {}
+        for key in ("old-spawn", "old-resume"):
+            found = self.lookup(key)
+            self.assertEqual(found["state"], "unknown")
+            self.assertIn("hc server restarted", found["reason"])
+            self.assertIn("new operation_id", found["reason"])
+            self.assertIsNone(found["assignment_id"])
+        self.assertNotEqual(self.owner(), old_owner)
+        for verb, args in (("spawn", dict(SPAWN, operation_id="old-spawn")), ("resume", resume)):
+            out, text = self.call_tool(verb, args)
+            self.assertTrue(out["isError"], text)
+            self.assertIn("hc server restarted", text)
+        self.assertEqual(len(self.runs("run")), 1)
+        self.assertEqual(len(self.sent_to(name(0))), 1)
+        self.assertEqual(len(self.rows("assignments")), 2)
+        self.assertEqual(self.lookup("unused")["state"], "absent")
+
+    def test_orchestrator_restart_on_the_same_hc_instance_keeps_keys(self):
+        """agent-runtime/R263: owner generation excludes the orchestrator process/session."""
+        first = self.spawned()
+        owner = self.owner()
+        self.session = {}
+        with mock.patch.object(hc_tools.lib, "cli_generation", return_value="new-orchestrator"):
+            self.assertEqual(self.owner(), owner)
+            self.assertEqual(self.lookup()["assignment_id"], first["assignment_id"])
+            self.assertEqual(self.spawned()["assignment_id"], first["assignment_id"])
+        self.assertEqual(len(self.runs("run")), 1)
+
+    def test_legacy_owner_keys_are_unknown_instead_of_absent_or_replayed(self):
+        """agent-runtime/R263: pre-instance keys have no safe provenance."""
+        self.spawned()
+        with self.store().transaction() as db:
+            db.execute("UPDATE operations SET owner=?", (hc_tools.hc_server(self.env) + "\nt0",))
+        found = self.lookup()
+        self.assertEqual(found["state"], "unknown")
+        self.assertIn("hc server restarted", found["reason"])
+        out, text = self.call_tool("spawn", dict(SPAWN, operation_id="op-1"))
+        self.assertTrue(out["isError"], text)
+        self.assertEqual(len(self.runs("run")), 1)
+
+    def test_unavailable_hc_instance_never_falls_back_to_replaying_or_absent(self):
+        """agent-runtime/R263: missing instance evidence fails closed with recovery guidance."""
+        self.spawned()
+        self.socket_path.unlink()
+        for key in ("op-1", "never"):
+            found = self.lookup(key)
+            self.assertEqual(found["state"], "unknown")
+            self.assertIn("retry", found["reason"])
+        out, text = self.call_tool("spawn", dict(SPAWN, operation_id="op-1"))
+        self.assertTrue(out["isError"], text)
+        self.assertEqual(len(self.runs("run")), 1)
+
     def test_S13_a_repeated_spawn_returns_the_first_assignment_and_sends_nothing(self):
         """agent-runtime/R252"""
         first = self.spawned()
@@ -354,6 +427,39 @@ class OperationConflictTests(Operations):
 
 
 class OperationLookupTests(Operations):
+    def test_store_construction_failures_are_unknown_with_recovery(self):
+        """agent-runtime/R261: real Store initialization failures stay lookup results."""
+        for defect in ("corrupt", "wrong-owner", "unopenable", "schema", "store-error"):
+            with self.subTest(defect=defect):
+                env = dict(self.env, XDG_STATE_HOME=str(self.dir / defect))
+                directory = Path(env["XDG_STATE_HOME"]) / "agent-runtime"
+                directory.mkdir(parents=True)
+                path = directory / "dispatch.sqlite3"
+                boundary = mock.patch.object(hc_tools.dispatch.os, "getuid", wraps=os.getuid)
+                if defect == "corrupt":
+                    path.write_bytes(b"not a sqlite database")
+                elif defect == "wrong-owner":
+                    boundary = mock.patch.object(hc_tools.dispatch.os, "getuid", return_value=-1)
+                elif defect == "unopenable":
+                    path.mkdir()
+                elif defect == "schema":
+                    with sqlite3.connect(path) as db:
+                        db.execute("PRAGMA user_version=999")
+                else:
+                    boundary = mock.patch.object(
+                        Store, "transaction", side_effect=StoreError("cannot initialize store")
+                    )
+                with boundary, mock.patch.dict(os.environ, {"PATH": env["PATH"]}):
+                    out = mcp_server.call_tool(
+                        "operation", {"operation_id": "unreadable"}, env, hc_tools.Context({})
+                    )
+                self.assertFalse(out["isError"], out)
+                found = out["structuredContent"]
+                self.assertEqual(found["state"], "unknown")
+                self.assertIsNone(found["assignment_id"])
+                self.assertIn("store", found["reason"])
+                self.assertIn("retry", found["reason"])
+
     def force(self, assignment, state, **changes):
         with self.store().transaction() as db:
             db.execute("UPDATE assignments SET state=? WHERE id=?", (state, assignment))
@@ -542,7 +648,7 @@ class OperationOutcomeTests(FakeHc):
     SPAWN = {"kind": "worker", "name": "w00", "task": "work", "cwd": "/tmp"}
 
     def lead(self):
-        return self.start(worker_rows(4), ENV)
+        return self.start(worker_rows(4), dict(ENV, HC_TERMINAL_SOCKET=str(self.socket_path)))
 
     def assignments(self):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
@@ -610,6 +716,7 @@ class OperationOutcomeTests(FakeHc):
             "XDG_STATE_HOME": str(self.dir / "state"),
             "XDG_CONFIG_HOME": str(self.dir / "config"),
             "HC_TERMINAL_ID": "t0",
+            "HC_TERMINAL_SOCKET": str(self.socket_path),
         }
 
     def cli_hc(self):
@@ -620,7 +727,7 @@ class OperationOutcomeTests(FakeHc):
         replies["run"] = {"out": json.dumps({"first_message": {"sent": True}})}
         self.install(replies)
 
-    def run_call(self, tool, arguments):
+    def run_call(self, tool, arguments, lead="L1"):
         done = subprocess.run(
             [
                 sys.executable,
@@ -629,7 +736,7 @@ class OperationOutcomeTests(FakeHc):
                 "call",
                 tool,
                 "--lead",
-                "L1",
+                lead,
                 "--json",
                 json.dumps(arguments),
             ],
@@ -640,6 +747,25 @@ class OperationOutcomeTests(FakeHc):
             timeout=60,
         )
         return done.returncode, done.stdout, done.stderr
+
+    def test_lookup_survives_a_new_lead_while_writing_verbs_keep_the_live_lead_gate(self):
+        """agent-runtime/R260: a terminal's keys outlive its orchestrator generation."""
+        self.cli_hc()
+        code, out, err = self.run_call(
+            "spawn", dict(self.SPAWN, cwd=str(self.dir), operation_id="restart-key")
+        )
+        self.assertEqual(code, 0, (out, err))
+        assignment = json.loads(out)["assignment_id"]
+        code, out, err = self.run_call("operation", {"operation_id": "restart-key"}, lead="L2")
+        self.assertEqual(code, 0, (out, err))
+        self.assertEqual(json.loads(out)["assignment_id"], assignment)
+        for verb in hc_tools.HANDLERS:
+            if verb == "operation":
+                continue
+            with self.subTest(verb=verb):
+                code, out, err = self.run_call(verb, {}, lead="L2")
+                self.assertEqual(code, 2, (out, err))
+                self.assertIn("live lead generation is L1", err)
 
     def test_S15_call_operation_prints_the_owner_scoped_state_and_assignment(self):
         """runtime-audit-fixes/S15"""
@@ -699,7 +825,7 @@ class OutcomeScenario(FakeHc):
 
     def test_S17_the_fixed_runtime_serves_a_long_lived_lead(self):
         """runtime-audit-fixes/S17"""
-        session = self.start(worker_rows(), ENV)
+        session = self.start(worker_rows(), dict(ENV, HC_TERMINAL_SOCKET=str(self.socket_path)))
         spawn = {"kind": "worker", "task": "work", "cwd": "/tmp"}
         # A team of 32 registered workers, 31 of them stopped.
         for index in range(LIMIT):

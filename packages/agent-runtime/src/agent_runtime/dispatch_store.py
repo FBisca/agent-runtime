@@ -39,6 +39,10 @@ NOT_STARTED_NEXT = (
     "the runtime never resends the task"
 )
 REPORT_KINDS = ("progress", "complete", "blocked", "decision")
+HC_RESTARTED = (
+    "the hc server restarted or this key predates server-instance tracking; "
+    "inspect the earlier work, then use a new operation_id"
+)
 
 
 SNAPSHOT_SQL = (
@@ -265,6 +269,25 @@ class Store:
         "PRIMARY KEY(owner,operation_id))"
     )
 
+    @staticmethod
+    def previous_operation(db, owner, operation_id):
+        """A prior socket's key, including legacy owners whose instance was never recorded.
+
+        Keep the terminal prefix to distinguish lost provenance from an unused key: absent
+        would invite a resend. Bound parameters and substr avoid SQL wildcard path matching.
+        """
+        terminal, marker, _ = owner.rpartition("\nsocket:")
+        if not marker:
+            return False
+        prefix = terminal + "\nsocket:"
+        return bool(
+            db.execute(
+                "SELECT 1 FROM operations WHERE operation_id=? AND owner<>? "
+                "AND (owner=? OR substr(owner,1,?)=?) LIMIT 1",
+                (operation_id, owner, terminal, len(prefix), prefix),
+            ).fetchone()
+        )
+
     def register(self, team, name, task_id=None, transfer=False, operation=None):
         """Register a pending assignment. operation=(owner, operation_id, fingerprint) records the key in the same
         transaction, so a key and its assignment exist together or not at all. A key this owner already used with
@@ -274,6 +297,8 @@ class Store:
             if operation:
                 owner, operation_id, fingerprint = operation
                 db.execute(self.OPERATIONS)
+                if self.previous_operation(db, owner, operation_id):
+                    raise StoreError(HC_RESTARTED)
                 used = db.execute(
                     "SELECT o.team,o.fingerprint,o.assignment_id,a.worker FROM operations o "
                     "LEFT JOIN assignments a ON a.id=o.assignment_id WHERE o.owner=? AND o.operation_id=?",
@@ -445,6 +470,8 @@ class Store:
                     "SELECT assignment_id FROM operations WHERE owner=? AND operation_id=?",
                     (owner, operation_id),
                 ).fetchone()
+                if not used and self.previous_operation(db, owner, operation_id):
+                    return {"state": "unknown", "assignment_id": None, "reason": HC_RESTARTED}
             if not used:
                 return {"state": "absent", "assignment_id": None}
             return self.assignment_view(db, used["assignment_id"])

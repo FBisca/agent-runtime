@@ -34,9 +34,10 @@ Herdr mod that draws them is specified beside them as it lands.
 
 - **R17** WHEN the inspector shows an attempt, THEN it is joined to Herdr's live `terminals()` by its exact address only (never by name, by position or by another attempt): an attempt whose address is a live terminal shows `live` and offers Open, which runs `agent.focus` for that terminal; a null address, or no `terminals()` to ask, or a space on another machine (the runtime records no machine, so no join is safe) shows `unknown`; a local address that is no longer a live terminal shows `not live`; the last three offer no Open. (from agent-workbench/S16)
 - **R18** WHEN live agent terminals exist that no attempt of the loaded plans names, THEN a Runtime section lists them in tree order from `terminals()` (each under the terminal that started it, the first of each tree showing its parent), on this computer only (in a space on another machine no attempt address can be told from its terminals, so the section lists none and says it cannot tell), each offering Open; no plan or ticket is made up for them, nothing is drawn when there are none, and the mod reads `terminals()` live without a timer. (from agent-workbench/S17)
+- **R19** WHEN the workbench layout is shown, THEN its tab bar has a Workbench button beside Herdr's Files and Changes, drawn by the mod (props `{ toggle: true }`) because Herdr's tabs mod draws only those two: a click opens the side panel on the workbench, or closes it when the workbench is what it shows, with the same `layout.select`, `layout.show` and `layout.hide` commands theirs run; a layout whose side panel holds no workbench gets no button. The button adds `workbench` once to Herdr's `workspace.panels`, after the person's own choices, since Herdr's tabs mod hides a panel that list does not name on every launch and space switch. (from agent-workbench/S24)
 
-Open is the one command the mod gives Herdr beyond the two `workbench` reads (R15 limits what it `exec`s, not this); it
-changes no file and no ledger.
+Open and the panel button's three layout commands are the only commands the mod gives Herdr beyond the two `workbench`
+reads (R15 limits what it `exec`s, not these); they change no file and no ledger.
 
 ## Coverage
 
@@ -60,3 +61,4 @@ changes no file and no ledger.
 | S16 | R17 | `tests/test_workbench_mod.py`: `test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address` (the `S16` tests of `herdr/agent-workbench/test/execution.test.js`), `test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling` |
 | S17 | R18 | `tests/test_workbench_mod.py`: `test_S17_a_Runtime_section_lists_live_agents_no_attempt_names` (the `S17` tests of `execution.test.js` and `data.test.js`) |
 | S18 | R16 | `tests/test_workbench_mod.py`: `test_S18_node_test_runs_the_mods_pure_modules_from_pytest`, `test_S18_a_missing_node_fails_naming_node_instead_of_skipping` |
+| S24 | R19 | `tests/test_workbench_mod.py`: `test_S24_the_tab_bar_opens_and_closes_the_workbench_panel` (the `S24` tests of `herdr/agent-workbench/test/toggle.test.js`), `test_S24_the_workbench_layout_puts_the_button_beside_herdrs_tabs` |

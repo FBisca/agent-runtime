@@ -4667,15 +4667,18 @@ class Driver:
         return (PurePosixPath(self.plan_rel()).parent / Path(path).name).as_posix()
 
     def held_requirements(self, spec):
-        """This plan's scenarios the spec already holds, each with its requirement: {"S3": "R220"}."""
+        """This plan's scenarios the spec already holds, each with its requirement: {"S3": "R220"}.
+        One requirement may name several scenarios — `(from <slug>/S1, S2, S3)` — and it holds every one of them."""
         try:
             text = Path(spec).read_text(encoding="utf-8")
         except OSError:
             return {}
         found = re.findall(
-            r"^- \*\*(R\d+)\*\*.*\(from %s/(S\w+)\)" % re.escape(self.slug), text, re.MULTILINE
+            r"^- \*\*(R\d+)\*\*.*\(from %s/((?:S\w+(?:,\s*)?)+)\)" % re.escape(self.slug),
+            text,
+            re.MULTILINE,
         )
-        return {sid: rid for rid, sid in found}
+        return {sid: rid for rid, ids in found for sid in (part.strip() for part in ids.split(","))}
 
     def scenario_steps(self, spec, plan):
         """The brief's steps and scenario list: a ticket may have written its scenarios into the spec already, and

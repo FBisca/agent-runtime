@@ -330,3 +330,38 @@ export function screenFor(layout, drilled, hasSelection) {
 
 /** A narrow list row: one line. */
 export const compactRow = (row) => `${row.look.glyph} ${row.id} ${row.summary} · ${row.look.word}`;
+
+// ---- the tab bar's Workbench button -------------------------------------------------------------------------
+
+// Herdr's own tabs mod draws a button for Files and Changes only, so the workbench layout puts this mod beside it
+// (props `{ toggle: true }`) to open and close the side panel on the workbench the same way theirs do.
+export const WORKBENCH_PANEL = "workbench";
+const HERDR_PANELS = ["files", "changes"];
+
+function findNode(node, id) {
+  if (node?.id === id) return node;
+  for (const child of node?.children ?? []) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** The button's state and the Herdr commands a click runs, or null when the layout has no panel holding the workbench. */
+export function panelToggle(root) {
+  const panel = findNode(root, "panel"), body = findNode(root, "panel-body");
+  if (!panel || !(body?.children ?? []).some((c) => c.id === WORKBENCH_PANEL)) return null;
+  const on = !panel.hidden && body.active === WORKBENCH_PANEL;
+  const commands = on
+    ? [["layout.hide", { id: "panel" }]]
+    : [["layout.select", { stack: "panel-body", child: WORKBENCH_PANEL }], ["layout.show", { id: "panel" }]];
+  return { on, commands };
+}
+
+// Herdr's tabs mod restores each space's panel only when it is in `workspace.panels` and hides it otherwise, so a
+// workbench missing from that list closes on every space switch and on launch.
+/** The panel list with the workbench added after the person's own, or null when it is already there. */
+export function panelsWith(panels) {
+  const list = Array.isArray(panels) ? panels : HERDR_PANELS;
+  return list.includes(WORKBENCH_PANEL) ? null : [...list, WORKBENCH_PANEL];
+}
