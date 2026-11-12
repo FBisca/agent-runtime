@@ -1,4 +1,4 @@
-"""agent-eval: freeze a coding-agent run into a local case (outside every repo, 0700/0600, immutable)."""
+"""agent-eval: freeze a coding-agent run into a local case, store a judge's label, or list the cases."""
 
 import argparse
 import json
@@ -10,6 +10,7 @@ from agent_eval.capture import capture
 from agent_eval.errors import CaptureError
 from agent_eval.label import KINDS, add_label
 from agent_eval.label2 import EXAMPLE
+from agent_eval.listing import listing
 
 CAPTURE_EPILOG = """\
 --session  a Claude, Codex or Pi session id, or a unique prefix, looked up in all three. For Claude, the
@@ -63,6 +64,17 @@ A complete label/2:
 )
 
 
+LIST_EPILOG = """\
+One line per case under <home>/cases/, newest first by its capture time: the slug, the date, the session
+count, the verdict, the score and the judging model, each `-` when the case has no label yet. --json
+prints the same rows as one array, which is what a script reads.
+
+Only a case's own record is read, its manifest.json and labels/<kind>.json, never a transcript: a
+directory under cases/ without a manifest is not a case and is not listed. Nothing is written; an empty
+or missing <home> prints nothing ([] with --json) and exits 0.
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-eval", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -98,6 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
     label.add_argument("case", metavar="CASE")
     label.add_argument("--kind", required=True, choices=KINDS)
     label.add_argument("file", metavar="FILE", type=Path)
+    commands.add_parser(
+        "list",
+        help="print every case on this machine with the label stored beside it",
+        epilog=LIST_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    ).add_argument("--json", action="store_true", dest="as_json", help="one JSON array on stdout")
     return parser
 
 
@@ -107,6 +125,8 @@ def warn(message: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "list":
+        return listing(args.as_json)
     try:
         if args.command == "add-label":
             path = add_label(args.case, args.kind, args.file)
