@@ -3905,9 +3905,15 @@ class Driver:
         )
 
     def oracles(self):
-        """The approved oracle bytes: the approval snapshot's, never the authored directory's."""
+        """The approved test and negative bytes: the approval snapshot's, never the authored directory's."""
         snapshot = snapshot_dir(self.contract()[1], self.args.state_dir)
-        return yaml_plan.payloads(snapshot / "oracle")
+        return yaml_plan.snapshot_files(snapshot, self.plan_path)
+
+    def inputs(self, item):
+        """(oracles, place, negative) the runner takes for `item`, from the approved bytes."""
+        return yaml_plan.runner_inputs(
+            self.plan_path, self.contract()[0], item, self.oracles(), self.repo
+        )
 
     def run_evidence(self, scenario_id, phase, commit):
         """One run of a scenario's evidence at `commit`, its receipt written and its sha256 in the ledger."""
@@ -3915,7 +3921,7 @@ class Driver:
         scenario = verify.scenario_of(model, scenario_id)
         assert scenario is not None and scenario.evidence is not None
         item = scenario.evidence
-        files = self.oracles()
+        oracles, place, negative = self.inputs(item)
         prior = self.earlier_receipts(scenario_id, phase)
         result = runner.run_evidence(
             self.repo,
@@ -3924,11 +3930,11 @@ class Driver:
             phase=phase,
             digest=approval.digest,
             check=item.check or "",
-            oracles={name: files[name] for name in item.oracle},
-            place=item.place,
+            oracles=oracles,
+            place=place,
             env_names=item.env,
             timeout=item.timeout,
-            negative=(item.negative, files[item.negative]) if item.negative else None,
+            negative=negative,
         )
         receipt = result.receipt
         # A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it.
@@ -4229,7 +4235,7 @@ class Driver:
                 item = scenario.evidence
                 if scenario.id not in passed or scenario.id not in model.outcome:
                     continue
-                if item is None or not (item.check and item.oracle) or item.baseline != "fail":
+                if item is None or not (item.check and item.has_tests) or item.baseline != "fail":
                     continue
                 stems = verify.receipt_stems(data, scenario.id, "baseline")
                 try:
@@ -4280,8 +4286,9 @@ class Driver:
             % (self.plan_path, scenario_id),
             "- Oracle: %s (the files named %s, approved bytes)"
             % (
-                yaml_plan.snapshot_path(approval, self.args.state_dir).parent / "oracle",
-                ", ".join(item.oracle),
+                yaml_plan.snapshot_path(approval, self.args.state_dir).parent
+                / ("acceptance" if item.acceptance else "oracle"),
+                ", ".join(item.acceptance or item.oracle),
             ),
             "- Check: `%s`" % item.check,
             "- Delivered code: commit %s of %s" % (sha, self.repo),
@@ -4292,9 +4299,9 @@ class Driver:
             % scenario_id,
             "",
             "Rules:",
-            "- Mutate delivered code only. Never edit the oracle or the file it is placed as (%s%s); such a patch "
+            "- Mutate delivered code only. Never edit the oracle or the file it is placed as (%s); such a patch "
             "counts as ineffective."
-            % (item.place or "", ", ".join(n.removesuffix(".oracle") for n in item.oracle)),
+            % ", ".join(yaml_plan.placed_files(self.plan_path, self.model, item, self.repo)),
             "- Do not touch the repository checkout. Make the change in a scratch worktree "
             "(`git worktree add --detach <dir> %s`), write `git diff` there to %s, then remove the worktree."
             % (sha, patch),
@@ -4374,11 +4381,7 @@ class Driver:
             for line in patch.decode("utf-8", "replace").splitlines()
             if line.startswith(("--- a/", "+++ b/"))
         }
-        placed = {
-            (item.place or "").rstrip("/") + "/" + name.removesuffix(".oracle")
-            for name in item.oracle
-        }
-        placed = {p.lstrip("/") for p in placed}
+        placed = set(yaml_plan.placed_files(self.plan_path, self.model, item, self.repo))
         if not touched:
             return (
                 "invalid",
@@ -4391,7 +4394,7 @@ class Driver:
                 "the patch edits the oracle's file %s" % sorted(touched & placed)[0],
                 None,
             )
-        files = self.oracles()
+        oracles, place, _ = self.inputs(item)
         run_ = runner.run_mutation(
             self.repo,
             record["sha"],
@@ -4399,8 +4402,8 @@ class Driver:
             digest=self.contract()[1].digest,
             check=item.check,
             patch=patch,
-            oracles={name: files[name] for name in item.oracle},
-            place=item.place,
+            oracles=oracles,
+            place=place,
             env_names=item.env,
             timeout=item.timeout,
             attempt_number=number,
@@ -5353,14 +5356,15 @@ def load_approved(path, *, repo, state_dir, **kwargs):
 
 
 def is_yaml(plan_path):
-    return Path(plan_path).name.endswith(".plan.yaml")
+    name = Path(plan_path).name
+    return name.endswith(".plan.yaml") or yaml_plan.is_folder_plan(plan_path)
 
 
 def require_yaml(plan_path):
     """A plan is a plan/1 YAML file; a Markdown plan is refused with the way out."""
     if not is_yaml(plan_path):
         raise PlanError(
-            "%s is not a plan/1 YAML plan (<name>.plan.yaml): the Markdown plan format is no longer read. "
+            "%s is not a plan/1 YAML plan (<name>.plan.yaml, or plan.yaml in its own folder): the Markdown plan format is no longer read. "
             "Rewrite it as plan/1 YAML and run `plan check <plan.yaml>`, then `plan approve`"
             % plan_path
         )
