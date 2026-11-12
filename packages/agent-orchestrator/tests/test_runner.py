@@ -630,3 +630,75 @@ class Baseline(RepoCase):
         )
         self.assertEqual(list(receipt["oracles"]), ["probe.txt.oracle"])
         self.assertFalse((self.repo / "checks" / "probe.txt").exists())
+
+
+class BaselineCost(Baseline):
+    """S14: the baseline runs a check once however many scenarios share it, and every check in one worktree whose
+    venv survives while nothing else a check left behind does."""
+
+    def write_many(self, checks):
+        ids = ["S%d" % (i + 1) for i in range(len(checks))]
+        self.plan.write_text(
+            yaml.safe_dump(
+                {
+                    "schema": "plan/1",
+                    "slug": "demo",
+                    "goal": "g",
+                    "spec": "docs/specs/demo.md",
+                    "outcome": ids,
+                    "scenarios": [
+                        {
+                            "id": sid,
+                            "when": "a",
+                            "then": "b",
+                            "evidence": {"check": check, "baseline": "fail"},
+                        }
+                        for sid, check in zip(ids, checks)
+                    ],
+                    "tickets": [
+                        {
+                            "id": "T1",
+                            "delivers": "x",
+                            "satisfies": ids,
+                            "paths": ["src/a/"],
+                            "size": "small",
+                            "difficulty": "simple",
+                        }
+                    ],
+                },
+                sort_keys=False,
+            )
+        )
+
+    def receipt(self, scenario):
+        found = list(self.state.rglob("receipts/%s.baseline.1.json" % scenario))
+        self.assertEqual(len(found), 1, list(self.state.rglob("*")))
+        return json.loads(found[0].read_text())
+
+    def test_S14_scenarios_that_share_a_check_run_it_once_and_each_keeps_its_receipt(self):
+        runs = self.root / "runs.log"
+        shared = 'echo shared >> "%s"\n' % runs + junit(FAILING, tests=1, failures=1) + "exit 1"
+        other = 'echo other >> "%s"\n' % runs + junit(FAILING, tests=1, failures=1) + "exit 1"
+        self.write_many([shared, shared, other])
+        code, message = self.approve()
+        self.assertEqual(code, 0, message)
+        self.assertEqual(runs.read_text().splitlines(), ["shared", "other"])
+        for scenario in ("S1", "S2", "S3"):
+            receipt = self.receipt(scenario)
+            self.assertEqual((receipt["scenario"], receipt["result"]), (scenario, "FAIL"))
+        self.assertEqual(self.receipt("S1")["started_at"], self.receipt("S2")["started_at"])
+
+    def test_S14_checks_share_one_worktree_that_keeps_its_venv_and_nothing_else(self):
+        (self.repo / ".gitignore").write_text(".venv/\ncache/\n")
+        git(self.repo, "add", ".gitignore")
+        git(self.repo, "commit", "-q", "-m", "ignore")
+        first = "mkdir -p .venv cache && touch .venv/warm cache/stale untracked.txt && exit 1"
+        # Each probe exits 0 (a vacuous PASS, so approve refuses) when the tree is not what it should be.
+        second = (
+            "test -f .venv/warm || exit 0; test -e cache/stale && exit 0; "
+            "test -e untracked.txt && exit 0; exit 1"
+        )
+        self.write_many([first, second])
+        code, message = self.approve()
+        self.assertEqual(code, 0, message)
+        self.assertEqual(git(self.repo, "worktree", "list").count("\n"), 0)

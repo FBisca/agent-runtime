@@ -5,6 +5,7 @@ safe_dump(sort_keys=True) after dropping approval: comments, key order and YAML
 presentation are preserved on disk but do not affect the contract digest.
 """
 
+import copy
 import fcntl
 import functools
 import hashlib
@@ -657,44 +658,62 @@ def approved_text(text, approval):
 def baseline(model, repo, base_sha, approval_digest, files):
     """Run every check item of the plan once at `base` and judge it against its `baseline:` (D24).
 
-    Returns the runs to persist, each with the calibration to record; raises PlanError naming every item that is
-    not what it claims, before anything is written."""
-    runs, refusals = [], []
-    for scenario in model.scenarios:
-        item = scenario.evidence
-        if item is None or not item.check:
-            continue
-        negative = (item.negative, files[item.negative]) if item.negative else None
-        run = runner.run_evidence(
-            repo,
-            base_sha,
-            scenario=scenario.id,
-            phase="baseline",
-            digest=approval_digest,
-            check=item.check,
-            oracles={name: files[name] for name in item.oracle},
-            place=item.place,
-            env_names=item.env,
-            timeout=item.timeout,
-            negative=negative,
-        )
-        ok, observed, calibrated = runner.judge_baseline(
-            run.receipt, item.baseline, bool(item.oracle)
-        )
-        if not ok:
-            refusals.append(
-                "%s: baseline expected %s at %s, observed %s — %s"
-                % (
-                    scenario.id,
-                    item.baseline,
-                    base_sha[:12],
-                    observed,
-                    "make the oracle fail on an assertion at base and pass its controls, or set baseline: pass"
-                    if item.baseline == "fail"
-                    else "fix the check or set baseline: fail",
-                )
+    Scenarios whose items would run the same thing share one run, and every run shares one worktree, so a plan pays
+    for each distinct check and one venv, not for each scenario. Returns the runs to persist, each with the
+    calibration to record; raises PlanError naming every item that is not what it claims, before anything is
+    written."""
+    runs, refusals, seen = [], [], {}
+    checked = [s for s in model.scenarios if s.evidence is not None and s.evidence.check]
+    if not checked:
+        return runs
+    with runner.Workspace(repo, base_sha) as shared:
+        for scenario in checked:
+            item = scenario.evidence
+            key = (
+                item.check,
+                tuple(sorted(item.oracle)),
+                item.place,
+                tuple(item.env),
+                item.timeout,
+                item.negative,
             )
-        runs.append((run, {"calibrated": calibrated, "expected": item.baseline}))
+            if key in seen:
+                first = seen[key]
+                run = runner.Run(copy.deepcopy(first.receipt), first.log)
+                run.receipt["scenario"] = scenario.id
+            else:
+                negative = (item.negative, files[item.negative]) if item.negative else None
+                run = seen[key] = runner.run_evidence(
+                    repo,
+                    base_sha,
+                    scenario=scenario.id,
+                    phase="baseline",
+                    digest=approval_digest,
+                    check=item.check,
+                    oracles={name: files[name] for name in item.oracle},
+                    place=item.place,
+                    env_names=item.env,
+                    timeout=item.timeout,
+                    negative=negative,
+                    workspace=shared,
+                )
+            ok, observed, calibrated = runner.judge_baseline(
+                run.receipt, item.baseline, bool(item.oracle)
+            )
+            if not ok:
+                refusals.append(
+                    "%s: baseline expected %s at %s, observed %s — %s"
+                    % (
+                        scenario.id,
+                        item.baseline,
+                        base_sha[:12],
+                        observed,
+                        "make the oracle fail on an assertion at base and pass its controls, or set baseline: pass"
+                        if item.baseline == "fail"
+                        else "fix the check or set baseline: fail",
+                    )
+                )
+            runs.append((run, {"calibrated": calibrated, "expected": item.baseline}))
     if refusals:
         raise PlanError("approval: " + "; ".join(refusals) + " — nothing was approved")
     return runs
