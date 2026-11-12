@@ -163,3 +163,42 @@ class HerdrComponentTests(HerdrCase):
         self.assertIn("kept", result.stdout)
         self.assertEqual(self.layout().read_text(encoding="utf-8"), '{"id": "edited"}')
         self.assertFalse(self.mod().is_symlink())
+
+    def test_s19_a_rerun_keeps_an_edited_layout_and_copy_aside(self):
+        """installer-contract/R10: an upgrade never overwrites what the person edited since."""
+        self.assertEqual(self.install_from_checkout().returncode, 0)
+        self.layout().write_text('{"id": "edited"}', encoding="utf-8")
+        result = self.run_installer(
+            "--components", "herdr", "--dry-run", script=self.checkout_dir / "install.sh"
+        )
+        self.assertIn("edited", result.stdout)
+        self.assertEqual(self.layout().read_text(encoding="utf-8"), '{"id": "edited"}')
+        again = self.install_from_checkout()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("kept your edited", again.stdout)
+        asides = list((self.herdr_home() / "layouts").glob("workbench.json.edited-*"))
+        self.assertEqual([p.read_text(encoding="utf-8") for p in asides], ['{"id": "edited"}'])
+        self.assertEqual(
+            self.layout().read_bytes(), (REPO / "herdr/layouts/workbench.json").read_bytes()
+        )
+
+    def test_s19_an_edited_release_copy_is_kept_aside_and_uninstall_follows_the_digest(self):
+        """installer-contract/R10: a copy is judged by what was installed, not by the release now."""
+        self.release("0.1.0")
+        args = ("--components", "herdr", "--yes", "--release", "v0.1.0")
+        self.assertEqual(self.bootstrap(*args).returncode, 0)
+        (self.mod() / "mod.json").write_text('{"edited": true}', encoding="utf-8")
+        again = self.bootstrap(*args)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        asides = list((self.herdr_home() / "mods").glob("agent-workbench.edited-*"))
+        self.assertEqual(len(asides), 1)
+        self.assertEqual((asides[0] / "mod.json").read_text(encoding="utf-8"), '{"edited": true}')
+        self.assertNotEqual(
+            (self.mod() / "mod.json").read_text(encoding="utf-8"), '{"edited": true}'
+        )
+        # Unedited since the rerun: uninstall removes the copy and the layout, and only those.
+        result = self.bootstrap("uninstall", "--components", "herdr", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.mod().exists())
+        self.assertFalse(self.layout().exists())
+        self.assertTrue(asides[0].is_dir())

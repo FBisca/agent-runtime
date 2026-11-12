@@ -276,10 +276,44 @@ elif command == "add":
     data = load()
     data["components"][name] = {"release": release, "source": source, "files": arguments[3:]}
     save(data)
+elif command == "digest":
+    data = load()
+    entry = data["components"].get(arguments[0])
+    if entry is not None:
+        entry.setdefault("digests", {})[arguments[1]] = arguments[2]
+        save(data)
+elif command == "digest-of":
+    data = load()
+    print(data["components"].get(arguments[0], {}).get("digests", {}).get(arguments[1], ""))
 elif command == "remove":
     data = load()
     data["components"].pop(arguments[0], None)
     save(data)
+PY
+}
+
+# A digest of a file, or of a whole directory (its relative paths and bytes): what a copy was when
+# the installer made it, so a later edit is told from the installer's own file.
+tree_digest() {
+  python3 - "$1" <<'PY'
+import hashlib
+import os
+import sys
+
+root = sys.argv[1]
+digest = hashlib.sha256()
+if os.path.isdir(root):
+    for directory, names, files in os.walk(root):
+        names.sort()
+        for name in sorted(files):
+            path = os.path.join(directory, name)
+            digest.update(os.path.relpath(path, root).encode() + b"\0")
+            with open(path, "rb") as handle:
+                digest.update(handle.read() + b"\0")
+else:
+    with open(root, "rb") as handle:
+        digest.update(handle.read())
+print(digest.hexdigest())
 PY
 }
 
@@ -776,9 +810,29 @@ check_herdr() {
   fi
 }
 
+# Whether a path this installer put there was changed since: its digest is not the recorded one.
+# A path with no recorded digest (a link, or an install from before digests) counts as unchanged.
+herdr_edited() {
+  [ -e "$1" ] && [ ! -L "$1" ] || return 1
+  recorded=$(manifest digest-of herdr "$1")
+  [ -n "$recorded" ] || return 1
+  [ "$(tree_digest "$1")" != "$recorded" ]
+}
+
+# An edit is the person's: a rerun puts the new file in place and keeps theirs beside it.
+herdr_keep_aside() {
+  if herdr_edited "$1"; then
+    aside=$1.edited-$(date +%Y%m%d%H%M%S)
+    mv "$1" "$aside"
+    printf 'kept your edited %s as %s\n' "$1" "$aside"
+  fi
+}
+
 # A copy is made beside its place and moved over it, so a reader sees the old one or the new one.
 install_herdr() {
   mkdir -p "$herdr_home/mods" "$herdr_home/layouts"
+  herdr_keep_aside "$herdr_mod"
+  herdr_keep_aside "$herdr_layout"
   if herdr_copies; then
     temporary=$herdr_home/mods/.agent-workbench.new.$$
     rm -rf "$temporary"
@@ -797,6 +851,8 @@ install_herdr() {
   mv "$temporary" "$herdr_layout"
   printf 'added the workbench layout %s (not switched to: pick it with layout.switch)\n' "$herdr_layout"
   manifest add herdr "$release" "$root" "$herdr_mod" "$herdr_layout"
+  manifest digest herdr "$herdr_layout" "$(tree_digest "$herdr_layout")"
+  if herdr_copies; then manifest digest herdr "$herdr_mod" "$(tree_digest "$herdr_mod")"; fi
 }
 
 # Remove what the component put in Herdr's home, and only while it is still what it put there: a
@@ -813,13 +869,13 @@ uninstall_herdr() {
         printf 'kept %s: it points at %s, which this install does not own\n' "$file" "$target"
       fi
     elif [ -d "$file" ]; then
-      if diff -r "$file" "$source/herdr/agent-workbench" >/dev/null 2>&1; then
+      if ! herdr_edited "$file" && [ -n "$(manifest digest-of herdr "$file")" ]; then
         herdr_remove "$file"
       else
         printf 'kept %s: it is not the copy this installer made\n' "$file"
       fi
     elif [ -f "$file" ]; then
-      if cmp -s "$file" "$source/herdr/layouts/workbench.json"; then
+      if ! herdr_edited "$file" && [ -n "$(manifest digest-of herdr "$file")" ]; then
         herdr_remove "$file"
       else
         printf 'kept %s: it is not the file this installer created\n' "$file"
@@ -1124,6 +1180,9 @@ print_plan() {
         printf 'pi: Pi itself comes from its official installer; this one does not run it\n'
         ;;
       herdr)
+        for edited in "$herdr_mod" "$herdr_layout"; do
+          if herdr_edited "$edited"; then printf 'herdr: %s was edited since it was installed: it would be kept as %s.edited-<time>\n' "$edited" "$edited"; fi
+        done
         printf 'herdr: %s %s -> %s\n' "$(herdr_verb)" "$herdr_mod" "${root:-the release payload}/herdr/agent-workbench"
         printf 'herdr: copy %s from %s/herdr/layouts/workbench.json (opt-in, not switched to)\n' "$herdr_layout" "${root:-the release payload}"
         ;;
