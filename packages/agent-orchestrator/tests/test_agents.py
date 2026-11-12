@@ -1,5 +1,6 @@
 """ensure_agent: every spawn records an intent first, and a restart re-attaches by the stable name."""
 
+import json
 import os
 import sys
 import unittest
@@ -120,6 +121,47 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
             [c["args"]["name"] for c in fixture.calls("spawn")], ["demo-t1", "demo-t1"]
         )
         fixture.assert_intents_precede_spawns()
+
+
+class AddressRecordTests(RunFixture, unittest.TestCase):
+    """The driver records an address only when the runtime returned one (agent-workbench/S8)."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_plan(rows=("T1",))
+
+    def runtime_returns_no_address(self):
+        real = self.runtime_process
+
+        def answer(argv, timeout=None):
+            done = real(argv, timeout)
+            body = json.loads(done.stdout) if done.stdout else None
+            if isinstance(body, dict) and "address" in body:
+                body.pop("address")
+                return type(done)(argv, done.returncode, json.dumps(body))
+            return done
+
+        self.runtime_process = answer
+
+    def test_S8_the_address_the_runtime_returned_is_recorded_on_the_agent_and_its_task(self):
+        self.run_driver()
+        data = self.ledger()
+        self.assertEqual(data["agents"]["demo-t1"]["address"], "term-demo-t1")
+        self.assertEqual(data["tasks"]["t1"]["address"], "term-demo-t1")
+
+    def test_S8_a_runtime_that_returned_no_address_leaves_none_not_the_assignment_or_the_name(self):
+        self.runtime_returns_no_address()
+        self.run_driver()
+        data = self.ledger()
+        self.assertIsNone(data["agents"]["demo-t1"]["address"])
+        self.assertIsNone(data["tasks"]["t1"]["address"])
+        task = data["tasks"]["t1"]
+        self.assertEqual(
+            (task["status"], task["assignment_id"]),
+            ("ACTIVE", spawn_id("demo-t1")),
+            "the task is still bound, under a key that is not shown as an address",
+        )
+        self.assertNotIn(task["runtime_id"], ("", None))
 
 
 if __name__ == "__main__":

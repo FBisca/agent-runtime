@@ -399,6 +399,15 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.plan_status("T1"), "IN PROGRESS")
 
+    def test_S13_a_ready_person_owned_ticket_wakes_the_lead_once(self):
+        """orchestrator-engine/R2: code-driven-orchestrator/S13"""
+        # exit 1 on the restart: T1's worker was left idle with no report, so the drive strands that unit
+        self.run_driver()
+        self.run_driver(expect=1)
+        person = [w for w in self.wakes() if w.get("kind") == "person"]
+        self.assertEqual([w["unit"] for w in person], ["T4"], "one wake, not one per drive")
+        self.assertIn("sign-off", person[0]["text"])
+
     def test_S13_it_waits_until_the_user_sets_it_complete(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S13"""
         # exit 1 on every restart: T1's worker was left idle with no report, so each drive strands that unit; the

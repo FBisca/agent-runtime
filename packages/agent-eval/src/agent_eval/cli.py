@@ -12,11 +12,15 @@ from agent_eval.label import KINDS, add_label
 from agent_eval.label2 import EXAMPLE
 
 CAPTURE_EPILOG = """\
---session  a Claude session id, or a unique prefix; the sessions its job's resume and fork links
-           reach and every session's subagents join the case. Repeat it for sessions the job state
-           cannot link. Required unless --orchestrate-run is given.
---case     the case slug; default the root session id: the oldest session of the first --session
-           chain, even when it is excluded.
+--session  a Claude, Codex or Pi session id, or a unique prefix, looked up in all three. For Claude, the
+           sessions its job's resume and fork links reach and every session's subagents join the case;
+           a Codex or Pi session joins alone, with its later rollout files for Codex. The first
+           --session's session is the `root`; repeat it for other sessions, which join as `session`.
+           A ref that matches nothing, several sessions, or one session under two harnesses exits 2
+           naming where it looked or what it found, and writes nothing. Required unless
+           --orchestrate-run is given.
+--case     the case slug; default the root session id: the first --session's session (for Claude, the oldest
+           of its chain), even when it is excluded.
 --exclude  a session of the chain or the run to leave out; the manifest lists it under `excluded`.
 --orchestrate-run  an orchestrate run slug: its run directory is copied into the case, and every
            Claude, Codex or Pi session that started inside the run's window with the cwd of one of its
@@ -65,10 +69,17 @@ def build_parser() -> argparse.ArgumentParser:
     cap = commands.add_parser(
         "capture",
         help="freeze a run into a case",
+        usage="agent-eval capture [options]",
         epilog=CAPTURE_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    cap.add_argument("--session", action="append", default=[], metavar="ID")
+    cap.add_argument(
+        "--session",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="a Claude, Codex or Pi session id or unique prefix; repeatable",
+    )
     cap.add_argument("--case", metavar="SLUG")
     cap.add_argument("--exclude", action="append", default=[], metavar="ID")
     cap.add_argument("--repo", metavar="PATH")

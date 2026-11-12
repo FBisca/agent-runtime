@@ -473,10 +473,15 @@ def semantic_problems(data, path, repo):
                 )
             if label.startswith("oracle") and destination is not None:
                 placed = destination / name.removesuffix(".oracle")
-                if (
-                    not placed.resolve().is_relative_to(repo)
-                    or placed.exists()
-                    or placed.is_symlink()
+                # archive promotes the oracle onto its place byte for byte: that copy is the plan's own, not a clash
+                promoted = (
+                    exists
+                    and placed.is_file()
+                    and not placed.is_symlink()
+                    and placed.read_bytes() == source.read_bytes()
+                )
+                if not placed.resolve().is_relative_to(repo) or (
+                    (placed.exists() or placed.is_symlink()) and not promoted
                 ):
                     defect(
                         prefix + ".place",

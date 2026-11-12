@@ -1,0 +1,119 @@
+"""The agent-workbench Herdr mod's pure modules (model.js, data.js) under `node --test`.
+
+Each scenario's test runs the JS tests named with its S-ID and requires that some ran and none failed, so a
+renamed or deleted JS test turns its scenario red instead of passing silently. A missing `node` fails the test
+naming node: the mod's logic is only proven when its tests run.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.integration
+
+MOD = Path(__file__).resolve().parent.parent / "herdr" / "agent-workbench"
+
+
+def node_tests(pattern=None, path=None):
+    """Run `node --test` over the mod's test directory and return (passed, failed, output). A missing node is a
+    failure that names node, never a skip."""
+    node = shutil.which("node", path=path)
+    if node is None:
+        pytest.fail(
+            "node is not installed: the agent-workbench mod's tests need `node` on PATH (node --test)"
+        )
+    command = [node, "--test", "--test-reporter=tap"]
+    if pattern:
+        command.append("--test-name-pattern=%s" % pattern)
+    command.extend(sorted(str(p) for p in (MOD / "test").glob("*.test.js")))
+    done = subprocess.run(command, capture_output=True, text=True, timeout=120, cwd=MOD)
+    passed = re.search(r"^# pass (\d+)$", done.stdout, re.M)
+    failed = re.search(r"^# fail (\d+)$", done.stdout, re.M)
+    return (
+        int(passed.group(1)) if passed else 0,
+        int(failed.group(1)) if failed else -1,
+        done.stdout + done.stderr,
+    )
+
+
+def scenario(sid, at_least):
+    passed, failed, output = node_tests(pattern=r"^%s " % sid)
+    assert failed == 0, output
+    assert passed >= at_least, "%s: %d node tests passed, expected at least %d\n%s" % (
+        sid,
+        passed,
+        at_least,
+        output,
+    )
+
+
+def source(name):
+    return (MOD / name).read_text()
+
+
+def test_S12_the_mod_lists_plans_and_shows_layered_tickets_with_one_inspector():
+    scenario("S12", 4)
+
+
+def test_S13_a_failure_is_shown_in_its_scope_with_the_way_out_and_no_placeholder_data():
+    scenario("S13", 6)
+
+
+def test_S14_a_narrow_mod_shows_one_column_and_a_drill_in_inspector():
+    scenario("S14", 3)
+
+
+def test_S15_a_refresh_runs_one_fixed_argv_fetch_in_flight_and_drops_stale_answers():
+    scenario("S15", 6)
+
+
+def test_S15_the_mod_runs_no_shell_and_writes_nothing():
+    files = [MOD / name for name in ("main.js", "data.js", "model.js", "ui.js")]
+    files += sorted((MOD / "views").glob("*.js"))
+    for file in files:
+        text = file.read_text()
+        assert "writeTextFile" not in text, file.name
+        assert "fs/promises" not in text, file.name
+        assert not re.search(r"exec\(\s*[\"'](sh|bash|zsh)[\"']", text), file.name
+        assert "process.run" not in text, file.name
+    main = source("main.js")
+    assert "watchFolder" in main
+    assert "FALLBACK_MS" in main
+
+
+def test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address():
+    scenario("S16", 6)
+
+
+def test_S17_a_Runtime_section_lists_live_agents_no_attempt_names():
+    scenario("S17", 6)
+
+
+def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling():
+    files = [MOD / name for name in ("main.js", "data.js", "model.js", "ui.js")]
+    files += sorted((MOD / "views").glob("*.js"))
+    for file in files:
+        text = file.read_text()
+        for command in re.findall(
+            r"[\"'](?:agent|pane|terminal|space|tab|layout)\.[a-z_]+[\"']", text
+        ):
+            assert command == '"agent.focus"', (file.name, command)
+    assert "setInterval" not in source("main.js")
+    assert "terminals()" in source("main.js")
+
+
+def test_S18_node_test_runs_the_mods_pure_modules_from_pytest():
+    passed, failed, output = node_tests()
+    assert failed == 0, output
+    assert passed >= 24, output
+
+
+def test_S18_a_missing_node_fails_naming_node_instead_of_skipping(tmp_path):
+    empty = str(tmp_path)
+    with pytest.raises(pytest.fail.Exception, match="node"):
+        node_tests(path=empty)
+    assert os.path.isdir(empty)
