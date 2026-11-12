@@ -83,6 +83,9 @@ class InstallerCase(unittest.TestCase):
                 r'^version = ".*"$', f'version = "{member_version}"', source, flags=re.MULTILINE
             )
             (directory / "pyproject.toml").write_text(pinned, encoding="utf-8")
+        # The Herdr mod and its layout ship with the checkout, so a release payload carries them too.
+        shutil.copytree(REPO / "herdr" / "agent-workbench", target / "herdr" / "agent-workbench")
+        shutil.copytree(REPO / "herdr" / "layouts", target / "herdr" / "layouts")
         return target
 
     def shim(self, name):

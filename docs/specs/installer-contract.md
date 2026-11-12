@@ -1,8 +1,8 @@
 # Installer-Contract
-Paths: install.sh, scripts/, tests/installer/
+Paths: install.sh, scripts/, tests/installer/, herdr/layouts/
 
 The installer is one POSIX shell script, `install.sh`, that installs the runtime and the components a user selects
-(`runtime`, `orchestrator`, `claude`, `codex`, `pi`) from a local checkout or from a pinned, checksum-verified release.
+(`runtime`, `orchestrator`, `claude`, `codex`, `pi`, `herdr`) from a local checkout or from a pinned, checksum-verified release.
 The runtime contract it installs lives in [agent-runtime.md](agent-runtime.md); the harness wiring it prints lives in
 [harness-adapters.md](harness-adapters.md). This spec covers how the installer selects, verifies, activates and
 removes what it installs, and what it must never touch.
@@ -18,3 +18,4 @@ removes what it installs, and what it must never touch.
 - **R7** WHEN install is rerun, upgraded or selectively uninstalled, THEN it preserves unrelated components and user-owned data, and maintains compatibility with documented `agent-runtime*` shims. (from selective-remote-installer/S7)
 - **R8** WHEN Linux/macOS installer tests run under clean/existing HOME values, with fake external binaries, THEN no network or credentials are needed, and shellcheck plus all failure-path cases pass. (from selective-remote-installer/S8)
 - **R9** WHEN Pi is not installed, THEN selecting its adapter reports the missing prerequisite and gives the official Pi installation method; it must not silently install or authenticate Pi. (from selective-remote-installer/S9)
+- **R10** WHEN `sh install.sh --components herdr` runs, THEN from a checkout it symlinks `herdr/agent-workbench` into `~/.config/herdr-app/mods/agent-workbench` (a release copies it) and adds the opt-in `workbench` layout without switching to it; `--dry-run` changes nothing; a rerun is idempotent; an existing mod or layout of that name that it did not install is refused with a preview, before anything else is changed; uninstall removes only what it installed, and keeps a copy or layout the person edited. The component needs the orchestrator, and so the runtime. (from agent-workbench/S19)
