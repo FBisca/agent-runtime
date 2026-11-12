@@ -1,6 +1,6 @@
 {
   "recorded": "2026-11-07",
-  "plan": "docs/plans/2026-11-07-uv-workspace-python-standards.plan.md",
+  "plan": "uv-workspace-python-standards",
   "note": "The compatibility baseline of the pre-workspace tree. A packaging move must not change anything recorded here without changing this file and the contract tests together.",
   "entrypoints": {
     "agent-runtime": {

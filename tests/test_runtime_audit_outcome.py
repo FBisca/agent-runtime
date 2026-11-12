@@ -15,6 +15,7 @@ because of the defect, not the harness.
 import json
 import os
 import queue
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -754,8 +755,16 @@ class OperationKeyOutcome(FakeHc):
 
     SPAWN = {"kind": "worker", "name": "w00", "task": "work", "cwd": "/tmp"}
 
+    def setUp(self):
+        super().setUp()
+        # An operation's owner is the hc socket's identity (device, inode, ctime): it must be a bound Unix socket.
+        self.socket_path = self.dir / "hc.sock"
+        listener = socket.socket(socket.AF_UNIX)
+        self.addCleanup(listener.close)
+        listener.bind(str(self.socket_path))
+
     def lead(self):
-        return self.start(worker_rows(4), ENV)
+        return self.start(worker_rows(4), dict(ENV, HC_TERMINAL_SOCKET=str(self.socket_path)))
 
     def assignments(self):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
@@ -823,6 +832,7 @@ class OperationKeyOutcome(FakeHc):
             "XDG_STATE_HOME": str(self.dir / "state"),
             "XDG_CONFIG_HOME": str(self.dir / "config"),
             "HC_TERMINAL_ID": "t0",
+            "HC_TERMINAL_SOCKET": str(self.socket_path),
         }
 
     def cli_hc(self):

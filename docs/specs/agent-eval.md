@@ -205,6 +205,20 @@ rules, whose score is not the weighted mean of its dimensions (quality .35, test
 communication .15, renormalised over the scored dimensions, rounded half up to 2 decimals) or whose verdict does
 not follow from its gates and scores.
 
+## Listing cases
+
+`agent-eval list` reads every directory under `<home>/cases/` that holds a real `manifest.json` and prints
+one line per case: the slug, the capture date, the session count, the label's verdict, its score and the
+judging model, each `-` when the case has no label yet. Newest first, by the manifest's `captured` and
+then by slug. `--json` prints the same rows as one array, with `null` for an unlabelled case's verdict,
+score and judge (the whole field set: `case`, `captured`, `sessions`, `verdict`, `score`, `judge`).
+
+Only a case's own record is read, its `manifest.json` and `labels/<kind>.json`, never a transcript or an
+orchestrate file, so a listing does not cost what the run behind it weighed. A directory without a
+manifest, or with one that does not parse, is not a case: it is skipped, and one unreadable label makes
+that case show as unlabelled rather than failing the listing. Nothing is written, and an empty or missing
+`<home>` prints nothing (`[]` with `--json`) and exits 0.
+
 ## Requirements
 
 - **R207** WHEN `agent-eval capture --session <claude-id>` runs on a session that belongs to a Claude background job, including a job whose state resumes itself (`sessionId == resumeSessionId`) and a job forked from another (`forkParentSessionId`), THEN the case holds every session reachable through every job's resume and fork links, each session's `subagents/agent-*.jsonl` with its `.meta.json`, and each session's `tool-results/` files; the manifest lists each session with harness `claude`, role and parent. (from agent-eval-p0/S1)
@@ -234,6 +248,9 @@ not follow from its gates and scores.
 - **R231** WHEN the `--session` ref matches no session, several sessions in one harness, or the same session under two harnesses, THEN capture exits 2 and writes nothing: an unknown ref names the directory it looked in for each harness, an ambiguous one names every candidate with its harness, and a session found under two harnesses names the two places it was found. (from agent-eval-named-capture/S2)
 - **R232** WHEN `--session` names a Codex or Pi session, alone or beside another `--session`, with or without a run, THEN the first `--session`'s session is the `root` and names the default case, whatever the other sessions' age, a later one has role `session`, a named session that is also a worker of the run joins once, keeping the role the naming gave it, and `--exclude` leaves a named session out and lists it. (from agent-eval-named-capture/S3)
 - **R233** WHEN the four Pi sessions of the 2026-11-10 batch are captured by name, THEN each case holds the session's whole transcript with its harness `pi`, the cwd of its first record and role `root`. (from agent-eval-named-capture/S5)
+- **R234** WHEN `agent-eval list` runs, THEN it prints one line per case under `<home>/cases` with the slug, the capture date, the session count, the verdict, the score and the judging model, newest first by the manifest's `captured` and then by slug; a case with no label prints `-` for the verdict, the score and the judge; a directory under `cases/` that holds no `manifest.json`, or one that does not parse, is not listed; nothing is written. (from agent-eval-list/S1)
+- **R235** WHEN `agent-eval list --json` runs, THEN it prints one JSON array with `case`, `captured`, `sessions`, `verdict`, `score` and `judge` per case, `null` verdict, score and judge for an unlabelled case, and it reads no transcript, so a case of any size is listed in the time its own record takes. (from agent-eval-list/S2)
+- **R236** WHEN `<home>` or its `cases/` directory does not exist, THEN `agent-eval list` prints nothing (`[]` with `--json`), exits 0 and creates nothing. (from agent-eval-list/S3)
 
 ## Coverage
 
@@ -268,3 +285,6 @@ not follow from its gates and scores.
 | agent-eval-named-capture/S2 | R231 | `packages/agent-eval/tests/test_capture_named.py`: `test_R228_an_unknown_ref_is_refused_naming_every_harness_it_looked_in`, `test_R228_an_ambiguous_prefix_inside_one_harness_is_refused_naming_both`, `test_R228_a_prefix_that_matches_two_harnesses_is_refused_naming_both`, `test_R228_the_same_session_under_two_harnesses_is_refused`; `packages/agent-eval/tests/test_capture_named_outcome.py`: `RefusalTests::test_R228_an_unknown_ref_is_refused_naming_every_harness_it_looked_in`, `RefusalTests::test_R228_an_ambiguous_prefix_inside_one_harness_is_refused_naming_both`, `RefusalTests::test_R228_a_prefix_that_matches_two_harnesses_is_refused_naming_both`, `RefusalTests::test_R228_the_same_session_under_two_harnesses_is_refused` |
 | agent-eval-named-capture/S3 | R232 | `packages/agent-eval/tests/test_capture_named.py`: `test_R228_the_first_named_session_is_the_root_and_names_the_case`, `test_R228_a_named_session_that_is_also_a_run_worker_joins_once`, `test_R228_a_named_session_can_be_excluded_and_is_listed`; `packages/agent-eval/tests/test_capture_named_outcome.py`: `RootTests::test_R228_the_first_named_session_is_the_root_and_names_the_case`, `RootTests::test_R228_a_named_session_that_is_also_a_run_worker_joins_once`, `RootTests::test_R228_a_named_session_can_be_excluded_and_is_listed` |
 | agent-eval-named-capture/S5 | R233 | human: Felippe's capture of the four Pi sessions of the 2026-11-10 batch by name (T2): each case holds the whole transcript, harness `pi`, the session's cwd and role `root` |
+| agent-eval-list/S1 | R234 | `packages/agent-eval/tests/test_list.py`: `test_R234_two_cases_are_listed_newest_first_with_their_verdict_and_score`, `test_R234_an_unlabelled_case_is_listed_with_a_dash_not_hidden`, `test_R234_a_directory_that_is_not_a_case_is_not_listed` |
+| agent-eval-list/S2 | R235 | `test_R235_json_prints_one_array_with_nulls_for_an_unlabelled_case`, `test_R235_listing_reads_no_transcript` |
+| agent-eval-list/S3 | R236 | `test_R236_an_empty_or_missing_home_prints_nothing_and_creates_nothing` |

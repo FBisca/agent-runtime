@@ -1,0 +1,105 @@
+schema: plan/1
+slug: agent-eval-list
+goal: >-
+  `agent-eval list` answers "which cases exist on this machine, and what
+  did a judge say about each" from the tool itself: one line per case,
+  newest first, with its label's verdict and score, and the same rows as
+  JSON for a script.
+spec: docs/specs/agent-eval.md
+outcome: [S1, S2, S3]
+
+scenarios:
+  - id: S1
+    when: "`agent-eval list` runs on a home that holds cases"
+    then: >-
+      it prints one line per case under `<home>/cases` with the slug, the
+      capture date, the session count, the label kind, the verdict and the
+      score, newest first (by `captured`, then slug); a case with no label
+      prints `-` for the verdict and the score, and a directory holding no
+      `manifest.json` is not a case and is not listed
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-eval/tests/test_list.py -m integration
+        -k "TextRows or Unlabelled" -q --junitxml="$EEC_JUNIT"
+      place: packages/agent-eval/tests/
+      baseline: fail
+      timeout: 300
+  - id: S2
+    when: "`agent-eval list --json` runs"
+    then: >-
+      it prints one JSON array of rows on stdout, `null` verdict, score
+      and judge for an unlabelled case, and reads no transcript, so a case
+      of any size is listed in the same time
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-eval/tests/test_list.py -m integration
+        -k "JsonRows or ReadsNoTranscript" -q --junitxml="$EEC_JUNIT"
+      place: packages/agent-eval/tests/
+      baseline: fail
+      timeout: 300
+  - id: S3
+    when: "<home> or its `cases/` directory does not exist"
+    then: >-
+      `agent-eval list` prints nothing (`[]` with --json), exits 0, and
+      creates nothing
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-eval/tests/test_list.py -m integration
+        -k "EmptyHome" -q --junitxml="$EEC_JUNIT"
+      place: packages/agent-eval/tests/
+      baseline: fail
+      timeout: 300
+
+decisions:
+  - id: D1
+    decision: the index is a subcommand of the tool, not a file in a repo
+    alternative: a docs pointer to ~/.local/state/agent-evals
+    why: >-
+      the path is per-machine and the data is private; a repo pointer
+      breaks on a fresh checkout
+    source: Felippe, in session
+  - id: D2
+    decision: >-
+      default output is one aligned line per case; `--json` is the machine
+      shape
+    alternative: JSON only, or a table only
+    why: >-
+      a person reads the table, a script reads the array, one command
+      serves both
+    source: assumption
+  - id: D3
+    decision: newest first by `captured`, then slug
+    alternative: filesystem order, or slug order
+    why: a batch is judged against the cases it just made
+    source: assumption
+  - id: D4
+    decision: an unlabelled case is listed with `-`, never hidden
+    alternative: list only labelled cases
+    why: an unjudged case is the one worth noticing
+    source: assumption
+  - id: D5
+    decision: >-
+      a directory without a parseable `manifest.json` is skipped
+    alternative: list it with unknown fields
+    why: >-
+      capture writes a valid manifest before the case exists; anything
+      else is a stray directory
+    source: assumption
+
+tickets:
+  - id: T1
+    delivers: >-
+      the `list` subcommand (text and `--json`), the spec requirement and
+      Coverage row, and the CLI's own help
+    satisfies: [S1, S2, S3]
+    paths:
+      - packages/agent-eval/src/agent_eval/listing.py
+      - packages/agent-eval/src/agent_eval/cli.py
+      - packages/agent-eval/tests/test_list.py
+      - docs/specs/agent-eval.md
+    size: small
+    difficulty: simple
+    risk: [state]
