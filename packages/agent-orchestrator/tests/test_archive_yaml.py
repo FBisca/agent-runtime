@@ -74,6 +74,19 @@ class YamlArchiveTests(ArchiveFixture, unittest.TestCase):
         self.assertNotIn("Append each scenario", task_md)
         self.assertNotIn("Scenarios, verbatim", task_md)
 
+    def test_S29_a_requirement_naming_several_scenarios_keeps_all_of_them(self):
+        """One requirement may carry several scenarios: the brief keeps every one of them."""
+        commit_spec(
+            self,
+            "# Demo\nPaths: src/a/\n\n- **R7** WHEN a, THEN b. (from demo/S1, S2)\n",
+        )
+        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.run_driver()
+        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
+        self.assertIn("keep as they are: S1 (R7), S2 (R7).", task_md)
+        self.assertIn("append none", task_md)
+        self.assertNotIn("Append each scenario", task_md)
+
     def test_S29_no_narrative_step_when_plan_md_is_missing(self):
         self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
         self.run_driver()
@@ -139,7 +152,7 @@ class SnapshotLocationTests(unittest.TestCase):
         self.default = Path(self.driver.yaml_plan.DEFAULT_STATE).expanduser()
 
     def fake_load(self, present_in):
-        def load(path, *, repo, state_dir, **kwargs):
+        def load(*_args, state_dir, **_kwargs):
             if Path(state_dir).expanduser() != present_in:
                 raise self.driver.PlanError(f"approval: snapshot missing at {state_dir} — approve")
             return "model"
