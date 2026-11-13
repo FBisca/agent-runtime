@@ -265,7 +265,7 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.refused("--routes-file", path, mention=("gemini",))
 
     def test_S3_a_legacy_run_with_a_brain_backend_restarts_with_the_same_command(self):
-        """orchestrator-engine/R90: S3 — the table answered the brain's models, so the record carries them."""
+        """orchestrator-engine/R92: S3 — the table answered the brain's models, so the record carries them."""
         self.run_driver("--brain-cli", "codex")
         record = self.ledger()["routes"]
         self.assertEqual(record["brain_cli"], "codex")
@@ -277,12 +277,12 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual(self.ledger()["routes"], record)
 
     def test_S3_a_legacy_run_with_a_brain_backend_restarts_without_the_flag(self):
-        """orchestrator-engine/R90: S3 — an omitted --brain-cli is not a conflict; the record answers."""
+        """orchestrator-engine/R92: S3 — an omitted --brain-cli is not a conflict; the record answers."""
         self.run_driver("--brain-cli", "codex")
         self.restarts()
 
     def test_S3_a_record_that_cannot_route_its_gates_takes_the_steps_the_argument_adds(self):
-        """orchestrator-engine/R90: S3 — the refusal's way out: --step names the gates, the record keeps them."""
+        """orchestrator-engine/R92: S3 — the refusal's way out: --step names the gates, the record keeps them."""
         record = recorded(cli="claude", medium=("claude", "sonnet", None))
         record["brain_cli"] = "codex"
         self.seed(record)
@@ -300,7 +300,7 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual(steps["gaps"]["effort"], "high")
 
     def test_S3_a_step_argument_may_not_replace_a_step_while_adding_the_missing_ones(self):
-        """orchestrator-engine/R90: S3 — only a step the record lacks is added; a recorded one still conflicts."""
+        """orchestrator-engine/R92: S3 — only a step the record lacks is added; a recorded one still conflicts."""
         record = recorded(cli="claude", steps={"reviewer": ("codex", "gpt-l", "xhigh")})
         record["brain_cli"] = "codex"
         self.seed(record)
