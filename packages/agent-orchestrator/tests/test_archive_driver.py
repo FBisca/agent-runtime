@@ -9,6 +9,7 @@ from unittest import mock
 import pytest
 from fixtures import load_script
 from test_archive import ARCHIVE, ArchiveFixture
+from test_complete import NODE, PersonFixture
 
 pytestmark = pytest.mark.integration
 
@@ -155,3 +156,42 @@ class ArchiveRouteRefusal(ArchiveFixture, unittest.TestCase):
         routes = load_script().routes
         self.assertEqual(routes.step_override("gaps=claude/haiku").step, "gaps")
         self.assertIsNone(re.search("archive", ",".join(routes.STEPS)))
+
+
+class PersonTicketArchive(PersonFixture, unittest.TestCase):
+    def test_control_verify_runs_once_the_agent_ticket_is_complete(self):
+        self.first_drive()
+        self.assertIn("ACCEPTED", self.history())
+
+    def test_S7_the_archive_neither_starts_nor_asks_for_a_node_while_a_person_ticket_is_open(self):
+        self.first_drive()
+        self.assertFalse((self.run_dir / "archive" / "request.json").exists())
+        self.assertEqual(self.archive_branch(), "")
+        self.assertNotIn("ARCHIVED", self.history())
+        self.assertNotIn(ARCHIVE, self.ledger()["tasks"])
+
+    def test_S7_the_run_ends_rather_than_wait_on_the_person(self):
+        result = self.drive_once(
+            self.ticket_merged()
+        )  # no step left: a run that waited would fail here
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ACCEPTED", self.history())
+
+    def test_S7_after_complete_the_next_run_archives_with_the_cover_node_in_the_coverage_row(self):
+        self.first_drive()
+        code, said = self.complete("T2", "S2=" + NODE)
+        self.assertEqual(code, 0, said)
+        self.drive_once([self.gaps_done()])
+        self.assertEqual(self.history()[-1], "ARCHIVED")
+        spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
+        rows = [line for line in spec.splitlines() if line.startswith("| R") and "| S2 |" in line]
+        self.assertEqual(len(rows), 1, spec)
+        self.assertIn("`%s`" % NODE, rows[0])
+
+    def test_S7_a_person_ticket_completed_with_no_cover_leaves_its_scenario_to_be_asked_for(self):
+        self.first_drive()
+        self.assertEqual(self.complete("T2")[0], 0)
+        self.drive_once([self.skip_archive_if_asked()] * 4)
+        request = json.loads((self.run_dir / "archive" / "request.json").read_text("utf-8"))
+        self.assertIn("S2", request["reason"])
+        self.assertIn("no test node", request["reason"])

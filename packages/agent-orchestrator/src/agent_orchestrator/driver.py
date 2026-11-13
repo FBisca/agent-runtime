@@ -32,6 +32,7 @@ from .plan import PlanError
 from .runtime_client import (
     OPERATION_ADOPTED,
     CliRuntimeClient,
+    approval_refusal,
     operation_state,
     refuses_operation_ids,
 )
@@ -535,7 +536,7 @@ CONTRACT = """# Contract for every task in this run
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
-- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node.
+- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node, unless the plan's evidence for it brings its own test files (acceptance files or oracles): those prove it, so map it only to tests this ticket changes.
 - COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
@@ -2640,7 +2641,7 @@ class Driver:
                 report,
                 repo=packet["checkout"],
                 base=self.args.base,
-                plan_rel=self.plan_rel_for_integrity(),
+                layout=self.layout,
                 layout_repo=self.repo,
             )
         except verify.VerifyError as error:
@@ -5665,25 +5666,16 @@ class Driver:
     # evidence on the head, CI, the merge. A problem no worker could fix (a scenario with no test node, a failing
     # outcome, a conflict) asks the Lead, whose menu is `retry` (rebuild from the current base) and `skip`.
 
-    def plan_rel(self):
-        try:
-            return self.plan_path.relative_to(self.repo).as_posix()
-        except ValueError:
-            return "docs/plans/" + self.plan_path.name
-
-    def plan_rel_for_integrity(self):
-        """The plan's path in the repository, or None for a folder plan kept outside it: its folder is no repo path a
-        ticket could touch, and the fallback name every such plan shares (`docs/plans/plan.yaml`) is no plan's."""
-        if yaml_plan.is_folder_plan(self.plan_path):
-            try:
-                return self.plan_path.relative_to(self.repo).as_posix()
-            except ValueError:
-                return None
-        return self.plan_rel()
+    @property
+    def layout(self):
+        """The plan's resolver: what its layout is, which files are its own, where they sit in the repository."""
+        return yaml_plan.PlanLayout(self.plan_path, self.repo)
 
     def start_archive(self, plan):
         agents = [t for t in plan["tickets"] if is_agent(t)]
-        if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
+        # Verify starts on the agent tickets; the archive waits for every ticket, a person's included, because a
+        # scenario only a person can prove has its test node from that person's `complete`.
+        if not agents or not all(is_done(t) for t in plan["tickets"]) or ARCHIVE in self.failed:
             return 0
         if self.plan_state() not in ACCEPTED_STATES:
             return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
@@ -5716,25 +5708,14 @@ class Driver:
         path = getattr(
             self, "plan_path", None
         )  # a driver that holds no plan (a unit test's) promotes
-        if path is None or not yaml_plan.is_folder_plan(path):
+        if path is None or not self.layout.is_folder:
             return "promote"
         return self.plan_model().archive or yaml_plan.repo_config(self.repo).archive_mode
 
     def plan_folder_rel(self):
-        """The plan folder's path in the repository, or None for a folder plan or a legacy plan that is not in a
-        folder of it. A folder that is the repository, or holds it, is refused: deleting it would delete the work."""
-        folder = self.plan_path.parent
-        if not yaml_plan.is_folder_plan(self.plan_path):
-            return None
-        if self.repo == folder or self.repo.is_relative_to(folder):
-            raise ValueError(
-                "the plan folder %s is or holds the repository; move plan.yaml into a folder of its own"
-                % folder
-            )
-        try:
-            return folder.relative_to(self.repo).as_posix()
-        except ValueError:
-            return None
+        """The plan folder's path in the repository, or None for a legacy plan or a folder plan kept outside it. A
+        folder that is the repository, or holds it, is refused: deleting it would delete the work."""
+        return self.layout.folder_place()
 
     def folder_tracked(self):
         """Whether the plan folder is tracked on the base branch, which is the tree an archive branch is built from."""
@@ -5762,7 +5743,7 @@ class Driver:
     def discard_plan(self, plan):
         """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No
         worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan."""
-        folder = self.plan_path.parent
+        folder = self.layout.folder
         shutil.rmtree(folder)
         self.discarded = True
         with self.book() as data:
@@ -5850,7 +5831,7 @@ class Driver:
             "summary": "the driver archived the plan: %s"
             % (
                 "oracles placed, plan files copied, spec section appended"
-                if self.archive_mode() == "promote" and not yaml_plan.is_folder_plan(self.plan_path)
+                if self.archive_mode() == "promote" and not self.layout.is_folder
                 else "acceptance files moved into their domain, plan folder deleted, spec section appended"
                 if self.archive_mode() == "promote"
                 else "the discarded plan folder deleted"
@@ -5872,13 +5853,18 @@ class Driver:
         narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
 
     def ticket_covers(self):
-        """{scenario: [node, ...]}: the union of every ticket report's `covers`. The report file is read again, so a
+        """{scenario: [node, ...]}: the union of every ticket report's `covers` and of the nodes `complete` recorded for
+        a person ticket. The report file is read again, so a
         node the Lead added after a request counts; the ledger's copy is the fallback."""
         with self.book() as data:
             rows = [
                 (t.get("report_path"), t.get("report"))
                 for t in data["tasks"].values()
                 if t["packet"].get("unit") != ARCHIVE
+            ]
+            # a person ticket has no report: its nodes are the ones `complete` recorded
+            rows += [
+                (None, {"covers": covers}) for covers in (data.get("person_covers") or {}).values()
             ]
         found: dict[str, list[str]] = {}
         for path, stored in rows:
@@ -6075,16 +6061,16 @@ class Driver:
             return "Deletes the discarded plan folder `%s`; it changes nothing else." % (
                 self.plan_folder_rel()
             )
-        if yaml_plan.is_folder_plan(self.plan_path):
+        if self.layout.is_folder:
             where = self.plan_folder_rel()
             return (
                 "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
                 "is deleted and the spec section with its Coverage table is written by the driver."
-                % ("folder `%s`" % where if where else "`%s`" % self.plan_path.parent, spec)
+                % ("folder `%s`" % where if where else "`%s`" % self.layout.folder, spec)
             )
         return (
             "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-            "with its Coverage table, written by the driver." % (self.plan_rel(), spec)
+            "with its Coverage table, written by the driver." % (self.layout.plan_place, spec)
         )
 
     def undraft_archive(self, task_id):
@@ -6138,20 +6124,16 @@ class Driver:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(files[name])
 
-    def narrative_path(self):
-        """A YAML plan's Markdown narrative, beside it: <stem>.plan.md."""
-        return self.plan_path.with_name(self.plan_path.name.removesuffix(".plan.yaml") + ".plan.md")
-
     def yaml_copies(self):
         """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
         The narrative is copied only when the plan has one."""
-        if yaml_plan.is_folder_plan(self.plan_path):
+        layout = self.layout
+        if layout.is_folder:
             return []  # a plan folder is deleted, never copied: its acceptance files are placed instead
-        oracle = yaml_plan.oracle_dir(self.plan_path)
-        copies = [(self.plan_rel(), self.plan_path)]
-        if self.narrative_path().exists():
-            copies.append((self.beside_plan(self.narrative_path()), self.narrative_path()))
-        copies.append((self.beside_plan(oracle) + "/", oracle))
+        copies = [(layout.plan_place, layout.path)]
+        if layout.narrative.exists():
+            copies.append((self.beside_plan(layout.narrative), layout.narrative))
+        copies.append((self.beside_plan(layout.oracle_dir) + "/", layout.oracle_dir))
         return copies
 
     def yaml_places(self, model):
@@ -6164,7 +6146,7 @@ class Driver:
     def beside_plan(self, path):
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
         the plan itself sits outside the repository."""
-        return (PurePosixPath(self.plan_rel()).parent / Path(path).name).as_posix()
+        return (PurePosixPath(self.layout.plan_place).parent / Path(path).name).as_posix()
 
     def held_requirements(self, spec):
         """This plan's scenarios the spec already holds, each with its requirement: {"S3": "R220"}.
@@ -6890,8 +6872,7 @@ def load_approved(path, *, repo, state_dir, **kwargs):
 
 
 def is_yaml(plan_path):
-    name = Path(plan_path).name
-    return name.endswith(".plan.yaml") or yaml_plan.is_folder_plan(plan_path)
+    return yaml_plan.PlanLayout.is_plan_file(plan_path)
 
 
 def require_yaml(plan_path):
@@ -6920,7 +6901,15 @@ def read_repo_config(args):
     plan = getattr(args, "plan", None)
     if args.command == "plan" and getattr(args, "plan_command", None) == "schema":
         return
-    if not plan or args.command not in ("plan", "status", "verify", "run", "accept", "launch"):
+    if not plan or args.command not in (
+        "plan",
+        "status",
+        "verify",
+        "run",
+        "accept",
+        "complete",
+        "launch",
+    ):
         return None
     where = Path(args.repo).resolve() if args.repo else Path(plan).resolve().parent
     found = subprocess.run(
@@ -7257,6 +7246,67 @@ def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
         else:
             result["state"] = "REJECTED"
     return result
+
+
+def complete_person_ticket(args):
+    """`complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...`: the Lead records a person-owned ticket done, with
+    the test nodes (a node in another repository included) that prove the scenarios it satisfies. The status and the
+    nodes go into the ledger under its lock, so a live driver keeps them and the next run archives with them."""
+    refusal = approval_refusal(verb="complete")
+    if refusal:
+        # The runtime's wording is about approval; its reason is the part before the dash.
+        raise Refused(
+            "complete: %s — recording a person's ticket belongs to the Lead (the person in their own session): "
+            "a worker: ask the Lead to run complete; a Lead runs it from a terminal with no agent host, or from "
+            "its hc Lead terminal" % refusal.split(" — ")[0]
+        )
+    note = " ".join(args.note.split())
+    if not note:
+        raise Refused("complete: needs a --note saying what was done, kept in the ticket's status")
+    covers: dict[str, list[str]] = {}
+    for item in args.cover or []:
+        scenario_id, separator, node = item.partition("=")
+        if not (separator and scenario_id.strip() and node.strip()):
+            raise Refused(
+                "complete: --cover %r is not S<n>=<node>, such as --cover S2=other-repo/tests/test_x.py::test_y"
+                % item
+            )
+        found = covers.setdefault(scenario_id.strip(), [])
+        if node.strip() not in found:
+            found.append(node.strip())
+    model, _, ledger_path, _, seen = acceptance_context(args)
+    ticket = next((t for t in model.tickets if t.id.lower() == args.ticket.lower()), None)
+    if ticket is None:
+        raise Refused(
+            "complete: no ticket %s in %s; its tickets are %s"
+            % (args.ticket, model.slug, ", ".join(t.id for t in model.tickets))
+        )
+    if ticket.owner.strip().lower() == "agent":
+        raise Refused(
+            "complete: %s is an agent ticket; the driver's workers complete it, and `complete` records only a "
+            "person-owned ticket" % ticket.id
+        )
+    for scenario_id in covers:
+        if scenario_id not in ticket.satisfies:
+            raise Refused(
+                "complete: --cover names %s, which %s does not satisfy (it satisfies %s)"
+                % (scenario_id, ticket.id, ", ".join(ticket.satisfies))
+            )
+    require(ledger_path.is_file(), "complete: %s has no run yet; run it first" % model.slug)
+    status = "COMPLETE %s · %s" % (datetime.now(timezone.utc).date().isoformat(), note)
+    try:
+        with ledger(ledger_path, snapshot=seen, keys=("plan",)) as data:
+            data.setdefault("ticket_status", {})[ticket.id] = status
+            recorded = data.setdefault("person_covers", {})
+            if covers:
+                recorded[ticket.id] = covers
+            else:
+                recorded.pop(ticket.id, None)
+            if not recorded:
+                del data["person_covers"]
+    except ledgers.LedgerStale as error:
+        raise Refused("complete: %s" % error) from None
+    return {"ticket": ticket.id, "status": status, "covers": covers}
 
 
 def accept_item(args):
@@ -8178,6 +8228,22 @@ def main(argv=None):
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
     sub = commands.add_parser(
+        "complete",
+        help="The Lead records a person-owned ticket COMPLETE, with the test nodes that prove its scenarios",
+    )
+    sub.add_argument("plan")
+    sub.add_argument("ticket", help="The person-owned ticket, such as T2")
+    sub.add_argument("--note", required=True, help="What was done: kept in the ticket's status")
+    sub.add_argument(
+        "--cover",
+        action="append",
+        metavar="S<n>=<node>",
+        help="A test node that proves a scenario the ticket satisfies; a node in another repository is "
+        "<repo-name>/<path>::<test>. Repeat for more",
+    )
+    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
+    sub = commands.add_parser(
         "launch", help="Check the plan and start `run` in a Herdr terminal named orchestrate-<slug>"
     )
     sub.add_argument("plan")
@@ -8236,6 +8302,8 @@ def main(argv=None):
         return verify_plan(args)
     if args.command == "accept":
         return accept_item(args)
+    if args.command == "complete":
+        return complete_person_ticket(args)
     if args.command == "run":
         return drive(args)
     if args.command == "await":

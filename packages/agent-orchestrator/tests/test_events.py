@@ -10,6 +10,8 @@ from test_archive import ArchiveFixture
 from test_decider import DeciderFixture
 from test_gates import DEFERRED, MAJOR
 
+pytestmark = pytest.mark.unit
+
 
 def subsequence(wanted, actual):
     rest = iter(actual)
@@ -119,6 +121,10 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(metrics_path.read_text(encoding="utf-8")), written)
         self.assertEqual(json.loads(result.stdout), written)
+
+
+class RollupTests(unittest.TestCase):
+    """The rollup and the metrics table are pure: no fixture builds a repository for them."""
 
     @pytest.mark.unit
     def test_S27_the_rollup_counts_events_alone(self):

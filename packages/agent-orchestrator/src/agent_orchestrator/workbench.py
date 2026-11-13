@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from . import evidence, verify, workbench_needs, workbench_totals
 from . import plan as yaml_plan
 from . import workbench_metrics as metrics
-from .plan import DiscoveryError, PlanError
+from .plan import DiscoveryError, PlanError, PlanLayout
 
 SCHEMA_VERSION = 1
 
@@ -193,17 +193,10 @@ def listing(entry, repo, args):
 def without_twins(found):
     """The plan files of a listing without a Markdown plan whose YAML twin (same directory, same stem) is listed: the
     YAML plan is the plan, and its twin's state would contradict the ledger's."""
-    yaml_stems = {
-        (Path(e["path"]).parent, Path(e["path"]).name.removesuffix(".plan.yaml"))
-        for e in found
-        if e["format"] == "yaml"
-    }
-    return [
-        e
-        for e in found
-        if e["format"] == "yaml"
-        or (Path(e["path"]).parent, Path(e["path"]).name.removesuffix(".plan.md")) not in yaml_stems
-    ]
+    layouts = [PlanLayout(e["path"]) for e in found]
+    keys = [(layout.path.parent, layout.kind, layout.stem) for layout in layouts]
+    yaml_stems = {key for key, e in zip(keys, found) if e["format"] == "yaml"}
+    return [e for key, e in zip(keys, found) if e["format"] == "yaml" or key not in yaml_stems]
 
 
 def plans(args):

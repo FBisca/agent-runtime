@@ -6,7 +6,8 @@ scope      every file the ticket changed is inside the ticket's paths
 integrity  no ticket touches the plan, an oracle file or an oracle place (where the driver puts an oracle); for a
            plan in its own folder, nothing in that folder and no acceptance destination
 covers     every scenario the ticket satisfies maps, in the report's `covers`, to test nodes that exist and
-           changed in the ticket; that they pass is the CI green check on the same head
+           changed in the ticket; that they pass is the CI green check on the same head. A scenario whose
+           evidence brings its own test files needs no node: the evidence gate runs those files
 
 Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items.
 
@@ -97,19 +98,16 @@ def destinations(model, layout_repo):
     return found
 
 
-def integrity(model, plan_rel, name, layout_repo=None):
-    """Why a ticket may never touch `name`, or None. `plan_rel` is the plan's repo path, or None for a folder plan
-    kept outside the repository; `layout_repo` is the repository whose config names the acceptance destinations."""
-    if plan_rel is not None and yaml_plan.is_folder_plan(plan_rel):
-        # The whole folder is the contract: the plan, its notes, its acceptance files and its negatives.
-        if name.startswith(posixpath.dirname(plan_rel) + "/"):
+def integrity(model, layout, name, layout_repo=None):
+    """Why a ticket may never touch `name`, or None. `layout` is the plan's resolver, which says what belongs to the
+    plan whichever layout it has; `layout_repo` is the repository whose config names the acceptance destinations."""
+    if layout.owns(name):
+        if layout.is_folder:
+            # The whole folder is the contract: the plan, its notes, its acceptance files and its negatives.
             return "is in the plan folder; a ticket never edits the plan or its acceptance files"
-    elif plan_rel is not None:
-        oracle_dir = plan_rel.removesuffix(".plan.yaml") + ".oracle"
-        if name == plan_rel:
+        if name == layout.plan_place:
             return "is the plan; a ticket never edits its contract"
-        if name.startswith(oracle_dir + "/"):
-            return "is an oracle file; a ticket never edits one"
+        return "is an oracle file; a ticket never edits one"
     if name in places(model):
         return "is an oracle place; the driver places the oracle there, a ticket never does"
     if layout_repo is not None and name in destinations(model, layout_repo):
@@ -176,7 +174,7 @@ def node_problem(repo, node, base, files, added):
     return None
 
 
-def covers(ticket, report, repo, base, files, added):
+def covers(model, ticket, report, repo, base, files, added):
     contract = report.get("contract")
     if contract != 3:
         return [
@@ -188,10 +186,13 @@ def covers(ticket, report, repo, base, files, added):
             }
         ]
     mapped = report.get("covers") or {}
+    # A scenario whose evidence brings its own test files (acceptance files, oracles) is proven by those files,
+    # which the ticket's evidence gate runs and the archive counts; the ticket never changes them.
+    proven = {s.id for s in model.scenarios if s.evidence and s.evidence.has_tests}
     findings = []
     for scenario in ticket.satisfies:
         nodes = mapped.get(scenario) or []
-        if not nodes:
+        if not nodes and scenario not in proven:
             findings.append(
                 {
                     "check": "covers",
@@ -206,7 +207,7 @@ def covers(ticket, report, repo, base, files, added):
     return findings
 
 
-def invariants(model, ticket_id, report, *, repo, base, plan_rel, layout_repo=None):
+def invariants(model, ticket_id, report, *, repo, base, layout, layout_repo=None):
     """The findings of a YAML plan ticket's gate: scope, integrity and covers. Empty means the gate passes."""
     ticket = next((t for t in model.tickets if t.id == ticket_id), None)
     if ticket is None:
@@ -216,7 +217,7 @@ def invariants(model, ticket_id, report, *, repo, base, plan_rel, layout_repo=No
     layout_repo = layout_repo or repo
     findings = []
     for name in sorted(files):
-        why = integrity(model, plan_rel, name, layout_repo)
+        why = integrity(model, layout, name, layout_repo)
         if why:
             findings.append({"check": "integrity", "excerpt": "%s %s" % (name, why)})
         elif not inside(name, ticket.paths):
@@ -227,7 +228,7 @@ def invariants(model, ticket_id, report, *, repo, base, plan_rel, layout_repo=No
                     % (name, ", ".join(ticket.paths)),
                 }
             )
-    return findings + covers(ticket, report, repo, base, files, added)
+    return findings + covers(model, ticket, report, repo, base, files, added)
 
 
 def items(findings, command, log_path):

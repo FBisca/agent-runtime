@@ -12,6 +12,8 @@ import pytest
 from fixtures import report_wait
 from test_gates import GateFixture
 
+pytestmark = pytest.mark.unit
+
 MANIFEST = Path(__file__).resolve().parent / "evidence-manifest.json"
 
 
