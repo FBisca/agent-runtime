@@ -32,8 +32,14 @@ class RoutedRunFixture(RunFixture):
         with mock.patch.object(spec.Driver, "loop", lambda driver: seen.append(driver)):
             result = self.in_process(spec, self.driver_args(*extra, routed=routed))
         self.assertEqual(result.returncode, expect, result.stderr)
-        self.settled = seen[0] if seen else None
+        self.driver = seen[0] if seen else None
         return result
+
+    @property
+    def settled(self):
+        """The driver `settle` stopped; a run that refused to start has none."""
+        assert getattr(self, "driver", None) is not None, "the run did not settle its routes"
+        return self.driver
 
     def gate(self, step, klass, default_effort):
         """What the gate would spawn on: backend, model and effort, as the driver's spawn takes them."""
