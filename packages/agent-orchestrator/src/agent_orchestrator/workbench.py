@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from . import evidence, verify, workbench_needs
 from . import plan as yaml_plan
+from . import workbench_metrics as metrics
 from .plan import DiscoveryError, PlanError
 
 SCHEMA_VERSION = 1
@@ -553,6 +554,7 @@ def plan(args):
             )
         )
     shown = [row for _, _, row in sorted(tickets, key=lambda item: item[:2])]
+    run_dir = Path(status["run_dir"])
     return {
         "schema_version": SCHEMA_VERSION,
         "slug": source.slug,
@@ -566,6 +568,9 @@ def plan(args):
         "counts": counts(shown),
         "tickets": shown,
         "outcome": outcome_of(source, repo, data, receipts_dir),
+        # A plan nobody drove has no run directory; one that has holds events, and its metrics are read from them.
+        "run_dir": str(run_dir) if run_dir.is_dir() else None,
+        "metrics": metrics.compute(run_dir, [t["id"] for t in shown]) if run_dir.is_dir() else None,
     }
 
 
