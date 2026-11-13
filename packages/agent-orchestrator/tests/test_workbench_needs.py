@@ -139,3 +139,21 @@ class NeedsMeTests(WorkbenchFixture):
         self.approved("done")
         self.write_ledger("done", {"T1": "COMPLETE"}, plan_state="ARCHIVED")
         self.assertEqual(self.listing()["needs_me"], [])
+
+    def test_S3_a_gone_driver_keeps_driver_gone_and_needs_you_and_drops_what_only_a_driver_clears(
+        self,
+    ):
+        error = {"at": at(5), "kind": "error", "unit": "t1", "gate": "poll", "error": "boom"}
+        rows = [start(0, dead_pid()), escalation(1), error]
+        self.running("gone", rows, {"T1": "needs you: sign off"})
+        self.running("alive", [start(), escalation(1), error], {"T1": "needs you: sign off"})
+        self.assertEqual(
+            self.kinds(self.listing()),
+            {
+                ("gone", None, "driver_gone"),
+                ("gone", "T1", "needs_you"),
+                ("alive", "T1", "needs_you"),
+                ("alive", None, "error"),
+                ("alive", "T1", "lead_pending"),
+            },
+        )
