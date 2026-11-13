@@ -287,7 +287,7 @@ class IntentRestart(OperationRuntime, unittest.TestCase):
                 self.assertEqual(request["event"], "intent")
                 self.assertIn("may or may not have reached demo-t1", request["reason"])
                 self.assertIn("retry or skip", request["reason"])
-                self.assertEqual(request["menu"], ["retry", "skip"])
+                self.assertEqual([o["action"] for o in request["menu"]], ["retry", "skip"])
                 self.assertTrue(self.wake_lines("decision"), "the Lead was not woken")
                 self.assertEqual(self.ledger()["intents"][key]["state"], "released")
 

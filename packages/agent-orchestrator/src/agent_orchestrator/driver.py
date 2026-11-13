@@ -763,11 +763,14 @@ def merge_state(view):
     return "open"
 
 
+AMENDING = "awaiting-amendment"  # the Lead decided `amend`: the unit waits for the driver to adopt the new plan
 PARKED = (
     "attention",
     "blocked",
     "skipped",
-)  # nothing runs for the unit until the user acts (`attention`: runs of the old driver)
+    AMENDING,
+)  # nothing runs for the unit until the user acts (`attention`: runs of the old driver) or, for AMENDING, until the
+# driver adopts an amendment
 SILENT = (
     "idle",
     "done",
@@ -1221,13 +1224,14 @@ class Driver:
             self.resume_plan_state(
                 data
             )  # a ticket the amendment added reopens a plan that had delivered
-        self.resume_changed(held, plan)
+        self.release_amendment(self.resume_changed(held, plan))
 
     def resume_changed(self, held, plan):
         """Each open attempt (working or parked) whose ticket's `paths`, `satisfies` or `delivers` the amendment
         changed gets its next packet and its worker is resumed on it; any other attempt is left alone."""
+        handed = {}
         if self.model is None:
-            return
+            return handed
         before = {t.id.lower(): t for t in held.tickets}
         changed = {}
         for ticket in self.model.tickets:
@@ -1238,7 +1242,7 @@ class Driver:
             ):
                 changed[ticket.id.lower()] = (old, ticket)
         if not changed:
-            return
+            return handed
         rows = {t["#"].lower(): t for t in plan["tickets"]}
         with self.book() as data:
             open_ = [
@@ -1252,8 +1256,11 @@ class Driver:
         for task_id, task in open_:
             unit = task["packet"]["unit"]
             try:
-                self.next_packet(task_id, task, rows[unit], plan, *changed[unit])
+                handed[task_id] = self.next_packet(task_id, task, rows[unit], plan, *changed[unit])
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                handed[task_id] = (
+                    None  # a parked unit stays parked: its worker still has the old contract
+                )
                 self.log("error", unit=unit, task=task_id, gate="amend", error=str(error)[:500])
                 narrate.say("fail", None, "could not hand %s its new packet: %s" % (task_id, error))
                 self.wake(
@@ -1263,11 +1270,12 @@ class Driver:
                     "terminal" % (unit, cell(error, 300)),
                     key="%s:%s" % (task_id, self.approved_digest()),
                 )
+        return handed
 
     def next_packet(self, task_id, task, row, plan, old, new):
         """Write the attempt's next packet `task.v<n>.md`, set its ownership reservation to the new paths and resume
-        its worker on the packet. Two workers never share a checkout, so the new paths cannot clash with another
-        attempt's reservation."""
+        its worker on the packet; True when a live worker was told. Two workers never share a checkout, so the new
+        paths cannot clash with another attempt's reservation."""
         packet, unit = task["packet"], task["packet"]["unit"]
         scenarios = [plan["scenarios"][sid] for sid in satisfied(row, plan["scenarios"])[0]]
         fields = self.contract_fields(row, scenarios)
@@ -1301,35 +1309,13 @@ class Driver:
                 fields
             )  # the ownership reservation: the new paths
             data["tasks"][task_id]["updated_at"] = now()
-        resumed = False
         name = packet["worker"]
-        if self.pane_alive(name):
-            answer = runtime_call(
-                self.lead,
-                "resume",
-                {
-                    "name": name,
-                    "task": "Your contract changed: the plan was amended. Read %s and follow it: it replaces your "
-                    "earlier task packet; keep the work already in this checkout." % packet_md,
-                },
-            )
-            assignment_id = assignment_of(answer)
-            with self.book() as data:
-                data["tasks"][task_id]["assignment_id"] = assignment_id
-                if name in (data.get("agents") or {}):
-                    data["agents"][name]["assignment_id"] = assignment_id
-                    if answer.get("address"):
-                        data["agents"][name]["address"] = answer["address"]
-            self.touched.add(name)
-            self.log(
-                "agent",
-                name=name,
-                role="worker",
-                unit=unit,
-                how="resume",
-                assignment_id=assignment_id,
-            )
-            resumed = True
+        resumed = self.resume_worker(
+            task_id,
+            packet,
+            "Your contract changed: the plan was amended. Read %s and follow it: it replaces your "
+            "earlier task packet; keep the work already in this checkout." % packet_md,
+        )
         self.log(
             "repacket",
             unit=unit,
@@ -1345,6 +1331,101 @@ class Driver:
             % (name, packet_md.name, "" if resumed else " (no live worker to tell)"),
             task=task_id,
         )
+        return resumed
+
+    def resume_worker(self, task_id, packet, text):
+        """Resume the attempt's own worker with `text`, whatever state the attempt is in: True when its pane is live
+        and was told, False when there is nobody to tell."""
+        name, unit = packet["worker"], packet["unit"]
+        if not self.pane_alive(name):
+            return False
+        answer = runtime_call(self.lead, "resume", {"name": name, "task": text})
+        assignment_id = assignment_of(answer)
+        with self.book() as data:
+            data["tasks"][task_id]["assignment_id"] = assignment_id
+            if name in (data.get("agents") or {}):
+                data["agents"][name]["assignment_id"] = assignment_id
+                if answer.get("address"):
+                    data["agents"][name]["address"] = answer["address"]
+        self.touched.add(name)
+        self.log(
+            "agent", name=name, role="worker", unit=unit, how="resume", assignment_id=assignment_id
+        )
+        return True
+
+    def release_amendment(self, handed):
+        """The driver adopted an amendment: every unit parked `awaiting-amendment` goes on. A unit whose ticket the
+        amendment changed was handed its new packet (`handed`: task id -> whether its worker was told, None when that
+        failed, by `resume_changed`); any other is resumed with a
+        message that the amendment was adopted and its contract is unchanged. A worker that cannot be told is not
+        released: the Lead is woken, and the unit stays parked."""
+        with self.book() as data:
+            parked = [
+                (task_id, copy.deepcopy(task))
+                for task_id, task in data["tasks"].items()
+                if task.get("gate") == AMENDING and task["status"] not in ("COMPLETE", "RELEASED")
+            ]
+        for task_id, task in parked:
+            unit, packet = task["packet"]["unit"], task["packet"]
+            if task_id in handed:
+                alive = handed[task_id]
+                if alive is None:
+                    continue
+            else:
+                report = next_path(self.run_dir / task_id, "report", ".json")[0]
+                try:
+                    alive = self.resume_worker(
+                        task_id,
+                        packet,
+                        "The plan was amended and the amendment was adopted (%s); your contract is unchanged. "
+                        "Read %s and carry on with this task, in this checkout. Report with task_id `%s` to %s "
+                        "(files are write-once; an earlier report stays where it is)."
+                        % (
+                            self.approved_digest()[:12],
+                            self.run_dir / unit / "task.md",
+                            task_id,
+                            report,
+                        ),
+                    )
+                except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                    self.log("error", unit=unit, task=task_id, gate="amend", error=str(error)[:500])
+                    self.wake(
+                        "amend-failed",
+                        unit,
+                        "amend-failed %s: its worker could not be told the amendment was adopted: %s -> look at "
+                        "its terminal" % (unit, cell(error, 300)),
+                        key="%s:%s" % (task_id, self.approved_digest()),
+                    )
+                    continue
+            with self.book() as data:
+                data["tasks"][task_id].update(
+                    # the worker reports again under the same task id; a pane that is gone gets a new one
+                    gate=None if alive else "redo-pending",
+                    status="ACTIVE",
+                    held=[],
+                    answered_at=now(),
+                    updated_at=now(),
+                    **(
+                        {}
+                        if alive
+                        else {
+                            "redo": {
+                                "fresh": False,
+                                "up": False,
+                                "answer": None,
+                                "reason": "the amendment was adopted",
+                            }
+                        }
+                    ),
+                )
+            self.write_status(unit.upper(), "IN PROGRESS")
+            self.log("amend-released", unit=unit, task=task_id, resumed=alive)
+            narrate.say(
+                "info",
+                "build",
+                "%s: the amendment was adopted, the unit goes on" % packet["worker"],
+                task=task_id,
+            )
 
     def start(self):
         plan = self.last_plan = self.read_plan()
@@ -2151,7 +2232,7 @@ class Driver:
             return
         decision_path = next_path(path.parent, "decision", ".json")[0]
         decision = contracts.validate_decision(
-            {"contract": contracts.VERSION, "action": "skip", "reason": reason}
+            {"contract": contracts.LEAD_VERSION, "action": "skip", "reason": reason}
         )
         write_atomic(decision_path, json.dumps(decision, indent=2) + "\n")
         write_atomic(
@@ -4427,6 +4508,8 @@ class Driver:
         held = task.get("held") or []
         asked = task.get("request") or {}
         self.release_intents(asked.get("intent"), "the Lead decided %s" % action)
+        if action == "amend":
+            return self.park_for_amendment(task_id, task, reason)
         if action in ("mark blocked", "skip"):
             blocked = action == "mark blocked"
             with self.book() as data:
@@ -4477,6 +4560,22 @@ class Driver:
         if task.get("fix"):
             return self.mark(task_id, gate="fix-pending", fix=dict(task["fix"], **flags))
         self.mark(task_id, gate="redo-pending", redo=dict(flags, reason=reason))
+
+    def park_for_amendment(self, task_id, task, reason):
+        """The Lead decided `amend`: the unit parks, its worker stays where it is and nothing is sent or started. The
+        Lead edits the plan and runs `plan amend`; the adopted amendment releases the unit (`release_amendment`)."""
+        unit, name = task["packet"]["unit"], task["packet"]["worker"]
+        with self.book() as data:
+            data["tasks"][task_id].update(gate=AMENDING, updated_at=now(), held=[])
+        for message in task.get("held") or []:
+            self.log("held-dropped", unit=unit, task=task_id, held=message["kind"], why="amend")
+        self.write_status(unit.upper(), "IN PROGRESS · awaiting amendment: " + cell(reason))
+        narrate.say(
+            "info",
+            "decide",
+            "%s waits for the plan to be amended: edit it, then run `plan amend`" % name,
+            task=task_id,
+        )
 
     def step_answer(self, task_id, decision):
         """The Lead's `answer`: the unit's worker goes on under the same task id, so the id the brief names is the id
@@ -6455,7 +6554,9 @@ class Driver:
             parked = [
                 (task_id, copy.deepcopy(task))
                 for task_id, task in data["tasks"].items()
-                if task.get("gate") in PARKED and task["status"] not in ("COMPLETE", "RELEASED")
+                if task.get("gate") in PARKED
+                and task.get("gate") != AMENDING  # it waits for the amendment, not for a Status
+                and task["status"] not in ("COMPLETE", "RELEASED")
             ]
         count = 0
         for task_id, task in parked:
@@ -7369,7 +7470,24 @@ def write_atomic(path, text):
 
 
 class Refused(PlanError):
-    """A command of the Lead that cannot be honoured; the command exits 2 and writes nothing."""
+    """A command of the Lead that cannot be honoured; the command exits 2 and writes nothing. It names the reason and
+    the way out: `str()` carries both, and `reason` and `way_out` stay apart for a caller that answers in JSON."""
+
+    def __init__(self, reason, way_out=None):
+        super().__init__("%s; %s" % (reason, way_out) if way_out else reason)
+        self.reason, self.way_out = reason, way_out
+
+
+class JsonRefusal(PlanError):
+    """A refusal an agent Lead reads: one JSON object `{error, reason, way_out}` on stderr, exit 2."""
+
+    def __init__(self, refused):
+        super().__init__(str(refused))
+        self.output = {
+            "error": "decision refused",
+            "reason": refused.reason,
+            "way_out": refused.way_out or "fix the reason above and run decide again",
+        }
 
 
 def run_dir_of(args):
@@ -7413,10 +7531,73 @@ def foreign_attempt(text, unit, expected):
     )
 
 
+DECISION_KEYS = {"action", "reason", "answer", "contract"}
+
+
+def read_decision(source):
+    """The decision object `decide --json <file|->` was handed, as (action, reason, answer): refused, naming what is
+    wrong with it, when it cannot be read or is not the object a decision is."""
+    try:
+        raw = (
+            sys.stdin.read(contracts.LIMIT + 1)
+            if source == "-"
+            else Path(source).read_text(encoding="utf-8")
+        )
+    except OSError as error:
+        raise Refused(
+            "cannot read the decision from %s (%s)" % (source, error.strerror or error),
+            "give --json a readable file, or - to read the decision from stdin",
+        ) from None
+    shape = 'a JSON object {"action": ..., "reason": ..., "answer": ...}, `answer` for the answer action only'
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        raise Refused("the decision is not valid JSON (%s)" % error, "write " + shape) from None
+    if not isinstance(value, dict):
+        raise Refused("the decision is not a JSON object", "write " + shape)
+    unknown = sorted(set(value) - DECISION_KEYS)
+    if unknown:
+        raise Refused("the decision has unknown fields: %s" % ", ".join(unknown), "write " + shape)
+    if value.get("contract", contracts.LEAD_VERSION) != contracts.LEAD_VERSION:
+        raise Refused(
+            "the decision's contract is %r" % (value["contract"],),
+            "leave `contract` out, or write %d" % contracts.LEAD_VERSION,
+        )
+    for key in ("action", "reason", "answer"):
+        if value.get(key) is not None and not isinstance(value[key], str):
+            raise Refused("the decision's %s is not a string" % key, "write " + shape)
+    return value.get("action"), value.get("reason"), value.get("answer")
+
+
 def decide(args):
-    """`decide <plan> <unit> <action> --reason R [--answer A]`: answer the unit's open request. The decision file is
-    written and validated first; only then is the request marked resolved, so the driver never sees a resolved request
-    without its decision."""
+    """`decide <plan> <unit> <action> --reason R [--answer A]` or `decide <plan> <unit> --json <file|->`: answer the
+    unit's open request. The decision file is written and validated first; only then is the request marked resolved, so
+    the driver never sees a resolved request without its decision. The JSON form writes what the flag form writes, and
+    its refusals are JSON (`JsonRefusal`)."""
+    source = getattr(args, "json", None)
+    try:
+        return decided(args, source)
+    except Refused as refused:
+        if source:
+            raise JsonRefusal(refused) from None
+        raise
+
+
+def decided(args, source):
+    if source:
+        if args.action or args.reason or args.answer:
+            raise Refused(
+                "--json carries the whole decision, and the command line named more",
+                "put the action, reason and answer in the JSON, or drop --json and use the flags",
+            )
+        action, reason, answer = read_decision(source)
+    else:
+        action, reason, answer = args.action, args.reason, args.answer
+        if not action or not reason:
+            raise Refused(
+                "the decision needs an action and a --reason",
+                "run `decide <plan> <unit> <action> --reason <why>`, or `decide <plan> <unit> --json <file|->`",
+            )
     run_dir, unit = run_dir_of(args), args.unit.lower()
     unit_dir = run_dir / unit
     unit_dir.mkdir(parents=True, exist_ok=True)
@@ -7427,30 +7608,41 @@ def decide(args):
         try:
             request = contracts.load(requests[-1], contracts.validate_request) if requests else None
         except contracts.ContractError as error:
-            raise Refused(str(error)) from None
-        if request is None or request["status"] != "open":
-            raise Refused("%s has no open request" % unit)
-        if args.action not in request["menu"]:
             raise Refused(
-                "action %r is not on the menu: %s" % (args.action, ", ".join(request["menu"]))
+                str(error), "the driver writes the request again on its next round; decide then"
+            ) from None
+        if request is None or request["status"] != "open":
+            raise Refused(
+                "%s has no open request" % unit,
+                "a unit has a request only while the driver waits for the Lead: `await %s` names the next one"
+                % args.plan,
             )
-        if args.action == "answer" and args.answer:
-            wrong = foreign_attempt(args.answer, unit, request["task"])
+        menu = contracts.menu_actions(request)
+        if action not in menu:
+            raise Refused(
+                "action %r is not on the menu" % (action,),
+                "choose one of: %s" % ", ".join(menu),
+            )
+        if action == "answer" and answer:
+            wrong = foreign_attempt(answer, unit, request["task"])
             if wrong:
                 raise Refused(
-                    "the answer names attempt %r, but the request is for %r and the worker resumes on %r: "
-                    "name %r, or leave the id out"
-                    % (wrong, request["task"], request["task"], request["task"])
+                    "the answer names attempt %r, but the request is for %r and the worker resumes on %r"
+                    % (wrong, request["task"], request["task"]),
+                    "name %r, or leave the id out" % request["task"],
                 )
         try:
             decision = contracts.validate_decision(
                 dict(
-                    {"contract": contracts.VERSION, "action": args.action, "reason": args.reason},
-                    **({"answer": args.answer} if args.answer else {}),
+                    {"contract": contracts.LEAD_VERSION, "action": action, "reason": reason},
+                    **({"answer": answer} if answer else {}),
                 )
             )
         except contracts.ContractError as error:
-            raise Refused(str(error)) from None
+            raise Refused(
+                str(error),
+                "give a reason, and an answer for the answer action only",
+            ) from None
         path = next_path(unit_dir, "decision", ".json")[0]
         write_atomic(path, json.dumps(decision, indent=2) + "\n")
         write_atomic(
@@ -7459,7 +7651,7 @@ def decide(args):
         )
     return {
         "unit": unit,
-        "action": args.action,
+        "action": action,
         "decision": str(path),
         "request": str(requests[-1]),
     }
@@ -7907,10 +8099,18 @@ def main(argv=None):
     )
     sub.add_argument("plan")
     sub.add_argument("unit")
-    sub.add_argument("action", help="One of: " + ", ".join(contracts.ACTIONS))
-    sub.add_argument("--reason", required=True)
+    sub.add_argument(
+        "action", nargs="?", help="One of: " + ", ".join(contracts.ACTIONS) + " (or use --json)"
+    )
+    sub.add_argument("--reason", help="Why; required with an action")
     sub.add_argument(
         "--answer", help="The text the worker is resumed with; required for the answer action"
+    )
+    sub.add_argument(
+        "--json",
+        metavar="FILE",
+        help='The whole decision as a JSON object {"action", "reason", "answer"?}, from FILE or - for stdin; '
+        "a refusal is one JSON object {error, reason, way_out} on stderr",
     )
     sub.add_argument(
         "--state-dir",
@@ -8064,6 +8264,9 @@ def run_cli(argv=None):
         # stdout holds a view or nothing: a refusal is one JSON object on stderr, so a reader never mistakes it for
         # a partial view.
         print(json.dumps(error.output, separators=(",", ":")), file=sys.stderr)
+        return 2
+    except JsonRefusal as error:
+        print(json.dumps(error.output), file=sys.stderr)
         return 2
     except PlanError as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)

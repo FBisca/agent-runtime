@@ -113,7 +113,7 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
             self.run_driver()
         self.assertNotIn(ARCHIVE, self.spawned())
         request = self.request("archive")
-        self.assertEqual(request["menu"], ["retry", "skip"])
+        self.assertEqual([o["action"] for o in request["menu"]], ["retry", "skip"])
         self.assertIn("S1 boom", request["reason"])
         self.assertEqual(self.task("archive")["gate"], "skipped")
         self.assertEqual(self.task("archive")["status"], "RELEASED")
