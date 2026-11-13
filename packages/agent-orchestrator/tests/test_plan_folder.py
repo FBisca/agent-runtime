@@ -239,6 +239,63 @@ class FolderPlanTests(RunFixture, unittest.TestCase):
         self.write(folder_contract(archive="discard"))
         self.assertEqual(self.command("check")[0], 0)
 
+    # The discard guard: a plan that discards is deleted, so its folder must sit directly under plans.dir
+
+    def discarding_copy(self, parent, plans=None):
+        """The plan folder copied under `parent`, discarding, with `plans` as the repo's plans.dir when given."""
+        target = parent / self.folder.name
+        shutil.copytree(self.folder, target)
+        (target / "plan.yaml").write_text(
+            yaml.safe_dump(
+                folder_contract(archive="discard", domain=None, spec=None), sort_keys=False
+            )
+        )
+        if plans is not None:
+            (self.repo / ".orchestrate" / "config.yaml").write_text(
+                yaml.safe_dump({"acceptance": {"dir": "accept"}, "plans": {"dir": str(plans)}})
+            )
+        return target / "plan.yaml"
+
+    def refused_by_plans_dir(self, plan, plans):
+        for verb in ("check", "approve"):
+            code, message = self.command(verb, plan)
+            self.assertEqual(code, 2, message)
+            for needle in ("plans.dir", str(plans), str(plan.parent), "move"):
+                self.assertIn(needle, message)
+
+    def test_S3_a_discard_folder_outside_plans_dir_is_refused_by_check_and_approve(self):
+        plans = self.root / "plans"
+        plans.mkdir()
+        plan = self.discarding_copy(self.root / "elsewhere", plans)
+        self.refused_by_plans_dir(plan, plans)
+
+    def test_S3_a_discard_folder_nested_below_plans_dir_is_refused(self):
+        plans = self.root / "plans"
+        plan = self.discarding_copy(plans / "nested", plans)
+        self.refused_by_plans_dir(plan, plans)
+
+    def test_S3_a_discard_folder_reached_through_a_symlink_is_refused(self):
+        plans = self.root / "plans"
+        plans.mkdir()
+        target = self.discarding_copy(self.root / "elsewhere", plans).parent
+        (plans / target.name).symlink_to(target)
+        self.refused_by_plans_dir(plans / target.name / "plan.yaml", plans)
+
+    def test_S3_a_discard_folder_directly_under_a_plans_dir_outside_the_repository_passes(self):
+        plans = self.root / "plans"
+        plan = self.discarding_copy(plans, plans)
+        code, message = self.command("check", plan)
+        self.assertEqual(code, 0, message)
+
+    def test_S3_a_promote_folder_is_not_held_to_plans_dir_at_check(self):
+        plans = self.root / "plans"
+        plans.mkdir()
+        self.discarding_copy(self.root / "elsewhere", plans)
+        (self.repo / ".orchestrate" / "config.yaml").write_text(
+            yaml.safe_dump({"acceptance": {"dir": "accept"}, "plans": {"dir": str(plans)}})
+        )
+        self.assertEqual(self.command("check")[0], 0)  # the fixture's promote plan, in docs/plans
+
     # S5
 
     def test_S5_approve_digests_the_plan_and_every_acceptance_and_negative_file(self):

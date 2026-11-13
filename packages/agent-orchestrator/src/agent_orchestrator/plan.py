@@ -416,6 +416,12 @@ class PlanLayout:
         it, may not, because deleting it would delete the work."""
         return self.is_folder and not self.holds_repo()
 
+    def directly_under(self, plans_dir):
+        """Whether the plan folder's resolved parent is the resolved `plans_dir`: the only place a folder is deleted
+        from. Resolving both means a folder nested deeper, or a symlink into `plans_dir`, is not directly under it."""
+        folder = self.folder
+        return folder is not None and folder.resolve().parent == Path(plans_dir).resolve()
+
     def folder_place(self):
         """The deletable folder's path in the repository; None for a legacy plan or a folder kept outside the
         repository. A folder that is or holds the repository is refused."""
@@ -476,11 +482,24 @@ def holds_no_test(paths, patterns):
     return not any(str(p).endswith("/") or is_test_path(p, patterns) for p in paths)
 
 
-def lint_problems(model, repo):
+def discard_problems(model, path, repo):
+    """The refusal of a folder plan that discards from a folder that is not directly under plans.dir, as a list. It
+    is no part of the load every driver tick makes: a config that moves mid-run must reach the deletion's own check,
+    not drain a run that holds an approved plan."""
+    layout = PlanLayout(path, repo)
+    cfg = repo_config(repo)
+    if not layout.is_folder or (model.archive or cfg.archive_mode) != "discard":
+        return []
+    if layout.directly_under(cfg.plans_dir):
+        return []
+    return [not_under_plans_dir(layout.folder, cfg.plans_dir)]
+
+
+def lint_problems(model, repo, path):
     """Problems `plan check`, `plan approve` and `plan amend` refuse; the driver's load never runs this, so a plan
     approved before a rule existed keeps running."""
     patterns = repo_config(repo).test_patterns
-    return [
+    return discard_problems(model, path, repo) + [
         f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
         "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
         "tests, to its paths"
@@ -793,6 +812,16 @@ def package_files(package, skip):
     return found
 
 
+def not_under_plans_dir(folder, plans_dir):
+    """The refusal of a plan folder that may not be deleted, naming the folder, plans.dir and the way out."""
+    resolved = Path(folder).resolve()
+    return (
+        f"plan folder {folder}: a plan that is deleted must sit directly under plans.dir ({plans_dir}), and its "
+        f"folder resolves to {resolved} — move the folder to {plans_dir}/{resolved.name}, or set plans.dir in "
+        f".orchestrate/config.yaml to {resolved.parent}"
+    )
+
+
 def folder_problems(data, path, repo, scenarios):
     """The rules of a plan in its own folder: the folder keys, their files, and what a promote may not clobber."""
     problems = []
@@ -1074,7 +1103,7 @@ def load(
             )
         raise PlanError("; ".join(problems))
     assert model is not None
-    if lint and (found := lint_problems(model, repo)):
+    if lint and (found := lint_problems(model, repo, path)):
         raise PlanError("; ".join(found))
     if model.approval and verify:
         return verify_snapshot(path, model, repo, state_dir)
@@ -1422,7 +1451,7 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
         )
     if not reason.strip():
         raise PlanError("amend: --reason is empty — say why the plan changes")
-    if found := lint_problems(model, repo):
+    if found := lint_problems(model, repo, path):
         raise PlanError("; ".join(found))
     with amend_lock(repo, model.slug):
         try:

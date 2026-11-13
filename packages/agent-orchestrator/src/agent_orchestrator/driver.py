@@ -1071,6 +1071,8 @@ class Driver:
             elif settled and self.drain:
                 self.end_drain()
             elif not settled:
+                if found := yaml_plan.discard_problems(model, self.plan_path, self.repo):
+                    raise PlanError("; ".join(found))  # a run starts only on a plan it may delete
                 self.model, self.approval = model, model.approval
         return self.legacy_of(model)
 
@@ -5603,9 +5605,18 @@ class Driver:
         )
         return bool(listed)
 
+    def guard_plan_folder(self):
+        """Refuse to delete a plan folder that is not directly under plans.dir. The config is read again here, not
+        taken from the plan's load: it can change mid-run, and this is the check at the deletion itself."""
+        layout = self.layout
+        plans_dir = repo_config.load(self.repo).plans_dir
+        if layout.folder is not None and not layout.directly_under(plans_dir):
+            raise ValueError(yaml_plan.not_under_plans_dir(layout.folder, plans_dir))
+
     def discard_plan(self, plan):
         """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No
         worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan."""
+        self.guard_plan_folder()
         folder = self.layout.folder
         shutil.rmtree(folder)
         self.discarded = True
@@ -5620,6 +5631,7 @@ class Driver:
         """Delete the plan folder from an archive checkout (a plan kept outside the repository has none there)."""
         rel = self.plan_folder_rel()
         if rel is not None:
+            self.guard_plan_folder()
             shutil.rmtree(Path(checkout) / rel, ignore_errors=True)
 
     def archive_owns(self):
