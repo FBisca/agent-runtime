@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import config as repo_config
-from . import contracts, events, evidence, routes, runner, verify, workbench
+from . import contracts, events, evidence, narrate, routes, runner, verify, workbench
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .plan import PlanError
@@ -714,10 +714,6 @@ def assignment_of(result):
     return found
 
 
-def event(message):
-    print("[orchestrate] " + message, file=sys.stderr, flush=True)
-
-
 GATES = (
     "reported",
     "converged",
@@ -981,7 +977,7 @@ def metrics_table(metrics):
     lines = ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
     return "\n".join(
         [
-            "[orchestrate] metrics for %s" % metrics["slug"],
+            "metrics for %s" % metrics["slug"],
             *lines,
             "lead model turns: %d" % metrics["lead"]["model_turns"],
         ]
@@ -1101,6 +1097,7 @@ class Driver:
             self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        narrate.NARRATOR.roots = [self.run_dir]  # the pane names a run file by its place in the run
         # The ledger first: it carries the kind marker before any file a worker can read exists.
         with ledger(self.ledger_path) as data:
             self.lead = data.setdefault("lead", "orchestrate:" + self.slug)
@@ -1354,7 +1351,12 @@ class Driver:
                         held = (task["packet"]["task_id"], message.get("text") or "")
                         break
                 else:
-                    event("complete from assignment %s matches no open gate" % assignment_id)
+                    narrate.say(
+                        "warn",
+                        None,
+                        "a complete from assignment %s matches no open step; ignored"
+                        % assignment_id,
+                    )
             if held:
                 self.hold(held[0], assignment_id, "complete", held[1])
         self.check_ended(result.get("assignments") or [])
@@ -1419,17 +1421,26 @@ class Driver:
                     hit = (task_id, "worker", task["packet"]["worker"])
         if not hit:
             if not silent and self.mutation_ended(assignment_id):
-                return event("mutation reviewer %s: %s" % (ATTENTION[kind], text or "no patch yet"))
+                return narrate.say(
+                    "warn",
+                    "mutation",
+                    "mutation reviewer %s: %s" % (ATTENTION[kind], text or "no patch yet"),
+                )
             with self.book() as data:
                 if (data.get("gaps") or {}).get("assignment_id") == assignment_id:
                     data["gaps"]["ended"] = (
                         True  # the gaps review is advisory: it never blocks or pauses anything
                     )
-                    return event("gaps reviewer %s: %s" % (ATTENTION[kind], text or "no gaps.md"))
+                    return narrate.say(
+                        "warn",
+                        "gaps",
+                        "gaps reviewer %s: %s" % (ATTENTION[kind], text or "no gaps.md"),
+                    )
             if not quiet:
-                event(
-                    "assignment %s %s: already handled or not an open assignment"
-                    % (assignment_id, ATTENTION[kind])
+                narrate.say(
+                    "info",
+                    None,
+                    "assignment %s %s; already handled, ignored" % (assignment_id, ATTENTION[kind]),
                 )
             return
         task_id, role, name = hit
@@ -1470,7 +1481,7 @@ class Driver:
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.errors.append("poll: %s" % error)
             self.log("error", gate="poll", error=str(error)[:500])
-            event("the pull request poll failed: %s" % error)
+            narrate.say("fail", None, "could not poll the pull requests: %s" % error)
         steps = {
             "reported": self.step_reported,
             "converged": self.step_converged,
@@ -1505,7 +1516,12 @@ class Driver:
                     gate="answers",
                     error=str(error)[:500],
                 )
-                event("%s answers failed: %s" % (task_id, error))
+                narrate.say(
+                    "fail",
+                    "review",
+                    "handling the worker's answers failed: %s" % error,
+                    task=task_id,
+                )
         with self.book() as data:
             ids = [task_id for task_id, task in data["tasks"].items() if task.get("gate") in steps]
         for task_id in ids:
@@ -1528,7 +1544,12 @@ class Driver:
                         gate=gate,
                         error=str(error)[:500],
                     )
-                    event("%s gate %s failed: %s" % (task_id, gate, error))
+                    narrate.say(
+                        "fail",
+                        narrate.step_of(gate),
+                        "step %s failed: %s" % (gate, error),
+                        task=task_id,
+                    )
                     break
                 acted += 1
         return acted
@@ -1592,7 +1613,7 @@ class Driver:
         except (OSError, subprocess.TimeoutExpired) as caught:
             error = str(caught)
         if error is not None:
-            event("could not alert %s: %s" % (terminal, error))
+            narrate.say("warn", None, "could not wake the Lead in %s: %s" % (terminal, error))
             self.log("notify-failed", terminal=terminal, error=error[:500])
 
     def request(self, task_id, kind, reason, fix=None):
@@ -1611,7 +1632,7 @@ class Driver:
             )
             if fix:
                 task["fix"] = fix
-        event("%s needs a decision (%s): %s" % (task_id, kind, reason))
+        narrate.say("ask", "decide", "Lead decision needed (%s): %s" % (kind, reason), task=task_id)
         self.log("escalation", unit=unit, task=task_id, cause=kind, reason=reason[:500])
         self.write_status(unit.upper(), "IN PROGRESS · decision pending: " + cell(reason))
         self.write_request(task_id)
@@ -1852,7 +1873,12 @@ class Driver:
             warnings=warned + 1,
             reason=reason[:200],
         )
-        event("%s: warned %s that %s is not readable yet (%s)" % (unit, name, path, reason[:120]))
+        narrate.say(
+            "warn",
+            "review" if where == "review" else "build",
+            "asked %s to fix %s: %s" % (name, path, reason),
+            task=task_id,
+        )
         return True
 
     def contract_error(self, task_id, where, error):
@@ -2155,8 +2181,12 @@ class Driver:
             },
         )
         self.mark(task_id, gate="reviewing", review=dict(review, assignment_id=assignment_id))
-        event(
-            "spawned %s (%s, %s, %s)" % (name, self.gate_label("reviewer", "large"), model, effort)
+        narrate.say(
+            "start",
+            "review",
+            "started reviewer %s · %s · %s · %s"
+            % (name, self.gate_label("reviewer", "large"), model, effort),
+            task=task_id,
         )
 
     def review_text(self, packet, review_path, delta=None):
@@ -2514,9 +2544,12 @@ class Driver:
                 ci_head=None,
                 delta={"from": reviewed, "findings": answers["findings"]},
             )
-            return event(
-                "%s: %s disputed with changes_code; delta re-review from %s"
-                % (task_id, ", ".join(changing), (reviewed or "the base")[:7])
+            return narrate.say(
+                "info",
+                "review",
+                "worker disputed %s with code changes; re-reviewing the delta from %s"
+                % (", ".join(changing), (reviewed or "the base")[:7]),
+                task=task_id,
             )
         self.mark(task_id, answers=dict(answers, state="done"))
 
@@ -2669,7 +2702,7 @@ class Driver:
             self.log(
                 "draft", unit=unit, task=task_id, pr=url, outcome="draft" if code == 0 else "failed"
             )
-            event("%s: the pull request is a draft again (%s)" % (task_id, url))
+            narrate.say("info", "fix", "%s back to draft while it is fixed" % url, task=task_id)
         self.mark(task_id, draft_done=True)
 
     def undraft(self, task_id, url):
@@ -2682,13 +2715,16 @@ class Driver:
             "draft", unit=unit, task=task_id, pr=url, outcome="draft" if code == 0 else "failed"
         )
         if code != 0:
-            event(
-                "%s: could not put %s back to draft (%s); trying again on a later round"
-                % (task_id, url, (err or out).strip()[:200])
+            narrate.say(
+                "warn",
+                "fix",
+                "could not put %s back to draft (%s); trying again next round"
+                % (url, (err or out).strip()),
+                task=task_id,
             )
             return False
         self.unready(unit)
-        event("%s: the pull request is a draft again (%s)" % (task_id, url))
+        narrate.say("info", "fix", "%s back to draft while it is fixed" % url, task=task_id)
         return True
 
     def unready(self, unit):
@@ -2749,12 +2785,14 @@ class Driver:
                 )
             if state == "error":
                 return self.request(task_id, "ci", "gh pr checks failed for %s" % url)
-            event("%s: no checks yet, or they are still running; polling again" % task_id)
+            narrate.say("wait", "ci", "waiting for CI on %s" % url, task=task_id)
             return False  # no fix round: the unit is polled again on a later round
         before = task.get("updated_from")
         if before and task.get("ci_head") in (None, before):
             # green read before GitHub moved the head is the old head's green, not the update's
-            event("%s: the checks are not yet those of the updated branch; polling again" % task_id)
+            narrate.say(
+                "wait", "ci", "waiting for CI on the updated branch of %s" % url, task=task_id
+            )
             return False
         waiting = (task.get("answers") or {}).get("state") in ("working", "reported")
         if waiting:  # green, but the implementer's answers may still change the code: pr-ready waits for them
@@ -2766,7 +2804,7 @@ class Driver:
                     task_id, "ci", "gh pr ready failed: %s" % (err or out).strip()[:200]
                 )
             self.mark(task_id, pr_ready=True)
-            event("%s: the pull request is ready for review (%s)" % (task_id, url))
+            narrate.say("done", "ci", "CI green; %s ready for review" % url, task=task_id)
         unit = self.unit_of(task_id)
         # an update-branch moves the head without a new report: the live head keys the wake, so it is sent again
         head = (
@@ -2785,10 +2823,20 @@ class Driver:
             self.conflict(task_id, url, view)
             return True
         if kind == "unknown":
-            event(
-                "%s: the merge state of %s is not known yet (%s); polling again"
-                % (task_id, url, view.get("error") or "UNKNOWN")
-            )
+            if view.get("error"):
+                narrate.say(
+                    "warn",
+                    "merge",
+                    "could not read whether %s can merge: %s; trying again" % (url, view["error"]),
+                    task=task_id,
+                )
+            else:
+                narrate.say(
+                    "wait",
+                    "merge",
+                    "waiting for GitHub to compute whether %s can merge" % url,
+                    task=task_id,
+                )
             return False
         if kind == "behind":
             return self.update_branch(task_id, url, view) is not False
@@ -2804,7 +2852,12 @@ class Driver:
         unit = self.unit_of(task_id)
         if code == 0:
             self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="updated")
-            event("%s: the branch was updated; no review needed" % unit)
+            narrate.say(
+                "info",
+                "merge",
+                "%s was behind its base; branch updated, CI runs again (no new review)" % url,
+                task=task_id,
+            )
             self.mark(
                 task_id,
                 gate="ready-for-ci",
@@ -2944,7 +2997,7 @@ class Driver:
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
         self.mark_merged(task_id, merge_commit=commit)
-        event("%s merged: %s" % (task_id, url))
+        narrate.say("done", "merge", "merged %s" % url, task=task_id)
 
     def mark_merged(self, task_id, **fields):
         """The unit's cleanup gate, and for the archive unit the plan's ARCHIVED, in one transaction: a crash between
@@ -2962,7 +3015,7 @@ class Driver:
         gone = self.task(task_id)["packet"]["checkout"]
         if not Path(gone).exists():
             self.log("merged-checkout-missing", task=task_id, checkout=gone)
-            event("%s merged, but its checkout %s no longer exists" % (task_id, gone))
+            narrate.say("warn", "merge", "merged, but its checkout %s is gone" % gone, task=task_id)
         try:
             with self.book() as data:
                 try:
@@ -3005,7 +3058,7 @@ class Driver:
             )
         self.mark_merged(task_id, pr=url, merge_commit=commit)
         self.stop_unit_agents(unit, "merged")
-        event("%s merged early: %s" % (unit, url))
+        narrate.say("done", "merge", "merged early: %s" % url, task=task_id)
 
     def reported_checks(self, task_id):
         """The checks of the newest attempt of the unit that holds a report: a fix round's own attempt usually has
@@ -3140,11 +3193,11 @@ class Driver:
         run(["git", "-C", str(self.repo), "worktree", "remove", str(path)], timeout=60)
         run(["git", "-C", str(self.repo), "worktree", "prune"], timeout=60)
         self.mark(task_id, gate="done", cleanup="panes stopped, worktree removed")
-        event("%s panes stopped and worktree removed" % task_id)
+        narrate.say("done", "cleanup", "panes stopped, worktree removed", task=task_id)
 
     def keep(self, task_id, reason):
         self.mark(task_id, gate="done", cleanup="kept: " + reason)
-        event("%s worktree kept: %s" % (task_id, reason))
+        narrate.say("warn", "cleanup", "worktree kept: %s" % reason, task=task_id)
 
     # ---- agents: one door for every spawn ---------------------------------------------------------------------
     # `ensure_agent` records the intent in the ledger (`agents[name]`) and the log, starts the agent under its stable
@@ -3192,7 +3245,7 @@ class Driver:
         path = self.routes_file
         steps = {}
         if not path:
-            event(routes.legacy_warning(self.args.models_file))
+            narrate.say("warn", "setup", routes.legacy_warning(self.args.models_file))
             resolved = routes.legacy(self.args.cli, self.models)
         else:
             try:
@@ -3364,9 +3417,12 @@ class Driver:
             reserve=self.args.context_reserve,
             model=verdict["model"],
         )
-        event(
-            "%s is below the context reserve (%d tokens left): swapping in a fresh %s"
-            % (name, verdict["remaining_tokens"], role)
+        narrate.say(
+            "info",
+            None,
+            "%s is low on context (%d tokens left); swapping in a fresh %s"
+            % (name, verdict["remaining_tokens"], role),
+            task=unit,
         )
         return True
 
@@ -3419,7 +3475,9 @@ class Driver:
             try:
                 self.stop_agent(name, unit, why)
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                event("could not stop %s (%s): %s" % (name, why, error))
+                narrate.say(
+                    "warn", None, "could not stop %s (%s): %s" % (name, why, error), task=unit
+                )
                 self.log("error", unit=unit, name=name, gate="stop", error=str(error)[:500])
 
     def pane_alive(self, name):
@@ -3491,7 +3549,12 @@ class Driver:
         self.mark(new_id, answer_ids=list(fix.get("answer_ids") or []))
         self.mark(task_id, gate="superseded", fix_task=new_id, held=[])
         self.replay_held(task, new_id)
-        event("fix round %s for %s from %s findings" % (new_id, packet["worker"], fix["source"]))
+        narrate.say(
+            "start",
+            "fix",
+            "fix round for %s from %s findings" % (packet["worker"], fix["source"]),
+            task=new_id,
+        )
 
     def hand_round(self, task, successor, task_md, text, fresh=False, answer=None):
         """Close the unit's open task, claim its successor and put a worker on it: the live pane is resumed, a gone
@@ -3560,11 +3623,19 @@ class Driver:
             try:
                 self.stop_agent(name, unit, "replaced")
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                event("could not stop %s before replacing it: %s" % (name, error))
+                narrate.say(
+                    "warn",
+                    None,
+                    "could not stop %s before replacing it: %s" % (name, error),
+                    task=successor["task_id"],
+                )
         address, assignment_id = self.ensure_agent(name, "worker", unit, spawn, fresh=True)
-        event(
-            "%s: spawned a fresh worker for %s (%s)"
-            % (name, successor["task_id"], "replacing the pane" if alive else "pane is gone")
+        narrate.say(
+            "start",
+            None,
+            "started a fresh worker %s (%s)"
+            % (name, "replacing the pane" if alive else "the old pane is gone"),
+            task=successor["task_id"],
         )
         return address, assignment_id
 
@@ -3585,7 +3656,7 @@ class Driver:
         except contracts.ContractError as error:
             return self.request(task_id, "decision", str(error))
         action, reason, unit = decision["action"], decision["reason"], task["packet"]["unit"]
-        event("%s decided %r: %s" % (task_id, action, reason))
+        narrate.say("info", "decide", "Lead decided %s: %s" % (action, reason), task=task_id)
         self.log("decision", unit=unit, task=task_id, action=action, reason=reason[:500])
         held = task.get("held") or []
         if action in ("mark blocked", "skip"):
@@ -3660,7 +3731,7 @@ class Driver:
             )
             self.keep_address(data, task_id, packet["worker"])
         self.replay_held(task, task_id)
-        event("answer for %s: %s resumed on the same task id" % (task_id, packet["worker"]))
+        narrate.say("info", "decide", "answer sent; %s resumed" % packet["worker"], task=task_id)
 
     def answer_text(self, task, decision):
         packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
@@ -3776,7 +3847,12 @@ class Driver:
         )
         self.mark(task_id, gate="superseded", held=[])
         self.replay_held(task, new_id)
-        event("retry %s for %s after %s" % (new_id, packet["worker"], task["event"]["kind"]))
+        narrate.say(
+            "start",
+            "fix",
+            "retry for %s after %s" % (packet["worker"], task["event"]["kind"]),
+            task=new_id,
+        )
 
     def redo_text(self, task, new_id, new_dir, redo):
         packet, unit = task["packet"], task["packet"]["unit"]
@@ -4157,7 +4233,9 @@ class Driver:
                 "at": now(),
             }
         self.log("evidence-unverified", unit=unit.lower(), task=task_id, scenarios=bad)
-        event("%s merged with its evidence unverified: %s" % (unit, ", ".join(bad)))
+        narrate.say(
+            "warn", "merge", "merged with its evidence unverified: %s" % ", ".join(bad), task=unit
+        )
 
     def integrate(self, plan):
         """A YAML plan whose every agent ticket is COMPLETE is DELIVERED, verified on one pinned default-branch
@@ -4181,7 +4259,7 @@ class Driver:
             if message not in self.errors:
                 self.errors.append(message)
                 self.log("error", gate="integration", error=message)
-                event(message)
+                narrate.say("fail", "verify", message)
             return steps
 
     def pin_default_branch(self):
@@ -4263,7 +4341,9 @@ class Driver:
             enter_plan_state(data, "DELIVERED")
             enter_plan_state(data, "VERIFYING")
         self.log("integration", sha=sha, tree=tree, attempt=attempt)
-        event("verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12]))
+        narrate.say(
+            "start", "verify", "verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12])
+        )
         passed = [
             scenario.id
             for scenario in verify.check_scenarios(self.model)
@@ -4395,13 +4475,15 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            event("mutation reviewer %s not started: %s" % (name, error))
+            narrate.say("fail", "mutation", "mutation reviewer %s not started: %s" % (name, error))
             record_update.update(ended=True, error=str(error)[:300])
         else:
             record_update["assignment_id"] = assignment_id
-            event(
-                "spawned %s (%s, %s, %s)"
-                % (name, self.gate_label("reviewer", "medium"), model_name, effort)
+            narrate.say(
+                "start",
+                "mutation",
+                "started mutation reviewer %s · %s · %s · %s"
+                % (name, self.gate_label("reviewer", "medium"), model_name, effort),
             )
         with self.book() as data:
             data["mutation"][scenario_id].update(record_update)
@@ -4511,9 +4593,10 @@ class Driver:
                 else:
                     entry["ended"] = False
             self.log("mutation", scenario=scenario_id, attempt=record["attempt"], outcome=outcome)
-            event(
-                "mutation %s attempt %d: %s — %s"
-                % (scenario_id, record["attempt"], outcome, detail)
+            narrate.say(
+                "done" if outcome == "killed" else "warn",
+                "mutation",
+                "%s attempt %d: %s — %s" % (scenario_id, record["attempt"], outcome, detail),
             )
             if outcome != "killed" and record["attempt"] < MUTATION_ATTEMPTS:
                 self.spawn_mutation_reviewer(scenario_id, record["attempt"] + 1)
@@ -4591,7 +4674,7 @@ class Driver:
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.failed.add(ARCHIVE)
             self.errors.append("archive: %s" % error)
-            event("archive not started: %s" % error)
+            narrate.say("fail", "archive", "archive not started: %s" % error)
             return 0
         self.build_archive(ARCHIVE)
         self.start_gaps(plan)
@@ -4670,7 +4753,7 @@ class Driver:
         write_atomic(path, json.dumps(report, indent=2) + "\n")
         self.mark(task_id, gate="reported")
         self.log("archive-built", task=task_id, pr=url, head=head)
-        event("archive built by the driver: %s" % url)
+        narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
 
     def ticket_covers(self):
         """{scenario: [node, ...]}: the union of every ticket report's `covers`. The report file is read again, so a
@@ -4997,12 +5080,15 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            event("gaps reviewer not started: %s" % error)
+            narrate.say("fail", "gaps", "gaps reviewer not started: %s" % error)
             gaps = {"name": name, "path": str(path), "ended": True, "error": str(error)}
         else:
             gaps = {"name": name, "path": str(path), "assignment_id": assignment_id, "ended": False}
-            event(
-                "spawned %s (%s, %s, %s)" % (name, self.gate_label("gaps", "medium"), model, effort)
+            narrate.say(
+                "start",
+                "gaps",
+                "started gaps reviewer %s · %s · %s · %s"
+                % (name, self.gate_label("gaps", "medium"), model, effort),
             )
         with self.book() as data:
             data["gaps"] = gaps
@@ -5131,7 +5217,7 @@ class Driver:
         task_id = ticket["#"].lower()
         self.failed.add(task_id)
         self.errors.append("%s: %s" % (ticket["#"], error))
-        event("%s %s: %s" % (ticket["#"], what, error))
+        narrate.say("fail", "build", "%s: %s" % (what, error), task=ticket["#"])
         self.write_status(ticket["#"], "TO-DO · %s: %s" % (what, cell(error, 120)))
         self.wake(
             "not-dispatched",
@@ -5199,7 +5285,7 @@ class Driver:
         ):  # the exit code follows what is stranded now, not what the Lead was told first
             self.errors.append(reason)
         self.log("stranded", unit=unit, task=task_id, name=name, error=str(error)[:500])
-        event("%s stranded: %s" % (task_id, error))
+        narrate.say("fail", None, "stranded, nothing will settle it: %s" % error, task=task_id)
 
     def reconcile(self, finishing=False):
         """Settle every open task whose assignment `wait` does not list. Returns how many it acted on; a task it
@@ -5250,7 +5336,12 @@ class Driver:
                 assignment_id=assignment_id,
                 answer=said,
             )
-            event("%s orphaned: %s (%s) answers %s" % (task_id, name, role, said))
+            narrate.say(
+                "warn",
+                "review" if role != "worker" else "build",
+                "%s %s is gone (runtime: %s)" % (role, name, said),
+                task=task_id,
+            )
             if role != "worker":  # the path an agent the runtime reported as exited takes
                 self.on_agent_attention(
                     assignment_id, "exited", "the runtime answered " + said, quiet=True
@@ -5297,7 +5388,7 @@ class Driver:
             else:
                 self.not_dispatched(ticket, error, "not re-dispatched as " + new_id)
             return 0
-        event("%s: dispatched again as %s after %s" % (unit.upper(), new_id, said))
+        narrate.say("start", "build", "dispatched again after %s" % said, task=new_id)
         return 1
 
     def attend_people(self, plan):
@@ -5309,7 +5400,7 @@ class Driver:
                 continue
             needs = cell(ticket["What it delivers"] or "your action")
             self.write_status(ticket["#"], "needs you: " + needs)
-            event("%s needs you: %s" % (ticket["#"], needs))
+            narrate.say("ask", None, "needs you: %s" % needs, task=ticket["#"])
             # attention.md and the pane are not read by a Lead that ended its turn; only a wake reaches it.
             self.wake(
                 "person", ticket["#"], "person %s: %s" % (ticket["#"], needs), key=ticket["#"]
@@ -5346,12 +5437,11 @@ class Driver:
                     "the user set %s to %s"
                     % (ticket["#"], "TO-DO: retry" if again else "COMPLETE: done by hand"),
                 )
-            event(
-                "%s %s"
-                % (
-                    ticket["#"],
-                    "reopened by the user: fresh attempt" if again else "completed by hand",
-                )
+            narrate.say(
+                "info",
+                None,
+                "reopened by you: fresh attempt" if again else "completed by hand",
+                task=ticket["#"],
             )
             if not again:
                 continue
@@ -5470,7 +5560,12 @@ class Driver:
             self.keep_address(data, task_id, name)
         self.write_status(ticket["#"], "IN PROGRESS")
         self.spawned.append(name)
-        event("spawned %s (%s, %s, %s)" % (name, klass, packet["model"], effort))
+        narrate.say(
+            "start",
+            "build",
+            "started worker %s · %s · %s · %s" % (name, klass, packet["model"], effort),
+            task=task_id,
+        )
 
     def worktree(self, name, branch):
         path = self.repo.parent / (self.repo.name + ".worktrees") / name

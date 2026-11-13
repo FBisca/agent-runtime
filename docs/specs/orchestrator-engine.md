@@ -108,6 +108,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R77** WHEN `plan check` or `plan approve` reads an evidence `env` naming HOME, PATH or any XDG_* variable, THEN it refuses with the reason and the way out (drop the name; the runner supplies a scratch value). (from orchestrator-audit-fixes/S17)
 - **R78** WHEN the evidence runner builds a check environment, THEN the scratch HOME and XDG_STATE_HOME are applied after the declared variables, so no declaration can override them. (from orchestrator-audit-fixes/S18)
 - **R79** WHEN an oracle target resolves outside the scratch tree, or a component of its path is a symlink (e.g. one added by the patch under test), THEN the receipt is an evidence error naming the path, nothing is written outside the scratch tree, and the driver does not crash. (from orchestrator-audit-fixes/S19)
+- **R80** WHEN the driver narrates a run on stderr, THEN each line carries the time, the unit, the step (one of `narrate.STEPS`), a kind symbol and the text, the attempt last; colour is used only on a terminal with `NO_COLOR` unset; a `wait` the unit already said is repeated only every 5 minutes, as `(still, Nm)`, and any other line of the unit resets it; run-dir paths are relative, the home is `~`, a GitHub PR URL is `#N`, and the text is cut at 200 characters. (from orchestrator-narration, small fix)
 
 ## Coverage
 
@@ -160,6 +161,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | orchestrator-audit-fixes/S17 | R77 | `packages/agent-orchestrator/tests/test_plan.py`: `PlanTests.test_S17_*` |
 | orchestrator-audit-fixes/S18 | R78 | `packages/agent-orchestrator/tests/test_runner.py`: `Containment.test_S18_*` |
 | orchestrator-audit-fixes/S19 | R79 | `packages/agent-orchestrator/tests/test_runner.py`: `Containment.test_S19_*` |
+| orchestrator-narration | R80 | `packages/agent-orchestrator/tests/test_narrate.py`: `NarrateTests.test_*`; `packages/agent-orchestrator/tests/test_run.py`: `test_a_refused_spawn_keeps_the_reservation_and_exits_1` |
 
 ### R4 — the route refusals
 
@@ -236,6 +238,7 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | `test_await.py` | R72, R76 | `orchestrator-audit-fixes/S2`–`S4` — the crash guard and what `await` says of a run whose driver died |
 | `test_launch.py` | R2, R6 | `code-driven-orchestrator/S17`, `orchestrate-lean-loop/S49`, `orchestrate-lean-loop/S50` — the pane the run starts in |
 | `test_merge.py` | R2 | `code-driven-orchestrator/S6`, `code-driven-orchestrator/S6a`, `code-driven-orchestrator/S8`–`S10` — the merge and the cleanup |
+| `test_narrate.py` | R80 | `orchestrator-narration` — the driver's narration on stderr |
 | `test_orchestrate.py` | R2 | the ledger: `claim`, `bind`, `checkpoint`, `release`, `show`, `context`, `metrics` |
 | `test_payload.py` | R18 | `orchestrator-payload-race/S1` — the bounded wait for a report's payload |
 | `test_pi_backend.py` | R2 | `pi-worker-driver/S1`–`S6` — the Pi worker backend |

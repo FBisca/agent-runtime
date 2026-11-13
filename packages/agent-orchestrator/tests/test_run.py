@@ -215,7 +215,7 @@ class RunTests(RunFixture, unittest.TestCase):
         self.refuse(["demo-t1"])
         self.set_plan(("T1",))
         result = self.run_driver(expect=1)
-        self.assertIn("T1 not dispatched", result.stderr)
+        self.assertRegex(result.stderr, r"T1\s+build\s+✗ not dispatched")
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RESERVED")
         self.assertIn("not dispatched", self.ticket_status("T1"))
         self.refuse([])
