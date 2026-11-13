@@ -87,10 +87,10 @@ The living contract for `plan/1` YAML plans: `plan check`, `plan approve`, evide
 
 | Requirement | Scenario | Test nodes |
 | --- | --- | --- |
-| R25 | S1 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S1_the_archive_is_committed_pushed_and_opened_by_the_driver_with_no_trailer`<br>`packages/agent-orchestrator/tests/test_deterministic_archive.py` |
+| R25 | S1 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S1_the_archive_is_committed_pushed_and_opened_by_the_driver_with_no_trailer`<br>`packages/agent-orchestrator/acceptance/archive/test_deterministic_archive.py` |
 | R29 | S2 | `packages/agent-orchestrator/tests/test_archive_driver.py::SpecSectionUnit::test_S2_a_scenario_the_spec_lacks_is_a_requirement_and_a_coverage_row` |
 | R29 | S3 | `packages/agent-orchestrator/tests/test_archive_driver.py::SpecSectionUnit::test_S3_a_human_scenario_reads_its_evidence_and_needs_no_node` |
 | R29 | S4 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S4_a_missing_node_opens_no_pr_and_asks_the_lead` |
 | R29 | S5 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S5_a_failing_outcome_asks_the_lead_with_retry_and_skip_and_spawns_no_worker` |
-| R35 | S6 | `packages/agent-orchestrator/tests/test_archive.py::GapsAfterArchiveTests::test_S6_before_the_archive_merges_no_gaps_reviewer_exists`<br>`packages/agent-orchestrator/tests/test_archive.py::GapsAfterArchiveTests::test_S6_once_the_archive_merges_the_gaps_reviewer_starts_and_is_the_only_one`<br>`packages/agent-orchestrator/tests/test_archive.py::GapsAfterArchiveTests::test_S6_the_run_ends_while_the_gaps_reviewer_is_still_open`<br>`packages/agent-orchestrator/tests/test_deterministic_archive.py` |
+| R35 | S6 | `packages/agent-orchestrator/tests/test_archive.py::GapsAfterArchiveTests::test_S6_before_the_archive_merges_no_gaps_reviewer_exists`<br>`packages/agent-orchestrator/tests/test_archive.py::GapsAfterArchiveTests::test_S6_once_the_archive_merges_the_gaps_reviewer_starts_and_is_the_only_one`<br>`packages/agent-orchestrator/tests/test_archive.py::GapsAfterArchiveTests::test_S6_the_run_ends_while_the_gaps_reviewer_is_still_open`<br>`packages/agent-orchestrator/acceptance/archive/test_deterministic_archive.py` |
 | R36 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRouteRefusal::test_S7_a_route_config_naming_the_archive_step_is_refused_before_any_spawn` |

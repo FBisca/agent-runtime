@@ -77,15 +77,18 @@ def reported(value):
     return type(value) in (int, float)
 
 
+def numeric(value):
+    """A usage dict of figures alone (a number, or None for one not reported)."""
+    return isinstance(value, dict) and all(reported(x) or x is None for x in value.values())
+
+
 def sum_usage(values):
     """One ticket's usage from the runtime's per-assignment values: each key is the sum over the assignments when every
     one reported it as a number, and `None` when any did not (a ticket total never hides a missing figure); the values
     as listed when they are not numeric dicts; `unknown` when the runtime reported none."""
     if not values:
         return "unknown"
-    if all(
-        isinstance(v, dict) and all(reported(x) or x is None for x in v.values()) for v in values
-    ):
+    if all(numeric(v) for v in values):
         total = {}
         for value in values:
             for key in value:
@@ -134,8 +137,12 @@ def rollup(events, slug):
             entry["review_rounds"] += 1
         elif kind in ("escalation", "attention"):
             entry["escalations"] += 1
-        elif kind == "agent" and row.get("role") == "decider":
-            entry["decider_calls"] += 1
+        elif kind == "agent":
+            if row.get("role") == "decider":
+                entry["decider_calls"] += 1
+            # Every assignment of the unit counts toward its total, so one that never reports usage nulls it.
+            if row.get("assignment_id"):
+                entry["usage"].setdefault(row["assignment_id"], None)
         elif kind == "finding":
             found = row.get("finding_kind") or "unknown"
             entry["findings"][found] = entry["findings"].get(found, 0) + 1
@@ -145,9 +152,13 @@ def rollup(events, slug):
     for unit, entry in units.items():
         if unit == "-" or not entry["route"]:
             continue
-        values = [
-            entry["usage"][key] for key in sorted(entry["usage"]) if entry["usage"][key] is not None
-        ]
+        values = [entry["usage"][key] for key in sorted(entry["usage"])]
+        measured = [value for value in values if value is not None]
+        if measured and all(numeric(value) for value in measured):
+            # An assignment the runtime never measured reported no figure, so every figure is incomplete.
+            values = [{} if value is None else value for value in values]
+        else:
+            values = measured
         tickets[unit] = {
             "route": entry["route"],
             "review_rounds": entry["review_rounds"],

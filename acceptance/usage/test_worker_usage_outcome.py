@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-RUNTIME_SRC = Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"
+RUNTIME_SRC = Path(__file__).resolve().parents[2] / "packages" / "agent-runtime" / "src"
 
 pytestmark = pytest.mark.integration
 

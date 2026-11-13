@@ -196,7 +196,7 @@ export function verifiedOf(ticket) {
 const byId = (tickets) => new Map(tickets.map((t) => [t.id, t]));
 
 /** One ticket row: its summary, state, blocked-by chips (each with the blocker's own state) and verified. */
-export function ticketRow(ticket, tickets) {
+export function ticketRow(ticket, tickets, live = null) {
   const known = byId(tickets);
   return {
     id: ticket.id,
@@ -205,16 +205,17 @@ export function ticketRow(ticket, tickets) {
     look: stateLook(ticket.state),
     verified: verifiedOf(ticket),
     chips: (ticket.blocked_by ?? []).map((id) => ({ id, look: stateLook(known.get(id)?.state) })),
+    workers: ticketWorkers(ticket, live),
   };
 }
 
 /** The tickets grouped by layer, in the answer's order (the orchestrator orders them by layer, then plan order). */
-export function ticketLayers(tickets) {
+export function ticketLayers(tickets, live = null) {
   const layers = [];
   for (const ticket of tickets) {
     let group = layers.at(-1);
     if (!group || group.layer !== ticket.layer) layers.push((group = { layer: ticket.layer, tickets: [] }));
-    group.tickets.push(ticketRow(ticket, tickets));
+    group.tickets.push(ticketRow(ticket, tickets, live));
   }
   return layers;
 }
@@ -264,46 +265,22 @@ export function attemptTerminal(address, live) {
   return { state: "not live", word: "not live", why: "no live terminal has this address", open: null };
 }
 
-const isAgent = (t) => Boolean(t.program?.agent) || (t.status !== null && t.status !== undefined && t.status !== "");
-
-/** What the Runtime section says instead of a list when it cannot tell: an attempt's address records no machine, so
- *  in a space on another machine nothing says which live agents an attempt names. Null when it can tell. */
-export const runtimeNote = (machine) =>
-  machine ? "Cannot tell which live agents a plan names in a space on another machine." : null;
-
-/** The live agent terminals no attempt of the given plans names, as rows in tree order (a terminal under the one that
- *  started it, depth 0 for the first of each tree). Nothing is made up for them: no plan, no ticket. Only on this
- *  computer (bare addresses): in a space on another machine it lists none, see `runtimeNote`. */
-export function runtimeAgents(terminals, plans, machine) {
-  if (!Array.isArray(terminals) || machine) return [];
-  const named = new Set();
-  for (const plan of plans ?? []) {
-    for (const ticket of plan.tickets ?? []) {
-      for (const a of ticket.attempts ?? []) if (a.address) named.add(a.address);
-    }
-  }
-  const here = (address) => !address.includes("/");
-  const agents = terminals.filter((t) =>
-    t && t.state === "live" && typeof t.address === "string" && here(t.address) && isAgent(t) && !named.has(t.address));
-  const listed = new Set(agents.map((t) => t.address));
-  const rows = [];
-  const seen = new Set();
-  const add = (t, depth) => {
-    if (seen.has(t.address)) return;
-    seen.add(t.address);
-    rows.push({
-      address: t.address,
-      name: t.name || t.program?.name || t.address,
-      status: t.status ?? null,
-      parent: t.parent ?? null,
-      depth,
-      open: openTerminal(t.address),
-    });
-    for (const kid of agents) if (kid.parent === t.address) add(kid, depth + 1);
-  };
-  for (const t of agents) if (!t.parent || !listed.has(t.parent)) add(t, 0);
-  for (const t of agents) add(t, 0); // a parent cycle has no root: every agent is still listed, once
-  return rows;
+/** An agent of a ticket as its row names it: the ledger's name and role, and where its terminal stands. The terminal
+ *  is joined by the address the ledger recorded and nothing else, never by a name (a terminal with the same name
+ *  elsewhere is another agent). `status` is Herdr's, only for a live one; Open only for a live one. */
+export function ticketWorkers(ticket, live = null) {
+  return (Array.isArray(ticket.agents) ? ticket.agents : []).map((a) => {
+    const terminal = attemptTerminal(a.address ?? null, live);
+    return {
+      name: a.name,
+      role: a.role ?? null,
+      address: a.address ?? null,
+      state: terminal.state,
+      word: terminal.word,
+      status: terminal.state === "live" ? (live.live.get(a.address)?.status ?? null) : null,
+      open: terminal.open,
+    };
+  });
 }
 
 // ---- metrics: measured by the orchestrator, only worded here; a value it did not measure reads unknown, never 0 ----
@@ -417,18 +394,25 @@ export function inspector(ticket, tickets, live = null, metrics = null) {
   };
 }
 
-/** The plan's header: its name, state, one progress bar, and the digests when it changed after approval. */
-export function planHeader(plan) {
+/** The plan's header: a way back, the plan's name as the title and its whole goal (wrapping fully when wide, in at most
+ *  three lines when narrow: `goalLines`), its state, one progress bar, and the digests when it changed after approval.
+ *  The repository is not part of it. */
+export function planHeader(plan, layout = "wide") {
   const revision = plan.revision ?? {};
   return {
+    title: plan.slug,
     slug: plan.slug,
+    back: true,
     goal: plan.goal ?? null,
+    goalLines: layout === "narrow" ? GOAL_LINES_NARROW : null,
     state: planState(plan.state),
     progress: progressOf(plan.counts),
     metrics: metricsHeader(plan.metrics),
     drift: revision.drift ? { approved: revision.approved_digest, current: revision.current_digest } : null,
   };
 }
+
+export const GOAL_LINES_NARROW = 3;
 
 // ---- layout -------------------------------------------------------------------------------------------------
 
