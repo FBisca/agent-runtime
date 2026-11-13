@@ -246,7 +246,9 @@ class FolderPlanTests(RunFixture, unittest.TestCase):
         target = parent / self.folder.name
         shutil.copytree(self.folder, target)
         (target / "plan.yaml").write_text(
-            yaml.safe_dump(folder_contract(archive="discard", domain=None, spec=None), sort_keys=False)
+            yaml.safe_dump(
+                folder_contract(archive="discard", domain=None, spec=None), sort_keys=False
+            )
         )
         if plans is not None:
             (self.repo / ".orchestrate" / "config.yaml").write_text(

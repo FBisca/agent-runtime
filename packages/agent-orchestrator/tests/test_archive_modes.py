@@ -251,9 +251,7 @@ class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
         self.drive()
         self.assertEqual(self.ledger()["plan"]["state"], "ARCHIVED")
         self.assertIn("demo-gaps", self.spawned())
-        self.assertEqual(
-            (self.run_dir / "gaps.md").read_text(encoding="utf-8"), "# Gaps\n- none\n"
-        )
+        self.assertEqual((self.run_dir / "gaps.md").read_text(encoding="utf-8"), "# Gaps\n- none\n")
 
     def test_S11_a_discard_plan_outside_the_repository_ends_archived_leaving_origin_untouched(self):
         self.configure(self.root / "plans")
