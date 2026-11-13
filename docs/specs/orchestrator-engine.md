@@ -109,6 +109,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R78** WHEN the evidence runner builds a check environment, THEN the scratch HOME and XDG_STATE_HOME are applied after the declared variables, so no declaration can override them. (from orchestrator-audit-fixes/S18)
 - **R79** WHEN an oracle target resolves outside the scratch tree, or a component of its path is a symlink (e.g. one added by the patch under test), THEN the receipt is an evidence error naming the path, nothing is written outside the scratch tree, and the driver does not crash. (from orchestrator-audit-fixes/S19)
 - **R80** WHEN the driver narrates a run on stderr, THEN each line carries the time, the unit, the step (one of `narrate.STEPS`), a kind symbol and the text, the attempt last; colour is used only on a terminal with `NO_COLOR` unset; a `wait` the unit already said is repeated only every 5 minutes, as `(still, Nm)`, and any other line of the unit resets it; run-dir paths are relative, the home is `~`, a GitHub PR URL is `#N`, and the text is cut at 200 characters. (from orchestrator-narration, small fix)
+- **R81** WHEN the archive PR merges, THEN only then does the driver spawn the advisory gaps reviewer, and the run ends without waiting for its report; before the archive merges no gaps reviewer exists. (from deterministic-archive/S6)
 
 ## Coverage
 
@@ -162,6 +163,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | orchestrator-audit-fixes/S18 | R78 | `packages/agent-orchestrator/tests/test_runner.py`: `Containment.test_S18_*` |
 | orchestrator-audit-fixes/S19 | R79 | `packages/agent-orchestrator/tests/test_runner.py`: `Containment.test_S19_*` |
 | orchestrator-narration | R80 | `packages/agent-orchestrator/tests/test_narrate.py`: `NarrateTests.test_*`; `packages/agent-orchestrator/tests/test_run.py`: `test_a_refused_spawn_keeps_the_reservation_and_exits_1` |
+| deterministic-archive/S6 | R81 | `packages/agent-orchestrator/tests/test_archive.py`: `GapsAfterArchiveTests.test_S6_*` |
 
 ### R4 — the route refusals
 

@@ -37,11 +37,6 @@ class ArchiveFixture(GateFixture):
         )
         return [self.worker_done(tests=True), self.reviewer_done()]
 
-    def gaps_done(self):
-        step = report_wait("demo-gaps", "complete")
-        step["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-        return step
-
 
 class ArchiveTests(ArchiveFixture, unittest.TestCase):
     def test_S15_nothing_archives_while_an_agent_ticket_is_unfinished(self):
@@ -55,7 +50,7 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
 
     def test_S15_a_passing_archive_goes_to_ci_and_merge(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S15"""
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
         task = self.task("archive")
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
@@ -82,7 +77,7 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
             return real(argv, timeout=timeout, cwd=cwd)
 
         self.gh_process = conflicting
-        self.waits(self.ticket_merged() + [self.gaps_done(), self.decide_step("archive", "skip")])
+        self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
         self.run_driver()
         self.assertEqual(self.spawned().count(ARCHIVE), 0)
         request = self.request("archive")
@@ -101,7 +96,7 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
         worker = self.with_usage(
             self.worker_done(tests=True), {"input_tokens": 100, "output_tokens": 20}
         )
-        self.waits([worker, self.reviewer_done(), self.gaps_done()])
+        self.waits([worker, self.reviewer_done()])
         result = self.run_driver()
         metrics = json.loads((self.run_dir / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(metrics["lead"]["model_turns"], 0)
@@ -131,7 +126,7 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
     """A YAML plan archives by promotion: the driver places the oracles and writes the spec."""
 
     def archive_run(self):
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
 
     def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_receipts_and_a_valid_digest(

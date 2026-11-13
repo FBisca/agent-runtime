@@ -1139,6 +1139,7 @@ class Driver:
                     + self.dispatch_ready(plan)
                     + self.attend_people(plan)
                     + self.start_archive(plan)
+                    + self.start_gaps(plan)
                 )
                 self.refresh_attention()
             else:  # the last valid plan keeps the work going; what the user's edit might have changed waits for a valid file
@@ -1384,13 +1385,14 @@ class Driver:
     def parked_assignments(self):
         """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the runtime, not work."""
         with self.book() as data:
-            gaps = data.get("gaps") or {}
-            return {
+            parked = {
                 agent.get("assignment_id")
                 for task in data["tasks"].values()
                 if task.get("gate") in PARKED
                 for agent in (task, task.get("review") or {}, task.get("decision") or {})
-            } - {None} | ({gaps.get("assignment_id")} if gaps.get("ended") else set())
+            } - {None}
+            # The gaps reviewer is advisory: its open assignment never keeps the run up, ended or not.
+            return parked | {(data.get("gaps") or {}).get("assignment_id")}
 
     def on_agent_attention(self, assignment_id, kind, text="", quiet=False, silent=False):
         """An agent reported `blocked` or `decision`, or its assignment failed or ended with no report. Each event is
@@ -4677,7 +4679,6 @@ class Driver:
             narrate.say("fail", "archive", "archive not started: %s" % error)
             return 0
         self.build_archive(ARCHIVE)
-        self.start_gaps(plan)
         return 1
 
     def claim_archive(self):
@@ -5023,10 +5024,13 @@ class Driver:
         return {sid: rid for rid, ids in found for sid in (part.strip() for part in ids.split(","))}
 
     def start_gaps(self, _plan):
-        """Spawn the advisory gaps reviewer once. Its failure never blocks anything."""
+        """Spawn the advisory gaps reviewer once, after the archive PR has merged (S6). Its failure never blocks
+        anything. Returns 1 when it acted, 0 otherwise."""
+        if self.plan_state() != "ARCHIVED":
+            return 0
         with self.book() as data:
             if data.get("gaps"):
-                return
+                return 0
             merges = [
                 (tid, t.get("pr"), t.get("merge_commit"))
                 for tid, t in data["tasks"].items()
@@ -5092,6 +5096,7 @@ class Driver:
             )
         with self.book() as data:
             data["gaps"] = gaps
+        return 1
 
     # ---- metrics: what a run cost, from the ledger and the runtime's own usage numbers ----------------------
 

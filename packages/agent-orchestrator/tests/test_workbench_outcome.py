@@ -119,7 +119,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
     def test_an_accepted_plan_maps_its_attempt_to_the_runtime_address_and_says_what_verify_says(
         self,
     ):
-        self.delivered(archive=True)
+        self.delivered()
         body = self.view()
         t1 = self.ticket_view(body, "T1")
         self.assertTrue(t1["verified"])
@@ -138,7 +138,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         )
 
     def test_the_driver_fallback_address_is_unknown_not_a_terminal(self):
-        self.delivered(archive=True)
+        self.delivered()
         data = self.ledger()
         assignment = data["tasks"]["t1"]["assignment_id"]
         data["tasks"]["t1"]["runtime_id"] = assignment
@@ -159,7 +159,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
 
     def test_control_the_delivered_fixture_is_accepted_by_verify(self):
         """Holds today: the accepted fixture the workbench reads is accepted by `verify`."""
-        self.delivered(archive=True)
+        self.delivered()
         result = self.verify()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["state"], "ACCEPTED")
