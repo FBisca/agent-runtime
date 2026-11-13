@@ -5,7 +5,6 @@ import io
 import json
 import os
 import shutil
-import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
@@ -236,6 +235,8 @@ class AmendTests(AmendFixture):
         self.assertEqual(self.command("check")[0], 0)
 
     def test_S10_one_entry_is_appended_and_the_approval_replaced_with_comments_kept(self):
+        # a runner has no git identity: the test sets the one `by` must name
+        self.git(self.repo, "config", "user.email", "amender@example.invalid")
         first = self.approve()
         data = self.read()
         data["tickets"][1]["delivers"] = "second, changed"
@@ -261,9 +262,7 @@ class AmendTests(AmendFixture):
         self.assertEqual(entry["digest"], after["approval"]["digest"])
         self.assertEqual(entry["reason"], "reason one")
         self.assertEqual(entry["tickets"], ["T2", "T3"])
-        email = subprocess.run(
-            ["git", "-C", str(self.repo), "config", "user.email"], capture_output=True, text=True
-        ).stdout.strip()
+        email = "amender@example.invalid"
         self.assertEqual(entry["by"], email + " (lead-test)")
         self.assertEqual(after["approval"]["by"], email)
         # neither block enters the digest: the amended plan verifies against its snapshot
