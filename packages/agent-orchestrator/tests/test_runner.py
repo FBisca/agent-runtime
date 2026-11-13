@@ -206,6 +206,44 @@ class EvidenceRunner(RepoCase):
         self.assertEqual(data["receipts"]["S1.integration.1"], run.sha256)
 
 
+class AcceptancePlacement(RepoCase):
+    def test_S6_each_acceptance_file_is_placed_at_its_domain_destination_before_the_check_and_recorded(
+        self,
+    ):
+        first, second = b"def test_a():\n    assert True\n", b"data\n"
+        check = (
+            "grep -q 'assert True' pkg/accept/billing/test_a.py\n"
+            "test -f pkg/accept/billing/nested/data.txt\n" + junit(PASSING, tests=1)
+        )
+        run = self.run_check(
+            check,
+            oracles={"test_a.py": first, "nested/data.txt": second},
+            place="pkg/accept/billing",
+            receipts_dir=self.receipts,
+        )
+        self.assertEqual(run.receipt["result"], "PASS", run.log)
+        self.assertEqual(
+            run.receipt["placed"],
+            {
+                "pkg/accept/billing/nested/data.txt": hashlib.sha256(second).hexdigest(),
+                "pkg/accept/billing/test_a.py": hashlib.sha256(first).hexdigest(),
+            },
+        )
+        on_disk = json.loads(run.path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["placed"], run.receipt["placed"])
+
+    def test_S6_a_legacy_oracle_is_recorded_under_the_name_it_is_placed_by(self):
+        digest = hashlib.sha256(b"probe\n").hexdigest()
+        run = self.run_check(
+            "test -f checks/probe.txt\n" + junit(PASSING, tests=1),
+            oracles={"probe.txt.oracle": b"probe\n"},
+            place="checks/",
+        )
+        self.assertEqual(run.receipt["result"], "PASS", run.log)
+        self.assertEqual(run.receipt["placed"], {"checks/probe.txt": digest})
+        self.assertEqual(run.receipt["oracles"], {"probe.txt.oracle": digest})
+
+
 class Containment(RepoCase):
     def test_S18_the_scratch_home_and_state_home_are_applied_after_the_declared_variables(self):
         scratch = self.root / "scratch"

@@ -2006,7 +2006,8 @@ class Driver:
                 report,
                 repo=packet["checkout"],
                 base=self.args.base,
-                plan_rel=self.plan_rel(),
+                plan_rel=self.plan_rel_for_integrity(),
+                layout_repo=self.repo,
             )
         except verify.VerifyError as error:
             return "error", [str(error)[:500]]
@@ -4554,6 +4555,16 @@ class Driver:
             return self.plan_path.relative_to(self.repo).as_posix()
         except ValueError:
             return "docs/plans/" + self.plan_path.name
+
+    def plan_rel_for_integrity(self):
+        """The plan's path in the repository, or None for a folder plan kept outside it: its folder is no repo path a
+        ticket could touch, and the fallback name every such plan shares (`docs/plans/plan.yaml`) is no plan's."""
+        if yaml_plan.is_folder_plan(self.plan_path):
+            try:
+                return self.plan_path.relative_to(self.repo).as_posix()
+            except ValueError:
+                return None
+        return self.plan_rel()
 
     def start_archive(self, plan):
         agents = [t for t in plan["tickets"] if is_agent(t)]

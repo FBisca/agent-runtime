@@ -422,7 +422,7 @@ def outcome_of(source, repo, data, receipts_dir):
 
 def revision_of(model, authored, path, repo, args):
     """(revision object, the model the tickets come from). An approved plan is shown as approved: when the authored
-    file or an oracle changed since, the approved snapshot's tickets are shown with `drift: true`."""
+    file, an oracle or an acceptance file changed since, the approved snapshot's tickets are shown with `drift: true`."""
     approval = model.approval
     if approval is None:
         return (
@@ -440,7 +440,7 @@ def revision_of(model, authored, path, repo, args):
         yaml_plan.identity(repo),
         approval.base,
         yaml_plan.canonical(authored),
-        yaml_plan.payloads(yaml_plan.oracle_dir(path)),
+        yaml_plan.approved_files(path, authored),
     )
     drift = current != approval.digest
     source = model
