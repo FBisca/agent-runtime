@@ -958,15 +958,30 @@ def legacy_imports(data):
     return rows
 
 
+USAGE_COLUMNS = (
+    ("input", "input_tokens"),
+    ("output", "output_tokens"),
+    ("cached", "cached_input_tokens"),
+    ("cache_write", "cache_write_tokens"),
+    ("reasoning", "reasoning_tokens"),
+    ("model_calls", "model_calls"),
+    ("tool_calls", "tool_calls"),
+    ("cost_usd", "cost_usd"),
+)
+
+
 def metrics_table(metrics):
-    rows = [("unit", "route", "rounds", "escalations", "deciders", "usage")]
+    rows = [
+        ("unit", "route", "rounds", "escalations", "deciders", *(name for name, _ in USAGE_COLUMNS))
+    ]
     for unit, row in metrics["tickets"].items():
         route = "%s·%s" % (row["route"]["size"], row["route"]["difficulty"])
-        usage = (
-            row["usage"]
-            if isinstance(row["usage"], str)
-            else json.dumps(row["usage"], separators=(",", ":"))
-        )
+        usage = row["usage"]
+        # A figure nobody reported prints as null, never as 0 or as a blank.
+        figures = [
+            usage if isinstance(usage, str) else json.dumps((usage or {}).get(key))
+            for _, key in USAGE_COLUMNS
+        ]
         rows.append(
             (
                 unit,
@@ -974,7 +989,7 @@ def metrics_table(metrics):
                 str(row["review_rounds"]),
                 str(row["escalations"]),
                 str(row["decider_calls"]),
-                usage,
+                *figures,
             )
         )
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
