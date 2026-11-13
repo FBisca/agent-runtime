@@ -77,3 +77,20 @@ The living contract for `plan/1` YAML plans: `plan check`, `plan approve`, evide
 | R32 | S3 | `packages/agent-orchestrator/tests/test_acceptance.py::VerifyTests::test_S3_a_receipt_rewritten_in_place_keeping_digest_tree_and_result_does_not_count`<br>`packages/agent-orchestrator/tests/test_yaml_eec_gaps.py::ReceiptTamper::test_a_receipt_rewritten_in_place_with_its_digest_tree_and_result_kept_does_not_count` |
 | R33 | S4 | `packages/agent-orchestrator/tests/test_decider.py::PersonOwnedTests::test_S4_attention_md_is_rebuilt_from_the_ledger_on_every_tick`<br>`packages/agent-orchestrator/tests/test_yaml_eec_gaps.py::AttentionRefresh::test_control_a_waiting_person_ticket_is_listed_once`<br>`packages/agent-orchestrator/tests/test_yaml_eec_gaps.py::AttentionRefresh::test_a_person_ticket_set_complete_leaves_the_attention_file`<br>`packages/agent-orchestrator/tests/test_yaml_eec_gaps.py::AttentionRefresh::test_a_person_ticket_set_complete_during_a_run_leaves_the_file_in_that_run` |
 | R34 | S5 | `packages/agent-orchestrator/tests/test_markdown_removed.py::WaitChecksRemovedTests::test_S5_the_wait_checks_module_does_not_exist_and_nothing_under_packages_names_it` |
+
+## Requirements: deterministic-archive
+
+- **R35** WHEN the archive PR merges, THEN only then does the driver spawn the advisory gaps reviewer, and the run ends without waiting for its report; before the archive merges no gaps reviewer exists (from deterministic-archive/S6)
+- **R36** WHEN a route config or a `--route` override names the `archive` step, THEN the driver refuses before any spawn, naming the step and the fix (the archive has no agent: remove the `archive` route); the `implementer`, `reviewer` and `gaps` step routes work as today (from deterministic-archive/S7)
+
+## Coverage: deterministic-archive
+
+| Requirement | Scenario | Test nodes |
+| --- | --- | --- |
+| R25 | S1 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S1_the_archive_is_committed_pushed_and_opened_by_the_driver_with_no_trailer`<br>`packages/agent-orchestrator/tests/test_deterministic_archive.py` |
+| R29 | S2 | `packages/agent-orchestrator/tests/test_archive_driver.py::SpecSectionUnit::test_S2_a_scenario_the_spec_lacks_is_a_requirement_and_a_coverage_row` |
+| R29 | S3 | `packages/agent-orchestrator/tests/test_archive_driver.py::SpecSectionUnit::test_S3_a_human_scenario_reads_its_evidence_and_needs_no_node` |
+| R29 | S4 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S4_a_missing_node_opens_no_pr_and_asks_the_lead` |
+| R29 | S5 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S5_a_failing_outcome_asks_the_lead_with_retry_and_skip_and_spawns_no_worker` |
+| R35 | S6 | `packages/agent-orchestrator/tests/test_deterministic_archive.py` |
+| R36 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRouteRefusal::test_S7_a_route_config_naming_the_archive_step_is_refused_before_any_spawn` |
