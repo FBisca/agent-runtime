@@ -552,9 +552,9 @@ class HeldMessageTests(WakeFixture, unittest.TestCase):
 
 
 class FailedHandOverTests(WakeFixture, unittest.TestCase):
-    def refuse_resumes(self, times=1, name="demo-t1"):
-        """The runtime refuses the next `times` resumes of `name`, as it does a pane blocked on a login."""
-        (self.home / "refuse_resume.json").write_text(json.dumps({name: times}), encoding="utf-8")
+    def refuse_resumes(self, name="demo-t1", error="the pane is blocked on a login"):
+        """The runtime refuses every resume of `name` with `error`, as it does a pane blocked on a login."""
+        (self.home / "refuse_resume.json").write_text(json.dumps({name: error}), encoding="utf-8")
 
     def test_S8_a_decision_that_cannot_be_handed_over_raises_a_new_request_naming_why(self):
         """engine-gaps/S8"""
