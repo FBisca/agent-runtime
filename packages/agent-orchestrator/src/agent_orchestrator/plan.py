@@ -31,7 +31,7 @@ from pydantic import (
     model_validator,
 )
 
-from . import config, runner
+from . import config, runner, runtime_client
 from . import ledger as ledgers
 
 DEFAULT_STATE = "~/.local/state/orchestrate"
@@ -1194,6 +1194,9 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
 
     Everything runs under the plan's run lock, so a live driver is never moved or raced; a held lock refuses before
     anything is written."""
+    refusal = runtime_client.approval_refusal()
+    if refusal:
+        raise PlanError("approval: %s — the plan was not approved" % refusal)
     path = Path(path).resolve()
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=True)

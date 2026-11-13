@@ -9,7 +9,10 @@ to the CLI.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
+from pathlib import Path
 from typing import Any, Protocol
 
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -89,3 +92,55 @@ class CliRuntimeClient:
                 "agent-runtime %s answered with something that is not a JSON object" % tool
             )
         return answer
+
+
+# The hosts an agent runs in. A process with none of these is a person's terminal or CI.
+HOST_MARKERS = (
+    "HC_TERMINAL_ID",
+    "HERDR_PANE_ID",
+    "CLAUDECODE",
+    "CODEX_THREAD_ID",
+    "CODEX_TOOL_CALL_ID",
+    "PI_CODING_AGENT",
+)
+ASK_THE_LEAD = "approval belongs to the Lead (the person in their own session): ask the Lead to run plan approve"
+
+
+def approval_refusal(env=None, process=None):
+    """A reason `plan approve` must refuse this caller, or None when it may go on.
+
+    With no host marker the caller is a plain terminal or CI and the runtime is not asked. Inside a host the
+    runtime CLI is the authority (`agent-runtime resolve --json`): only a caller it verifies as the Lead passes,
+    and a lookup that fails reads as unverified. An env marker is forgeable, so it never grants anything: it only
+    makes the lookup mandatory."""
+    env = os.environ if env is None else env
+    if not any(env.get(name) for name in HOST_MARKERS):
+        return None
+    run = process if process is not None else runtime_process
+    home = env.get("AGENT_RUNTIME_HOME")
+    script = Path(home).expanduser() / "server" / "agent_runtime.py" if home else None
+    argv = [sys.executable, str(script)] if script and script.is_file() else ["agent-runtime"]
+    try:
+        done = run([*argv, "resolve", "--json"], timeout=10)
+        if done.returncode != 0:
+            raise ValueError("exit %d" % done.returncode)
+        answer = json.loads(done.stdout)
+        if not isinstance(answer, dict):
+            raise ValueError("not a JSON object")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return "the runtime lookup of the caller failed (%s), so the caller is unverified — %s" % (
+            error,
+            ASK_THE_LEAD,
+        )
+    caller = answer.get("caller") if isinstance(answer.get("caller"), dict) else {}
+    if answer.get("role") == "worker" or caller.get("kind") == "worker":
+        return "the caller is a spawned worker (parent %s) — %s" % (
+            answer.get("parent", "unknown"),
+            ASK_THE_LEAD,
+        )
+    if caller.get("kind") == "lead" and caller.get("verified") is True:
+        return None
+    return "the runtime does not verify the caller as the Lead (it reports %s) — %s" % (
+        caller.get("kind", answer.get("role", "unknown")),
+        ASK_THE_LEAD,
+    )
