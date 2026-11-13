@@ -93,7 +93,7 @@ sys.exit(result.returncode)
 """
 
 
-class Drives:
+class Drives(RunFixture):
     """The driver run as its own process, as `launch` runs it, so a run that hangs or dies is observed from outside."""
 
     def driver_argv(self, *extra):
@@ -134,7 +134,8 @@ class Drives:
             start_new_session=True,
         )
         self.addCleanup(self.kill, process)
-        process.out, process.err = out, err
+        # Popen has no slot for the files it writes to; settle reads them back from here.
+        self.outputs = {**getattr(self, "outputs", {}), process.pid: (out, err)}
         return process
 
     def kill(self, process):
@@ -157,9 +158,10 @@ class Drives:
             time.sleep(0.1)
         code = process.poll()
         self.kill(process)
-        process.out.seek(0)
-        process.err.seek(0)
-        return code, process.out.read(), process.err.read()
+        out, err = self.outputs[process.pid]
+        out.seek(0)
+        err.seek(0)
+        return code, out.read(), err.read()
 
     def drive_process(self, steps, timeout, *extra, until=None, first=None):
         self.waits(steps)
@@ -168,7 +170,7 @@ class Drives:
     def run_files_text(self):
         """Every text file the run wrote under its run directory, joined."""
         found = []
-        for path in sorted(self.run_dir.rglob("*")) if self.run_dir.exists() else []:
+        for path in sorted(self.run_dir_of().rglob("*")) if self.run_dir_of().exists() else []:
             if path.is_file() and path.suffix in (".jsonl", ".log", ".md", ".json", ".txt"):
                 try:
                     found.append(path.read_text(encoding="utf-8", errors="replace"))
@@ -192,11 +194,11 @@ class Drives:
                 )
             except subprocess.TimeoutExpired:
                 result = None
-            self.assertIsNotNone(
-                result,
-                "await polled for %ss with no driver holding the run lock (printed so far: %r)"
-                % (seconds, lines),
-            )
+            if result is None:
+                self.fail(
+                    "await polled for %ss with no driver holding the run lock (printed so far: %r)"
+                    % (seconds, lines)
+                )
             line = result.stdout.strip()
             lines.append(line)
             if line.startswith(want):
