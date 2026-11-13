@@ -111,6 +111,10 @@ def run_command(command):
 def process(argv, timeout=None):
     """The answer to one `agent-runtime call <tool> --lead <lead> --json <arguments>` argv (without the program name)."""
     del timeout  # the seam passes one; the fake answers at once, so there is nothing to time out
+    if argv[:1] == ["resolve"]:  # `plan approve` asks who the caller is; here a verified Lead
+        return subprocess.CompletedProcess(
+            argv, 0, json.dumps({"role": "lead", "caller": {"kind": "lead", "verified": True}}), ""
+        )
     home = os.environ["FAKE_RUNTIME_HOME"]
     tool = argv[1]
     lead = argv[argv.index("--lead") + 1] if "--lead" in argv else None

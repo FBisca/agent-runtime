@@ -13,9 +13,8 @@ from unittest import mock
 
 import pytest
 import yaml
-from fixtures import RunFixture, load_script
-
 from agent_orchestrator import runtime_client
+from fixtures import RunFixture, load_script
 
 pytestmark = pytest.mark.integration
 
