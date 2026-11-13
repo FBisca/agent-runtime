@@ -119,7 +119,8 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R87** WHEN a reviewer whose idle request is still undecided reports `complete`, THEN the review is taken as for any reviewer (the unit goes on to `reviewed`) and the request closes as resolved by the worker, with a decision that says so; WHEN the Lead has decided, THEN a late `complete` is ignored. This supersedes orchestrator-silent-idle/S13. (from orchestrator-audit-fixes/S10)
 - **R88** WHEN the Lead decides a request that did not name a busy answerer (a `ci` request answered `fresh worker`), THEN the answers record is not failed and the answerer's later `complete` is received; WHEN a decision does fail the record because the request named the answerer, THEN an `answers-dropped` event says why pr-ready stopped waiting on the answers. (from orchestrator-audit-fixes/S12)
 - **R89** WHEN a worker names an attempt id with any round suffix (`r`, `d`, `o`, `p` or `a`), THEN the driver recognizes it as an attempt id through one shared pattern (`attempt_pattern`), so `use t1a1` in an answer for `t1a2` is refused as foreign. (from orchestrator-audit-fixes/S13)
-- **R90** WHEN a drive starts, THEN before any worker line the driver writes the banner on stderr: the `narrate.LOGO` wordmark, then the plan's slug and goal, its ticket count by status, the repository and base, `--max-workers`, the `--gate` commands when any, the route source (the config path and where it came from, or `legacy table (deprecated)`), one line per class route (`backend · model · effort`, `effort by matrix` when the matrix decides) and one per step route; colour only where R80 allows it. (from orchestrator-banner, small fix)
+- **R90** WHEN a unit's request file is missing or does not validate (a crash left it empty), THEN the driver writes it again from the ledger before it waits on the Lead, so `decide` can still answer it; a readable request is never rewritten. (small fix: a 0-byte `request.2.json` stalled a live run)
+- **R91** WHEN a drive starts, THEN before any worker line the driver writes the banner on stderr: the `narrate.LOGO` wordmark, then the plan's slug and goal, its ticket count by status, the repository and base, `--max-workers`, the `--gate` commands when any, the route source (the config path and where it came from, or `legacy table (deprecated)`), one line per class route (`backend · model · effort`, `effort by matrix` when the matrix decides) and one per step route; colour only where R80 allows it. (from orchestrator-banner, small fix)
 
 ## Coverage
 
@@ -256,7 +257,7 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | `test_events.py` | R2 | `orchestrate-lean-loop/S27` — the event log |
 | `test_evidence.py` | R2 | `orchestration-baselines/S2` — the per-attempt evidence |
 | `test_fake_gh.py` | R2 | the fake `gh` — a draft PR that never goes ready; scripted draft views, checks while ready and a failing draft undo |
-| `test_gates.py` | R2 | `code-driven-orchestrator/S5`–`S7` — the report, the review, the fix round |
+| `test_gates.py` | R2, R90 | `code-driven-orchestrator/S5`–`S7` — the report, the review, the fix round |
 | `test_ledger.py` | R71–R75 | `orchestrator-audit-fixes/S1`, `S2`, `S5`–`S7` — the shared ledger lock, its deadline, the snapshot and the kind marker |
 | `test_silent_idle.py` | R77–R79 | `orchestrator-audit-fixes/S8`–`S11` — the one idle watchdog over a reviewer, a mutation reviewer and a gaps reviewer, and the file a worker owes |
 | `test_answers.py` | R80, R81 | `orchestrator-audit-fixes/S12`, `S13` — the answers a decision leaves alone and the attempt ids an answer may name |
