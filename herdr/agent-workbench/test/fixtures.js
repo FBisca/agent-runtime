@@ -7,6 +7,12 @@ export const PLANS = {
   schema_version: 1,
   repo: REPO,
   plans: [
+    // Printed first although its file is the oldest: the order is the command's (newest activity), not the file name's.
+    {
+      slug: "broken", format: "yaml", path: DIR + "2026-11-09-broken.plan.yaml", legacy: false,
+      state: null, group: "active", last_activity: "2026-11-12T11:00:00+00:00", tickets: null,
+      error: { kind: "invalid_plan", message: "cycle: T1 -> T2 -> T1" },
+    },
     {
       slug: "agent-workbench", format: "yaml", path: DIR + "2026-11-11-agent-workbench.plan.yaml", legacy: false,
       state: "RUNNING", group: "active", last_activity: "2026-11-12T10:00:00+00:00",
@@ -16,11 +22,6 @@ export const PLANS = {
       slug: "second", format: "yaml", path: DIR + "2026-11-10-second.plan.yaml", legacy: false,
       state: "APPROVED", group: "active", last_activity: "2026-11-10T09:00:00+00:00",
       tickets: { total: 1, by_state: { "TO-DO": 1 } },
-    },
-    {
-      slug: "broken", format: "yaml", path: DIR + "2026-11-09-broken.plan.yaml", legacy: false,
-      state: null, group: "active", last_activity: null, tickets: null,
-      error: { kind: "invalid_plan", message: "cycle: T1 -> T2 -> T1" },
     },
     {
       slug: "old-plan", format: "markdown", path: DIR + "2026-10-30-old-plan.plan.md", legacy: true,

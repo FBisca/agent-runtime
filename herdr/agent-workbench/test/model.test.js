@@ -10,8 +10,8 @@ const rows = () => planRows(readPlans(ok(PLANS)).value.plans);
 
 test("S12 plans list YAML with state and progress and Markdown marked legacy, active before archived, newest first", () => {
   const list = rows();
-  assert.deepEqual(list.map((r) => r.slug), ["agent-workbench", "second", "broken", "old-plan"]);
-  const yaml = list[0];
+  assert.deepEqual(list.map((r) => r.slug), ["broken", "agent-workbench", "second", "old-plan"]);
+  const yaml = list[1];
   assert.equal(yaml.state, "RUNNING");
   assert.deepEqual(yaml.progress, { done: 1, working: 1, blocked: 0, total: 3 });
   assert.equal(yaml.legacy, false);
@@ -171,7 +171,8 @@ test("S30 Needs me comes first with the way to act on each item, in the order th
 
 test("S30 active plans follow in the command's order, then one collapsed older line that expands to the older plans", () => {
   const { active, older, olderLine } = planSections(answer());
-  assert.deepEqual(active.map((r) => r.slug), ["agent-workbench", "second", "broken"]);
+  assert.deepEqual(active.map((r) => r.slug), answer().plans.filter((p) => p.group === "active").map((p) => p.slug));
+  assert.deepEqual(active.map((r) => r.slug), ["broken", "agent-workbench", "second"], "not the file-name order");
   assert.deepEqual(older.map((r) => r.slug), ["old-plan"]);
   assert.equal(olderLine(false).label, "1 older ▸");
   assert.equal(olderLine(false).rows.length, 0, "collapsed: no older plan is listed");
