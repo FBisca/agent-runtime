@@ -1098,7 +1098,7 @@ class Driver:
             model = self.model
         else:
             settled = self.model is not None and started
-            if settled and model.approval.digest != self.approval.digest:
+            if settled and model.approval.digest != self.approved_digest():
                 held = self.model
                 self.model, self.approval = model, model.approval
                 self.adopt(held, self.legacy_of(model))
@@ -1122,6 +1122,13 @@ class Driver:
     # on with what is already running and starts nothing new, so nobody has to stop the driver and kill its workers.
     # `plan amend` writes the approval snapshot before it replaces the file: a read finds the old plan or the new one.
 
+    def approved_digest(self):
+        """The digest of the approval this run gates against; the drain and adoption code only runs once a plan is
+        held, so a missing one is a bug, not a state."""
+        if self.approval is None:
+            raise PlanError("the run holds no approved plan yet")
+        return self.approval.digest
+
     def begin_drain(self, error):
         """Drain once per edit: one event and one wake, however many reads find the file still changed."""
         if self.drain:
@@ -1137,7 +1144,7 @@ class Driver:
             :500
         ]
         self.drain = {"cause": cause, "error": text}
-        self.log("drain", state="draining", cause=cause, error=text, digest=self.approval.digest)
+        self.log("drain", state="draining", cause=cause, error=text, digest=self.approved_digest())
         narrate.say("warn", None, "draining: the plan is %s: %s" % (cause, text))
         self.wake(
             "drain",
@@ -1153,7 +1160,7 @@ class Driver:
             "drain",
             state="ended",
             cause=(self.drain or {}).get("cause"),
-            digest=self.approval.digest,
+            digest=self.approved_digest(),
         )
         narrate.say("info", None, "the plan is back to its approved bytes: the drain ended")
         self.drain = None
@@ -1161,18 +1168,19 @@ class Driver:
     def adopt(self, held, plan):
         """The plan carries a valid approval other than the one this run holds: gate and dispatch against it from
         now on. `held` is the model the run held until now."""
-        amendment = next(
-            (a for a in reversed(self.model.amendments) if a.digest == self.approval.digest), None
-        )
+        if self.model is None:
+            raise PlanError("the run holds no plan to adopt an amendment into")
+        digest = self.approved_digest()
+        amendment = next((a for a in reversed(self.model.amendments) if a.digest == digest), None)
         self.log(
             "amended",
             prev_digest=held.approval.digest,
-            digest=self.approval.digest,
+            digest=digest,
             reason=amendment.reason[:500] if amendment else None,
             tickets=amendment.tickets if amendment else None,
             drained=True if self.drain else None,
         )
-        narrate.say("info", None, "adopted the amended plan %s" % self.approval.digest[:12])
+        narrate.say("info", None, "adopted the amended plan %s" % digest[:12])
         self.drain = None
         self.last_plan = plan
         with self.book() as data:
@@ -1184,6 +1192,8 @@ class Driver:
     def resume_changed(self, held, plan):
         """Each open attempt (working or parked) whose ticket's `paths`, `satisfies` or `delivers` the amendment
         changed gets its next packet and its worker is resumed on it; any other attempt is left alone."""
+        if self.model is None:
+            return
         before = {t.id.lower(): t for t in held.tickets}
         changed = {}
         for ticket in self.model.tickets:
@@ -1217,7 +1227,7 @@ class Driver:
                     unit,
                     "amend-failed %s: its worker could not be given the amended contract: %s -> look at its "
                     "terminal" % (unit, cell(error, 300)),
-                    key="%s:%s" % (task_id, self.approval.digest),
+                    key="%s:%s" % (task_id, self.approved_digest()),
                 )
 
     def next_packet(self, task_id, task, row, plan, old, new):
@@ -1245,7 +1255,7 @@ class Driver:
                     "",
                     "The plan was amended (%s). This packet replaces your earlier ones: keep the work already in "
                     "this checkout and finish against the contract above. What changed:"
-                    % self.approval.digest[:12],
+                    % self.approved_digest()[:12],
                     *changes,
                     "",
                 ]
@@ -1292,7 +1302,7 @@ class Driver:
             task=task_id,
             packet=packet_md.name,
             resumed=resumed,
-            digest=self.approval.digest,
+            digest=self.approved_digest(),
         )
         narrate.say(
             "info",
