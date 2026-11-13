@@ -1024,6 +1024,9 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
+        self.discarded = (
+            False  # the plan folder was deleted by this drive: the plan it last read is the plan
+        )
         self.model: yaml_plan.Plan | None = None  # the approved plan/1 model of a YAML plan
         self.approval: yaml_plan.Approval | None = (
             None  # the approval block of the YAML plan the loop last read
@@ -1065,6 +1068,10 @@ class Driver:
                 )
 
     def read_plan(self):
+        if self.discarded and self.last_plan is not None:
+            return (
+                self.last_plan
+            )  # its folder is gone by design; the approved model was read before
         require_yaml(self.plan_path)
         model = load_approved(
             self.plan_path,
@@ -4457,7 +4464,10 @@ class Driver:
         """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
         changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set
         verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can
-        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round."""
+        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round.
+        A discarded plan promoted nothing and wrote no spec, so there is nothing to hold on its archive head."""
+        if self.archive_mode() == "discard":
+            return "PASS", []
         try:
             commit = verify.snapshot_commit(packet["checkout"])
             tree = self.tree_of(commit)
@@ -5082,6 +5092,8 @@ class Driver:
             if not interrupted:
                 return 0
         try:
+            if self.archive_mode() == "discard" and not self.folder_tracked():
+                return self.discard_plan(plan)
             self.claim_archive()
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.failed.add(ARCHIVE)
@@ -5090,6 +5102,84 @@ class Driver:
             return 0
         self.build_archive(ARCHIVE)
         return 1
+
+    def archive_mode(self):
+        """promote | discard. Only a plan in its own folder can discard: a legacy plan always promotes."""
+        path = getattr(
+            self, "plan_path", None
+        )  # a driver that holds no plan (a unit test's) promotes
+        if path is None or not yaml_plan.is_folder_plan(path):
+            return "promote"
+        return self.plan_model().archive or yaml_plan.repo_config(self.repo).archive_mode
+
+    def plan_folder_rel(self):
+        """The plan folder's path in the repository, or None for a folder plan or a legacy plan that is not in a
+        folder of it. A folder that is the repository, or holds it, is refused: deleting it would delete the work."""
+        folder = self.plan_path.parent
+        if not yaml_plan.is_folder_plan(self.plan_path):
+            return None
+        if self.repo == folder or self.repo.is_relative_to(folder):
+            raise ValueError(
+                "the plan folder %s is or holds the repository; move plan.yaml into a folder of its own"
+                % folder
+            )
+        try:
+            return folder.relative_to(self.repo).as_posix()
+        except ValueError:
+            return None
+
+    def folder_tracked(self):
+        """Whether the plan folder is tracked on the base branch, which is the tree an archive branch is built from."""
+        rel = self.plan_folder_rel()
+        if rel is None:
+            return False
+        remote, _, branch = self.args.base.partition("/")
+        run(["git", "-C", str(self.repo), "fetch", "-q", remote, branch], timeout=120)
+        listed = run(
+            [
+                "git",
+                "-C",
+                str(self.repo),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                self.args.base,
+                "--",
+                rel,
+            ],
+            timeout=TREE_TIMEOUT,
+        )
+        return bool(listed)
+
+    def discard_plan(self, plan):
+        """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No
+        worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan."""
+        folder = self.plan_path.parent
+        shutil.rmtree(folder)
+        self.discarded = True
+        with self.book() as data:
+            enter_plan_state(data, "ARCHIVED")
+        self.log("archive-discarded", folder=str(folder))
+        narrate.say("done", "archive", "plan discarded: %s deleted" % folder)
+        self.start_gaps(plan)
+        return 1
+
+    def remove_plan_folder(self, checkout):
+        """Delete the plan folder from an archive checkout (a plan kept outside the repository has none there)."""
+        rel = self.plan_folder_rel()
+        if rel is not None:
+            shutil.rmtree(Path(checkout) / rel, ignore_errors=True)
+
+    def archive_owns(self):
+        """What the archive unit writes: the spec, the files it copies or places, and the plan folder it deletes."""
+        model = self.plan_model()
+        owns = [model.spec] if model.spec and self.archive_mode() == "promote" else []
+        if self.archive_mode() == "promote":
+            owns += [rel for rel, _ in self.yaml_copies()] + [
+                rel for rel, _ in self.yaml_places(model)
+            ]
+        folder = self.plan_folder_rel()
+        return owns + ([folder + "/"] if folder else [])
 
     def claim_archive(self):
         name = self.slug[: 32 - len("-archive")].rstrip("-_") + "-archive"
@@ -5101,12 +5191,12 @@ class Driver:
             "task_id": ARCHIVE,
             "worker": name,
             "plan": str(self.plan_path),
-            "objective": "Archive the plan into the living spec",
+            "objective": "Archive the plan into the living spec"
+            if self.archive_mode() == "promote"
+            else "Delete the discarded plan folder",
             "checkout": str(checkout),
             "backend": self.args.cli,
-            "owns": [plan_model.spec]
-            + [rel for rel, _ in self.yaml_copies()]
-            + [rel for rel, _ in self.yaml_places(plan_model)],
+            "owns": self.archive_owns(),
             "acceptance": YAML_ARCHIVE_ACCEPTANCE,
             "checks": [],  # no local gate: the pull request's CI and the outcome re-run are the gates
             "depends_on": [],
@@ -5127,7 +5217,7 @@ class Driver:
     def build_archive(self, task_id):
         """Build, push and open the archive, then hand its report to the gates. Any trouble asks the Lead."""
         try:
-            missing = self.archive_missing()
+            missing = self.archive_missing() if self.archive_mode() == "promote" else []
             if missing:
                 return self.request(
                     task_id,
@@ -5149,9 +5239,16 @@ class Driver:
             "contract": contracts.VERSION,
             "task_id": task_id,
             "status": "COMPLETE",
-            "summary": "the driver archived the plan: oracles placed, plan files copied, spec section appended",
+            "summary": "the driver archived the plan: %s"
+            % (
+                "oracles placed, plan files copied, spec section appended"
+                if self.archive_mode() == "promote" and not yaml_plan.is_folder_plan(self.plan_path)
+                else "acceptance files moved into their domain, plan folder deleted, spec section appended"
+                if self.archive_mode() == "promote"
+                else "the discarded plan folder deleted"
+            ),
             "acceptance_met": True,
-            "files": [self.plan_model().spec] + [rel for rel, _ in self.yaml_copies()],
+            "files": self.archive_owns(),
             "decisions": [],
             "interfaces": [],
             "remaining": [],
@@ -5192,14 +5289,10 @@ class Driver:
     def scenario_nodes(self):
         """{scenario id: its test nodes}: the tickets' `covers`, then the scenario's own placed oracle paths."""
         covers = self.ticket_covers()
-        placed: dict[str, list[str]] = {}
-        for scenario in self.plan_model().scenarios:
-            evidence_ = scenario.evidence
-            if evidence_ and evidence_.promote and evidence_.place:
-                placed[scenario.id] = [
-                    evidence_.place.rstrip("/") + "/" + name.removesuffix(".oracle")
-                    for name in evidence_.oracle
-                ]
+        placed = {
+            scenario.id: [rel for rel, _ in self.scenario_targets(scenario)]
+            for scenario in self.plan_model().scenarios
+        }
         return {
             s.id: list(dict.fromkeys(covers.get(s.id, []) + placed.get(s.id, [])))
             for s in self.plan_model().scenarios
@@ -5273,26 +5366,36 @@ class Driver:
             ["git", "-C", str(path), "checkout", "-q", "-B", branch, self.args.base],
             timeout=TREE_TIMEOUT,
         )
-        self.place_oracles(path)
-        for rel, source in self.yaml_copies():
-            if source.is_dir():
-                for child in sorted(p for p in source.rglob("*") if p.is_file()):
-                    target = path / rel.rstrip("/") / child.relative_to(source)
+        # A plan in its own folder leaves the tree: its acceptance files go to their domain, a discarded plan's go
+        # nowhere. Deleted first, so a destination inside the folder is written after it.
+        self.remove_plan_folder(path)
+        message = "docs(%s): delete the discarded plan folder" % self.slug
+        if self.archive_mode() == "promote":
+            message = "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec)
+            self.place_oracles(path)
+            for rel, source in self.yaml_copies():
+                if source.is_dir():
+                    for child in sorted(p for p in source.rglob("*") if p.is_file()):
+                        target = path / rel.rstrip("/") / child.relative_to(source)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(child.read_bytes())
+                else:
+                    target = path / rel
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(child.read_bytes())
-            else:
-                target = path / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(source.read_bytes())
-        spec = path / self.plan_model().spec
-        try:
-            before = spec.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            before = ""
-        section = self.spec_section(before, self.held_requirements(spec))
-        body = (before if before.endswith("\n") else before + "\n") + "\n" if before.strip() else ""
-        spec.parent.mkdir(parents=True, exist_ok=True)
-        spec.write_text(body + section, encoding="utf-8")
+                    target.write_bytes(source.read_bytes())
+            spec = path / self.plan_model().spec
+            try:
+                before = spec.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                before = ""
+            section = self.spec_section(before, self.held_requirements(spec))
+            body = (
+                (before if before.endswith("\n") else before + "\n") + "\n"
+                if before.strip()
+                else ""
+            )
+            spec.parent.mkdir(parents=True, exist_ok=True)
+            spec.write_text(body + section, encoding="utf-8")
         run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
         identity = (
             []
@@ -5315,7 +5418,7 @@ class Driver:
                 "commit",
                 "-q",
                 "-m",
-                "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec),
+                message,
             ],
             timeout=TREE_TIMEOUT,
         )
@@ -5341,11 +5444,11 @@ class Driver:
                 "--head",
                 "feat/" + packet["worker"],
                 "--title",
-                "docs(%s): archive the plan" % self.slug,
+                "docs(%s): archive the plan" % self.slug
+                if self.archive_mode() == "promote"
+                else "docs(%s): delete the discarded plan folder" % self.slug,
                 "--body",
-                "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-                "with its Coverage table, written by the driver."
-                % (self.plan_rel(), self.plan_model().spec),
+                self.archive_body(),
             ],
             timeout=120,
             cwd=packet["checkout"],
@@ -5356,6 +5459,25 @@ class Driver:
                 "gh pr create failed: %s" % ((err or out).strip()[:300] or "no url printed")
             )
         return found[-1]
+
+    def archive_body(self):
+        """The archive pull request's description, by what the archive does with the plan."""
+        spec = self.plan_model().spec
+        if self.archive_mode() == "discard":
+            return "Deletes the discarded plan folder `%s`; it changes nothing else." % (
+                self.plan_folder_rel()
+            )
+        if yaml_plan.is_folder_plan(self.plan_path):
+            where = self.plan_folder_rel()
+            return (
+                "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
+                "is deleted and the spec section with its Coverage table is written by the driver."
+                % ("folder `%s`" % where if where else "`%s`" % self.plan_path.parent, spec)
+            )
+        return (
+            "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
+            "with its Coverage table, written by the driver." % (self.plan_rel(), spec)
+        )
 
     def undraft_archive(self, task_id):
         """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a failing one."""
@@ -5373,18 +5495,31 @@ class Driver:
         self.mark(task_id, status="ACTIVE", gate=None, ci_state=None, ci_rows=None, ci_head=None)
         self.build_archive(task_id)
 
+    def scenario_targets(self, scenario):
+        """(repo-relative place, the file's name in the approval snapshot) for each file a scenario's evidence
+        promotes. A legacy oracle keeps its source name without the `.oracle` suffix: only the promoted name is
+        collected as a test. A folder plan's acceptance file is placed in its domain under its own name."""
+        evidence = scenario.evidence
+        if not evidence:
+            return []
+        if getattr(
+            evidence, "acceptance", None
+        ):  # only a folder plan's evidence has acceptance files
+            placed = yaml_plan.placed_files(self.plan_path, self.plan_model(), evidence, self.repo)
+            return [(rel, "acceptance/" + name) for rel, name in zip(placed, evidence.acceptance)]
+        if evidence.promote and evidence.place:
+            return [
+                (evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle"), name)
+                for name in evidence.oracle
+            ]
+        return []
+
     def oracle_targets(self, model):
-        """(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without
-        the `.oracle` suffix: only the promoted name is collected as a test. One derivation for the placing and the
-        brief, so they cannot disagree."""
-        targets = []
-        for scenario in model.scenarios:
-            evidence = scenario.evidence
-            if evidence and evidence.promote and evidence.place:
-                for name in evidence.oracle:
-                    placed = evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle")
-                    targets.append((placed, name))
-        return targets
+        """(repo-relative place, snapshot file name) for each promoted file. One derivation for the placing, the
+        comparison and the brief, so they cannot disagree."""
+        return [
+            target for scenario in model.scenarios for target in self.scenario_targets(scenario)
+        ]
 
     def place_oracles(self, checkout):
         """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
@@ -5402,6 +5537,8 @@ class Driver:
     def yaml_copies(self):
         """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
         The narrative is copied only when the plan has one."""
+        if yaml_plan.is_folder_plan(self.plan_path):
+            return []  # a plan folder is deleted, never copied: its acceptance files are placed instead
         oracle = yaml_plan.oracle_dir(self.plan_path)
         copies = [(self.plan_rel(), self.plan_path)]
         if self.narrative_path().exists():
@@ -5411,8 +5548,10 @@ class Driver:
 
     def yaml_places(self, model):
         """(repo-relative destination, approved source) for each promote oracle file, at its place."""
-        oracle = yaml_plan.oracle_dir(self.plan_path)
-        return [(rel, oracle / name) for rel, name in self.oracle_targets(model)]
+        return [
+            (rel, yaml_plan.file_path(self.plan_path, name))
+            for rel, name in self.oracle_targets(model)
+        ]
 
     def beside_plan(self, path):
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
