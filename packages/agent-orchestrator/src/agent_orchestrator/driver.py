@@ -5533,7 +5533,7 @@ class Driver:
                 "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
                 *(
                     [
-                        "Verify and CI run `%s`; do not run it yourself." % packet["full"],
+                        "`%s` is the whole suite: do not run it; verify and CI run it." % packet["full"],
                     ]
                     if packet.get("full")
                     else []
