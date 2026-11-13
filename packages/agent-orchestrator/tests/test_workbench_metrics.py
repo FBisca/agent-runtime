@@ -44,6 +44,17 @@ def ci(minutes, gate, unit="t1", task="t1", result="failed", pr=PR):
     }
 
 
+def tokens(input=None, output=None, cached=None, cache_write=None, reasoning=None):
+    # attempts.jsonl schema 3 carries every count; a count nobody measured is null, never absent.
+    return {
+        "input": input,
+        "output": output,
+        "cached": cached,
+        "cache_write": cache_write,
+        "reasoning": reasoning,
+    }
+
+
 class MetricsFixture(WorkbenchFixture):
     def approved(self, slug, *edges):
         data = graph(*(edges or ([],)))
@@ -196,13 +207,13 @@ class MetricsTests(MetricsFixture):
         self.attempts(
             "bench",
             [
-                {"unit": "t1", "tokens": {"input": 100, "output": 10, "cached": None}},
-                {"unit": "t1", "tokens": {"input": 50, "output": None, "cached": None}},
-                {"unit": "t2", "tokens": {"input": None, "output": None, "cached": None}},
+                {"unit": "t1", "tokens": tokens(input=100, output=10)},
+                {"unit": "t1", "tokens": tokens(input=50)},
+                {"unit": "t2", "tokens": tokens()},
             ],
         )
         tickets = self.view(path)["metrics"]["tickets"]
-        self.assertEqual(tickets["T1"]["tokens"], {"input": 150, "output": 10, "cached": None})
+        self.assertEqual(tickets["T1"]["tokens"], tokens(input=150, output=10))
         self.assertEqual(tickets["T1"]["model"], "opus")
         self.assertIsNone(tickets["T2"]["tokens"])
         self.assertIsNone(tickets["T2"]["model"])
