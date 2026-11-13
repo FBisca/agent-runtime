@@ -1132,7 +1132,8 @@ class Driver:
             route_record = data["routes"]
         narrate.NARRATOR.banner(
             plan=self.slug,
-            goal=self.model.goal,
+            # a legacy markdown plan has no model, so no goal to show
+            goal=self.model.goal if self.model else "",
             statuses=[ticket["Status"] for ticket in plan["tickets"]],
             repo=str(self.repo),
             base=self.args.base,
@@ -2191,6 +2192,13 @@ class Driver:
 
     def gate(self, task_id, packet, report):
         """The gate for a unit's report: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
+        # The checks below run silently for as long as the evidence takes: say the report was picked up.
+        narrate.say(
+            "info",
+            "verify",
+            "%s reported %s: checking its report" % (task_id, report.get("status") or "?"),
+            task=task_id,
+        )
         # The archive's gate is its own; a ticket is gated by verify's invariants, then its evidence.
         if packet["unit"] == ARCHIVE:
             return self.archive_evidence(task_id, packet)
@@ -4219,7 +4227,7 @@ class Driver:
             self.plan_path, self.contract()[0], item, self.oracles(), self.repo
         )
 
-    def run_evidence(self, scenario_id, phase, commit):
+    def run_evidence(self, scenario_id, phase, commit, task=None):
         """One run of a scenario's evidence at `commit`, its receipt written and its sha256 in the ledger."""
         model, approval = self.contract()
         scenario = verify.scenario_of(model, scenario_id)
@@ -4227,6 +4235,15 @@ class Driver:
         item = scenario.evidence
         oracles, place, negative = self.inputs(item)
         prior = self.earlier_receipts(scenario_id, phase)
+        # A run can take minutes in its scratch tree; said before and after, the pane never looks idle through it.
+        step = "archive" if phase == "archive" else "verify"
+        narrate.say(
+            "start",
+            step,
+            "running %s evidence (%s) at %s" % (scenario_id, phase, commit[:12]),
+            task=task,
+        )
+        started = time.monotonic()
         result = runner.run_evidence(
             self.repo,
             commit,
@@ -4254,6 +4271,19 @@ class Driver:
         runner.persist(result, self.receipts_dir())
         with self.book() as data:
             runner.record_in_ledger(data, result)
+        kind = {"PASS": "done", "FAIL": "fail"}.get(receipt["result"], "warn")
+        narrate.say(
+            kind,
+            step,
+            "%s evidence %s (%s, %ds)"
+            % (
+                scenario_id,
+                receipt.get("label") or receipt["result"],
+                phase,
+                time.monotonic() - started,
+            ),
+            task=task,
+        )
         return result
 
     def earlier_receipts(self, scenario_id, phase):
@@ -4283,7 +4313,7 @@ class Driver:
             commit = verify.snapshot_commit(packet["checkout"])
             items = []
             for scenario_id in scenario_ids:
-                result = self.run_evidence(scenario_id, "ticket", commit)
+                result = self.run_evidence(scenario_id, "ticket", commit, task=task_id)
                 receipt = result.receipt
                 with self.book() as data:
                     data.setdefault("ticket_evidence", {}).setdefault(unit, {})[scenario_id] = {
@@ -4350,7 +4380,7 @@ class Driver:
             for scenario in verify.check_scenarios(model):
                 if scenario.id not in model.outcome or scenario.id not in held:
                     continue
-                result = self.run_evidence(scenario.id, "archive", commit)
+                result = self.run_evidence(scenario.id, "archive", commit, task=task_id)
                 if result.receipt["result"] != "PASS":
                     items.append(self.evidence_item(len(items) + 1, scenario.id, result))
             with self.book() as data:
@@ -7000,14 +7030,15 @@ def main(argv=None):
     for verb, what in (
         ("plans", "Every plan of a repository with its state and ticket counts"),
         ("plan", "One YAML plan's ticket graph: blocked_by edges, layers, states and revision"),
+        ("totals", "The last seven days of every plan, summed for the cards and their dashboards"),
     ):
         sub = bench.add_parser(verb, help=what)
         sub.add_argument(
-            "path" if verb == "plans" else "plan",
-            nargs="?" if verb == "plans" else None,
-            help="A plan file, or the directory holding plans"
-            if verb == "plans"
-            else "The plan file",
+            "plan" if verb == "plan" else "path",
+            nargs=None if verb == "plan" else "?",
+            help="The plan file"
+            if verb == "plan"
+            else "A plan file, or the directory holding plans",
         )
         sub.add_argument("--repo", help="Repository root; default the current repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)

@@ -13,7 +13,7 @@ from test_workbench import WorkbenchFixture, graph
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 T0 = datetime(2026, 11, 12, 10, 0, 0, tzinfo=timezone.utc)
 
 
@@ -275,7 +275,7 @@ class MetricsTests(ValueFixture):
         self.assertIsNone(t1["tokens"])
         self.assertEqual(metrics["tickets"]["T2"]["fix_rounds"], 1)
         lane = metrics["timeline"]["T1"]
-        self.assertEqual([segment["phase"] for segment in lane], ["work", "review", "ci"])
+        self.assertEqual([segment["phase"] for segment in lane], ["work", "review", "ci", "merge"])
         self.assertEqual(datetime.fromisoformat(lane[0]["start"]), T0)
         self.assertEqual(datetime.fromisoformat(lane[2]["end"]), T0 + timedelta(minutes=31))
 

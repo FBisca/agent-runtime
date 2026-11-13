@@ -2,6 +2,7 @@
 
 import io
 import unittest
+from typing import Any
 
 import pytest
 from agent_orchestrator import narrate
@@ -130,7 +131,7 @@ class NarrateTests(unittest.TestCase):
 class BannerTests(unittest.TestCase):
     """orchestrator-engine/R90: the run's banner, written once when a drive starts."""
 
-    ROUTES = {
+    ROUTES: dict[str, Any] = {
         "source": "user",
         "path": "/Users/me/.config/agent-runtime/routes.yaml",
         "classes": {

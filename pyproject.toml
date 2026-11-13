@@ -28,9 +28,10 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests", "packages/agent-orchestrator/tests", "packages/*/acceptance", "packages/agent-eval/tests"]
-# A promoted acceptance file imports its package's helpers (`fixtures`) as the package's own tests do.
-pythonpath = ["packages/agent-orchestrator/tests"]
+testpaths = ["tests", "acceptance", "packages/agent-orchestrator/tests", "packages/*/acceptance", "packages/agent-eval/tests"]
+# A promoted acceptance file imports its package's helpers (`fixtures`) as the package's own tests do; the root
+# package's acceptance/ imports the root tests/ the same way.
+pythonpath = ["packages/agent-orchestrator/tests", "tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
 markers = [
@@ -80,3 +81,5 @@ quote-style = "double"
 python-version = "3.11"
 # Check every platform: the legacy budget must not depend on the runner OS.
 python-platform = "all"
+# The acceptance tests import the test helpers of the suite they moved out of, as pytest lets them.
+extra-paths = ["packages/agent-orchestrator/tests", "tests"]
