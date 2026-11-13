@@ -1291,6 +1291,9 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
     `baseline: pass` check red, and the plan's evidence is still judged against the tree it was approved on. The
     amendment holds its own lock, never the run lock, so a live driver is not stopped; a ticket the ledger marks
     COMPLETE is frozen, and nothing is written when the amendment is refused."""
+    refusal = runtime_client.approval_refusal(verb="amend")
+    if refusal:
+        raise PlanError("amend: %s — the plan was not amended" % refusal)
     path = Path(path).resolve()
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=False)

@@ -250,6 +250,32 @@ class PlanTests(RunFixture, unittest.TestCase):
         )
         self.refused_approve("worker")
 
+    def test_S20_plan_amend_refuses_a_worker_the_runtime_verifies_by_ancestry_too(self):
+        block = self.approve()
+        self.without_host_markers()
+        self.answer = lambda argv: Done(
+            0, json.dumps({"role": "lead", "caller": {"kind": "worker", "verified": True}})
+        )
+        before = self.plan.read_bytes()
+        code, message = self.command("amend", "--reason", "retitle")
+        self.assertEqual(code, 2, message)
+        self.assertIn("worker", message)
+        self.assertIn("amend", message)
+        self.assertEqual(self.plan.read_bytes(), before)
+        self.assertEqual(
+            yaml.safe_load(self.plan.read_text())["approval"]["digest"], block["digest"]
+        )
+
+    def test_S20_the_way_out_names_both_a_worker_and_a_lead(self):
+        self.answer = lambda argv: Done(
+            0, json.dumps({"role": "unknown", "caller": {"kind": "unknown"}})
+        )
+        code, message = self.command("approve")
+        self.assertEqual(code, 2, message)
+        self.assertIn("ask the Lead", message)
+        self.assertIn("from a terminal with no agent host", message)
+        self.assertIn("hc Lead terminal", message)
+
     def test_S21_a_lead_the_runtime_verifies_approves(self):
         self.assertIn("digest", self.approve())
         self.assertEqual(self.asked[0][-2:], ["resolve", "--json"])

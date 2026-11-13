@@ -2,7 +2,7 @@
 
 `plan approve` always asks the runtime CLI who the caller is, and refuses a worker, or an unverified caller
 inside a host (a marker is present); many tests approve under a Lead marker, and a developer running the suite
-from an agent session would otherwise be refused by the real lookup. A test of the refusal replaces this."""
+from an agent session would otherwise be refused by the real lookup. This file covers every suite of the package (tests and acceptance); a test of the refusal replaces it."""
 
 import json
 import subprocess

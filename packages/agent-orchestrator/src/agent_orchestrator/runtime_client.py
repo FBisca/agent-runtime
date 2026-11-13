@@ -103,10 +103,19 @@ HOST_MARKERS = (
     "CODEX_TOOL_CALL_ID",
     "PI_CODING_AGENT",
 )
-ASK_THE_LEAD = "approval belongs to the Lead (the person in their own session): ask the Lead to run plan approve"
 
 
-def approval_refusal(env=None, process=None):
+def ask_the_lead(verb):
+    """The way out, for each caller: a worker cannot approve or amend, and a Lead the runtime cannot verify (a plain
+    agent session with no hc ancestry) runs it where no agent marker makes its identity doubtful."""
+    return (
+        "%s belongs to the Lead (the person in their own session): a worker: ask the Lead to run plan %s; "
+        "a Lead runs plan %s from a terminal with no agent host, or from its hc Lead terminal"
+        % ("approval" if verb == "approve" else "amendment", verb, verb)
+    )
+
+
+def approval_refusal(env=None, process=None, verb="approve"):
     """A reason `plan approve` must refuse this caller, or None when it may go on.
 
     The runtime CLI is always asked (`agent-runtime resolve --json`), because it can see worker ancestry that no
@@ -132,17 +141,17 @@ def approval_refusal(env=None, process=None):
             return None
         return "the runtime lookup of the caller failed (%s), so the caller is unverified — %s" % (
             error,
-            ASK_THE_LEAD,
+            ask_the_lead(verb),
         )
     caller = answer.get("caller") if isinstance(answer.get("caller"), dict) else {}
     if answer.get("role") == "worker" or caller.get("kind") == "worker":
         return "the caller is a spawned worker (parent %s) — %s" % (
             answer.get("parent", "unknown"),
-            ASK_THE_LEAD,
+            ask_the_lead(verb),
         )
     if (caller.get("kind") == "lead" and caller.get("verified") is True) or not in_host:
         return None
     return "the runtime does not verify the caller as the Lead (it reports %s) — %s" % (
         caller.get("kind", answer.get("role", "unknown")),
-        ASK_THE_LEAD,
+        ask_the_lead(verb),
     )
