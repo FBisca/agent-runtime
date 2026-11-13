@@ -83,6 +83,20 @@ def home_tests(sid, name, at_least):
     )
 
 
+def plan_tests(sid, name, at_least):
+    """An open plan's node tests for one scenario: `<sid> plan ...` (the control plan's own `<sid> ...` tests share the ID,
+    so the prefix names these)."""
+    passed, failed, output = node_tests(pattern=r"^%s plan" % sid)
+    assert failed == 0, output
+    assert passed >= at_least, "%s %s: %d node tests passed, expected at least %d\n%s" % (
+        sid,
+        name,
+        passed,
+        at_least,
+        output,
+    )
+
+
 def source(name):
     return (MOD / name).read_text()
 
@@ -310,3 +324,11 @@ def test_S14_home_lists_needs_me_with_a_glyph_and_an_action_and_each_plan_with_r
     home = (MOD / "views" / "home.js").read_text()
     assert "item.glyph" in home and "item.action" in home
     assert "row.recency" in home and "row.prs" in home and "row.live" in home
+
+
+def test_S16_an_open_plan_has_five_cards_from_its_own_metrics_and_a_value_it_does_not_carry_reads_unknown():
+    plan_tests("S16", "five cards", 3)
+
+
+def test_S17_each_ticket_is_a_card_of_its_measures_phases_agents_and_pr_and_the_timeline_marks_each_merge():
+    plan_tests("S17", "ticket cards and timeline", 5)
