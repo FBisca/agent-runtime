@@ -24,13 +24,13 @@ class RoutedRunFixture(RunFixture):
     """A run stopped once its routes are settled: the driver has parsed its arguments and started, and no worker
     exists. What each gate would spawn on is the driver's own answer, read in this process."""
 
-    def settle(self, *extra, expect=0):
+    def settle(self, *extra, expect=0, routed=True):
         """The run's routes, settled: the driver the run built, stopped where its loop would begin."""
         spec = load_script()
         seen = []
         self.alias_state(self.plan)
         with mock.patch.object(spec.Driver, "loop", lambda driver: seen.append(driver)):
-            result = self.in_process(spec, self.driver_args(*extra))
+            result = self.in_process(spec, self.driver_args(*extra, routed=routed))
         self.assertEqual(result.returncode, expect, result.stderr)
         self.settled = seen[0] if seen else None
         return result

@@ -12,6 +12,7 @@ from unittest import mock
 
 import pytest
 from fixtures import RunFixture, load_script, report_wait, spawn_id  # noqa: E402
+from test_step_routes import RoutedRunFixture
 
 pytestmark = pytest.mark.integration
 
@@ -37,39 +38,6 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
     def workers(self):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
 
-    def test_S2_the_configured_backend_model_and_effort_are_chosen(self):
-        """orchestrator-engine/R2: P4/S2 — the config names the combination the worker runs on, and the spawn carries it."""
-        path = self.routes_file(
-            config(
-                route("small", "codex", "gpt-s", effort="high"),
-                route("medium", "claude", "sonnet"),
-                route("large", "claude", "opus"),
-            )
-        )
-        self.run_driver("--routes-file", path)
-        worker = self.workers()["demo-t1"]
-        self.assertEqual(
-            (worker["cli"], worker["model"], worker["effort"]), ("codex", "gpt-s", "high")
-        )
-
-    def test_S2_the_selected_route_is_logged_in_the_route_ledger(self):
-        """orchestrator-engine/R2: P4/S2 — the ledger keeps the resolved route, so the run says what it spent and where."""
-        path = self.routes_file(
-            config(
-                route("small", "codex", "gpt-s", effort="high"),
-                route("medium", "claude", "sonnet"),
-                route("large", "claude", "opus"),
-            )
-        )
-        self.run_driver("--routes-file", path)
-        record = self.ledger()["routes"]
-        self.assertEqual(record["source"], "explicit")
-        self.assertEqual(record["path"], path)
-        self.assertEqual(
-            record["classes"]["small"],
-            {"class": "small", "backend": "codex", "model": "gpt-s", "effort": "high"},
-        )
-
     def test_S2_the_selected_route_is_logged_in_the_event_log(self):
         """orchestrator-engine/R2: P4/S2 — the run says which route it dispatched on."""
         path = self.routes_file(
@@ -86,87 +54,6 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             (logged[0]["backend"], logged[0]["model"], logged[0]["effort"]),
             ("codex", "gpt-s", "high"),
         )
-
-    def test_S2_the_repository_policy_config_answers_when_no_file_is_named(self):
-        """orchestrator-engine/R2: P4/S2 — the repository's own policy answers when the run names no config."""
-        policy = self.repo / ".orchestrate" / "routes.json"
-        policy.parent.mkdir(parents=True, exist_ok=True)
-        policy.write_text(
-            json.dumps(
-                config(
-                    route("small", "codex", "gpt-s"),
-                    route("medium", "claude", "sonnet"),
-                    route("large", "claude", "opus"),
-                )
-            ),
-            encoding="utf-8",
-        )
-        self.run_driver(routed=False)
-        worker = self.workers()["demo-t1"]
-        self.assertEqual((worker["cli"], worker["model"]), ("codex", "gpt-s"))
-        self.assertEqual(self.ledger()["routes"]["source"], "repo")
-
-    def test_S2_the_user_default_config_answers_when_no_other_config_is_named(self):
-        """orchestrator-engine/R2: P4/S2 — the user's own default answers when neither the run nor the repository names a config."""
-        home = self.root / "home"
-        (home / ".config" / "orchestrate").mkdir(parents=True)
-        (home / ".config" / "orchestrate" / "routes.json").write_text(
-            json.dumps(
-                config(
-                    route("small", "codex", "gpt-s"),
-                    route("medium", "claude", "sonnet"),
-                    route("large", "claude", "opus"),
-                )
-            ),
-            encoding="utf-8",
-        )
-        with mock.patch.dict(os.environ, {"HOME": str(home)}):
-            self.run_driver(routed=False)
-        worker = self.workers()["demo-t1"]
-        self.assertEqual((worker["cli"], worker["model"]), ("codex", "gpt-s"))
-        self.assertEqual(self.ledger()["routes"]["source"], "user")
-
-    def test_S2_the_named_config_wins_over_the_repository_policy(self):
-        """orchestrator-engine/R2: P4/S2 — the order is explicit, then the repository's policy, then the user's default."""
-        policy = self.repo / ".orchestrate" / "routes.json"
-        policy.parent.mkdir(parents=True, exist_ok=True)
-        policy.write_text(
-            json.dumps(
-                config(
-                    route("small", "claude", "haiku"),
-                    route("medium", "claude", "sonnet"),
-                    route("large", "claude", "opus"),
-                )
-            ),
-            encoding="utf-8",
-        )
-        path = self.routes_file(
-            config(
-                route("small", "codex", "gpt-s"),
-                route("medium", "claude", "sonnet"),
-                route("large", "claude", "opus"),
-            )
-        )
-        self.run_driver("--routes-file", path)
-        worker = self.workers()["demo-t1"]
-        self.assertEqual((worker["cli"], worker["model"]), ("codex", "gpt-s"))
-        self.assertEqual(self.ledger()["routes"]["source"], "explicit")
-
-    def test_S2_an_explicit_override_wins_over_the_config(self):
-        """orchestrator-engine/R2: P4/S2 — the override on the command line beats the config file."""
-        path = self.routes_file(
-            config(
-                route("small", "claude", "haiku"),
-                route("medium", "claude", "sonnet"),
-                route("large", "claude", "opus"),
-            )
-        )
-        self.run_driver("--routes-file", path, "--route", "small=codex/gpt-s@high")
-        worker = self.workers()["demo-t1"]
-        self.assertEqual(
-            (worker["cli"], worker["model"], worker["effort"]), ("codex", "gpt-s", "high")
-        )
-        self.assertEqual(self.ledger()["routes"]["classes"]["small"]["backend"], "codex")
 
     def test_S1_a_route_naming_pi_and_the_top_effort_reaches_the_worker_spawn(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi and max are expressible, and the spawn carries both."""
@@ -346,6 +233,85 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             (spawns["demo2-t1-review"]["cli"], spawns["demo2-t1-review"]["model"]),
             ("codex", "gpt-m"),
         )
+
+
+class RouteSettlementTests(RoutedRunFixture, unittest.TestCase):
+    """Which route answers a class, read where the driver settles its routes; the spawns above show it crossing."""
+
+    def small(self):
+        route = self.settled.routes["small"]
+        return route.backend, route.model, route.effort
+
+    def classes_with_small(self, backend, model, **extra):
+        return (
+            self.route("small", backend, model, **extra),
+            self.route("medium", "claude", "sonnet"),
+            self.route("large", "claude", "opus"),
+        )
+
+    def test_S2_the_configured_backend_model_and_effort_are_chosen(self):
+        """orchestrator-engine/R2: P4/S2 — the config names the combination the worker runs on."""
+        path = self.routes_file(
+            self.config(*self.classes_with_small("codex", "gpt-s", effort="high"))
+        )
+        self.settle("--routes-file", path)
+        self.assertEqual(self.small(), ("codex", "gpt-s", "high"))
+
+    def test_S2_the_selected_route_is_logged_in_the_route_ledger(self):
+        """orchestrator-engine/R2: P4/S2 — the ledger keeps the resolved route, so the run says what it spent and where."""
+        path = self.routes_file(
+            self.config(*self.classes_with_small("codex", "gpt-s", effort="high"))
+        )
+        self.settle("--routes-file", path)
+        record = self.ledger()["routes"]
+        self.assertEqual(record["source"], "explicit")
+        self.assertEqual(record["path"], path)
+        self.assertEqual(
+            record["classes"]["small"],
+            {"class": "small", "backend": "codex", "model": "gpt-s", "effort": "high"},
+        )
+
+    def test_S2_the_repository_policy_config_answers_when_no_file_is_named(self):
+        """orchestrator-engine/R2: P4/S2 — the repository's own policy answers when the run names no config."""
+        policy = self.repo / ".orchestrate" / "routes.json"
+        policy.parent.mkdir(parents=True, exist_ok=True)
+        policy.write_text(
+            json.dumps(self.config(*self.classes_with_small("codex", "gpt-s"))), encoding="utf-8"
+        )
+        self.settle(routed=False)
+        self.assertEqual(self.small()[:2], ("codex", "gpt-s"))
+        self.assertEqual(self.ledger()["routes"]["source"], "repo")
+
+    def test_S2_the_user_default_config_answers_when_no_other_config_is_named(self):
+        """orchestrator-engine/R2: P4/S2 — the user's own default answers when neither the run nor the repository names a config."""
+        home = self.root / "home"
+        (home / ".config" / "orchestrate").mkdir(parents=True)
+        (home / ".config" / "orchestrate" / "routes.json").write_text(
+            json.dumps(self.config(*self.classes_with_small("codex", "gpt-s"))), encoding="utf-8"
+        )
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            self.settle(routed=False)
+        self.assertEqual(self.small()[:2], ("codex", "gpt-s"))
+        self.assertEqual(self.ledger()["routes"]["source"], "user")
+
+    def test_S2_the_named_config_wins_over_the_repository_policy(self):
+        """orchestrator-engine/R2: P4/S2 — the order is explicit, then the repository's policy, then the user's default."""
+        policy = self.repo / ".orchestrate" / "routes.json"
+        policy.parent.mkdir(parents=True, exist_ok=True)
+        policy.write_text(
+            json.dumps(self.config(*self.classes_with_small("claude", "haiku"))), encoding="utf-8"
+        )
+        path = self.routes_file(self.config(*self.classes_with_small("codex", "gpt-s")))
+        self.settle("--routes-file", path)
+        self.assertEqual(self.small()[:2], ("codex", "gpt-s"))
+        self.assertEqual(self.ledger()["routes"]["source"], "explicit")
+
+    def test_S2_an_explicit_override_wins_over_the_config(self):
+        """orchestrator-engine/R2: P4/S2 — the override on the command line beats the config file."""
+        path = self.routes_file(self.config(*self.classes_with_small("claude", "haiku")))
+        self.settle("--routes-file", path, "--route", "small=codex/gpt-s@high")
+        self.assertEqual(self.small(), ("codex", "gpt-s", "high"))
+        self.assertEqual(self.ledger()["routes"]["classes"]["small"]["backend"], "codex")
 
 
 if __name__ == "__main__":
