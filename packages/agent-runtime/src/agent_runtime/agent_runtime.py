@@ -836,6 +836,17 @@ def terminal_root_pid(terminal_id):
     return pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1 else None
 
 
+def lead_advice(generation):
+    """The way out of a live-lead refusal, worded so that it can be followed.
+
+    LEAD_ID cannot carry a real generation (its start stamp has spaces), so the advice to pass
+    --lead is only given when the generation can be passed.
+    """
+    if LEAD_ID.fullmatch(generation):
+        return "run this driver in its own hc terminal or pass --lead %s" % generation
+    return "run this driver in its own hc terminal, or wait until that generation's work is done"
+
+
 def cmd_call(args):
     hc_tools = hc_tools_module()
     try:
@@ -876,7 +887,7 @@ def cmd_call(args):
         if live:
             print(
                 "this terminal's live lead generation is %s with unfinished assignments or unacknowledged reports; "
-                "run this driver in its own hc terminal or pass --lead %s" % (live, live),
+                "%s" % (live, lead_advice(live)),
                 file=sys.stderr,
             )
             return 2

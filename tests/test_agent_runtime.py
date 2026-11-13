@@ -1027,6 +1027,31 @@ class CallTests(unittest.TestCase):
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
 
+    def test_the_cli_refusal_advices_only_what_can_be_followed(self):
+        """LEAD_ID cannot carry a real generation (its start stamp has spaces): the advice the refusal
+        prints must be usable."""
+        spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
+        code, _, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
+        self.assertEqual(code, 0, err)
+        code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("--lead L1", err)  # a generation LEAD_ID can carry
+
+        stamp = "%d:%s" % (os.getpid(), app.lstart(os.getpid()))  # a real generation
+        store = Store({"XDG_STATE_HOME": str(self.dir / "state")})
+        with store.transaction() as db:
+            scope, lead, _ = db.execute(
+                "SELECT scope,lead,generation FROM teams ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        owner = store.team(scope, lead, stamp)
+        identity = store.register(owner, "w2")
+        store.bind(identity["assignment_id"], "t8", scope)  # the owner holds work
+        code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 2, out + err)
+        self.assertIn(stamp, err)  # the refusal names the generation that owns the terminal
+        self.assertNotIn("--lead %s" % stamp, err)  # an advice nobody can follow
+        self.assertIn("own hc terminal", err)  # the way out
+
     def test_the_cli_live_lead_check_reads_the_same_ownership_rule(self):
         """A newer row that left nothing behind never hides the live lead's generation."""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
