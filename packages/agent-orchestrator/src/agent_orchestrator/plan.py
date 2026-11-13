@@ -304,14 +304,120 @@ def read_yaml(path):
         ) from None
 
 
-def is_folder_plan(path):
-    return Path(path).name == FOLDER_PLAN
+class PlanLayout:
+    """The one place that knows how a plan lays out its files, for a plan in its own folder (`<folder>/plan.yaml`)
+    and a legacy plan (`<stem>.plan.yaml` beside `<stem>.plan.md` and `<stem>.oracle/`). Built from the plan path and
+    the repository; every command that reads, snapshots, places, guards or copies a plan's files asks it, so the
+    file name is read in this class only. `repo` may be left out where only the path is asked."""
 
+    YAML = ".plan.yaml"
+    MARKDOWN = ".plan.md"
 
-def oracle_dir(path):
-    path = Path(path)
-    stem = path.name.removesuffix(".plan.yaml")
-    return path.with_name(stem + ".oracle")
+    def __init__(self, path, repo=None):
+        self.path = Path(path)
+        self.repo = Path(repo) if repo is not None else None
+        self.kind = "folder" if self.path.name == FOLDER_PLAN else "legacy"
+
+    @classmethod
+    def of(cls, path, repo=None):
+        return path if isinstance(path, cls) else cls(path, repo)
+
+    @classmethod
+    def is_plan_file(cls, path):
+        """Whether `path` is named like a plan/1 YAML plan: `plan.yaml` or `<stem>.plan.yaml`."""
+        name = Path(path).name
+        return name == FOLDER_PLAN or name.endswith(cls.YAML)
+
+    @classmethod
+    def is_listed(cls, path):
+        """Whether a plan listing shows `path`: a `<stem>.plan.yaml` or `<stem>.plan.md` plan (a folder plan is listed
+        from its plans dir, not by name)."""
+        return Path(path).name.endswith((cls.YAML, cls.MARKDOWN))
+
+    @property
+    def is_folder(self):
+        return self.kind == "folder"
+
+    @property
+    def format(self):
+        return "markdown" if self.path.name.endswith(self.MARKDOWN) else "yaml"
+
+    @property
+    def stem(self):
+        """What names the plan: its folder's name for a folder plan, else the file name without its suffixes."""
+        if self.is_folder:
+            return self.path.parent.name
+        return self.path.name.removesuffix(self.YAML).removesuffix(self.MARKDOWN)
+
+    @property
+    def folder(self):
+        """The plan's own folder, or None for a legacy plan."""
+        return self.path.parent if self.is_folder else None
+
+    @property
+    def oracle_dir(self):
+        """A legacy plan's oracle directory beside it, or None for a folder plan."""
+        return None if self.is_folder else self.path.with_name(self.stem + ".oracle")
+
+    @property
+    def narrative(self):
+        """A legacy plan's Markdown narrative beside it, or None for a folder plan."""
+        return None if self.is_folder else self.path.with_name(self.stem + self.MARKDOWN)
+
+    @property
+    def contract_files(self):
+        """The paths that are the plan's contract: the folder plan's plan.yaml (the rest of its folder is read from
+        `owns`), a legacy plan's file, narrative and oracle directory."""
+        if self.is_folder:
+            return [self.path]
+        return [self.path, self.narrative, self.oracle_dir]
+
+    def place(self, path):
+        """`path` relative to the repository, or None when it is outside it."""
+        try:
+            return Path(path).relative_to(self.repo).as_posix()
+        except ValueError:
+            return None
+
+    @property
+    def plan_place(self):
+        """Where the plan file sits in the repository; a legacy plan kept outside it is placed under docs/plans/,
+        where an archive copies it. A folder plan outside the repository has no place (None)."""
+        placed = self.place(self.path)
+        if placed is None and not self.is_folder:
+            return "docs/plans/" + self.path.name
+        return placed
+
+    def owns(self, name):
+        """Whether the repository path `name` belongs to the plan: anything in a folder plan's folder, or a legacy
+        plan's file or oracle directory. A folder plan kept outside the repository owns no repository path."""
+        if self.is_folder:
+            folder = self.place(self.folder)
+            return folder is not None and name.startswith(folder + "/")
+        plan = self.plan_place
+        oracles = posixpath.dirname(plan) + "/" + self.oracle_dir.name
+        return name == plan or name.startswith(oracles + "/")
+
+    def holds_repo(self):
+        folder = self.folder
+        return folder is not None and (self.repo == folder or self.repo.is_relative_to(folder))
+
+    def may_delete_folder(self):
+        """Whether the plan has a folder of its own that may be deleted: a folder that is the repository, or holds
+        it, may not, because deleting it would delete the work."""
+        return self.is_folder and not self.holds_repo()
+
+    def folder_place(self):
+        """The deletable folder's path in the repository; None for a legacy plan or a folder kept outside the
+        repository. A folder that is or holds the repository is refused."""
+        if not self.is_folder:
+            return None
+        if self.holds_repo():
+            raise ValueError(
+                "the plan folder %s is or holds the repository; move plan.yaml into a folder of its own"
+                % self.folder
+            )
+        return self.place(self.folder)
 
 
 def git(repo, *args):
@@ -383,7 +489,7 @@ def semantic_problems(data, path, repo):
     def defect(loc, why, fix):
         problems.append(f"{loc}: {why} — {fix}")
 
-    folder = is_folder_plan(path)
+    folder = PlanLayout(path).is_folder
     scenarios = data.get("scenarios")
     tickets = data.get("tickets")
     scenarios = scenarios if isinstance(scenarios, list) else []
@@ -588,10 +694,10 @@ def semantic_problems(data, path, repo):
         ):
             if not isinstance(name, str):
                 continue
-            source = oracle_dir(path) / name
+            source = PlanLayout(path).oracle_dir / name
             try:
                 literal_path(name)
-                source.resolve().relative_to(oracle_dir(path).resolve())
+                source.resolve().relative_to(PlanLayout(path).oracle_dir.resolve())
                 exists = source.is_file()
             except ValueError:
                 exists = False
@@ -834,20 +940,22 @@ def folder_files(path, data):
 
 def approved_files(path, data):
     """The files an approval of `path` covers, by the name the digest and the snapshot use."""
-    return folder_files(path, data) if is_folder_plan(path) else payloads(oracle_dir(path))
+    layout = PlanLayout(path)
+    return folder_files(path, data) if layout.is_folder else payloads(layout.oracle_dir)
 
 
 def snapshot_files(snapshot, path):
     """The files of an approval snapshot directory: `oracle/` for a legacy plan, the folder-relative names for a
     folder plan (everything beside its plan.yaml)."""
-    if not is_folder_plan(path):
+    if not PlanLayout(path).is_folder:
         return payloads(snapshot / "oracle")
     return {n: b for n, b in payloads(snapshot).items() if n != "plan.yaml"}
 
 
 def file_path(path, name):
     """Where a snapshot file name lives in the authored plan, for a message."""
-    return Path(path).parent / name if is_folder_plan(path) else oracle_dir(path) / name
+    layout = PlanLayout(path)
+    return layout.folder / name if layout.is_folder else layout.oracle_dir / name
 
 
 def destination(model, item, repo):
@@ -864,7 +972,7 @@ def runner_inputs(path, model, item, files, repo):
     are placed in, and the negative patch as (name, bytes). One derivation for the baseline, the runs and the
     mutation checks, whichever layout the plan has."""
     negative = (item.negative, files[item.negative]) if item.negative else None
-    if not is_folder_plan(path):
+    if not PlanLayout(path).is_folder:
         return {name: files[name] for name in item.oracle}, item.place, negative
     return (
         {name: files["acceptance/" + name] for name in item.acceptance},
@@ -875,7 +983,7 @@ def runner_inputs(path, model, item, files, repo):
 
 def placed_files(path, model, item, repo):
     """Repo-relative path of each test file an evidence item places."""
-    if not is_folder_plan(path):
+    if not PlanLayout(path).is_folder:
         return [
             ((item.place or "").rstrip("/") + "/" + name.removesuffix(".oracle")).lstrip("/")
             for name in item.oracle
@@ -1264,7 +1372,9 @@ def publish(path, text, plan_bytes, files, sha, state_dir):
         try:
             (temporary / "plan.yaml").write_bytes(plan_bytes)
             for name, content in files.items():
-                dest = temporary / name if is_folder_plan(path) else temporary / "oracle" / name
+                dest = (
+                    temporary / name if PlanLayout(path).is_folder else temporary / "oracle" / name
+                )
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
             if target.exists():
@@ -1406,9 +1516,6 @@ def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     return {"approval": approval, "amendment": entry}
 
 
-PLAN_SUFFIXES = (".plan.yaml", ".plan.md")
-
-
 class DiscoveryError(PlanError):
     """Plan discovery refused for a reason a reader can tell apart: `kind` is not_a_repo, ambiguous or no_such_path."""
 
@@ -1422,7 +1529,7 @@ def plan_entries(directory):
     if not directory.is_dir():
         return []
     return sorted(
-        (p for p in directory.iterdir() if p.is_file() and p.name.endswith(PLAN_SUFFIXES)),
+        (p for p in directory.iterdir() if p.is_file() and PlanLayout.is_listed(p)),
         key=lambda p: p.name,
     )
 
@@ -1432,11 +1539,10 @@ def slug_of(path):
 
     A Markdown plan, or a YAML plan whose file cannot be read, keeps the file-derived slug: a listing never fails on
     the plan it lists."""
-    derived = path.name.removesuffix(".plan.yaml").removesuffix(".plan.md")
-    if path.name == "plan.yaml":
-        derived = path.parent.name  # a folder plan is named by its folder
-    elif not path.name.endswith(".plan.yaml"):
-        return derived
+    layout = PlanLayout(path)
+    derived = layout.stem  # a folder plan is named by its folder
+    if not PlanLayout.is_plan_file(path):
+        return derived  # a Markdown plan keeps the file-derived slug
     try:
         data = read_yaml(path)[0]
     except PlanError:
@@ -1457,7 +1563,7 @@ def folder_plans(directory):
     """`<directory>/<folder>/plan.yaml` for each folder that has one; nothing is created."""
     if not directory.is_dir():
         return []
-    return sorted(p / "plan.yaml" for p in directory.iterdir() if (p / "plan.yaml").is_file())
+    return sorted(p / FOLDER_PLAN for p in directory.iterdir() if (p / FOLDER_PLAN).is_file())
 
 
 def repository_root(cwd, repo=None):
@@ -1500,7 +1606,7 @@ def discover(repo=None, explicit=None):
         plans_dir = repo_config(root).plans_dir
         configured = folder_plans(plans_dir)
         tracked = git(root, "ls-files").splitlines()
-        dirs = sorted({str(Path(f).parent) for f in tracked if f.endswith(PLAN_SUFFIXES)})
+        dirs = sorted({str(Path(f).parent) for f in tracked if PlanLayout.is_listed(f)})
         # A repo that writes its config has named its plans dir, so plan files elsewhere (test
         # fixtures) cannot make the listing ambiguous. The built-in default names nothing.
         if len(dirs) > 1 and (root / config.CONFIG_PATH).is_file():
@@ -1522,7 +1628,7 @@ def discover(repo=None, explicit=None):
     return [
         {
             "path": str(p),
-            "format": "markdown" if p.name.endswith(".plan.md") else "yaml",
+            "format": PlanLayout(p).format,
             "slug": slug_of(p),
         }
         for p in sorted(files)

@@ -86,7 +86,12 @@ class VerifyFixture(unittest.TestCase):
     def gate(self, covers, **ticket):
         report = {"contract": 3, "task_id": "t1", "covers": covers}
         return verify.invariants(
-            model(**ticket), "T1", report, repo=self.repo, base="main", plan_rel=PLAN_REL
+            model(**ticket),
+            "T1",
+            report,
+            repo=self.repo,
+            base="main",
+            layout=yaml_plan.PlanLayout(self.repo / PLAN_REL, self.repo),
         )
 
     def found(self, findings):
@@ -272,6 +277,8 @@ class FolderPlanIntegrityTests(VerifyFixture):
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
 
     def folder_gate(self, plan_rel=FOLDER_PLAN_REL, **ticket):
+        outside = plan_rel is None  # a plan kept outside the repository
+        plan_path = Path("/elsewhere/plan.yaml") if outside else self.repo / plan_rel
         report = {"contract": 3, "task_id": "t1", "covers": self.covers}
         return self.found(
             verify.invariants(
@@ -280,7 +287,7 @@ class FolderPlanIntegrityTests(VerifyFixture):
                 report,
                 repo=self.repo,
                 base="main",
-                plan_rel=plan_rel,
+                layout=yaml_plan.PlanLayout(plan_path, self.repo),
             )
         )
 
@@ -344,14 +351,14 @@ class FolderPlanIntegrityTests(VerifyFixture):
 
 
 class DriverPlanPathTests(unittest.TestCase):
-    """What the driver hands verify as the plan's repo path."""
+    """What the driver's layout says of the plan's place in the repository."""
 
     def rel(self, plan_path, repo="/repo"):
         from agent_orchestrator import driver
 
         stub = driver.Driver.__new__(driver.Driver)
         stub.plan_path, stub.repo = Path(plan_path), Path(repo)
-        return stub.plan_rel_for_integrity()
+        return stub.layout.plan_place
 
     def test_S7_a_folder_plan_in_the_repository_is_named_by_its_repo_path(self):
         self.assertEqual(
