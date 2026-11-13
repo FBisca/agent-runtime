@@ -1,16 +1,19 @@
 """The typed route schema: which backend, model and effort each model class runs on.
 
-The driver used to read its classes from the "Model classes" table of `~/.claude/CLAUDE.md`. That table is
-still read — it is the legacy config, kept for a transition — but a run may name a route config instead: a
-versioned document that says what each class runs on. The schema is strict on purpose: an unknown backend or
-an unknown class is an error, never a silent fall back to another billable model.
+A new run is routed by a route config: a versioned document that says what each class runs on. The driver reads
+no model table (not the "Model classes" table of `~/.claude/CLAUDE.md`, not its own): a run with no typed config
+stops before any worker and says how to supply one. The schema is strict on purpose: an unknown backend or an
+unknown class is an error, never a silent fall back to another billable model.
 
 The schema is a plain dict, so the file format stays a separate question: JSON is read here, YAML when
 PyYAML is installed. The rules below are the same either way.
 
-A run finds its config in the plan's order: the file it names, then the repository's own policy, then the user's
-default. A command line may override one class outright (`--route small=codex/gpt-s@high`); the override is
-validated like a config route and wins over every file. With no config at all the legacy table answers.
+A new run finds its config in this order: the file it names (`--routes-file`), then the repository's own policy
+(`.orchestrate/routes.json`), then the user's profile for the run's backend (`~/.config/orchestrate/routes.json`
+for Claude, `routes-codex.json` for Codex, `routes-pi.json` for Pi). The first file found is the only one read: an
+invalid one fails the run, it never falls through to the next. A command line may override one class or step
+outright (`--route small=codex/gpt-s@high`); the override is validated like a config route and wins over every
+file. A run that resumes keeps the routes its ledger recorded instead (see `read_record`).
 """
 
 import json
@@ -41,10 +44,8 @@ NOUNS = {"class": "model class", "backend": "worker backend", "effort": "effort"
 CONFIG_SUFFIXES = (".json", ".yaml", ".yml")
 REPO_POLICY = ".orchestrate"  # the repository's own policy directory
 USER_POLICY = "~/.config/orchestrate"  # the user's default directory
-LEGACY_WARNING = (
-    "legacy routing config in use: the 'Model classes' table of %s; it is deprecated and will be "
-    "phased out, pass --routes-file to name the typed route config"
-)
+# The user's profile per worker backend: the file stem under USER_POLICY. Claude's is the plain `routes`.
+USER_PROFILES = {"claude": "routes", "codex": "routes-codex", "pi": "routes-pi"}
 
 
 class RouteError(ValueError):
@@ -85,11 +86,6 @@ class RouteConfig:
 
 def text(value):
     return isinstance(value, str) and bool(value.strip())
-
-
-def legacy_warning(path):
-    """The warning a legacy run gets: the old config still answers, but it is on its way out."""
-    return LEGACY_WARNING % path
 
 
 class RouteEntry(BaseModel):
@@ -260,12 +256,12 @@ def load(path):
     return validate(data)
 
 
-def config_files(directory):
-    """The route config files a directory holds, in the order they are read."""
+def config_files(directory, stem="routes"):
+    """The route config files a directory may hold for one stem, in the order they are read."""
     if not directory:
         return []
     base = Path(directory).expanduser()
-    return [str(base / ("routes" + suffix)) for suffix in CONFIG_SUFFIXES]
+    return [str(base / (stem + suffix)) for suffix in CONFIG_SUFFIXES]
 
 
 def user_config_dir():
@@ -276,18 +272,33 @@ def user_config_dir():
         return None
 
 
-def find_config(explicit=None, repo=None, home=None):
-    """The route config a run uses, and where it came from.
+def missing_config(backend):
+    """The refusal of a new run that has no typed route config: what was looked for and how to supply one."""
+    profile = "%s/%s%s" % (USER_POLICY, USER_PROFILES[backend], CONFIG_SUFFIXES[0])
+    return (
+        "no typed route config for a new run on %s: looked for the repository policy %s/routes.json and the "
+        "user profile %s. Pass --routes-file FILE, or create %s. A route file is JSON such as "
+        '{"version": 1, "routes": [{"class": "small", "backend": "%s", "model": "MODEL", "effort": "low"}, '
+        "...]} with a route for small, medium and large; the driver reads no model table"
+        % (backend, REPO_POLICY, profile, profile, backend)
+    )
 
-    The order is the plan's: the file the run names, then the repository's policy, then the user's default.
-    (None, None) means no config was found and the legacy 'Model classes' table answers."""
+
+def find_config(explicit=None, repo=None, home=None, backend="claude"):
+    """The route config a new run uses, and where it came from.
+
+    The order is: the file the run names, then the repository's policy, then the user's profile for the run's
+    backend. A run with none of them is refused: there is no table to answer, and no default to guess."""
     if explicit:
         return str(explicit), "explicit"
-    for directory, source in ((repo and str(Path(repo) / REPO_POLICY), "repo"), (home, "user")):
-        for path in config_files(directory):
+    for directory, stem, source in (
+        (repo and str(Path(repo) / REPO_POLICY), "routes", "repo"),
+        (home, USER_PROFILES[backend], "user"),
+    ):
+        for path in config_files(directory, stem):
             if Path(path).exists():
                 return path, source
-    return None, None
+    raise RouteError(missing_config(backend))
 
 
 def _override_parts(text, what="route", noun="class"):
@@ -520,20 +531,9 @@ def conflicts(pinned, classes, steps, cli=None, brain_cli=None, via=None):
     return out
 
 
-def legacy(backend, models):
-    """The routes the legacy 'Model classes' table answers: one model per class, the effort left to the matrix."""
-    return {
-        klass: Route(klass=klass, backend=backend, model=model) for klass, model in models.items()
-    }
-
-
-def resolve(config, backend, legacy_models):
-    """The class -> route map a run uses.
-
-    Without a config the legacy table answers, unchanged. With one the config wins, and a class it leaves out
-    is an error rather than a silent fall back to another billable model."""
-    if config is None:
-        return legacy(backend, legacy_models)
+def resolve(config):
+    """The class -> route map a run uses. A class the config leaves out is an error rather than a silent fall
+    back to another billable model."""
     routes = {route.klass: route for route in config.routes}
     missing = [klass for klass in CLASSES if klass not in routes]
     if missing:

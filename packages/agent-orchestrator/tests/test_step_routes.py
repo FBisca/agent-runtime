@@ -57,6 +57,14 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
             self.route("large", "claude", "opus"),
         )
 
+    def brain_config(self):
+        """The classes of a run whose medium class, which the gates run on, sits on the brain backend."""
+        return self.config(
+            self.route("small", "claude", "haiku"),
+            self.route("medium", "codex", "gpt-m"),
+            self.route("large", "claude", "opus"),
+        )
+
     def test_S8_each_step_names_its_own_backend_model_and_effort(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the reviewer and the gaps reviewer sit where their own step says."""
         path = self.routes_file(
@@ -125,7 +133,8 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
 
     def test_S9_the_brain_names_one_backend_for_every_gate_step(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — `--brain-cli` still answers for the reviewer and the gaps reviewer alike."""
-        self.run_driver("--brain-cli", "codex")
+        path = self.routes_file(self.brain_config())
+        self.run_driver("--brain-cli", "codex", "--routes-file", path)
         spawns = self.spawns()
         self.assertEqual((spawns[REVIEW]["cli"], spawns[REVIEW]["model"]), ("codex", "gpt-m"))
         self.assertEqual((spawns[GAPS]["cli"], spawns[GAPS]["model"]), ("codex", "gpt-m"))
@@ -133,7 +142,12 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
     def test_S9_a_step_route_overrides_the_brain(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — the reviewer may sit on another backend than the gaps reviewer."""
         self.run_driver(
-            "--brain-cli", "codex", "--step", "reviewer=pi/minimax/MiniMax-M3.1-Flash@max"
+            "--brain-cli",
+            "codex",
+            "--routes-file",
+            self.routes_file(self.brain_config()),
+            "--step",
+            "reviewer=pi/minimax/MiniMax-M3.1-Flash@max",
         )
         spawns = self.spawns()
         self.assertEqual(

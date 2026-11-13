@@ -598,75 +598,6 @@ def satisfied(ticket, scenarios):
     return found, missing
 
 
-MODEL_COLUMNS = {"claude": 1, "codex": 2, "pi": 3}
-SKILL_MODELS = Path(__file__).resolve().with_name("models.md")
-
-
-def model_rows(path):
-    """The rows of the 'Model classes' table of `path`, with the index of every named column.
-
-    The header row names the columns (`| Class | Claude | Codex | Pi |`); a table without one keeps the
-    positional rule."""
-    text = Path(path).expanduser().read_text(encoding="utf-8")
-    section = re.split(r"^## Model classes\s*$", text, maxsplit=1, flags=re.M)
-    body = section[1].split("\n## ", 1)[0] if len(section) > 1 else ""
-    rows, header = [], {}
-    for line in body.splitlines():
-        cells = split_row(line)
-        if not cells or len(cells) < 2:
-            continue
-        if set("".join(cells)) <= set("-: "):  # the separator row under the header
-            continue
-        if cells[0].lower() == "class":
-            header = {cell.lower(): index for index, cell in enumerate(cells)}
-            continue
-        rows.append(cells)
-    return header, rows
-
-
-def column_models(header, rows, backend):
-    """The class→model map one column holds. The column is read by its header name; a table without that
-    header keeps the positional rule, except for Pi: it falls back to the skill's own table."""
-    index = header.get(backend)
-    if index is None and (not header or backend != "pi"):
-        index = MODEL_COLUMNS.get(backend)
-    models = {}
-    if index is None:
-        return models
-    for cells in rows:
-        if cells[0] in ROUTE["class"] and len(cells) > index:
-            value = cells[index].strip("`")
-            quoted = re.search(r'"([^"]+)"', value)
-            models[cells[0]] = quoted.group(1) if quoted else value
-    return models
-
-
-def class_models(path, backend, required=True):
-    """Resolve each class to a model from the 'Model classes' table of the instructions file.
-
-    A Pi run whose file has no Pi column takes its models from the skill's own table. With `required` false a
-    class the table does not name is left out instead of being an error: a typed route config may answer it,
-    and a table that cannot be read at all is simply no table."""
-    try:
-        header, rows = model_rows(path)
-    except OSError as error:
-        if not required:
-            return {}
-        raise PlanError("cannot read the Model classes table: %s" % error) from None
-    models = column_models(header, rows, backend)
-    if backend == "pi":
-        try:
-            skill_header, skill_rows = model_rows(SKILL_MODELS)
-        except OSError as error:
-            raise PlanError("cannot read the skill's own Model classes table: %s" % error) from None
-        for klass, model in column_models(skill_header, skill_rows, "pi").items():
-            models.setdefault(klass, model)
-    missing = [c for c in ROUTE["class"] if not models.get(c)]
-    if missing and required:
-        raise PlanError("%s lacks a %s model for class %s" % (path, backend, ", ".join(missing)))
-    return models
-
-
 def runtime_process(argv, timeout=None):
     """One `agent-runtime` process. The tests answer it in process (a fake module), so a driver run starts no
     process per call: the seam is the process, not the answer."""
@@ -1347,6 +1278,13 @@ class Driver:
         )
 
     def start(self):
+        if getattr(self.args, "models_file", None):
+            raise PlanError(
+                "--models-file is no longer read: the driver routes by a typed route file, not by a model "
+                "table. Pass --routes-file FILE (JSON or YAML naming a backend, model and effort per class), "
+                "or keep the routes in %s/routes.json (routes-codex.json for --cli codex, routes-pi.json "
+                "for --cli pi)" % routes.USER_POLICY
+            )
         plan = self.last_plan = self.read_plan()
         self.slug = plan["slug"]
         self.brain_cli = getattr(self.args, "brain_cli", None)
@@ -1360,24 +1298,19 @@ class Driver:
             self.pin_routes(pinned)
         else:
             self.args.cli = self.args.cli or "claude"
-            # The route config this run uses, in the plan's order: the file the run names, then the repository's own
-            # policy, then the user's default. With one, the legacy table is a fallback, not a prerequisite, so it is
-            # not read; with none, the legacy table answers and says it is deprecated.
-            self.routes_file, self.route_source = routes.find_config(
-                explicit=getattr(self.args, "routes_file", None),
-                repo=self.repo,
-                home=routes.user_config_dir(),
-            )
-            if self.routes_file:
-                self.models, self.brain_models = {}, {}
-            else:
-                self.models = class_models(self.args.models_file, self.args.cli, required=True)
-                self.brain_models = (
-                    class_models(self.args.models_file, self.brain_cli, required=True)
-                    if self.brain_cli
-                    else self.models
+            # The route config this run uses: the file the run names, then the repository's own policy, then the
+            # user's profile for the run's backend. No model table answers: with none of them the run stops here.
+            try:
+                self.routes_file, self.route_source = routes.find_config(
+                    explicit=getattr(self.args, "routes_file", None),
+                    repo=self.repo,
+                    home=routes.user_config_dir(),
+                    backend=self.args.cli,
                 )
+            except routes.RouteError as error:
+                raise PlanError(str(error)) from None
             self.routes, self.step_routes = self.load_routes()
+            self.require_gate_routes()
         Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
         self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1388,7 +1321,7 @@ class Driver:
             if not pinned:  # a resumed run keeps the record it already has
                 data["routes"] = routes.record(
                     self.routes,
-                    self.route_source or "legacy",
+                    self.route_source,
                     self.routes_file,
                     self.step_routes,
                     cli=self.args.cli,
@@ -1427,7 +1360,7 @@ class Driver:
             pid=os.getpid(),
             cli=self.args.cli,
             max_workers=self.args.max_workers,
-            route_source=self.route_source or "legacy",
+            route_source=self.route_source,
         )
 
     def loop(self):
@@ -3782,7 +3715,7 @@ class Driver:
         if explicit:
             try:
                 config = routes.load(explicit)
-                resolved = routes.resolve(config, pinned.cli, {})
+                resolved = routes.resolve(config)
             except routes.RouteError as error:
                 raise PlanError("invalid route config %s: %s" % (explicit, error)) from None
             # An explicit file is the whole routing of the run, so a step the ledger has and it lacks differs too.
@@ -3818,7 +3751,6 @@ class Driver:
         self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps) | added
         self.added_steps = added
         self.routes_file, self.route_source = pinned.path, pinned.source
-        self.models, self.brain_models = {}, {}
         if self.brain_cli:
             wanted = [s for s in ("reviewer", "gaps") if s not in self.step_routes]
             medium = self.routes["medium"]
@@ -3839,31 +3771,17 @@ class Driver:
                 )
 
     def load_routes(self):
-        """The class -> route map this run uses: the typed route config when one was found, the legacy
-        'Model classes' table otherwise. An invalid route config stops the run here, before any worker.
+        """The class -> route map this run uses, from the typed route config the run selected. An invalid route
+        config stops the run here, before any worker; it never falls back to another file.
 
         The step routes come with it: the config's own `steps` list, then the command line's overrides,
         which replace the class or the step they name."""
-        path = self.routes_file
-        steps = {}
-        if not path:
-            narrate.say("warn", "setup", routes.legacy_warning(self.args.models_file))
-            resolved = routes.legacy(self.args.cli, self.models)
-            if self.brain_cli:
-                # The table answers the gates on the brain backend's own column. Recording that as step routes
-                # keeps the record complete: a restart need not read the table again to route the gates.
-                medium = self.brain_models["medium"]
-                steps = {
-                    step: routes.StepRoute(step, self.brain_cli, medium)
-                    for step in ("reviewer", "gaps")
-                }
-        else:
-            try:
-                config = routes.load(path)
-                resolved = routes.resolve(config, self.args.cli, self.models)
-                steps = {step.step: step for step in config.steps}
-            except routes.RouteError as error:
-                raise PlanError("invalid route config %s: %s" % (path, error)) from None
+        try:
+            config = routes.load(self.routes_file)
+            resolved = routes.resolve(config)
+            steps = {step.step: step for step in config.steps}
+        except routes.RouteError as error:
+            raise PlanError("invalid route config %s: %s" % (self.routes_file, error)) from None
         try:
             resolved = routes.apply_overrides(
                 resolved, routes.overrides(getattr(self.args, "route", None))
@@ -3877,6 +3795,29 @@ class Driver:
         except routes.RouteError as error:
             raise PlanError("invalid step override: %s" % error) from None
         return resolved, steps
+
+    def require_gate_routes(self):
+        """A brain backend needs a route for each gate it spawns: a step route, or a medium route on that backend.
+
+        A run that cannot route its gates stops before any worker, with the arguments that would route them."""
+        brain = self.brain_cli
+        if not brain:
+            return
+        wanted = [step for step in ("reviewer", "gaps") if step not in self.step_routes]
+        medium = self.routes["medium"]
+        if wanted and medium.backend != brain:
+            raise PlanError(
+                "the medium route runs on %s, not on the brain backend %s the %s gate(s) would spawn on. "
+                "Pass --step %s=%s/MODEL[@EFFORT] for them, or give the route config a medium route on %s"
+                % (
+                    medium.backend,
+                    brain,
+                    "/".join(wanted),
+                    wanted[0],
+                    brain,
+                    brain,
+                )
+            )
 
     def step_route(self, step):
         """The step's own route, when the run names one."""
@@ -3900,19 +3841,17 @@ class Driver:
     def gate_model(self, klass):
         """The model a review gate spawns on: the brain's medium model when a brain backend was named.
 
-        The legacy path reads the brain backend's own column and fails when the table has none. A typed route
-        config answers the brain model instead: its medium class must run on the brain backend."""
+        A typed route config answers the brain model: its medium class must run on the brain backend, and a run
+        whose medium route does not stopped at start unless its gates have step routes."""
         brain = getattr(self, "brain_cli", None)
         if not brain:
             return self.routes[klass].model
-        if not self.brain_models:
-            route = self.routes.get("medium")
-            if route is None or route.backend != brain:
-                raise PlanError(
-                    "the route config has no medium route on the brain backend '%s'" % brain
-                )
-            return route.model
-        return self.brain_models["medium"]
+        route = self.routes.get("medium")
+        if route is None or route.backend != brain:
+            raise PlanError(
+                "the route config has no medium route on the brain backend '%s'" % brain
+            )
+        return route.model
 
     def gate_step(self, step, klass):
         """The backend and model one gate spawns on: the step's own route, or the brain's answer.
@@ -6565,7 +6504,7 @@ class Driver:
                 "effort_source": "step"
                 if (step and step.effort)
                 else ("config" if route.effort else "matrix"),
-                "source": self.route_source or "legacy",
+                "source": self.route_source,
             },
         )
         task_dir = self.run_dir / task_id
@@ -7805,13 +7744,14 @@ def main(argv=None):
     )
     sub.add_argument(
         "--models-file",
-        default="~/.claude/CLAUDE.md",
-        help="File holding the 'Model classes' table",
+        help="Removed: the driver reads no model table. Naming it stops the run; pass --routes-file instead",
     )
     sub.add_argument(
         "--routes-file",
-        help="Typed route config (JSON, or YAML with PyYAML): what each model class "
-        "runs on. Without it the legacy 'Model classes' table answers",
+        help="Typed route config (JSON, or YAML with PyYAML): what each model class runs on. It wins over "
+        "the repository's .orchestrate/routes.json, which wins over the user's profile for --cli "
+        "(~/.config/orchestrate/routes.json for claude, routes-codex.json, routes-pi.json). "
+        "A new run with none of them stops before any worker",
     )
     sub.add_argument(
         "--route",
@@ -7819,7 +7759,7 @@ def main(argv=None):
         default=[],
         metavar="CLASS=BACKEND/MODEL[@EFFORT]",
         help="An explicit route for one model class: 'small=codex/gpt-s@high'. It wins over the route "
-        "config, which wins over the legacy 'Model classes' table",
+        "config",
     )
     sub.add_argument(
         "--step",

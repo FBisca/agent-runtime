@@ -95,8 +95,28 @@ python3 -m agent_orchestrator run <plan> --cli pi \
   --step reviewer=pi/ollama-cloud/glm-5.3@high
 ```
 
-`--step` beats `--route`, which beats `--routes-file`, which beats the `Pi` column of the `## Model classes`
-table in `--models-file`; the driver's own `models.md` answers a class none of them names.
+`--step` and `--route` beat `--routes-file`, which beats the repository's `.orchestrate/routes.json`, which beats
+the user's profile for the run's backend: `~/.config/orchestrate/routes.json` for Claude, `routes-codex.json` for
+`--cli codex` and `routes-pi.json` for `--cli pi`. The driver reads no model table: a new run with no route file,
+or whose selected file is invalid, stops before any worker is spawned and names the file it expected, and
+`--models-file` is refused. A Pi profile routes each class to a Pi model, for example:
+
+```json
+{
+  "version": 1,
+  "routes": [
+    {"class": "small", "backend": "pi", "model": "minimax/MiniMax-M3.1-Flash", "effort": "low"},
+    {"class": "medium", "backend": "pi", "model": "ollama-cloud/glm-5.3"},
+    {"class": "large", "backend": "pi", "model": "ollama-cloud/kimi-k3.1-pro"}
+  ]
+}
+```
+
+A run that restarts keeps the routes its ledger recorded, whatever these files now say. An explicit argument that
+differs from the record stops it before any worker is spawned or resumed, and a ledger with no complete route
+record needs `--routes-file`, which records the complete routes before the run resumes. `--brain-cli` puts the
+review gates on another backend: give each gate a `--step` route, or a medium route on that backend, or the run
+stops before it spawns a worker.
 
 Drives run in parallel per plan: two plans in one repository each run on their own models, each in its own
 worktrees. A second `run` of a plan that is already being driven is refused, whatever `--state-dir` it names:

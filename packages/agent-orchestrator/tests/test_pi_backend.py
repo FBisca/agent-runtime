@@ -1,5 +1,6 @@
 """The Pi backend and the brain tier: which backend each tier of a run spawns on."""
 
+import json
 import unittest
 
 import pytest
@@ -30,27 +31,45 @@ class PiBackendTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual((worker["cli"], worker["model"]), ("pi", PI_MODEL))
         self.assertEqual(worker["effort"], "low")
 
-    def test_S2_the_models_file_pi_column_wins_when_it_is_there(self):
-        """orchestrator-engine/R2: pi-worker-driver/S2 — a Pi column in the models file answers the classes."""
-        self.models.write_text(
-            "## Model classes\n\n| Class | Claude | Codex | Pi |\n|---|---|---|---|\n"
-            '| small | `model: "haiku"` | `gpt-s` | `pi-small` |\n'
-            '| medium | `model: "sonnet"` | `gpt-m` | `pi-medium` |\n'
-            '| large | `model: "opus"` | `gpt-l` | `pi-large` |\n',
+    def test_S2_the_pi_profile_answers_the_classes(self):
+        """orchestrator-engine/R2: pi-worker-driver/S2 — a Pi run is routed by a Pi route file."""
+        path = self.root / "pi-routes.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "routes": [
+                        {"class": klass, "backend": "pi", "model": "pi-" + klass}
+                        for klass in ("small", "medium", "large")
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
-        self.run_driver("--cli", "pi")
-        worker = self.spawns()[WORKER]
-        self.assertEqual(worker["model"], "pi-small")
+        self.run_driver("--cli", "pi", "--routes-file", str(path))
+        self.assertEqual(self.spawns()[WORKER]["model"], "pi-small")
 
-    def test_S2_without_a_pi_column_the_skill_table_answers(self):
-        """orchestrator-engine/R2: pi-worker-driver/S2 — the run starts even when the models file knows no Pi."""
-        self.run_driver("--cli", "pi")
-        self.assertEqual(self.spawns()[WORKER]["model"], PI_MODEL)
+    def brain_routes(self):
+        """Pi workers whose medium class, which the gates run on, sits on the brain backend."""
+        path = self.root / "pi-codex-routes.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "routes": [
+                        {"class": "small", "backend": "pi", "model": PI_MODEL},
+                        {"class": "medium", "backend": "codex", "model": "gpt-m"},
+                        {"class": "large", "backend": "pi", "model": PI_MODEL},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return str(path)
 
     def test_S3_the_reviewer_spawns_on_the_brain_backend(self):
         """orchestrator-engine/R2: pi-worker-driver/S3 — the merge gate runs on the brain, on the brain's medium model."""
-        self.run_driver("--cli", "pi", "--brain-cli", "codex")
+        self.run_driver("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.brain_routes())
         review = self.spawns()[REVIEW]
         self.assertEqual(
             (review["cli"], review["model"], review["effort"]), ("codex", "gpt-m", "high")
@@ -58,13 +77,13 @@ class PiBackendTests(ArchiveFixture, unittest.TestCase):
 
     def test_S4_the_gaps_reviewer_spawns_on_the_brain_backend(self):
         """orchestrator-engine/R2: pi-worker-driver/S4 — the gaps review is a gate too."""
-        self.run_driver("--cli", "pi", "--brain-cli", "codex")
+        self.run_driver("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.brain_routes())
         gaps = self.spawns()[GAPS]
         self.assertEqual((gaps["cli"], gaps["model"], gaps["effort"]), ("codex", "gpt-m", "medium"))
 
     def test_S5_the_worker_tiers_stay_on_the_worker_backend(self):
         """orchestrator-engine/R2: pi-worker-driver/S5 — the implementer stays on Pi; the driver archives with no agent."""
-        self.run_driver("--cli", "pi", "--brain-cli", "codex")
+        self.run_driver("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.brain_routes())
         spawns = self.spawns()
         self.assertEqual(spawns[WORKER]["cli"], "pi")
         self.assertNotIn(ARCHIVE, spawns)

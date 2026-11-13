@@ -49,6 +49,11 @@ def route(klass, backend, model, **extra):
 class RouteResumeTests(RunFixture, unittest.TestCase):
     """The driver resumes a run: what its ledger recorded is what its workers run on."""
 
+    def run_driver(self, *extra, **kwargs):
+        """A restart names no route file of its own unless the test says so: the ledger answers."""
+        kwargs.setdefault("routed", False)
+        return super().run_driver(*extra, **kwargs)
+
     def seed(self, record="absent"):
         """The ledger a run that already started leaves: its lead and, unless `absent`, its route record."""
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -264,21 +269,26 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         path = self.routes_file(route("small", "gemini", "x"))
         self.refused("--routes-file", path, mention=("gemini",))
 
-    def test_S3_a_legacy_run_with_a_brain_backend_restarts_with_the_same_command(self):
-        """orchestrator-engine/R92: S3 — the table answered the brain's models, so the record carries them."""
-        self.run_driver("--brain-cli", "codex")
-        record = self.ledger()["routes"]
-        self.assertEqual(record["brain_cli"], "codex")
-        self.assertEqual(
-            {name: (step["backend"], step["model"]) for name, step in record["steps"].items()},
-            {"reviewer": ("codex", "gpt-m"), "gaps": ("codex", "gpt-m")},
+    def start_with_a_brain(self):
+        """A new run whose medium class, which the gates run on, sits on the brain backend."""
+        path = self.routes_file(
+            route("small", "claude", "haiku"),
+            route("medium", "codex", "gpt-m"),
+            route("large", "claude", "opus"),
         )
+        self.run_driver("--brain-cli", "codex", "--routes-file", path)
+        return self.ledger()["routes"]
+
+    def test_S3_a_run_with_a_brain_backend_restarts_with_the_same_command(self):
+        """orchestrator-engine/R92: S3 — the record carries the brain backend, and a restart naming it again matches."""
+        record = self.start_with_a_brain()
+        self.assertEqual(record["brain_cli"], "codex")
         self.restarts("--brain-cli", "codex")
         self.assertEqual(self.ledger()["routes"], record)
 
-    def test_S3_a_legacy_run_with_a_brain_backend_restarts_without_the_flag(self):
+    def test_S3_a_run_with_a_brain_backend_restarts_without_the_flag(self):
         """orchestrator-engine/R92: S3 — an omitted --brain-cli is not a conflict; the record answers."""
-        self.run_driver("--brain-cli", "codex")
+        self.start_with_a_brain()
         self.restarts()
 
     def test_S3_a_record_that_cannot_route_its_gates_takes_the_steps_the_argument_adds(self):

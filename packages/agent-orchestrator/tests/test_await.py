@@ -40,8 +40,8 @@ class AwaitFixture(GateFixture):
                 str(self.plan),
                 "--state-dir",
                 str(self.state_dir),
-                "--models-file",
-                str(self.models),
+                "--routes-file",
+                str(self.route_file),
                 "--wait-seconds",
                 "1",
                 "--idle-interval",
@@ -166,7 +166,7 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
 
     def test_S3_an_exception_during_startup_logs_a_crash_wakes_the_lead_and_exits_non_zero(self):
         """orchestrator-engine/R72"""
-        code, err = self.finish(self.start_driver("--models-file", str(self.root / "missing.md")))
+        code, err = self.finish(self.start_driver("--routes-file", str(self.root / "missing.json")))
         self.assertNotEqual(code, 0)
         self.assertEqual(len(self.crash_events()), 1, err)
         self.assertEqual(len(self.crash_wakes()), 1)
@@ -190,8 +190,8 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
             str(self.plan),
             "--state-dir",
             str(self.state_dir),
-            "--models-file",
-            str(self.models),
+            "--routes-file",
+            str(self.route_file),
             "--wait-seconds",
             "1",
             "--idle-interval",
