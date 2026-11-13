@@ -58,4 +58,6 @@ class RedispatchRouteTests(DeciderFixture, unittest.TestCase):
         self.run_driver(expect=1)
         reserved = self.ledger()["tasks"]["t1p1"]
         self.assertEqual(reserved["status"], "RESERVED")
-        self.assertEqual((reserved["packet"]["class"], reserved["packet"]["model"]), ("large", "opus"))
+        self.assertEqual(
+            (reserved["packet"]["class"], reserved["packet"]["model"]), ("large", "opus")
+        )
