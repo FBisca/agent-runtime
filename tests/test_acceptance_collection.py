@@ -141,6 +141,8 @@ def test_S2_every_node_id_a_living_spec_cites_names_a_test_that_exists():
     stale = []
     for spec in sorted(SPECS.glob("*.md")):
         for path, node in re.findall(r"([A-Za-z0-9_./-]+\.py)::([A-Za-z0-9_:]+)", spec.read_text(encoding="utf-8")):
+            if path.startswith("agent-skills/") or "<domain>" in path:
+                continue  # a skill's own tests and a path template are outside this suite
             target = ROOT / path
             if not target.is_file():
                 stale.append(f"{spec.name}: missing file {path}")
