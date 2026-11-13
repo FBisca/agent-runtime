@@ -2107,17 +2107,38 @@ class Driver:
             narrate.say("warn", None, "could not wake the Lead in %s: %s" % (terminal, error))
             self.log("notify-failed", terminal=terminal, error=error[:500])
 
-    def request(self, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None):
+    def request(
+        self,
+        task_id,
+        kind,
+        reason,
+        fix=None,
+        answerer=None,
+        menu=None,
+        intent=None,
+        from_gate=None,
+    ):
         """The unit needs the Lead. A unit that already has an open request keeps it. `answerer` is the assignment of
         a busy answerer the request names: only a decision on such a request replaces that assignment. `menu` narrows
         the actions the Lead may take, and `intent` names the intents the decision settles."""
         with self.book() as data:
-            unit = self.book_request(data, task_id, kind, reason, fix, answerer, menu, intent)
+            unit = self.book_request(
+                data, task_id, kind, reason, fix, answerer, menu, intent, from_gate
+            )
         if unit is not None:
             self.announce_request(task_id, kind, reason, unit)
 
     def book_request(
-        self, data, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None
+        self,
+        data,
+        task_id,
+        kind,
+        reason,
+        fix=None,
+        answerer=None,
+        menu=None,
+        intent=None,
+        from_gate=None,
     ):
         """The ledger half of `request`, for a caller that books it with other changes in one write: the unit's
         id, or None when the unit already has an open request."""
@@ -2126,7 +2147,7 @@ class Driver:
             return None
         unit = task["packet"]["unit"]
         path, _ = next_path(self.run_dir / unit, "request", ".json")
-        asked = {"path": str(path), "kind": kind, "from_gate": task.get("gate")}
+        asked = {"path": str(path), "kind": kind, "from_gate": from_gate or task.get("gate")}
         if answerer:
             asked["answerer"] = answerer
         if menu:
@@ -4132,7 +4153,16 @@ class Driver:
             applying = applying or self.decided_action(task)
         elif gate not in ("redo-pending", "fix-pending") or not applying:
             return False
-        worker = task["packet"]["worker"]
+        worker, from_gate = task["packet"]["worker"], None
+        if (
+            gate == "decided"
+            and applying == "answer"
+            and (task.get("request") or {}).get("from_gate") == "reviewing"
+            and task.get("review")
+        ):
+            # The answer was for the reviewer: the new request names it and keeps the review routing, so the Lead's next
+            # `answer` reaches the reviewer again, not the implementer.
+            worker, from_gate = task["review"]["name"], "reviewing"
         # the wake cuts a reason at 200 characters: the way out comes first, the runtime's words (all in the file) after
         reason = (
             "the Lead's decision (%s) could not reach %s; retry it once the pane works, or fresh worker, mark blocked "
@@ -4148,7 +4178,7 @@ class Driver:
             gate=gate,
             error=str(error)[:500],
         )
-        self.request(task_id, "handover", reason)
+        self.request(task_id, "handover", reason, from_gate=from_gate)
         return True
 
     def decided_action(self, task):

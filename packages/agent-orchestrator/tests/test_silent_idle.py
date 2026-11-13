@@ -205,3 +205,29 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned().count(REVIEWER), 2, "a fresh reviewer replaced it")
         self.assertIn(self.ANSWER, self.brief_text())
         self.assertEqual(self.task()["review"]["assignment_id"], spawn_id(REVIEWER, 2))
+
+    def test_S9_a_refused_reviewer_resume_asks_again_and_the_next_answer_still_reaches_the_reviewer(
+        self,
+    ):
+        """engine-gaps/S9"""
+        (self.home / "refuse_resume.json").write_text(
+            json.dumps({REVIEWER: "the pane is blocked on a login"}), encoding="utf-8"
+        )
+        again = self.decide_step("t1", "answer", "the pane is back", answer=self.ANSWER)
+        again["write"] = [[str(self.home / "refuse_resume.json"), "{}"]]
+        finished = self.reviewer_done()
+        finished["assignments"] = [assignment(REVIEWER, "complete", id=resume_id(REVIEWER, 2))]
+        finished["messages"] = [envelope(finished["assignments"][0], "complete")]
+        self.waits(self.answered([again, finished]))
+        self.run_driver("--idle-minutes", "0")
+        second = self.request_file(2)
+        self.assertEqual((second["event"], second["status"]), ("handover", "resolved"))
+        self.assertIn(REVIEWER, second["reason"])
+        self.assertNotIn("demo-t1 ", second["reason"])
+        self.assertEqual(self.resumed("demo-t1"), [], "the implementer was never answered")
+        self.assertEqual(len(self.resumed(REVIEWER)), 2, "the refused resume and the retry")
+        self.assertEqual((self.task()["status"], self.task()["gate"]), ("COMPLETE", "done"))
+
+    def request_file(self, nth):
+        path = self.run_dir / "t1" / ("request.json" if nth == 1 else "request.%d.json" % nth)
+        return json.loads(path.read_text(encoding="utf-8"))
