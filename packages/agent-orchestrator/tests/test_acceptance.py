@@ -10,13 +10,14 @@ import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
 import yaml
 from agent_orchestrator import plan as yaml_plan
 from agent_orchestrator import verify
-from fixtures import WORLDS, load_script, report_wait, spawn_id
+from fixtures import WORLDS, RunFixture, load_script, report_wait, spawn_id
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -110,7 +111,15 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.routed(plan, "T1"), [])
 
 
-class SnapshotFixture:
+if (
+    TYPE_CHECKING
+):  # the mixin is mixed into a `RunFixture` test case; the base is for the type checker only
+    _Base = RunFixture
+else:
+    _Base = object
+
+
+class SnapshotFixture(_Base):
     """Mixin for a `RunFixture` class: the tests of a class that only read a run's result share one run of it."""
 
     def from_snapshot(self, key, build):
