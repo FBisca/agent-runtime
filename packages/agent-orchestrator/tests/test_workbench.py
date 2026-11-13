@@ -603,6 +603,52 @@ class PlanTests(WorkbenchFixture):
         self.assertTrue(shown["revision"]["drift"])
         self.assertEqual([t["id"] for t in shown["tickets"]], ["T1"])
 
+    def write_folder_plan(self):
+        """An approved plan in its own folder: one acceptance file, placed at acceptance/flows/probe.txt."""
+        data = graph([])
+        data["domain"] = "flows"
+        data["scenarios"][0]["evidence"] = {
+            "check": "test -f acceptance/flows/probe.txt",
+            "baseline": "pass",
+            "acceptance": ["probe.txt"],
+            "package": ".",
+        }
+        folder = self.plans / "2026-11-12-bench"
+        (folder / "acceptance").mkdir(parents=True)
+        (folder / "acceptance" / "probe.txt").write_text("probe\n", encoding="utf-8")
+        path = self.write_plan(data, name="2026-11-12-bench/plan.yaml", approve=False)
+        code, out, err = self.run_cli(
+            "plan",
+            "approve",
+            str(path),
+            "--repo",
+            str(self.repo),
+            "--state-dir",
+            str(self.state_dir),
+        )
+        self.assertEqual(code, 0, out + err)
+        return path
+
+    def test_S7_an_approved_folder_plan_is_not_drift_until_an_acceptance_file_is_edited(self):
+        path = self.write_folder_plan()
+        approved = self.view(path)
+        self.assertFalse(approved["revision"]["drift"])
+        self.assertEqual(
+            approved["revision"]["approved_digest"], approved["revision"]["current_digest"]
+        )
+        (path.parent / "acceptance" / "probe.txt").write_text("edited\n", encoding="utf-8")
+        shown = self.view(path)
+        self.assertTrue(shown["revision"]["drift"])
+        self.assertNotEqual(
+            shown["revision"]["approved_digest"], shown["revision"]["current_digest"]
+        )
+        self.assertEqual([t["id"] for t in shown["tickets"]], ["T1"])
+
+    def test_S7_an_added_acceptance_file_is_drift_in_a_folder_plan(self):
+        path = self.write_folder_plan()
+        (path.parent / "acceptance" / "extra.txt").write_text("more\n", encoding="utf-8")
+        self.assertTrue(self.view(path)["revision"]["drift"])
+
     def drifted_ledger(self):
         path = self.write_plan(graph([], []))
         self.write_ledger(

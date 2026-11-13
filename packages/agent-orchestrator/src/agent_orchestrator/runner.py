@@ -337,12 +337,18 @@ class EvidenceError(Exception):
     """An oracle cannot be placed safely; the message names the path."""
 
 
+def placed_path(place_dir, name):
+    """The tree-relative path an oracle or acceptance file is written at: its name under the place directory, a
+    legacy oracle without its `.oracle` suffix."""
+    return (Path(place_dir or ".") / name.removesuffix(".oracle")).as_posix()
+
+
 def place_oracles(tree, place_dir, oracles):
     """Write each oracle under `tree`, refusing any target that leaves it or passes through a symlink (the patch
     under test can add one, and a write through it would land outside the scratch tree)."""
     root = Path(os.path.realpath(tree))
     for name, content in oracles.items():
-        relative = Path(place_dir or ".") / name.removesuffix(".oracle")
+        relative = Path(placed_path(place_dir, name))
         target = Path(tree) / relative
         if not Path(os.path.realpath(target)).is_relative_to(root):
             raise EvidenceError("oracle target %s resolves outside the scratch tree" % relative)
@@ -502,6 +508,10 @@ def receipt_of(
         "check": check,
         "place": place,
         "oracles": {name: sha256(content) for name, content in sorted(oracles.items())},
+        # Each file by where the check finds it, so a folder plan's acceptance files show their domain destination.
+        "placed": {
+            placed_path(place, name): sha256(content) for name, content in sorted(oracles.items())
+        },
         "env": list(env_names),
         "timeout": timeout,
         "tools": tool_versions(clean_path(base_env.get("PATH", ""), base_env.get("VIRTUAL_ENV"))),
