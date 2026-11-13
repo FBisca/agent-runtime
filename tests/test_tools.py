@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from test_mcp_server import SERVER, Session
+from test_mcp_server import SERVER, InProcessSession, Session
 
 pytestmark = pytest.mark.integration
 
@@ -207,7 +207,7 @@ class ToolCase(unittest.TestCase):
         self.log = self.dir / "log"
         self.log.write_text("")
 
-    def start(self, replies=None, env=None, new_cli=False):
+    def start(self, replies=None, env=None, new_cli=False, process=False):
         replies = dict(replies or {})
         replies.setdefault("get:t0", {"out": raw("lead", None)})
         replies.setdefault("get:t1", {"out": raw("worker", "t0")})
@@ -230,7 +230,11 @@ class ToolCase(unittest.TestCase):
             "CODEX_THREAD_ID": "test-session",
         }
         full.update(env or {})
-        session = Session(full, new_cli=new_cli)
+        # The tool's decision runs in process; a test that is about the pipe, the process ancestry or a
+        # call in its own thread asks for the server process.
+        session = (
+            Session(full, new_cli=new_cli) if process or new_cli else InProcessSession(full)
+        )
         self.addCleanup(session.close)
         session.handshake()
         return session
@@ -1199,7 +1203,9 @@ class WaitCollectStopReportTests(ToolCase):
 
     def test_S5_long_wait_does_not_block_ping_and_cancel_ends_it(self):
         """agent-runtime-tools/S5"""
-        session = self.start({"wait": {"sleep": 30}, "ls": {"out": json.dumps({"terminals": []})}})
+        session = self.start(
+            {"wait": {"sleep": 30}, "ls": {"out": json.dumps({"terminals": []})}}, process=True
+        )
         write = lambda m: (
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
@@ -1283,7 +1289,7 @@ class WaitCollectStopReportTests(ToolCase):
     def test_long_collect_does_not_block_ping_and_cancel_ends_it(self):
         """agent-runtime/R34
         agent-runtime-dispatch/S1; retains transport cancellation coverage."""
-        session = self.start({"read": {"sleep": 30}})
+        session = self.start({"read": {"sleep": 30}}, process=True)
         write = lambda m: (
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
@@ -1393,7 +1399,7 @@ class StopCleanupTests(ToolCase):
 
     def test_S2_cancelling_spawn_ends_the_terminal_it_started(self):
         """agent-runtime-tools/S2"""
-        session = self.start({"run": {"sleep": 30}})
+        session = self.start({"run": {"sleep": 30}}, process=True)
         write = lambda m: (
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
