@@ -1116,22 +1116,43 @@ def wait(arguments, env, ctx):
         return observations
 
     try:
-        return result(
-            dispatch_wait.wait(
-                store,
-                team,
-                recipient,
-                target,
-                seconds,
-                arguments.get("receipt"),
-                ctx,
-                observe,
-                inbox=inbox,
-            ),
-            structured=True,
+        batch = dispatch_wait.wait(
+            store,
+            team,
+            recipient,
+            target,
+            seconds,
+            arguments.get("receipt"),
+            ctx,
+            observe,
+            inbox=inbox,
         )
     except InterruptedError:
         raise ToolError("cancelled")
+    attach_usage(batch, env)
+    return result(batch, structured=True)
+
+
+def attach_usage(batch, env):
+    """Add each returned row's measured `usage`; a row whose worker has no measurement gets no key.
+
+    Done once, on the batch the wait returns, outside the store's transaction and the listener. The
+    store budgets a worst-case dict per row, so the attached response stays under its cap.
+    """
+    measured = {}
+
+    def figures(worker):
+        if worker not in measured:
+            try:
+                measured[worker] = usage.assignment_usage(env, worker)
+            except Exception:  # measuring is garnish: it never fails a wait
+                measured[worker] = {}
+        return measured[worker]
+
+    for row in batch.get("assignments") or ():
+        found = figures(row.get("name")).get(row.get("assignment_id"))
+        if found:
+            row["usage"] = found
 
 
 def collect(arguments, env, ctx):
