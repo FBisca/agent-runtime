@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import evidence, verify
+from . import evidence, verify, workbench_needs
 from . import plan as yaml_plan
 from .plan import DiscoveryError, PlanError
 
@@ -95,36 +95,73 @@ def approved_view(path, repo, args):
 
 
 def listing(entry, repo, args):
-    """One plan's entry of `workbench plans`. A plan that does not load is an entry with an error and null counts, so
-    one broken plan never hides the others."""
+    """(one plan's entry of `workbench plans`, the items it holds for the person). A plan that does not load is an
+    entry with an error and null counts, so one broken plan never hides the others."""
+    from . import driver
+
     markdown = entry["format"] == "markdown"
+    path = Path(entry["path"])
     shown = {
         "slug": entry["slug"],
         "format": entry["format"],
         "path": entry["path"],
         "legacy": markdown,
     }
+    status = None
     try:
         if markdown:
             status = status_of(entry["path"], repo, args)
         else:
-            status = approved_view(Path(entry["path"]), repo, args)[2]
+            status = approved_view(path, repo, args)[2]
     except (PlanError, ValueError, KeyError, OSError) as error:
         kind = error.kind if isinstance(error, WorkbenchError) else "invalid_plan"
         shown.update(state=None, tickets=None, error={"kind": kind, "message": str(error)})
-        return shown
-    shown.update(slug=status["slug"], state=status["state"])
-    # A Markdown plan whose table lists no ticket has nothing to count: no counts, not a zero.
-    if status["tickets"] or not markdown:
-        shown["tickets"] = counts(status["tickets"])
-    return shown
+    else:
+        shown.update(slug=status["slug"], state=status["state"])
+        # A Markdown plan whose table lists no ticket has nothing to count: no counts, not a zero.
+        if status["tickets"] or not markdown:
+            shown["tickets"] = counts(status["tickets"])
+    if status:
+        ledger, run_dir = Path(status["ledger"]), Path(status["run_dir"])
+    else:
+        ledger, run_dir = driver.locate_state(args.state_dir, path, repo, entry["slug"])
+    group = workbench_needs.group_of(
+        shown["state"], markdown, None if status else workbench_needs.ledger_state_of(ledger)
+    )
+    events = run_dir / "events.jsonl"
+    # Only an active plan's log is read whole: what waits on the person is only asked of those.
+    run = workbench_needs.scan(events) if group == "active" else None
+    shown.update(group=group, last_activity=workbench_needs.last_activity(events, path, run))
+    items = []
+    if group == "active":
+        items = workbench_needs.needs_of(
+            shown["slug"], shown["state"], status["tickets"] if status else [], run
+        )
+    return shown, items
+
+
+def without_twins(found):
+    """The plan files of a listing without a Markdown plan whose YAML twin (same directory, same stem) is listed: the
+    YAML plan is the plan, and its twin's state would contradict the ledger's."""
+    yaml_stems = {
+        (Path(e["path"]).parent, Path(e["path"]).name.removesuffix(".plan.yaml"))
+        for e in found
+        if e["format"] == "yaml"
+    }
+    return [
+        e
+        for e in found
+        if e["format"] == "yaml"
+        or (Path(e["path"]).parent, Path(e["path"]).name.removesuffix(".plan.md")) not in yaml_stems
+    ]
 
 
 def plans(args):
-    """`workbench plans [path] [--repo R]`: every plan of the repository, with its state and ticket counts."""
+    """`workbench plans [path] [--repo R]`: every plan of the repository, with its state, ticket counts, group and last
+    activity, active plans first and the newest first, and the `needs_me` items of the active ones."""
     repo = repository_of(args, args.path)
     try:
-        found = yaml_plan.discover(repo, args.path)
+        found = without_twins(yaml_plan.discover(repo, args.path))
     except DiscoveryError as error:
         raise refusal(error, "plans") from None
     if not found:
@@ -133,10 +170,13 @@ def plans(args):
             "no plan files in %s" % repo,
             "pass an explicit plan path or --repo R, or write a plan with /start-planning",
         )
+    rows = [listing(entry, repo, args) for entry in found]
+    rows.sort(key=lambda row: workbench_needs.order_key(row[0]))
     return {
         "schema_version": SCHEMA_VERSION,
         "repo": str(repo),
-        "plans": [listing(entry, repo, args) for entry in found],
+        "plans": [shown for shown, _ in rows],
+        "needs_me": [item for _, items in rows for item in items],
     }
 
 

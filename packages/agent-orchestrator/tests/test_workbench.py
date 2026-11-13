@@ -8,6 +8,7 @@ import json
 import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -19,6 +20,36 @@ pytestmark = pytest.mark.integration
 
 SECRET = "hunter2-workbench-secret"
 BODY = "REPORT-BODY-MARKER the worker wrote this"
+
+
+T0 = datetime(2026, 11, 12, 10, 0, 0, tzinfo=timezone.utc)
+
+
+def at(minutes):
+    return (T0 + timedelta(minutes=minutes)).isoformat()
+
+
+def dead_pid():
+    """A pid no process holds, so `kill(pid, 0)` raises ProcessLookupError."""
+    for pid in range(99999, 1000, -1):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+        except PermissionError:
+            continue
+    raise AssertionError("no free pid found")
+
+
+def state_event(minutes, unit, task=None):
+    return {
+        "at": at(minutes),
+        "kind": "state",
+        "unit": unit,
+        "task": task or unit,
+        "gate": [None, None],
+        "status": ["ACTIVE", "ACTIVE"],
+    }
 
 
 def graph(*edges):
@@ -124,6 +155,51 @@ class WorkbenchFixture(RunFixture, unittest.TestCase):
         code, out, err = self.workbench("plan", str(path))
         self.assertEqual(code, 0, out + err)
         return json.loads(out)
+
+    def approved(self, slug, *edges):
+        data = graph(*(edges or ([],)))
+        data["slug"] = slug
+        return self.write_plan(data)
+
+    def draft(self, slug):
+        data = graph([])
+        data["slug"] = slug
+        return self.write_plan(data, approve=False)
+
+    def broken(self, slug):
+        """A plan that does not load: a ticket blocked by one that does not exist."""
+        data = graph([], ["T1"])
+        data["slug"] = slug
+        data["tickets"][1]["blocked_by"] = ["T9"]
+        return self.write_plan(data, approve=False)
+
+    def markdown(self, name, slug):
+        path = self.plans / name
+        path.write_text(
+            "# Plan: %s\n\nSlug: `%s`. Status: APPROVED 2026-11-01.\n\n## Tickets\n\n"
+            "| # | What it delivers | Satisfies | Blocked by | Paths | Size | Difficulty | Owner | Status |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| T1 | first | S1 | none | src/a/ | small | simple | agent | TO-DO |\n" % (slug, slug),
+            encoding="utf-8",
+        )
+        self.git(self.repo, "add", str(path))
+        return path
+
+    def log_events(self, slug, rows):
+        run = self.state_dir / load_script().repo_key(self.repo) / slug
+        run.mkdir(parents=True, exist_ok=True)
+        with open(run / "events.jsonl", "w", encoding="utf-8") as stream:
+            for row in rows:
+                stream.write(json.dumps(row) + "\n")
+        return run
+
+    def listing(self):
+        code, out, err = self.workbench("plans")
+        self.assertEqual(code, 0, out + err)
+        return json.loads(out)
+
+    def by_slug(self, shown):
+        return {entry["slug"]: entry for entry in shown["plans"]}
 
 
 class PlansTests(WorkbenchFixture):
@@ -298,6 +374,116 @@ class PlansTests(WorkbenchFixture):
         self.assertEqual(entry["slug"], "2026-11-03-noslug")
         self.assertIsNone(entry.get("error"))
         self.assertEqual(entry["tickets"]["total"], 3)
+
+
+class PlanListTests(WorkbenchFixture):
+    def test_S25_a_markdown_twin_of_a_yaml_plan_is_not_listed_and_a_lone_markdown_plan_is_legacy(
+        self,
+    ):
+        yaml_path = self.approved("bench")
+        twin = self.markdown(yaml_path.name.replace(".plan.yaml", ".plan.md"), "bench")
+        self.markdown("2026-11-01-old.plan.md", "old")
+        shown = self.listing()
+        entries = self.by_slug(shown)
+        self.assertEqual(len(shown["plans"]), 2, shown["plans"])
+        self.assertEqual(sorted(entries), ["bench", "old"])
+        self.assertNotIn(str(twin.resolve()), [entry["path"] for entry in shown["plans"]])
+        self.assertEqual((entries["bench"]["format"], entries["bench"]["legacy"]), ("yaml", False))
+        self.assertEqual((entries["old"]["format"], entries["old"]["legacy"]), ("markdown", True))
+
+    def test_S26_each_plan_is_grouped_active_or_older(self):
+        self.approved("live")
+        self.write_ledger("live", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
+        for slug, plan_state in (
+            ("delivered", "DELIVERED"),
+            ("verifying", "VERIFYING"),
+            ("done", "ARCHIVED"),
+            ("accepted", "ACCEPTED"),
+            ("humanok", "ACCEPTED_WITH_HUMAN"),
+            ("refused", "REJECTED"),
+        ):
+            self.approved(slug)
+            self.write_ledger(slug, {"T1": "COMPLETE"}, plan_state=plan_state)
+        self.approved("ready")
+        self.draft("sketch")
+        self.broken("gone")
+        self.write_ledger("gone", {}, plan_state="ARCHIVED")
+        self.broken("authoring")
+        self.broken("stuck")
+        self.write_ledger("stuck", {}, plan_state="RUNNING")
+        self.markdown("2026-11-01-old.plan.md", "old")
+        groups = {slug: entry["group"] for slug, entry in self.by_slug(self.listing()).items()}
+        self.assertEqual(
+            groups,
+            {
+                "live": "active",
+                "delivered": "active",
+                "verifying": "active",
+                "ready": "active",
+                "sketch": "active",
+                "authoring": "active",
+                "stuck": "active",
+                "done": "older",
+                "accepted": "older",
+                "humanok": "older",
+                "refused": "older",
+                "gone": "older",
+                "old": "older",
+            },
+        )
+
+    def test_S27_plans_carry_their_last_activity_and_are_ordered_active_first_newest_first(self):
+        for slug, minutes in (("early", 5), ("late", 50)):
+            self.approved(slug)
+            self.write_ledger(slug, {"T1": "IN PROGRESS"}, plan_state="RUNNING")
+            self.log_events(
+                slug,
+                [{"at": at(0), "kind": "start", "pid": os.getpid()}, state_event(minutes, "t1")],
+            )
+        self.approved("done")
+        self.write_ledger("done", {"T1": "COMPLETE"}, plan_state="ARCHIVED")
+        self.log_events("done", [{"at": at(500), "kind": "finish"}])
+        shown = self.listing()
+        entries = self.by_slug(shown)
+        self.assertEqual(
+            datetime.fromisoformat(entries["late"]["last_activity"]), T0 + timedelta(minutes=50)
+        )
+        self.assertEqual(
+            datetime.fromisoformat(entries["early"]["last_activity"]), T0 + timedelta(minutes=5)
+        )
+        self.assertEqual([entry["slug"] for entry in shown["plans"]], ["late", "early", "done"])
+
+    def test_S27_without_events_the_plan_files_mtime_is_the_last_activity(self):
+        path = self.approved("quiet")
+        stamp = (T0 + timedelta(days=3)).timestamp()
+        os.utime(path, (stamp, stamp))
+        shown = self.listing()
+        self.assertEqual(
+            datetime.fromisoformat(self.by_slug(shown)["quiet"]["last_activity"]),
+            T0 + timedelta(days=3),
+        )
+
+    def test_S27_a_torn_last_line_does_not_hide_the_newest_event(self):
+        self.approved("torn")
+        run = self.log_events("torn", [{"at": at(0), "kind": "start", "pid": os.getpid()}])
+        with open(run / "events.jsonl", "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(state_event(7, "t1")) + '\n{"at": "2026-11-1')
+        entry = self.by_slug(self.listing())["torn"]
+        self.assertEqual(datetime.fromisoformat(entry["last_activity"]), T0 + timedelta(minutes=7))
+
+    def test_S27_a_plan_with_no_event_and_no_file_has_null_last_activity_and_sorts_last(self):
+        from agent_orchestrator import workbench_needs
+
+        missing = self.plans / "gone.plan.yaml"
+        self.assertIsNone(workbench_needs.last_activity(self.plans / "events.jsonl", missing))
+        rows = [
+            {"slug": "none", "group": "active", "last_activity": None},
+            {"slug": "old", "group": "older", "last_activity": at(900)},
+            {"slug": "early", "group": "active", "last_activity": at(1)},
+            {"slug": "late", "group": "active", "last_activity": at(2)},
+        ]
+        rows.sort(key=workbench_needs.order_key)
+        self.assertEqual([row["slug"] for row in rows], ["late", "early", "none", "old"])
 
 
 class PlanTests(WorkbenchFixture):
