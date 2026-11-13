@@ -199,7 +199,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | orchestrator-audit-fixes/S14 | R103 | `packages/agent-orchestrator/tests/test_intents.py`: `IntentBooking.test_S14_*`, `ChaseAndAnswersKeys.test_S14_*` |
 | orchestrator-audit-fixes/S15 | R104 | `packages/agent-orchestrator/tests/test_intents.py`: `IntentRestart.test_S15_*` |
 | orchestrator-audit-fixes/S16 | R105 | `packages/agent-orchestrator/tests/test_intents.py`: `FailGateBooking.test_S16_*` |
-| orchestrator-audit-fixes/S22 | R106 | `packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py`: `LedgerContentionOutcome`, `SilentReviewerOutcome`, `IntentRestartOutcome.test_a_restart_over_a_pending_resume_asks_the_lead_and_sends_nothing_again`, `ApproveGateOutcome` |
+| orchestrator-audit-fixes/S22 | R106 | `packages/agent-orchestrator/tests/test_intents.py`: `IntentRestart.test_S15_a_pending_or_unknown_intent_asks_the_lead_and_never_resends`, `IntentRestart.test_S15_an_intent_the_runtime_never_saw_is_acted_on_again`; the driver-placed `packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py`: `LedgerContentionOutcome`, `SilentReviewerOutcome`, `IntentRestartOutcome.test_a_restart_over_a_pending_resume_asks_the_lead_and_sends_nothing_again`, `ApproveGateOutcome` |
 
 ### R4 — the route refusals
 
