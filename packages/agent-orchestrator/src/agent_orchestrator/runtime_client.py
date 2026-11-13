@@ -22,6 +22,25 @@ class RuntimeError(RuntimeError):  # noqa: A001 - the name the driver already ca
     """The runtime refused a call or answered with something that is not JSON."""
 
 
+# What `agent-runtime call operation` answers for an operation id. The runtime knows nothing of the orchestrator's
+# intents: these are its words for where a keyed spawn or resume stands.
+OPERATION_ADOPTED = ("bound", "working", "blocked", "decision", "complete", "failed")
+OPERATION_STATES = ("absent", "pending", "unknown", *OPERATION_ADOPTED)
+
+
+def operation_state(answer):
+    """The state a lookup answered, or `unknown` for an answer this driver does not know the meaning of: an unlisted
+    state is no reason to send again."""
+    state = answer.get("state") if isinstance(answer, dict) else None
+    return state if state in OPERATION_STATES else "unknown"
+
+
+def refuses_operation_ids(error):
+    """True when a runtime's refusal of a keyed send says the runtime does not take operation ids (an older runtime,
+    or one without dispatch): the send did not happen, and an unkeyed one must not take its place."""
+    return "operation_id" in str(error)
+
+
 class ProcessResult(Protocol):
     """What a finished process gives back: its exit code and its two streams."""
 

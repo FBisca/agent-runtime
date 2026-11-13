@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -27,7 +28,12 @@ from . import contracts, events, evidence, narrate, routes, runner, verify, work
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .plan import PlanError
-from .runtime_client import CliRuntimeClient
+from .runtime_client import (
+    OPERATION_ADOPTED,
+    CliRuntimeClient,
+    operation_state,
+    refuses_operation_ids,
+)
 from .runtime_client import RuntimeError as RuntimeCallError
 
 ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
@@ -689,6 +695,15 @@ def runtime_call(lead, tool, arguments, timeout=120):
 
 class Unreadable(ValueError):
     """`status` could not say whether an agent is gone."""
+
+
+class IntentUnsettled(ValueError):
+    """A spawn or resume the driver will not send on its own: it may or may not have reached the runtime, or the
+    runtime cannot key it. `operations` are the intents that stay open until the Lead decides."""
+
+    def __init__(self, message, operations=()):
+        super().__init__(message)
+        self.operations = list(operations)
 
 
 def terminal_gone(error, name):
@@ -1676,6 +1691,10 @@ class Driver:
             try:
                 self.step_answers(task_id)
                 acted += 1
+            except IntentUnsettled as error:
+                self.hold_intent(
+                    task_id, error
+                )  # the answers wait; the Lead decides what the resume becomes
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                 self.mark(task_id, answers=dict(self.task(task_id)["answers"], state="failed"))
                 self.errors.append("%s: %s" % (task_id, error))
@@ -1704,6 +1723,11 @@ class Driver:
                         steps[gate](task_id) is False
                     ):  # nothing to act on yet: poll again next iteration
                         break
+                except IntentUnsettled as error:
+                    self.hold_intent(
+                        task_id, error
+                    )  # a request now, so the unit is not `stuck` after the decision
+                    break
                 except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                     self.stuck.add((task_id, gate))
                     self.errors.append("%s: %s" % (task_id, error))
@@ -1786,26 +1810,45 @@ class Driver:
             narrate.say("warn", None, "could not wake the Lead in %s: %s" % (terminal, error))
             self.log("notify-failed", terminal=terminal, error=error[:500])
 
-    def request(self, task_id, kind, reason, fix=None, answerer=None):
+    def request(self, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None):
         """The unit needs the Lead. A unit that already has an open request keeps it. `answerer` is the assignment of
-        a busy answerer the request names: only a decision on such a request replaces that assignment."""
+        a busy answerer the request names: only a decision on such a request replaces that assignment. `menu` narrows
+        the actions the Lead may take, and `intent` names the intents the decision settles."""
         with self.book() as data:
-            task = data["tasks"][task_id]
-            if task.get("gate") == "requested":
-                return
-            unit = task["packet"]["unit"]
-            path, _ = next_path(self.run_dir / unit, "request", ".json")
-            task.update(
-                event={"at": now(), "kind": kind, "reason": reason},
-                gate="requested",
-                updated_at=now(),
-                request=dict(
-                    {"path": str(path), "kind": kind, "from_gate": task.get("gate")},
-                    **({"answerer": answerer} if answerer else {}),
-                ),
-            )
-            if fix:
-                task["fix"] = fix
+            unit = self.book_request(data, task_id, kind, reason, fix, answerer, menu, intent)
+        if unit is not None:
+            self.announce_request(task_id, kind, reason, unit)
+
+    def book_request(
+        self, data, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None
+    ):
+        """The ledger half of `request`, for a caller that books it with other changes in one write: the unit's
+        id, or None when the unit already has an open request."""
+        task = data["tasks"][task_id]
+        if task.get("gate") == "requested":
+            return None
+        unit = task["packet"]["unit"]
+        path, _ = next_path(self.run_dir / unit, "request", ".json")
+        asked = {"path": str(path), "kind": kind, "from_gate": task.get("gate")}
+        if answerer:
+            asked["answerer"] = answerer
+        if menu:
+            asked["menu"] = list(menu)
+        if intent:
+            asked["intent"] = list(intent)
+        task.update(
+            event={"at": now(), "kind": kind, "reason": reason},
+            gate="requested",
+            updated_at=now(),
+            request=asked,
+        )
+        if fix:
+            task["fix"] = fix
+        return unit
+
+    def announce_request(self, task_id, kind, reason, unit):
+        """What follows the booking of a request: the pane, the log, the ticket's status, the file and the wake. A
+        crash before the file is on disk is repaired by `step_requested`."""
         narrate.say("ask", "decide", "Lead decision needed (%s): %s" % (kind, reason), task=task_id)
         self.log("escalation", unit=unit, task=task_id, cause=kind, reason=reason[:500])
         self.write_status(unit.upper(), "IN PROGRESS · decision pending: " + cell(reason))
@@ -1830,7 +1873,7 @@ class Driver:
                 task["event"]["kind"],
                 task["event"]["reason"],
                 [str(c) for c in candidates if c.exists()],
-                menu=ARCHIVE_MENU if unit == ARCHIVE else None,
+                menu=task["request"].get("menu") or (ARCHIVE_MENU if unit == ARCHIVE else None),
             )
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             write_atomic(path, json.dumps(row, indent=2) + "\n")
@@ -1918,10 +1961,6 @@ class Driver:
                     % (held["text"] or "worker " + held["kind"]),
                 )
 
-    def escalate(self, task_id, reason, fix):
-        """A unit failed its gates past the cap. `fix` is the round a `retry` would run."""
-        self.request(task_id, "gate", reason, fix=fix)
-
     def write_status(self, ticket_id, status):
         if ticket_id == ARCHIVE.upper():
             return  # the archive unit has no ticket row
@@ -1947,13 +1986,17 @@ class Driver:
         """Checkpoint the worker's report as PARTIAL: the unit is not COMPLETE until CI and the merge."""
         path = self.report_file(task_id)
         with self.book() as data:
-            # review_rounds is the driver's own count: the worker's value is never trusted.
-            checkpoint(
-                data,
-                task_id,
-                dict(report, status="PARTIAL", **dict({"review_rounds": 0}, **changes)),
-            )
-            data["tasks"][task_id]["report_path"] = str(path)
+            self.book_report(data, task_id, report, path, **changes)
+
+    @staticmethod
+    def book_report(data, task_id, report, path, **changes):
+        # review_rounds is the driver's own count: the worker's value is never trusted.
+        checkpoint(
+            data,
+            task_id,
+            dict(report, status="PARTIAL", **dict({"review_rounds": 0}, **changes)),
+        )
+        data["tasks"][task_id]["report_path"] = str(path)
 
     def report_file(self, task_id):
         """The newest report in a task directory. Files are write-once: a later attempt writes report.2.json."""
@@ -2036,6 +2079,7 @@ class Driver:
                 "model": sender.get("model") or task["packet"].get("model"),
                 "effort": sender.get("effort") or task["packet"].get("effort"),
             },
+            attempt=task_id,
         )
         # The warned agent comes back as a new assignment: the record the next report is matched against must be
         # the one that will speak, or the report lands on no gate at all.
@@ -2254,10 +2298,30 @@ class Driver:
         return "FAIL", verify.items(findings, command, log)
 
     def fail_gate(self, task_id, report, source, items, checks_run=(), answer_ids=(), rebase=False):
-        """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure."""
+        """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure.
+
+        The round, the report, the next phase (a fix round, or the Lead's request) and the draft the pull request
+        still owes are booked in one ledger write, before any git or gh call: a restart after a crash anywhere later
+        finds the gate already failed once, and the draft it owes is in `fix`."""
         remaining = [short(item) for item in items]
+        unit = self.unit_of(task_id)
+        path = self.report_file(task_id)
+        owed = None
+        if unit != ARCHIVE and self.unit_flag(unit, "pr_ready"):
+            owed = self.pr_of(
+                task_id
+            )  # the PR was readied: it goes back to draft before anyone changes its code
+        fix = {
+            "source": source,
+            "items": items,
+            "attempt": None,
+            "checks_run": list(checks_run),
+            "answer_ids": list(answer_ids),
+            "rebase": True if rebase else None,
+            "draft": owed,
+        }
+        asked = kind = reason = None
         with self.book() as data:  # the driver's count: the report's review_rounds is never read
-            unit = data["tasks"][task_id]["packet"]["unit"]
             rounds = data.setdefault("rounds", {})
             if (
                 unit not in rounds
@@ -2265,55 +2329,51 @@ class Driver:
                 rounds[unit] = unit_summary(data, unit)["failed_reviews"]
             rounds[unit] += 1
             failures = rounds[unit]
-        if unit == ARCHIVE:
-            # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
-            self.record_report(task_id, report, remaining=remaining)
+            fix["attempt"] = failures
             self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
+            if unit == ARCHIVE:
+                # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
+                self.book_report(data, task_id, report, path, remaining=remaining)
+                reason = (
+                    "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
+                    "leaves the archive to you"
+                    % (
+                        "the archive pull request conflicts with its base"
+                        if source == "conflict"
+                        else "the archive failed its %s gate" % source,
+                        "; ".join(remaining),
+                    )
+                )
+                kind = source
+                asked = self.book_request(data, task_id, kind, reason)
+            else:
+                self.book_report(data, task_id, report, path, review_rounds=1, remaining=remaining)
+                for item in items:
+                    self.log_finding(
+                        unit,
+                        task_id,
+                        source,
+                        item.get("kind", "blocking") if isinstance(item, dict) else "blocking",
+                        item,
+                    )
+                if failures > self.fix_cap(unit):
+                    kind = "gate"
+                    reason = "%s failed its gates %d times; last: %s" % (
+                        unit,
+                        failures,
+                        "; ".join(remaining),
+                    )
+                    asked = self.book_request(data, task_id, kind, reason, fix=fix)
+                else:
+                    data["tasks"][task_id].update(gate="fix-pending", fix=fix, updated_at=now())
+        # Nothing below is the round's to book twice. The draft is attempted now and, when gh refuses, left in `fix`
+        # for `step_fix` to try again before it dispatches anyone.
+        if unit == ARCHIVE:
             self.undraft_archive(task_id)
-            return self.request(
-                task_id,
-                source,
-                "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
-                "leaves the archive to you"
-                % (
-                    "the archive pull request conflicts with its base"
-                    if source == "conflict"
-                    else "the archive failed its %s gate" % source,
-                    "; ".join(remaining),
-                ),
-            )
-        self.record_report(task_id, report, review_rounds=1, remaining=remaining)
-        fix = {
-            "source": source,
-            "items": items,
-            "attempt": failures,
-            "checks_run": list(checks_run),
-            "answer_ids": list(answer_ids),
-            "rebase": True if rebase else None,
-            "draft": None,
-        }
-        if self.unit_flag(unit, "pr_ready"):
-            # the PR was readied: it goes back to draft before anyone changes its code, a capped one included
-            url = self.pr_of(task_id)
-            if url and not self.undraft(task_id, url):
-                # step_fix tries again and dispatches no worker until it is a draft
-                fix["draft"] = url
-        self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
-        for item in items:
-            self.log_finding(
-                unit,
-                task_id,
-                source,
-                item.get("kind", "blocking") if isinstance(item, dict) else "blocking",
-                item,
-            )
-        if failures > self.fix_cap(unit):
-            return self.escalate(
-                task_id,
-                "%s failed its gates %d times; last: %s" % (unit, failures, "; ".join(remaining)),
-                fix,
-            )
-        self.mark(task_id, gate="fix-pending", fix=fix)
+        elif owed and self.undraft(task_id, owed):
+            self.mark(task_id, fix=dict(fix, draft=None))
+        if asked is not None:
+            self.announce_request(task_id, kind, reason, asked)
 
     def fix_cap(self, unit):
         """The fix rounds a unit may use: its `Max fix rounds:` plan line, else --max-fix-rounds."""
@@ -2370,6 +2430,7 @@ class Driver:
                 "model": model,
                 "effort": effort,
             },
+            attempt=Path(review["dir"]).name,
         )
         self.mark(task_id, gate="reviewing", review=dict(review, assignment_id=assignment_id))
         narrate.say(
@@ -3614,13 +3675,156 @@ class Driver:
             return step
         return "medium" if getattr(self, "brain_cli", None) else klass
 
-    def ensure_agent(self, name, role, unit, spawn, fresh=False):
+    # Every spawn and resume goes out under an intent: a row in the ledger's `intents`, keyed by a fresh UUID that is
+    # also the runtime's operation_id, booked before the call. The readable `unit/attempt/operation` path is metadata
+    # for the person reading the ledger. A restart that finds an intent still open asks the runtime what became of its
+    # key (`call operation`), and never sends again for a delivery it cannot establish.
+
+    def book_intent(self, operation, name, role, unit, attempt):
+        """Book the intent for one spawn or resume and return its operation id."""
+        operation_id = str(uuid.uuid4())
+        path = "%s/%s/%s" % (unit, attempt, operation)
+        with self.book() as data:
+            data.setdefault("intents", {})[operation_id] = {
+                "name": name,
+                "role": role,
+                "unit": unit,
+                "attempt": attempt,
+                "operation": operation,
+                "path": path,
+                "at": now(),
+                "state": "open",
+                "assignment_id": None,
+            }
+        self.log(
+            "intent-booked",
+            name=name,
+            role=role,
+            unit=unit,
+            operation=operation,
+            operation_id=operation_id,
+            route=path,
+        )
+        return operation_id
+
+    def settle_intent(self, operation_id, state, assignment_id=None, why=None):
+        """Close an intent as `bound` (the runtime answered), `adopted` (a restart found its assignment), `absent` (the
+        runtime never saw the key), `refused` (the runtime said no) or `released` (the Lead decided)."""
+        with self.book() as data:
+            row = (data.get("intents") or {}).get(operation_id)
+            if row is None:
+                return
+            row["state"] = state
+            row["settled_at"] = now()
+            if assignment_id:
+                row["assignment_id"] = assignment_id
+            if why:
+                row["why"] = str(why)[:300]
+        self.log(
+            "intent-settled", operation_id=operation_id, state=state, why=why and str(why)[:300]
+        )
+
+    def release_intents(self, operations, why):
+        """The Lead decided, or the unit was given up: these intents no longer stand for a send that may land."""
+        for operation_id in operations or ():
+            self.settle_intent(operation_id, "released", why=why)
+
+    def send(self, operation, name, role, unit, attempt, arguments):
+        """One spawn or resume under its own intent; (the runtime's answer, its assignment id). A runtime that does
+        not take operation ids is never sent the call without one: the Lead is asked instead."""
+        operation_id = self.book_intent(operation, name, role, unit, attempt)
+        try:
+            result = runtime_call(self.lead, operation, dict(arguments, operation_id=operation_id))
+        except subprocess.TimeoutExpired:
+            raise  # it may have started: the intent stays open, and a restart looks the key up
+        except (ValueError, OSError) as error:
+            self.settle_intent(operation_id, "refused", why=error)
+            if refuses_operation_ids(error):
+                raise IntentUnsettled(
+                    "the runtime does not take operation ids (%s), so nothing was sent to %s and nothing will be "
+                    "sent without one: retry once the runtime supports them, or skip"
+                    % (error, name)
+                ) from None
+            raise
+        assignment_id = assignment_of(result)
+        self.settle_intent(operation_id, "bound", assignment_id=assignment_id)
+        return result, assignment_id
+
+    def reconcile_intent(self, name):
+        """What became of an intent the driver left open for `name`: (assignment id, intent) when the runtime holds
+        the assignment (it is adopted), None when nothing is open or the runtime never saw the key (the caller acts
+        again). A delivery the runtime cannot vouch for raises `IntentUnsettled`: sending again could do it twice."""
+        with self.book() as data:
+            found = sorted(
+                (row["at"], key, dict(row))
+                for key, row in (data.get("intents") or {}).items()
+                if row["name"] == name and row["state"] in ("open", "held")
+            )
+        adopted = None
+        for _, key, intent in found:
+            if intent["state"] == "held":  # the Lead has been asked: no lookup each round
+                raise IntentUnsettled(self.unsettled_text(intent, "held", None), [key])
+            try:
+                answer = runtime_call(self.lead, "operation", {"operation_id": key})
+            except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                answer = {"state": "unknown", "reason": "the lookup failed: %s" % error}
+            state = operation_state(answer)
+            assignment_id = answer.get("assignment_id") if isinstance(answer, dict) else None
+            self.log("intent-lookup", name=name, operation_id=key, state=state)
+            if state == "absent":
+                self.settle_intent(key, "absent")
+            elif state in OPERATION_ADOPTED and isinstance(assignment_id, str) and assignment_id:
+                self.settle_intent(key, "adopted", assignment_id=assignment_id)
+                adopted = (assignment_id, intent)
+            else:
+                raise IntentUnsettled(
+                    self.unsettled_text(intent, state, (answer or {}).get("reason")), [key]
+                )
+        return adopted
+
+    @staticmethod
+    def unsettled_text(intent, state, reason):
+        return "the %s may or may not have reached %s (the runtime answers %s%s): retry or skip" % (
+            intent["operation"],
+            intent["name"],
+            state,
+            "; " + str(reason) if reason else "",
+        )
+
+    def adopt(self, name, role, unit, assignment_id, intent):
+        """Bind an assignment a restart found under an intent, as the send that made it would have."""
+        with self.book() as data:
+            record = data.setdefault("agents", {}).setdefault(
+                name, {"role": role, "unit": unit, "intent_at": intent["at"]}
+            )
+            record.update(assignment_id=assignment_id, bound_at=now(), how="adopt")
+            address = record.get("address")
+        self.touched.add(name)
+        self.log("agent", name=name, role=role, unit=unit, how="adopt", assignment_id=assignment_id)
+        return address
+
+    def hold_intent(self, task_id, error):
+        """An intent the driver cannot settle: the unit's Lead is asked, and a `retry` sends again under a new key."""
+        with self.book() as data:
+            for key in error.operations:
+                row = (data.get("intents") or {}).get(key)
+                if row and row["state"] == "open":
+                    row["state"] = "held"
+        self.request(task_id, "intent", str(error), menu=("retry", "skip"), intent=error.operations)
+
+    def ensure_agent(self, name, role, unit, spawn, fresh=False, attempt=None):
         """Put one agent under `name` and return (address, assignment_id).
 
         `spawn` is the runtime's spawn arguments. A name the ledger already knows is looked up first and, when live,
         resumed with the same task instead of spawned (that is how a restart re-attaches). `fresh` says the caller
         already stopped the old agent of this name, so a bound record needs no lookup; an open intent is always
         looked up."""
+        attempt = attempt or name
+        adopted = self.reconcile_intent(name)
+        if adopted:
+            assignment_id, intent = adopted
+            address = self.adopt(name, role, unit, assignment_id, intent)
+            return address or assignment_id, assignment_id
         with self.book() as data:
             agents = data.setdefault("agents", {})
             known = agents.get(name)
@@ -3639,13 +3843,15 @@ class Driver:
             live, spawn = False, dict(spawn, task=spawn["task"] + self.handoff(name, unit))
         try:
             if live:
-                result, how = (
-                    runtime_call(self.lead, "resume", {"name": name, "task": spawn["task"]}),
+                (result, assignment_id), how = (
+                    self.send(
+                        "resume", name, role, unit, attempt, {"name": name, "task": spawn["task"]}
+                    ),
                     "attach",
                 )
             else:
-                result, how = (
-                    runtime_call(self.lead, "spawn", self.spawn_args(spawn, role)),
+                (result, assignment_id), how = (
+                    self.send("spawn", name, role, unit, attempt, self.spawn_args(spawn, role)),
                     "spawn",
                 )
         except subprocess.TimeoutExpired:
@@ -3658,7 +3864,6 @@ class Driver:
                     else:
                         data["agents"].pop(name, None)
             raise
-        assignment_id = assignment_of(result)
         returned = result.get("address")
         if not returned and how == "attach":
             returned = (known or {}).get(
@@ -3881,10 +4086,18 @@ class Driver:
             "effort": successor["effort"],
             "task": text,
         }
+        attempt = successor["task_id"]
+        adopted = self.reconcile_intent(name)
+        if (
+            adopted
+        ):  # a send this driver made before it died: the runtime holds it, so nothing is sent again
+            assignment_id, intent = adopted
+            address = self.adopt(name, "worker", unit, assignment_id, intent)
+            return address or task["runtime_id"], assignment_id
         if self.open_intent(
             name
         ):  # the driver died while starting this worker: find it, do not start another
-            return self.ensure_agent(name, "worker", unit, spawn, fresh=True)
+            return self.ensure_agent(name, "worker", unit, spawn, fresh=True, attempt=attempt)
         alive = self.pane_alive(name)
         if alive and not fresh:
             with self.book() as data:
@@ -3892,12 +4105,14 @@ class Driver:
             if self.swap_due(name, "worker", unit, last):
                 fresh, spawn["task"] = True, spawn["task"] + self.handoff(name, unit)
         if alive and not fresh:
-            resumed = runtime_call(
-                self.lead,
+            resumed, assignment_id = self.send(
                 "resume",
+                name,
+                "worker",
+                unit,
+                attempt,
                 {"name": name, "task": "Read %s and follow it.%s" % (task_md, said)},
             )
-            assignment_id = assignment_of(resumed)
             with self.book() as data:
                 if name in (data.get("agents") or {}):
                     data["agents"][name]["assignment_id"] = assignment_id
@@ -3923,7 +4138,9 @@ class Driver:
                     "could not stop %s before replacing it: %s" % (name, error),
                     task=successor["task_id"],
                 )
-        address, assignment_id = self.ensure_agent(name, "worker", unit, spawn, fresh=True)
+        address, assignment_id = self.ensure_agent(
+            name, "worker", unit, spawn, fresh=True, attempt=attempt
+        )
         narrate.say(
             "start",
             None,
@@ -3953,6 +4170,8 @@ class Driver:
         narrate.say("info", "decide", "Lead decided %s: %s" % (action, reason), task=task_id)
         self.log("decision", unit=unit, task=task_id, action=action, reason=reason[:500])
         held = task.get("held") or []
+        asked = task.get("request") or {}
+        self.release_intents(asked.get("intent"), "the Lead decided %s" % action)
         if action in ("mark blocked", "skip"):
             blocked = action == "mark blocked"
             with self.book() as data:
@@ -3972,6 +4191,9 @@ class Driver:
         if unit == ARCHIVE:
             return self.retry_archive(task_id)
         self.write_status(unit.upper(), "IN PROGRESS")
+        if asked.get("kind") == "intent" and action == "retry" and asked.get("from_gate"):
+            # the held send goes out again under a new key, from the step that held it
+            return self.mark(task_id, gate=asked["from_gate"], held=[])
         answers = task.get("answers") or {}
         named = (task.get("request") or {}).get("answerer")
         if answers.get("state") == "working" and named == answers.get("assignment_id"):
@@ -4849,6 +5071,8 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, IntentUnsettled):
+                self.release_intents(error.operations, "no attempt is waiting on it")
             narrate.say("fail", "mutation", "mutation reviewer %s not started: %s" % (name, error))
             record_update.update(ended=True, error=str(error)[:300])
         else:
@@ -5633,6 +5857,8 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, IntentUnsettled):
+                self.release_intents(error.operations, "no attempt is waiting on it")
             narrate.say("fail", "gaps", "gaps reviewer not started: %s" % error)
             gaps = {"name": name, "path": str(path), "ended": True, "error": str(error)}
         else:
@@ -5769,6 +5995,9 @@ class Driver:
         the ticket stays out of this run's rounds until the Lead sets its Status to exactly TO-DO (a restarted drive
         reads a cell starting with TO-DO as TO-DO and tries it once more)."""
         task_id = ticket["#"].lower()
+        if isinstance(error, IntentUnsettled):
+            # The Lead's way out is the ticket's Status: setting it back to TO-DO is the decision to send again.
+            self.release_intents(error.operations, "the Lead is told through the ticket's wake")
         self.failed.add(task_id)
         self.errors.append("%s: %s" % (ticket["#"], error))
         narrate.say("fail", "build", "%s: %s" % (what, error), task=ticket["#"])
@@ -6123,6 +6352,7 @@ class Driver:
                 "model": model,
                 "effort": effort,
             },
+            attempt=task_id,
         )
         with self.book() as data:
             bind(data, task_id, str(runtime_id))
