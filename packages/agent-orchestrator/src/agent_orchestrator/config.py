@@ -1,7 +1,8 @@
-"""The repo config, `<repo>/.orchestrate/config.yaml`: where plans live and how they archive.
+"""The repo config, `<repo>/.orchestrate/config.yaml`: where plans live, how they archive, and its check tiers.
 
 Only these nodes are read. A missing file means the defaults; reading never creates anything."""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +11,16 @@ import yaml
 CONFIG_PATH = Path(".orchestrate") / "config.yaml"
 ARCHIVE_MODES = ("promote", "discard")
 # node -> its keys: the whole accepted shape, so an unknown key is refused by its dotted path.
-NODES = {"plans": ("dir",), "acceptance": ("dir",), "archive": ("mode",)}
+NODES = {
+    "plans": ("dir",),
+    "acceptance": ("dir",),
+    "archive": ("mode",),
+    "checks": ("fast", "affected", "full"),
+}
+# the placeholders `checks.affected` may name: the run's base ref and the ticket's paths
+AFFECTED_PLACEHOLDERS = ("base", "paths")
+FULL_KEYS = ("run", "verify")
+PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 
 
 class ConfigError(ValueError):
@@ -18,10 +28,21 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class Checks:
+    """The declared check tiers; each is optional, and `None` means the repo did not declare it."""
+
+    fast: str | None
+    affected: str | None
+    full_run: str | None
+    full_verify: bool
+
+
+@dataclass(frozen=True)
 class RepoConfig:
     plans_dir: Path
     acceptance_dir: str
     archive_mode: str
+    checks: Checks | None = None
 
 
 def _path(root, value, dotted):
@@ -31,6 +52,53 @@ def _path(root, value, dotted):
         )
     path = Path(value).expanduser()
     return path if path.is_absolute() else root / path
+
+
+def _command(body, key, dotted, placeholders=False):
+    """A check command: a non-empty string, its placeholders limited to `placeholders` when given."""
+    value = body.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(
+            f"{CONFIG_PATH}: {dotted} must be a non-empty command string — write the command to run"
+        )
+    if placeholders:
+        for name in PLACEHOLDER.findall(value):
+            if name not in AFFECTED_PLACEHOLDERS:
+                raise ConfigError(
+                    f"{CONFIG_PATH}: {dotted}: placeholder {{{name}}} is not one of "
+                    f"{', '.join('{' + p + '}' for p in AFFECTED_PLACEHOLDERS)} — "
+                    f"use only those, or remove it"
+                )
+    return value
+
+
+def _checks(body):
+    """The `checks` node, its nested `full` mapping checked key by key."""
+    full = body.get("full", {})
+    if full is None:
+        full = {}
+    if not isinstance(full, dict):
+        raise ConfigError(
+            f"{CONFIG_PATH}: checks.full must be a mapping — write full: {{run: ..., verify: ...}}"
+        )
+    for key in full:
+        if key not in FULL_KEYS:
+            raise ConfigError(
+                f"{CONFIG_PATH}: checks.full.{key}: unknown key — remove it (known: {', '.join(FULL_KEYS)})"
+            )
+    verify = full.get("verify", True)
+    if not isinstance(verify, bool):
+        raise ConfigError(
+            f"{CONFIG_PATH}: checks.full.verify must be true or false — write verify: true or verify: false"
+        )
+    return Checks(
+        fast=_command(body, "fast", "checks.fast"),
+        affected=_command(body, "affected", "checks.affected", placeholders=True),
+        full_run=_command(full, "run", "checks.full.run"),
+        full_verify=verify,
+    )
 
 
 def load(root):
@@ -71,4 +139,5 @@ def load(root):
         raise ConfigError(
             f"{CONFIG_PATH}: archive.mode: {mode!r} is not a mode — use one of {' | '.join(ARCHIVE_MODES)}"
         )
-    return RepoConfig(plans, acceptance, mode)
+    checks = _checks(data["checks"]) if "checks" in data else None
+    return RepoConfig(plans, acceptance, mode, checks)

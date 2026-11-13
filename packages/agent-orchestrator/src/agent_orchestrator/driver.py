@@ -5577,7 +5577,7 @@ def read_repo_config(args):
     if args.command == "plan" and getattr(args, "plan_command", None) == "schema":
         return
     if not plan or args.command not in ("plan", "status", "verify", "run", "accept", "launch"):
-        return
+        return None
     where = Path(args.repo).resolve() if args.repo else Path(plan).resolve().parent
     found = subprocess.run(
         ["git", "-C", str(where), "rev-parse", "--show-toplevel"],
@@ -5586,7 +5586,15 @@ def read_repo_config(args):
         timeout=15,
     )
     if found.returncode == 0:
-        yaml_plan.repo_config(Path(found.stdout.strip()).resolve())
+        return yaml_plan.repo_config(Path(found.stdout.strip()).resolve())
+    return None
+
+
+CHECKS_WARNING = (
+    "plan check: %s declares no checks node — add checks.fast, checks.affected and checks.full "
+    "to brief workers with the cheap check tiers; until then workers run the repository's full CI "
+    "gate (or the --gate commands)"
+)
 
 
 def repo_key(repo):
@@ -6706,7 +6714,10 @@ def main(argv=None):
     args, extra = parser.parse_known_args(argv)
     if extra and args.command != "launch":
         parser.error("unrecognized arguments: " + " ".join(extra))
-    read_repo_config(args)
+    config = read_repo_config(args)
+    if args.command == "plan" and args.plan_command == "check":
+        if config is not None and config.checks is None:
+            print(CHECKS_WARNING % ".orchestrate/config.yaml", file=sys.stderr)
     if args.command == "launch":
         return launch(args, extra)  # unknown options are forwarded to `run`, which validates them
     if args.command == "plan":
