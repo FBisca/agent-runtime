@@ -8,7 +8,37 @@ The selection follows the command line: an explicit `-m` wins, and asking for pa
 durations) means the whole suite. A worker of xdist takes the selection from the controller.
 """
 
+import socket
+import subprocess
+
 import pytest
+
+
+class _RefusedInUnit(RuntimeError):
+    """A unit test reached for a process or a socket."""
+
+
+def _refuse(what):
+    def refused(*args, **kwargs):
+        raise _RefusedInUnit(
+            f"a unit test tried to {what}: the fast suite stays in process. Mark the test "
+            "`integration`, or inject the seam it reaches for."
+        )
+
+    return refused
+
+
+@pytest.fixture(autouse=True)
+def _no_process_or_socket_in_unit(request, monkeypatch):
+    """Refuse a process or a network connection in a unit test; integration tests are untouched."""
+    node = request.node
+    if node.get_closest_marker("integration") or not node.get_closest_marker("unit"):
+        yield
+        return
+    monkeypatch.setattr(subprocess, "Popen", _refuse("start a process (Popen)"))
+    monkeypatch.setattr(socket.socket, "connect", _refuse("open a network socket"))
+    monkeypatch.setattr(socket.socket, "connect_ex", _refuse("open a network socket"))
+    yield
 
 
 def pytest_collection_modifyitems(config, items):

@@ -122,3 +122,4 @@ def test_S13_promoted_acceptance_tests_are_collected_in_any_package(tmp_path):
     assert "test_promoted_in_another_package" in result.stdout
     assert "test_promoted_at_the_root_imports_root_tests" in result.stdout
     assert "3 passed" in result.stdout
+

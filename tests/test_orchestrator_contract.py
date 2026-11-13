@@ -60,6 +60,7 @@ class SeamTests(unittest.TestCase):
             self.assertNotIn("agent_runtime", names, "%s imports the runtime's modules" % path.name)
             self.assertNotIn("dispatch_store", names, "%s imports the runtime's store" % path.name)
 
+    @pytest.mark.integration
     def test_S3_the_client_calls_the_runtime_cli_and_returns_its_answer(self):
         """python-workspace-contracts/R200"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,14 +83,15 @@ class SeamTests(unittest.TestCase):
 
     def test_S3_a_failing_runtime_is_reported_not_swallowed(self):
         """python-workspace-contracts/R200"""
-        with tempfile.TemporaryDirectory() as tmp:
-            fake = Path(tmp) / "agent-runtime"
-            fake.write_text("#!/bin/sh\necho 'boom' >&2\nexit 3\n", encoding="utf-8")
-            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
-            with mock.patch.dict(os.environ, {"PATH": "%s:%s" % (tmp, os.environ["PATH"])}):
-                with self.assertRaises(Exception) as caught:
-                    CliRuntimeClient("lead-1").call("spawn", {}, timeout=30)
-            self.assertIn("boom", str(caught.exception))
+
+        class Failed:
+            returncode = 3
+            stdout = ""
+            stderr = "boom\n"
+
+        with self.assertRaises(RuntimeError) as caught:
+            CliRuntimeClient("lead-1", process=lambda argv, timeout=None: Failed()).call("spawn", {}, timeout=30)
+        self.assertIn("boom", str(caught.exception))
 
 
 class BoundaryTests(unittest.TestCase):
@@ -172,6 +174,7 @@ class BoundaryTests(unittest.TestCase):
 class CliContractTests(unittest.TestCase):
     """The CLI the skill documented is the CLI the member ships."""
 
+    @pytest.mark.integration
     def test_the_cli_offers_the_documented_commands(self):
         """python-workspace-contracts/R202"""
         env = dict(os.environ, PYTHONPATH=str(MEMBER.parent))
