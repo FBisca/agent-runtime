@@ -64,7 +64,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R46** WHEN `gh pr ready --undo` fails as a unit leaves for a fix round, THEN no fix worker is dispatched; the undo is logged and tried again on a later round. (from orchestrator-pr-merge-state/S9)
 - **R47** WHEN `gh pr update-branch` fails and a fresh `gh pr view` shows no conflict, THEN no conflict round is raised: the Lead is asked with the `gh` error and the way out. (from orchestrator-pr-merge-state/S10)
 - **R48** WHEN a unit's pull request conflicts after its fix rounds hit the cap, THEN it escalates to the Lead as other capped rounds do, and the PR is left a draft. (from orchestrator-pr-merge-state/S11)
-- **R49** WHEN the archive unit's pull request conflicts, THEN its conflict round goes fix, `converge --final`, `ready-for-ci` with no review, and the PR is a draft while it is rebased. (from orchestrator-pr-merge-state/S12)
+- **R49** WHEN the archive unit's pull request conflicts, THEN the driver asks the Lead with `retry` and `skip` and spawns no worker; `retry` rebuilds the branch from the current base. (from orchestrator-pr-merge-state/S12)
 - **R50** WHEN a drive starts and an open, unparked ledger task's assignment is not in `wait`'s `unfinished`, and `status` for its agent answers `exited`, or `unknown` with hc's `not_found`, THEN the task is orphaned and an `orphaned` event names the task and the status answer. (from drive-restart-recovery/S2)
 - **R51** WHEN the loop would finish while an open, unparked ledger task's assignment is not in `wait`'s `unfinished`, THEN it reconciles that task first; a task it cannot settle raises a `stranded` wake, and the run exits non-zero instead of logging `finish`. A task held by a live terminal this drive did not bind is stranded the same way: the `stranded` wake names the task and the runtime's answer. A task whose agent has ended its turn (`idle` or `done`) and whose report has landed for that attempt goes to the gates (`reported`): nothing is spawned and the run does not finish over it. (from drive-restart-recovery/S2a; the two clauses from drive-restart-recovery-gaps/S10 and S11)
 - **R52** WHEN `status` for an open task's agent fails (the call raises, or answers `unknown` with any error other than `not_found`), THEN nothing is released or spawned, and a `stranded` wake names the unit and the error. (from drive-restart-recovery/S2b)
@@ -98,7 +98,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R67** WHEN a dispatch fails, THEN the `not-dispatched` wake names the ticket, the reason, and the way out "set the ticket's Status cell back to exactly `TO-DO`". (from drive-restart-recovery-gaps/S12a)
 - **R68** WHEN a unit the idle tick skipped (its gate was `requested`, `awaiting-merge` or parked) returns to `working`, THEN its working window starts again at that tick, and the idle tick does not count it until another `--working-minutes` have passed. (from drive-restart-recovery-gaps/S13)
 - **R69** WHEN a drive starts, THEN the working window starts empty: `--working-minutes` is measured from the first tick that sees the agent `working`, and a restart resets it. (from drive-restart-recovery-gaps/S13a)
-- **R70** WHEN the archive brief is written for a YAML plan, THEN every scenario the plan's spec already carries in a requirement's provenance is kept as it is and the brief appends none of them again: a requirement that names several scenarios at once (`(from <slug>/S1, S2, S3)`) holds every one of them, not only the first. (from yaml-eec/S29)
+- **R70** WHEN the driver writes the archive's spec section for a YAML plan, THEN every scenario the plan's spec already carries in a requirement's provenance is kept as it is and the section appends none of them again: a requirement that names several scenarios at once (`(from <slug>/S1, S2, S3)`) holds every one of them, not only the first. (from yaml-eec/S29)
 - **R71** WHEN the driver books a change while a Lead command holds the ledger lock, THEN it waits with jittered backoff (0.2 s growing to 5 s) under one monotonic deadline of 60 s that counts the lock waits and the sleeps alike, then books the change; a busy ledger is not an error of the step that met it, and the drive does not exit. (from orchestrator-audit-fixes/S1)
 - **R72** WHEN the ledger stays busy past that deadline, or any other exception escapes the driver during startup, the loop or the finalization, THEN the driver logs `crashed <reason>` (`crashed ledger busy >60s` for the ledger), writes a `crash` wake without taking the ledger lock, and exits non-zero; a `run` refused because another driver holds the run lock logs no crash. (from orchestrator-audit-fixes/S2, S3)
 - **R73** WHEN the driver and the evidence runner both write the ledger, THEN they take the same lock through one shared helper (`ledger.locked`) and the same deadline rule. (from orchestrator-audit-fixes/S6)
@@ -141,7 +141,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | S9 | R31 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S9_a_failed_draft_undo_holds_the_fix_worker_until_it_succeeds` |
 | S10 | R32 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S10_an_update_branch_failure_that_is_no_conflict_goes_to_the_lead` |
 | S11 | R33 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S11_a_conflict_past_the_cap_goes_to_the_lead_and_leaves_the_pr_a_draft` |
-| S12 | R34 | `packages/agent-orchestrator/tests/test_archive.py`: `test_S12_a_conflicting_archive_pr_is_rebased_with_no_review` |
+| S12 | R34 | `packages/agent-orchestrator/tests/test_archive.py`: `ArchiveMergeStateTests.test_S5_a_conflicting_archive_pr_asks_the_lead_and_spawns_no_worker` |
 | drive-restart-recovery-gaps/S10 | R51 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished` |
 | drive-restart-recovery-gaps/S11 | R51 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish` |
 | drive-restart-recovery-gaps/S9 | R63 | `packages/agent-orchestrator/tests/test_wake.py`: `test_S7_an_answer_naming_another_attempt_exits_2_writes_nothing_and_names_the_expected_id` |
@@ -151,7 +151,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | drive-restart-recovery-gaps/S12a | R67 | `packages/agent-orchestrator/tests/test_run.py`: `test_S12a_the_not_dispatched_wake_names_the_ticket_the_reason_and_the_exact_TO_DO_way_out` |
 | drive-restart-recovery-gaps/S13 | R68 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window` |
 | drive-restart-recovery-gaps/S13a | R69 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it` |
-| yaml-eec/S29 | R70 | `packages/agent-orchestrator/tests/test_archive_yaml.py`: `test_S29_a_requirement_naming_several_scenarios_keeps_all_of_them` |
+| yaml-eec/S29 | R70 | `packages/agent-orchestrator/tests/test_archive_driver.py`: `SpecSectionUnit.test_S2_a_held_scenario_keeps_its_number_and_adds_no_requirement` |
 | orchestrator-audit-fixes/S1 | R71 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S1_a_held_ledger_is_waited_out_with_jittered_backoff_and_then_booked`, `test_S1_the_backoff_grows_to_5_seconds_and_no_further`, `test_S1_the_driver_waits_for_a_ledger_a_lead_command_holds_and_books_the_change` |
 | orchestrator-audit-fixes/S2 | R72 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S2_*`; `packages/agent-orchestrator/tests/test_await.py`: `CrashGuardTests.test_S2_*` |
 | orchestrator-audit-fixes/S3 | R72 | `packages/agent-orchestrator/tests/test_await.py`: `CrashGuardTests.test_S3_*` |
@@ -164,6 +164,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | orchestrator-audit-fixes/S19 | R79 | `packages/agent-orchestrator/tests/test_runner.py`: `Containment.test_S19_*` |
 | orchestrator-narration | R80 | `packages/agent-orchestrator/tests/test_narrate.py`: `NarrateTests.test_*`; `packages/agent-orchestrator/tests/test_run.py`: `test_a_refused_spawn_keeps_the_reservation_and_exits_1` |
 | deterministic-archive/S6 | R81 | `packages/agent-orchestrator/tests/test_archive.py`: `GapsAfterArchiveTests.test_S6_*` |
+| deterministic-archive/S7 | R9 | `packages/agent-orchestrator/tests/test_archive_driver.py`: `ArchiveRouteRefusal.test_S7_*` |
 
 ### R4 — the route refusals
 
