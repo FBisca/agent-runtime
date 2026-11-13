@@ -5473,6 +5473,18 @@ class Driver:
             )
         return [c for c in (tiers.fast, affected) if c], affected, tiers.full_run
 
+    def last_attempt(self, unit, task_id):
+        """The packet of the unit's most recent other attempt that carries a class, or None."""
+        with self.book() as data:
+            earlier = [
+                task["packet"]
+                for other_id, task in data["tasks"].items()
+                if other_id != task_id
+                and task["packet"].get("unit") == unit
+                and "class" in task["packet"]
+            ]
+        return earlier[-1] if earlier else None
+
     def dispatch(self, plan, ticket, task_id=None, note=""):
         number = ticket["#"][1:]
         name = worker_name(plan["slug"], number)
@@ -5487,6 +5499,10 @@ class Driver:
             )
         size, difficulty = ticket["Size"].strip(), ticket["Difficulty"].strip()
         klass, matrix_effort = MATRIX[(size, difficulty)]
+        last = self.last_attempt("t" + number, task_id)
+        if last and ROUTE["class"].index(last["class"]) > ROUTE["class"].index(klass):
+            # A retry the driver raised keeps its class: a re-dispatch never drops below the last attempt.
+            klass, matrix_effort = last["class"], last.get("effort") or matrix_effort
         route = self.routes[klass]
         backend = self.step_backend("implementer", route.backend)
         model = self.step_model("implementer", route.model)
