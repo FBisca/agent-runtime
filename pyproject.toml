@@ -39,6 +39,26 @@ markers = [
     "live: touches a real CLI or provider; skipped unless its opt-in variable is set",
 ]
 filterwarnings = ["default::pytest.PytestUnhandledThreadExceptionWarning"]
+# The affected check tier (`pytest --impacted`, .orchestrate/config.yaml). The tests load server/
+# and hooks/ by path and the packages by their installed names, so import analysis selects no
+# test for a source change: the map routes each root to its tests. Its globs are right-anchored
+# and `*` is one segment, so a deeper file needs its own glob; test_check_tiers_repo checks
+# every tracked source file is covered.
+impacted_module = "server"
+impacted_map = [
+  "server/*=tests",
+  "hooks/*=tests",
+  "bin/*=tests",
+  "scripts/*=tests/installer",
+  "install.sh=tests/installer",
+  "herdr/*/*=tests/test_workbench_mod.py",
+  "herdr/*/*/*=tests/test_workbench_mod.py",
+  "herdr/*/*=tests/installer/test_herdr.py",
+  "herdr/*/*/*=tests/installer/test_herdr.py",
+  "packages/agent-runtime/src/*/*=tests",
+  "packages/agent-orchestrator/src/*/*=packages/agent-orchestrator/tests",
+  "packages/agent-eval/src/*/*=packages/agent-eval/tests",
+]
 
 [tool.ruff]
 line-length = 100
