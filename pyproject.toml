@@ -85,3 +85,11 @@ python-version = "3.11"
 python-platform = "all"
 # The acceptance tests import the test helpers of the suite they moved out of, as pytest lets them.
 extra-paths = ["packages/agent-orchestrator/tests", "tests"]
+
+# An acceptance file is promoted byte-identical to its approval and is never edited after, so its fixture
+# subclasses may override a helper with the plan's own signature.
+[[tool.ty.overrides]]
+include = ["packages/*/acceptance/**", "acceptance/**"]
+
+[tool.ty.overrides.rules]
+invalid-method-override = "ignore"
