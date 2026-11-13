@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from test_mcp_server import RUNTIME_SRC, Session
-from test_tools import ToolCase
+from test_tools import FAKE, ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
@@ -55,8 +55,13 @@ class AsyncRPC:
             return
 
     def close(self):
-        """Stop the reader before the session closes its streams: a thread on a closed file raises."""
-        self.thread.join(timeout=2)
+        """Stop the reader before the session closes its streams: a thread on a closed file raises.
+
+        The reader sits on the server's stdout until the server exits, and the server exits when its stdin
+        closes: end the input first, then the join is the reader finishing, not a timeout.
+        """
+        self.session.proc.stdin.close()
+        self.thread.join(timeout=10)
 
     def send(self, method, params=None, notify=False):
         self.sequence += 1
@@ -80,7 +85,67 @@ class AsyncRPC:
         return self.send("tools/call", {"name": name, "arguments": arguments})
 
 
-class EventWaitTests(ToolCase):
+class LazySessions:
+    """Sessions indexed like a list, each started the first time a test reaches for it."""
+
+    def __init__(self, start):
+        self.start, self.sessions = start, {}
+
+    def __getitem__(self, index):
+        if index not in self.sessions:
+            self.sessions[index] = self.start(index)
+        return self.sessions[index]
+
+
+class HcCase(ToolCase):
+    """ToolCase with the fake hc installable on its own: a test that drives hc_tools in process, or reads the
+    store, needs the binary and its replies but no server process behind them."""
+
+    def install_hc(self, replies=None, env=None):
+        """Write the fake hc and its replies; return the environment a server (or a call) would run under."""
+        replies = dict(replies or {})
+        replies.setdefault("get:t0", {"out": raw("lead", None)})
+        replies.setdefault("get:t1", {"out": raw("worker", "t0")})
+        (self.dir / "replies").write_text(json.dumps(replies))
+        hc = self.dir / "bin" / "hc"
+        hc.write_text(
+            FAKE
+            % {
+                "python": sys.executable,
+                "log": str(self.log),
+                "replies": str(self.dir / "replies"),
+                "overlay": str(self.dir / "overlay"),
+            }
+        )
+        hc.chmod(0o755)
+        full = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+            "CODEX_THREAD_ID": "test-session",
+        }
+        full.update(env or {})
+        return full
+
+    def count_sessions(self):
+        """The HC_TERMINAL_ID of every server session started from now on, in order."""
+        started = []
+        real = Session.__init__
+
+        def counted(session, env, new_cli=False):
+            started.append(env.get("HC_TERMINAL_ID"))
+            real(session, env, new_cli)
+
+        patcher = mock.patch.object(Session, "__init__", counted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return started
+
+
+class EventRig(HcCase):
+    """A lead with two workers registered through its server; a worker's own session starts when a test first
+    talks to it, since most tests only read what the lead's server answers."""
+
     def prepare(self):
         def terminal(name, address, parent="t0", state="working"):
             return {"name": name, "address": address, "parent": parent, "status": state}
@@ -103,17 +168,19 @@ class EventWaitTests(ToolCase):
         }
         self.lead = self.start(self.replies, self.env)
         self.assignments = [self.spawn(self.lead, name) for name in ("w1", "w2")]
-        self.workers = []
-        for address in ("t1", "t2"):
-            session = Session(
-                dict(self.env, HC_TERMINAL_ID=address, CODEX_THREAD_ID="worker-" + address),
-                new_cli=True,
-            )
-            self.addCleanup(session.close)
-            session.handshake()
-            self.workers.append(session)
+        self.workers = LazySessions(self.worker_session)
         self.rpc = AsyncRPC(self.lead)
         self.addCleanup(self.rpc.close)
+
+    def worker_session(self, index):
+        address = ("t1", "t2")[index]
+        session = Session(
+            dict(self.env, HC_TERMINAL_ID=address, CODEX_THREAD_ID="worker-" + address),
+            new_cli=True,
+        )
+        self.addCleanup(session.close)
+        session.handshake()
+        return session
 
     def spawn(self, session, name, assignment_id=None):
         arguments = {"kind": "worker", "name": name, "task": "work", "cwd": "/tmp"}
@@ -165,6 +232,8 @@ class EventWaitTests(ToolCase):
         self.pending(rpc, request_id)
         return request_id
 
+
+class EventWaitTests(EventRig):
     def test_S3_final_wait_records_reason_and_fingerprint_atomically(self):
         """agent-runtime/R109
         S3: a partial "messages" result leaves the last-wait row untouched."""
@@ -305,6 +374,28 @@ class EventWaitTests(ToolCase):
                 original,
             )
 
+    def test_S11_a_test_starts_only_the_sessions_it_talks_to(self):
+        """S11: no server for a rig that drives the tool handlers in process; the lead alone for a test that only
+        waits on it; a worker's own session once the test talks to that worker."""
+        started = self.count_sessions()
+        self.resume_rig()
+        self.assertEqual(started, [], "the resume rig calls the handlers in process")
+        self.prepare()
+        self.assertEqual(started, ["t0"], "prepare starts the lead, no worker")
+        self.workers[1]
+        self.assertEqual(started, ["t0", "t2"], "the second worker's session starts on first use")
+        self.workers[0]
+        self.assertEqual(started, ["t0", "t2", "t1"])
+        self.workers[0]
+        self.assertEqual(started, ["t0", "t2", "t1"], "a session is started once")
+
+    def test_closing_the_rpc_reader_ends_it_on_the_sessions_eof_not_on_its_join_budget(self):
+        """The reader blocks on the server's stdout, so a close that leaves the server running can only wait out
+        its join budget (2s a test); closing the session's input ends the server and the reader with it."""
+        self.prepare()
+        self.rpc.close()
+        self.assertFalse(self.rpc.thread.is_alive())
+
     def test_S4_read_only_fingerprint_changes_with_messages_states_and_turns(self):
         """agent-runtime/R110"""
         store = Store({"HOME": str(self.dir / "home")})
@@ -373,7 +464,7 @@ class EventWaitTests(ToolCase):
             "AGENT_RUNTIME_DISPATCH": "1",
         }
         row = {"name": "w1", "address": "t1", "parent": "t0", "status": mode, "turn": turn}
-        self.start({"get:w1": {"out": json.dumps(row)}}, env)
+        self.install_hc({"get:w1": {"out": json.dumps(row)}}, env)
         store = Store(env, clock=lambda: now[0])
         team = store.team("events", "t0", "resume")
         old = store.register(team, "w1")["assignment_id"]
@@ -1686,13 +1777,9 @@ os._exit(0)
         self.assertEqual(len(workers()), before)
 
 
-class WaitUsageTests(ToolCase):
+class WaitUsageTests(EventRig):
     rpc: AsyncRPC
     assignments: list
-
-    prepare = EventWaitTests.prepare
-    spawn = EventWaitTests.spawn
-    batch = EventWaitTests.batch
 
     def transcript(self, assignment, name="session-w1"):
         """The Claude transcript a worker of cwd /tmp writes: one marked prompt, one model call."""

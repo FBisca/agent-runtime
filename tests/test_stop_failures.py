@@ -11,7 +11,7 @@ from unittest import mock
 
 import test_event_wait as event_helpers
 from test_mcp_server import RUNTIME_SRC, SERVER
-from test_tools import ToolCase, raw
+from test_tools import raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
@@ -41,11 +41,7 @@ def task_row(store):
         )
 
 
-class StopFailureTests(ToolCase):
-    prepare = event_helpers.EventWaitTests.prepare
-    spawn = event_helpers.EventWaitTests.spawn
-    batch = event_helpers.EventWaitTests.batch
-
+class StopFailureTests(event_helpers.EventRig):
     def set_reply(self, key, reply):
         self.replies[key] = reply
         (self.dir / "replies").write_text(json.dumps(self.replies))
@@ -60,6 +56,14 @@ class StopFailureTests(ToolCase):
         ]  # prepare() gave the lead's stdout to rpc
         self.assertFalse(result["isError"], result)
         return result
+
+    def test_S11_a_stop_test_that_talks_to_the_lead_alone_starts_no_worker_session(self):
+        """S11: the stop and wait go through the lead's server; no worker session is started for them."""
+        started = self.count_sessions()
+        self.prepare()
+        self.rpc_call("stop", {"name": "w1"})
+        self.wait()
+        self.assertEqual(started, ["t0"])
 
     def test_stop_of_a_vanished_terminal_succeeds_and_later_waits_exclude_it(self):
         """agent-runtime/R66"""
@@ -256,7 +260,7 @@ class StoreTaskReleaseTests(unittest.TestCase):
         self.assertEqual(task_row(self.store)["status"], "complete")
 
 
-class StopStoreFailureTests(ToolCase):
+class StopStoreFailureTests(event_helpers.HcCase):
     """A store failure after the terminal was killed names the kill and the record left to reconcile."""
 
     ENV = {
@@ -268,7 +272,8 @@ class StopStoreFailureTests(ToolCase):
 
     def setUp(self):
         super().setUp()
-        self.start({"get:w1": {"out": raw("w1", "t0")}}, self.ENV)
+        self.started = self.count_sessions()
+        self.install_hc({"get:w1": {"out": raw("w1", "t0")}}, self.ENV)
         self.env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
             "HOME": str(self.dir / "home"),
@@ -284,6 +289,11 @@ class StopStoreFailureTests(ToolCase):
         self.team = self.store.team(scope, "t0", generation)
         first = self.store.register(self.team, "w1")
         self.store.bind(first["assignment_id"], "t9", scope)
+
+    def test_S11_a_stop_driven_in_process_starts_no_server(self):
+        """S11: the stop reads the fake binary and the store; no server answers for it."""
+        self.stop()
+        self.assertEqual(self.started, [])
 
     def stop(self):
         out = hc_tools.call("stop", {"name": "w1"}, self.env, hc_tools.Context())
