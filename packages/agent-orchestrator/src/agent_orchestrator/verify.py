@@ -6,7 +6,8 @@ scope      every file the ticket changed is inside the ticket's paths
 integrity  no ticket touches the plan, an oracle file or an oracle place (where the driver puts an oracle); for a
            plan in its own folder, nothing in that folder and no acceptance destination
 covers     every scenario the ticket satisfies maps, in the report's `covers`, to test nodes that exist and
-           changed in the ticket; that they pass is the CI green check on the same head
+           changed in the ticket; that they pass is the CI green check on the same head. A scenario whose
+           evidence brings its own test files needs no node: the evidence gate runs those files
 
 Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items.
 
@@ -173,7 +174,7 @@ def node_problem(repo, node, base, files, added):
     return None
 
 
-def covers(ticket, report, repo, base, files, added):
+def covers(model, ticket, report, repo, base, files, added):
     contract = report.get("contract")
     if contract != 3:
         return [
@@ -185,10 +186,13 @@ def covers(ticket, report, repo, base, files, added):
             }
         ]
     mapped = report.get("covers") or {}
+    # A scenario whose evidence brings its own test files (acceptance files, oracles) is proven by those files,
+    # which the ticket's evidence gate runs and the archive counts; the ticket never changes them.
+    proven = {s.id for s in model.scenarios if s.evidence and s.evidence.has_tests}
     findings = []
     for scenario in ticket.satisfies:
         nodes = mapped.get(scenario) or []
-        if not nodes:
+        if not nodes and scenario not in proven:
             findings.append(
                 {
                     "check": "covers",
@@ -224,7 +228,7 @@ def invariants(model, ticket_id, report, *, repo, base, layout, layout_repo=None
                     % (name, ", ".join(ticket.paths)),
                 }
             )
-    return findings + covers(ticket, report, repo, base, files, added)
+    return findings + covers(model, ticket, report, repo, base, files, added)
 
 
 def items(findings, command, log_path):
