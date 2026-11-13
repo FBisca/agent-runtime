@@ -1,7 +1,8 @@
 # Agent workbench mod
 
-One Herdr pane that shows a plan's ticket graph from the orchestrator's own loader and ledger. It runs only
-`agent-orchestrator workbench plans|plan --json` (fixed argv, no shell, in the shown space's folder) and writes
+One Herdr pane that opens on home (the week's cards, what needs the person, the active plans) and shows a plan's ticket
+graph from the orchestrator's own loader and ledger. It runs only
+`agent-orchestrator workbench plans|plan|totals --json` (fixed argv, no shell, in the shown space's folder) and writes
 nothing. Requirements: `docs/specs/agent-workbench.md`.
 
 ## Where things live
@@ -28,10 +29,11 @@ decides is how an answer, or the lack of one, reads (`readPlans`, `notice`).
 
 ## Rules
 
-- The mod opens on the plan list: Needs me (the answer's `needs_me`, each with its way to act), the active plans in the order the command printed, one collapsed "N older" line (`planSections`).
+- The mod opens on home (`initialNav`, `homeView`), never on a plan picker: the week's five cards from `workbench totals` (`cardsOf`: merged, first pass, escalations, tokens, ticket time; an unmeasured value reads `unknown`, tokens note how many tickets were measured, and no totals answer draws no cards), Needs me as one row per plan holding its items (each with its way to act), the active plans in the order the command printed with their workers, the PRs awaiting merge, one collapsed "N older" line. A plan row, a card or a PR row opens over home (`navigate`); ← returns home. The totals are fetched only while home or a dashboard shows; a plan open fetches the plan alone.
+- A plan's workers on home come from the plan's own `agents` and join Herdr's terminals only by exact address, as a ticket's do.
 - A selected plan with `metrics` shows wall time, first-pass rate and driver errors in its header, a Measures section in the inspector and, at wide widths, a timeline (`timelineOf`). What the orchestrator did not measure reads `unknown`, never 0.
 - An open plan's header is a way back (←), the plan's name as the title and its whole goal: wrapped fully when wide, in at most three lines when narrow (`planHeader`). The repository's name is not shown. Each ticket row names its agents by the ledger's name and role (`ticketWorkers`): `live` with Herdr's status and an Open at the exact address, `not live` when no live terminal has it, `unknown` with no address. There is no Runtime section.
-- Never call `writeTextFile`, a shell or any command but the two workbench verbs. The Herdr commands it runs are
+- Never call `writeTextFile`, a shell or any command but the three workbench verbs. The Herdr commands it runs are
   `agent.focus` (Open) and the panel button's `layout.select`, `layout.show` and `layout.hide`; an attempt joins a terminal by exact address, never by name, and a remote space joins nothing.
 - An unknown value is shown as unknown (or its own text), never filled in; a failure is shown where it belongs
   (project or plan) with its way out; nothing is drawn when there is no data.

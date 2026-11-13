@@ -3,8 +3,8 @@
 //
 // What it guarantees: a fixed argv per command (never a shell, the plan path is one argument), the space's folder as
 // the working directory, at most one fetch in flight, and an answer older than the latest request is dropped. It
-// writes nothing: the only verbs it knows are `workbench plans` and `workbench plan`.
-import { readPlans, readPlan, planRows, pickPlan } from "./model.js";
+// writes nothing: the only verbs it knows are `workbench plans`, `workbench plan` and `workbench totals`.
+import { readPlans, readPlan, readTotals } from "./model.js";
 
 export const COMMAND = "agent-orchestrator";
 // The watcher is the fast path; the timer is the net for a change it did not see (a remote space, a watch that ended).
@@ -16,12 +16,14 @@ export const FLUSH_MS = 2000;
 
 export const plansArgv = () => ["workbench", "plans", "--json"];
 export const planArgv = (path) => ["workbench", "plan", path, "--json"];
+export const totalsArgv = () => ["workbench", "totals", "--json"];
 
 export function createData({ exec }) {
   let scope = null;
   let epoch = 0; // bumped by anything that makes a running fetch's answer the wrong one to show
-  let selected = null;
+  let selected = null; // the plan path the person opened; null while home or a dashboard shows
   let plans = { status: "loading" };
+  let totals = { status: "loading" };
   let answers = new Map(); // plan path -> {status, value | error}: one plan's error never hides another plan
   let running = null;
   let queued = false;
@@ -43,14 +45,22 @@ export function createData({ exec }) {
       const listed = readPlans(await call(plansArgv()));
       if (mine !== epoch) continue; // asked for something else meanwhile: this answer is old
       plans = listed.ok ? { status: "ok", value: listed.value } : { status: "error", error: listed.error };
-      if (listed.ok) selected = pickPlan(planRows(listed.value.plans), selected);
       notify();
-      if (!listed.ok || !selected) continue;
-      const path = selected;
-      const loaded = readPlan(await call(planArgv(path)));
-      if (mine !== epoch) continue;
-      answers.set(path, loaded.ok ? { status: "ok", value: loaded.value } : { status: "error", error: loaded.error });
-      notify();
+      if (!listed.ok) continue;
+      if (selected) {
+        const path = selected;
+        const loaded = readPlan(await call(planArgv(path)));
+        if (mine !== epoch) continue;
+        answers.set(path, loaded.ok ? { status: "ok", value: loaded.value } : { status: "error", error: loaded.error });
+        notify();
+      } else if (listed.value.plans.length) {
+        // Only home and a dashboard show the week's totals, so they are fetched only then; a failure shows no cards and
+        // never hides the plans.
+        const week = readTotals(await call(totalsArgv()));
+        if (mine !== epoch) continue;
+        totals = week.ok ? { status: "ok", value: week.value } : { status: "error", error: week.error };
+        notify();
+      }
     } while (queued);
   }
 
@@ -62,14 +72,18 @@ export function createData({ exec }) {
       epoch += 1;
       selected = null;
       plans = { status: "loading" };
+      totals = { status: "loading" };
       answers = new Map();
       return true;
     },
 
-    /** The person picked a plan: whatever is in flight for the previous one is old now. */
-    select(path) {
+    /** The person opened a plan, or went home or to a card's dashboard (`nav` is the model's): whatever is in flight for
+     *  the previous screen is old now. Leaving home drops its totals, so they are fetched again on the way back. */
+    show(nav) {
+      const path = nav.screen === "plan" ? nav.path : null;
       if (selected === path) return;
       selected = path;
+      if (path) totals = { status: "loading" };
       epoch += 1;
       queued = true;
     },
@@ -101,7 +115,7 @@ export function createData({ exec }) {
     state() {
       const shown = plans.status === "ok" && selected ? answers.get(selected) ?? { status: "loading" } : null;
       const loaded = [...answers.values()].filter((a) => a.status === "ok").map((a) => a.value);
-      return { scope, plans, selected, plan: shown, loaded };
+      return { scope, plans, totals, selected, plan: shown, loaded };
     },
   };
 }
