@@ -34,20 +34,7 @@ class AwaitFixture(GateFixture):
         self.addCleanup(out.close)
         self.addCleanup(err.close)
         process = subprocess.Popen(
-            [
-                *DRIVER,
-                "run",
-                str(self.plan),
-                "--state-dir",
-                str(self.state_dir),
-                "--routes-file",
-                str(self.route_file),
-                "--wait-seconds",
-                "1",
-                "--idle-interval",
-                "0",
-                *extra,
-            ],
+            [*DRIVER, *self.driver_args(*extra)],
             stdout=out,
             stderr=err,
             env=self.env(),
@@ -185,18 +172,7 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
     def in_process_code(self):
         spec = load_script()
         self.alias_state(self.plan)
-        argv = [
-            "run",
-            str(self.plan),
-            "--state-dir",
-            str(self.state_dir),
-            "--routes-file",
-            str(self.route_file),
-            "--wait-seconds",
-            "1",
-            "--idle-interval",
-            "0",
-        ]
+        argv = self.driver_args()
         try:
             return self.in_process(spec, argv).returncode
         except RuntimeError:

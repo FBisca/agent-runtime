@@ -299,20 +299,7 @@ class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
         self.alias_state(self.plan)
         return self.in_process(
             load_script(),
-            [
-                "run",
-                str(self.plan),
-                "--repo",
-                str(self.repo),
-                "--state-dir",
-                str(self.state_dir),
-                "--routes-file",
-                str(self.route_file),
-                "--wait-seconds",
-                "1",
-                "--idle-interval",
-                "0",
-            ],
+            self.driver_args("--repo", str(self.repo)),
         )
 
     def said(self, result):

@@ -29,19 +29,7 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
             FAKE_PLAN=str(self.state_dir / "demo.json"),
             FAKE_EVENTS=str(self.run_dir_of() / "events.jsonl"),
         )
-        argv = [
-            "orchestrate",
-            "run",
-            str(self.plan),
-            "--state-dir",
-            str(self.state_dir),
-            "--routes-file",
-            str(self.route_file),
-            "--wait-seconds",
-            "1",
-            "--idle-interval",
-            "0",
-        ]
+        argv = ["orchestrate", *self.driver_args()]
         with (
             mock.patch.dict(os.environ, env),
             mock.patch.object(sys, "argv", argv),

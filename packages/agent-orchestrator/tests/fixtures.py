@@ -613,11 +613,9 @@ class RunFixture(_Case):
         backend = extra[extra.index("--cli") + 1] if "--cli" in extra else "claude"
         return ["--routes-file", str(self.route_files[backend])]
 
-    def run_driver(self, *extra, plan=None, expect=0, routed=True):
-        """The driver run in this process: the fakes answer in process, so the run starts no process of its own."""
-        spec = load_script()
-        self.alias_state(plan or self.plan)
-        argv = [
+    def driver_args(self, *extra, plan=None, routed=True):
+        """Arguments for a driver run, in process or in a subprocess."""
+        return [
             "run",
             str(plan or self.plan),
             "--state-dir",
@@ -629,7 +627,12 @@ class RunFixture(_Case):
             "0",
             *extra,
         ]
-        result = self.in_process(spec, argv)
+
+    def run_driver(self, *extra, plan=None, expect=0, routed=True):
+        """The driver run in this process: the fakes answer in process, so the run starts no process of its own."""
+        spec = load_script()
+        self.alias_state(plan or self.plan)
+        result = self.in_process(spec, self.driver_args(*extra, plan=plan, routed=routed))
         self.assertEqual(result.returncode, expect, result.stderr)
         return result
 

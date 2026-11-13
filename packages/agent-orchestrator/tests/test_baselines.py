@@ -100,19 +100,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
     def drive(self, budget=25.0, label="", records=None):
         """The driver run under a budget: a run that overruns it is terminated and recorded as a failure."""
         self.alias_state(self.plan)
-        argv = [
-            *DRIVER,
-            "run",
-            str(self.plan),
-            "--state-dir",
-            str(self.state_dir),
-            "--routes-file",
-            str(self.route_file),
-            "--wait-seconds",
-            "1",
-            "--idle-interval",
-            "0.05",
-        ]
+        argv = [*DRIVER, *self.driver_args("--idle-interval", "0.05")]
         return bench.run_budgeted(
             argv,
             env=self.env(),

@@ -202,9 +202,12 @@ class ConfigReadByEveryCommandTests(DiscoveryFixture):
                 ("run",),
             ):
                 with self.subTest(config=dotted, verb=verb):
-                    code, out, err = self.run_cli(
-                        *verb, str(plan), "--repo", str(self.repo), "--state-dir", state
+                    argv = (
+                        self.driver_args("--repo", str(self.repo), plan=plan, routed=False)
+                        if verb == ("run",)
+                        else [*verb, str(plan), "--repo", str(self.repo), "--state-dir", state]
                     )
+                    code, out, err = self.run_cli(*argv)
                     self.assertEqual(code, 2, err)
                     self.assertIn(dotted, err)
                     self.assertEqual(out, "")

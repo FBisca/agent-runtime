@@ -97,20 +97,7 @@ class Drives(RunFixture):
     """The driver run as its own process, as `launch` runs it, so a run that hangs or dies is observed from outside."""
 
     def driver_argv(self, *extra):
-        return [
-            *DRIVER,
-            "run",
-            str(self.plan),
-            "--state-dir",
-            str(self.state_dir),
-            "--routes-file",
-            str(self.route_file),
-            "--wait-seconds",
-            "1",
-            "--idle-interval",
-            "0",
-            *extra,
-        ]
+        return [*DRIVER, *self.driver_args(*extra)]
 
     def driver_env(self, first=None):
         env = self.env()

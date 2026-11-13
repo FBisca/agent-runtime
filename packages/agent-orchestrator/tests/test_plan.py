@@ -106,7 +106,7 @@ class PlanTests(RunFixture, unittest.TestCase):
         reference = Path(__file__).resolve().parent / "data" / "reference.plan.yaml"
         # The reference's schema, not its approval: the snapshot lives in the approver's state dir (D26), so a
         # committed approval block cannot be verified on CI or any other machine.
-        self.assertEqual(load(reference, verify=False).slug, "yaml-eec")
+        self.assertEqual(load(reference, repo=self.repo, verify=False).slug, "yaml-eec")
         self.assertEqual(self.command("check")[0], 0)
         out = io.StringIO()
         with redirect_stdout(out):
