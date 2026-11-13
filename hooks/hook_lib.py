@@ -79,13 +79,14 @@ def open_readonly(env=None):
 
 
 def led_team(db, who):
-    """The team id when (scope, lead, generation) is exactly the latest team for (scope, lead), else None."""
+    """The team id when this caller leads the terminal's owning team, else None.
+
+    The owner is the newest team row for (scope, lead) that is neither dead nor empty: a session that
+    left nothing behind never hides the lead's own team, and a newer row that is alive or holds work
+    still owns the terminal. The same rule the server reads."""
     scope, lead, generation = who
-    row = db.execute(
-        "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
-        (scope, lead),
-    ).fetchone()
-    return row["id"] if row and row["generation"] == generation else None
+    owner = dispatch.owning_team(db, scope, lead, own_generation=generation)
+    return owner["id"] if owner and owner["generation"] == generation else None
 
 
 def undelivered(db, team, lead):

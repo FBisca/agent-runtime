@@ -124,8 +124,11 @@ def ancestor_cli():
     return None
 
 
-def lstart(pid):
-    """Process start time string via ps, or None on any failure."""
+def process_start_stamp(pid):
+    """(exists, stamp) of one process: exists is False only when the process is provably gone.
+
+    The stamp is the process's start time, so a pid another process reused carries a different one.
+    A process table that cannot be read is never proof of death: the stamp is then None."""
     try:
         result = subprocess.run(
             ["ps", "-o", "lstart=", "-p", str(pid)],
@@ -136,8 +139,15 @@ def lstart(pid):
             env=dict(os.environ, LC_ALL="C"),
         )  # locale-stable; the server and hooks differ in env
     except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout.strip() or None if result.returncode == 0 else None
+        return True, None
+    if result.returncode != 0:
+        return False, None  # ps knows no such process
+    return True, result.stdout.strip() or None
+
+
+def lstart(pid):
+    """Process start time string via ps, or None on any failure."""
+    return process_start_stamp(pid)[1]
 
 
 def cli_generation():
@@ -744,32 +754,30 @@ def hc_tools_module():
 
 
 def live_lead_conflict(hc_tools, env):
-    """The generation of this terminal's latest team when it differs from ours and that team is live, else None.
+    """The generation of this terminal's owner when it differs from ours and that team is live, else None.
     Live means wait(all) still has something for it: unfinished assignments or results not yet acknowledged,
-    or any unacknowledged message to its lead. One hc terminal has one live lead generation. The check reads
-    in one transaction; the team row is inserted later by the tool itself, so a concurrent call under the
-    live generation can still land in between (the driver runs in its own terminal, which keeps this rare)."""
+    or any unacknowledged message to its lead. One hc terminal has one live lead generation. The owner is
+    the newest team row that is neither dead nor empty, the same rule the server reads. The check reads in
+    one transaction; the team row is inserted later by the tool itself, so a concurrent call under the live
+    generation can still land in between (the driver runs in its own terminal, which keeps this rare)."""
     _, caller = hc_tools.require_hc(env)
     scope, generation = hc_tools.dispatch_identity(env)
     store = hc_tools.dispatch.Store(env)
     with store.transaction() as db:
-        row = db.execute(
-            "SELECT id, generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
-            (scope, caller),
-        ).fetchone()
-        if not row or row[1] == generation:
+        owner = hc_tools.dispatch.owning_team(db, scope, caller, own_generation=generation)
+        if not owner or owner["generation"] == generation:
             return None
         live = (
             db.execute(
                 "SELECT 1 FROM (%s) LIMIT 1" % hc_tools.dispatch.SNAPSHOT_SQL,
-                (row[0], "all", "all", "all", "all", "all", "all"),
+                (owner["id"], "all", "all", "all", "all", "all", "all"),
             ).fetchone()
             or db.execute(
                 "SELECT 1 FROM messages WHERE team=? AND recipient=? AND acked=0 LIMIT 1",
-                (row[0], caller),
+                (owner["id"], caller),
             ).fetchone()
         )
-    return row[1] if live else None
+    return owner["generation"] if live else None
 
 
 MAX_CALL_ANCESTOR_HOPS = 40

@@ -22,6 +22,10 @@ SCRIPT = Path(__file__).resolve().parents[1] / "server" / "agent_runtime.py"
 BIN = SCRIPT
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"))
 from agent_runtime import agent_runtime as app  # noqa: E402
+from agent_runtime.dispatch_store import Store  # noqa: E402
+
+# A generation whose process is gone: no process carries that pid, so the row is provably dead.
+DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
 
 app.ps_entry = lambda pid, timeout=0.2: None  # tests never read the real process tree
 
@@ -1022,6 +1026,21 @@ class CallTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
+
+    def test_the_cli_live_lead_check_reads_the_same_ownership_rule(self):
+        """A newer row that left nothing behind never hides the live lead's generation."""
+        spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
+        code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
+        self.assertEqual(code, 0, err)
+        store = Store({"XDG_STATE_HOME": str(self.dir / "state")})
+        with store.transaction() as db:
+            scope, lead, _ = db.execute(
+                "SELECT scope,lead,generation FROM teams ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        store.team(scope, lead, DEAD_GENERATION)  # a newer row that left nothing behind
+        code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("L1", err)
 
     def test_ancestry_S5_parented_terminal_forced_lead_owns_worker_and_receives_report(self):
         self.set_replies(

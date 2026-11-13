@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import dispatch_events
-from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT
+from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT, process_start_stamp
 
 MAX_WORKERS = MAX_MESSAGES = 32
 TEAM_LIMIT = "team limit is 32 active workers: stop an active worker, then retry"
@@ -114,6 +114,74 @@ class StoreError(Exception):
 
 class StorageError(StoreError):
     """The store itself is unusable (directory ownership, schema version); never an authorization verdict."""
+
+
+# One rule owns a terminal: the newest team row for that scope and terminal that is neither dead nor
+# empty. A row is dead when its generation is a `pid:lstart` stamp whose process no longer carries that
+# stamp; a generation with no pid is never provably dead, so its row is judged by what it holds. A row
+# is empty when it holds no worker, assignment, message, receipt, caller, task, last_wait row or
+# operation. The caller's own row is never skipped for it, so a caller always has a team; when every
+# other row would be skipped, the newest one owns the terminal.
+GENERATION_PID = re.compile(r"^(\d+):(.+)$")
+
+
+def generation_alive(generation):
+    """True when the generation's process is provably alive: that pid still carries that start stamp.
+
+    A generation with no pid is never provably alive (nor provably dead): only what its team holds
+    can judge it."""
+    match = GENERATION_PID.match(generation) if isinstance(generation, str) else None
+    if not match:
+        return False
+    exists, stamp = process_start_stamp(int(match.group(1)))
+    return exists and stamp == match.group(2)
+
+
+def team_empty(db, team):
+    """True when the team holds no worker, assignment, message, receipt, caller, task, last_wait row or
+    operation: the session that owned it left nothing behind."""
+    if db.execute("SELECT 1 FROM workers WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    if db.execute("SELECT 1 FROM assignments WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    if db.execute("SELECT 1 FROM messages WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    if db.execute("SELECT 1 FROM receipts WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    if db.execute("SELECT 1 FROM callers WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    if db.execute("SELECT 1 FROM last_wait WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    # The task and operation tables arrived with later store versions: an older one has neither.
+    if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
+    ).fetchone() and db.execute("SELECT 1 FROM tasks WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
+    ).fetchone() and db.execute("SELECT 1 FROM operations WHERE team=? LIMIT 1", (team,)).fetchone():
+        return False
+    return True
+
+
+def owning_team(db, scope, lead, own_team=None, own_generation=None):
+    """The team row that owns (scope, lead), or None when the terminal has no team.
+
+    The owner is the newest row that is neither dead nor empty. The caller's own row (own_team, or the
+    row of own_generation) is never skipped for it, so a caller always has a team; when every other row
+    would be skipped, the newest one owns the terminal."""
+    rows = db.execute(
+        "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC", (scope, lead)
+    ).fetchall()
+    for row in rows:
+        if row["id"] == own_team or (
+            own_generation is not None and row["generation"] == own_generation
+        ):
+            return row
+        if team_empty(db, row["id"]) and not generation_alive(row["generation"]):
+            continue  # a session that left nothing behind never owns the terminal
+        return row
+    return rows[0] if rows else None
 
 
 def uid():
@@ -371,7 +439,7 @@ class Store:
 
     def _bind(self, db, assignment, address, scope, turn=None, mode="fresh"):
         row = db.execute(
-            "SELECT a.worker,a.state,a.rowid AS sequence,t.rowid AS generation,t.scope,t.lead "
+            "SELECT a.worker,a.state,a.rowid AS sequence,t.id AS team,t.scope,t.lead "
             "FROM assignments a JOIN teams t ON t.id=a.team WHERE a.id=?",
             (assignment,),
         ).fetchone()
@@ -390,10 +458,10 @@ class Store:
         newer_assignment = db.execute(
             BIND_NEWER_ASSIGNMENT_SQL, (row["worker"], row["sequence"])
         ).fetchone()
-        newer_generation = db.execute(
-            "SELECT 1 FROM teams WHERE scope=? AND lead=? AND rowid>? LIMIT 1",
-            (scope, row["lead"], row["generation"]),
-        ).fetchone()
+        # The binding follows the same ownership rule as the authorization: the team that owns the
+        # terminal binds its workers, and a session that left nothing behind never takes it.
+        owner = owning_team(db, scope, row["lead"], own_team=row["team"])
+        newer_generation = owner is not None and owner["id"] != row["team"]
         newer_address = db.execute(
             BIND_NEWER_ADDRESS_SQL, (address, scope, row["sequence"])
         ).fetchone()
@@ -886,12 +954,14 @@ class Store:
         )
 
     def authorize(self, db, actor, pending=False):
-        latest = db.execute(
-            "SELECT id FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC LIMIT 1",
-            (actor["scope"], actor["parent"] or actor["address"]),
-        ).fetchone()
-        if not latest or latest[0] != actor["team_id"]:
-            raise StoreError("stale team generation")
+        terminal = actor["parent"] or actor["address"]
+        owner = owning_team(db, actor["scope"], terminal, own_team=actor["team_id"])
+        if not owner or owner["id"] != actor["team_id"]:
+            raise StoreError(
+                "stale team generation: terminal %s is owned by generation %s; run this session in its own "
+                "hc terminal, or start a new session in this terminal once the owner is gone"
+                % (terminal, owner["generation"] if owner else "none")
+            )
         if actor["worker_id"] and not pending:
             row = db.execute(
                 "SELECT 1 FROM workers w JOIN assignments a ON a.worker=w.id "
