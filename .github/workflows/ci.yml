@@ -8,13 +8,21 @@ on:
 permissions:
   contents: read
 
+# A new push supersedes the run before it on the same branch: macOS runners are scarce account-wide,
+# and runs for stale commits queued every newer one behind them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Pull requests run on ubuntu only, so they are not queued behind the macOS runners; main runs both,
+        # so a macOS-only failure still surfaces on the merge that caused it.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
