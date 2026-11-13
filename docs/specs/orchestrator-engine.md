@@ -121,6 +121,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R89** WHEN a worker names an attempt id with any round suffix (`r`, `d`, `o`, `p` or `a`), THEN the driver recognizes it as an attempt id through one shared pattern (`attempt_pattern`), so `use t1a1` in an answer for `t1a2` is refused as foreign. (from orchestrator-audit-fixes/S13)
 - **R90** WHEN a unit's request file is missing or does not validate (a crash left it empty), THEN the driver writes it again from the ledger before it waits on the Lead, so `decide` can still answer it; a readable request is never rewritten. (small fix: a 0-byte `request.2.json` stalled a live run)
 - **R91** WHEN a drive starts, THEN before any worker line the driver writes the banner on stderr: the `narrate.LOGO` wordmark, then the plan's slug and goal, its ticket count by status, the repository and base, `--max-workers`, the `--gate` commands when any, the route source (the config path and where it came from, or `legacy table (deprecated)`), one line per class route (`backend · model · effort`, `effort by matrix` when the matrix decides) and one per step route; colour only where R80 allows it. (from orchestrator-banner, small fix)
+- **R92** WHEN an existing run resumes with recorded routes, including legacy routes, THEN it keeps every recorded class and step backend, model and effort, and the recorded `--cli` and `--brain-cli`, whatever the policy now says or lacks; an explicit `--route`, `--step`, `--routes-file` or `--cli` that says otherwise fails before any worker is spawned or resumed, naming the argument and the recorded value, and leaves the ledger unchanged; a missing or incomplete route record needs an explicit `--routes-file`, which migrates the run and records the complete resolved routes before it resumes; an argument that matches the record is accepted and an omitted one is not a conflict; a run started on the legacy table with a brain backend records the reviewer and gaps routes the table answered, and a record whose gates cannot be routed takes the `--step` routes the command line gives them. (from remove-legacy-routing/S3)
 
 ## Coverage
 
@@ -186,6 +187,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | orchestrator-audit-fixes/S11 | R83 | `packages/agent-orchestrator/tests/test_silent_idle.py`: `SilentWorker.test_S11_*` |
 | orchestrator-audit-fixes/S12 | R85 | `packages/agent-orchestrator/tests/test_answers.py`: `OpenAnswers.test_S12_*` |
 | orchestrator-audit-fixes/S13 | R86 | `packages/agent-orchestrator/tests/test_answers.py`: `AttemptIds.test_S13_*`, `AnswerRefusal.test_S13_*` |
+| remove-legacy-routing/S3 | R92 | `packages/agent-orchestrator/tests/test_routes_resume.py`: `RouteResumeTests.test_S3_*` |
 
 ### R4 — the route refusals
 
@@ -277,6 +279,7 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | `test_route_selection_run.py` | R2, R4 | `orchestrator-routing-decoupling/S2`–`S4` — the route a run resolves |
 | `test_routes.py` | R2, R4 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3` — the typed route schema |
 | `test_routes_driver.py` | R2, R4, R90 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3`, `orchestrator-banner` — the route config a run reads and the banner that names it |
+| `test_routes_resume.py` | R92 | `remove-legacy-routing/S3` — the routes a resumed run keeps |
 | `test_step_routes.py` | R2, R8–R11 | `orchestrator-routing-effort-role/S3`, `S8`–`S10` — the step routes |
 | `test_run_lock.py` | R17 | `orchestrator-run-lock/S1`, `S2` — one driver per plan and repository |
 | `test_run.py` | R2, R5 | `code-driven-orchestrator/S1`–`S4`, `code-driven-orchestrator/S14` — the dispatch loop and its restart |
