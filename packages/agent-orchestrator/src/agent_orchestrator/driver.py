@@ -771,6 +771,15 @@ ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or 
 DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
 
 
+def readable_request(path):
+    """The request on disk, or None when it is missing or does not validate: the driver owns the file, so either way
+    it writes the file again rather than leave the unit waiting on a decision no `decide` can record."""
+    try:
+        return contracts.load(path, contracts.validate_request)
+    except (OSError, contracts.ContractError):
+        return None
+
+
 def next_path(directory, stem, suffix):
     """The first write-once file name free in `directory`: <stem><suffix>, <stem>.2<suffix>, ..."""
     for index in range(1, 1000):
@@ -960,7 +969,9 @@ def metrics_table(metrics):
         usage = row["usage"]
         # A figure nobody reported prints as null, never as 0 or as a blank.
         figures = [
-            usage if isinstance(usage, str) else json.dumps((usage or {}).get(key))
+            usage
+            if isinstance(usage, str)
+            else json.dumps((usage if isinstance(usage, dict) else {}).get(key))
             for _, key in USAGE_COLUMNS
         ]
         rows.append(
@@ -1111,6 +1122,17 @@ class Driver:
             if data["plan"]["state"] == "APPROVED":
                 enter_plan_state(data, "RUNNING")
             self.resume_plan_state(data)
+            route_record = data["routes"]
+        narrate.NARRATOR.banner(
+            plan=self.slug,
+            goal=self.model.goal,
+            statuses=[ticket["Status"] for ticket in plan["tickets"]],
+            repo=str(self.repo),
+            base=self.args.base,
+            max_workers=self.args.max_workers,
+            gates=list(getattr(self.args, "gate", None) or []),
+            routes=route_record,
+        )
         contract = self.run_dir / "contract.md"
         if not contract.exists():
             contract.write_text(CONTRACT, encoding="utf-8")
@@ -1764,10 +1786,11 @@ class Driver:
         self.write_request(task_id)
 
     def write_request(self, task_id):
-        """Write the request file of a `requested` task (again, if the driver died before it was on disk) and its wake."""
+        """Write the request file of a `requested` task and its wake. It is written again when it is missing (the driver
+        died before it was on disk) or unreadable (a crash left it empty), so the Lead can always `decide`."""
         task = self.task(task_id)
         unit, path = task["packet"]["unit"], Path(task["request"]["path"])
-        if not path.exists():
+        if readable_request(path) is None:
             candidates = [
                 self.run_dir / unit / "task.md",
                 self.run_dir / task_id / "report.json",
@@ -1819,9 +1842,12 @@ class Driver:
         """Wait for the Lead: a resolved request moves the unit on to `decided`. False while it is still open."""
         task = self.task(task_id)
         path = Path(task["request"]["path"])
-        if not path.exists():
-            self.write_request(task_id)  # the driver died after the ledger and before the file
-        request = contracts.load(path, contracts.validate_request)
+        request = readable_request(path)
+        if request is None:
+            self.write_request(
+                task_id
+            )  # the driver died after the ledger and before the file, or mid-write
+            request = contracts.load(path, contracts.validate_request)
         if request["status"] != "resolved":
             return False
         self.mark(task_id, gate="decided", decision={"path": request["decision"]})

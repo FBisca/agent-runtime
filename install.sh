@@ -800,10 +800,18 @@ check_herdr() {
     echo "  move it away or remove it, then run the install again" >&2
     exit 1
   fi
-  if [ -e "$herdr_layout" ] || [ -L "$herdr_layout" ]; then
+  if [ -L "$herdr_layout" ]; then
+    target=$(readlink "$herdr_layout")
+    if ! under "$target" "$root" && ! owned_by_the_installer "$target" && ! herdr_listed "$herdr_layout"; then
+      echo "refusing to replace $herdr_layout: it points at $target, which this install does not own" >&2
+      echo "  would $verb $herdr_layout -> $root/herdr/layouts/workbench.json" >&2
+      echo "  move it away or remove it, then run the install again" >&2
+      exit 1
+    fi
+  elif [ -e "$herdr_layout" ]; then
     if ! herdr_listed "$herdr_layout" && ! cmp -s "$herdr_layout" "$root/herdr/layouts/workbench.json"; then
       echo "refusing to replace $herdr_layout: a layout of that name is there and this install did not put it there" >&2
-      echo "  would copy $root/herdr/layouts/workbench.json -> $herdr_layout" >&2
+      echo "  would $verb $root/herdr/layouts/workbench.json -> $herdr_layout" >&2
       echo "  move it away or remove it, then run the install again" >&2
       exit 1
     fi
@@ -828,11 +836,35 @@ herdr_keep_aside() {
   fi
 }
 
+# A layout file the person wrote over a link: in a checkout nothing recorded its digest, so it is
+# theirs unless it is the checkout's own layout.
+herdr_layout_edited() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  recorded=$(manifest digest-of herdr "$1")
+  if [ -n "$recorded" ]; then
+    [ "$(tree_digest "$1")" != "$recorded" ]
+  else
+    if cmp -s "$1" "$root/herdr/layouts/workbench.json"; then return 1; fi
+    return 0
+  fi
+}
+
+# Whether the layout at this path is the person's, by the rule its install mode uses.
+herdr_layout_kept() {
+  if herdr_copies; then herdr_edited "$1"; else herdr_layout_edited "$1"; fi
+}
+
 # A copy is made beside its place and moved over it, so a reader sees the old one or the new one.
 install_herdr() {
   mkdir -p "$herdr_home/mods" "$herdr_home/layouts"
   herdr_keep_aside "$herdr_mod"
-  herdr_keep_aside "$herdr_layout"
+  if herdr_copies; then
+    herdr_keep_aside "$herdr_layout"
+  elif herdr_layout_kept "$herdr_layout"; then
+    aside=$herdr_layout.edited-$(date +%Y%m%d%H%M%S)
+    mv "$herdr_layout" "$aside"
+    printf 'kept your edited %s as %s\n' "$herdr_layout" "$aside"
+  fi
   if herdr_copies; then
     temporary=$herdr_home/mods/.agent-workbench.new.$$
     rm -rf "$temporary"
@@ -846,13 +878,22 @@ install_herdr() {
     swap_link "$root/herdr/agent-workbench" "$herdr_mod" || exit 1
     printf 'linked %s\n' "$herdr_mod"
   fi
-  temporary=$herdr_home/layouts/.workbench.json.new.$$
-  cp "$root/herdr/layouts/workbench.json" "$temporary"
-  mv "$temporary" "$herdr_layout"
+  if herdr_copies; then
+    temporary=$herdr_home/layouts/.workbench.json.new.$$
+    cp "$root/herdr/layouts/workbench.json" "$temporary"
+    mv "$temporary" "$herdr_layout"
+  else
+    swap_link "$root/herdr/layouts/workbench.json" "$herdr_layout" || exit 1
+  fi
   printf 'added the workbench layout %s (not switched to: pick it with layout.switch)\n' "$herdr_layout"
   manifest add herdr "$release" "$root" "$herdr_mod" "$herdr_layout"
-  manifest digest herdr "$herdr_layout" "$(tree_digest "$herdr_layout")"
-  if herdr_copies; then manifest digest herdr "$herdr_mod" "$(tree_digest "$herdr_mod")"; fi
+  if herdr_copies; then
+    manifest digest herdr "$herdr_layout" "$(tree_digest "$herdr_layout")"
+    manifest digest herdr "$herdr_mod" "$(tree_digest "$herdr_mod")"
+  else
+    # A pull changes the checkout's files, not the link: touching the links is the event Herdr reloads on.
+    printf 'after a pull, make Herdr reload the workbench: touch -h %s %s\n' "$herdr_mod" "$herdr_layout"
+  fi
 }
 
 # Remove what the component put in Herdr's home, and only while it is still what it put there: a
@@ -1180,11 +1221,10 @@ print_plan() {
         printf 'pi: Pi itself comes from its official installer; this one does not run it\n'
         ;;
       herdr)
-        for edited in "$herdr_mod" "$herdr_layout"; do
-          if herdr_edited "$edited"; then printf 'herdr: %s was edited since it was installed: it would be kept as %s.edited-<time>\n' "$edited" "$edited"; fi
-        done
+        if herdr_edited "$herdr_mod"; then printf 'herdr: %s was edited since it was installed: it would be kept as %s.edited-<time>\n' "$herdr_mod" "$herdr_mod"; fi
+        if herdr_layout_kept "$herdr_layout"; then printf 'herdr: %s was edited since it was installed: it would be kept as %s.edited-<time>\n' "$herdr_layout" "$herdr_layout"; fi
         printf 'herdr: %s %s -> %s\n' "$(herdr_verb)" "$herdr_mod" "${root:-the release payload}/herdr/agent-workbench"
-        printf 'herdr: copy %s from %s/herdr/layouts/workbench.json (opt-in, not switched to)\n' "$herdr_layout" "${root:-the release payload}"
+        printf 'herdr: %s %s from %s/herdr/layouts/workbench.json (opt-in, not switched to)\n' "$(herdr_verb)" "$herdr_layout" "${root:-the release payload}"
         ;;
     esac
     printf '%s: record in the manifest\n' "$component"

@@ -15,7 +15,7 @@ import posixpath
 import shutil
 import subprocess
 import tempfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -1005,34 +1005,51 @@ def approved_text(text, approval):
     return replaced_text(text, "approval", approval)
 
 
-def baseline(path, model, repo, base_sha, approval_digest, files):
+def evidence_key(path, model, item, files, repo):
+    """What one check evidence item runs: the check, its oracle bytes (by hash), place, env names, timeout and
+    negative. Two items with one key observe the same thing at one commit."""
+    oracles, place, negative = runner_inputs(path, model, item, files, repo)
+    return (
+        item.check,
+        tuple(sorted((name, runner.sha256(content)) for name, content in oracles.items())),
+        place,
+        tuple(item.env),
+        item.timeout,
+        (negative[0], runner.sha256(negative[1])) if negative else None,
+    )
+
+
+def checked_scenarios(model):
+    return [s for s in model.scenarios if s.evidence is not None and s.evidence.check]
+
+
+def baseline(path, model, repo, base_sha, approval_digest, files, carried=None):
     """Run every check item of the plan once at `base` and judge it against its `baseline:` (D24).
 
     Scenarios whose items would run the same thing share one run, and every run shares one worktree, so a plan pays
-    for each distinct check and one venv, not for each scenario. Returns the runs to persist, each with the
-    calibration to record; raises PlanError naming every item that is not what it claims, before anything is
-    written."""
-    runs, refusals, seen = [], [], {}
-    checked = [s for s in model.scenarios if s.evidence is not None and s.evidence.check]
+    for each distinct check and one venv, not for each scenario. `carried` maps a scenario ID to the Run of its
+    unchanged item, re-issued from an earlier approval: it is judged like a fresh run and not run again. Returns
+    the runs to persist, each with the calibration to record; raises PlanError naming every item that is not what
+    it claims, before anything is written."""
+    runs, refusals, seen, carried = [], [], {}, carried or {}
+    checked = checked_scenarios(model)
     if not checked:
         return runs
-    with runner.Workspace(repo, base_sha) as shared:
+    with ExitStack() as stack:
+        shared = None
         for scenario in checked:
             item = scenario.evidence
             oracles, place, negative = runner_inputs(path, model, item, files, repo)
-            key = (
-                item.check,
-                tuple(sorted(oracles)),
-                place,
-                tuple(item.env),
-                item.timeout,
-                item.negative,
-            )
-            if key in seen:
+            key = evidence_key(path, model, item, files, repo)
+            if scenario.id in carried:
+                run = seen[key] = carried[scenario.id]
+            elif key in seen:
                 first = seen[key]
                 run = runner.Run(copy.deepcopy(first.receipt), first.log)
                 run.receipt["scenario"] = scenario.id
             else:
+                if shared is None:
+                    shared = stack.enter_context(runner.Workspace(repo, base_sha))
                 run = seen[key] = runner.run_evidence(
                     repo,
                     base_sha,
@@ -1067,6 +1084,42 @@ def baseline(path, model, repo, base_sha, approval_digest, files):
     if refusals:
         raise PlanError("approval: " + "; ".join(refusals) + " — nothing was approved")
     return runs
+
+
+def carried_baselines(path, repo, old, old_files, model, files, previous, sha, state_dir):
+    """The baseline Runs `plan amend` re-issues instead of running: each check item whose evidence is the same in the
+    approved snapshot `old` and in the edit, and whose receipt for the previous digest still passes the receipt
+    ledger's tamper check, under the new digest `sha`. A changed or new item, or one whose receipt cannot be vouched
+    for, is not here and runs."""
+    from . import (
+        verify,
+    )  # verify reads plans, so it imports this module: the import waits until it is called
+
+    ledger, receipts = state_paths(repo, model.slug, state_dir)
+    found = ledgers.snapshot(ledger)  # a read: it never waits for the driver
+    if not found:
+        return {}
+    try:
+        was = Plan.model_validate(old)
+    except ValidationError:
+        return {}
+    before = {s.id: s.evidence for s in checked_scenarios(was)}
+    tree = git(repo, "rev-parse", previous.base + "^{tree}")
+    carried = {}
+    for scenario in checked_scenarios(model):
+        item = scenario.evidence
+        if scenario.id not in before:
+            continue
+        if evidence_key(path, was, before[scenario.id], old_files, repo) != evidence_key(
+            path, model, item, files, repo
+        ):
+            continue
+        kept = verify.carryable_baseline(found, scenario.id, receipts, previous.digest, tree)
+        if kept is not None:
+            carried[scenario.id] = runner.reissue(
+                *kept, scenario=scenario.id, digest=sha, carried_from=previous.digest
+            )
+    return carried
 
 
 def state_paths(repo, slug, state_dir):
@@ -1320,7 +1373,8 @@ def amend_locked(path, repo, model, state_dir, reason, runtime_id):
         raise PlanError(
             f"amend: {path} holds the approved contract, nothing to amend — edit the plan, then run plan amend again"
         )
-    runs = baseline(path, model, repo, base_sha, sha, files)
+    carried = carried_baselines(path, repo, old, old_files, model, files, previous, sha, state_dir)
+    runs = baseline(path, model, repo, base_sha, sha, files, carried)
     if runs:
         ledger, receipts = state_paths(repo, model.slug, state_dir)
         for run, calibration in runs:

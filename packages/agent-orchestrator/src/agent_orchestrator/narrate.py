@@ -53,6 +53,14 @@ WIDTH = 200  # the text is cut here; the ledger keeps the whole of it
 PR_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+)")
 REPEATED = re.compile(r"(\S+): \1: ")  # "path: path: why", how a contract error quotes its own file
 UNIT = re.compile(r"(?i)t\d+")
+# The banner a drive opens with, so the pane shows where one run starts and what it runs on.
+LOGO = (
+    r"   ___  ___  ___ _  _ ___ ___ _____ ___    _ _____ ___",
+    r"  / _ \| _ \/ __| || | __/ __|_   _| _ \  /_\_   _| __|",
+    r" | (_) |   / (__| __ | _|\__ \ | | |   / / _ \| | | _|",
+    r"  \___/|_|_\\___|_||_|___|___/ |_| |_|_\/_/ \_\_| |___|",
+)
+CLASS_ORDER = ("small", "medium", "large")
 
 
 def step_of(gate):
@@ -97,6 +105,59 @@ class Narrator:
         stream = self.stream or sys.stderr
         print(self.line(kind, step, text, unit, attempt, now, stream), file=stream, flush=True)
         return True
+
+    def banner(self, plan, goal, statuses, repo, base, max_workers, gates, routes):
+        """The logo and the run's card: the plan, its tickets, where it builds and what each class and step runs on.
+        `routes` is the ledger's record of them (`routes.record`)."""
+        stream = self.stream or sys.stderr
+        color = self.colored(stream)
+
+        def paint(value, ansi):
+            return "\x1b[%sm%s\x1b[0m" % (ansi, value) if color else value
+
+        def row(label, value):
+            return "  %s%s" % (paint("%-9s" % label, "2"), value)
+
+        counts = {}
+        for status in statuses:
+            counts[status.lower()] = counts.get(status.lower(), 0) + 1
+        tickets = " · ".join(
+            [str(len(statuses))] + ["%d %s" % (counts[k], k) for k in sorted(counts)]
+        )
+        lines = [paint(line, "36") for line in LOGO] + [""]
+        lines.append(row("plan", "%s · %s" % (plan, self.shorten(goal))))
+        lines.append(row("tickets", tickets))
+        lines.append(row("repo", "%s · base %s" % (self.shorten(repo), base)))
+        lines.append(row("workers", "max %d" % max_workers))
+        if gates:
+            lines.append(row("gates", " · ".join(self.shorten(gate) for gate in gates)))
+        if routes.get("path"):
+            source = "%s (%s)" % (self.shorten(routes["path"]), routes.get("source"))
+        else:
+            source = "legacy table (deprecated)"
+        lines.append(row("routes", source))
+        classes = routes.get("classes") or {}
+        steps = routes.get("steps") or {}
+        order = sorted(classes, key=lambda k: (CLASS_ORDER.index(k) if k in CLASS_ORDER else 99, k))
+        entries = [classes[k] for k in order] + [steps[k] for k in sorted(steps)]
+        backend_w = max((len(e["backend"]) for e in entries), default=0)
+        model_w = max((len(e["model"]) for e in entries), default=0)
+
+        def route(name, entry, default):
+            return "    %-8s %-*s · %-*s · %s" % (
+                name,
+                backend_w,
+                entry["backend"],
+                model_w,
+                entry["model"],
+                entry.get("effort") or paint(default, "2"),
+            )
+
+        lines += [route(k, classes[k], "effort by matrix") for k in order]
+        if steps:
+            lines.append("  " + paint("steps", "2"))
+            lines += [route(k, steps[k], "effort by step") for k in sorted(steps)]
+        print("\n".join(lines) + "\n", file=stream, flush=True)
 
     def unit(self, task):
         if not task:

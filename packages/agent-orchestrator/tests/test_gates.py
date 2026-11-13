@@ -4,6 +4,7 @@ import io
 import itertools
 import json
 import os
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -296,6 +297,24 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.request()["task"], "t1r2")
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
+
+    def test_an_unreadable_request_file_is_written_again_and_the_lead_can_decide(self):
+        """orchestrator-engine/R90 — (a crash left a 0-byte request.json behind)"""
+        path = self.run_dir / "t1" / "request.json"
+        emptied = wait_result(run=[[sys.executable, "-c", "open(%r, 'w').close()" % str(path)]])
+        self.waits(
+            [
+                self.worker_done(),
+                self.worker_done("t1r1"),
+                self.worker_done("t1r2"),
+                emptied,
+                self.skipped(),
+            ]
+        )
+        self.run_driver()
+        request = self.request()
+        self.assertEqual((request["task"], request["status"]), ("t1r2", "resolved"))
+        self.assertEqual(self.task("t1r2")["gate"], "skipped")
 
     FAILED_CHECK = [{"command": "pytest", "outcome": "failed", "reason": "2 tests failed"}]
 

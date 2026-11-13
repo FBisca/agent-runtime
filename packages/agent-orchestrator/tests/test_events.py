@@ -5,7 +5,7 @@ import subprocess
 import unittest
 
 import pytest
-from fixtures import DRIVER, load_script
+from fixtures import DRIVER, load_script, report_wait, resume_id
 from test_archive import ArchiveFixture
 from test_decider import DeciderFixture
 from test_gates import DEFERRED, MAJOR
@@ -91,13 +91,14 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
         worker = self.worker_done(tests=True)
         worker["assignments"][0]["usage"] = {"input_tokens": 100, "output_tokens": 20}
-        self.waits(
-            [
-                worker,
-                self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
-                self.worker_done("t1r1"),
-            ]
-        )
+        reviewer = self.reviewer_done(self.review(verdict="block", major=[MAJOR]))
+        fix = self.worker_done("t1r1")
+        again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
+        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
+        # Every assignment reports, so the ticket total is a sum and not null.
+        for step in (reviewer, fix, again):
+            step["assignments"][0]["usage"] = {"input_tokens": 0, "output_tokens": 0}
+        self.waits([worker, reviewer, fix, again])
         self.run_driver()
         metrics_path = self.run_dir / "metrics.json"
         written = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -195,6 +196,37 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         ticket = spec.events.rollup(rows, "demo")["tickets"]["t1"]
         self.assertEqual(ticket["usage"], {"input_tokens": 3, "cost_usd": None, "tool_calls": 5})
         rows = [{"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}}]
+        self.assertEqual(spec.events.rollup(rows, "demo")["tickets"]["t1"]["usage"], "unknown")
+
+    @pytest.mark.unit
+    def test_S10_an_assignment_that_reported_no_usage_nulls_every_figure(self):
+        """worker-usage/S10"""
+        spec = load_script()
+        at = "2026-11-07T00:00:00+00:00"
+
+        def agent(assignment, role):
+            return {
+                "at": at,
+                "kind": "agent",
+                "unit": "t1",
+                "role": role,
+                "how": "spawn",
+                "assignment_id": assignment,
+            }
+
+        route = {"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}}
+        worker_usage = {
+            "at": at,
+            "kind": "usage",
+            "unit": "t1",
+            "assignment_id": "a1",
+            "usage": {"input_tokens": 1, "tool_calls": 2},
+        }
+        rows = [route, agent("a1", "worker"), worker_usage, agent("a2", "reviewer")]
+        ticket = spec.events.rollup(rows, "demo")["tickets"]["t1"]
+        self.assertEqual(ticket["usage"], {"input_tokens": None, "tool_calls": None})
+
+        rows = [route, agent("a1", "worker"), agent("a2", "reviewer")]
         self.assertEqual(spec.events.rollup(rows, "demo")["tickets"]["t1"]["usage"], "unknown")
 
     @pytest.mark.unit

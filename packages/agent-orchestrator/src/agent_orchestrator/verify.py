@@ -359,6 +359,26 @@ def read_receipt(data, stem, receipts_dir, digest, tree):
     return receipt, None
 
 
+def carryable_baseline(data, sid, receipts_dir, digest, tree):
+    """(receipt, log) of the item's latest baseline receipt when it can be re-issued under a later digest, else None.
+
+    It must pass the same tamper check an acceptance read applies (ledger hash, digest, tree) and its log must still
+    match the hash the receipt records: an item whose evidence cannot be vouched for is run again, never carried."""
+    stems = receipt_stems(data, sid, "baseline")
+    if not stems:
+        return None
+    receipt, _ = read_receipt(data, stems[-1], receipts_dir, digest, tree)
+    if receipt is None:
+        return None
+    try:
+        log = (Path(receipts_dir) / receipt["log"]).read_text(encoding="utf-8")
+    except (KeyError, TypeError, OSError, ValueError):
+        return None
+    if hashlib.sha256(log.encode("utf-8")).hexdigest() != receipt.get("log_sha256"):
+        return None
+    return receipt, log
+
+
 def holds_acceptance(record, digest, tree):
     """A human acceptance counts for the contract and the tree it was given on, and no other."""
     return (
