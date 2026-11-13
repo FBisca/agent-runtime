@@ -65,7 +65,7 @@ class SpecSectionUnit(unittest.TestCase):
 
 class DriverArchive(ArchiveFixture, unittest.TestCase):
     def test_S1_the_archive_is_committed_pushed_and_opened_by_the_driver_with_no_trailer(self):
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
         self.assertNotIn(ARCHIVE, self.spawned())
         (create,) = self.gh_calls("pr", "create")
@@ -108,7 +108,7 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
         return mock.patch.object(load_script().Driver, "archive_evidence", evidence)
 
     def test_S5_a_failing_outcome_asks_the_lead_with_retry_and_skip_and_spawns_no_worker(self):
-        self.waits(self.ticket_merged() + [self.gaps_done(), self.decide_step("archive", "skip")])
+        self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
         with self.failing_once():
             self.run_driver()
         self.assertNotIn(ARCHIVE, self.spawned())
@@ -119,7 +119,7 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
         self.assertEqual(self.task("archive")["status"], "RELEASED")
 
     def test_S5_retry_rebuilds_the_branch_from_the_base_and_the_plan_is_archived(self):
-        self.waits(self.ticket_merged() + [self.gaps_done(), self.decide_step("archive", "retry")])
+        self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "retry")])
         with self.failing_once():
             self.run_driver()
         self.assertEqual(len(self.gh_calls("pr", "create")), 1)  # the open pull request is reused

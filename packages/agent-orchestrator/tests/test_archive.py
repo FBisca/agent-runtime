@@ -37,11 +37,6 @@ class ArchiveFixture(GateFixture):
         )
         return [self.worker_done(tests=True), self.reviewer_done()]
 
-    def gaps_done(self):
-        step = report_wait("demo-gaps", "complete")
-        step["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-        return step
-
 
 class ArchiveTests(ArchiveFixture, unittest.TestCase):
     def test_S15_nothing_archives_while_an_agent_ticket_is_unfinished(self):
@@ -55,7 +50,7 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
 
     def test_S15_a_passing_archive_goes_to_ci_and_merge(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S15"""
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
         task = self.task("archive")
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
@@ -82,7 +77,7 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
             return real(argv, timeout=timeout, cwd=cwd)
 
         self.gh_process = conflicting
-        self.waits(self.ticket_merged() + [self.gaps_done(), self.decide_step("archive", "skip")])
+        self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
         self.run_driver()
         self.assertEqual(self.spawned().count(ARCHIVE), 0)
         request = self.request("archive")
@@ -101,7 +96,7 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
         worker = self.with_usage(
             self.worker_done(tests=True), {"input_tokens": 100, "output_tokens": 20}
         )
-        self.waits([worker, self.reviewer_done(), self.gaps_done()])
+        self.waits([worker, self.reviewer_done()])
         result = self.run_driver()
         metrics = json.loads((self.run_dir / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(metrics["lead"]["model_turns"], 0)
@@ -131,7 +126,7 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
     """A YAML plan archives by promotion: the driver places the oracles and writes the spec."""
 
     def archive_run(self):
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
 
     def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_receipts_and_a_valid_digest(
@@ -200,3 +195,43 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
             model, stripped, self.run_dir / "receipts", digest=ledger["integration"]["digest"]
         )
         self.assertEqual(again["state"], "REJECTED")
+
+
+GAPS = "demo-gaps"
+
+
+class GapsAfterArchiveTests(ArchiveFixture, unittest.TestCase):
+    def test_S6_before_the_archive_merges_no_gaps_reviewer_exists(self):
+        """orchestrator-engine/R2: deterministic-archive/S6 — the archive PR is closed unmerged, so nothing gaps."""
+        real = self.gh_process
+
+        def closed_archive(argv, timeout=None, cwd=None):
+            if argv[:3] == ["pr", "view", "https://github.com/o/r/pull/9"]:
+                row = {"state": "CLOSED", "isDraft": False, "mergeStateStatus": "UNKNOWN"}
+                row.update(mergeable="UNKNOWN", mergeCommit=None)
+                return fake_gh.Completed(argv, 0, json.dumps(row))
+            return real(argv, timeout=timeout, cwd=cwd)
+
+        self.gh_process = closed_archive
+        self.waits(self.ticket_merged() + [{}, {}, self.decide_step("archive", "skip")])
+        self.run_driver()
+        self.assertNotIn(GAPS, self.spawned())
+        self.assertFalse(self.task("archive").get("merge_commit"))
+
+    def test_S6_once_the_archive_merges_the_gaps_reviewer_starts_and_is_the_only_one(self):
+        """orchestrator-engine/R2: deterministic-archive/S6 — the merged archive spawns the reviewer exactly once."""
+        self.waits(self.ticket_merged())
+        self.run_driver()
+        self.assertEqual(self.task("archive")["gate"], "done")
+        self.assertEqual(self.spawned().count(GAPS), 1)
+
+    def test_S6_the_run_ends_while_the_gaps_reviewer_is_still_open(self):
+        """orchestrator-engine/R2: deterministic-archive/S6 — its assignment stays open in the runtime; the run ends."""
+        held = {"agents": [GAPS]}  # the reviewer holds its assignment open and never reports
+        self.waits(self.ticket_merged() + [held] * 10)  # more waits than the run needs
+        self.run_driver()
+        self.assertEqual(self.spawned().count(GAPS), 1)
+        self.assertEqual(self.task("archive")["gate"], "done")
+        self.assertFalse(self.ledger()["gaps"]["ended"])
+        left = json.loads((self.home / "waits.json").read_text(encoding="utf-8"))
+        self.assertTrue(left, "the run drained every held wait: it waited on gaps")

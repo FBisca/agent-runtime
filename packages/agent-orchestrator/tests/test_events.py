@@ -20,7 +20,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
     @pytest.mark.integration
     def test_S27_every_state_change_is_one_json_line_logged_before_the_next_step(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
         states = [e for e in self.events("state") if e["task"] == "t1"]
         gates = [e["gate"][1] for e in states if e["gate"][0] != e["gate"][1]]
@@ -96,7 +96,6 @@ class EventTests(ArchiveFixture, unittest.TestCase):
                 worker,
                 self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
                 self.worker_done("t1r1"),
-                self.gaps_done(),
             ]
         )
         self.run_driver()

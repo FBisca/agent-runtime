@@ -195,21 +195,15 @@ class AcceptanceFixture(GateFixture):
         ]
         return step
 
-    def archive_steps(self):
-        """The gaps reviewer of a plan that was accepted: the driver archives it with no agent."""
-        gaps = report_wait("demo-gaps", "complete")
-        gaps["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-        return [gaps]
-
-    def drive(self, steps, archive=False):
-        self.waits(steps + (self.archive_steps() if archive else []))
+    def drive(self, steps):
+        self.waits(steps)
         self.run_driver("--repo", str(self.repo))
 
-    def delivered(self, gate="done", lands="done", scenarios=None, tickets=None, archive=False):
+    def delivered(self, gate="done", lands="done", scenarios=None, tickets=None):
         self.write_plan(scenarios, tickets)
         if lands:
             self.merged_on_main(lands)
-        self.drive([self.worker(gate), self.reviewer(), self.default_mutator()], archive)
+        self.drive([self.worker(gate), self.reviewer(), self.default_mutator()])
 
     def receipts(self, phase=None):
         found = [
@@ -248,7 +242,7 @@ class AcceptanceFixture(GateFixture):
 class TicketGateTests(AcceptanceFixture, unittest.TestCase):
     def test_S16_the_completing_ticket_runs_its_evidence_at_its_head_after_the_invariants(self):
         """The worker's work is not committed yet: the evidence runs on the tree the ticket holds."""
-        self.delivered(archive=True)
+        self.delivered()
         (receipt,) = self.receipts("ticket")
         self.assertEqual((receipt["scenario"], receipt["result"]), ("S1", "PASS"))
         self.assertEqual(
@@ -307,7 +301,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
     def test_S17_every_ticket_complete_pins_the_fetched_default_branch_and_accepts_on_its_tree(
         self,
     ):
-        self.delivered(archive=True)
+        self.delivered()
         self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         (receipt,) = [r for r in self.receipts("integration") if r["scenario"] == "S1"]
         digest = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]["digest"]
@@ -383,7 +377,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
     def test_S17_a_new_run_verifies_a_rejected_plan_again(self):
         self.delivered(lands="almost")
         subprocess.run(self.land("done"), check=True, capture_output=True)
-        self.drive([self.default_mutator()], archive=True)
+        self.drive([self.default_mutator()])
         self.assertEqual(self.history()[-1], "ARCHIVED")
         self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL", "PASS"])
 
@@ -432,7 +426,7 @@ class HumanTests(AcceptanceFixture, unittest.TestCase):
     def test_S18_a_run_after_accept_archives_the_plan(self):
         self.delivered_with_human()
         self.assertEqual(self.accept("S2").returncode, 0)
-        self.drive([], archive=True)
+        self.drive([])
         self.assertEqual(len(self.gh_calls("pr", "create")), 1)
 
     def test_S18_the_lead_human_accepts_a_rejected_item(self):
@@ -447,7 +441,7 @@ class HumanTests(AcceptanceFixture, unittest.TestCase):
     ):
         self.delivered(lands="almost")
         self.assertEqual(self.accept("S1").returncode, 0)
-        self.drive([], archive=True)
+        self.drive([])
         self.assertEqual(self.history()[-2:], ["ACCEPTED_WITH_HUMAN", "ARCHIVED"])
         self.assertEqual(len(self.gh_calls("pr", "create")), 1)
         self.assertEqual(self.receipts("archive"), [], "an item a person accepted is not re-run")
@@ -504,7 +498,7 @@ class UnverifiedTests(AcceptanceFixture, unittest.TestCase):
         self.assertNotEqual(self.verify().returncode, 0)
 
     def test_S19_a_ticket_merged_after_its_evidence_passed_is_not_flagged(self):
-        self.delivered(archive=True)
+        self.delivered()
         self.assertNotIn("unverified", self.status()["tickets"][0])
         self.assertNotIn("unverified", self.ledger())
 
@@ -521,7 +515,7 @@ class VerifyTests(AcceptanceFixture, unittest.TestCase):
         return [e for e in json.loads(result.stdout)["errors"]]
 
     def test_S20_verify_accepts_a_delivered_plan_and_names_each_item(self):
-        self.delivered(archive=True)
+        self.delivered()
         result = self.verify()
         self.assertEqual(result.returncode, 0, result.stderr)
         body = json.loads(result.stdout)
@@ -529,7 +523,7 @@ class VerifyTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual([(i["scenario"], i["state"]) for i in body["items"]], [("S1", "PASS")])
 
     def test_S20_a_missing_receipt_does_not_count(self):
-        self.delivered(archive=True)
+        self.delivered()
         path = self.receipt_path()
         shutil.move(str(path), str(path) + ".gone")
         result = self.verify()
@@ -540,7 +534,7 @@ class VerifyTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["items"][0]["state"], "UNKNOWN")
 
     def test_S20_a_receipt_for_another_tree_or_digest_does_not_count(self):
-        self.delivered(archive=True)
+        self.delivered()
         path = self.receipt_path()
         original = path.read_text(encoding="utf-8")
         for field, why in (("tree", "another tree"), ("digest", "another approval digest")):
@@ -564,7 +558,7 @@ class VerifyTests(AcceptanceFixture, unittest.TestCase):
         path.write_text(original, encoding="utf-8")
 
     def test_S20_a_receipt_that_no_longer_matches_the_ledger_hash_does_not_count(self):
-        self.delivered(archive=True)
+        self.delivered()
         path = self.receipt_path()
         path.write_text(
             path.read_text(encoding="utf-8").replace('"PASS"', '"PASS" '), encoding="utf-8"
@@ -577,7 +571,7 @@ class VerifyTests(AcceptanceFixture, unittest.TestCase):
 
     def test_S3_a_receipt_rewritten_in_place_keeping_digest_tree_and_result_does_not_count(self):
         """A Pi worker has no hooks: it can rewrite a receipt, keeping its digest, tree and result, and the ledger must still refuse it."""
-        self.delivered(archive=True)
+        self.delivered()
         path = self.receipt_path()
         original = json.loads(path.read_text(encoding="utf-8"))
         rewritten = json.dumps(original, indent=4, sort_keys=False) + "\n\n"
