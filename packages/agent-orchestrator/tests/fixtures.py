@@ -16,7 +16,7 @@ import threading
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest import mock
 
 import fake_gh
@@ -417,7 +417,14 @@ class RunFixture(_Case):
         )
 
     def runtime_process(self, argv, timeout=None):
-        """The fake runtime's answer, in process: a driver run starts no process per call."""
+        """The fake runtime's answer, in process: a driver run starts no process per call.
+
+        A lookup of an operation id answers `absent`: the fake keeps no operation keys, so a restart that asks acts
+        again as it did before it keyed its sends. A test of the keys scripts the answer itself."""
+        if argv[2:3] == ["operation"]:
+            key = json.loads(argv[argv.index("--json") + 1]).get("operation_id")
+            answer = {"operation_id": key, "state": "absent", "assignment_id": None}
+            return fake_runtime.Completed(argv, 0, json.dumps(answer), "")
         return fake_runtime.process(
             argv[1:], timeout=timeout
         )  # the fake reads the argv without the program name
@@ -656,6 +663,10 @@ class RunFixture(_Case):
             else []
         )
         return [r for r in rows if not kinds or r["kind"] in kinds]
+
+    # The name the outcome oracle reads the run's events by. An assignment, not a method: the workbench acceptance
+    # suite gives `events` another meaning of its own.
+    events: Any = run_events
 
     def assert_intents_precede_spawns(self):
         """D11: every spawn call went through ensure_agent, so its intent was already in events.jsonl."""

@@ -1,4 +1,4 @@
-// The header: an open plan's way back, name, state and whole goal, with one progress bar; on the list, the project.
+// The header: an open plan's or dashboard's way back and name (a plan's state and whole goal, with one progress bar too); on home, the project.
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { badge, control, progressBar, progressText } from "../ui.js";
@@ -11,8 +11,8 @@ export function headerView(head, ctx) {
     .child(h_flex().gap(8).items_center()
       .when(open, (el) => el.child(control("back", "←", (_e, cx) => onBack(cx), t))
         .child(div().flex_1().min_w(0).text_size(15).font_semibold().truncate().child(head.title)))
-      .when(!open, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(narrow ? "plans" : `${project} · plans`)))
-      .when(open, (el) => el.child(badge(head.state.word, head.state.tone, t)))
+      .when(!open, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(narrow ? "home" : `${project} · last 7 days`)))
+      .when(open && Boolean(head.state), (el) => el.child(badge(head.state.word, head.state.tone, t)))
       .when(Boolean(expand), (el) => el.child(control("expand", expand.expanded ? "Collapse" : "Expand",
         (_e, cx) => expand.onClick(cx), t, expand.expanded)))
       .child(control("refresh", loading ? "…" : "↻", (_e, cx) => onRefresh(cx), t)))

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -27,7 +28,12 @@ from . import contracts, events, evidence, narrate, routes, runner, verify, work
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .plan import PlanError
-from .runtime_client import CliRuntimeClient
+from .runtime_client import (
+    OPERATION_ADOPTED,
+    CliRuntimeClient,
+    operation_state,
+    refuses_operation_ids,
+)
 from .runtime_client import RuntimeError as RuntimeCallError
 
 ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
@@ -691,6 +697,15 @@ class Unreadable(ValueError):
     """`status` could not say whether an agent is gone."""
 
 
+class IntentUnsettled(ValueError):
+    """A spawn or resume the driver will not send on its own: it may or may not have reached the runtime, or the
+    runtime cannot key it. `operations` are the intents that stay open until the Lead decides."""
+
+    def __init__(self, message, operations=()):
+        super().__init__(message)
+        self.operations = list(operations)
+
+
 def terminal_gone(error, name):
     """True when the runtime's `unknown` says the terminal does not exist: hc's error kind `not_found`, or its
     `no terminal "<name>"`. Any other error is a read that failed, and says nothing about the terminal."""
@@ -1029,6 +1044,9 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
+        self.discarded = (
+            False  # the plan folder was deleted by this drive: the plan it last read is the plan
+        )
         self.model: yaml_plan.Plan | None = None  # the approved plan/1 model of a YAML plan
         self.approval: yaml_plan.Approval | None = (
             None  # the approval block of the YAML plan the loop last read
@@ -1075,8 +1093,12 @@ class Driver:
 
         A plan edited since its approval, or one that no longer loads, does not stop a run in flight: the run drains
         on the last approved snapshot (`begin_drain`) until the file is back to its approved bytes or carries a valid
-        approval of its own (`adopt`). Before the run holds an approved plan there is nothing to drain on, so the
+        approval of its own (`adopt_amendment`). Before the run holds an approved plan there is nothing to drain on, so the
         refusal stands."""
+        if self.discarded and self.last_plan is not None:
+            return (
+                self.last_plan
+            )  # its folder is gone by design; the approved model was read before
         started = getattr(self, "run_dir", None) is not None
         try:
             require_yaml(self.plan_path)
@@ -1101,7 +1123,7 @@ class Driver:
             if settled and model.approval.digest != self.approved_digest():
                 held = self.model
                 self.model, self.approval = model, model.approval
-                self.adopt(held, self.legacy_of(model))
+                self.adopt_amendment(held, self.legacy_of(model))
             elif settled and self.drain:
                 self.end_drain()
             elif not settled:
@@ -1165,7 +1187,7 @@ class Driver:
         narrate.say("info", None, "the plan is back to its approved bytes: the drain ended")
         self.drain = None
 
-    def adopt(self, held, plan):
+    def adopt_amendment(self, held, plan):
         """The plan carries a valid approval other than the one this run holds: gate and dispatch against it from
         now on. `held` is the model the run held until now."""
         if self.model is None:
@@ -1316,36 +1338,54 @@ class Driver:
         plan = self.last_plan = self.read_plan()
         self.slug = plan["slug"]
         self.brain_cli = getattr(self.args, "brain_cli", None)
-        # The route config this run uses, in the plan's order: the file the run names, then the repository's own
-        # policy, then the user's default. With one, the legacy table is a fallback, not a prerequisite, so it is
-        # not read; with none, the legacy table answers and says it is deprecated.
-        self.routes_file, self.route_source = routes.find_config(
-            explicit=getattr(self.args, "routes_file", None),
-            repo=self.repo,
-            home=routes.user_config_dir(),
-        )
-        if self.routes_file:
-            self.models, self.brain_models = {}, {}
-        else:
-            self.models = class_models(self.args.models_file, self.args.cli, required=True)
-            self.brain_models = (
-                class_models(self.args.models_file, self.brain_cli, required=True)
-                if self.brain_cli
-                else self.models
-            )
-        self.routes, self.step_routes = self.load_routes()
-        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.ledger_path, self.run_dir = locate_state(
+        # The run directory is only named once the routes are settled: a run that stops here has not started.
+        self.ledger_path, run_dir = locate_state(
             self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
+        pinned = self.recorded_routes()
+        self.added_steps = {}
+        if pinned:
+            self.pin_routes(pinned)
+        else:
+            self.args.cli = self.args.cli or "claude"
+            # The route config this run uses, in the plan's order: the file the run names, then the repository's own
+            # policy, then the user's default. With one, the legacy table is a fallback, not a prerequisite, so it is
+            # not read; with none, the legacy table answers and says it is deprecated.
+            self.routes_file, self.route_source = routes.find_config(
+                explicit=getattr(self.args, "routes_file", None),
+                repo=self.repo,
+                home=routes.user_config_dir(),
+            )
+            if self.routes_file:
+                self.models, self.brain_models = {}, {}
+            else:
+                self.models = class_models(self.args.models_file, self.args.cli, required=True)
+                self.brain_models = (
+                    class_models(self.args.models_file, self.brain_cli, required=True)
+                    if self.brain_cli
+                    else self.models
+                )
+            self.routes, self.step_routes = self.load_routes()
+        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         narrate.NARRATOR.roots = [self.run_dir]  # the pane names a run file by its place in the run
         # The ledger first: it carries the kind marker before any file a worker can read exists.
         with ledger(self.ledger_path) as data:
             self.lead = data.setdefault("lead", "orchestrate:" + self.slug)
-            data["routes"] = routes.record(
-                self.routes, self.route_source or "legacy", self.routes_file, self.step_routes
-            )
+            if not pinned:  # a resumed run keeps the record it already has
+                data["routes"] = routes.record(
+                    self.routes,
+                    self.route_source or "legacy",
+                    self.routes_file,
+                    self.step_routes,
+                    cli=self.args.cli,
+                    brain_cli=self.brain_cli,
+                )
+            elif self.added_steps:  # steps the record lacked, given by the command line
+                data["routes"]["steps"].update(
+                    routes.record(self.routes, "", None, self.added_steps)["steps"]
+                )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
             # the ledger owns the plan's state; the plan file is never written
             if not data.get("plan"):
@@ -1892,6 +1932,10 @@ class Driver:
             try:
                 self.step_answers(task_id)
                 acted += 1
+            except IntentUnsettled as error:
+                self.hold_intent(
+                    task_id, error
+                )  # the answers wait; the Lead decides what the resume becomes
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                 self.mark(task_id, answers=dict(self.task(task_id)["answers"], state="failed"))
                 self.errors.append("%s: %s" % (task_id, error))
@@ -1920,6 +1964,11 @@ class Driver:
                         steps[gate](task_id) is False
                     ):  # nothing to act on yet: poll again next iteration
                         break
+                except IntentUnsettled as error:
+                    self.hold_intent(
+                        task_id, error
+                    )  # a request now, so the unit is not `stuck` after the decision
+                    break
                 except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                     self.stuck.add((task_id, gate))
                     self.errors.append("%s: %s" % (task_id, error))
@@ -2002,26 +2051,45 @@ class Driver:
             narrate.say("warn", None, "could not wake the Lead in %s: %s" % (terminal, error))
             self.log("notify-failed", terminal=terminal, error=error[:500])
 
-    def request(self, task_id, kind, reason, fix=None, answerer=None):
+    def request(self, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None):
         """The unit needs the Lead. A unit that already has an open request keeps it. `answerer` is the assignment of
-        a busy answerer the request names: only a decision on such a request replaces that assignment."""
+        a busy answerer the request names: only a decision on such a request replaces that assignment. `menu` narrows
+        the actions the Lead may take, and `intent` names the intents the decision settles."""
         with self.book() as data:
-            task = data["tasks"][task_id]
-            if task.get("gate") == "requested":
-                return
-            unit = task["packet"]["unit"]
-            path, _ = next_path(self.run_dir / unit, "request", ".json")
-            task.update(
-                event={"at": now(), "kind": kind, "reason": reason},
-                gate="requested",
-                updated_at=now(),
-                request=dict(
-                    {"path": str(path), "kind": kind, "from_gate": task.get("gate")},
-                    **({"answerer": answerer} if answerer else {}),
-                ),
-            )
-            if fix:
-                task["fix"] = fix
+            unit = self.book_request(data, task_id, kind, reason, fix, answerer, menu, intent)
+        if unit is not None:
+            self.announce_request(task_id, kind, reason, unit)
+
+    def book_request(
+        self, data, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None
+    ):
+        """The ledger half of `request`, for a caller that books it with other changes in one write: the unit's
+        id, or None when the unit already has an open request."""
+        task = data["tasks"][task_id]
+        if task.get("gate") == "requested":
+            return None
+        unit = task["packet"]["unit"]
+        path, _ = next_path(self.run_dir / unit, "request", ".json")
+        asked = {"path": str(path), "kind": kind, "from_gate": task.get("gate")}
+        if answerer:
+            asked["answerer"] = answerer
+        if menu:
+            asked["menu"] = list(menu)
+        if intent:
+            asked["intent"] = list(intent)
+        task.update(
+            event={"at": now(), "kind": kind, "reason": reason},
+            gate="requested",
+            updated_at=now(),
+            request=asked,
+        )
+        if fix:
+            task["fix"] = fix
+        return unit
+
+    def announce_request(self, task_id, kind, reason, unit):
+        """What follows the booking of a request: the pane, the log, the ticket's status, the file and the wake. A
+        crash before the file is on disk is repaired by `step_requested`."""
         narrate.say("ask", "decide", "Lead decision needed (%s): %s" % (kind, reason), task=task_id)
         self.log("escalation", unit=unit, task=task_id, cause=kind, reason=reason[:500])
         self.write_status(unit.upper(), "IN PROGRESS · decision pending: " + cell(reason))
@@ -2046,7 +2114,7 @@ class Driver:
                 task["event"]["kind"],
                 task["event"]["reason"],
                 [str(c) for c in candidates if c.exists()],
-                menu=ARCHIVE_MENU if unit == ARCHIVE else None,
+                menu=task["request"].get("menu") or (ARCHIVE_MENU if unit == ARCHIVE else None),
             )
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             write_atomic(path, json.dumps(row, indent=2) + "\n")
@@ -2134,10 +2202,6 @@ class Driver:
                     % (held["text"] or "worker " + held["kind"]),
                 )
 
-    def escalate(self, task_id, reason, fix):
-        """A unit failed its gates past the cap. `fix` is the round a `retry` would run."""
-        self.request(task_id, "gate", reason, fix=fix)
-
     def write_status(self, ticket_id, status):
         if ticket_id == ARCHIVE.upper():
             return  # the archive unit has no ticket row
@@ -2163,13 +2227,17 @@ class Driver:
         """Checkpoint the worker's report as PARTIAL: the unit is not COMPLETE until CI and the merge."""
         path = self.report_file(task_id)
         with self.book() as data:
-            # review_rounds is the driver's own count: the worker's value is never trusted.
-            checkpoint(
-                data,
-                task_id,
-                dict(report, status="PARTIAL", **dict({"review_rounds": 0}, **changes)),
-            )
-            data["tasks"][task_id]["report_path"] = str(path)
+            self.book_report(data, task_id, report, path, **changes)
+
+    @staticmethod
+    def book_report(data, task_id, report, path, **changes):
+        # review_rounds is the driver's own count: the worker's value is never trusted.
+        checkpoint(
+            data,
+            task_id,
+            dict(report, status="PARTIAL", **dict({"review_rounds": 0}, **changes)),
+        )
+        data["tasks"][task_id]["report_path"] = str(path)
 
     def report_file(self, task_id):
         """The newest report in a task directory. Files are write-once: a later attempt writes report.2.json."""
@@ -2252,6 +2320,7 @@ class Driver:
                 "model": sender.get("model") or task["packet"].get("model"),
                 "effort": sender.get("effort") or task["packet"].get("effort"),
             },
+            attempt=task_id,
         )
         # The warned agent comes back as a new assignment: the record the next report is matched against must be
         # the one that will speak, or the report lands on no gate at all.
@@ -2470,10 +2539,30 @@ class Driver:
         return "FAIL", verify.items(findings, command, log)
 
     def fail_gate(self, task_id, report, source, items, checks_run=(), answer_ids=(), rebase=False):
-        """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure."""
+        """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure.
+
+        The round, the report, the next phase (a fix round, or the Lead's request) and the draft the pull request
+        still owes are booked in one ledger write, before any git or gh call: a restart after a crash anywhere later
+        finds the gate already failed once, and the draft it owes is in `fix`."""
         remaining = [short(item) for item in items]
+        unit = self.unit_of(task_id)
+        path = self.report_file(task_id)
+        owed = None
+        if unit != ARCHIVE and self.unit_flag(unit, "pr_ready"):
+            owed = self.pr_of(
+                task_id
+            )  # the PR was readied: it goes back to draft before anyone changes its code
+        fix = {
+            "source": source,
+            "items": items,
+            "attempt": None,
+            "checks_run": list(checks_run),
+            "answer_ids": list(answer_ids),
+            "rebase": True if rebase else None,
+            "draft": owed,
+        }
+        asked = kind = reason = None
         with self.book() as data:  # the driver's count: the report's review_rounds is never read
-            unit = data["tasks"][task_id]["packet"]["unit"]
             rounds = data.setdefault("rounds", {})
             if (
                 unit not in rounds
@@ -2481,55 +2570,51 @@ class Driver:
                 rounds[unit] = unit_summary(data, unit)["failed_reviews"]
             rounds[unit] += 1
             failures = rounds[unit]
-        if unit == ARCHIVE:
-            # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
-            self.record_report(task_id, report, remaining=remaining)
+            fix["attempt"] = failures
             self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
+            if unit == ARCHIVE:
+                # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
+                self.book_report(data, task_id, report, path, remaining=remaining)
+                reason = (
+                    "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
+                    "leaves the archive to you"
+                    % (
+                        "the archive pull request conflicts with its base"
+                        if source == "conflict"
+                        else "the archive failed its %s gate" % source,
+                        "; ".join(remaining),
+                    )
+                )
+                kind = source
+                asked = self.book_request(data, task_id, kind, reason)
+            else:
+                self.book_report(data, task_id, report, path, review_rounds=1, remaining=remaining)
+                for item in items:
+                    self.log_finding(
+                        unit,
+                        task_id,
+                        source,
+                        item.get("kind", "blocking") if isinstance(item, dict) else "blocking",
+                        item,
+                    )
+                if failures > self.fix_cap(unit):
+                    kind = "gate"
+                    reason = "%s failed its gates %d times; last: %s" % (
+                        unit,
+                        failures,
+                        "; ".join(remaining),
+                    )
+                    asked = self.book_request(data, task_id, kind, reason, fix=fix)
+                else:
+                    data["tasks"][task_id].update(gate="fix-pending", fix=fix, updated_at=now())
+        # Nothing below is the round's to book twice. The draft is attempted now and, when gh refuses, left in `fix`
+        # for `step_fix` to try again before it dispatches anyone.
+        if unit == ARCHIVE:
             self.undraft_archive(task_id)
-            return self.request(
-                task_id,
-                source,
-                "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
-                "leaves the archive to you"
-                % (
-                    "the archive pull request conflicts with its base"
-                    if source == "conflict"
-                    else "the archive failed its %s gate" % source,
-                    "; ".join(remaining),
-                ),
-            )
-        self.record_report(task_id, report, review_rounds=1, remaining=remaining)
-        fix = {
-            "source": source,
-            "items": items,
-            "attempt": failures,
-            "checks_run": list(checks_run),
-            "answer_ids": list(answer_ids),
-            "rebase": True if rebase else None,
-            "draft": None,
-        }
-        if self.unit_flag(unit, "pr_ready"):
-            # the PR was readied: it goes back to draft before anyone changes its code, a capped one included
-            url = self.pr_of(task_id)
-            if url and not self.undraft(task_id, url):
-                # step_fix tries again and dispatches no worker until it is a draft
-                fix["draft"] = url
-        self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
-        for item in items:
-            self.log_finding(
-                unit,
-                task_id,
-                source,
-                item.get("kind", "blocking") if isinstance(item, dict) else "blocking",
-                item,
-            )
-        if failures > self.fix_cap(unit):
-            return self.escalate(
-                task_id,
-                "%s failed its gates %d times; last: %s" % (unit, failures, "; ".join(remaining)),
-                fix,
-            )
-        self.mark(task_id, gate="fix-pending", fix=fix)
+        elif owed and self.undraft(task_id, owed):
+            self.mark(task_id, fix=dict(fix, draft=None))
+        if asked is not None:
+            self.announce_request(task_id, kind, reason, asked)
 
     def fix_cap(self, unit):
         """The fix rounds a unit may use: its `Max fix rounds:` plan line, else --max-fix-rounds."""
@@ -2586,6 +2671,7 @@ class Driver:
                 "model": model,
                 "effort": effort,
             },
+            attempt=Path(review["dir"]).name,
         )
         self.mark(task_id, gate="reviewing", review=dict(review, assignment_id=assignment_id))
         narrate.say(
@@ -3643,6 +3729,101 @@ class Driver:
         otherwise."""
         return getattr(self, "brain_cli", None) or self.args.cli
 
+    def recorded_routes(self):
+        """The routes an existing run's ledger recorded, or None for a run that has not started.
+
+        A run that started and has no complete record cannot be recovered from whatever policy is there now:
+        it stops here, before any worker, unless --routes-file names the config that migrates it."""
+        data = ledgers.snapshot(self.ledger_path)
+        if data is None or not ("lead" in data or "routes" in data):
+            return None
+        pinned, why = routes.read_record(data.get("routes"))
+        if pinned is None:
+            if getattr(self.args, "routes_file", None):
+                return None  # the explicit config migrates the run and records the complete routes
+            raise PlanError(
+                "cannot resume %s: %s, and the policy now in force may not be what it ran on. Pass "
+                "--routes-file with the typed route config to migrate it; the complete resolved routes "
+                "are then recorded in the ledger before the run resumes" % (self.slug, why)
+            )
+        return pinned
+
+    def pin_routes(self, pinned):
+        """The recorded routes answer the run; an explicit argument that says otherwise stops it.
+
+        An argument that matches the record is accepted and one the command line omits is not a conflict. The
+        ledger is not written until the run is clear to resume."""
+        args = self.args
+        try:
+            chosen = routes.overrides(getattr(args, "route", None))
+            chosen_steps = routes.step_overrides(getattr(args, "step", None))
+        except routes.RouteError as error:
+            raise PlanError("invalid route override: %s" % error) from None
+        classes = {route.klass: route for route in chosen}
+        steps = {route.step: route for route in chosen_steps}
+        via = {route.klass: "--route" for route in chosen}
+        via.update({route.step: "--step" for route in chosen_steps})
+        dropped = []
+        explicit = getattr(args, "routes_file", None)
+        if explicit:
+            try:
+                config = routes.load(explicit)
+                resolved = routes.resolve(config, pinned.cli, {})
+            except routes.RouteError as error:
+                raise PlanError("invalid route config %s: %s" % (explicit, error)) from None
+            # An explicit file is the whole routing of the run, so a step the ledger has and it lacks differs too.
+            via = {name: "--routes-file" for name in (*routes.CLASSES, *routes.STEPS)} | via
+            classes = routes.apply_overrides(resolved, chosen)
+            steps = routes.apply_step_overrides({s.step: s for s in config.steps}, chosen_steps)
+            dropped = sorted(set(pinned.steps) - set(steps))
+        # A record whose gates cannot be routed (its medium route is not on the brain backend and it names no step
+        # for them) takes the gate steps the command line adds: that is the way out the refusal below names.
+        brain = self.brain_cli or pinned.brain_cli
+        gates = (
+            [s for s in ("reviewer", "gaps") if s not in pinned.steps]
+            if brain and pinned.classes["medium"].backend != brain
+            else []
+        )
+        added = {name: steps.pop(name) for name in gates if name in steps}
+        found = routes.conflicts(
+            pinned, classes, steps, cli=args.cli, brain_cli=self.brain_cli, via=via
+        )
+        found += [
+            "--routes-file: step %s is recorded as %s, the file names no such step"
+            % (name, routes.describe(pinned.steps[name]))
+            for name in dropped
+        ]
+        if found:
+            raise PlanError(
+                "cannot resume %s: the arguments conflict with the routes its ledger recorded (%s). Drop "
+                "the conflicting argument to keep the recorded routes; the ledger is unchanged"
+                % (self.slug, "; ".join(found))
+            )
+        args.cli = args.cli or pinned.cli
+        self.brain_cli = self.brain_cli or pinned.brain_cli
+        self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps) | added
+        self.added_steps = added
+        self.routes_file, self.route_source = pinned.path, pinned.source
+        self.models, self.brain_models = {}, {}
+        if self.brain_cli:
+            wanted = [s for s in ("reviewer", "gaps") if s not in self.step_routes]
+            medium = self.routes["medium"]
+            if wanted and medium.backend != self.brain_cli:
+                raise PlanError(
+                    "cannot resume %s: the recorded medium route runs on %s, not on the brain backend %s the "
+                    "%s gate(s) would spawn on. Pass --step %s=%s/MODEL[@EFFORT] for them, or --routes-file "
+                    "with a medium route on %s to migrate"
+                    % (
+                        self.slug,
+                        medium.backend,
+                        self.brain_cli,
+                        "/".join(wanted),
+                        wanted[0],
+                        self.brain_cli,
+                        self.brain_cli,
+                    )
+                )
+
     def load_routes(self):
         """The class -> route map this run uses: the typed route config when one was found, the legacy
         'Model classes' table otherwise. An invalid route config stops the run here, before any worker.
@@ -3654,6 +3835,14 @@ class Driver:
         if not path:
             narrate.say("warn", "setup", routes.legacy_warning(self.args.models_file))
             resolved = routes.legacy(self.args.cli, self.models)
+            if self.brain_cli:
+                # The table answers the gates on the brain backend's own column. Recording that as step routes
+                # keeps the record complete: a restart need not read the table again to route the gates.
+                medium = self.brain_models["medium"]
+                steps = {
+                    step: routes.StepRoute(step, self.brain_cli, medium)
+                    for step in ("reviewer", "gaps")
+                }
         else:
             try:
                 config = routes.load(path)
@@ -3702,7 +3891,7 @@ class Driver:
         brain = getattr(self, "brain_cli", None)
         if not brain:
             return self.routes[klass].model
-        if self.routes_file:
+        if not self.brain_models:
             route = self.routes.get("medium")
             if route is None or route.backend != brain:
                 raise PlanError(
@@ -3727,13 +3916,156 @@ class Driver:
             return step
         return "medium" if getattr(self, "brain_cli", None) else klass
 
-    def ensure_agent(self, name, role, unit, spawn, fresh=False):
+    # Every spawn and resume goes out under an intent: a row in the ledger's `intents`, keyed by a fresh UUID that is
+    # also the runtime's operation_id, booked before the call. The readable `unit/attempt/operation` path is metadata
+    # for the person reading the ledger. A restart that finds an intent still open asks the runtime what became of its
+    # key (`call operation`), and never sends again for a delivery it cannot establish.
+
+    def book_intent(self, operation, name, role, unit, attempt):
+        """Book the intent for one spawn or resume and return its operation id."""
+        operation_id = str(uuid.uuid4())
+        path = "%s/%s/%s" % (unit, attempt, operation)
+        with self.book() as data:
+            data.setdefault("intents", {})[operation_id] = {
+                "name": name,
+                "role": role,
+                "unit": unit,
+                "attempt": attempt,
+                "operation": operation,
+                "path": path,
+                "at": now(),
+                "state": "open",
+                "assignment_id": None,
+            }
+        self.log(
+            "intent-booked",
+            name=name,
+            role=role,
+            unit=unit,
+            operation=operation,
+            operation_id=operation_id,
+            route=path,
+        )
+        return operation_id
+
+    def settle_intent(self, operation_id, state, assignment_id=None, why=None):
+        """Close an intent as `bound` (the runtime answered), `adopted` (a restart found its assignment), `absent` (the
+        runtime never saw the key), `refused` (the runtime said no) or `released` (the Lead decided)."""
+        with self.book() as data:
+            row = (data.get("intents") or {}).get(operation_id)
+            if row is None:
+                return
+            row["state"] = state
+            row["settled_at"] = now()
+            if assignment_id:
+                row["assignment_id"] = assignment_id
+            if why:
+                row["why"] = str(why)[:300]
+        self.log(
+            "intent-settled", operation_id=operation_id, state=state, why=why and str(why)[:300]
+        )
+
+    def release_intents(self, operations, why):
+        """The Lead decided, or the unit was given up: these intents no longer stand for a send that may land."""
+        for operation_id in operations or ():
+            self.settle_intent(operation_id, "released", why=why)
+
+    def send(self, operation, name, role, unit, attempt, arguments):
+        """One spawn or resume under its own intent; (the runtime's answer, its assignment id). A runtime that does
+        not take operation ids is never sent the call without one: the Lead is asked instead."""
+        operation_id = self.book_intent(operation, name, role, unit, attempt)
+        try:
+            result = runtime_call(self.lead, operation, dict(arguments, operation_id=operation_id))
+        except subprocess.TimeoutExpired:
+            raise  # it may have started: the intent stays open, and a restart looks the key up
+        except (ValueError, OSError) as error:
+            self.settle_intent(operation_id, "refused", why=error)
+            if refuses_operation_ids(error):
+                raise IntentUnsettled(
+                    "the runtime does not take operation ids (%s), so nothing was sent to %s and nothing will be "
+                    "sent without one: retry once the runtime supports them, or skip"
+                    % (error, name)
+                ) from None
+            raise
+        assignment_id = assignment_of(result)
+        self.settle_intent(operation_id, "bound", assignment_id=assignment_id)
+        return result, assignment_id
+
+    def reconcile_intent(self, name):
+        """What became of an intent the driver left open for `name`: (assignment id, intent) when the runtime holds
+        the assignment (it is adopted), None when nothing is open or the runtime never saw the key (the caller acts
+        again). A delivery the runtime cannot vouch for raises `IntentUnsettled`: sending again could do it twice."""
+        with self.book() as data:
+            found = sorted(
+                (row["at"], key, dict(row))
+                for key, row in (data.get("intents") or {}).items()
+                if row["name"] == name and row["state"] in ("open", "held")
+            )
+        adopted = None
+        for _, key, intent in found:
+            if intent["state"] == "held":  # the Lead has been asked: no lookup each round
+                raise IntentUnsettled(self.unsettled_text(intent, "held", None), [key])
+            try:
+                answer = runtime_call(self.lead, "operation", {"operation_id": key})
+            except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                answer = {"state": "unknown", "reason": "the lookup failed: %s" % error}
+            state = operation_state(answer)
+            assignment_id = answer.get("assignment_id") if isinstance(answer, dict) else None
+            self.log("intent-lookup", name=name, operation_id=key, state=state)
+            if state == "absent":
+                self.settle_intent(key, "absent")
+            elif state in OPERATION_ADOPTED and isinstance(assignment_id, str) and assignment_id:
+                self.settle_intent(key, "adopted", assignment_id=assignment_id)
+                adopted = (assignment_id, intent)
+            else:
+                raise IntentUnsettled(
+                    self.unsettled_text(intent, state, (answer or {}).get("reason")), [key]
+                )
+        return adopted
+
+    @staticmethod
+    def unsettled_text(intent, state, reason):
+        return "the %s may or may not have reached %s (the runtime answers %s%s): retry or skip" % (
+            intent["operation"],
+            intent["name"],
+            state,
+            "; " + str(reason) if reason else "",
+        )
+
+    def adopt(self, name, role, unit, assignment_id, intent):
+        """Bind an assignment a restart found under an intent, as the send that made it would have."""
+        with self.book() as data:
+            record = data.setdefault("agents", {}).setdefault(
+                name, {"role": role, "unit": unit, "intent_at": intent["at"]}
+            )
+            record.update(assignment_id=assignment_id, bound_at=now(), how="adopt")
+            address = record.get("address")
+        self.touched.add(name)
+        self.log("agent", name=name, role=role, unit=unit, how="adopt", assignment_id=assignment_id)
+        return address
+
+    def hold_intent(self, task_id, error):
+        """An intent the driver cannot settle: the unit's Lead is asked, and a `retry` sends again under a new key."""
+        with self.book() as data:
+            for key in error.operations:
+                row = (data.get("intents") or {}).get(key)
+                if row and row["state"] == "open":
+                    row["state"] = "held"
+        self.request(task_id, "intent", str(error), menu=("retry", "skip"), intent=error.operations)
+
+    def ensure_agent(self, name, role, unit, spawn, fresh=False, attempt=None):
         """Put one agent under `name` and return (address, assignment_id).
 
         `spawn` is the runtime's spawn arguments. A name the ledger already knows is looked up first and, when live,
         resumed with the same task instead of spawned (that is how a restart re-attaches). `fresh` says the caller
         already stopped the old agent of this name, so a bound record needs no lookup; an open intent is always
         looked up."""
+        attempt = attempt or name
+        adopted = self.reconcile_intent(name)
+        if adopted:
+            assignment_id, intent = adopted
+            address = self.adopt(name, role, unit, assignment_id, intent)
+            return address or assignment_id, assignment_id
         with self.book() as data:
             agents = data.setdefault("agents", {})
             known = agents.get(name)
@@ -3752,13 +4084,15 @@ class Driver:
             live, spawn = False, dict(spawn, task=spawn["task"] + self.handoff(name, unit))
         try:
             if live:
-                result, how = (
-                    runtime_call(self.lead, "resume", {"name": name, "task": spawn["task"]}),
+                (result, assignment_id), how = (
+                    self.send(
+                        "resume", name, role, unit, attempt, {"name": name, "task": spawn["task"]}
+                    ),
                     "attach",
                 )
             else:
-                result, how = (
-                    runtime_call(self.lead, "spawn", self.spawn_args(spawn, role)),
+                (result, assignment_id), how = (
+                    self.send("spawn", name, role, unit, attempt, self.spawn_args(spawn, role)),
                     "spawn",
                 )
         except subprocess.TimeoutExpired:
@@ -3771,7 +4105,6 @@ class Driver:
                     else:
                         data["agents"].pop(name, None)
             raise
-        assignment_id = assignment_of(result)
         returned = result.get("address")
         if not returned and how == "attach":
             returned = (known or {}).get(
@@ -3994,10 +4327,18 @@ class Driver:
             "effort": successor["effort"],
             "task": text,
         }
+        attempt = successor["task_id"]
+        adopted = self.reconcile_intent(name)
+        if (
+            adopted
+        ):  # a send this driver made before it died: the runtime holds it, so nothing is sent again
+            assignment_id, intent = adopted
+            address = self.adopt(name, "worker", unit, assignment_id, intent)
+            return address or task["runtime_id"], assignment_id
         if self.open_intent(
             name
         ):  # the driver died while starting this worker: find it, do not start another
-            return self.ensure_agent(name, "worker", unit, spawn, fresh=True)
+            return self.ensure_agent(name, "worker", unit, spawn, fresh=True, attempt=attempt)
         alive = self.pane_alive(name)
         if alive and not fresh:
             with self.book() as data:
@@ -4005,12 +4346,14 @@ class Driver:
             if self.swap_due(name, "worker", unit, last):
                 fresh, spawn["task"] = True, spawn["task"] + self.handoff(name, unit)
         if alive and not fresh:
-            resumed = runtime_call(
-                self.lead,
+            resumed, assignment_id = self.send(
                 "resume",
+                name,
+                "worker",
+                unit,
+                attempt,
                 {"name": name, "task": "Read %s and follow it.%s" % (task_md, said)},
             )
-            assignment_id = assignment_of(resumed)
             with self.book() as data:
                 if name in (data.get("agents") or {}):
                     data["agents"][name]["assignment_id"] = assignment_id
@@ -4036,7 +4379,9 @@ class Driver:
                     "could not stop %s before replacing it: %s" % (name, error),
                     task=successor["task_id"],
                 )
-        address, assignment_id = self.ensure_agent(name, "worker", unit, spawn, fresh=True)
+        address, assignment_id = self.ensure_agent(
+            name, "worker", unit, spawn, fresh=True, attempt=attempt
+        )
         narrate.say(
             "start",
             None,
@@ -4066,6 +4411,8 @@ class Driver:
         narrate.say("info", "decide", "Lead decided %s: %s" % (action, reason), task=task_id)
         self.log("decision", unit=unit, task=task_id, action=action, reason=reason[:500])
         held = task.get("held") or []
+        asked = task.get("request") or {}
+        self.release_intents(asked.get("intent"), "the Lead decided %s" % action)
         if action in ("mark blocked", "skip"):
             blocked = action == "mark blocked"
             with self.book() as data:
@@ -4085,6 +4432,9 @@ class Driver:
         if unit == ARCHIVE:
             return self.retry_archive(task_id)
         self.write_status(unit.upper(), "IN PROGRESS")
+        if asked.get("kind") == "intent" and action == "retry" and asked.get("from_gate"):
+            # the held send goes out again under a new key, from the step that held it
+            return self.mark(task_id, gate=asked["from_gate"], held=[])
         answers = task.get("answers") or {}
         named = (task.get("request") or {}).get("answerer")
         if answers.get("state") == "working" and named == answers.get("assignment_id"):
@@ -4577,7 +4927,10 @@ class Driver:
         """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
         changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set
         verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can
-        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round."""
+        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round.
+        A discarded plan promoted nothing and wrote no spec, so there is nothing to hold on its archive head."""
+        if self.archive_mode() == "discard":
+            return "PASS", []
         try:
             commit = verify.snapshot_commit(packet["checkout"])
             tree = self.tree_of(commit)
@@ -4781,15 +5134,62 @@ class Driver:
         narrate.say(
             "start", "verify", "verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12])
         )
+        full_failed = self.verify_full(sha, tree, attempt)
         passed = [
             scenario.id
             for scenario in verify.check_scenarios(self.model)
             if self.run_evidence(scenario.id, "integration", sha).receipt["result"] == "PASS"
         ]
-        # The plan settles once every mutation check has: an unkilled oracle is not an accepted outcome.
-        if not self.start_mutations(sha, passed):
+        # The plan settles once every mutation check has: an unkilled oracle is not an accepted outcome. A plan whose
+        # whole suite failed is rejected whatever its mutations show, so none is started for it.
+        if full_failed or not self.start_mutations(sha, passed):
             self.settle_acceptance()
         return 2
+
+    def verify_full(self, sha, tree, attempt):
+        """The repo's whole suite (`checks.full.run`), once for this verify pass, on the pinned commit; True when it
+        failed. `--skip-full` or `checks.full.verify: false` leave it to CI: a `skipped` event says so and why. A
+        repo that declares no `full` has nothing to run or skip."""
+        tiers = repo_config.load(self.repo).checks
+        if tiers is None or not tiers.full_run:
+            return False
+        command = tiers.full_run
+        reason = (
+            "--skip-full"
+            if getattr(self.args, "skip_full", False)
+            else None
+            if tiers.full_verify
+            else "checks.full.verify: false"
+        )
+        record = {
+            "state": "skipped" if reason else None,
+            "sha": sha,
+            "tree": tree,
+            "digest": self.contract()[1].digest,
+            "attempt": attempt,
+            "command": command,
+            "log": str(self.run_dir / "full.log"),
+            "at": now(),
+        }
+        if reason:
+            record["reason"] = reason
+        else:
+            narrate.say(
+                "start", "verify", "running the whole suite on %s: %s" % (sha[:12], command)
+            )
+            result = verify.run_full(self.repo, sha, command, self.run_dir / "full.log")
+            record.update(state=result["state"], exit=result["exit"], detail=result["detail"])
+        with self.book() as data:
+            data["full"] = record
+        self.log(
+            "full",
+            **{
+                k: v
+                for k, v in record.items()
+                if k in ("state", "sha", "command", "log", "reason", "exit", "attempt")
+            },
+        )
+        return record["state"] == "FAIL"
 
     # ---- the mutation check (S21) ----------------------------------------------------------------------------
     # An outcome oracle that was uncalibrated at baseline (it failed for a missing interface, so its assertions were
@@ -4912,6 +5312,8 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, IntentUnsettled):
+                self.release_intents(error.operations, "no attempt is waiting on it")
             narrate.say("fail", "mutation", "mutation reviewer %s not started: %s" % (name, error))
             record_update.update(ended=True, error=str(error)[:300])
         else:
@@ -5155,6 +5557,8 @@ class Driver:
             if not interrupted:
                 return 0
         try:
+            if self.archive_mode() == "discard" and not self.folder_tracked():
+                return self.discard_plan(plan)
             self.claim_archive()
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.failed.add(ARCHIVE)
@@ -5163,6 +5567,84 @@ class Driver:
             return 0
         self.build_archive(ARCHIVE)
         return 1
+
+    def archive_mode(self):
+        """promote | discard. Only a plan in its own folder can discard: a legacy plan always promotes."""
+        path = getattr(
+            self, "plan_path", None
+        )  # a driver that holds no plan (a unit test's) promotes
+        if path is None or not yaml_plan.is_folder_plan(path):
+            return "promote"
+        return self.plan_model().archive or yaml_plan.repo_config(self.repo).archive_mode
+
+    def plan_folder_rel(self):
+        """The plan folder's path in the repository, or None for a folder plan or a legacy plan that is not in a
+        folder of it. A folder that is the repository, or holds it, is refused: deleting it would delete the work."""
+        folder = self.plan_path.parent
+        if not yaml_plan.is_folder_plan(self.plan_path):
+            return None
+        if self.repo == folder or self.repo.is_relative_to(folder):
+            raise ValueError(
+                "the plan folder %s is or holds the repository; move plan.yaml into a folder of its own"
+                % folder
+            )
+        try:
+            return folder.relative_to(self.repo).as_posix()
+        except ValueError:
+            return None
+
+    def folder_tracked(self):
+        """Whether the plan folder is tracked on the base branch, which is the tree an archive branch is built from."""
+        rel = self.plan_folder_rel()
+        if rel is None:
+            return False
+        remote, _, branch = self.args.base.partition("/")
+        run(["git", "-C", str(self.repo), "fetch", "-q", remote, branch], timeout=120)
+        listed = run(
+            [
+                "git",
+                "-C",
+                str(self.repo),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                self.args.base,
+                "--",
+                rel,
+            ],
+            timeout=TREE_TIMEOUT,
+        )
+        return bool(listed)
+
+    def discard_plan(self, plan):
+        """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No
+        worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan."""
+        folder = self.plan_path.parent
+        shutil.rmtree(folder)
+        self.discarded = True
+        with self.book() as data:
+            enter_plan_state(data, "ARCHIVED")
+        self.log("archive-discarded", folder=str(folder))
+        narrate.say("done", "archive", "plan discarded: %s deleted" % folder)
+        self.start_gaps(plan)
+        return 1
+
+    def remove_plan_folder(self, checkout):
+        """Delete the plan folder from an archive checkout (a plan kept outside the repository has none there)."""
+        rel = self.plan_folder_rel()
+        if rel is not None:
+            shutil.rmtree(Path(checkout) / rel, ignore_errors=True)
+
+    def archive_owns(self):
+        """What the archive unit writes: the spec, the files it copies or places, and the plan folder it deletes."""
+        model = self.plan_model()
+        owns = [model.spec] if model.spec and self.archive_mode() == "promote" else []
+        if self.archive_mode() == "promote":
+            owns += [rel for rel, _ in self.yaml_copies()] + [
+                rel for rel, _ in self.yaml_places(model)
+            ]
+        folder = self.plan_folder_rel()
+        return owns + ([folder + "/"] if folder else [])
 
     def claim_archive(self):
         name = self.slug[: 32 - len("-archive")].rstrip("-_") + "-archive"
@@ -5174,12 +5656,12 @@ class Driver:
             "task_id": ARCHIVE,
             "worker": name,
             "plan": str(self.plan_path),
-            "objective": "Archive the plan into the living spec",
+            "objective": "Archive the plan into the living spec"
+            if self.archive_mode() == "promote"
+            else "Delete the discarded plan folder",
             "checkout": str(checkout),
             "backend": self.args.cli,
-            "owns": [plan_model.spec]
-            + [rel for rel, _ in self.yaml_copies()]
-            + [rel for rel, _ in self.yaml_places(plan_model)],
+            "owns": self.archive_owns(),
             "acceptance": YAML_ARCHIVE_ACCEPTANCE,
             "checks": [],  # no local gate: the pull request's CI and the outcome re-run are the gates
             "depends_on": [],
@@ -5200,7 +5682,7 @@ class Driver:
     def build_archive(self, task_id):
         """Build, push and open the archive, then hand its report to the gates. Any trouble asks the Lead."""
         try:
-            missing = self.archive_missing()
+            missing = self.archive_missing() if self.archive_mode() == "promote" else []
             if missing:
                 return self.request(
                     task_id,
@@ -5222,9 +5704,16 @@ class Driver:
             "contract": contracts.VERSION,
             "task_id": task_id,
             "status": "COMPLETE",
-            "summary": "the driver archived the plan: oracles placed, plan files copied, spec section appended",
+            "summary": "the driver archived the plan: %s"
+            % (
+                "oracles placed, plan files copied, spec section appended"
+                if self.archive_mode() == "promote" and not yaml_plan.is_folder_plan(self.plan_path)
+                else "acceptance files moved into their domain, plan folder deleted, spec section appended"
+                if self.archive_mode() == "promote"
+                else "the discarded plan folder deleted"
+            ),
             "acceptance_met": True,
-            "files": [self.plan_model().spec] + [rel for rel, _ in self.yaml_copies()],
+            "files": self.archive_owns(),
             "decisions": [],
             "interfaces": [],
             "remaining": [],
@@ -5265,14 +5754,10 @@ class Driver:
     def scenario_nodes(self):
         """{scenario id: its test nodes}: the tickets' `covers`, then the scenario's own placed oracle paths."""
         covers = self.ticket_covers()
-        placed: dict[str, list[str]] = {}
-        for scenario in self.plan_model().scenarios:
-            evidence_ = scenario.evidence
-            if evidence_ and evidence_.promote and evidence_.place:
-                placed[scenario.id] = [
-                    evidence_.place.rstrip("/") + "/" + name.removesuffix(".oracle")
-                    for name in evidence_.oracle
-                ]
+        placed = {
+            scenario.id: [rel for rel, _ in self.scenario_targets(scenario)]
+            for scenario in self.plan_model().scenarios
+        }
         return {
             s.id: list(dict.fromkeys(covers.get(s.id, []) + placed.get(s.id, [])))
             for s in self.plan_model().scenarios
@@ -5346,26 +5831,36 @@ class Driver:
             ["git", "-C", str(path), "checkout", "-q", "-B", branch, self.args.base],
             timeout=TREE_TIMEOUT,
         )
-        self.place_oracles(path)
-        for rel, source in self.yaml_copies():
-            if source.is_dir():
-                for child in sorted(p for p in source.rglob("*") if p.is_file()):
-                    target = path / rel.rstrip("/") / child.relative_to(source)
+        # A plan in its own folder leaves the tree: its acceptance files go to their domain, a discarded plan's go
+        # nowhere. Deleted first, so a destination inside the folder is written after it.
+        self.remove_plan_folder(path)
+        message = "docs(%s): delete the discarded plan folder" % self.slug
+        if self.archive_mode() == "promote":
+            message = "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec)
+            self.place_oracles(path)
+            for rel, source in self.yaml_copies():
+                if source.is_dir():
+                    for child in sorted(p for p in source.rglob("*") if p.is_file()):
+                        target = path / rel.rstrip("/") / child.relative_to(source)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(child.read_bytes())
+                else:
+                    target = path / rel
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(child.read_bytes())
-            else:
-                target = path / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(source.read_bytes())
-        spec = path / self.plan_model().spec
-        try:
-            before = spec.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            before = ""
-        section = self.spec_section(before, self.held_requirements(spec))
-        body = (before if before.endswith("\n") else before + "\n") + "\n" if before.strip() else ""
-        spec.parent.mkdir(parents=True, exist_ok=True)
-        spec.write_text(body + section, encoding="utf-8")
+                    target.write_bytes(source.read_bytes())
+            spec = path / self.plan_model().spec
+            try:
+                before = spec.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                before = ""
+            section = self.spec_section(before, self.held_requirements(spec))
+            body = (
+                (before if before.endswith("\n") else before + "\n") + "\n"
+                if before.strip()
+                else ""
+            )
+            spec.parent.mkdir(parents=True, exist_ok=True)
+            spec.write_text(body + section, encoding="utf-8")
         run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
         identity = (
             []
@@ -5388,7 +5883,7 @@ class Driver:
                 "commit",
                 "-q",
                 "-m",
-                "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec),
+                message,
             ],
             timeout=TREE_TIMEOUT,
         )
@@ -5414,11 +5909,11 @@ class Driver:
                 "--head",
                 "feat/" + packet["worker"],
                 "--title",
-                "docs(%s): archive the plan" % self.slug,
+                "docs(%s): archive the plan" % self.slug
+                if self.archive_mode() == "promote"
+                else "docs(%s): delete the discarded plan folder" % self.slug,
                 "--body",
-                "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-                "with its Coverage table, written by the driver."
-                % (self.plan_rel(), self.plan_model().spec),
+                self.archive_body(),
             ],
             timeout=120,
             cwd=packet["checkout"],
@@ -5429,6 +5924,25 @@ class Driver:
                 "gh pr create failed: %s" % ((err or out).strip()[:300] or "no url printed")
             )
         return found[-1]
+
+    def archive_body(self):
+        """The archive pull request's description, by what the archive does with the plan."""
+        spec = self.plan_model().spec
+        if self.archive_mode() == "discard":
+            return "Deletes the discarded plan folder `%s`; it changes nothing else." % (
+                self.plan_folder_rel()
+            )
+        if yaml_plan.is_folder_plan(self.plan_path):
+            where = self.plan_folder_rel()
+            return (
+                "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
+                "is deleted and the spec section with its Coverage table is written by the driver."
+                % ("folder `%s`" % where if where else "`%s`" % self.plan_path.parent, spec)
+            )
+        return (
+            "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
+            "with its Coverage table, written by the driver." % (self.plan_rel(), spec)
+        )
 
     def undraft_archive(self, task_id):
         """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a failing one."""
@@ -5446,18 +5960,31 @@ class Driver:
         self.mark(task_id, status="ACTIVE", gate=None, ci_state=None, ci_rows=None, ci_head=None)
         self.build_archive(task_id)
 
+    def scenario_targets(self, scenario):
+        """(repo-relative place, the file's name in the approval snapshot) for each file a scenario's evidence
+        promotes. A legacy oracle keeps its source name without the `.oracle` suffix: only the promoted name is
+        collected as a test. A folder plan's acceptance file is placed in its domain under its own name."""
+        evidence = scenario.evidence
+        if not evidence:
+            return []
+        if getattr(
+            evidence, "acceptance", None
+        ):  # only a folder plan's evidence has acceptance files
+            placed = yaml_plan.placed_files(self.plan_path, self.plan_model(), evidence, self.repo)
+            return [(rel, "acceptance/" + name) for rel, name in zip(placed, evidence.acceptance)]
+        if evidence.promote and evidence.place:
+            return [
+                (evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle"), name)
+                for name in evidence.oracle
+            ]
+        return []
+
     def oracle_targets(self, model):
-        """(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without
-        the `.oracle` suffix: only the promoted name is collected as a test. One derivation for the placing and the
-        brief, so they cannot disagree."""
-        targets = []
-        for scenario in model.scenarios:
-            evidence = scenario.evidence
-            if evidence and evidence.promote and evidence.place:
-                for name in evidence.oracle:
-                    placed = evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle")
-                    targets.append((placed, name))
-        return targets
+        """(repo-relative place, snapshot file name) for each promoted file. One derivation for the placing, the
+        comparison and the brief, so they cannot disagree."""
+        return [
+            target for scenario in model.scenarios for target in self.scenario_targets(scenario)
+        ]
 
     def place_oracles(self, checkout):
         """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
@@ -5475,6 +6002,8 @@ class Driver:
     def yaml_copies(self):
         """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
         The narrative is copied only when the plan has one."""
+        if yaml_plan.is_folder_plan(self.plan_path):
+            return []  # a plan folder is deleted, never copied: its acceptance files are placed instead
         oracle = yaml_plan.oracle_dir(self.plan_path)
         copies = [(self.plan_rel(), self.plan_path)]
         if self.narrative_path().exists():
@@ -5484,8 +6013,10 @@ class Driver:
 
     def yaml_places(self, model):
         """(repo-relative destination, approved source) for each promote oracle file, at its place."""
-        oracle = yaml_plan.oracle_dir(self.plan_path)
-        return [(rel, oracle / name) for rel, name in self.oracle_targets(model)]
+        return [
+            (rel, yaml_plan.file_path(self.plan_path, name))
+            for rel, name in self.oracle_targets(model)
+        ]
 
     def beside_plan(self, path):
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
@@ -5567,6 +6098,8 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, IntentUnsettled):
+                self.release_intents(error.operations, "no attempt is waiting on it")
             narrate.say("fail", "gaps", "gaps reviewer not started: %s" % error)
             gaps = {"name": name, "path": str(path), "ended": True, "error": str(error)}
         else:
@@ -5703,6 +6236,9 @@ class Driver:
         the ticket stays out of this run's rounds until the Lead sets its Status to exactly TO-DO (a restarted drive
         reads a cell starting with TO-DO as TO-DO and tries it once more)."""
         task_id = ticket["#"].lower()
+        if isinstance(error, IntentUnsettled):
+            # The Lead's way out is the ticket's Status: setting it back to TO-DO is the decision to send again.
+            self.release_intents(error.operations, "the Lead is told through the ticket's wake")
         self.failed.add(task_id)
         self.errors.append("%s: %s" % (ticket["#"], error))
         narrate.say("fail", "build", "%s: %s" % (what, error), task=ticket["#"])
@@ -6067,6 +6603,7 @@ class Driver:
                 "model": model,
                 "effort": effort,
             },
+            attempt=task_id,
         )
         with self.book() as data:
             bind(data, task_id, str(runtime_id))
@@ -7241,7 +7778,12 @@ def main(argv=None):
         default=40000,
         help="Tokens an implementer or reviewer must have left before a resume; below it the driver swaps in a fresh agent",
     )
-    sub.add_argument("--cli", choices=("claude", "codex", "pi"), default="claude")
+    sub.add_argument(
+        "--cli",
+        choices=("claude", "codex", "pi"),
+        help="The worker backend (default claude). A run that resumes keeps the backend its ledger recorded; "
+        "an explicit --cli that differs from it stops the run",
+    )
     sub.add_argument(
         "--brain-cli",
         choices=("claude", "codex", "pi"),
@@ -7265,6 +7807,12 @@ def main(argv=None):
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument(
         "--gate", action="append", default=[], help="CI command a worker must pass (repeatable)"
+    )
+    sub.add_argument(
+        "--skip-full",
+        action="store_true",
+        help="Verify does not run the repo's whole suite (`checks.full.run`); CI runs it. "
+        "A repo can say so for every run with `checks.full.verify: false`",
     )
     sub.add_argument(
         "--state-dir",

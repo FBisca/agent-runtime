@@ -51,6 +51,7 @@ function read(result, shaped) {
 
 export const readPlans = (result) => read(result, (v) => Array.isArray(v.plans));
 export const readPlan = (result) => read(result, (v) => Array.isArray(v.tickets));
+export const readTotals = (result) => read(result, (v) => Boolean(v.cards) && typeof v.cards === "object");
 
 const TITLE = {
   no_plans: "No plans",
@@ -135,6 +136,9 @@ export function planRows(plans) {
   }));
 }
 
+/** The older line's words: collapsed until the person opens it. */
+export const olderLabel = (count, open) => `${count} older ${open ? "▾" : "▸"}`;
+
 // What each `needs_me` kind says, and the way to act on it. Only kinds, plans and tickets come from the answer; the
 // words are the mod's. The ways name commands the person runs or the place to look, never text from a run.
 const NEEDS = {
@@ -160,25 +164,16 @@ const needsItem = (item, rows) => {
   };
 };
 
-/** The list the mod opens on: Needs me, then the active plans, then one `older` line that is collapsed until opened.
- *  `olderLine(open)` is null when no plan is older, else its label and the rows it lists (none while collapsed). An
- *  answer that carries no `group` has nothing to fold away, so every plan is listed active. */
+/** Needs me, the active plans and the older ones as rows, from a plans answer. `olderLine(open)` is null when no plan
+ *  is older, else its label and the rows it lists (none while collapsed). An answer that carries no `group` has nothing
+ *  to fold away, so every plan is listed active. */
 export function planSections(answer) {
   const rows = planRows(answer?.plans);
   const older = rows.filter((r) => r.group === "older");
   const active = rows.filter((r) => r.group !== "older");
   const needsMe = (Array.isArray(answer?.needs_me) ? answer.needs_me : []).map((i) => needsItem(i, rows));
-  const olderLine = (open) => (older.length
-    ? { label: `${older.length} older ${open ? "▾" : "▸"}`, rows: open ? older : [] }
-    : null);
+  const olderLine = (open) => (older.length ? { label: olderLabel(older.length, open), rows: open ? older : [] } : null);
   return { needsMe, active, older, olderLine };
-}
-
-/** The plan shown: the one the person picked if it is still listed, else the first that loads. */
-export function pickPlan(rows, selected) {
-  if (selected && rows.some((r) => r.path === selected && r.selectable)) return selected;
-  const open = rows.filter((r) => r.selectable);
-  return (open.find((r) => !r.error) ?? open[0])?.path ?? null;
 }
 
 // ---- tickets ------------------------------------------------------------------------------------------------
@@ -265,15 +260,16 @@ export function attemptTerminal(address, live) {
   return { state: "not live", word: "not live", why: "no live terminal has this address", open: null };
 }
 
-/** An agent of a ticket as its row names it: the ledger's name and role, and where its terminal stands. The terminal
- *  is joined by the address the ledger recorded and nothing else, never by a name (a terminal with the same name
- *  elsewhere is another agent). `status` is Herdr's, only for a live one; Open only for a live one. */
-export function ticketWorkers(ticket, live = null) {
-  return (Array.isArray(ticket.agents) ? ticket.agents : []).map((a) => {
+/** An agent as a row names it: the ledger's name and role, and where its terminal stands. The terminal is joined by the
+ *  address the ledger recorded and nothing else, never by a name (a terminal with the same name elsewhere is another
+ *  agent). `status` is Herdr's, only for a live one; Open only for a live one. */
+function workersOf(agents, live) {
+  return (Array.isArray(agents) ? agents : []).map((a) => {
     const terminal = attemptTerminal(a.address ?? null, live);
     return {
       name: a.name,
       role: a.role ?? null,
+      ticket: a.ticket ?? null,
       address: a.address ?? null,
       state: terminal.state,
       word: terminal.word,
@@ -282,6 +278,9 @@ export function ticketWorkers(ticket, live = null) {
     };
   });
 }
+
+/** The agents of one ticket, from the ticket's own `agents`. */
+export const ticketWorkers = (ticket, live = null) => workersOf(ticket.agents, live);
 
 // ---- metrics: measured by the orchestrator, only worded here; a value it did not measure reads unknown, never 0 ----
 
@@ -413,6 +412,145 @@ export function planHeader(plan, layout = "wide") {
 }
 
 export const GOAL_LINES_NARROW = 3;
+
+// ---- home: the week's cards, Needs me, the active plans with their workers, the PRs to merge, the older line -----------
+
+// The cards, in the order they are drawn. The orchestrator measured every value; an unmeasured one reads unknown, never 0.
+const CARDS = [
+  ["merged", "Merged"],
+  ["first_pass", "First pass"],
+  ["escalations", "Escalations"],
+  ["tokens", "Tokens"],
+  ["ticket_time", "Ticket time"],
+];
+
+/** A token count in words: `950`, `12.3k`, `1.2M`. */
+export function tokenCount(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return String(n);
+}
+
+function tokensCard(tokens) {
+  const measured = num(tokens?.measured), tickets = num(tokens?.tickets);
+  const total = num(tokens?.input) === null || num(tokens?.output) === null ? null : tokens.input + tokens.output;
+  // Coverage is part of the number: a total over some of the tickets must not read as the whole week's.
+  const note = measured === null || tickets === null || tickets === 0 ? null : `${measured} of ${tickets} tickets measured`;
+  return { value: total === null || !measured ? UNKNOWN : tokenCount(total), note };
+}
+
+/** The five cards from a totals answer, or null when there is none (no card is drawn from a guess). */
+export function cardsOf(totals) {
+  const cards = totals?.cards;
+  if (!cards || typeof cards !== "object") return null;
+  const rate = num(cards.first_pass_rate);
+  const values = {
+    merged: { value: count(cards.merged), note: null },
+    first_pass: { value: rate === null ? UNKNOWN : `${Math.round(rate * 100)}%`, note: null },
+    escalations: { value: count(cards.escalations), note: null },
+    tokens: tokensCard(cards.tokens),
+    ticket_time: { value: duration(cards.median_ticket_seconds), note: null },
+  };
+  return CARDS.map(([id, label]) => ({ id, label, ...values[id] }));
+}
+
+/** Needs me as one row per plan, in the order each plan first appears, each holding that plan's items in order. */
+function needsRows(items) {
+  const rows = [];
+  for (const item of items) {
+    let row = rows.find((r) => r.plan === item.plan);
+    if (!row) rows.push((row = { plan: item.plan, path: item.path, items: [] }));
+    row.items.push({ ticket: item.ticket, kind: item.kind, title: item.title, wayOut: item.wayOut });
+  }
+  return rows;
+}
+
+/** What the mod opens on. `plans` and `totals` are the commands' answers (`totals` null when there is none: no cards),
+ *  `live` is `liveTerminals(...)`. Workers are joined to Herdr's terminals only at their exact address. */
+export function homeView(plans, totals, live = null) {
+  const sections = planSections(plans);
+  const byPlan = new Map((Array.isArray(plans?.plans) ? plans.plans : []).map((p) => [p.slug, p]));
+  const awaitingMerge = [];
+  for (const row of planRows(plans?.plans)) {
+    for (const m of byPlan.get(row.slug)?.awaiting_merge ?? []) {
+      awaitingMerge.push({ plan: row.slug, ticket: m.ticket, pr: m.pr ?? null });
+    }
+  }
+  return {
+    cards: cardsOf(totals),
+    needs: needsRows(sections.needsMe),
+    active: sections.active.map((row) => ({ ...row, workers: workersOf(byPlan.get(row.slug)?.agents, live) })),
+    awaitingMerge,
+    older: { count: sections.older.length, rows: sections.older },
+  };
+}
+
+/** How many cards fit a row: two when narrow, so a card keeps room for its number. */
+export const cardsPerRow = (layout) => (layout === "narrow" ? 2 : 5);
+
+const list = (v) => (Array.isArray(v) ? v : []);
+const entries = (v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.entries(v) : []);
+const at = (r) => `${r.plan} ${r.ticket}`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const percent = (r) => (num(r) === null ? UNKNOWN : `${Math.round(r * 100)}%`);
+const tokenSum = (r) => (num(r?.input) === null && num(r?.output) === null ? null : (r.input ?? 0) + (r.output ?? 0));
+const tokenText = (r) => { const n = tokenSum(r); return n === null ? UNKNOWN : tokenCount(n); };
+const countBars = (pairs) => pairs.map(([label, value]) => ({ label, value, text: String(value) }));
+
+// One builder per card: `bars` are the aggregates, `lists` the tickets behind them. Each reads only its own section of
+// the totals answer, so a missing section draws nothing rather than a guess.
+const DETAIL = {
+  ticket_time: (totals) => ({
+    bars: entries(totals.time?.steps).map(([label, s]) => ({
+      label, value: num(s?.median), text: num(s?.median) === null ? UNKNOWN : `${duration(s.median)} · max ${duration(s.max)}`,
+    })),
+    lists: [{ title: "Slowest tickets", rows: list(totals.time?.slowest).map((r) => ({ label: at(r), text: duration(r.seconds) })) }],
+  }),
+  merged: (totals) => ({
+    bars: countBars(list(totals.merged?.by_day).map((d) => [d.day, d.count])),
+    lists: [{ title: "Merged", rows: list(totals.merged?.tickets).map((r) => ({ label: at(r), text: r.pr ?? "" })) }],
+  }),
+  first_pass: (totals) => ({
+    bars: entries(totals.first_pass?.by_plan).map(([label, v]) => ({ label, value: num(v), text: percent(v) })),
+    lists: [{
+      title: "Fixed tickets",
+      rows: list(totals.first_pass?.fixed).map((r) => ({ label: at(r), text: `${plural(r.fix_rounds, "fix round")} · ${plural(r.findings, "finding")}` })),
+    }],
+  }),
+  escalations: (totals) => ({
+    bars: countBars([...entries(totals.escalations?.by_cause), ...entries(totals.escalations?.by_plan)]),
+    lists: [{ title: "Latest", rows: list(totals.escalations?.latest).map((r) => ({ label: at(r), text: `${r.cause} · ${r.at}` })) }],
+  }),
+  tokens: (totals) => ({
+    bars: [...entries(totals.tokens?.by_plan), ...entries(totals.tokens?.by_model)]
+      .map(([label, v]) => ({ label, value: tokenSum(v), text: tokenText(v) })),
+    lists: [{ title: "Top tickets", rows: list(totals.tokens?.top).map((r) => ({ label: at(r), text: `${tokenText(r)} · ${r.model ?? UNKNOWN}` })) }],
+  }),
+};
+
+/** A card's dashboard detail from the totals answer: `bars` only when wide (a narrow panel has no room for them),
+ *  `lists` always; a list with no rows is left out. */
+export function dashboardView(card, totals, layout) {
+  const detail = totals && DETAIL[card]?.(totals);
+  if (!detail) return { bars: [], lists: [] };
+  const bars = layout === "narrow" ? [] : detail.bars;
+  return { bars, lists: detail.lists.filter((l) => l.rows.length) };
+}
+
+// ---- navigation ---------------------------------------------------------------------------------------------
+
+/** Where the mod opens: on home. There is no plan picker. */
+export const initialNav = () => ({ screen: "home" });
+
+/** A plan or a card opens over home; back from either returns to it. An action the mod does not know changes nothing. */
+export function navigate(nav, action) {
+  switch (action?.type) {
+    case "plan": return { screen: "plan", path: action.path };
+    case "card": return { screen: "dashboard", card: action.id };
+    case "back": return initialNav();
+    default: return nav;
+  }
+}
 
 // ---- layout -------------------------------------------------------------------------------------------------
 
