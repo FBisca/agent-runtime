@@ -225,7 +225,7 @@ test("S13 a command that fails to start or times out is a project error with no 
   assert.equal(h.calls.length, 1, "no plan is fetched without a list");
 });
 
-test("S17 the plans whose answers are held are handed over, so a Runtime section knows every attempt it can see", async () => {
+test("S15 the plans whose answers are held are handed over to the view", async () => {
   const h = harness();
   const data = createData({ exec: h.exec });
   data.setScope(SCOPE);
