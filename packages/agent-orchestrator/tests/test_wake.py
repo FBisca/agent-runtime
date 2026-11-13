@@ -472,7 +472,9 @@ class QueueTests(WakeFixture, unittest.TestCase):
     def test_S4_other_units_keep_dispatching_and_gating_while_one_request_is_open(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S4"""
         third = self.worker_done("t3", name="demo-t3")
-        third["write"] = [[str(self.run_dir / "t3" / "report.json"), self.report("t3")]]
+        # t3 maps its scenario to a node that does not exist, so its gate fails
+        gone = self.report("t3", covers={"S3": ["src/c/test_gone.py::test_x"]})
+        third["write"] = [[str(self.run_dir / "t3" / "report.json"), gone]]
         self.waits([self.blocked(), third, self.decide_step("t1", "skip")])
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t3"])

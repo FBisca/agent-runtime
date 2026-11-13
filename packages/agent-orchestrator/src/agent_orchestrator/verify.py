@@ -7,7 +7,7 @@ integrity  no ticket touches the plan, an oracle file or an oracle place (where 
            plan in its own folder, nothing in that folder and no acceptance destination
 covers     every scenario the ticket satisfies maps, in the report's `covers`, to test nodes that exist and
            changed in the ticket; that they pass is the CI green check on the same head. A scenario whose
-           evidence brings its own test files needs no node: the evidence gate runs those files
+           evidence brings its own test files, or is a person's check, needs no node
 
 Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items.
 
@@ -193,8 +193,11 @@ def covers(model, ticket, report, repo, base, files, added):
         ]
     mapped = report.get("covers") or {}
     # A scenario whose evidence brings its own test files (acceptance files, oracles) is proven by those files,
-    # which the ticket's evidence gate runs and the archive counts; the ticket never changes them.
-    proven = {s.id for s in model.scenarios if s.evidence and s.evidence.has_tests}
+    # which the ticket's evidence gate runs and the archive counts; the ticket never changes them. A scenario whose
+    # evidence is `human` is proven by a person's check, which no test node stands for (the archive asks none).
+    proven = {
+        s.id for s in model.scenarios if s.evidence and (s.evidence.has_tests or s.evidence.human)
+    }
     findings = []
     for scenario in ticket.satisfies:
         nodes = mapped.get(scenario) or []

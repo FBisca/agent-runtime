@@ -122,9 +122,10 @@ class GateFixture(RunFixture):
             step["write"].append([str(self.worktree / name_), text])
         return step
 
-    def use_yaml_plan(self, paths=("src/a/",), oracle=False, lint=True):
+    def use_yaml_plan(self, paths=("src/a/",), oracle=False, lint=True, unproven=False):
         """Replace the plan with an approved one-ticket plan (and, with `oracle`, an oracle placed
-        under src/a/). With `lint=False` the plan is approved as one approved before the lint existed."""
+        under src/a/). With `lint=False` the plan is approved as one approved before the lint existed. With
+        `unproven` the ticket also satisfies S2, which has no evidence, so only a covers node can prove it."""
         evidence = {"human": "confirm"}
         if oracle:
             directory = self.plan.parent / "demo.oracle"
@@ -142,12 +143,13 @@ class GateFixture(RunFixture):
             "goal": "deliver",
             "spec": "docs/specs/demo.md",
             "outcome": ["S1"],
-            "scenarios": [dict(id="S1", when="a", then="b", evidence=evidence)],
+            "scenarios": [dict(id="S1", when="a", then="b", evidence=evidence)]
+            + ([dict(id="S2", when="c", then="d")] if unproven else []),
             "tickets": [
                 dict(
                     id="T1",
                     delivers="first",
-                    satisfies=["S1"],
+                    satisfies=["S1", "S2"] if unproven else ["S1"],
                     paths=list(paths),
                     size="small",
                     difficulty="simple",
@@ -828,7 +830,7 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.assertIn("test_nope", task_md)
 
     def test_S4_a_covers_failure_on_paths_that_hold_no_test_says_so_and_leads_with_amend(self):
-        self.use_yaml_plan(paths=("src/a/x.py",), lint=False)
+        self.use_yaml_plan(paths=("src/a/x.py",), lint=False, unproven=True)
         self.extra_files = {"src/a/x.py": "x = 1\n"}
         self.waits(
             [
@@ -847,6 +849,7 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.assertEqual(first["action"] if isinstance(first, dict) else first, "amend")
 
     def test_S4_a_covers_failure_on_paths_that_hold_a_test_keeps_the_plain_reason_and_menu(self):
+        self.use_yaml_plan(unproven=True)
         self.waits(
             [
                 self.worker_done(tests=True, report=self.report("t1", covers={})),
@@ -862,14 +865,13 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         first = request["menu"][0]
         self.assertEqual(first["action"] if isinstance(first, dict) else first, "retry")
 
-    def test_S9_a_satisfied_scenario_left_unmapped_is_a_fix_round(self):
+    def test_S9_a_satisfied_scenario_a_person_checks_goes_to_review_with_no_node(self):
+        # The fixture's scenarios carry `human` evidence; a scenario no test file or person proves is refused
+        # unmapped (test_verify.CoversTests), and a covers finding is a fix round (the node tests here).
         report = self.report("t1", covers={})
-        self.waits([self.worker_done(tests=True, report=report)])
+        self.waits([self.worker_done(tests=True, report=report), self.reviewer_done()])
         self.run_driver()
-        self.assertEqual(
-            self.found(),
-            [("covers", "S1: no test node in covers; map the scenario to the tests that prove it")],
-        )
+        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
 
     def test_S9_a_report_that_is_not_contract_3_is_refused_by_name(self):
         report = json.loads(self.report("t1", contract=2))

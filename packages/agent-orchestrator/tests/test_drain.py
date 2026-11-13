@@ -240,7 +240,13 @@ class DrainTests(DrainFixture, unittest.TestCase):
         """T1 now satisfies S2 too: the report that covers only S1 fails the gate on the new contract."""
         self.set_plan(("T1",))
         self.approved = self.plan.read_text(encoding="utf-8")
-        first = self.edit(lambda data: data["tickets"][0].update(satisfies=["S1", "S2"]))
+
+        def satisfy_s2(data):
+            # S2 drops the fixture's `human` evidence, so a test node must prove it
+            data["tickets"][0].update(satisfies=["S1", "S2"])
+            data["scenarios"][1].pop("evidence")
+
+        first = self.edit(satisfy_s2)
         resumed = report_wait("demo-t1", "complete", id=resume_id("demo-t1"))
         resumed["write"] = self.worker_done(tests=True)["write"]
         self.waits(
