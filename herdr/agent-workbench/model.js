@@ -214,16 +214,20 @@ export function ticketRow(ticket, tickets, live = null) {
   };
 }
 
-/** The tickets grouped by layer, in the answer's order (the orchestrator orders them by layer, then plan order). */
-export function ticketLayers(tickets, live = null) {
+// The tickets grouped by layer in the answer's order (the orchestrator orders them by layer, then plan order), each made
+// into what the caller draws.
+function byLayer(tickets, make) {
   const layers = [];
   for (const ticket of tickets) {
     let group = layers.at(-1);
     if (!group || group.layer !== ticket.layer) layers.push((group = { layer: ticket.layer, tickets: [] }));
-    group.tickets.push(ticketRow(ticket, tickets, live));
+    group.tickets.push(make(ticket));
   }
   return layers;
 }
+
+/** The tickets grouped by layer, in the answer's order. */
+export const ticketLayers = (tickets, live = null) => byLayer(tickets, (ticket) => ticketRow(ticket, tickets, live));
 
 /** The ticket the inspector opens on: the one the person picked if it is still there, else the one in progress, else the
  *  first not yet done, else the first. */
@@ -346,22 +350,79 @@ function measuresOf(m) {
   ].map(([label, text]) => ({ label, text }));
 }
 
-/** The timeline's lanes: one per ticket in the plan's order, a segment per phase placed as fractions of the run's span
- *  (an open segment runs to the span's end). Null unless wide and the plan has metrics with a span. */
-export function timelineOf(metrics, tickets, layout) {
-  if (layout !== "wide" || !metrics) return null;
-  const start = Date.parse(metrics.span?.start), end = Date.parse(metrics.span?.end);
+// ---- the plan's timeline and its ticket cards -------------------------------------------------------------------------
+
+/** One ticket's phases as the split of its time: each measured phase in its palette slot. An unmeasured phase is no
+ *  segment and a ticket with none measured has no split (null), so nothing is drawn from a guess. */
+function phasesOf(phases) {
+  const parts = STEP_ORDER.filter((step) => num(phases?.[step]) !== null)
+    .map((step) => ({ step, slot: stepLook(step).slot, seconds: phases[step], text: duration(phases[step]) }));
+  return parts.length ? parts : null;
+}
+
+const CLOCK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const clock = (ms) => {
+  const d = new Date(ms);
+  const two = (v) => String(v).padStart(2, "0");
+  return `${CLOCK_DAYS[d.getUTCDay()]} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+};
+
+// The lanes on the plan's clock: one per ticket in the plan's order, a segment per phase as fractions of the span (an open
+// segment runs to the span's end) and where the ticket merged. Null without a span.
+function lanesOf(metrics, tickets) {
+  const start = Date.parse(metrics?.span?.start), end = Date.parse(metrics?.span?.end);
   if (!(end > start)) return null;
   const span = end - start;
   const at = (iso) => Math.min(Math.max((Date.parse(iso) - start) / span, 0), 1);
   return {
-    lanes: tickets.map((ticket) => ({
-      id: ticket.id,
-      segments: (metrics.timeline?.[ticket.id] ?? []).map((seg) => {
-        const left = at(seg.start);
-        return { phase: seg.phase, left, width: (seg.end ? at(seg.end) : 1) - left };
+    start, end,
+    lanes: tickets.map((ticket) => {
+      const merged = metrics.tickets?.[ticket.id]?.merged_at;
+      return {
+        id: ticket.id,
+        look: stateLook(ticket.state),
+        merged: Number.isFinite(Date.parse(merged ?? "")) ? at(merged) : null,
+        segments: (metrics.timeline?.[ticket.id] ?? []).map((seg) => {
+          const left = at(seg.start);
+          const right = seg.end ? at(seg.end) : 1;
+          return { step: seg.phase, slot: stepLook(seg.phase).slot, left, width: right - left,
+            seconds: ((seg.end ? Date.parse(seg.end) : end) - Date.parse(seg.start)) / 1000 };
+        }),
+      };
+    }),
+  };
+}
+
+/** What stands under the cards: the lanes on the plan's own clock with each merge marked when wide, and each ticket's phase
+ *  split when narrow. Null for a plan with no metrics, and wide for one with no span. */
+export function planTimeline(metrics, tickets, layout) {
+  if (!metrics) return null;
+  if (layout === "narrow") {
+    return {
+      kind: "split",
+      lanes: tickets.map((ticket) => {
+        const phases = phasesOf(metrics.tickets?.[ticket.id]?.phases);
+        const total = phases ? phases.reduce((n, p) => n + p.seconds, 0) : 0;
+        return { id: ticket.id, look: stateLook(ticket.state), phases: phases && phases.map((p) => ({ ...p, share: total > 0 ? p.seconds / total : 0 })) };
       }),
-    })),
+    };
+  }
+  const built = lanesOf(metrics, tickets);
+  if (!built) return null;
+  const span = (built.end - built.start) / 1000;
+  return {
+    kind: "timeline",
+    span: { seconds: span, text: duration(span) },
+    ticks: [0, 0.25, 0.5, 0.75, 1].map((left) => ({ left, label: clock(built.start + left * (built.end - built.start)) })),
+    lanes: built.lanes,
+  };
+}
+
+/** The wide timeline as the metrics test reads it: lanes of `{phase, left, width}`; null unless wide, with a span. */
+export function timelineOf(metrics, tickets, layout) {
+  const built = layout === "wide" && metrics ? lanesOf(metrics, tickets) : null;
+  return built && {
+    lanes: built.lanes.map((lane) => ({ id: lane.id, segments: lane.segments.map((s) => ({ phase: s.step, left: s.left, width: s.width })) })),
   };
 }
 
@@ -422,6 +483,119 @@ export function planHeader(plan, layout = "wide") {
 }
 
 export const GOAL_LINES_NARROW = 3;
+
+// ---- an open plan's five cards and its ticket cards: from its own answer alone, never from the week's totals -------------
+
+const PLAN_CARDS = [
+  ["progress", "Progress"],
+  ["first_pass", "First pass"],
+  ["wall", "Wall time"],
+  ["escalations", "Escalations"],
+  ["tokens", "Tokens"],
+];
+
+const topTwo = (pairs) => pairs.slice(0, 2).map(([key, n]) => `${key} ${n}`).join(" · ");
+
+/** A plan's five cards: progress (done of total), first pass, wall time, escalations and tokens with the coverage the
+ *  number stands on. What its metrics do not carry reads unknown, never 0, and a card with no data has no picture. */
+export function planCards(plan) {
+  const m = plan?.metrics ?? null;
+  const measured = Object.values(m?.tickets ?? {});
+  const progress = progressOf(plan?.counts);
+  const rest = Object.entries(plan?.counts?.by_state ?? {}).filter(([state, n]) => stateLook(state).key !== "done" && n > 0);
+
+  const rate = num(m?.first_pass_rate);
+  const rounds = measured.filter((x) => num(x.fix_rounds) !== null);
+  const findings = measured.filter((x) => num(x.findings) !== null);
+
+  const steps = STEP_ORDER.map((step) => [step, sum(measured.map((x) => num(x.phases?.[step]) ?? 0))]).filter(([, n]) => n > 0);
+
+  const causes = {};
+  const escalated = measured.filter((x) => x.escalations && typeof x.escalations === "object");
+  for (const x of escalated) for (const [cause, n] of Object.entries(x.escalations)) causes[cause] = (causes[cause] ?? 0) + n;
+  const ranked = Object.entries(causes).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+
+  const tickets = num(plan?.counts?.total) ?? (Array.isArray(plan?.tickets) ? plan.tickets.length : null);
+  const withTokens = measured.filter((x) => tokenSum(x.tokens) !== null);
+
+  const values = {
+    progress: {
+      value: progress ? `${progress.done}/${progress.total}` : UNKNOWN,
+      note: progress ? (rest.map(([state, n]) => `${n} ${state.toLowerCase()}`).join(" · ") || "all done") : null,
+      picture: progress && progress.total > 0 ? { kind: "ring", value: progress.done / progress.total, tone: "done" } : null,
+    },
+    first_pass: {
+      value: rate === null ? UNKNOWN : `${Math.round(rate * 100)}%`,
+      note: rounds.length ? `${plural(sum(rounds.map((x) => x.fix_rounds)), "fix round")} · ${plural(sum(findings.map((x) => x.findings)), "finding")}` : null,
+      picture: rate === null ? null : { kind: "ring", value: rate, tone: null },
+    },
+    wall: {
+      value: duration(m?.wall_seconds),
+      note: steps.length ? steps.slice(0, 2).map(([step, n]) => `${step} ${duration(n)}`).join(" · ") : null,
+      picture: steps.length ? { kind: "stack", parts: steps.map(([key, value]) => ({ key, value, slot: stepLook(key).slot })) } : null,
+    },
+    escalations: {
+      value: escalated.length ? String(sum(ranked.map(([, n]) => n))) : UNKNOWN,
+      note: escalated.length ? topTwo(ranked) || "none" : null,
+      picture: rankedParts(ranked),
+    },
+    tokens: {
+      value: withTokens.length ? tokenCount(sum(withTokens.map((x) => tokenSum(x.tokens)))) : UNKNOWN,
+      note: m && tickets ? `${withTokens.length} of ${tickets} tickets measured` : null,
+      picture: m && tickets ? { kind: "coverage", measured: withTokens.length, unmeasured: Math.max(0, tickets - withTokens.length) } : null,
+    },
+  };
+  return PLAN_CARDS.map(([id, label]) => ({ id, label, ...values[id] }));
+}
+
+/** What one ticket's card says of its measures: its fix rounds (or first pass), findings, time, tokens and model. A
+ *  measure the run did not take is not listed, and a ticket with no metrics has none. */
+function measureList(m) {
+  if (!m) return [];
+  const tokens = tokenSum(m.tokens);
+  return [
+    num(m.fix_rounds) === null ? null : m.fix_rounds > 0 ? plural(m.fix_rounds, "round") : "first pass",
+    num(m.findings) > 0 ? plural(m.findings, "finding") : null,
+    num(m.elapsed_seconds) > 0 ? duration(m.elapsed_seconds) : null,
+    tokens === null ? null : `${tokenCount(tokens)} tok`,
+    m.model || null,
+  ].filter(Boolean);
+}
+
+/** One ticket as a card: its row (state, summary, blocked-by chips) plus its measures, its phase split, its live agents and
+ *  the count of the others, and its PR as `#n` (a link only when `prLink` accepts it). `metrics` is the plan's. */
+export function ticketCard(ticket, tickets, metrics, live = null) {
+  const row = ticketRow(ticket, tickets, live);
+  const m = metrics?.tickets?.[ticket.id] ?? null;
+  return {
+    ...row,
+    size: ticket.size ?? null,
+    difficulty: ticket.difficulty ?? null,
+    risk: ticket.risk ?? null,
+    after: row.chips,
+    measures: measureList(m),
+    phases: phasesOf(m?.phases),
+    live: row.workers.filter((w) => w.state === "live"),
+    idle: row.workers.filter((w) => w.state !== "live").length,
+    ...prOf(ticket.pr),
+  };
+}
+
+/** The ticket cards by layer, each layer with how many of its tickets are done. */
+export const cardLayers = (tickets, metrics, live = null) =>
+  byLayer(tickets, (ticket) => ticketCard(ticket, tickets, metrics, live))
+    .map((layer) => ({ ...layer, done: layer.tickets.filter((t) => t.look.key === "done").length }));
+
+/** The inspector's width beside an open plan when wide. */
+export const INSPECTOR_PX = 360;
+
+/** How many cards and ticket cards fit a row of an open plan, from the width the inspector leaves, and whether the
+ *  inspector sits beside them. A narrow panel has one ticket card to a row and the inspector as a drill-in. */
+export function planColumns(layout, width) {
+  if (layout === "narrow") return { cards: 2, tickets: 1, inspector: false };
+  const room = typeof width === "number" ? width - INSPECTOR_PX : Infinity;
+  return { cards: room >= 640 ? 5 : 2, tickets: room >= 640 ? 2 : 1, inspector: true };
+}
 
 // ---- home: the week's cards, Needs me, the active plans with their workers, the PRs to merge, the older line -----------
 

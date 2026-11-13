@@ -236,3 +236,33 @@ export const HOME_PLANS = {
   ],
 };
 export const HOME_TERMINALS = [{ address: "t9a", state: "live", name: "Claude Code", status: "working", program: { agent: "claude" } }];
+
+// An open plan as `workbench plan --json` prints it since its tickets carry their agents and its metrics their phases and merges.
+export const RICH_PLAN = {
+  schema_version: 1, slug: "alpha", state: "RUNNING", goal: "g", path: "/r/docs/plans/alpha/plan.yaml",
+  counts: { total: 3, by_state: { COMPLETE: 1, "IN PROGRESS": 1, "TO-DO": 1 } },
+  tickets: [
+    { id: "T1", state: "COMPLETE", layer: 0, blocked_by: [], delivers: "one", pr: GH(1), size: "small", difficulty: "simple",
+      agents: [{ name: "alpha-t1", role: "worker", address: "t9c" }, { name: "alpha-t1-review", role: "reviewer", address: null }] },
+    { id: "T2", state: "IN PROGRESS", layer: 1, blocked_by: ["T1"], delivers: "two", pr: null, size: "regular", difficulty: "complex",
+      agents: [{ name: "alpha-t2", role: "worker", address: "t9a" }] },
+    { id: "T3", state: "TO-DO", layer: 1, blocked_by: ["T1"], delivers: "three", pr: "https://example.invalid/pull/3", agents: [] },
+  ],
+  metrics: {
+    wall_seconds: 7200, first_pass_rate: 0.5,
+    span: { start: "2026-11-13T08:00:00+00:00", end: "2026-11-13T12:00:00+00:00" },
+    errors: { by_gate: {}, last: null },
+    tickets: {
+      T1: { elapsed_seconds: 3600, merged_at: "2026-11-13T10:00:00+00:00", phases: { work: 1200, review: 600, ci: 60, merge: 1200 },
+        fix_rounds: 1, review_rounds: 2, findings: 4, ci_failures: 0, escalations: { gate: 2, idle: 1 }, model: "sonnet",
+        tokens: { input: 10, output: 52000 } },
+      T2: { elapsed_seconds: 1200, merged_at: null, phases: { work: 1200, review: null, ci: null, merge: null },
+        fix_rounds: 0, review_rounds: 0, findings: 0, ci_failures: 0, escalations: {}, model: null, tokens: null },
+    },
+    timeline: {
+      T1: [{ phase: "work", start: "2026-11-13T08:00:00+00:00", end: "2026-11-13T08:20:00+00:00" },
+        { phase: "merge", start: "2026-11-13T09:40:00+00:00", end: "2026-11-13T10:00:00+00:00" }],
+      T2: [{ phase: "work", start: "2026-11-13T10:00:00+00:00", end: null }],
+    },
+  },
+};

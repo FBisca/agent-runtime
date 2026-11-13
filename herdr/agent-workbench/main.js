@@ -7,15 +7,15 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, homeView, dashboardView, initialNav, navigate, ticketLayers, pickTicket, relatives, inspector, planHeader,
-  timelineOf, notice, liveTerminals, panelToggle, panelsWith, panelExpand, prLink, PANEL_PX,
+  layoutFor, screenFor, planRows, homeView, dashboardView, initialNav, navigate, pickTicket, relatives, inspector, planHeader,
+  planCards, planTimeline, cardLayers, planColumns, INSPECTOR_PX,
+  notice, liveTerminals, panelToggle, panelsWith, panelExpand, prLink, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { homeScreen } from "./views/home.js";
 import { dashboardScreen } from "./views/dashboard.js";
-import { layeredList, compactList } from "./views/tickets.js";
+import { planBody } from "./views/plan.js";
 import { inspectorView } from "./views/inspector.js";
-import { timelineView } from "./views/timeline.js";
 import { noticeView, loadingView } from "./views/notices.js";
 import { toggleView } from "./views/toggle.js";
 
@@ -193,21 +193,23 @@ export default class AgentWorkbench extends View {
     if (plan.status === "error") return show(noticeView(notice(plan.error, { plan: picked.slug }), t));
 
     const tickets = plan.value.tickets;
+    const metrics = plan.value.metrics;
     const selected = pickTicket(tickets, this.ticket);
     const select = (id, cx) => { this.ticket = id; this.drilled = true; cx.notify(); };
-    const layers = ticketLayers(tickets, live);
-    const ctx = { t, selected, kin: relatives(tickets, selected), onSelect: select, onOpen };
-    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live, plan.value.metrics) : null;
+    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live, metrics) : null;
     const screen = screenFor(layout, this.drilled, Boolean(selected));
     if (screen === "inspector") {
       return show(inspectorView(detail, { t, onOpen, onBack: (cx) => { this.drilled = false; cx.notify(); } }));
     }
-    if (screen === "list") return show(compactList(layers, ctx));
-    const timeline = timelineOf(plan.value.metrics, tickets, layout);
-    if (timeline) root.child(timelineView(timeline, t));
+    // Everything the plan draws is its own answer's (D14): the five cards, the timeline and the ticket cards fetch nothing.
+    const columns = planColumns(layout, this.size?.width);
+    const body = planBody({
+      cards: planCards(plan.value), timeline: planTimeline(metrics, tickets, layout), layers: cardLayers(tickets, metrics, live), columns,
+    }, { t, selected, kin: relatives(tickets, selected), onSelect: select, onOpen, onLink: openPr });
+    if (!columns.inspector) return show(body);
     return root.child(h_flex().id("body").flex_1().min_h(0)
-      .child(div().id("layers").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(layeredList(layers, ctx)))
-      .child(div().id("detail").w(360).flex_none().h_full().overflow_y_scrollbar().border_l(1).border_color(t.border)
+      .child(div().id("plan-body").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(body))
+      .child(div().id("detail").w(INSPECTOR_PX).flex_none().h_full().overflow_y_scrollbar().border_l(1).border_color(t.border)
         .when(Boolean(detail), (el) => el.child(inspectorView(detail, { t, onOpen, onBack: null })))));
   }
 }

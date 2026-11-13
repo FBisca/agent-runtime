@@ -15,8 +15,8 @@ const SINGLE = 1;
 export const labelText = (text, t) => div().text_size(10).font_semibold().text_color(t.dim).child(text.toUpperCase());
 
 /** A titled panel: the frame every chart sits in. */
-export const panel = (title, body, t) => v_flex().gap(10).p(14).rounded(10).bg(t.surface).border_1().border_color(t.border)
-  .child(labelText(title, t)).child(body);
+export const panel = (title, body, t, extra = null) => v_flex().gap(10).p(14).rounded(10).bg(t.surface).border_1().border_color(t.border)
+  .child(h_flex().gap(8).items_center().child(labelText(title, t)).when(Boolean(extra), (el) => el.child(extra))).child(body);
 
 // ---- pieces ----------------------------------------------------------------------------------------------------------
 
@@ -44,7 +44,7 @@ const hatched = (el, t) => el.relative().overflow_hidden().border_1().border_col
     PathBuilder.fill().add_polygon([["0%", "0%"], ["100%", "0%"], ["100%", "100%"], ["0%", "100%"]], true).build(),
     Background.pattern_slash(t.dim, 2, 6)).absolute().size_full());
 
-const legend = (items, t) => h_flex().flex_wrap().gap(12).children(items.map(({ name, color, hatch }) => h_flex().gap(5).items_center()
+export const legend = (items, t) => h_flex().flex_wrap().gap(12).children(items.map(({ name, color, hatch }) => h_flex().gap(5).items_center()
   .text_size(11)
   .child(div().w(10).h(10).rounded(3).map((el) => (hatch ? hatched(el, t) : el.bg(color))))
   .child(div().text_color(t.muted).child(name))));
@@ -79,8 +79,9 @@ export function sparkline(values, t, h) {
     .children(lone.map(([x, y]) => div().absolute().left(x).top(y).ml(-3).mt(-3).w(6).h(6).rounded_full().bg(color)));
 }
 
-/** A ring: the share `frac` of a full turn, over a track. Arcs in percentages of a square box. */
-export function ring(frac, t, size, center, stroke = 10) {
+/** A ring: the share `frac` of a full turn, over a track, in `color` (the data palette's single-series slot unless the
+ *  caller, a view of states, gives its own). Arcs in percentages of a square box. */
+export function ring(frac, t, size, center, stroke = 10, color = dataColor(SINGLE, t)) {
   const R = 42;
   const at = (a) => [`${50 + R * Math.sin(a)}%`, `${50 - R * Math.cos(a)}%`];
   const track = PathBuilder.stroke(stroke).move_to(...at(0)).arc_to(`${R}%`, `${R}%`, 0, false, true, ...at(Math.PI))
@@ -89,13 +90,13 @@ export function ring(frac, t, size, center, stroke = 10) {
   const value = PathBuilder.stroke(stroke).move_to(...at(0)).arc_to(`${R}%`, `${R}%`, 0, f > 0.5, true, ...at(2 * Math.PI * f)).build();
   return div().relative().w(size).h(size).flex_none()
     .child(window.paint_path(track, t.raised).absolute().size_full())
-    .child(window.paint_path(value, dataColor(SINGLE, t)).absolute().size_full())
+    .child(window.paint_path(value, color).absolute().size_full())
     .child(v_flex().absolute().size_full().items_center().justify_center().child(center));
 }
 
 // ---- a card's picture on home: its dashboard in small, from the model's `picture` (no scale: the card's number is the reading) ----
 
-const bar = (parts, t, id) => h_flex().h(8).gap(2).w_full()
+export const bar = (parts, t, id) => h_flex().h(8).gap(2).w_full()
   .children(parts.filter((p) => p.value > 0).map((p, i) => div().id(`${id}-${i}`).h_full().rounded(3).bg(dataColor(p.slot, t))
     .flex_basis(0).flex_grow(p.value).tooltip(`${p.key} · ${p.value}`)));
 
