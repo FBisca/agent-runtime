@@ -1,5 +1,7 @@
 """A throwaway Claude config directory and an evals home, shared by the capture tests."""
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -10,6 +12,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from agent_eval.cli import main
 
 RESUMED = (
     "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa"  # a self-resuming job's session, and CHAIN's parent
@@ -93,7 +98,8 @@ def make_repo(repo: Path) -> tuple[str, str]:
 
 
 class CaptureCase(unittest.TestCase):
-    """Every test gets its own Claude directory and evals home; the CLI runs as a subprocess."""
+    """Every test gets its own Claude directory and evals home; the CLI runs in process unless a test
+    asks for the subprocess boundary (agent-eval/S13)."""
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
@@ -102,17 +108,37 @@ class CaptureCase(unittest.TestCase):
         build_claude(self.claude)
         self.home = self.tmp / "evals"
 
-    def run_cli(
-        self, *args: str, home: Path | None = None, env: dict[str, str] | None = None
-    ) -> subprocess.CompletedProcess[str]:
-        full = {
-            **os.environ,
+    def overrides(self, home: Path | None, env: dict[str, str] | None) -> dict[str, str]:
+        return {
             "CLAUDE_CONFIG_DIR": str(self.claude),
             "CODEX_HOME": str(self.tmp / "codex"),
             "PI_CODING_AGENT_DIR": str(self.tmp / "pi"),
             "AGENT_EVALS_HOME": str(home or self.home),
             **(env or {}),
         }
+
+    def run_cli(
+        self, *args: str, home: Path | None = None, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with (
+            mock.patch.dict(os.environ, self.overrides(home, env)),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            try:
+                code = main(list(args))
+            except SystemExit as exit:  # argparse exits on --help and on a usage error
+                code = exit.code if isinstance(exit.code, int) else 1
+        return subprocess.CompletedProcess(
+            ["agent-eval", *args], code, out.getvalue(), err.getvalue()
+        )
+
+    def run_cli_subprocess(
+        self, *args: str, home: Path | None = None, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        full = {**os.environ, **self.overrides(home, env)}
         return subprocess.run(
             [sys.executable, "-m", "agent_eval", *args], env=full, capture_output=True, text=True
         )
