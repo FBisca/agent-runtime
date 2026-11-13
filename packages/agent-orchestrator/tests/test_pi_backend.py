@@ -5,6 +5,7 @@ import unittest
 
 import pytest
 from test_archive import ARCHIVE, ArchiveFixture
+from test_step_routes import RoutedRunFixture
 
 pytestmark = pytest.mark.integration
 
@@ -67,20 +68,6 @@ class PiBackendTests(ArchiveFixture, unittest.TestCase):
         )
         return str(path)
 
-    def test_S3_the_reviewer_spawns_on_the_brain_backend(self):
-        """orchestrator-engine/R2: pi-worker-driver/S3 — the merge gate runs on the brain, on the brain's medium model."""
-        self.run_driver("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.brain_routes())
-        review = self.spawns()[REVIEW]
-        self.assertEqual(
-            (review["cli"], review["model"], review["effort"]), ("codex", "gpt-m", "high")
-        )
-
-    def test_S4_the_gaps_reviewer_spawns_on_the_brain_backend(self):
-        """orchestrator-engine/R2: pi-worker-driver/S4 — the gaps review is a gate too."""
-        self.run_driver("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.brain_routes())
-        gaps = self.spawns()[GAPS]
-        self.assertEqual((gaps["cli"], gaps["model"], gaps["effort"]), ("codex", "gpt-m", "medium"))
-
     def test_S5_the_worker_tiers_stay_on_the_worker_backend(self):
         """orchestrator-engine/R2: pi-worker-driver/S5 — the implementer stays on Pi; the driver archives with no agent."""
         self.run_driver("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.brain_routes())
@@ -96,9 +83,36 @@ class PiBackendTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual((spawns[GAPS]["cli"], spawns[GAPS]["model"]), ("claude", "sonnet"))
         self.assertEqual((spawns[WORKER]["cli"], spawns[WORKER]["model"]), ("claude", "haiku"))
 
+
+class PiBackendRoutingTests(RoutedRunFixture, unittest.TestCase):
+    """The brain tier's routes, read where the driver settles them; the spawns above show them crossing the boundary."""
+
+    def pi_codex_routes(self):
+        return self.routes_file(
+            self.config(
+                self.route("small", "pi", PI_MODEL),
+                self.route("medium", "codex", "gpt-m"),
+                self.route("large", "pi", PI_MODEL),
+            )
+        )
+
+    def test_S3_the_reviewer_spawns_on_the_brain_backend(self):
+        """orchestrator-engine/R2: pi-worker-driver/S3 — the merge gate runs on the brain, on the brain's medium model."""
+        self.settle("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.pi_codex_routes())
+        self.assertEqual(self.reviewer(), ("codex", "gpt-m", "high"))
+
+    def test_S4_the_gaps_reviewer_spawns_on_the_brain_backend(self):
+        """orchestrator-engine/R2: pi-worker-driver/S4 — the gaps review is a gate too."""
+        self.settle("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.pi_codex_routes())
+        self.assertEqual(self.gaps(), ("codex", "gpt-m", "medium"))
+
     def test_S6_a_codex_run_keeps_every_tier_where_it_is(self):
         """orchestrator-engine/R2: pi-worker-driver/S6 — the same for the Codex column."""
-        self.run_driver("--cli", "codex")
-        spawns = self.spawns()
-        self.assertEqual((spawns[REVIEW]["cli"], spawns[REVIEW]["model"]), ("codex", "gpt-l"))
-        self.assertEqual((spawns[WORKER]["cli"], spawns[WORKER]["model"]), ("codex", "gpt-s"))
+        self.settle("--cli", "codex")
+        driver = self.settled
+        self.assertEqual(self.reviewer()[:2], ("codex", "gpt-l"))
+        self.assertEqual((driver.args.cli, driver.routes["small"].model), ("codex", "gpt-s"))
+
+
+if __name__ == "__main__":
+    unittest.main()
