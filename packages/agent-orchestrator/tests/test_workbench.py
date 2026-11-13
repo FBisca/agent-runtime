@@ -941,3 +941,67 @@ class ReadOnlyTests(WorkbenchFixture):
         self.assertNotIn("REPORT-BODY", shown)
         self.assertNotIn(SECRET, shown)
         self.assertNotIn("WORKBENCH_SECRET", shown)
+
+
+class AgentsTests(WorkbenchFixture):
+    def with_agents(self, slug, agents, tasks=None, plan_state="RUNNING"):
+        path = self.write_ledger(
+            slug, {"T1": "IN PROGRESS", "T2": "TO-DO"}, plan_state=plan_state, tasks=tasks
+        )
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["agents"] = agents
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_S1_each_ticket_carries_the_ledger_agents_of_its_unit(self):
+        path = self.approved("bench", [], [])
+        self.with_agents(
+            "bench",
+            {
+                "bench-t1": {"role": "worker", "unit": "t1", "address": "term-1"},
+                "bench-t1-review": {"role": "reviewer", "unit": "t1", "address": None},
+                "bench-archive": {"role": "worker", "unit": "archive", "address": "term-a"},
+                # never matched by name: the name says t2, the unit says t1
+                "bench-t2": {"role": "worker", "unit": "t1", "address": "term-x"},
+            },
+        )
+        tickets = {t["id"]: t for t in self.view(path)["tickets"]}
+        self.assertEqual(
+            sorted(tickets["T1"]["agents"], key=lambda a: a["name"]),
+            [
+                {"name": "bench-t1", "role": "worker", "address": "term-1"},
+                {"name": "bench-t1-review", "role": "reviewer", "address": None},
+                {"name": "bench-t2", "role": "worker", "address": "term-x"},
+            ],
+        )
+        self.assertEqual(tickets["T2"]["agents"], [])
+
+    def test_S2_each_plan_lists_its_ticket_agents_and_the_prs_awaiting_merge(self):
+        self.approved("bench", [], [])
+        self.approved("old")
+        self.write_ledger("old", {"T1": "COMPLETE"}, plan_state="ARCHIVED")
+        merge = {
+            "packet": {"unit": "t2"},
+            "gate": "awaiting-merge",
+            "pr": "https://github.com/o/r/pull/7",
+        }
+        self.with_agents(
+            "bench",
+            {
+                "bench-t1": {"role": "worker", "unit": "t1", "address": "term-1"},
+                "bench-archive": {"role": "worker", "unit": "archive", "address": "term-a"},
+            },
+            tasks={
+                "t2": merge,
+                "t1": {"packet": {"unit": "t1"}, "gate": "ci", "pr": "https://x/pull/1"},
+            },
+        )
+        by_slug = self.by_slug(self.listing())
+        self.assertEqual(
+            by_slug["bench"]["agents"],
+            [{"name": "bench-t1", "role": "worker", "ticket": "T1", "address": "term-1"}],
+        )
+        self.assertEqual(
+            by_slug["bench"]["awaiting_merge"],
+            [{"ticket": "T2", "pr": "https://github.com/o/r/pull/7"}],
+        )
+        self.assertEqual((by_slug["old"]["agents"], by_slug["old"]["awaiting_merge"]), ([], []))
