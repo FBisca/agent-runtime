@@ -185,6 +185,13 @@ class StepRouteBoundaryTests(RoutedRunFixture, ArchiveFixture, unittest.TestCase
     def spawns(self):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
 
+    def test_S3_a_gate_without_a_step_route_spawns_on_todays_effort(self):
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — the spawns carry the default: the reviewer high, the gaps medium."""
+        self.run_driver()
+        spawns = self.spawns()
+        self.assertEqual(spawns[REVIEW]["effort"], "high")
+        self.assertEqual(spawns[GAPS]["effort"], "medium")
+
     def test_S8_a_step_route_for_the_implementer_overrides_the_class_route(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the implementer's own step route answers, whatever the class says."""
         path = self.routes_file(
