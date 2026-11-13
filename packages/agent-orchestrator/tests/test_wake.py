@@ -551,6 +551,53 @@ class HeldMessageTests(WakeFixture, unittest.TestCase):
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
 
+class FailedHandOverTests(WakeFixture, unittest.TestCase):
+    def refuse_resumes(self, times=1, name="demo-t1"):
+        """The runtime refuses the next `times` resumes of `name`, as it does a pane blocked on a login."""
+        (self.home / "refuse_resume.json").write_text(json.dumps({name: times}), encoding="utf-8")
+
+    def test_S8_a_decision_that_cannot_be_handed_over_raises_a_new_request_naming_why(self):
+        """engine-gaps/S8"""
+        self.refuse_resumes()
+        self.waits(
+            [
+                self.blocked(),
+                self.decide_step("t1", "retry", "carry on"),
+                self.decide_step("t1", "skip"),
+            ]
+        )
+        self.run_driver()
+        again = self.request(nth=2)
+        self.assertEqual((again["event"], again["status"]), ("handover", "resolved"))
+        for needle in ("retry", "login", "demo-t1", "fresh worker", "skip"):
+            self.assertIn(needle, again["reason"])
+        self.assertEqual(len(self.wake_lines("decision")), 2)
+        self.assertEqual(
+            self.task()["status"], "RELEASED"
+        )  # the second decision, `skip`, ended the unit
+        self.assertEqual(len(self.calls("resume")), 1, "one resume, refused; nothing sent again")
+
+    def test_S8_a_complete_that_lands_while_that_request_is_open_is_acted_on_without_a_hand_over(
+        self,
+    ):
+        """engine-gaps/S8"""
+        self.refuse_resumes()
+        self.waits(
+            [
+                self.blocked(),
+                self.decide_step("t1", "retry", "carry on"),
+                self.worker_done(tests=True),
+                self.decide_step("t1", "retry", "the pane is back"),
+                self.reviewer_done(),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual([e["held"] for e in self.run_events("held")], ["complete"])
+        self.assertEqual(self.task()["status"], "COMPLETE")
+        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
+        self.assertEqual(len(self.calls("resume")), 1, "the refused resume is the only hand-over")
+
+
 class PrReadyTests(WakeFixture, unittest.TestCase):
     def test_S5_a_reviewed_green_unit_writes_exactly_one_pr_ready_wake(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S5"""

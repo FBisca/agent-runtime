@@ -1916,6 +1916,8 @@ class Driver:
                     )  # a request now, so the unit is not `stuck` after the decision
                     break
                 except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                    if self.decision_unapplied(task_id, gate, error):
+                        break  # the Lead is asked again, as for an unsettled intent: not an error of the run
                     self.stuck.add((task_id, gate))
                     self.errors.append("%s: %s" % (task_id, error))
                     self.log(
@@ -4007,6 +4009,44 @@ class Driver:
                     row["state"] = "held"
         self.request(task_id, "intent", str(error), menu=("retry", "skip"), intent=error.operations)
 
+    def decision_unapplied(self, task_id, gate, error):
+        """A step that was applying the Lead's decision failed (the hand-over was refused, e.g. the pane is blocked on
+        a login): the unit gets a new request naming the failure and the way out, instead of sitting stuck for the rest
+        of the run. A worker message that lands while it is open is held, and the next decision acts on it. False when
+        the step was not applying a decision."""
+        task = self.task(task_id)
+        if task.get("gate") != gate:
+            return False
+        applying = (task.get("decision") or {}).get("applying")
+        if gate == "decided":
+            applying = applying or self.decided_action(task)
+        elif gate not in ("redo-pending", "fix-pending") or not applying:
+            return False
+        worker = task["packet"]["worker"]
+        # the wake cuts a reason at 200 characters: the way out comes first, the runtime's words (all in the file) after
+        reason = (
+            "the Lead's decision (%s) could not reach %s; retry it once the pane works, or fresh worker, mark blocked "
+            "or skip: %s" % (applying or "decision", worker, " ".join(str(error).split())[:600])
+        )
+        with self.book() as data:
+            if "decision" in data["tasks"][task_id]:
+                data["tasks"][task_id]["decision"].pop("applying", None)
+        self.log(
+            "error",
+            unit=task["packet"]["unit"],
+            task=task_id,
+            gate=gate,
+            error=str(error)[:500],
+        )
+        self.request(task_id, "handover", reason)
+        return True
+
+    def decided_action(self, task):
+        try:
+            return contracts.load(task["decision"]["path"], contracts.validate_decision)["action"]
+        except (contracts.ContractError, KeyError, OSError, ValueError):
+            return None
+
     def ensure_agent(self, name, role, unit, spawn, fresh=False, attempt=None):
         """Put one agent under `name` and return (address, assignment_id).
 
@@ -4255,14 +4295,27 @@ class Driver:
         pane (or a `fresh` round) gets a new worker from `text`."""
         task_id, new_id = task["packet"]["task_id"], successor["task_id"]
         with self.book() as data:
-            if data["tasks"][task_id]["status"] != "RELEASED":
+            before = data["tasks"][task_id]["status"]
+            if before != "RELEASED":
                 release(data, task_id, "superseded by " + new_id)
-            claim(data, successor)
+            reserved = claim(data, successor)["action"] == "reserved"
             bound = data["tasks"][new_id]["runtime_id"]
         if not bound:
-            runtime_id, assignment_id = self.hand_over(
-                task, successor, task_md, text, fresh, answer
-            )
+            try:
+                runtime_id, assignment_id = self.hand_over(
+                    task, successor, task_md, text, fresh, answer
+                )
+            except (ValueError, OSError, subprocess.TimeoutExpired):
+                # Nothing took the round over, so the worker's own task stays the unit's open task: a `complete` that
+                # lands while the Lead is asked again must still find it (a released task is not looked at).
+                with self.book() as data:
+                    if before != "RELEASED":
+                        data["tasks"][task_id].update(status=before, updated_at=now())
+                        for key in ("release_reason", "cutoff"):
+                            data["tasks"][task_id].pop(key, None)
+                    if reserved and not data["tasks"][new_id]["runtime_id"]:
+                        del data["tasks"][new_id]
+                raise
             with self.book() as data:
                 bind(data, new_id, str(runtime_id))
                 data["tasks"][new_id]["assignment_id"] = assignment_id
@@ -4414,9 +4467,12 @@ class Driver:
             "up": action == "retry one class up",
             "answer": decision.get("answer"),
         }
+        applying = dict(task["decision"], applying=action)  # a failed hand-over asks the Lead again
         if task.get("fix"):
-            return self.mark(task_id, gate="fix-pending", fix=dict(task["fix"], **flags))
-        self.mark(task_id, gate="redo-pending", redo=dict(flags, reason=reason))
+            return self.mark(
+                task_id, gate="fix-pending", fix=dict(task["fix"], **flags), decision=applying
+            )
+        self.mark(task_id, gate="redo-pending", redo=dict(flags, reason=reason), decision=applying)
 
     def step_answer(self, task_id, decision):
         """The Lead's `answer`: the unit's worker goes on under the same task id, so the id the brief names is the id
