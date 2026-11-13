@@ -93,3 +93,12 @@ include = ["packages/*/acceptance/**", "acceptance/**"]
 
 [tool.ty.overrides.rules]
 invalid-method-override = "ignore"
+
+# The orchestrator audit's outcome oracle was placed in the unit suite, before oracles moved to acceptance/. It is
+# promoted byte-identical too, and its fixture mixins reach the RunFixture attributes only through the class they are
+# mixed into, which ty cannot see.
+[[tool.ty.overrides]]
+include = ["packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
