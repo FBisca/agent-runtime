@@ -19,7 +19,9 @@ def pytest_collection_modifyitems(config, items):
         return  # an explicit marker expression wins
     if config.getoption("numprocesses", None) or config.getoption("durations", None):
         return  # parallelism or a profile of the whole suite
-    if any(not argument.startswith("-") for argument in config.invocation_params.args):
+    # Ask pytest whether positional paths were given: an option's value (`-p no:cacheprovider`, `-k name`) does not
+    # start with `-` either, and reading it as a path ran the whole suite serially.
+    if config.args_source == pytest.Config.ArgsSource.ARGS:
         return  # a path or a node id was named: the caller picked the tests
     keep = []
     drop = []
