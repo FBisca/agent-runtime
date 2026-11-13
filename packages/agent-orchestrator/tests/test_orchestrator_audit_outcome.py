@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import unittest
+from typing import IO
 
 import pytest
 import yaml
@@ -93,7 +94,14 @@ sys.exit(result.returncode)
 """
 
 
-class Drives:
+class Driven(subprocess.Popen):
+    """A driver process that keeps the files its stdout and stderr go to."""
+
+    out: IO[str]
+    err: IO[str]
+
+
+class Drives(RunFixture):
     """The driver run as its own process, as `launch` runs it, so a run that hangs or dies is observed from outside."""
 
     def driver_argv(self, *extra):
@@ -126,7 +134,7 @@ class Drives:
         err = open(self.root / ("driver-%d.err" % self.runs), "w+", encoding="utf-8")
         self.addCleanup(out.close)
         self.addCleanup(err.close)
-        process = subprocess.Popen(
+        process = Driven(
             self.driver_argv(*extra),
             stdout=out,
             stderr=err,
@@ -168,7 +176,8 @@ class Drives:
     def run_files_text(self):
         """Every text file the run wrote under its run directory, joined."""
         found = []
-        for path in sorted(self.run_dir.rglob("*")) if self.run_dir.exists() else []:
+        run_dir = self.run_dir_of()
+        for path in sorted(run_dir.rglob("*")) if run_dir.exists() else []:
             if path.is_file() and path.suffix in (".jsonl", ".log", ".md", ".json", ".txt"):
                 try:
                     found.append(path.read_text(encoding="utf-8", errors="replace"))
@@ -192,11 +201,11 @@ class Drives:
                 )
             except subprocess.TimeoutExpired:
                 result = None
-            self.assertIsNotNone(
-                result,
-                "await polled for %ss with no driver holding the run lock (printed so far: %r)"
-                % (seconds, lines),
-            )
+            if result is None:
+                self.fail(
+                    "await polled for %ss with no driver holding the run lock (printed so far: %r)"
+                    % (seconds, lines)
+                )
             line = result.stdout.strip()
             lines.append(line)
             if line.startswith(want):
