@@ -8,6 +8,7 @@ from unittest import mock
 
 import pytest
 from fixtures import load_script
+from test_acceptance import SnapshotFixture
 from test_archive import ARCHIVE, ArchiveFixture
 from test_complete import NODE, PersonFixture
 
@@ -158,7 +159,10 @@ class ArchiveRouteRefusal(ArchiveFixture, unittest.TestCase):
         self.assertIsNone(re.search("archive", ",".join(routes.STEPS)))
 
 
-class PersonTicketArchive(PersonFixture, unittest.TestCase):
+class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
+    def first_drive(self):
+        self.from_snapshot(self.snapshot_key("first_drive"), super().first_drive)
+
     def test_control_verify_runs_once_the_agent_ticket_is_complete(self):
         self.first_drive()
         self.assertIn("ACCEPTED", self.history())

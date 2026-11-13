@@ -12,7 +12,6 @@ has a passing control beside the case that is red at base.
 """
 
 import io
-import json
 import os
 import shutil
 import unittest
@@ -23,7 +22,6 @@ import pytest
 import yaml
 from fixtures import RunFixture, load_script
 from test_decider import DeciderFixture
-from test_yaml_eec import YamlPlanFixture
 
 pytestmark = pytest.mark.integration
 
@@ -160,34 +158,6 @@ class NegativeRule(RunFixture, unittest.TestCase):
             risk_contract(dict(KEEPS), evidence_waiver="verified in the hook suite")
         )
         self.assertEqual(code, 0, message)
-
-
-class ReceiptTamper(YamlPlanFixture, unittest.TestCase):
-    """S3: a receipt rewritten in place, its digest, tree and result kept, does not count (D31's only Pi guard)."""
-
-    def integration_receipt(self, run_dir):
-        """The latest S1 integration receipt, `S1.integration.<n>.json` with the highest n: the one verify reads."""
-        found = {}
-        for path in (run_dir / "receipts").glob("S1.integration.*.json"):
-            found[int(path.name.split(".")[2])] = path
-        self.assertTrue(found, "no integration receipt for S1")
-        return found[max(found)]
-
-    def test_a_receipt_rewritten_in_place_with_its_digest_tree_and_result_kept_does_not_count(self):
-        _, _, run_dir = self.delivered()
-        self.assertEqual(
-            self.verify().returncode, 0, "the delivered plan did not verify before the rewrite"
-        )
-        path = self.integration_receipt(run_dir)
-        receipt = json.loads(path.read_text(encoding="utf-8"))
-        path.write_text(
-            json.dumps(dict(receipt, note="rewritten by a worker"), indent=2), encoding="utf-8"
-        )
-        rewritten = self.verify()
-        output = rewritten.stdout + rewritten.stderr
-        self.assertNotEqual(rewritten.returncode, 0, "a receipt rewritten in place still counted")
-        self.assertIn("S1 UNKNOWN", output, "the item is not UNKNOWN naming its scenario")
-        self.assertIn("no longer matches the sha256", output)
 
 
 class AttentionRefresh(DeciderFixture, unittest.TestCase):

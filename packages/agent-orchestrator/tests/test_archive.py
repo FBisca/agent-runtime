@@ -6,6 +6,7 @@ import unittest
 import fake_gh
 import pytest
 from fixtures import load_script, report_wait
+from test_acceptance import SnapshotFixture
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -21,7 +22,7 @@ Paths: src/a/
 TESTS = "".join('def test_%s():\n    """demo/R%d"""\n\n' % (n, i) for i, n in enumerate("abc", 1))
 
 
-class ArchiveFixture(GateFixture):
+class ArchiveFixture(SnapshotFixture, GateFixture):
     def setUp(self):
         super().setUp()
         self.use_yaml_plan(oracle=True)
@@ -128,8 +129,11 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
     """A YAML plan archives by promotion: the driver places the oracles and writes the spec."""
 
     def archive_run(self):
-        self.waits(self.ticket_merged())
-        self.run_driver()
+        def build():
+            self.waits(self.ticket_merged())
+            self.run_driver()
+
+        self.from_snapshot(self.snapshot_key("archive_run"), build)
 
     def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_receipts_and_a_valid_digest(
         self,

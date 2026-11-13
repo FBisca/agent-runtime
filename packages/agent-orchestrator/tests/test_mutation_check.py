@@ -24,11 +24,14 @@ class MutationFixture(AcceptanceFixture):
         return step
 
     def mutated(self, *patches):
-        self.write_plan()
-        self.merged_on_main("done")
-        steps = [self.worker("done"), self.reviewer()]
-        steps += [self.mutator(n, patch) for n, patch in enumerate(patches, 1)]
-        self.drive(steps)
+        def build():
+            self.write_plan()
+            self.merged_on_main("done")
+            steps = [self.worker("done"), self.reviewer()]
+            steps += [self.mutator(n, patch) for n, patch in enumerate(patches, 1)]
+            self.drive(steps)
+
+        self.from_snapshot(self.snapshot_key("mutated", patches), build)
 
     def mutation_receipts(self):
         return self.receipts("mutation")
