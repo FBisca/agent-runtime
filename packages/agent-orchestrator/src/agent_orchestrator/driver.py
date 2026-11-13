@@ -4573,6 +4573,9 @@ class Driver:
             self.log("held-acted", unit=unit, task=task_id, held="complete", acted="reported")
             return self.mark(task_id, gate="reported", held=[])
         if action == "answer":
+            if asked.get("from_gate") == "reviewing" and task.get("review"):
+                # The request was raised while the reviewer owed its review: the answer is for the reviewer.
+                return self.step_review_answer(task_id, decision)
             return self.step_answer(task_id, decision)
         flags = {
             "fresh": action == "fresh worker",
@@ -4641,6 +4644,74 @@ class Driver:
             self.keep_address(data, task_id, packet["worker"])
         self.replay_held(task, task_id)
         narrate.say("info", "decide", "answer sent; %s resumed" % packet["worker"], task=task_id)
+
+    def step_review_answer(self, task_id, decision):
+        """The Lead's `answer` to a request raised while the reviewer owed its review: the reviewer goes on with the
+        review it owes, under the same review file, and the implementer is left alone. A reviewer whose pane is gone is
+        replaced by a fresh one whose brief carries the answer."""
+        task = self.task(task_id)
+        packet, review = task["packet"], task["review"]
+        unit, name = packet["unit"], review["name"]
+        review_dir = Path(review["dir"])
+        review_dir.mkdir(exist_ok=True, mode=0o700)
+        # named after the decision file, so a driver that died after the resume writes nothing twice
+        suffix = Path(task["decision"]["path"]).name.removeprefix("decision").removesuffix(".json")
+        brief = review_dir / ("answer%s.md" % suffix)
+        if not brief.exists():
+            brief.write_text(
+                "\n".join(
+                    [
+                        "# The Lead's answer to your review of %s" % unit.upper(),
+                        "",
+                        "What happened: %s" % task["event"]["reason"],
+                        "The Lead's instruction: %s" % decision["reason"],
+                        "The Lead's answer: %s" % decision["answer"],
+                        "",
+                        "You still owe the review: your brief is %s. Write %s and report complete with the "
+                        "assignment id this message came with."
+                        % (review_dir / "task.md", review["path"]),
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        backend, model = self.gate_step("reviewer", "large")
+        text = (
+            "Read %s and follow it. The Lead answered what stopped your review of %s; the review you owe is still "
+            "%s (brief: %s). The Lead's answer: %s"
+            % (brief, unit.upper(), review["path"], review_dir / "task.md", decision["answer"])
+        )
+        # a pane that is gone gets a fresh reviewer with the same brief and the answer
+        alive = self.pane_alive(name)
+        _, assignment_id = self.ensure_agent(
+            name,
+            "reviewer",
+            unit,
+            {
+                "kind": "worker",
+                "name": name,
+                "task": text,
+                "cwd": packet["checkout"],
+                "cli": backend,
+                "model": model,
+                "effort": self.step_effort("reviewer", "high"),
+            },
+            fresh=not alive,
+            attempt=review_dir.name + "-answer" + suffix,
+        )
+        self.mark(
+            task_id,
+            gate="reviewing",
+            review=dict(review, assignment_id=assignment_id),
+            held=[],
+            updated_at=now(),
+        )
+        narrate.say(
+            "info",
+            "decide",
+            "answer sent; %s %s" % (name, "resumed" if alive else "replaced by a fresh reviewer"),
+            task=task_id,
+        )
 
     def answer_text(self, task, decision):
         packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
