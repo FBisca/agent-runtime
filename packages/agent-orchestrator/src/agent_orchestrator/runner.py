@@ -667,6 +667,15 @@ def run_evidence(
     return run
 
 
+def reissue(receipt, log, *, scenario, digest, carried_from):
+    """The Run of an earlier receipt re-issued under a new approval digest, to go through `persist` like any other.
+
+    Nothing about the run changes but its label: the facts are the ones observed for the earlier digest, and
+    `carried_from` says which digest that was."""
+    carried = dict(receipt, scenario=scenario, digest=digest, carried_from=carried_from)
+    return Run(carried, log)
+
+
 def persist(run, receipts_dir, extra=None):
     """Write the run's receipt and log as `<scenario>.<phase>.<n>.json|log`; n counts the item's earlier receipts.
 
