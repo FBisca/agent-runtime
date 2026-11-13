@@ -31,15 +31,27 @@ class AgentRuntimeTiersTests(unittest.TestCase):
 # The tests load server/ and hooks/ by path and the packages by their installed names, so
 # pytest-impacted's import analysis selects no test for a source change here: the file map
 # is what routes a change to its tests. Every tracked root must reach an existing test path.
-ROOTS = ("server", "hooks", "bin", "scripts", "herdr", "packages/agent-orchestrator/src",
-         "packages/agent-eval/src", "packages/agent-runtime/src")
+ROOTS = (
+    "server",
+    "hooks",
+    "bin",
+    "scripts",
+    "herdr",
+    "packages/agent-orchestrator/src",
+    "packages/agent-eval/src",
+    "packages/agent-runtime/src",
+)
 
 
 def _source_files():
     yield REPO / "install.sh"
     for root in ROOTS:
         for path in (REPO / root).rglob("*"):
-            if path.is_file() and "__pycache__" not in path.parts and "node_modules" not in path.parts:
+            if (
+                path.is_file()
+                and "__pycache__" not in path.parts
+                and "node_modules" not in path.parts
+            ):
                 yield path
 
 
@@ -56,7 +68,9 @@ class AffectedTierSelectsTests(unittest.TestCase):
     def test_every_source_file_maps_to_an_existing_test_path(self):
         pairs = parse_file_map(self.ini.get("impacted_map", []))
         for target in {path for _, path in pairs}:
-            self.assertTrue((REPO / target).exists(), f"impacted_map target {target} does not exist")
+            self.assertTrue(
+                (REPO / target).exists(), f"impacted_map target {target} does not exist"
+            )
         unmapped = [
             str(path.relative_to(REPO))
             for path in _source_files()
