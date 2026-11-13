@@ -7,14 +7,17 @@ network and no credentials are involved. The file is an integration test: it dri
 subprocess and the filesystem.
 """
 
+import atexit
 import hashlib
 import io
 import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -48,10 +51,34 @@ served=$FAKE_RELEASES/$rel
 [ -f "$served" ] || { echo "curl: (22) the requested URL returned error: 404 $last" >&2; exit 22; }
 case ${FAKE_CURL_MODE:-} in
   partial:"${rel##*/}") head -c 100 "$served" > "$out"; exit 18 ;;
-  kill:"${rel##*/}") head -c 100 "$served" > "$out"; kill -TERM "$PPID"; sleep 2; exit 15 ;;
+  kill:"${rel##*/}") head -c 100 "$served" > "$out"; kill -TERM "$PPID"; exit 15 ;;
 esac
 cp "$served" "$out"
 """
+
+
+# A release is built once per session and shared read-only: building one costs a shell, a git work
+# tree and a tarball, and most tests only read it. `BUILDS` counts the builds, per version.
+SHARED = {}
+BUILDS = {}
+_SHARED_ROOT = []
+
+
+def _writable(path, writable):
+    """Flip a tree between read-only (shared) and writable (a copy, or the cleanup)."""
+    for entry in [path, *Path(path).rglob("*")]:
+        mode = entry.stat().st_mode
+        entry.chmod(mode | stat.S_IWUSR if writable else mode & ~0o222)
+
+
+def _drop_shared():
+    for directory in SHARED.values():
+        _writable(directory, True)
+    for root in _SHARED_ROOT:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+atexit.register(_drop_shared)
 
 
 def sha256(path):
@@ -110,10 +137,35 @@ class ReleaseCase(shared.StreamedInstallCase):
         return result, out
 
     def release(self, version="0.1.0"):
-        """A release that built, and the directory its assets are in."""
-        result, out = self.build(version)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        """The release of a version, shared read-only: a test that changes it takes `release_copy`."""
+        shared = self.shared_release(version)
+        out = self.releases / f"v{version}"
+        if not out.is_symlink():
+            out.symlink_to(shared)
         return out
+
+    def release_copy(self, version="0.1.0"):
+        """A private, writable copy of the release, for a test that tampers with its assets."""
+        out = self.releases / f"v{version}"
+        if out.is_symlink():
+            out.unlink()
+        shutil.copytree(self.shared_release(version), out)
+        _writable(out, True)
+        return out
+
+    def shared_release(self, version):
+        if version not in SHARED:
+            result, built = self.build(version)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if not _SHARED_ROOT:
+                _SHARED_ROOT.append(tempfile.mkdtemp(prefix="agent-runtime-release-"))
+            kept = Path(_SHARED_ROOT[0]) / f"v{version}"
+            shutil.copytree(built, kept)
+            _writable(kept, False)
+            SHARED[version] = kept
+            BUILDS[version] = BUILDS.get(version, 0) + 1
+            shutil.rmtree(built)
+        return SHARED[version]
 
     def seal(self, directory):
         """Rewrite SHA256SUMS for what the directory holds now: a publisher that tampers does this."""
@@ -398,7 +450,7 @@ class PinnedBootstrapTests(ReleaseCase):
 
     def test_s3_a_release_manifest_that_mixes_versions_is_refused(self):
         """installer-contract/R3: the release manifest is checked: components of two versions are a mixture."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         manifest = json.loads((out / "release.json").read_text(encoding="utf-8"))
         manifest["components"]["orchestrator"] = "0.2.0"
         (out / "release.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -534,7 +586,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_a_tampered_payload_is_refused_and_nothing_is_left(self):
         """installer-contract/R6: the tarball no longer matches its checksum: nothing runs and nothing stays."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         tarball = self.tarball(out)
         tarball.write_bytes(tarball.read_bytes() + b"tampered")
         result = self.refused()
@@ -546,7 +598,7 @@ class VerificationTests(ReleaseCase):
     def test_s6_a_failed_verification_leaves_the_prior_version_usable(self):
         """installer-contract/R6: the prior install, its manifest and its shims are exactly as they were."""
         self.install_prior()
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         self.tarball(out).write_bytes(b"not a tarball")
         before = shared.snapshot(self.home)
         for mode in (None, "partial:agent-runtime-v0.1.0.tar.gz"):
@@ -580,7 +632,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_a_missing_asset_is_refused_with_the_asset_named(self):
         """installer-contract/R6: a release with no checksums, no manifest or no payload is not installed."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         for name in ("SHA256SUMS", "release.json", "agent-runtime-v0.1.0.tar.gz"):
             hidden = self.root / f"hidden-{name}"
             (out / name).rename(hidden)
@@ -592,7 +644,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_a_checksum_file_without_the_payload_entry_is_refused(self):
         """installer-contract/R6: no checksum for the asset means nothing to verify it against: refuse."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         sums = (out / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
         kept = [line for line in sums if "tar.gz" not in line]
         (out / "SHA256SUMS").write_text("\n".join(kept) + "\n", encoding="utf-8")
@@ -608,7 +660,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_an_independent_checksum_outranks_the_one_published_with_the_release(self):
         """installer-contract/R6: a tamperer who rewrites the release's checksums cannot rewrite the user's own."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         trusted = sha256(self.tarball(out))
         # The publisher swaps the payload and republishes consistent checksums.
         with tarfile.open(self.tarball(out), "w:gz") as archive:
@@ -657,7 +709,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_a_release_manifest_for_another_release_or_platform_is_refused(self):
         """installer-contract/R6: a manifest that names another release, payload or platform is a mismatch."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         original = (out / "release.json").read_text(encoding="utf-8")
         for field, value in (
             ("release", "v0.2.0"),
@@ -682,7 +734,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_a_payload_that_escapes_its_directory_is_refused(self):
         """installer-contract/R6: a tarball with traversal, an absolute path or an escaping link extracts nothing."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         escapes = self.root / "escaped"
         cases = {
             "traversal": ("agent-runtime-v0.1.0/../../escaped", tarfile.REGTYPE, ""),
@@ -712,7 +764,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_a_payload_that_is_not_a_release_checkout_is_refused(self):
         """installer-contract/R6: a verified tarball that lacks the installer or the shims is no release payload."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         with tarfile.open(self.tarball(out), "w:gz") as archive:
             info = tarfile.TarInfo("agent-runtime-v0.1.0/README.md")
             info.size = 2
@@ -725,7 +777,7 @@ class VerificationTests(ReleaseCase):
 
     def test_s6_a_staged_release_is_reused_and_a_different_payload_for_it_is_refused(self):
         """installer-contract/R6: the staged release stays what it was verified to be; a rerun does not replace it."""
-        out = self.release("0.1.0")
+        out = self.release_copy("0.1.0")
         first = self.refused()
         self.assertEqual(first.returncode, 0, first.stderr)
         again = self.refused()
