@@ -95,6 +95,43 @@ def approved_view(path, repo, args):
     return revision, source, status_of(path, repo, args, source)
 
 
+def agents_of(data, ids):
+    """[(ticket id, name, role, address)] of every ledger agent whose unit is a ticket of `ids`, in ledger order. The
+    unit is the link, never the name; an agent of no ticket (the archive's) is left out."""
+    by_unit = {ticket_id.lower(): ticket_id for ticket_id in ids}
+    found = []
+    for name, agent in (data.get("agents") or {}).items():
+        agent = agent or {}
+        unit = agent.get("unit")
+        if not isinstance(unit, str) or unit.lower() not in by_unit:
+            continue
+        address = agent.get("address")
+        found.append(
+            (
+                by_unit[unit.lower()],
+                name,
+                agent.get("role"),
+                address if isinstance(address, str) and address.strip() else None,
+            )
+        )
+    return found
+
+
+def awaiting_merge_of(data, ids):
+    """[{ticket, pr}] for each task the driver holds at the awaiting-merge gate, in ledger order."""
+    by_unit = {ticket_id.lower(): ticket_id for ticket_id in ids}
+    held = []
+    for task in (data.get("tasks") or {}).values():
+        unit = (task.get("packet") or {}).get("unit")
+        if (
+            task.get("gate") == "awaiting-merge"
+            and isinstance(unit, str)
+            and unit.lower() in by_unit
+        ):
+            held.append({"ticket": by_unit[unit.lower()], "pr": task.get("pr")})
+    return held
+
+
 def listing(entry, repo, args):
     """(one plan's entry of `workbench plans`, the items it holds for the person). A plan that does not load is an
     entry with an error and null counts, so one broken plan never hides the others."""
@@ -134,10 +171,19 @@ def listing(entry, repo, args):
     run = workbench_needs.scan(events) if group == "active" else None
     shown.update(group=group, last_activity=workbench_needs.last_activity(events, path, run))
     items = []
+    shown.update(agents=[], awaiting_merge=[])
     if group == "active":
         items = workbench_needs.needs_of(
             shown["slug"], shown["state"], status["tickets"] if status else [], run
         )
+        if status and ledger.is_file():
+            data = driver.read_ledger_file(ledger)
+            ids = [t["id"] for t in status["tickets"]]
+            shown["agents"] = [
+                {"name": name, "role": role, "ticket": ticket, "address": address}
+                for ticket, name, role, address in agents_of(data, ids)
+            ]
+            shown["awaiting_merge"] = awaiting_merge_of(data, ids)
     return shown, items
 
 
@@ -516,6 +562,7 @@ def plan(args):
     data = driver.read_ledger_file(ledger_path) if ledger_path.is_file() else {}
     receipts_dir = Path(status["run_dir"]) / "receipts"
     unverified = data.get("unverified") or {}
+    agents = agents_of(data, [t.id for t in source.tickets])
     layers = layers_of(source.tickets)
     tickets = []
     for index, ticket in enumerate(source.tickets):
@@ -550,6 +597,11 @@ def plan(args):
                     "unverified_reason": (unverified.get(ticket.id) or {}).get("reason"),
                     "attempts": attempts_of(ticket.id, data),
                     "gates": gates,
+                    "agents": [
+                        {"name": name, "role": role, "address": address}
+                        for owner, name, role, address in agents
+                        if owner == ticket.id
+                    ],
                 },
             )
         )

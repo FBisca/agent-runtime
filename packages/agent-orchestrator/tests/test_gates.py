@@ -550,12 +550,12 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
     def payload_trouble(self):
         return [
             e
-            for e in self.events("payload-warning", "contract-error")
+            for e in self.run_events("payload-warning", "contract-error")
             if e.get("where") == "review"
         ]
 
     def gates(self):
-        return [e["gate"][1] for e in self.events("state") if e["task"] == "t1"]
+        return [e["gate"][1] for e in self.run_events("state") if e["task"] == "t1"]
 
     def test_S1_a_reviewer_that_ends_its_turn_idle_then_reports_complete_is_accepted(self):
         """orchestrator-engine/R62: orchestrator-silent-idle/S1"""
@@ -603,7 +603,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         )
         with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: 0)):
             self.run_driver("--idle-minutes", "10")
-        self.assertEqual([e for e in self.events("idle") if e.get("unit")], [])
+        self.assertEqual([e for e in self.run_events("idle") if e.get("unit")], [])
         self.assertFalse((self.run_dir / "t1" / "request.json").exists())
         self.assertEqual(self.reviewer_resumes(), [])
         self.assertEqual(self.task()["gate"], "done")
@@ -697,7 +697,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
                 self.waits([self.worker_done(tests=True), self.silent(runtime_state), recovered])
                 self.run_driver()  # the default idle watchdog could not have fired
                 self.assertEqual(len(self.reviewer_resumes()), 1, "no recovery at once")
-                self.assertEqual(len(self.events("payload-warning")), 1)
+                self.assertEqual(len(self.run_events("payload-warning")), 1)
                 self.assertEqual(self.task()["gate"], "done")
 
     def test_S12_the_reviewer_brief_allows_background_jobs_and_names_the_report_order(self):

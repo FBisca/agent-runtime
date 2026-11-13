@@ -1193,8 +1193,9 @@ class Driver:
     )  # a seam: the idle tick's tests move time without patching `time`
 
     def idle_ticks(self, assignments):
-        """Every `--idle-minutes`, look at each unit: did its agent show anything new, did its CI move? A unit that
-        shows nothing at two consecutive ticks needs the Lead."""
+        """Every `--idle-minutes`, look at each agent the run waits on: did it show anything new, did its CI move?
+        An agent that shows nothing at two consecutive ticks needs the Lead. One watch covers a unit's task, a mutation
+        reviewer and the gaps reviewer: they differ in who is asked and with what, not in when."""
         moment = self.clock()
         if moment - self.last_tick < self.args.idle_minutes * 60:
             return
@@ -1211,39 +1212,148 @@ class Driver:
                 # A skipped unit that returns to `working` starts a fresh window, not the one it left.
                 self.working_since.pop(task_id, None)
                 continue
-            working = self.working_minutes(task_id, assignments, moment)
-            if working is not None and working < self.args.working_minutes:
-                # A long test is one turn: the runtime says the agent is busy, so there is nothing to ask.
-                self.ticks.pop(task_id, None)
+            seen = self.watch(
+                task_id,
+                self.unit_assignments(unit),
+                [task.get("gate"), task.get("report_path"), task.get("ci_state")],
+                assignments,
+                moment,
+            )
+            if seen is None:
                 continue
-            signature = self.idle_signature(task_id, assignments)
-            previous = self.ticks.get(task_id)
-            if previous is None or previous[0] != signature:
-                self.ticks[task_id] = [signature, 0, moment]
-                continue
-            streak = previous[1] + 1
-            self.ticks[task_id] = [signature, streak, previous[2]]
+            streak, minutes, working = seen
             waiting = "ci" if task.get("gate") == "ready-for-ci" else "agent"
             self.log("idle", unit=unit, task=task_id, waiting=waiting, ticks=streak)
             if streak >= 2:
+                owed = self.owed(task)
                 self.request(
                     task_id,
                     "idle",
-                    self.idle_reason(task, unit, streak, (moment - previous[2]) / 60, working),
+                    self.idle_reason(task, unit, streak, minutes, working, owed),
+                    answerer=owed[3] if owed and owed[0] == "implementer" else None,
                 )
+        self.watch_support(assignments, moment)
 
-    def idle_reason(self, task, unit, streak, minutes, working):
+    def watch(self, key, mine, shown, assignments, moment):
+        """One step of the idle watchdog for one watched thing. `mine` is its assignment ids and `shown` what it
+        showed besides its agents' states. None while the agent is busy (a long test is one turn: nothing to ask)
+        or while this is the first look; else (ticks it showed nothing new, minutes since it last did, minutes it
+        has been `working`)."""
+        working = self.working_for(key, mine, assignments, moment)
+        if working is not None and working < self.args.working_minutes:
+            self.ticks.pop(key, None)
+            return None
+        agents = sorted(
+            [a.get("assignment_id"), a.get("state"), a.get("runtime_state")]
+            for a in assignments
+            if a.get("assignment_id") in mine
+        )
+        signature = json.dumps([*shown, agents], sort_keys=True)
+        previous = self.ticks.get(key)
+        if previous is None or previous[0] != signature:
+            self.ticks[key] = [signature, 0, moment]
+            return None
+        streak = previous[1] + 1
+        self.ticks[key] = [signature, streak, previous[2]]
+        return streak, (moment - previous[2]) / 60, working
+
+    def unit_assignments(self, unit):
+        with self.book() as data:
+            return {
+                a.get("assignment_id")
+                for a in (data.get("agents") or {}).values()
+                if a.get("unit") == unit
+            }
+
+    def watch_support(self, assignments, moment):
+        """The mutation reviewers and the gaps reviewer that have not finished: they belong to no unit, so the Lead
+        is told by one `idle` wake per attempt, which names the file the agent owes."""
+        with self.book() as data:
+            mutation = {
+                sid: copy.deepcopy(record)
+                for sid, record in (data.get("mutation") or {}).items()
+                if record.get("state") == "reviewing"
+                and not record.get("ended")
+                and record.get("assignment_id")
+            }
+            gaps = copy.deepcopy(data.get("gaps") or {})
+        watched = [
+            (
+                "mutation:%s" % sid,
+                "mutation reviewer",
+                record["name"],
+                record["assignment_id"],
+                self.mutation_patch(sid, record["attempt"]),
+                [record["attempt"]],
+            )
+            for sid, record in mutation.items()
+        ]
+        if gaps.get("assignment_id") and not gaps.get("ended"):
+            watched.append(
+                (
+                    "gaps",
+                    "gaps reviewer",
+                    gaps["name"],
+                    gaps["assignment_id"],
+                    Path(gaps["path"]),
+                    [],
+                )
+            )
+        for key, role, name, assignment_id, owed, shown in watched:
+            seen = self.watch(key, {assignment_id}, shown, assignments, moment)
+            if seen is None:
+                continue
+            streak, minutes, working = seen
+            self.log("idle", agent=name, waiting="agent", ticks=streak)
+            if streak < 2:
+                continue
+            self.wake(
+                "idle",
+                role,
+                "idle: %s %s showed no new state for %d ticks (%d minutes)%s; it is live but has not reported "
+                "complete or written %s: look at its terminal and tell it to finish; if it is gone, "
+                "closing its terminal ends the attempt"
+                % (
+                    role,
+                    name,
+                    streak,
+                    minutes,
+                    ", working for %d minutes" % working if working is not None else "",
+                    owed,
+                ),
+                key="%s:%s" % (name, assignment_id),
+            )
+
+    def owed(self, task):
+        """(role, agent name, file, assignment id) of the agent a unit waits on, or None: the file is the next
+        write-once path it has not written yet, never one that already holds an earlier answer."""
+        answers = task.get("answers") or {}
+        if answers.get("state") == "working":
+            return (
+                "implementer",
+                task["packet"]["worker"],
+                self.next_report(answers["id"]),
+                answers.get("assignment_id"),
+            )
+        if task.get("gate") == "reviewing":
+            return (
+                "reviewer",
+                task["review"]["name"],
+                task["review"]["path"],
+                task["review"].get("assignment_id"),
+            )
+        if not task.get("gate") and task["status"] == "ACTIVE":
+            return (
+                "worker",
+                task["packet"]["worker"],
+                self.next_report(task["packet"]["task_id"]),
+                task.get("assignment_id"),
+            )
+        return None
+
+    def idle_reason(self, task, unit, streak, minutes, working, owed):
         """What the Lead reads when a unit showed nothing for two ticks: who it waits on, the file that agent owes,
         how long it has been quiet and the way out."""
-        task_id = task["packet"]["task_id"]
-        answers = task.get("answers") or {}
-        owed = None
-        if answers.get("state") == "working":
-            owed = ("implementer", task["packet"]["worker"], self.report_file(answers["id"]))
-        elif task.get("gate") == "reviewing":
-            owed = ("reviewer", task["review"]["name"], task["review"]["path"])
-        elif not task.get("gate") and task["status"] == "ACTIVE":
-            owed = ("worker", task["packet"]["worker"], self.report_file(task_id))
         text = "idle: %s showed no new state or report for %d ticks (%d minutes)" % (
             unit,
             streak,
@@ -1254,49 +1364,22 @@ class Driver:
         if owed:
             text += (
                 "; %s %s is live but has not reported complete or written %s: "
-                "look at its terminal, then " % (owed[0], owed[1], owed[2])
+                "look at its terminal, then " % owed[:3]
             )
         else:
             text += "; "
         return text + "decide %s %s retry | answer | skip" % (self.plan_path, unit)
 
-    def working_minutes(self, task_id, assignments, moment):
-        """How long the runtime has reported this unit's agent `working`, or None when it does not."""
-        unit = self.task(task_id)["packet"]["unit"]
-        with self.book() as data:
-            mine = {
-                a.get("assignment_id")
-                for a in (data.get("agents") or {}).values()
-                if a.get("unit") == unit
-            }
+    def working_for(self, key, mine, assignments, moment):
+        """How long the runtime has reported one of these assignments `working`, or None when it does not."""
         if not any(
             a.get("assignment_id") in mine and a.get("runtime_state") == "working"
             for a in assignments
         ):
-            self.working_since.pop(task_id, None)
+            self.working_since.pop(key, None)
             return None
-        since = self.working_since.setdefault(task_id, moment)
+        since = self.working_since.setdefault(key, moment)
         return (moment - since) / 60
-
-    def idle_signature(self, task_id, assignments):
-        """What a unit showed since the last tick: its gate, its report, its checks and its agents' state."""
-        task = self.task(task_id)
-        unit = task["packet"]["unit"]
-        with self.book() as data:
-            mine = {
-                a.get("assignment_id")
-                for a in (data.get("agents") or {}).values()
-                if a.get("unit") == unit
-            }
-        agents = sorted(
-            [a.get("assignment_id"), a.get("state"), a.get("runtime_state")]
-            for a in assignments
-            if a.get("assignment_id") in mine
-        )
-        return json.dumps(
-            [task.get("gate"), task.get("report_path"), task.get("ci_state"), agents],
-            sort_keys=True,
-        )
 
     # ---- gates: a worker's report -> converge -> review -> fix rounds ---------------------------------------
     # The ledger task's `gate` field is the whole state: reported -> converged -> reviewing -> reviewed ->
@@ -1320,7 +1403,7 @@ class Driver:
                     assignment_id, "exited" if kind == "failed" else kind, message.get("text") or ""
                 )
                 continue
-            held = None
+            held = closing = None
             with self.book() as data:
                 if (data.get("gaps") or {}).get("assignment_id") == assignment_id:
                     data["gaps"]["ended"] = True  # advisory: nothing waits on it any more
@@ -1350,6 +1433,10 @@ class Driver:
                     if not gate and task.get("assignment_id") == assignment_id:
                         task["gate"] = "reported"
                         break
+                    if gate == "requested" and self.escalated_reviewer(task, assignment_id):
+                        task["gate"] = "reviewed"
+                        closing = task["packet"]["task_id"]
+                        break
                     if gate == "requested" and task.get("assignment_id") == assignment_id:
                         held = (task["packet"]["task_id"], message.get("text") or "")
                         break
@@ -1360,9 +1447,40 @@ class Driver:
                         "a complete from assignment %s matches no open step; ignored"
                         % assignment_id,
                     )
+            if closing:
+                self.close_request(
+                    closing,
+                    "resolved by the worker: the reviewer reported complete before the Lead decided",
+                )
+                self.write_status(self.unit_of(closing).upper(), "IN PROGRESS")
+                self.log(
+                    "request-resolved",
+                    unit=self.unit_of(closing),
+                    task=closing,
+                    by="worker",
+                    assignment_id=assignment_id,
+                )
             if held:
                 self.hold(held[0], assignment_id, "complete", held[1])
         self.check_ended(result.get("assignments") or [])
+
+    def escalated_reviewer(self, task, assignment_id):
+        """True when `assignment_id` is the unit's reviewer, the unit's open request is the idle request raised while
+        that reviewer was working, and the Lead has not decided it: the review the reviewer finished still counts.
+        Once the Lead decides, the unit has moved on and a late `complete` is not acted on (R79)."""
+        request = task.get("request") or {}
+        review = task.get("review") or {}
+        if not (
+            request.get("kind") == "idle"
+            and request.get("from_gate") == "reviewing"
+            and review.get("assignment_id") == assignment_id
+        ):
+            return False
+        try:
+            document = contracts.load(request["path"], contracts.validate_request)
+        except (contracts.ContractError, OSError, ValueError):
+            return False
+        return document["status"] == "open"
 
     def check_ended(self, assignments):
         """Attention from assignment states, as `wait` reports them: `failed`, `blocked` or `decision`, or `working`
@@ -1424,7 +1542,9 @@ class Driver:
                 elif not gate and task.get("assignment_id") == assignment_id:
                     hit = (task_id, "worker", task["packet"]["worker"])
         if not hit:
-            if not silent and self.mutation_ended(assignment_id):
+            if silent:
+                return self.support_silent(assignment_id)
+            if self.mutation_ended(assignment_id):
                 return narrate.say(
                     "warn",
                     "mutation",
@@ -1620,8 +1740,9 @@ class Driver:
             narrate.say("warn", None, "could not wake the Lead in %s: %s" % (terminal, error))
             self.log("notify-failed", terminal=terminal, error=error[:500])
 
-    def request(self, task_id, kind, reason, fix=None):
-        """The unit needs the Lead. A unit that already has an open request keeps it."""
+    def request(self, task_id, kind, reason, fix=None, answerer=None):
+        """The unit needs the Lead. A unit that already has an open request keeps it. `answerer` is the assignment of
+        a busy answerer the request names: only a decision on such a request replaces that assignment."""
         with self.book() as data:
             task = data["tasks"][task_id]
             if task.get("gate") == "requested":
@@ -1632,7 +1753,10 @@ class Driver:
                 event={"at": now(), "kind": kind, "reason": reason},
                 gate="requested",
                 updated_at=now(),
-                request={"path": str(path), "kind": kind},
+                request=dict(
+                    {"path": str(path), "kind": kind, "from_gate": task.get("gate")},
+                    **({"answerer": answerer} if answerer else {}),
+                ),
             )
             if fix:
                 task["fix"] = fix
@@ -1789,6 +1913,11 @@ class Driver:
                 break
             newest = "report.%d.json" % index
         return directory / newest
+
+    def next_report(self, task_id):
+        """The file a worker owes next: the first write-once report name the task directory does not hold yet. A
+        worker asked again writes report.2.json; the newest file on disk is one it already wrote."""
+        return next_path(self.run_dir / task_id, "report", ".json")[0]
 
     def read_payload(self, task_id, where, path, load):
         """The payload a report named, read and validated; None when the agent that sent it still owes it.
@@ -3684,11 +3813,19 @@ class Driver:
             return self.retry_archive(task_id)
         self.write_status(unit.upper(), "IN PROGRESS")
         answers = task.get("answers") or {}
-        if answers.get("state") == "working":
-            # The Lead decided a unit whose implementer went silent on the answers: the hand-over below puts that
-            # pane on a new assignment, so the old answers assignment can never report. Left `working`, pr-ready
-            # would wait on it for ever; `failed` is what the old exit path recorded.
+        named = (task.get("request") or {}).get("answerer")
+        if answers.get("state") == "working" and named == answers.get("assignment_id"):
+            # The Lead decided a request that named the silent answerer: the hand-over below puts that pane on a new
+            # assignment, so the old answers assignment can never report. Left `working`, pr-ready would wait on it
+            # for ever; `failed` is what the old exit path recorded. Any other request leaves a busy answerer alone:
+            # its complete is still received (R85).
             self.mark(task_id, answers=dict(answers, state="failed"))
+            why = (
+                "the Lead decided %r on a request that named the answerer %s, so its assignment is replaced "
+                "and pr-ready no longer waits on the answers" % (action, task["packet"]["worker"])
+            )
+            narrate.say("warn", "decide", "answers dropped: %s" % why, task=task_id)
+            self.log("answers-dropped", unit=unit, task=task_id, assignment_id=named, why=why)
         finished = next((m for m in held if m["kind"] == "complete"), None)
         if finished and self.report_is_valid(task_id):
             self.log("held-acted", unit=unit, task=task_id, held="complete", acted="reported")
@@ -4413,7 +4550,7 @@ class Driver:
             sha = record["sha"]
         directory = self.run_dir / "mutation"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        patch = directory / ("%s.%d.patch" % (scenario_id, number))
+        patch = self.mutation_patch(scenario_id, number)
         task_md = directory / ("%s.%d-task.md" % (scenario_id, number))
         item = scenario.evidence
         suffix = "-mut-%s-%d" % (scenario_id.lower(), number)
@@ -4494,6 +4631,44 @@ class Driver:
             data["mutation"][scenario_id].update(record_update)
         self.log("mutation-reviewer", scenario=scenario_id, attempt=number, name=name)
 
+    def mutation_patch(self, scenario_id, number):
+        return self.run_dir / "mutation" / ("%s.%d.patch" % (scenario_id, number))
+
+    def support_silent(self, assignment_id):
+        """A mutation or gaps reviewer whose turn ended without `complete`. Its output for the current attempt on disk
+        is its answer: it counts as done and is validated as a reported completion is. With no output it is a live
+        agent that may be waiting on a background job, and only the idle watchdog asks the Lead about it (R77)."""
+        landed = None
+        with self.book() as data:
+            for scenario_id, record in (data.get("mutation") or {}).items():
+                if (
+                    record.get("state") == "reviewing"
+                    and record.get("assignment_id") == assignment_id
+                ):
+                    if (
+                        not record.get("ended")
+                        and self.mutation_patch(scenario_id, record["attempt"]).exists()
+                    ):
+                        record["ended"] = True
+                        landed = (
+                            record["name"],
+                            self.mutation_patch(scenario_id, record["attempt"]),
+                        )
+                    break
+            else:
+                gaps = data.get("gaps") or {}
+                if (
+                    gaps.get("assignment_id") == assignment_id
+                    and not gaps.get("ended")
+                    and Path(gaps["path"]).exists()
+                ):
+                    gaps["ended"] = True
+                    landed = (gaps["name"], Path(gaps["path"]))
+        if landed:
+            self.log(
+                "output-landed", agent=landed[0], file=str(landed[1]), assignment_id=assignment_id
+            )
+
     def mutation_ended(self, assignment_id):
         """True when `assignment_id` is a mutation reviewer's: its turn is over, so its patch is read next round."""
         with self.book() as data:
@@ -4511,7 +4686,7 @@ class Driver:
         oracle, else applied and run. Outcomes: killed, survived, invalid, oracle, error."""
         item = verify.scenario_of(self.model, scenario_id).evidence
         number = record["attempt"]
-        path = self.run_dir / "mutation" / ("%s.%d.patch" % (scenario_id, number))
+        path = self.mutation_patch(scenario_id, number)
         try:
             patch = path.read_bytes()
         except OSError:
@@ -6360,14 +6535,28 @@ def numbered(directory, stem, suffix):
     return found
 
 
+# The letter after a unit's id in an attempt's task id says why the attempt exists: fix `r`, retry `d`, orphan `o`,
+# reopen `p`, answer `a`. Every place that recognizes an attempt id builds its pattern here, so a new letter is
+# added once.
+ATTEMPT_LETTERS = "rdopa"
+
+
+def attempt_pattern(unit):
+    """The regex of one attempt id of `unit` in free text: the unit's own id, or the unit, a round letter and a
+    number. Neither a longer word (`t1apple`) nor a worker name (`demo-t1`) matches."""
+    return r"(?<![\w-])%s(?:[%s]\d+)?(?!\w)" % (re.escape(unit), ATTEMPT_LETTERS)
+
+
 def foreign_attempt(text, unit, expected):
-    """The first attempt id of `unit` that `text` names and that is not `expected`, else None. An attempt id is the
-    unit's own id or the unit followed by a round letter (fix `r`, retry `d`, orphan `o`, reopen `p`) and a number,
-    in any case: a worker that writes `T1R2` has named the same attempt as `t1r2`. The worker name (`demo-t1`) and
-    any longer word are not ids."""
-    pattern = r"(?<![\w-])%s(?:[rdop]\d+)?(?!\w)" % re.escape(unit)
+    """The first attempt id of `unit` that `text` names and that is not `expected`, else None, in any case: a worker
+    that writes `T1R2` has named the same attempt as `t1r2`."""
     return next(
-        (m for m in re.findall(pattern, text, re.IGNORECASE) if m.lower() != expected.lower()), None
+        (
+            m
+            for m in re.findall(attempt_pattern(unit), text, re.IGNORECASE)
+            if m.lower() != expected.lower()
+        ),
+        None,
     )
 
 
@@ -6660,13 +6849,15 @@ def main(argv=None):
         sub.add_argument("--repo", help="Repository root; default the current repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
         sub.add_argument("--json", action="store_true", help="Accepted; the answer is always JSON")
-    for verb in ("check", "approve"):
+    for verb in ("check", "approve", "amend"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
         sub.add_argument("--repo", help="Repository root; default the plan file's repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
         if verb == "approve":
             sub.add_argument("--base", default="origin/main")
+        if verb == "amend":
+            sub.add_argument("--reason", required=True, help="Why the approved plan changes")
     inspect = commands.add_parser(
         "inspect", help="Read checkout identity and installed command paths"
     )
@@ -6907,13 +7098,26 @@ def main(argv=None):
     if args.command == "plan":
         if args.plan_command == "schema":
             return yaml_plan.Plan.model_json_schema(by_alias=True)
-        if args.plan_command == "approve":
+        if args.plan_command in ("approve", "amend"):
             caller = resolve_runtime()
             if isinstance(caller, dict) and caller.get("role") == "worker":
                 raise PlanError(
-                    "approval: caller is a spawned worker, parent %s — approval belongs to the Lead "
-                    "(the person in their own session); ask the Lead to run plan approve"
-                    % caller.get("parent", "unknown")
+                    "%s: caller is a spawned worker, parent %s — %s belongs to the Lead "
+                    "(the person in their own session); ask the Lead to run plan %s"
+                    % (
+                        "approval" if args.plan_command == "approve" else "amend",
+                        caller.get("parent", "unknown"),
+                        args.plan_command,
+                        args.plan_command,
+                    )
+                )
+            if args.plan_command == "amend":
+                return yaml_plan.amend(
+                    args.plan,
+                    reason=args.reason,
+                    repo=args.repo,
+                    state_dir=args.state_dir,
+                    runtime_id=os.environ.get("HERDR_PANE_ID") or os.environ.get("HC_TERMINAL_ID"),
                 )
             return {
                 "approval": yaml_plan.approve(

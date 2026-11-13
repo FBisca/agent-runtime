@@ -67,7 +67,7 @@ class CommitTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(
             len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead"
         )
-        self.assertTrue(self.events("contract-error"))
+        self.assertTrue(self.run_events("contract-error"))
         return self.request()["reason"]
 
     def test_S10_a_commit_shorter_than_seven_hex_characters_is_not_accepted(self):
@@ -258,7 +258,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         self.assertIn("the cache is never cleared", deferred)
         self.assertNotIn("B1", deferred)
         self.assertNotIn("Q1", deferred)
-        kinds = sorted((e["finding_kind"], e["id"]) for e in self.events("finding"))
+        kinds = sorted((e["finding_kind"], e["id"]) for e in self.run_events("finding"))
         self.assertEqual(
             kinds, [("blocking", "B1"), ("concern", "K1"), ("nit", "N1"), ("question", "Q1")]
         )
@@ -274,7 +274,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        errors = self.events("contract-error")
+        errors = self.run_events("contract-error")
         self.assertEqual(len(errors), 1)
         self.assertIn("Q1", errors[0]["error"])
         resumes = self.calls("resume")
@@ -289,9 +289,9 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         self.assertIn("Q1", brief)
         self.assertIn("report.2.json", brief)
         self.assertEqual(self.ledger_failed(), 1)
-        self.assertEqual(len(self.events("round")), 1)
+        self.assertEqual(len(self.run_events("round")), 1)
         self.assertEqual(self.task("t1r1")["gate"], "done")
-        self.assertEqual(self.events("escalation"), [])
+        self.assertEqual(self.run_events("escalation"), [])
 
     def test_S16_a_second_report_still_missing_the_response_is_a_request(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S16"""
@@ -315,7 +315,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(self.worker_resumes(), ["demo-t1"])
-        self.assertEqual(self.events("contract-error"), [])
+        self.assertEqual(self.run_events("contract-error"), [])
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
 
@@ -351,7 +351,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         )
         self.run_driver("--idle-minutes", "10")
         self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1"])
-        self.assertEqual(self.events("escalation"), [])
+        self.assertEqual(self.run_events("escalation"), [])
         self.assertEqual(self.task()["gate"], "done")
         self.assertEqual(self.task()["answers"]["state"], "done")
 
@@ -388,7 +388,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S17"""
         self.waits(self.passing_with_question() + [self.answers_report([RESPONSE])])
         self.run_driver()
-        self.assertIn("ready-for-ci", [e["gate"][1] for e in self.events("state")])
+        self.assertIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
         resumes = self.calls("resume")
         self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
         self.assertEqual(
@@ -407,14 +407,14 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
             "rename the helper", (self.run_dir / "deferred.md").read_text(encoding="utf-8")
         )
         self.assertEqual(
-            [(e["finding"], e["status"]) for e in self.events("response")], [("Q1", "fixed")]
+            [(e["finding"], e["status"]) for e in self.run_events("response")], [("Q1", "fixed")]
         )
 
     def test_S17_the_pr_is_not_ready_until_the_answers_are_in(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S17"""
         self.waits(self.passing_with_question() + [self.answers_report([RESPONSE])])
         self.run_driver()
-        order = [e["kind"] for e in self.events("wake", "response")]
+        order = [e["kind"] for e in self.run_events("wake", "response")]
         self.assertEqual(order[:2], ["response", "wake"])
 
     def test_S17_a_disputed_response_that_changes_code_goes_to_a_delta_re_review(self):
@@ -472,7 +472,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.request()["event"], "responses")
         self.assertEqual(
-            [e["where"] for e in self.events("contract-error")], ["responses", "responses"]
+            [e["where"] for e in self.run_events("contract-error")], ["responses", "responses"]
         )
         self.assertEqual(len(self.calls("resume")), 2)
 
@@ -491,7 +491,7 @@ class ClarificationTests(EnvelopeFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        rows = self.events("clarification")
+        rows = self.run_events("clarification")
         self.assertEqual(
             [(r["finding"], r["asked_by"], r["note"], r["source"]) for r in rows],
             [
@@ -508,7 +508,7 @@ class ClarificationTests(EnvelopeFixture, unittest.TestCase):
             [self.worker_done(tests=True), self.reviewer_done(self.review2(clarifications=[asked]))]
         )
         self.run_driver()
-        rows = self.events("clarification")
+        rows = self.run_events("clarification")
         self.assertEqual(
             [(r["finding"], r["asked_by"], r["source"]) for r in rows],
             [("Q1", "reviewer", "review")],

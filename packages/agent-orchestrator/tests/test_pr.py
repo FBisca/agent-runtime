@@ -35,7 +35,7 @@ class PrFixture(GateFixture):
         return wait_result([assignment(name, "working", runtime_state, id=id)])
 
     def rounds_of(self, source):
-        return [e for e in self.events("round") if e.get("source") == source]
+        return [e for e in self.run_events("round") if e.get("source") == source]
 
     def unit_spawned(self):
         """The agents of this unit: the archive and the gaps review are other units' business."""
@@ -57,7 +57,7 @@ class DraftTests(PrFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.gh_calls("pr", "ready")[0], ["pr", "ready", PR, "--undo"])
         self.assertIn("draft", (self.run_dir / "t1" / "task.md").read_text(encoding="utf-8"))
-        during = [e for e in self.events("ci") if e["gate"] == "reviewing"]
+        during = [e for e in self.run_events("ci") if e["gate"] == "reviewing"]
         self.assertTrue(during, "no checks were polled while the reviewer worked")
         self.assertEqual(self.task()["status"], "COMPLETE")
 
@@ -86,7 +86,7 @@ class DraftTests(PrFixture, unittest.TestCase):
         self.assertEqual(
             states[-1]["gate"][1], "ready-for-ci"
         )  # the review passed and the checks were green
-        self.assertEqual([e["source"] for e in self.events("round")], ["review"])
+        self.assertEqual([e["source"] for e in self.run_events("round")], ["review"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
     def test_S20_a_unit_that_never_passes_review_is_never_marked_ready(self):
@@ -126,9 +126,11 @@ class ChecksTests(PrFixture, unittest.TestCase):
         polls = self.gh_calls("pr", "checks")
         self.assertGreaterEqual(len(polls), 5)
         self.assertTrue(all(p[3:] == ["--json", "name,bucket,link,description"] for p in polls))
-        self.assertEqual(self.events("round"), [])
+        self.assertEqual(self.run_events("round"), [])
         self.assertEqual(self.calls("resume"), [])
-        self.assertEqual([e["state"] for e in self.events("ci")][:3], ["none", "pending", "none"])
+        self.assertEqual(
+            [e["state"] for e in self.run_events("ci")][:3], ["none", "pending", "none"]
+        )
         self.assertEqual(self.task()["status"], "COMPLETE")
 
     def test_S21_a_failed_check_after_the_review_is_a_ci_fix_round_with_the_failed_log(self):
@@ -215,7 +217,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.run_driver()
         ready = self.wake_lines("pr-ready")
         self.assertEqual([line.split(":")[0] for line in ready], ["pr-ready t3", "pr-ready t1"])
-        self.assertEqual(self.events("round"), [])
+        self.assertEqual(self.run_events("round"), [])
 
 
 class SlotTests(PrFixture, unittest.TestCase):
@@ -277,8 +279,8 @@ class BranchTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.gh_calls("pr", "update-branch"), [["pr", "update-branch", PR]])
         self.assertEqual(self.unit_spawned(), ["demo-t1", "demo-t1-review"])
         self.assertEqual(self.calls("resume"), [])
-        self.assertEqual(self.events("round"), [])
-        self.assertEqual([e["outcome"] for e in self.events("update-branch")], ["updated"])
+        self.assertEqual(self.run_events("round"), [])
+        self.assertEqual([e["outcome"] for e in self.run_events("update-branch")], ["updated"])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
     def test_S23_a_conflict_gives_a_fresh_worker_a_rebase_task_then_a_delta_re_review(self):
@@ -305,7 +307,7 @@ class BranchTests(PrFixture, unittest.TestCase):
         brief = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
         self.assertIn("rebase", brief)
         self.assertEqual(
-            [e["source"] for e in self.events("round")], ["conflict"]
+            [e["source"] for e in self.run_events("round")], ["conflict"]
         )  # the conflict counts as a round
         self.assertEqual(self.ledger()["rounds"]["t1"], 1)
         re_review = (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8")
@@ -373,7 +375,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1-review"])
         re_review = (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8")
         self.assertIn("This is a re-review", re_review)
-        self.assertEqual([e["source"] for e in self.events("round")], ["conflict"])
+        self.assertEqual([e["source"] for e in self.run_events("round")], ["conflict"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
     def test_S2_a_conflicting_draft_at_ready_for_ci_is_never_readied_before_its_rebase(self):
@@ -394,7 +396,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.gh_calls("pr", "update-branch"), [])
         ready_at = [c for c in self.gh_log() if c["argv"][:2] == ["pr", "ready"]][0]
         self.assertTrue(any('"round"' in line for line in ready_at["events"]))
-        self.assertEqual([e["source"] for e in self.events("round")], ["conflict"])
+        self.assertEqual([e["source"] for e in self.run_events("round")], ["conflict"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
     def test_S3_a_pr_behind_while_it_waits_is_updated_stays_ready_and_wakes_again_on_its_new_head(
@@ -416,7 +418,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.gh_calls("pr", "update-branch"), [["pr", "update-branch", PR]])
         self.assertEqual(self.ready_calls(), [[]])  # no draft undo: nobody wrote code
-        self.assertEqual(self.events("round"), [])
+        self.assertEqual(self.run_events("round"), [])
         keys = [w["key"] for w in self.wakes() if w["kind"] == "pr-ready"]
         self.assertEqual(keys, ["t1:abc1234", "t1:" + "b" * 40])
         self.assertEqual(self.task()["status"], "COMPLETE")
@@ -433,7 +435,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.ready_calls(), [[]])
         self.assertEqual(self.gh_calls("pr", "update-branch"), [])
-        self.assertEqual(self.events("round"), [])
+        self.assertEqual(self.run_events("round"), [])
         self.assertEqual(len([w for w in self.wakes() if w["kind"] == "pr-ready"]), 1)
         self.assertEqual(self.task()["status"], "COMPLETE")
 
@@ -453,7 +455,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(self.ready_calls(), [[], ["--undo"], []])
-        rounds = self.events("round")
+        rounds = self.run_events("round")
         self.assertEqual([e["source"] for e in rounds], ["ci"])
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
         self.assertEqual(findings["items"][0]["check"], "unit tests")
@@ -470,8 +472,8 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.ready_calls(), [[]])
         self.assertEqual(self.gh_calls("pr", "update-branch"), [])
-        self.assertEqual(self.events("round"), [])
-        self.assertEqual([e for e in self.events("idle") if e.get("unit") == "t1"], [])
+        self.assertEqual(self.run_events("round"), [])
+        self.assertEqual([e for e in self.run_events("idle") if e.get("unit") == "t1"], [])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
     def test_S7_a_merge_wins_over_a_conflict_and_red_checks(self):
@@ -480,7 +482,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.checks(["fail"], ready=True)
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
-        self.assertEqual(self.events("round"), [])
+        self.assertEqual(self.run_events("round"), [])
         self.assertEqual(self.ready_calls(), [[]])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
@@ -495,7 +497,7 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(
-            [e["outcome"] for e in self.events("draft")], ["failed", "failed", "draft"]
+            [e["outcome"] for e in self.run_events("draft")], ["failed", "failed", "draft"]
         )
         undone = [i for i, c in enumerate(self.gh_log()) if c["argv"][3:] == ["--undo"]][-1]
         spawned_after = self.gh_log()[undone]["events"]
@@ -513,8 +515,8 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(request["event"], "ci")
         self.assertIn("does not conflict", request["reason"])
         self.assertIn("HTTP 403", request["reason"])
-        self.assertEqual(self.events("round"), [])
-        self.assertEqual([e["outcome"] for e in self.events("update-branch")], ["failed"])
+        self.assertEqual(self.run_events("round"), [])
+        self.assertEqual([e["outcome"] for e in self.run_events("update-branch")], ["failed"])
 
     def test_S11_a_conflict_past_the_cap_goes_to_the_lead_and_leaves_the_pr_a_draft(self):
         """orchestrator-engine/R33: orchestrator-pr-merge-state/S11"""
@@ -560,7 +562,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
         self.assertIn("merged-early", deferred)
         self.assertIn("drops the last row", deferred)
-        self.assertEqual([e["unit"] for e in self.events("merged-early")], ["t1"])
+        self.assertEqual([e["unit"] for e in self.run_events("merged-early")], ["t1"])
         self.assertEqual(
             sorted(c["args"]["name"] for c in self.calls("stop")), ["demo-t1", "demo-t1-review"]
         )
@@ -628,7 +630,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
 
 class IdleTests(PrFixture, unittest.TestCase):
     def idle_events(self):
-        return [e for e in self.events("idle") if e.get("unit")]
+        return [e for e in self.run_events("idle") if e.get("unit")]
 
     def test_S6_a_unit_whose_agent_shows_nothing_new_since_the_last_tick_is_logged_idle(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S6"""
@@ -767,7 +769,7 @@ class IdleTests(PrFixture, unittest.TestCase):
             ]
         )
         self.run_driver("--idle-minutes", "0")
-        gates = [e["gate"][1] for e in self.events("state") if e["task"] == "t1"]
+        gates = [e["gate"][1] for e in self.run_events("state") if e["task"] == "t1"]
         self.assertIn("awaiting-merge", gates)
         self.assertEqual(self.idle_events(), [])
         self.assertEqual(self.wake_lines("decision"), [])

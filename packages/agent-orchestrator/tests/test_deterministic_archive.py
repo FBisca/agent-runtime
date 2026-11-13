@@ -131,7 +131,7 @@ class GapsAfterArchive(DriverArchiveFixture, unittest.TestCase):
         # No gaps report is scripted. The fakes end a run either way, so not waiting is pinned by T2's own test.
         self.run_to_archive()
         self.assertIn("demo-gaps", self.spawned())
-        events = self.events()
+        events = self.run_events()
         done = next(
             i
             for i, e in enumerate(events)

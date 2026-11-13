@@ -61,7 +61,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
             "origin/main...HEAD",
         ):
             self.assertIn(needle, fresh["task"])
-        rows = self.events("swap")
+        rows = self.run_events("swap")
         self.assertEqual(
             [(r["name"], r["unit"], r["role"]) for r in rows], [("demo-t1", "t1", "worker")]
         )
@@ -77,7 +77,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(self.ledger()["rounds"], {"t1": 2})
-        self.assertEqual(len(self.events("round")), 2)
+        self.assertEqual(len(self.run_events("round")), 2)
         self.assertEqual(self.task("t1r1")["gate"], "superseded")
 
     def test_S19_a_reviewer_below_the_reserve_is_swapped_before_the_re_review(self):
@@ -102,7 +102,8 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         ):
             self.assertIn(needle, fresh["task"])
         self.assertEqual(
-            [(r["name"], r["role"]) for r in self.events("swap")], [("demo-t1-review", "reviewer")]
+            [(r["name"], r["role"]) for r in self.run_events("swap")],
+            [("demo-t1-review", "reviewer")],
         )
         self.assertEqual({w["kind"] for w in self.wakes()} - {"integration-waits"}, {"pr-ready"})
         self.assertEqual(self.task("t1r1")["gate"], "done")
@@ -112,8 +113,8 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         self.waits([self.worker_done()])
         self.run_driver()
         self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1"])
-        self.assertEqual(self.events("swap"), [])
-        rows = self.events("context")
+        self.assertEqual(self.run_events("swap"), [])
+        rows = self.run_events("context")
         self.assertEqual(
             [(r["name"], r["unit"], r["context"]) for r in rows], [("demo-t1", "t1", "unknown")]
         )
@@ -124,21 +125,21 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         self.waits([with_usage(self.worker_done(), stale)])
         self.run_driver()
         self.assertEqual(len(self.calls("resume")), 1)
-        self.assertEqual([r["context"] for r in self.events("context")], ["unknown"])
+        self.assertEqual([r["context"] for r in self.run_events("context")], ["unknown"])
 
     def test_S19_an_agent_with_room_is_resumed_without_a_swap(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
         self.waits([with_usage(self.worker_done(), sample(50000))])
         self.run_driver()
         self.assertEqual(len(self.calls("resume")), 1)
-        self.assertEqual(self.events("swap", "context"), [])
+        self.assertEqual(self.run_events("swap", "context"), [])
 
     def test_S19_the_reserve_is_set_by_a_flag(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
         self.waits([with_usage(self.worker_done(), sample(190000))])
         self.run_driver("--context-reserve", "1000")
         self.assertEqual(len(self.calls("resume")), 1)
-        self.assertEqual(self.events("swap"), [])
+        self.assertEqual(self.run_events("swap"), [])
 
 
 if __name__ == "__main__":
