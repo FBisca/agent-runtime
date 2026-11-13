@@ -13,9 +13,15 @@ from unittest import mock
 
 import pytest
 import yaml
+from agent_orchestrator import runtime_client
 from fixtures import RunFixture, load_script
 
 pytestmark = pytest.mark.integration
+
+
+class Done:
+    def __init__(self, returncode, stdout, stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
 
 
 def contract():
@@ -57,6 +63,17 @@ class PlanTests(RunFixture, unittest.TestCase):
         self.resolve_patch.start()
         self.addCleanup(self.resolve_patch.stop)
         self.addCleanup(self.env_patch.stop)
+        self.asked = []
+        self.answer = lambda argv: Done(
+            0, json.dumps({"role": "lead", "caller": {"kind": "lead", "verified": True}})
+        )
+        process_patch = mock.patch.object(runtime_client, "runtime_process", self.ask_runtime)
+        process_patch.start()
+        self.addCleanup(process_patch.stop)
+
+    def ask_runtime(self, argv, timeout=None):
+        self.asked.append(argv)
+        return self.answer(argv)
 
     def write(self, data):
         self.plan.write_text("# retained comment\n" + yaml.safe_dump(data, sort_keys=False))
@@ -169,6 +186,99 @@ class PlanTests(RunFixture, unittest.TestCase):
         self.assertEqual(code, 2)
         for path in ("tickets[0].repo", "tickets[0].max_fix_rounds", "tickets[0].extra"):
             self.assertIn(path, message)
+
+    def refused_approve(self, reason):
+        code, message = self.command("approve")
+        self.assertEqual(code, 2, message)
+        self.assertIn(reason, message)
+        self.assertIn("ask the Lead", message)
+        self.assertNotIn("approval", yaml.safe_load(self.plan.read_text()))
+        self.assertFalse((self.state_dir / "approvals").exists())
+
+    def test_S20_a_worker_the_runtime_names_is_refused_and_nothing_is_written(self):
+        for caller in ({"kind": "worker", "verified": True}, {"kind": "worker", "verified": False}):
+            with self.subTest(caller=caller):
+                self.answer = lambda argv, caller=caller: Done(
+                    0, json.dumps({"role": "worker", "parent": "t1", "caller": caller})
+                )
+                self.refused_approve("worker")
+
+    def test_S20_an_unverified_or_unknown_caller_inside_a_host_is_refused(self):
+        for answer in (
+            {"role": "unknown", "caller": {"kind": "unknown", "verified": False}},
+            {"role": "lead", "caller": {"kind": "lead", "verified": False}},
+            {"role": "lead"},
+        ):
+            with self.subTest(answer=answer):
+                self.answer = lambda argv, answer=answer: Done(0, json.dumps(answer))
+                self.refused_approve("verif")
+
+    def test_S20_a_failed_lookup_with_agent_markers_is_refused(self):
+        for answer in (
+            lambda argv: Done(1, "", "boom"),
+            lambda argv: Done(0, "not json"),
+            lambda argv: (_ for _ in ()).throw(OSError("no agent-runtime")),
+        ):
+            with self.subTest(answer=answer):
+                self.answer = answer
+                self.refused_approve("lookup")
+
+    def without_host_markers(self):
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in runtime_client.HOST_MARKERS:
+            os.environ.pop(name, None)
+
+    def test_S21_a_plain_terminal_or_ci_with_no_host_markers_approves_when_the_runtime_cannot_place_it(
+        self,
+    ):
+        for answer in (
+            lambda argv: (_ for _ in ()).throw(OSError("no agent-runtime")),
+            lambda argv: Done(1, "", "boom"),
+            lambda argv: Done(0, json.dumps({"role": "unknown", "caller": {"kind": "unknown"}})),
+        ):
+            with self.subTest(answer=answer):
+                self.without_host_markers()
+                self.answer = answer
+                self.assertIn("digest", self.approve())
+
+    def test_S20_a_worker_the_runtime_verifies_by_ancestry_is_refused_with_no_host_markers(self):
+        self.without_host_markers()
+        self.answer = lambda argv: Done(
+            0, json.dumps({"role": "lead", "caller": {"kind": "worker", "verified": True}})
+        )
+        self.refused_approve("worker")
+
+    def test_S20_plan_amend_refuses_a_worker_the_runtime_verifies_by_ancestry_too(self):
+        block = self.approve()
+        self.without_host_markers()
+        self.answer = lambda argv: Done(
+            0, json.dumps({"role": "lead", "caller": {"kind": "worker", "verified": True}})
+        )
+        before = self.plan.read_bytes()
+        code, message = self.command("amend", "--reason", "retitle")
+        self.assertEqual(code, 2, message)
+        self.assertIn("worker", message)
+        self.assertIn("amend", message)
+        self.assertEqual(self.plan.read_bytes(), before)
+        self.assertEqual(
+            yaml.safe_load(self.plan.read_text())["approval"]["digest"], block["digest"]
+        )
+
+    def test_S20_the_way_out_names_both_a_worker_and_a_lead(self):
+        self.answer = lambda argv: Done(
+            0, json.dumps({"role": "unknown", "caller": {"kind": "unknown"}})
+        )
+        code, message = self.command("approve")
+        self.assertEqual(code, 2, message)
+        self.assertIn("ask the Lead", message)
+        self.assertIn("from a terminal with no agent host", message)
+        self.assertIn("hc Lead terminal", message)
+
+    def test_S21_a_lead_the_runtime_verifies_approves(self):
+        self.assertIn("digest", self.approve())
+        self.assertEqual(self.asked[0][-2:], ["resolve", "--json"])
 
     def test_S17_check_and_approve_refuse_an_env_naming_home_path_or_xdg(self):
         for name in ("HOME", "PATH", "XDG_CACHE_HOME"):
@@ -322,18 +432,6 @@ class PlanTests(RunFixture, unittest.TestCase):
             self.assertIn(word, message)
         self.assertEqual(self.plan.read_bytes(), before)
         self.assertFalse(self.state_dir.exists())
-
-    def test_S3_lead_unknown_and_failed_resolution_proceed(self):
-        for caller in ({"role": "lead"}, {"runtime": "unknown"}):
-            with (
-                self.subTest(caller=caller),
-                mock.patch.object(load_script(), "resolve_runtime", return_value=caller),
-                mock.patch.dict(os.environ, {"AGENT_RUNTIME_DISPATCH": "1"}),
-            ):
-                self.approve()
-        self.resolve_patch.stop()
-        with mock.patch.object(load_script(), "run", side_effect=ValueError("resolve failed")):
-            self.approve()
 
     def test_S2_missing_snapshot_is_repaired_by_reapproval(self):
         block = self.approve()

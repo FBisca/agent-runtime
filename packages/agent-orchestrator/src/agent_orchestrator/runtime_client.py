@@ -9,7 +9,10 @@ to the CLI.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
+from pathlib import Path
 from typing import Any, Protocol
 
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -89,3 +92,66 @@ class CliRuntimeClient:
                 "agent-runtime %s answered with something that is not a JSON object" % tool
             )
         return answer
+
+
+# The hosts an agent runs in. A process with none of these is a person's terminal or CI.
+HOST_MARKERS = (
+    "HC_TERMINAL_ID",
+    "HERDR_PANE_ID",
+    "CLAUDECODE",
+    "CODEX_THREAD_ID",
+    "CODEX_TOOL_CALL_ID",
+    "PI_CODING_AGENT",
+)
+
+
+def ask_the_lead(verb):
+    """The way out, for each caller: a worker cannot approve or amend, and a Lead the runtime cannot verify (a plain
+    agent session with no hc ancestry) runs it where no agent marker makes its identity doubtful."""
+    return (
+        "%s belongs to the Lead (the person in their own session): a worker: ask the Lead to run plan %s; "
+        "a Lead runs plan %s from a terminal with no agent host, or from its hc Lead terminal"
+        % ("approval" if verb == "approve" else "amendment", verb, verb)
+    )
+
+
+def approval_refusal(env=None, process=None, verb="approve"):
+    """A reason `plan approve` must refuse this caller, or None when it may go on.
+
+    The runtime CLI is always asked (`agent-runtime resolve --json`), because it can see worker ancestry that no
+    env marker shows. A worker is refused marker or not; only a caller it verifies as the Lead passes for sure. A
+    failed lookup or a caller it cannot place is refused only inside a host (a marker is present), so a plain
+    terminal or CI without the runtime still approves. A marker is forgeable, so it never grants anything: it only
+    makes an unverified answer a refusal."""
+    env = os.environ if env is None else env
+    in_host = any(env.get(name) for name in HOST_MARKERS)
+    run = process if process is not None else runtime_process
+    home = env.get("AGENT_RUNTIME_HOME")
+    script = Path(home).expanduser() / "server" / "agent_runtime.py" if home else None
+    argv = [sys.executable, str(script)] if script and script.is_file() else ["agent-runtime"]
+    try:
+        done = run([*argv, "resolve", "--json"], timeout=10)
+        if done.returncode != 0:
+            raise ValueError("exit %d" % done.returncode)
+        answer = json.loads(done.stdout)
+        if not isinstance(answer, dict):
+            raise ValueError("not a JSON object")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if not in_host:
+            return None
+        return "the runtime lookup of the caller failed (%s), so the caller is unverified — %s" % (
+            error,
+            ask_the_lead(verb),
+        )
+    caller = answer.get("caller") if isinstance(answer.get("caller"), dict) else {}
+    if answer.get("role") == "worker" or caller.get("kind") == "worker":
+        return "the caller is a spawned worker (parent %s) — %s" % (
+            answer.get("parent", "unknown"),
+            ask_the_lead(verb),
+        )
+    if (caller.get("kind") == "lead" and caller.get("verified") is True) or not in_host:
+        return None
+    return "the runtime does not verify the caller as the Lead (it reports %s) — %s" % (
+        caller.get("kind", answer.get("role", "unknown")),
+        ask_the_lead(verb),
+    )

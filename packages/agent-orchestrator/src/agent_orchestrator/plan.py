@@ -31,7 +31,7 @@ from pydantic import (
     model_validator,
 )
 
-from . import config, runner
+from . import config, runner, runtime_client
 from . import ledger as ledgers
 
 DEFAULT_STATE = "~/.local/state/orchestrate"
@@ -1194,6 +1194,9 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
 
     Everything runs under the plan's run lock, so a live driver is never moved or raced; a held lock refuses before
     anything is written."""
+    refusal = runtime_client.approval_refusal()
+    if refusal:
+        raise PlanError("approval: %s — the plan was not approved" % refusal)
     path = Path(path).resolve()
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=True)
@@ -1288,6 +1291,9 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
     `baseline: pass` check red, and the plan's evidence is still judged against the tree it was approved on. The
     amendment holds its own lock, never the run lock, so a live driver is not stopped; a ticket the ledger marks
     COMPLETE is frozen, and nothing is written when the amendment is refused."""
+    refusal = runtime_client.approval_refusal(verb="amend")
+    if refusal:
+        raise PlanError("amend: %s — the plan was not amended" % refusal)
     path = Path(path).resolve()
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=False)
