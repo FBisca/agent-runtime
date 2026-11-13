@@ -16,7 +16,7 @@ UNKNOWN = "99999999-0000-4000-8000-000000000000"
 REAL_RUN = subprocess.run
 HERE = Path(__file__).parent
 
-# The 19 tests that test_capture_named.py held before it was deleted, each kept by the same name.
+# The tests test_capture_named.py held before it was deleted; each is kept by a test of this name.
 DELETED_NAMED_TESTS = (
     "test_R228_a_named_pi_session_is_captured_with_its_harness_and_cwd",
     "test_R228_a_named_session_brings_no_subagent_and_nothing_else",
@@ -33,7 +33,7 @@ DELETED_NAMED_TESTS = (
     "test_R228_a_named_session_can_be_excluded_and_is_listed",
     "test_R229_a_named_session_records_its_cwd_and_assignment_id",
     "test_R229_a_session_captured_by_name_and_as_a_worker_records_the_same_fields",
-    "test_R229_a_chain_member_records_its_own_cwd_and_assignment_id",
+    "test_R229_a_subagent_records_its_own_cwd_and_assignment_id",
     "test_R229_a_session_without_a_marker_records_a_null_assignment_id",
 )
 

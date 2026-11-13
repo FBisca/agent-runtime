@@ -4,7 +4,7 @@ the manifest's own fields (agent-eval-named-capture/R228-R229)."""
 import gzip
 
 import pytest
-from claude_fixture import CHAIN, FORKED, RESUMED, CaptureCase, job
+from claude_fixture import CHAIN, FORKED, RESUMED, SOLO, CaptureCase, job, write
 from harness_fixture import (
     ASSIGNMENT,
     CODEX_INJECTED,
@@ -31,6 +31,7 @@ CODEX_ID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
 WORKER = "cccccccc-3333-4333-8333-cccccccccccc"
 PARENT = "dddddddd-4444-4444-8444-dddddddddddd"
 CHILD = "ffffffff-6666-4666-8666-ffffffffffff"
+WORKER_C = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 
 
 class NamedCase(CaptureCase):
@@ -131,8 +132,8 @@ class RefusalTests(NamedCase):
         """agent-eval-named-capture/R228"""
         result = self.capture("--session", "99999999-0000-4000-8000-000000000000")
         self.assertEqual(result.returncode, 2)
-        for root in (self.claude, self.codex, self.pi):
-            self.assertIn(str(root), result.stderr)
+        for place in (self.claude / "projects", self.codex / "sessions", self.pi / "sessions"):
+            self.assertIn(str(place), result.stderr)
         self.assertEqual(self.tree(), [])
 
     def test_R228_an_ambiguous_prefix_inside_one_harness_is_refused_naming_both(self):
@@ -168,12 +169,18 @@ class RefusalTests(NamedCase):
 
     def test_R228_the_same_session_under_two_harnesses_is_refused(self):
         """agent-eval-named-capture/R228"""
-        pi_session(self.pi, "--Users-x-demo--", "p", SAME, "/work/demo", "2026-11-10T10:00:00Z")
-        codex_rollout(self.codex, "2026/11/10", "a", SAME, "/work/other", "2026-11-10T10:00:00Z")
+        pi_file = pi_session(
+            self.pi, "--Users-x-demo--", "p", SAME, "/work/demo", "2026-11-10T10:00:00Z"
+        )
+        codex_file = codex_rollout(
+            self.codex, "2026/11/10", "a", SAME, "/work/other", "2026-11-10T10:00:00Z"
+        )
         result = self.capture("--session", SAME)
         self.assertEqual(result.returncode, 2)
         self.assertIn("two harnesses", result.stderr)
         self.assertIn(SAME, result.stderr)
+        self.assertIn(str(pi_file), result.stderr)
+        self.assertIn(str(codex_file), result.stderr)
         self.assertEqual(self.tree(), [])
 
 
@@ -197,6 +204,7 @@ class RootTests(NamedCase):
         worktree = self.worktree()
         orchestrate_run(self.state, SLUG, {"t1": worktree}, FIRST, LAST)
         pi_session(self.pi, "--demo--", "p", PI_ID, worktree, INSIDE)
+        claude_session(self.claude, "-wt1", WORKER, worktree, INSIDE)
         result = self.capture(
             "--session",
             PI_ID,
@@ -207,8 +215,9 @@ class RootTests(NamedCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         sessions = self.manifest(PI_ID)["sessions"]
-        self.assertEqual([s["id"] for s in sessions], [PI_ID])
-        self.assertEqual(sessions[0]["role"], "root")
+        self.assertEqual([s["id"] for s in sessions].count(PI_ID), 1)
+        entries = {s["id"]: s for s in sessions}
+        self.assertEqual((entries[PI_ID]["role"], entries[WORKER]["role"]), ("root", "worker"))
         self.assertEqual(self.manifest(PI_ID)["orchestrate"]["slug"], SLUG)
 
     def test_R228_a_named_session_can_be_excluded_and_is_listed(self):
@@ -234,19 +243,34 @@ class ManifestFieldTests(NamedCase):
             "2026-11-10T10:00:00Z",
             PROMPT % ASSIGNMENT,
         )
-        result = self.capture("--session", PI_ID)
+        codex_rollout(
+            self.codex, "2026/11/10", "a", CODEX_ID, "/work/x", "2026-11-10T10:00:00Z", "no id here"
+        )
+        claude_session(
+            self.claude, "-app", WORKER_C, "/work/c", "2026-11-10T10:00:00Z", PROMPT % ASSIGNMENT
+        )
+        result = self.capture("--session", PI_ID, "--session", CODEX_ID, "--session", WORKER_C)
         self.assertEqual(result.returncode, 0, result.stderr)
-        entry = self.entries(PI_ID)[PI_ID]
-        self.assertEqual(entry["cwd"], "/work/demo")
-        self.assertEqual(entry["assignment_id"], ASSIGNMENT)
+        entries = self.entries(PI_ID)
+        self.assertEqual(
+            (entries[PI_ID]["cwd"], entries[PI_ID]["assignment_id"]), ("/work/demo", ASSIGNMENT)
+        )
+        self.assertEqual(
+            (entries[CODEX_ID]["cwd"], entries[CODEX_ID]["assignment_id"]), ("/work/x", None)
+        )
+        self.assertEqual(
+            (entries[WORKER_C]["cwd"], entries[WORKER_C]["assignment_id"]), ("/work/c", ASSIGNMENT)
+        )
 
     def test_R229_a_session_captured_by_name_and_as_a_worker_records_the_same_fields(self):
         """agent-eval-named-capture/R229"""
         worktree = self.worktree()
         orchestrate_run(self.state, SLUG, {"t1": worktree}, FIRST, LAST)
         claude_session(self.claude, "-wt", WORKER, worktree, INSIDE, PROMPT % ASSIGNMENT)
-        by_name = self.capture("--session", WORKER)
-        self.assertEqual(by_name.returncode, 0, by_name.stderr)
+        pi_session(self.pi, "--demo--", "p", PI_ID, worktree, INSIDE, PROMPT % ASSIGNMENT)
+        codex_rollout(
+            self.codex, "2026/11/10", "a", CODEX_ID, worktree, INSIDE, PROMPT % ASSIGNMENT
+        )
         by_run = self.capture(
             "--orchestrate-run",
             SLUG,
@@ -256,12 +280,28 @@ class ManifestFieldTests(NamedCase):
             "run-case",
         )
         self.assertEqual(by_run.returncode, 0, by_run.stderr)
-        named = self.entries(WORKER)[WORKER]
-        worker = self.entries("run-case")[WORKER]
-        self.assertEqual(named["cwd"], worktree)
-        self.assertEqual(named["assignment_id"], ASSIGNMENT)
-        self.assertEqual(named["cwd"], worker["cwd"])
-        self.assertEqual(named["assignment_id"], worker["assignment_id"])
+        by_name = self.capture(
+            "--case", "by-name", "--session", WORKER, "--session", PI_ID, "--session", CODEX_ID
+        )
+        self.assertEqual(by_name.returncode, 0, by_name.stderr)
+        run_entries, name_entries = self.entries("run-case"), self.entries("by-name")
+        for sid in (WORKER, PI_ID, CODEX_ID):
+            for field in ("cwd", "assignment_id"):
+                self.assertEqual(name_entries[sid][field], run_entries[sid][field], (sid, field))
+            self.assertEqual(name_entries[sid]["assignment_id"], ASSIGNMENT)
+            self.assertEqual(name_entries[sid]["cwd"], worktree)
+
+    def test_R229_a_subagent_records_its_own_cwd_and_assignment_id(self):
+        """agent-eval-named-capture/R229: the subagent road carries the same two fields"""
+        claude_session(self.claude, "-app", WORKER, "/work/c", "2026-11-10T10:00:00Z")
+        write(
+            self.claude / "projects" / "-app" / WORKER / "subagents" / "agent-s1.jsonl",
+            '{"type":"user","cwd":"/work/sub","message":{"role":"user","content":"hi"}}\n',
+        )
+        result = self.capture("--session", WORKER)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entry = self.entries(WORKER)["agent-s1"]
+        self.assertEqual((entry["cwd"], entry["assignment_id"]), ("/work/sub", None))
 
     def test_R229_a_chain_member_records_its_own_cwd_and_assignment_id(self):
         """agent-eval-named-capture/R229: the chain road carries the same two fields"""
@@ -288,6 +328,12 @@ class ManifestFieldTests(NamedCase):
         entries = self.entries(PI_ID)
         self.assertIsNone(entries[PI_ID]["assignment_id"])
         self.assertIsNone(entries[CODEX_ID]["assignment_id"])
+        solo = self.capture("--session", SOLO)
+        self.assertEqual(solo.returncode, 0, solo.stderr)
+        self.assertEqual(
+            (self.entries(SOLO)[SOLO]["cwd"], self.entries(SOLO)[SOLO]["assignment_id"]),
+            (None, None),
+        )
 
     def test_R237_a_codex_prompt_that_starts_with_a_bracket_keeps_its_assignment_id(self):
         """R237: only Codex's own injected messages are skipped"""
