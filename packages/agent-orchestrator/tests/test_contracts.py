@@ -540,7 +540,7 @@ class TierBriefTests(unittest.TestCase):
         )
         others = [line for line in text.splitlines() if "uv run pytest -n auto" in line]
         self.assertEqual(len(others), 1, text)
-        self.assertIn("Do not run", others[0])
+        self.assertIn("do not run", others[0])
         self.assertNotIn("full CI gate", text)
 
     def test_S3_a_named_gate_is_the_required_checks_alone_and_the_tiers_are_not_applied(self):
