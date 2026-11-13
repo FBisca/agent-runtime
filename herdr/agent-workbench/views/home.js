@@ -2,10 +2,8 @@
 // collapsed older line. A card opens its dashboard and a plan row opens the plan; both are the model's navigation.
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { olderLabel } from "../model.js";
+import { olderLabel, cardsPerRow } from "../model.js";
 import { badge, control, progressText } from "../ui.js";
-
-const CARDS_PER_ROW = { wide: 5, narrow: 2 };
 
 const heading = (text, t) => div().px(8).pt(6).text_size(10).font_semibold().text_color(t.dim).child(text.toUpperCase());
 
@@ -19,7 +17,7 @@ function card(c, onCard, t) {
 
 // Rows of cards, not a wrap: the model says how many fit, so a short last row keeps its cards' width.
 function cards(list, layout, onCard, t) {
-  const per = CARDS_PER_ROW[layout] ?? CARDS_PER_ROW.wide;
+  const per = cardsPerRow(layout);
   const rows = [];
   for (let i = 0; i < list.length; i += per) rows.push(list.slice(i, i + per));
   return v_flex().id("cards").gap(6).px(8).pt(6).children(rows.map((row, r) =>

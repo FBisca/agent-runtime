@@ -485,6 +485,58 @@ export function homeView(plans, totals, live = null) {
   };
 }
 
+/** How many cards fit a row: two when narrow, so a card keeps room for its number. */
+export const cardsPerRow = (layout) => (layout === "narrow" ? 2 : 5);
+
+const list = (v) => (Array.isArray(v) ? v : []);
+const entries = (v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.entries(v) : []);
+const at = (r) => `${r.plan} ${r.ticket}`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const percent = (r) => (num(r) === null ? UNKNOWN : `${Math.round(r * 100)}%`);
+const tokenSum = (r) => (num(r?.input) === null && num(r?.output) === null ? null : (r.input ?? 0) + (r.output ?? 0));
+const tokenText = (r) => { const n = tokenSum(r); return n === null ? UNKNOWN : tokenCount(n); };
+const countBars = (pairs) => pairs.map(([label, value]) => ({ label, value, text: String(value) }));
+
+// One builder per card: `bars` are the aggregates, `lists` the tickets behind them. Each reads only its own section of
+// the totals answer, so a missing section draws nothing rather than a guess.
+const DETAIL = {
+  ticket_time: (totals) => ({
+    bars: entries(totals.time?.steps).map(([label, s]) => ({
+      label, value: num(s?.median), text: num(s?.median) === null ? UNKNOWN : `${duration(s.median)} · max ${duration(s.max)}`,
+    })),
+    lists: [{ title: "Slowest tickets", rows: list(totals.time?.slowest).map((r) => ({ label: at(r), text: duration(r.seconds) })) }],
+  }),
+  merged: (totals) => ({
+    bars: countBars(list(totals.merged?.by_day).map((d) => [d.day, d.count])),
+    lists: [{ title: "Merged", rows: list(totals.merged?.tickets).map((r) => ({ label: at(r), text: r.pr ?? "" })) }],
+  }),
+  first_pass: (totals) => ({
+    bars: entries(totals.first_pass?.by_plan).map(([label, v]) => ({ label, value: num(v), text: percent(v) })),
+    lists: [{
+      title: "Fixed tickets",
+      rows: list(totals.first_pass?.fixed).map((r) => ({ label: at(r), text: `${plural(r.fix_rounds, "fix round")} · ${plural(r.findings, "finding")}` })),
+    }],
+  }),
+  escalations: (totals) => ({
+    bars: countBars([...entries(totals.escalations?.by_cause), ...entries(totals.escalations?.by_plan)]),
+    lists: [{ title: "Latest", rows: list(totals.escalations?.latest).map((r) => ({ label: at(r), text: `${r.cause} · ${r.at}` })) }],
+  }),
+  tokens: (totals) => ({
+    bars: [...entries(totals.tokens?.by_plan), ...entries(totals.tokens?.by_model)]
+      .map(([label, v]) => ({ label, value: tokenSum(v), text: tokenText(v) })),
+    lists: [{ title: "Top tickets", rows: list(totals.tokens?.top).map((r) => ({ label: at(r), text: `${tokenText(r)} · ${r.model ?? UNKNOWN}` })) }],
+  }),
+};
+
+/** A card's dashboard detail from the totals answer: `bars` only when wide (a narrow panel has no room for them),
+ *  `lists` always; a list with no rows is left out. */
+export function dashboardView(card, totals, layout) {
+  const detail = totals && DETAIL[card]?.(totals);
+  if (!detail) return { bars: [], lists: [] };
+  const bars = layout === "narrow" ? [] : detail.bars;
+  return { bars, lists: detail.lists.filter((l) => l.rows.length) };
+}
+
 // ---- navigation ---------------------------------------------------------------------------------------------
 
 /** Where the mod opens: on home. There is no plan picker. */

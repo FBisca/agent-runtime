@@ -7,7 +7,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, homeView, initialNav, navigate, ticketLayers, pickTicket, relatives, inspector, planHeader,
+  layoutFor, screenFor, planRows, homeView, dashboardView, initialNav, navigate, ticketLayers, pickTicket, relatives, inspector, planHeader,
   timelineOf, notice, liveTerminals, panelToggle, panelsWith, panelExpand, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
@@ -154,7 +154,7 @@ export default class AgentWorkbench extends View {
           : noticeView(notice(state.totals.error ?? { kind: "no_json", message: "no totals" }, { project }), t));
       }
       return root.child(header({ title: card.label }, back)).child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(dashboardScreen(card, t)));
+        .child(dashboardScreen(card, dashboardView(card.id, state.totals.value, layout), t)));
     }
 
     const picked = this.nav.screen === "plan" ? rows.find((r) => r.path === this.nav.path) ?? null : null;
