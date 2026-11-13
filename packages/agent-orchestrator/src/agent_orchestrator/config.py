@@ -16,7 +16,10 @@ NODES = {
     "acceptance": ("dir",),
     "archive": ("mode",),
     "checks": ("fast", "affected", "full"),
+    "tests": ("patterns",),
 }
+# file-name globs that mark a test file; a directory named `tests` marks one whatever these say
+DEFAULT_TEST_PATTERNS = ("test_*", "*_test.*", "*.test.*", "*.spec.*")
 # the placeholders `checks.affected` may name: the run's base ref and the ticket's paths
 AFFECTED_PLACEHOLDERS = ("base", "paths")
 FULL_KEYS = ("run", "verify")
@@ -43,6 +46,7 @@ class RepoConfig:
     acceptance_dir: str
     archive_mode: str
     checks: Checks | None = None
+    test_patterns: tuple = DEFAULT_TEST_PATTERNS
 
 
 def _path(root, value, dotted):
@@ -101,6 +105,20 @@ def _checks(body):
     )
 
 
+def _test_patterns(body):
+    value = body.get("patterns", list(DEFAULT_TEST_PATTERNS))
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(p, str) and p.strip() for p in value)
+    ):
+        raise ConfigError(
+            f"{CONFIG_PATH}: tests.patterns must be a non-empty list of file-name globs — "
+            "write patterns: ['test_*', '*.spec.*']"
+        )
+    return tuple(value)
+
+
 def load(root):
     """The repo's config under `root`, defaults filled in; ConfigError for an unknown key or a bad value."""
     root = Path(root)
@@ -140,4 +158,5 @@ def load(root):
             f"{CONFIG_PATH}: archive.mode: {mode!r} is not a mode — use one of {' | '.join(ARCHIVE_MODES)}"
         )
     checks = _checks(data["checks"]) if "checks" in data else None
-    return RepoConfig(plans, acceptance, mode, checks)
+    patterns = _test_patterns(data.get("tests", {}))
+    return RepoConfig(plans, acceptance, mode, checks, patterns)

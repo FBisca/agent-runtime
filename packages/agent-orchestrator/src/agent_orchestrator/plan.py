@@ -6,6 +6,7 @@ presentation are preserved on disk but do not affect the contract digest.
 """
 
 import copy
+import fnmatch
 import fcntl
 import functools
 import hashlib
@@ -331,6 +332,32 @@ def _toplevel(directory):
 def _identity(repo):
     common = Path(git(repo, "rev-parse", "--git-common-dir"))
     return str((Path(repo) / common).resolve())
+
+
+def is_test_path(path, patterns):
+    """Whether `path` can hold a test: its file name matches a pattern or one of its directories is `tests`."""
+    parts = Path(path).parts
+    name = "" if str(path).endswith("/") else parts[-1] if parts else ""
+    directories = parts if str(path).endswith("/") else parts[:-1]
+    return "tests" in directories or any(fnmatch.fnmatchcase(name, p) for p in patterns)
+
+
+def holds_no_test(paths, patterns):
+    """True when none of `paths` is a directory (a trailing slash) or a test file: no test can be added there."""
+    return not any(str(p).endswith("/") or is_test_path(p, patterns) for p in paths)
+
+
+def lint_problems(model, repo):
+    """Problems `plan check`, `plan approve` and `plan amend` refuse; the driver's load never runs this, so a plan
+    approved before a rule existed keeps running."""
+    patterns = repo_config(repo).test_patterns
+    return [
+        f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
+        "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
+        "tests, to its paths"
+        for i, ticket in enumerate(model.tickets)
+        if ticket.owner.strip().lower() == "agent" and holds_no_test(ticket.paths, patterns)
+    ]
 
 
 def semantic_problems(data, path, repo):
@@ -882,7 +909,12 @@ def verify_snapshot(path, model, repo, state_dir):
     return Plan.model_validate(snap_data).model_copy(update={"approval": model.approval})
 
 
-def load(path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, verify=True):
+def load(
+    path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, verify=True, lint=None
+):
+    """`lint` runs the refusals that only authoring commands make. It defaults to on for `plan check` (which
+    verifies without requiring an approval) and off for the driver's load, which requires one."""
+    lint = verify and not require_approval if lint is None else lint
     path = Path(path).resolve()
     data, problems = read_yaml(path)
     model = None
@@ -907,6 +939,8 @@ def load(path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, ve
             )
         raise PlanError("; ".join(problems))
     assert model is not None
+    if lint and (found := lint_problems(model, repo)):
+        raise PlanError("; ".join(found))
     if model.approval and verify:
         return verify_snapshot(path, model, repo, state_dir)
     if require_approval and model.approval is None:
@@ -1064,7 +1098,7 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
     anything is written."""
     path = Path(path).resolve()
     repo = repository(path, repo)
-    model = load(path, repo=repo, verify=False)
+    model = load(path, repo=repo, verify=False, lint=True)
     with run_lock(repo, model.slug):
         try:
             return approve_locked(path, repo, model, state_dir, base)
