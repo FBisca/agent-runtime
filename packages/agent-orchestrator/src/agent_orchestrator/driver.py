@@ -960,7 +960,9 @@ def metrics_table(metrics):
         usage = row["usage"]
         # A figure nobody reported prints as null, never as 0 or as a blank.
         figures = [
-            usage if isinstance(usage, str) else json.dumps((usage or {}).get(key))
+            usage
+            if isinstance(usage, str)
+            else json.dumps((usage if isinstance(usage, dict) else {}).get(key))
             for _, key in USAGE_COLUMNS
         ]
         rows.append(
