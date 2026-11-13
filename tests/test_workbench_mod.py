@@ -295,10 +295,14 @@ def test_S12_each_home_card_carries_a_picture_of_its_dashboard_and_a_card_with_n
 def test_S13_home_draws_the_header_with_expand_and_refresh_as_a_plan_and_a_dashboard_do():
     main = source("main.js")
     # The header closure carries both buttons; home's branch adds it before its body, as the plan's and the dashboard's do.
-    header = re.search(r"const header = \(head, back = null\) => headerView\(head, \{(.*?)\}\);", main, re.S)
+    header = re.search(
+        r"const header = \(head, back = null\) => headerView\(head, \{(.*?)\}\);", main, re.S
+    )
     assert header, "main.js builds one header for every screen"
     assert "onRefresh" in header.group(1) and "expand: this.expandFor()" in header.group(1)
-    assert re.search(r"root\.child\(header\(null\)\);\s*return show\(homeScreen\(", main), "home draws the header"
+    assert re.search(r"root\.child\(header\(null\)\);\s*return show\(homeScreen\(", main), (
+        "home draws the header"
+    )
 
 
 def test_S14_home_lists_needs_me_with_a_glyph_and_an_action_and_each_plan_with_recency_live_agents_and_prs():
