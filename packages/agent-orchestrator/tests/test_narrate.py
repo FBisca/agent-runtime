@@ -1,7 +1,6 @@
 """The driver's pane: one short, coloured line per thing that happened, repeated waits collapsed."""
 
 import io
-import re
 import unittest
 
 import pytest
@@ -124,7 +123,7 @@ class NarrateTests(unittest.TestCase):
         self.assertTrue(
             self.lines()[1].endswith("! the table of ~/.claude/CLAUDE.md is deprecated")
         )
-        cut = re.search("✗ (.*)$", self.lines()[2]).group(1)
+        cut = self.lines()[2].split("✗ ", 1)[1]
         self.assertEqual((len(cut), cut[-1]), (narrate.WIDTH, "…"))
 
 
