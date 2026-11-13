@@ -20,7 +20,13 @@ ledger status changed), `route` (the route a worker was dispatched on: `unit`, `
 `draft` (a pull request was put back to a draft: `unit`, `task`, `pr`, `outcome`),
 `update-branch` (a pull request behind its base was updated, or it conflicted: `unit`, `task`, `pr`, `outcome`),
 `merged-early` (a pull request was merged while its unit was still working: `unit`, `task`, `pr`, `findings`) and
-`idle` (a unit that showed nothing new at an idle tick: `unit`, `task`, `waiting` agent|ci, `ticks`)."""
+`idle` (a unit that showed nothing new at an idle tick: `unit`, `task`, `waiting` agent|ci, `ticks`),
+`drain` (the plan was edited since its approval, or no longer loads, and the run starts no new worker: `state`
+draining|ended, `cause` edited|unloadable, `error`, `digest` of the approval the run holds; `ended` when the file is
+back to its approved bytes),
+`amended` (the run adopted an amendment: `prev_digest`, `digest`, and the amendment's `reason` and `tickets`) and
+`repacket` (an open attempt whose ticket the amendment changed was given its next packet: `unit`, `task`, `packet`
+`task.v<n>.md`, `resumed`, `digest`)."""
 
 import json
 import os
