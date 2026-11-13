@@ -90,7 +90,9 @@ class SeamTests(unittest.TestCase):
             stderr = "boom\n"
 
         with self.assertRaises(RuntimeError) as caught:
-            CliRuntimeClient("lead-1", process=lambda argv, timeout=None: Failed()).call("spawn", {}, timeout=30)
+            CliRuntimeClient("lead-1", process=lambda argv, timeout=None: Failed()).call(
+                "spawn", {}, timeout=30
+            )
         self.assertIn("boom", str(caught.exception))
 
 

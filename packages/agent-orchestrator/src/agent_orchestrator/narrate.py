@@ -134,7 +134,7 @@ class Narrator:
         if routes.get("path"):
             source = "%s (%s)" % (self.shorten(routes["path"]), routes.get("source"))
         else:
-            source = "legacy table (deprecated)"
+            source = "recorded in the ledger (legacy table)"
         lines.append(row("routes", source))
         classes = routes.get("classes") or {}
         steps = routes.get("steps") or {}

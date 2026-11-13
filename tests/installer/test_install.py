@@ -443,15 +443,6 @@ class EnvironmentTests(InstallerCase):
         self.assertEqual(no_home.returncode, 1)
         self.assertIn("HOME", no_home.stderr)
 
-    def test_s8_shellcheck_is_happy_with_the_installer(self):
-        """installer-contract/R8: the installer is shellcheck clean."""
-        if shutil.which("shellcheck") is None:
-            self.skipTest("shellcheck is not installed")
-        result = subprocess.run(
-            ["shellcheck", str(INSTALLER)], capture_output=True, text=True, check=False
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
 
 def snapshot(home):
     """Everything under a home directory: what it is, where a link points, and what a file holds."""

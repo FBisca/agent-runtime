@@ -16,6 +16,31 @@ pytestmark = pytest.mark.integration
 REFUSAL = "team limit is 32 active workers: stop an active worker, then retry"
 
 
+def worker_address(name):
+    """The terminal address the runtime tests' fake hc gives worker `wNN` (see test_operations.worker_rows)."""
+    return "t%d" % (100 + int(name[1:]))
+
+
+def team_of(store):
+    """The team a lead's first call created in `store`, and its scope, for a test that seeds around that call."""
+    with store.transaction() as db:
+        row = db.execute("SELECT id,scope FROM teams ORDER BY rowid DESC LIMIT 1").fetchone()
+    return row["id"], row["scope"]
+
+
+def seed_workers(store, team, scope, active=(), stopped=()):
+    """Put workers in a team's store the way a spawn and the worker's first report leave them: registered, bound
+    to their address, and active, or stopped after that. Nothing launches and no worker session starts, so a test
+    that needs a full team drives only the step it is about through the public path. A stopped name that is
+    named in `active` comes back active, as a resume leaves it."""
+    # Stopped names go first: a name registered while 32 others are active would be refused as the 33rd.
+    for name in stopped:
+        store.bind(store.register(team, name)["assignment_id"], worker_address(name), scope)
+        store.stopped(team, name)
+    for name in active:
+        store.bind(store.register(team, name)["assignment_id"], worker_address(name), scope)
+
+
 class TeamLimitTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -120,6 +145,58 @@ class TeamLimitTests(unittest.TestCase):
         identity = self.store.register(self.team, "w5")
         self.assertEqual(identity["team_id"], self.team)
         self.assertEqual(self.active(), 32)
+
+
+class SeededTeamTests(unittest.TestCase):
+    """S10: a runtime test that needs a full team seeds it through the store; it never spawns 32 workers."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = Store({"HOME": self.temp.name})
+        self.team = self.store.team("test", "t0", "lead")
+
+    def count(self, active):
+        with self.store.transaction() as db:
+            return db.execute(
+                "SELECT COUNT(*) FROM workers WHERE team=? AND active=?", (self.team, active)
+            ).fetchone()[0]
+
+    def test_S10_a_seeded_full_team_refuses_the_33rd_active_worker(self):
+        """agent-runtime/R241"""
+        seed_workers(self.store, self.team, "test", active=["w%02d" % i for i in range(32)])
+        self.assertEqual(self.count(1), 32)
+        with self.assertRaises(StoreError) as caught:
+            self.store.register(self.team, "w32")
+        self.assertEqual(str(caught.exception), REFUSAL)
+
+    def test_S10_a_seeded_stopped_worker_holds_no_slot_and_keeps_its_name(self):
+        """agent-runtime/R240"""
+        seed_workers(
+            self.store,
+            self.team,
+            "test",
+            active=["w%02d" % i for i in range(31)],
+            stopped=["w31"],
+        )
+        self.assertEqual((self.count(1), self.count(0)), (31, 1))
+        self.store.register(self.team, "w32")  # the 32nd active worker fits beside the stopped name
+        with self.assertRaises(StoreError) as caught:
+            self.store.register(
+                self.team, "w31", transfer=True
+            )  # reactivating it would be the 33rd
+        self.assertEqual(str(caught.exception), REFUSAL)
+
+    def test_S10_a_stopped_name_is_reactivated_by_seeding_it_active(self):
+        """agent-runtime/R240"""
+        seed_workers(self.store, self.team, "test", stopped=["w00", "w01"])
+        seed_workers(self.store, self.team, "test", active=["w01"])
+        self.assertEqual((self.count(1), self.count(0)), (1, 1))
+
+    def test_S10_a_seeded_worker_answers_at_its_own_address(self):
+        """agent-runtime/R240"""
+        seed_workers(self.store, self.team, "test", active=["w05"])
+        self.assertEqual(self.store.worker_address(self.team, "w05"), "t105")
 
 
 if __name__ == "__main__":

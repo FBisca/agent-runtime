@@ -46,20 +46,6 @@ class RouteDriverTests(RunFixture, unittest.TestCase):
         self.assertIn("tiny", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
-    def test_S1_a_run_with_no_route_config_keeps_the_legacy_model_decisions(self):
-        """orchestrator-engine/R2: P4/S1 — no route config, the same model per class as the legacy table says."""
-        self.run_driver()
-        spawns = {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
-        worker = spawns["demo-t1"]
-        self.assertEqual(
-            (worker["cli"], worker["model"], worker["effort"]), ("claude", "haiku", "low")
-        )
-
-    def test_S1_a_legacy_run_says_the_legacy_config_is_deprecated(self):
-        """orchestrator-engine/R2: P4/S1 — the legacy path is kept for a transition, with an explicit warning."""
-        result = self.run_driver()
-        self.assertIn("legacy routing config", result.stderr)
-
     def test_a_run_opens_with_its_banner_naming_each_class_route(self):
         """orchestrator-engine/R90: the drive's first lines are the banner: the plan, its tickets and its routes."""
         path = self.routes_file(
@@ -75,18 +61,6 @@ class RouteDriverTests(RunFixture, unittest.TestCase):
         self.assertIn("  plan     demo · ", head)
         self.assertRegex(head, r"\n    medium   codex  · gpt-m · high\n")
         self.assertIn("routes.json (explicit)", head)
-
-    def test_S1_a_legacy_run_with_a_brain_backend_the_table_lacks_fails(self):
-        """orchestrator-engine/R2: P4/S1 — the legacy path stays strict: a class the table does not name is an error, not a fallback."""
-        self.models.write_text(
-            "## Model classes\n\n| Class | Claude |\n|---|---|\n"
-            '| small | `model: "haiku"` |\n| medium | `model: "sonnet"` |\n'
-            '| large | `model: "opus"` |\n',
-            encoding="utf-8",
-        )
-        result = self.run_driver("--brain-cli", "codex", expect=2)
-        self.assertIn("lacks a codex model for class", result.stderr)
-        self.assertEqual(self.calls("spawn"), [])
 
     def test_S1_a_typed_route_config_answers_a_brain_backend_the_table_lacks(self):
         """orchestrator-engine/R2: P4/S1 — with a route config the brain model comes from the config, not from the legacy table."""

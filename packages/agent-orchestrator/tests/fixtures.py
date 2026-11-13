@@ -270,7 +270,30 @@ class RunFixture(_Case):
             '| large | `model: "opus"` | `gpt-l` |\n',
             encoding="utf-8",
         )
-        self.models = models
+        self.models = models  # the table no run reads now; a test puts it where a run must not look
+        # What a run is routed by: one typed route file per backend, named as the user's profiles are.
+        self.route_files = {}
+        for backend, name, models in (
+            ("claude", "routes.json", ("haiku", "sonnet", "opus")),
+            ("codex", "routes-codex.json", ("gpt-s", "gpt-m", "gpt-l")),
+            ("pi", "routes-pi.json", ("minimax/MiniMax-M3.1-Flash",) * 3),
+        ):
+            path = self.root / "routes" / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "routes": [
+                            {"class": klass, "backend": backend, "model": model}
+                            for klass, model in zip(("small", "medium", "large"), models)
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.route_files[backend] = path
+        self.route_file = self.route_files["claude"]
         self.set_plan()
 
     def set_plan(self, rows=("T1", "T2", "T3", "T4", "T5"), **kwargs):
@@ -582,7 +605,15 @@ class RunFixture(_Case):
         self.assertEqual(code, 0, out.getvalue())
         return path
 
-    def run_driver(self, *extra, plan=None, expect=0):
+    def routing_args(self, extra=(), routed=True):
+        """The route file a run names when the test names none: the one for its `--cli`, a claude file otherwise.
+        A test of the files a run finds on its own passes `routed=False`."""
+        if not routed or "--routes-file" in extra:
+            return []
+        backend = extra[extra.index("--cli") + 1] if "--cli" in extra else "claude"
+        return ["--routes-file", str(self.route_files[backend])]
+
+    def run_driver(self, *extra, plan=None, expect=0, routed=True):
         """The driver run in this process: the fakes answer in process, so the run starts no process of its own."""
         spec = load_script()
         self.alias_state(plan or self.plan)
@@ -591,8 +622,7 @@ class RunFixture(_Case):
             str(plan or self.plan),
             "--state-dir",
             str(self.state_dir),
-            "--models-file",
-            str(self.models),
+            *self.routing_args(extra, routed),
             "--wait-seconds",
             "1",
             "--idle-interval",

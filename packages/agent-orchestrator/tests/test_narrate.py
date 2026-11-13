@@ -192,7 +192,7 @@ class BannerTests(unittest.TestCase):
             "steps": {},
         }
         lines = self.banner(gates=[], routes=legacy)
-        self.assertIn("  routes   legacy table (deprecated)", lines)
+        self.assertIn("  routes   recorded in the ledger (legacy table)", lines)
         self.assertFalse([line for line in lines if line.lstrip().startswith(("gates", "steps"))])
 
     def test_the_logo_is_coloured_only_on_a_terminal(self):

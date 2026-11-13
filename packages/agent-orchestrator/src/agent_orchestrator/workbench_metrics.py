@@ -112,6 +112,7 @@ class Lane:
         self.fix_tasks = set()
         self.reviews = 0
         self.findings = 0
+        self.reasons = {}
         self.ci_failed = set()
         self.escalations = {}
         self.segments = []  # [phase, start, end or None]
@@ -172,6 +173,11 @@ class Lane:
             self.model = self.model or row["model"]
         elif kind == "finding":
             self.findings += 1
+            reason = "%s/%s" % (
+                row.get("source") or "unknown",
+                row.get("finding_kind") or "unknown",
+            )
+            self.reasons[reason] = self.reasons.get(reason, 0) + 1
         elif kind == "ci" and row.get("state") == "failed":
             self.ci_failed.add((task, row.get("pr"), row.get("gate")))
         elif kind == "escalation":
@@ -246,6 +252,7 @@ def compute_rows(rows, attempts, ticket_ids):
             "fix_rounds": len(lane.fix_tasks),
             "review_rounds": lane.reviews,
             "findings": lane.findings,
+            "reasons": dict(sorted(lane.reasons.items())),
             "ci_failures": len(lane.ci_failed),
             "escalations": dict(sorted(lane.escalations.items())),
             "model": lane.model

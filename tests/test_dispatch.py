@@ -1,14 +1,21 @@
 """Durable dispatch over real MCP subprocesses, fake hc only."""
 
 import json
+import os
 import stat
 import sys
+import time
+from types import SimpleNamespace
+from unittest import mock
 
 from test_mcp_server import RUNTIME_SRC
-from test_tools import ToolCase, raw
+from test_operations import FakeHc
+from test_team_limit import team_of
+from test_tools import ToolCase, hc_in_process, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
+from agent_runtime import dispatch_wait, hc_tools, mcp_server
 from agent_runtime.dispatch_store import MAX_BATCH_BYTES, Store, StoreError
 
 pytestmark = pytest.mark.integration
@@ -54,11 +61,48 @@ class DispatchTests(ToolCase):
         args.update(extra)
         return self.call(worker, "report", args)
 
+    def seed_report(self, assignment, text, kind="progress", message_id=None):
+        """A report of worker w1 written through the store, as its first publish leaves it (the assignment binds to
+        the worker's address). For a test about what the lead does with many reports, not about publishing one: it
+        starts no worker session and makes no call. Returns the envelope the lead will read."""
+        store = Store({"HOME": str(self.dir / "home")})
+        team, scope = team_of(store)
+        return store.publish(
+            scope, "t9", "t0", assignment["assignment_id"], text, kind, message_id, caller_name="w1"
+        )
+
     def read(self, lead, **extra):
         result, text = self.call(lead, "wait", dict(target="all", timeout=0, **extra))
         self.assertFalse(result["isError"], text)
         self.assertEqual(result["structuredContent"], json.loads(text))
         return result["structuredContent"]
+
+    def test_S10_seeded_reports_reach_the_lead_as_a_worker_session_would_publish_them(self):
+        """A test about how the lead reads many reports seeds them through the store: no worker session starts."""
+        lead = self.lead()
+        assignment = self.spawn(lead)
+        sent = [
+            self.seed_report(assignment, "report %d" % i, message_id="seed-%d" % i)
+            for i in range(3)
+        ]
+        batch = self.read(lead)
+        self.assertEqual(batch["messages"], sent)
+        self.assertEqual(
+            sorted(batch["messages"][0]),
+            sorted(
+                [
+                    "message_id",
+                    "team_id",
+                    "worker_id",
+                    "assignment_id",
+                    "sender",
+                    "recipient",
+                    "kind",
+                    "text",
+                ]
+            ),
+        )
+        self.assertEqual(self.runs("send"), [], "a report went through hc send")
 
     def test_structured_reports_from_both_clis_without_hc_send(self):
         """agent-runtime/R34"""
@@ -278,28 +322,23 @@ class DispatchTests(ToolCase):
         """agent-runtime/R53"""
         lead = self.lead()
         assignment = self.spawn(lead)
-        worker = self.worker()
         for i in range(35):
-            result, text = self.publish(
-                worker, assignment, kind="progress", text=str(i), message_id=str(i)
-            )
-            self.assertFalse(result["isError"], text)
+            self.seed_report(assignment, str(i), message_id=str(i))
         first = self.read(lead)
         self.assertTrue(first["more"])
         self.assertTrue(first["receipt"])
         second = self.read(lead, receipt=first["receipt"])
         self.assertEqual(len(first["messages"]) + len(second["messages"]), 35)
         self.assertFalse(second["more"])
+        # the one report that goes through a worker session is the one refused
+        worker = self.worker()
         result, text = self.publish(worker, assignment, text="x" * 65537)
         self.assertTrue(result["isError"])
         self.assertIn("65536", text)
         self.assertEqual(self.read(lead)["messages"], second["messages"])
         self.read(lead, receipt=second["receipt"])
         for i in range(3):
-            result, text = self.publish(
-                worker, assignment, kind="progress", text="x" * 60000, message_id="large-%s" % i
-            )
-            self.assertFalse(result["isError"], text)
+            self.seed_report(assignment, "x" * 60000, message_id="large-%s" % i)
         page = self.read(lead)
         self.assertEqual(len(page["messages"]), 2)
         self.assertLess(len(json.dumps(page["messages"]).encode()), 131072)
@@ -314,27 +353,17 @@ class DispatchTests(ToolCase):
         agent-runtime-dispatch/S26"""
         lead = self.lead()
         assignment = self.spawn(lead)
-        worker = self.worker()
-        encode = lambda value: json.dumps(value, separators=(",", ":")).encode("utf-8")
+
+        def encode(value):
+            return json.dumps(value, separators=(",", ":")).encode("utf-8")
+
         for overflow in (0, 1):
             with self.subTest(overflow_bytes=overflow):
                 first_id, second_id = "boundary-%s-a" % overflow, "boundary-%s-b" % overflow
-                result, text = self.publish(
-                    worker, assignment, kind="progress", text="x" * 65530, message_id=first_id
-                )
-                self.assertFalse(result["isError"], text)
-                first = result["structuredContent"]
+                first = self.seed_report(assignment, "x" * 65530, message_id=first_id)
                 second = dict(first, message_id=second_id, text="y")
                 padding = MAX_BATCH_BYTES + overflow - len(encode([first, second]))
-                result, text = self.publish(
-                    worker,
-                    assignment,
-                    kind="progress",
-                    text="y" * (1 + padding),
-                    message_id=second_id,
-                )
-                self.assertFalse(result["isError"], text)
-                second = result["structuredContent"]
+                second = self.seed_report(assignment, "y" * (1 + padding), message_id=second_id)
                 self.assertEqual(len(encode([first, second])), MAX_BATCH_BYTES + overflow)
                 result, text = self.call(lead, "wait", {"target": "all", "timeout": 0})
                 self.assertFalse(result["isError"], text)
@@ -414,145 +443,6 @@ class DispatchTests(ToolCase):
         # A complete report committed first wins.
         self.publish(self.worker(), assignment)
         self.assertEqual(self.read(lead)["reason"], "completed")
-
-    def test_fresh_spawn_idle_before_first_turn_is_not_attention(self):
-        """agent-runtime/R63"""
-        started = json.loads(raw("w1", "t0", "idle"))
-        started["turn"] = 0
-        row = {
-            "address": "t9",
-            "name": "w1",
-            "parent": "t0",
-            "turn": 0,
-            "status": {"state": "idle"},
-        }
-        replies = {
-            "get:w1": {"out": json.dumps(started)},
-            "ls": {"out": json.dumps({"terminals": [row]})},
-            "get:t0": {"out": raw("lead", None)},
-        }
-        lead = self.start(
-            replies,
-            {
-                "CODEX_THREAD_ID": "l",
-                "HC_SCOPE": "lead-token",
-                "HC_TERMINAL_SOCKET": "/hc/sock",
-                "AGENT_RUNTIME_DISPATCH": "1",
-            },
-        )
-        self.spawn(lead)
-        result, text = self.call(lead, "wait", {"target": "all", "timeout": 1})
-        self.assertEqual(
-            result["structuredContent"]["reason"], "timeout", text
-        )  # CLI still starting up
-        replies["ls"] = {
-            "out": json.dumps({"terminals": [dict(row, turn=1, status={"state": "done"})]})
-        }
-        (self.dir / "replies").write_text(json.dumps(replies))
-        result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
-        self.assertEqual(
-            result["structuredContent"]["reason"], "attention", text
-        )  # first turn ended, no report
-
-    def test_resume_then_immediate_wait_ignores_the_old_done_turn(self):
-        """agent-runtime/R63"""
-
-        def ls(turn):
-            return {
-                "out": json.dumps(
-                    {
-                        "terminals": [
-                            {
-                                "address": "t9",
-                                "name": "w1",
-                                "parent": "t0",
-                                "turn": turn,
-                                "status": {"state": "done"},
-                            }
-                        ]
-                    }
-                )
-            }
-
-        worker = json.loads(raw("w1", "t0"))
-        worker["turn"] = 1
-        replies = {
-            "get:w1": {"out": json.dumps(worker)},
-            "ls": ls(1),
-            "get:t0": {"out": raw("lead", None)},
-        }
-        lead = self.start(
-            replies,
-            {
-                "CODEX_THREAD_ID": "l",
-                "HC_SCOPE": "lead-token",
-                "HC_TERMINAL_SOCKET": "/hc/sock",
-                "AGENT_RUNTIME_DISPATCH": "1",
-            },
-        )
-        self.spawn(lead)
-        result, text = self.call(lead, "resume", {"name": "w1", "task": "again"})
-        self.assertFalse(result["isError"], text)
-        result, text = self.call(lead, "wait", {"target": "all", "timeout": 1})
-        self.assertEqual(
-            result["structuredContent"]["reason"], "timeout"
-        )  # still the previous turn's done
-        replies["ls"] = ls(2)
-        (self.dir / "replies").write_text(json.dumps(replies))
-        result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
-        self.assertFalse(result["isError"], text)
-        self.assertEqual(result["structuredContent"]["reason"], "attention")
-        self.assertEqual(len(result["structuredContent"]["unfinished"]), 1)
-
-    def test_resume_of_a_mid_turn_worker_ignores_the_old_turn_ending(self):
-        """agent-runtime/R63"""
-
-        def ls(turn):
-            return {
-                "out": json.dumps(
-                    {
-                        "terminals": [
-                            {
-                                "address": "t9",
-                                "name": "w1",
-                                "parent": "t0",
-                                "turn": turn,
-                                "status": {"state": "done"},
-                            }
-                        ]
-                    }
-                )
-            }
-
-        worker = json.loads(raw("w1", "t0", "working"))
-        worker["turn"] = 3
-        replies = {
-            "get:w1": {"out": json.dumps(worker)},
-            "ls": ls(3),
-            "get:t0": {"out": raw("lead", None)},
-        }
-        lead = self.start(
-            replies,
-            {
-                "CODEX_THREAD_ID": "l",
-                "HC_SCOPE": "lead-token",
-                "HC_TERMINAL_SOCKET": "/hc/sock",
-                "AGENT_RUNTIME_DISPATCH": "1",
-            },
-        )
-        self.spawn(lead)
-        result, text = self.call(
-            lead, "resume", {"name": "w1", "task": "again"}
-        )  # recorded: working, turn 3
-        self.assertFalse(result["isError"], text)
-        replies["ls"] = ls(4)  # the turn that was already running ends
-        (self.dir / "replies").write_text(json.dumps(replies))
-        result, _ = self.call(lead, "wait", {"target": "all", "timeout": 1})
-        self.assertEqual(result["structuredContent"]["reason"], "timeout")
-        replies["ls"] = ls(5)  # the resumed turn ends
-        (self.dir / "replies").write_text(json.dumps(replies))
-        result, _ = self.call(lead, "wait", {"target": "all", "timeout": 2})
-        self.assertEqual(result["structuredContent"]["reason"], "attention")
 
     def test_unsent_spawn_is_removed_and_can_be_spawned_again(self):
         """agent-runtime/R72
@@ -730,6 +620,138 @@ class DispatchTests(ToolCase):
             )
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.read(lead)["messages"], [])
+
+
+class ClockedWaitTests(FakeHc):
+    """agent-runtime/R63: how a lead's `wait` reads a worker's turns, with the wait's clock injected.
+
+    The server's call path runs in this process with the fake hc answered in process, and the wait's monotonic clock
+    and listener are replaced: the seconds a wait would sit in its listener pass on the injected clock at once, so a
+    `timeout` the test asks for costs no real time. What the wait answers is the signal the code produced; the real
+    server over stdio is held by the wait tests of test_event_wait and by DispatchTests."""
+
+    def setUp(self):
+        super().setUp()
+        self.now = 1000.0
+        test = self
+
+        class InjectedListener(dispatch_wait.Listener):
+            def wait(
+                self, seconds
+            ):  # nothing publishes in process: the time a real wait takes just passes
+                test.now += seconds
+
+        self.enterContext(
+            mock.patch.object(dispatch_wait, "time", SimpleNamespace(monotonic=lambda: test.now))
+        )
+        self.enterContext(mock.patch.object(dispatch_wait, "Listener", InjectedListener))
+        self.session = {}
+        self.env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_TERMINAL_ID": "t0",
+            "CODEX_THREAD_ID": "l",
+            "HC_SCOPE": "lead-token",
+            "HC_TERMINAL_SOCKET": str(self.socket_path),
+            "AGENT_RUNTIME_DISPATCH": "1",
+        }
+
+    def lead(self, replies):
+        """A lead whose fake hc answers `replies`, with the one worker w1 spawned; returns its assignment."""
+        self.replies = dict(replies, **{"get:t0": {"out": raw("lead", None)}})
+        self.install(self.replies)
+        self.enterContext(hc_in_process(self.dir / "bin" / "hc"))
+        result, text = self.call(
+            "spawn",
+            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
+        )
+        self.assertFalse(result["isError"], text)
+        return json.loads(text)
+
+    def change(self, **replies):
+        self.replies.update(replies)
+        (self.dir / "replies").write_text(json.dumps(self.replies))
+
+    def call(self, tool, arguments):
+        with mock.patch.dict(os.environ, {"PATH": self.env["PATH"]}):
+            result = mcp_server.call_tool(tool, arguments, self.env, hc_tools.Context(self.session))
+        return result, result["content"][0]["text"]
+
+    def wait(self, timeout):
+        started = self.now
+        result, text = self.call("wait", {"target": "all", "timeout": timeout})
+        self.assertFalse(result["isError"], text)
+        return result["structuredContent"], self.now - started
+
+    @staticmethod
+    def terminals(turn, state="done"):
+        row = {
+            "address": "t9",
+            "name": "w1",
+            "parent": "t0",
+            "turn": turn,
+            "status": {"state": state},
+        }
+        return {"out": json.dumps({"terminals": [row]})}
+
+    @staticmethod
+    def worker(turn, state="idle"):
+        row = json.loads(raw("w1", "t0", state))
+        row["turn"] = turn
+        return {"out": json.dumps(row)}
+
+    def test_S7_a_wait_with_nothing_to_report_answers_timeout_when_the_injected_clock_reaches_it(
+        self,
+    ):
+        """agent-runtime/R63"""
+        real = time.monotonic()
+        self.lead({"get:w1": self.worker(0), "ls": self.terminals(0, "idle")})
+        batch, elapsed = self.wait(30)
+        self.assertEqual(batch["reason"], "timeout")
+        self.assertGreaterEqual(
+            elapsed, 30, "the wait did not run to its timeout on the injected clock"
+        )
+        self.assertTrue(
+            self.runs("ls"), "the wait never looked at the terminals it was waiting for"
+        )
+        self.assertLess(time.monotonic() - real, 10, "the 30 seconds were waited in real time")
+
+    def test_fresh_spawn_idle_before_first_turn_is_not_attention(self):
+        """agent-runtime/R63"""
+        self.lead({"get:w1": self.worker(0), "ls": self.terminals(0, "idle")})
+        batch, _ = self.wait(1)
+        self.assertEqual(batch["reason"], "timeout")  # CLI still starting up
+        self.assertTrue(self.runs("ls"), "the wait never looked at the terminal")
+        self.change(ls=self.terminals(1))
+        batch, _ = self.wait(2)
+        self.assertEqual(batch["reason"], "attention")  # first turn ended, no report
+
+    def test_resume_then_immediate_wait_ignores_the_old_done_turn(self):
+        """agent-runtime/R63"""
+        self.lead({"get:w1": self.worker(1, "idle"), "ls": self.terminals(1)})
+        result, text = self.call("resume", {"name": "w1", "task": "again"})
+        self.assertFalse(result["isError"], text)
+        batch, _ = self.wait(1)
+        self.assertEqual(batch["reason"], "timeout")  # still the previous turn's done
+        self.assertTrue(self.runs("ls"), "the wait never looked at the terminal")
+        self.change(ls=self.terminals(2))
+        batch, _ = self.wait(2)
+        self.assertEqual(batch["reason"], "attention")
+        self.assertEqual(len(batch["unfinished"]), 1)
+
+    def test_resume_of_a_mid_turn_worker_ignores_the_old_turn_ending(self):
+        """agent-runtime/R63"""
+        self.lead({"get:w1": self.worker(3, "working"), "ls": self.terminals(3)})
+        result, text = self.call(
+            "resume", {"name": "w1", "task": "again"}
+        )  # recorded: working, turn 3
+        self.assertFalse(result["isError"], text)
+        self.change(ls=self.terminals(4))  # the turn that was already running ends
+        batch, _ = self.wait(1)
+        self.assertEqual(batch["reason"], "timeout")
+        self.change(ls=self.terminals(5))  # the resumed turn ends
+        batch, _ = self.wait(2)
+        self.assertEqual(batch["reason"], "attention")
 
 
 class ActivationTests(ToolCase):

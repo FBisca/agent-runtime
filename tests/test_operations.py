@@ -16,6 +16,7 @@ from unittest import mock
 
 import pytest
 from test_mcp_server import RUNTIME_SRC
+from test_team_limit import seed_workers, team_of
 from test_tools import FAKE, ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
@@ -801,11 +802,39 @@ class OperationOutcomeTests(FakeHc):
         self.assertEqual(len(self.runs("run")), 1)
 
 
+class OperationKeyKeeperTests(unittest.TestCase):
+    """A test deleted for being a copy leaves its guarantee with a named keeper, in the spec rows that cited it."""
+
+    def test_S6_the_oracle_file_keeps_no_copy_of_the_operation_key_cases_and_the_spec_names_their_keeper(
+        self,
+    ):
+        oracle = PLUGIN / "acceptance" / "runtime" / "test_runtime_audit_outcome.py"
+        self.assertNotIn("class OperationKeyOutcome", oracle.read_text())
+        spec = (PLUGIN / "docs" / "specs" / "agent-runtime.md").read_text()
+        self.assertNotIn("OperationKeyOutcome", spec)
+        rows = {
+            line.split("|")[1].strip(): line
+            for line in spec.splitlines()
+            if line.startswith("| R2")
+        }
+        keeper = "tests/test_operations.py::OperationOutcomeTests"
+        for requirement in ("R252", "R253", "R254"):
+            self.assertIn(keeper, rows[requirement], requirement)
+        self.assertIn("the keeper of the copy", spec)
+
+
 # --- The outcome --------------------------------------------------------------------------------------------------
 
 
 class OutcomeScenario(FakeHc):
-    """runtime-audit-fixes/S17: one lead session over stdio, one fake hc, every fixed defect in the same run."""
+    """runtime-audit-fixes/S17: one lead session over stdio, one fake hc, every fixed defect in the same run. The
+    team the lead has built up is seeded through the store; each step the scenario is about drives the server."""
+
+    def seed(self, active=(), stopped=()):
+        """Workers in the lead's team: the server created it on the call the test made first."""
+        store = Store({"HOME": str(self.dir / "home")})
+        team, scope = team_of(store)
+        seed_workers(store, team, scope, active, stopped)
 
     def hook_decision(self, payload):
         """The real PreToolUse hook as a spawned worker would meet it (a fake agent-runtime answers `worker`)."""
@@ -823,25 +852,34 @@ class OutcomeScenario(FakeHc):
         out = json.loads(done.stdout) if done.stdout.strip() else None
         return out["hookSpecificOutput"]["permissionDecision"] if out else "allow"
 
+    def test_S10_the_long_lived_lead_is_seeded_and_only_the_step_under_test_launches(self):
+        """A team of 32 registered workers with 31 stopped comes from the store: the fake hc sees one launch for
+        it, and the next spawn is the one under test."""
+        session = self.start(worker_rows(), dict(ENV, HC_TERMINAL_SOCKET=str(self.socket_path)))
+        first, text = self.call(session, "spawn", dict(SPAWN, name=name(0)))
+        self.assertFalse(first["isError"], text)  # the server's first call creates the lead's team
+        self.seed(active=[name(0)], stopped=[name(i) for i in range(1, LIMIT)])
+        self.assertEqual(len(self.runs("run")), 1, "seeding launched a worker")
+        fresh, text = self.call(session, "spawn", dict(SPAWN, name=name(LIMIT)))
+        self.assertFalse(fresh["isError"], text)
+        self.assertEqual(len(self.runs("run")), 2)
+
     def test_S17_the_fixed_runtime_serves_a_long_lived_lead(self):
         """runtime-audit-fixes/S17"""
         session = self.start(worker_rows(), dict(ENV, HC_TERMINAL_SOCKET=str(self.socket_path)))
         spawn = {"kind": "worker", "task": "work", "cwd": "/tmp"}
-        # A team of 32 registered workers, 31 of them stopped.
-        for index in range(LIMIT):
-            result, text = self.call(session, "spawn", dict(spawn, name=name(index)))
-            self.assertFalse(result["isError"], "setup: %s" % text)
-        for index in range(1, LIMIT):
-            result, text = self.call(session, "stop", {"name": name(index)})
-            self.assertFalse(result["isError"], "setup: %s" % text)
+        # A team of 32 registered workers, 31 of them stopped: the server's first call creates the team.
+        first, text = self.call(session, "spawn", dict(spawn, name=name(0)))
+        self.assertFalse(first["isError"], "setup: %s" % text)
+        self.seed(active=[name(0)], stopped=[name(i) for i in range(1, LIMIT)])
         # The new spawn succeeds; the 33rd active worker is refused with the way out.
         fresh, text = self.call(session, "spawn", dict(spawn, name=name(LIMIT)))
         self.assertFalse(
             fresh["isError"], "a new name was refused with 2 active workers: %s" % text
         )
-        for index in range(1, LIMIT - 1):
-            result, text = self.call(session, "resume", {"name": name(index), "task": "again"})
-            self.assertFalse(result["isError"], "setup: %s" % text)
+        self.seed(
+            active=[name(i) for i in range(1, LIMIT - 1)]
+        )  # 30 stopped names resumed: 32 active
         refused, text = self.call(session, "spawn", dict(spawn, name=name(LIMIT + 1)))
         self.assertTrue(refused["isError"], "the 33rd active worker was spawned")
         self.assertIn(LIMIT_TEXT, text)
