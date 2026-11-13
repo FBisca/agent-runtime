@@ -38,13 +38,19 @@ def model(**ticket):
                     },
                 },
                 {"id": "S2", "when": "c", "then": "d"},
+                {
+                    "id": "S3",
+                    "when": "e",
+                    "then": "f",
+                    "evidence": {"human": "a person checks the PR"},
+                },
             ],
             "tickets": [
                 dict(
                     {
                         "id": "T1",
                         "delivers": "x",
-                        "satisfies": ["S1", "S2"],
+                        "satisfies": ["S1", "S2", "S3"],
                         "paths": ["src/a/", "tests/test_a.py"],
                         "size": "small",
                         "difficulty": "simple",
@@ -175,10 +181,11 @@ class CoversTests(VerifyFixture):
             [("covers", "S2: no test node in covers; map the scenario to the tests that prove it")],
         )
 
-    def test_S9_a_report_without_covers_leaves_unmapped_each_scenario_whose_evidence_brings_no_tests(
+    def test_S9_a_report_without_covers_leaves_unmapped_each_scenario_no_test_file_or_person_proves(
         self,
     ):
         # S1's evidence places its own test file, which the ticket's evidence gate runs: a ticket never changes it.
+        # S3's evidence is a person's check, which no test node can stand for.
         findings = self.gate({})
         self.assertEqual(
             [e.split(":")[0] for c, e in self.found(findings) if c == "covers"], ["S2"]
@@ -268,6 +275,11 @@ def folder_model(**ticket):
     for key in ("oracle", "place"):
         evidence.pop(key, None)
     evidence.update(acceptance=["test_probe.py"], package="pkg")
+    for scenario in data["scenarios"]:
+        if "human" in scenario.get(
+            "evidence", {}
+        ):  # the dump adds the check defaults a human item refuses
+            scenario["evidence"] = {"human": scenario["evidence"]["human"]}
     data["domain"] = "billing"
     return yaml_plan.Plan.model_validate(data)
 
