@@ -1224,9 +1224,15 @@ def discover(repo=None, explicit=None):
             files.add(path)
     else:
         root = repository_root(Path.cwd(), repo)
-        configured = folder_plans(repo_config(root).plans_dir)
+        plans_dir = repo_config(root).plans_dir
+        configured = folder_plans(plans_dir)
         tracked = git(root, "ls-files").splitlines()
         dirs = sorted({str(Path(f).parent) for f in tracked if f.endswith(PLAN_SUFFIXES)})
+        # A repo that writes its config has named its plans dir, so plan files elsewhere (test
+        # fixtures) cannot make the listing ambiguous. The built-in default names nothing.
+        if len(dirs) > 1 and (root / config.CONFIG_PATH).is_file():
+            chosen = [d for d in dirs if (root / d).resolve() == plans_dir.resolve()]
+            dirs = chosen or dirs
         if len(dirs) > 1:
             raise DiscoveryError(
                 "ambiguous",

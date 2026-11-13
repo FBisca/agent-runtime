@@ -325,6 +325,21 @@ class PlansTests(WorkbenchFixture):
         self.assertIn("path", error["way_out"])
         self.assertIn("--repo", error["way_out"])
 
+    def test_S3_several_plan_directories_with_a_repo_config_naming_one_list_that_one(self):
+        self.write_plan(graph([]))
+        fixture = self.repo / "tests" / "data" / "reference.plan.yaml"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(yaml.safe_dump(graph([])), encoding="utf-8")
+        config = self.repo / ".orchestrate" / "config.yaml"
+        config.parent.mkdir()
+        config.write_text("plans:\n  dir: docs/plans\n", encoding="utf-8")
+        self.git(self.repo, "add", "tests/data", ".orchestrate")
+        code, out, err = self.workbench("plans")
+        self.assertEqual(code, 0, err)
+        listed = [entry["path"] for entry in json.loads(out)["plans"]]
+        self.assertTrue(listed, out)
+        self.assertTrue(all("/docs/plans/" in path for path in listed), listed)
+
     def test_S3_a_plan_that_does_not_exist_is_a_named_error(self):
         error = self.error("plan", str(self.plans / "nope.plan.yaml"))
         self.assertEqual(error["kind"], "no_such_plan")
