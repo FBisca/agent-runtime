@@ -1125,7 +1125,7 @@ class Driver:
             route_record = data["routes"]
         narrate.NARRATOR.banner(
             plan=self.slug,
-            goal=self.model.goal,
+            goal=self.model.goal if self.model is not None else "",
             statuses=[ticket["Status"] for ticket in plan["tickets"]],
             repo=str(self.repo),
             base=self.args.base,

@@ -81,3 +81,6 @@ quote-style = "double"
 python-version = "3.11"
 # Check every platform: the legacy budget must not depend on the runner OS.
 python-platform = "all"
+# The test helpers resolve the way pytest finds them (`pythonpath` above), so a promoted acceptance file that
+# imports its package's `fixtures` type-checks.
+extra-paths = ["packages/agent-orchestrator/tests", "tests"]
