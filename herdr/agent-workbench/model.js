@@ -152,6 +152,15 @@ const NEEDS = {
   lead_pending: (t) => ({ title: `${t} waits on its Lead`, wayOut: `Answer ${t}'s Lead escalation in its terminal` }),
 };
 
+// The glyph and the button of a Needs me item, by its kind; a kind the mod does not know is opened, not guessed at.
+const NEEDS_ACT = {
+  lead_pending: { glyph: "⚑", action: "Answer" },
+  needs_you: { glyph: "?", action: "Answer" },
+  fix_plan: { glyph: "⚠", action: "Fix plan" },
+  ready_to_drive: { glyph: "▶", action: "Drive" },
+};
+const NEEDS_OPEN = { glyph: "•", action: "Open" };
+
 const needsItem = (item, rows) => {
   const make = NEEDS[item.kind];
   const text = make ? make(item.ticket ?? "a ticket") : { title: item.kind, wayOut: "Open the plan to see why" };
@@ -160,6 +169,7 @@ const needsItem = (item, rows) => {
     ticket: item.ticket ?? null,
     kind: item.kind,
     path: rows.find((r) => r.slug === item.plan && r.selectable)?.path ?? null,
+    ...(NEEDS_ACT[item.kind] ?? NEEDS_OPEN),
     ...text,
   };
 };
@@ -460,14 +470,56 @@ function needsRows(items) {
   for (const item of items) {
     let row = rows.find((r) => r.plan === item.plan);
     if (!row) rows.push((row = { plan: item.plan, path: item.path, items: [] }));
-    row.items.push({ ticket: item.ticket, kind: item.kind, title: item.title, wayOut: item.wayOut });
+    row.items.push({
+      ticket: item.ticket, kind: item.kind, glyph: item.glyph, action: item.action, title: item.title, wayOut: item.wayOut,
+    });
   }
   return rows;
 }
 
+// ---- home's pictures: each card's dashboard in small, from the same answer; no data is no picture ----------------------
+
+/** The palette slot of the nth part of a ranked list; the parts beyond the palette fold into one neutral `other`. */
+function rankedParts(pairs) {
+  const ranked = pairs.filter(([, n]) => num(n) > 0).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  if (!ranked.length) return null;
+  const parts = ranked.slice(0, DATA_SLOTS).map(([key, value], slot) => ({ key, value, slot }));
+  const rest = sum(ranked.slice(DATA_SLOTS).map(([, n]) => n));
+  if (rest > 0) parts.push({ key: "other", value: rest, slot: null });
+  return { kind: "stack", parts };
+}
+
+const PICTURE = {
+  merged: (totals) => {
+    const values = sparkOf("merged", totals).map((v) => v ?? 0);
+    return hasCount(values) ? { kind: "columns", values } : null;
+  },
+  first_pass: (totals) => (num(totals.cards?.first_pass_rate) === null ? null : { kind: "ring", value: totals.cards.first_pass_rate }),
+  escalations: (totals) => rankedParts(entries(totals.escalations?.by_cause)),
+  tokens: (totals) => {
+    const measured = num(totals.cards?.tokens?.measured), tickets = num(totals.cards?.tokens?.tickets);
+    return measured === null || tickets === null || tickets <= 0 ? null : { kind: "coverage", measured, unmeasured: Math.max(0, tickets - measured) };
+  },
+  ticket_time: (totals) => {
+    const parts = STEP_ORDER.filter((step) => num(totals.time?.steps?.[step]?.median) !== null)
+      .map((step) => ({ key: step, value: totals.time.steps[step].median, slot: stepLook(step).slot }));
+    return parts.length ? { kind: "stack", parts } : null;
+  },
+};
+
+const pictureOf = (card, totals) => PICTURE[card](totals);
+
+/** How recently a plan moved: `active 3m ago`, `active 3h ago`, then `last active <day>`; null when it has no time. */
+function recencyOf(iso, now) {
+  const when = relativeTime(iso, new Date(now).toISOString());
+  if (when === null) return null;
+  return when.endsWith(" ago") ? `active ${when}` : `last active ${when}`;
+}
+
 /** What the mod opens on. `plans` and `totals` are the commands' answers (`totals` null when there is none: no cards),
- *  `live` is `liveTerminals(...)`. Workers are joined to Herdr's terminals only at their exact address. */
-export function homeView(plans, totals, live = null) {
+ *  `live` is `liveTerminals(...)` and `now` the clock (ms) a plan's recency reads against. Workers are joined to Herdr's
+ *  terminals only at their exact address; a plan lists its live ones and counts the others. */
+export function homeView(plans, totals, live = null, now = Date.now()) {
   const sections = planSections(plans);
   const byPlan = new Map((Array.isArray(plans?.plans) ? plans.plans : []).map((p) => [p.slug, p]));
   const awaitingMerge = [];
@@ -476,12 +528,25 @@ export function homeView(plans, totals, live = null) {
       awaitingMerge.push({ plan: row.slug, ticket: m.ticket, pr: m.pr ?? null });
     }
   }
+  const plan = (row) => {
+    const raw = byPlan.get(row.slug);
+    const workers = workersOf(raw?.agents, live);
+    return {
+      ...row,
+      workers,
+      live: workers.filter((w) => w.state === "live"),
+      idle: workers.filter((w) => w.state !== "live").length,
+      recency: recencyOf(raw?.last_activity, now),
+      prs: list(raw?.awaiting_merge).map((m) => ({ ticket: m.ticket, ...prOf(m.pr) })),
+    };
+  };
+  const cards = cardsOf(totals);
   return {
-    cards: cardsOf(totals),
+    cards: cards && cards.map((c) => ({ ...c, picture: pictureOf(c.id, totals) })),
     needs: needsRows(sections.needsMe),
-    active: sections.active.map((row) => ({ ...row, workers: workersOf(byPlan.get(row.slug)?.agents, live) })),
+    active: sections.active.map(plan),
     awaitingMerge,
-    older: { count: sections.older.length, rows: sections.older },
+    older: { count: sections.older.length, rows: sections.older.map(plan) },
   };
 }
 

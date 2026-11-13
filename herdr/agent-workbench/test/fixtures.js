@@ -208,3 +208,31 @@ export const OLD_TOTALS = {
     slowest: RICH_TOTALS.time.slowest,
   },
 };
+
+// Home as the CLI prints it today: one active plan with live and idle agents, PRs to merge, and one item of every Needs me kind that has an action.
+export const HOME_NOW = Date.parse(WINDOW_END);
+export const HOME_PLANS = {
+  schema_version: 1,
+  repo: "/r",
+  plans: [
+    {
+      slug: "alpha", format: "yaml", path: "/r/docs/plans/alpha/plan.yaml", legacy: false, state: "RUNNING",
+      tickets: { total: 3, by_state: { COMPLETE: 1, "IN PROGRESS": 2 } }, group: "active",
+      last_activity: "2026-11-13T11:57:00+00:00",
+      agents: [
+        { name: "alpha-t2", role: "worker", ticket: "T2", address: "t9a" },
+        { name: "alpha-t1", role: "worker", ticket: "T1", address: "t9c" },
+        { name: "alpha-t1-review", role: "reviewer", ticket: "T1", address: null },
+      ],
+      awaiting_merge: [{ ticket: "T3", pr: GH(3) }, { ticket: "T4", pr: "https://example.invalid/pull/4" }],
+    },
+  ],
+  needs_me: [
+    { plan: "alpha", ticket: "T2", kind: "lead_pending" },
+    { plan: "alpha", ticket: "T1", kind: "needs_you" },
+    { plan: "alpha", ticket: null, kind: "fix_plan" },
+    { plan: "alpha", ticket: null, kind: "ready_to_drive" },
+    { plan: "alpha", ticket: null, kind: "something_new" },
+  ],
+};
+export const HOME_TERMINALS = [{ address: "t9a", state: "live", name: "Claude Code", status: "working", program: { agent: "claude" } }];

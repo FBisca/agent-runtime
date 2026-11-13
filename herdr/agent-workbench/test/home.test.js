@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { homeView, initialNav, navigate, liveTerminals, duration, readTotals, olderLabel } from "../model.js";
+import { RICH_TOTALS, OLD_TOTALS, HOME_PLANS, HOME_TERMINALS, HOME_NOW } from "./fixtures.js";
 
 // Answers as `workbench plans|totals --json` print them; terminals as Herdr's terminals() lists them.
 const PR = "https://example.invalid/pull/3";
@@ -147,4 +148,74 @@ test("S8 back on home stays home, and an action the mod does not know changes no
   assert.deepEqual(navigate({ screen: "home" }, { type: "back" }), { screen: "home" });
   const plan = { screen: "plan", path: "/p" };
   assert.deepEqual(navigate(plan, { type: "nonsense" }), plan);
+});
+
+test("S12 home's cards each carry a picture of their dashboard, and a card with no data has none", () => {
+  const home = homeView(HOME_PLANS, RICH_TOTALS, liveTerminals(HOME_TERMINALS, null), HOME_NOW);
+  const pic = Object.fromEntries(home.cards.map((c) => [c.id, c.picture]));
+  assert.deepEqual(pic.merged, { kind: "columns", values: [0, 0, 0, 0, 0, 3, 1] });
+  assert.deepEqual(pic.first_pass, { kind: "ring", value: 0.75 });
+  assert.equal(pic.escalations.kind, "stack");
+  assert.deepEqual(new Set(pic.escalations.parts.map((p) => p.key)), new Set(["gate", "blocked", "ci"]));
+  assert.deepEqual(pic.tokens, { kind: "coverage", measured: 1, unmeasured: 3 });
+  assert.deepEqual(pic.ticket_time.parts.map((p) => [p.key, p.value]), [["work", 600], ["review", 120], ["ci", 60], ["merge", 900]]);
+  // The model carries a slot of the palette, never a colour; a step keeps its own.
+  assert.deepEqual(pic.ticket_time.parts.map((p) => p.slot), [0, 1, 2, 3]);
+  assert.ok(pic.escalations.parts.every((p) => !("color" in p)));
+});
+
+test("S12 home draws no picture for a card with no data: a calm week, an unmeasured rate, no week of days, no tickets", () => {
+  const picture = (totals, id) => homeView(HOME_PLANS, totals, null, HOME_NOW).cards.find((c) => c.id === id).picture;
+  assert.equal(picture({ ...RICH_TOTALS, escalations: { ...RICH_TOTALS.escalations, by_cause: {} } }, "escalations"), null);
+  assert.equal(picture({ ...RICH_TOTALS, cards: { ...RICH_TOTALS.cards, first_pass_rate: null } }, "first_pass"), null);
+  assert.equal(picture({ ...RICH_TOTALS, cards: { ...RICH_TOTALS.cards, tokens: { input: null, output: null, measured: 0, tickets: 0 } } }, "tokens"), null);
+  assert.equal(picture({ ...RICH_TOTALS, time: { ...RICH_TOTALS.time, steps: {} } }, "ticket_time"), null);
+  const quiet = { ...RICH_TOTALS, merged: { ...RICH_TOTALS.merged, by_day: RICH_TOTALS.merged.by_day.map((d) => ({ ...d, count: 0, by_plan: {} })) } };
+  assert.equal(picture(quiet, "merged"), null, "a week of zeros draws no columns");
+  // A CLI before the series: days with something are not a week, so no columns; the step medians still picture the time.
+  const old = homeView(HOME_PLANS, OLD_TOTALS, null, HOME_NOW).cards;
+  assert.equal(old.find((c) => c.id === "merged").picture, null);
+  assert.equal(old.find((c) => c.id === "ticket_time").picture.kind, "stack");
+  assert.equal(homeView(HOME_PLANS, null, null, HOME_NOW).cards, null);
+});
+
+test("S12 home folds the causes beyond the palette into one neutral part", () => {
+  const by_cause = { a: 5, b: 4, c: 3, d: 2, e: 1 };
+  const parts = homeView(HOME_PLANS, { ...RICH_TOTALS, escalations: { ...RICH_TOTALS.escalations, by_cause } }, null, HOME_NOW)
+    .cards.find((c) => c.id === "escalations").picture.parts;
+  assert.deepEqual(parts.map((p) => [p.key, p.value, p.slot]), [["a", 5, 0], ["b", 4, 1], ["c", 3, 2], ["d", 2, 3], ["other", 1, null]]);
+});
+
+test("S14 home's Needs me items carry a glyph and an action for their kind", () => {
+  const home = homeView(HOME_PLANS, RICH_TOTALS, null, HOME_NOW);
+  const kinds = Object.fromEntries(home.needs.flatMap((n) => n.items).map((i) => [i.kind, [i.glyph, i.action]]));
+  assert.deepEqual(kinds, {
+    lead_pending: ["⚑", "Answer"], needs_you: ["?", "Answer"], fix_plan: ["⚠", "Fix plan"],
+    ready_to_drive: ["▶", "Drive"], something_new: ["•", "Open"],
+  });
+  const driver = homeView({ ...HOME_PLANS, needs_me: [{ plan: "alpha", ticket: null, kind: "driver_gone" }] }, null, null, HOME_NOW);
+  assert.deepEqual([driver.needs[0].items[0].glyph, driver.needs[0].items[0].action], ["•", "Open"]);
+});
+
+test("S14 home's plans carry how recently they moved, their live agents, the count of the others and their PRs to merge", () => {
+  const home = homeView(HOME_PLANS, RICH_TOTALS, liveTerminals(HOME_TERMINALS, null), HOME_NOW);
+  const alpha = home.active[0];
+  assert.equal(alpha.recency, "active 3m ago");
+  assert.deepEqual(alpha.live.map((w) => w.name), ["alpha-t2"]);
+  assert.equal(alpha.idle, 2);
+  assert.deepEqual(alpha.prs, [
+    { ticket: "T3", link: "https://github.com/acme/repo/pull/3", linkText: "#3" },
+    { ticket: "T4", link: null, linkText: "#4" },
+  ], "a PR opens only when it is a GitHub pull request");
+  // Without Herdr's terminals none is known live: all of them are the others.
+  const blind = homeView(HOME_PLANS, null, null, HOME_NOW).active[0];
+  assert.deepEqual([blind.live, blind.idle], [[], 3]);
+});
+
+test("S14 home's plan with no activity time, no agents and no PR has no recency, none live and nothing to merge", () => {
+  const bare = { ...HOME_PLANS, plans: [{ ...HOME_PLANS.plans[0], last_activity: null, agents: [], awaiting_merge: [] }] };
+  const plan = homeView(bare, null, null, HOME_NOW).active[0];
+  assert.deepEqual([plan.recency, plan.live, plan.idle, plan.prs], [null, [], 0, []]);
+  const day = { ...HOME_PLANS, plans: [{ ...HOME_PLANS.plans[0], last_activity: "2026-11-10T09:00:00+00:00" }] };
+  assert.equal(homeView(day, null, null, HOME_NOW).active[0].recency, "last active Tue 10 Nov");
 });

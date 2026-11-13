@@ -80,17 +80,52 @@ export function sparkline(values, t, h) {
 }
 
 /** A ring: the share `frac` of a full turn, over a track. Arcs in percentages of a square box. */
-export function ring(frac, t, size, center) {
+export function ring(frac, t, size, center, stroke = 10) {
   const R = 42;
   const at = (a) => [`${50 + R * Math.sin(a)}%`, `${50 - R * Math.cos(a)}%`];
-  const track = PathBuilder.stroke(10).move_to(...at(0)).arc_to(`${R}%`, `${R}%`, 0, false, true, ...at(Math.PI))
+  const track = PathBuilder.stroke(stroke).move_to(...at(0)).arc_to(`${R}%`, `${R}%`, 0, false, true, ...at(Math.PI))
     .arc_to(`${R}%`, `${R}%`, 0, false, true, ...at(2 * Math.PI - 1e-4)).build();
   const f = Math.max(0.001, Math.min(0.999, frac));
-  const value = PathBuilder.stroke(10).move_to(...at(0)).arc_to(`${R}%`, `${R}%`, 0, f > 0.5, true, ...at(2 * Math.PI * f)).build();
+  const value = PathBuilder.stroke(stroke).move_to(...at(0)).arc_to(`${R}%`, `${R}%`, 0, f > 0.5, true, ...at(2 * Math.PI * f)).build();
   return div().relative().w(size).h(size).flex_none()
     .child(window.paint_path(track, t.raised).absolute().size_full())
     .child(window.paint_path(value, dataColor(SINGLE, t)).absolute().size_full())
     .child(v_flex().absolute().size_full().items_center().justify_center().child(center));
+}
+
+// ---- a card's picture on home: its dashboard in small, from the model's `picture` (no scale: the card's number is the reading) ----
+
+const bar = (parts, t, id) => h_flex().h(8).gap(2).w_full()
+  .children(parts.filter((p) => p.value > 0).map((p, i) => div().id(`${id}-${i}`).h_full().rounded(3).bg(dataColor(p.slot, t))
+    .flex_basis(0).flex_grow(p.value).tooltip(`${p.key} · ${p.value}`)));
+
+const caption = (text, t) => div().text_size(10).text_color(t.dim).truncate().child(text);
+
+/** The week as small columns, today's in full strength and the days before it fainter. */
+function miniColumns(values, t) {
+  const max = Math.max(...values, 1);
+  return h_flex().h(30).gap(3).items_end().children(values.map((v, i) => div().id(`mc-${i}`).flex_1().rounded_t(2)
+    .h(`${Math.max(4, (v / max) * 100)}%`).bg(dataColor(SINGLE, t, i === values.length - 1 ? 1 : 0.4)).tooltip(String(v))));
+}
+
+/** A card's picture, or an empty box when the model has none: a card never draws a zero chart. `word` words a stack's
+ *  values (the step medians are seconds, the causes are counts). */
+export function pictureView(picture, t, word = String) {
+  if (!picture) return div();
+  if (picture.kind === "columns") return miniColumns(picture.values, t);
+  if (picture.kind === "ring") {
+    return div().absolute().right(10).top(10).child(ring(picture.value, t, 46, div(), 6));
+  }
+  if (picture.kind === "stack") {
+    return v_flex().gap(4).child(bar(picture.parts, t, "pic"))
+      .child(caption(picture.parts.slice(0, 2).map((p) => `${p.key} ${word(p.value)}`).join(" · "), t));
+  }
+  // coverage: measured solid, not measured hatched
+  return h_flex().h(8).gap(2).w_full()
+    .when(picture.measured > 0, (el) => el.child(div().id("pic-m").h_full().rounded(3).bg(dataColor(SINGLE, t))
+      .flex_basis(0).flex_grow(picture.measured).tooltip(`${picture.measured} measured`)))
+    .when(picture.unmeasured > 0, (el) => el.child(div().id("pic-u").h_full().rounded(3).map((e) => hatched(e, t))
+      .flex_basis(0).flex_grow(picture.unmeasured).tooltip(`${picture.unmeasured} not measured`)));
 }
 
 // ---- the charts of the model ---------------------------------------------------------------------------------------------
