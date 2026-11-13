@@ -83,6 +83,22 @@ class DiscoveryTests(DiscoveryFixture):
         self.track(".plans/2026-01-02-b.plan.yaml")
         self.assertEqual(self.listing(str(docs)), [str(docs.resolve())])
 
+    def test_S5_two_directories_with_a_repo_config_naming_one_list_that_directory(self):
+        docs = self.track("docs/plans/2026-01-01-a.plan.yaml")
+        self.track("tests/data/reference.plan.yaml")
+        self.track(".orchestrate/config.yaml", "plans:\n  dir: docs/plans\n")
+        self.assertEqual(self.listing(), [str(docs.resolve())])
+
+    def test_S5_two_directories_with_a_repo_config_naming_neither_still_refuse(self):
+        self.track("docs/plans/2026-01-01-a.plan.yaml")
+        self.track(".plans/2026-01-02-b.plan.yaml")
+        self.track(".orchestrate/config.yaml", "plans:\n  dir: work\n")
+        code, out, err = self.run_cli("plans", "list", "--json", "--repo", str(self.repo))
+        self.assertEqual(code, 2)
+        self.assertIn("docs/plans", err)
+        self.assertIn(".plans", err)
+        self.assertEqual(out, "")
+
     def test_S5_without_repo_the_current_directory_is_the_repository(self):
         plan = self.track("docs/plans/2026-01-01-a.plan.yaml")
         cwd = os.getcwd()
