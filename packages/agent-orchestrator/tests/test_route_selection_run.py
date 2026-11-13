@@ -80,7 +80,7 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             )
         )
         self.run_driver("--routes-file", path)
-        logged = [row for row in self.events("route") if row.get("unit") == "t1"]
+        logged = [row for row in self.run_events("route") if row.get("unit") == "t1"]
         self.assertTrue(logged, "the dispatch logged no route")
         self.assertEqual(
             (logged[0]["backend"], logged[0]["model"], logged[0]["effort"]),

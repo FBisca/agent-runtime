@@ -22,7 +22,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
         self.waits(self.ticket_merged())
         self.run_driver()
-        states = [e for e in self.events("state") if e["task"] == "t1"]
+        states = [e for e in self.run_events("state") if e["task"] == "t1"]
         gates = [e["gate"][1] for e in states if e["gate"][0] != e["gate"][1]]
         self.assertTrue(
             subsequence(
@@ -45,7 +45,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
             subsequence(["RESERVED", "ACTIVE", "PARTIAL", "COMPLETE"], statuses), statuses
         )
         self.assertEqual({e["unit"] for e in states}, {"t1"})
-        self.assertTrue(all(e["at"] for e in self.events()))
+        self.assertTrue(all(e["at"] for e in self.run_events()))
         # the reviewer was spawned only after the converge pass was on the log
         reviewer_spawn = next(
             c for c in self.calls("spawn") if c["args"]["name"] == "demo-t1-review"
@@ -61,10 +61,10 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         review = self.review(verdict="block", major=[MAJOR], deferred=[DEFERRED])
         self.waits([self.worker_done(tests=True), self.reviewer_done(review)])
         self.run_driver()
-        findings = [(e["source"], e["finding_kind"], e["id"]) for e in self.events("finding")]
+        findings = [(e["source"], e["finding_kind"], e["id"]) for e in self.run_events("finding")]
         self.assertEqual(findings, [("review", "deferred", "D1"), ("review", "blocking", "M1")])
         self.assertEqual(
-            [(e["unit"], e["source"]) for e in self.events("round")], [("t1", "review")]
+            [(e["unit"], e["source"]) for e in self.run_events("round")], [("t1", "review")]
         )
 
     @pytest.mark.integration
@@ -72,7 +72,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
         self.waits([self.worker_done(), self.worker_done("t1r1", tests=True)])
         self.run_driver()
-        found = self.events("finding")
+        found = self.run_events("finding")
         self.assertTrue(
             found
             and all(e["source"] == "verify" and e["finding_kind"] == "blocking" for e in found)
@@ -84,7 +84,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         self.prs(["OPEN"] * 4 + ["MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
-        self.assertGreaterEqual(len(self.events("idle")), 2)
+        self.assertGreaterEqual(len(self.run_events("idle")), 2)
 
     @pytest.mark.integration
     def test_S27_metrics_are_rebuilt_from_events_after_a_crash(self):
@@ -233,13 +233,13 @@ class DecisionEventTests(DeciderFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
         self.waits([self.blocked(), self.decided("skip", reason="not needed")])
         self.run_driver()
-        decisions = self.events("decision")
+        decisions = self.run_events("decision")
         self.assertEqual(
             [(d["unit"], d["action"], d["reason"]) for d in decisions],
             [("t1", "skip", "not needed")],
         )
         self.assertEqual(
-            [(e["unit"], e["cause"]) for e in self.events("escalation")], [("t1", "blocked")]
+            [(e["unit"], e["cause"]) for e in self.run_events("escalation")], [("t1", "blocked")]
         )
 
 

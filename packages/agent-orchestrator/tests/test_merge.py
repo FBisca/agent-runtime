@@ -192,7 +192,9 @@ class MergeTests(GateFixture, unittest.TestCase):
         task = self.task()
         self.assertEqual(task["status"], "COMPLETE")
         self.assertIsNone(task["checkout_at_checkpoint"])
-        logged = [e for e in self.events() if gone in json.dumps(e) and "checkout" in json.dumps(e)]
+        logged = [
+            e for e in self.run_events() if gone in json.dumps(e) and "checkout" in json.dumps(e)
+        ]
         self.assertTrue(logged, "no log line names the missing checkout")
         self.assertNotEqual(task["gate"], "awaiting-merge")
 
@@ -300,7 +302,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.request()["event"], "review")
         self.assertIn("deadbee", self.request()["reason"])
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.events("state")])
+        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
 
     def test_a_blocking_review_never_reaches_the_ci_gate(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S8"""
@@ -308,9 +310,9 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.waits([self.worker_done(tests=True), self.reviewer_done(review)])
         self.run_driver()
         self.assertEqual(
-            [e for e in self.events("round") if e.get("source") == "ci"], []
+            [e for e in self.run_events("round") if e.get("source") == "ci"], []
         )  # no CI fix round
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.events("state")])
+        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
 
 
 if __name__ == "__main__":
