@@ -10,6 +10,8 @@ from test_archive import ArchiveFixture
 from test_decider import DeciderFixture
 from test_gates import DEFERRED, MAJOR
 
+pytestmark = pytest.mark.unit
+
 
 def subsequence(wanted, actual):
     rest = iter(actual)

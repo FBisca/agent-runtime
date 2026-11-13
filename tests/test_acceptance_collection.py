@@ -5,6 +5,9 @@ tests/. Its module imports the package's helpers (`fixtures`) the way the packag
 package's tests/ must be on the import path when the acceptance file is collected.
 """
 
+import ast
+import re
+import socket
 import subprocess
 import sys
 import textwrap
@@ -122,3 +125,60 @@ def test_S13_promoted_acceptance_tests_are_collected_in_any_package(tmp_path):
     assert "test_promoted_in_another_package" in result.stdout
     assert "test_promoted_at_the_root_imports_root_tests" in result.stdout
     assert "3 passed" in result.stdout
+
+
+SPECS = ROOT / "docs" / "specs"
+TESTS_ROOT = ("tests", "acceptance", "packages/agent-orchestrator/tests", "packages/agent-eval/tests")
+
+
+def _defined_names(path: Path) -> set:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+
+
+def test_S2_every_node_id_a_living_spec_cites_names_a_test_that_exists():
+    """A `path::Class::test` citation resolves to a file that exists and a test defined in it."""
+    stale = []
+    for spec in sorted(SPECS.glob("*.md")):
+        for path, node in re.findall(r"([A-Za-z0-9_./-]+\.py)::([A-Za-z0-9_:]+)", spec.read_text(encoding="utf-8")):
+            target = ROOT / path
+            if not target.is_file():
+                stale.append(f"{spec.name}: missing file {path}")
+            elif node.split("::")[-1] not in _defined_names(target):
+                stale.append(f"{spec.name}: {path}::{node} is not defined")
+    assert stale == []
+
+
+def test_S4_every_test_module_under_testpaths_declares_its_level():
+    """A `test_*.py` under a testpaths directory sets pytestmark to unit or integration."""
+    undeclared = []
+    for root in TESTS_ROOT:
+        for module in sorted((ROOT / root).rglob("test_*.py")):
+            if not re.search(r"^pytestmark\s*=\s*pytest\.mark\.(unit|integration)\b", module.read_text(encoding="utf-8"), re.M):
+                undeclared.append(str(module.relative_to(ROOT)))
+    assert undeclared == []
+
+
+@pytest.mark.integration
+def test_S5_option_only_invocations_select_what_the_bare_run_selects():
+    """`-p no:cacheprovider` (an option with a value) collects the same tests as the bare run."""
+
+    def collected(*args):
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", *args],
+            cwd=ROOT, capture_output=True, text=True, timeout=300,
+        )
+        return [line for line in result.stdout.splitlines() if "::" in line]
+
+    bare = collected()
+    assert bare, "the bare run collects nothing"
+    assert collected("-p", "no:cacheprovider") == bare
+    assert collected("-p", "no:warnings") == bare
+
+
+def test_S3_a_unit_test_cannot_start_a_process_or_open_a_socket():
+    """The fast suite's guard refuses a process and a network connection in a unit-marked test."""
+    with pytest.raises(RuntimeError, match="unit"):
+        subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
+    with pytest.raises(RuntimeError, match="unit"):
+        socket.create_connection(("127.0.0.1", 9), timeout=0.1)
