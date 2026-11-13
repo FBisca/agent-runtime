@@ -1,0 +1,165 @@
+schema: plan/1
+slug: check-tiers
+goal: >-
+  In a repo that declares check tiers, each ticket worker passes only the cheap tiers (`fast`, and `affected`
+  rendered for its ticket), the whole suite runs once per plan at verify (or only in CI), so parallel workers no
+  longer each run the whole suite on one machine.
+spec: docs/specs/orchestrator-engine.md
+outcome: [S2, S6]
+
+scenarios:
+  # The repo declares its tiers
+  - id: S1
+    when: '`.orchestrate/config.yaml` carries a `checks` node'
+    then: >-
+      `checks.fast`, `checks.affected`, `checks.full.run` (strings) and `checks.full.verify` (bool, default true) are
+      read, each optional; an unknown key under `checks`, or a placeholder in `affected` other than `{base}` and
+      `{paths}`, is refused naming its dotted path and the fix
+  - id: S4
+    when: '`plan check` runs in a repo whose config declares no `checks` node'
+    then: >-
+      it prints one warning on stderr naming `.orchestrate/config.yaml` and the fields `checks.fast`,
+      `checks.affected`, `checks.full`, exits 0, and workers are briefed with `--gate`, or the full-CI-gate default,
+      as today
+
+  # The worker passes the cheap tiers
+  - id: S2
+    when: a ticket worker is briefed in a repo whose config declares check tiers and the run names no `--gate`
+    then: >-
+      its required checks are `checks.fast` and `checks.affected` with `{base}` rendered as the run's `--base` ref
+      as given and `{paths}` as the ticket's paths, each shell-quoted, space-joined; the brief's "Before you report
+      COMPLETE, run:" line lists exactly those, one other line names `checks.full` as the check the worker does not
+      run because verify and CI run it, and the brief no longer asks for the repository's full CI gate
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_check_tiers.py -m integration
+        -k "S2 or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_check_tiers.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 600
+  - id: S3
+    when: a run names `--gate` in a repo whose config declares check tiers
+    then: the worker's required checks are the named gate commands alone; the tiers are not applied
+  - id: S5
+    when: >-
+      a COMPLETE report gives the rendered `affected` check `not_run` with a non-blank reason (the selection found
+      no test)
+    then: >-
+      the report is accepted; a `fast` check, or any other required check, reported `not_run` is still refused as
+      today
+
+  # The whole suite runs once per plan
+  - id: S6
+    when: every ticket has merged in a repo whose config declares `checks.full.run`
+    then: >-
+      verify runs it exactly once per verify pass, through bash in a scratch checkout of the pinned default-branch
+      commit (as evidence checks run), and records a `full` event with its state and that sha; its output goes to
+      `<run dir>/full.log`; a failure rejects the plan and the Lead's `plan-rejected` wake names the command, that
+      log and `--skip-full`
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_full_verify.py -m integration
+        -k "S6 or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_full_verify.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 900
+  - id: S7
+    when: 'the run names `--skip-full`, or the config sets `checks.full.verify: false`'
+    then: >-
+      verify does not run the whole suite and records a `full` event with state `skipped`, the pinned sha and the
+      reason (`--skip-full` or `checks.full.verify: false`); the plan's evidence still runs and decides the plan
+
+  # The pilots
+  - id: S8
+    when: an orchestrate run starts in agent-runtime
+    then: >-
+      its config declares the tiers: `fast` is the unit suite, `affected` selects through pytest-impacted from
+      `{base}`, `full` is the whole suite in parallel; `plan check` prints no tiers warning
+  - id: S9
+    when: an orchestrate run starts in agent-skills
+    then: its config declares the tiers, with `affected` through pytest-impacted
+    evidence:
+      human: >-
+        Felippe confirms agent-skills' config declares `fast`, `affected` through pytest-impacted and `full`, and a
+        run there briefs its worker with `fast` and the rendered `affected`
+  - id: S10
+    when: an orchestrate run starts in rastro-ai
+    then: >-
+      its config declares the tiers, with `affected` a repo script that runs `cargo test -p` for each crate under
+      `{paths}` and every crate that depends on it, directly or transitively
+    evidence:
+      human: >-
+        Felippe confirms rastro-ai's config declares `fast`, `affected` and `full`, a run there briefs its worker
+        with `fast` and the rendered `affected`, and the script tests only the touched crates and their dependents
+
+tickets:
+  - id: T1
+    delivers: >-
+      The `checks` node in the repo config (keys, defaults, refusals) and the `plan check` warning for a repo that
+      declares none, in the config loader plan-layout T1 landed (#188).
+    satisfies: [S1, S4]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/config.py
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_config.py
+      - packages/agent-orchestrator/tests/test_check_tiers_config.py
+    size: small
+    difficulty: simple
+  - id: T2
+    delivers: >-
+      Workers briefed with the cheap tiers: required checks rendered from the config, the brief's wording, `--gate`
+      overriding, and `affected` allowed `not_run` with a reason at COMPLETE
+    satisfies: [S2, S3, S5]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_check_tiers.py
+      - packages/agent-orchestrator/tests/test_contracts.py
+    size: regular
+    difficulty: simple
+    blocked_by: [T1]
+  - id: T3
+    delivers: >-
+      verify runs `checks.full.run` once on the pinned default-branch commit, records the `full` event, rejects the
+      plan on failure, and `--skip-full` / `checks.full.verify: false` move it to CI
+    satisfies: [S6, S7]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/verify.py
+      - packages/agent-orchestrator/tests/test_full_verify.py
+      - packages/agent-orchestrator/tests/test_acceptance.py
+    size: regular
+    difficulty: complex
+    blocked_by: [T2]
+  - id: T4
+    delivers: agent-runtime declares its tiers, with pytest-impacted as a dev dependency
+    satisfies: [S8]
+    paths:
+      - .orchestrate/config.yaml
+      - pyproject.toml
+      - uv.lock
+      - packages/agent-orchestrator/tests/test_check_tiers_repo.py
+    size: small
+    difficulty: simple
+    blocked_by: [T1]
+  - id: T5
+    delivers: agent-skills declares its tiers, with pytest-impacted as a dev dependency
+    satisfies: [S9]
+    paths: [.orchestrate/config.yaml, pyproject.toml, uv.lock]
+    owner: fbisca
+    repo: ../agent-skills
+    blocked_by: [T3]
+  - id: T6
+    delivers: rastro-ai declares its tiers, with the crate-selecting `affected` script
+    satisfies: [S10]
+    paths: [.orchestrate/config.yaml, scripts/affected-tests.sh]
+    owner: fbisca
+    repo: ../rastro-ai
+    blocked_by: [T3]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-13T12:31:15.390723+00:00'
+  base: 153afea67c77963dd9bad8ade95f2b83d85d6834
+  digest: 9b7dec8c00b5334da4e2df8ff7829f273ac6d8f4ea59971de96906d123f7dee3
