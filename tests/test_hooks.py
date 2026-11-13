@@ -34,6 +34,9 @@ from agent_runtime import (
 
 pytestmark = pytest.mark.integration
 
+# A generation whose process is gone: no process carries that pid, so the row is provably dead.
+DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
+
 
 def _load(script):
     spec = importlib.util.spec_from_file_location("hook_" + script.stem, script)
@@ -851,6 +854,10 @@ class HookStoreCase(unittest.TestCase):
         store = dispatch_store.Store(self.env)
         return store, store.team(scope, lead, generation)
 
+    def other_live_generation(self):
+        """A generation of another process that runs right now: the test runner's own."""
+        return "%d:%s" % (os.getpid(), lib.lstart(os.getpid()))
+
     def sql(self, store, statement, *params):
         with store.transaction() as db:
             db.execute(statement, params)
@@ -965,7 +972,7 @@ class LeadContextTests(HookStoreCase):
         def superseded(generation):  # the hook's team exists but a newer team for the lead does too
             store, team = self.team(generation)
             self.worker(store, team)
-            self.team("1:newer")
+            self.team(self.other_live_generation())
 
         def other_lead(generation):
             store, team = self.team(generation, lead="t7")
@@ -1214,6 +1221,35 @@ class StopGuardTests(HookStoreCase):
     def unseen(self):
         return self.worker(self.store, self.team_id)
 
+    def test_S7_the_lead_liveness_hooks_read_the_same_ownership_rule(self):
+        """The context reminder and the Stop guard read the same rule as the server: a newer row that is
+        dead and empty does not hide the lead's own team, and a newer row that owns the terminal does."""
+        self.unseen()  # the lead's own team holds work
+        dead = self.store.team(
+            "scope", "t0", DEAD_GENERATION
+        )  # a newer row that left nothing behind
+        self.assertIsNotNone(self.prompt())
+        self.assertEqual(self.stop()[0], {"decision": "block", "reason": self.REASON % (1, 0)})
+
+        self.worker(self.store, dead)  # the gone session holds work: it owns the terminal
+        self.assertIsNone(self.prompt())
+        self.assertIsNone(self.stop()[0])
+
+        self.store.team("scope", "t0", self.other_live_generation())  # a running generation owns it
+        self.assertIsNone(self.prompt())
+        self.assertIsNone(self.stop()[0])
+
+    def test_S7_a_lead_behind_a_dead_empty_team_may_end_its_turn_once_it_has_seen_the_result(self):
+        """The ownership rule does not change when the lead stops: a lead whose wait result it has seen
+        may end its turn, while the reminder still points at its own team."""
+        self.unseen()  # the lead's own team holds work
+        self.store.team("scope", "t0", DEAD_GENERATION)  # a newer row that left nothing behind
+        self.assertEqual(self.stop()[0], {"decision": "block", "reason": self.REASON % (1, 0)})
+
+        self.last_wait(self.store, self.team_id, "attention", 2)  # the lead has seen the result
+        self.assertIn("workers need you", self.line(self.prompt()))
+        self.assertIsNone(self.stop()[0])
+
     def test_blocks_with_the_wait_reason_when_work_is_unseen(self):
         """agent-runtime/R119"""
         ident = self.unseen()
@@ -1436,7 +1472,8 @@ class StopGuardTests(HookStoreCase):
         self.worker(self.store, team)
         out, err, code = child.run(STOP, self.STOP)
         self.assertEqual((out["decision"], code), ("block", 0), err)
-        self.store.team("scope", "t5", "1:newer")  # a newer team supersedes the hook's
+        newer = self.store.team("scope", "t5", "1:newer")  # a newer team supersedes the hook's
+        self.worker(self.store, newer)  # it still holds work, so it owns the terminal
         self.assertIsNone(child.run(STOP, self.STOP)[0])
         self.assertIsNone(self.stop()[0])  # t0 leads no team with needs
         other = dispatch_store.Store(self.env)

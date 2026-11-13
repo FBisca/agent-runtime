@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -15,10 +16,14 @@ from test_tools import ToolCase, hc_in_process, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
+from agent_runtime import agent_runtime as lib
 from agent_runtime import dispatch_wait, hc_tools, mcp_server
 from agent_runtime.dispatch_store import MAX_BATCH_BYTES, Store, StoreError
 
 pytestmark = pytest.mark.integration
+
+# A generation whose process is gone: no process carries that pid, so the row is provably dead.
+DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
 
 
 class DispatchTests(ToolCase):
@@ -76,6 +81,23 @@ class DispatchTests(ToolCase):
         self.assertFalse(result["isError"], text)
         self.assertEqual(result["structuredContent"], json.loads(text))
         return result["structuredContent"]
+
+    def test_S8_a_spawn_binds_to_the_leads_own_team_when_the_newer_row_is_dead_and_empty(self):
+        """The binding and the authorization agree on who owns the terminal: a session that left nothing
+        behind never takes the terminal from the lead that still works."""
+        lead = self.lead()
+        self.call(
+            lead, "wait", {"target": "all", "timeout": 0}
+        )  # the lead's own team row exists now
+        store = Store({"HOME": str(self.dir / "home")})
+        with store.transaction() as db:
+            scope, lead_id, team = db.execute(
+                "SELECT scope,lead,id FROM teams ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        store.team(scope, lead_id, DEAD_GENERATION)  # a newer row that left nothing behind
+        assignment = self.spawn(lead)
+        self.assertEqual(assignment["team_id"], team)
+        self.assertIsNotNone(store.worker_address(team, "w1"))
 
     def test_S10_seeded_reports_reach_the_lead_as_a_worker_session_would_publish_them(self):
         """A test about how the lead reads many reports seeds them through the store: no worker session starts."""
@@ -620,6 +642,67 @@ class DispatchTests(ToolCase):
             )
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.read(lead)["messages"], [])
+
+
+class TeamOwnershipTests(ToolCase):
+    """One rule owns a terminal: the newest team row that is neither dead nor empty.
+
+    A row is dead when its generation is a `pid:lstart` stamp whose process no longer carries that
+    stamp, and empty when it holds no worker, assignment, message, receipt, caller, task, last_wait
+    row or operation.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.store = Store({"HOME": str(self.dir / "home")})
+        self.scope, self.terminal = "scope", "t0"
+
+    def live_generation(self):
+        """A generation whose process runs right now: this test process."""
+        return "%d:%s" % (os.getpid(), lib.lstart(os.getpid()))
+
+    def other_live_generation(self):
+        """A generation of another process that runs right now."""
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(proc.kill)
+        self.addCleanup(proc.wait)
+        return "%d:%s" % (proc.pid, lib.lstart(proc.pid))
+
+    def test_S3_a_dead_and_empty_newer_row_does_not_fence_the_live_lead(self):
+        """A session that left nothing behind never fences the terminal."""
+        live = self.live_generation()
+        team = self.store.team(self.scope, self.terminal, live)
+        self.store.register(team, "w1")  # the live lead's team holds work
+        self.store.team(self.scope, self.terminal, DEAD_GENERATION)  # newer, and empty
+        actor = self.store.actor(self.scope, self.terminal, None, generation=live)
+        self.assertEqual(actor["team_id"], team)
+
+    def test_S4_a_live_newer_row_owns_the_terminal_and_fences_the_live_lead(self):
+        """The live lead is fenced with 'stale team generation' and the message names the owner."""
+        live = self.live_generation()
+        team = self.store.team(self.scope, self.terminal, live)
+        self.store.register(team, "w1")
+        owner = self.other_live_generation()
+        self.store.team(self.scope, self.terminal, owner)
+        with self.assertRaises(StoreError) as error:
+            self.store.actor(self.scope, self.terminal, None, generation=live)
+        message = str(error.exception)
+        self.assertIn("stale team generation", message)
+        self.assertIn(self.terminal, message)
+        self.assertIn(owner, message)
+
+    def test_S5_a_dead_newer_row_that_holds_work_keeps_the_terminal(self):
+        """A generation that is gone but still holds work keeps the terminal."""
+        live = self.live_generation()
+        team = self.store.team(self.scope, self.terminal, live)
+        self.store.register(team, "w1")
+        gone = self.store.team(self.scope, self.terminal, DEAD_GENERATION)
+        self.store.register(gone, "w2")  # the gone session still holds a worker
+        with self.assertRaises(StoreError) as error:
+            self.store.actor(self.scope, self.terminal, None, generation=live)
+        message = str(error.exception)
+        self.assertIn("stale team generation", message)
+        self.assertIn(DEAD_GENERATION, message)
 
 
 class ClockedWaitTests(FakeHc):
