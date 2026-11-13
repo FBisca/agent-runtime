@@ -72,6 +72,15 @@ export const PLAN = {
   ],
 };
 
+export const TOTALS = {
+  schema_version: 1,
+  window: { days: 7 },
+  cards: {
+    merged: 3, first_pass_rate: 0.5, escalations: 2,
+    tokens: { input: 100, output: 40, measured: 1, tickets: 3 }, median_ticket_seconds: 2400,
+  },
+};
+
 export const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
 export const refusal = (kind, message, wayOut) => ({
   code: 2,
