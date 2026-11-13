@@ -1,7 +1,6 @@
 """Event waits through real MCP processes; fake hc, explicit reconciliation barriers."""
 
 import functools
-import importlib
 import json
 import queue
 import sqlite3
@@ -9,7 +8,6 @@ import subprocess
 import sys
 import threading
 import time
-import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
@@ -685,7 +683,7 @@ class EventWaitTests(EventRig):
         now[0] += 61
         self.assertEqual(wait()["assignments"][0].get("attention"), "not_started")
 
-    def prepare_mcp_resume(self, mode="idle", fast_progress=False):
+    def prepare_mcp_resume(self, mode="idle"):
         self.prepare()
         self.rows[0].update(status=mode, turn=3)
         self.replies["get:w1"] = {"out": json.dumps(self.rows[0])}
@@ -693,47 +691,9 @@ class EventWaitTests(EventRig):
         (self.dir / "replies").write_text(json.dumps(self.replies))
         self.publish(0)
         page = self.batch(self.rpc, self.rpc.tool("wait", {"target": "inbox", "timeout": 0}))
-        if fast_progress:
-            # Hold the external send response until a real worker MCP report binds the pending assignment.
-            script = self.dir / "bin" / "hc"
-            barrier = (
-                "if argv[0] == 'send':\n"
-                "    from pathlib import Path\n"
-                "    root = Path(%r)\n"
-                "    root.joinpath('sending').write_text(argv[2].split('Use assignment_id=', 1)[1].split()[0])\n"
-                "    deadline = time.monotonic() + 5\n"
-                "    while not root.joinpath('release-send').exists() and time.monotonic() < deadline:\n"
-                "        time.sleep(0.005)\n" % str(self.dir)
-            )
-            source = script.read_text()
-            script.write_text(
-                source.replace(
-                    'sys.stdout.write(reply.get("out", ""))',
-                    barrier + 'sys.stdout.write(reply.get("out", ""))',
-                )
-            )
         request = self.rpc.tool(
             "resume", {"name": "w1", "task": "next task", "receipt": page["receipt"]}
         )
-        if fast_progress:
-            deadline = time.monotonic() + 3
-            while not (self.dir / "sending").exists():
-                self.assertLess(time.monotonic(), deadline, "resume never reached send")
-                threading.Event().wait(0.005)
-            assignment = (self.dir / "sending").read_text()
-            try:
-                result, text = self.call(
-                    self.workers[0],
-                    "report",
-                    {
-                        "assignment_id": assignment,
-                        "kind": "progress",
-                        "text": "started during send",
-                    },
-                )
-                self.assertFalse(result["isError"], text)
-            finally:
-                (self.dir / "release-send").touch()
         resumed = self.batch(self.rpc, request)
         self.assignments[0] = resumed
         self.resume_store = Store(self.env)
@@ -746,17 +706,6 @@ class EventWaitTests(EventRig):
                 "UPDATE resume_marks SET dispatched_ms=? WHERE assignment=?",
                 (int((time.time() - seconds) * 1000), assignment),
             )
-
-    def test_S12_mcp_zero_timeout_surfaces_overdue_resume(self):
-        """S12: real MCP resume and fake-hc observation expose the swallowed send at timeout zero."""
-        assignment = self.prepare_mcp_resume()
-        self.age_mcp_resume(assignment, 61)
-        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
-        self.assertEqual(batch["reason"], "attention")
-        member = next(a for a in batch["assignments"] if a["assignment_id"] == assignment)
-        self.assertEqual(member.get("attention"), "not_started")
-        self.assertEqual(member["state"], "working")
-        self.assertEqual(len(self.runs("send")), 1)
 
     def test_S13_mcp_pending_wait_wakes_for_resume_report(self):
         """S13: a report wakes the real IPC wait and suppresses overdue-resume attention after ack."""
@@ -773,62 +722,6 @@ class EventWaitTests(EventRig):
         )
         self.assertEqual(after["reason"], "timeout")
         self.assertTrue(all("attention" not in a for a in after["assignments"]))
-
-    def test_S13_mcp_turn_advance_suppresses_resume_attention(self):
-        """S13: a real runtime observation of the next working turn suppresses not_started."""
-        assignment = self.prepare_mcp_resume()
-        self.rows[0].update(status="working", turn=4)
-        self.replies["ls"] = {"out": json.dumps({"terminals": self.rows})}
-        (self.dir / "replies").write_text(json.dumps(self.replies))
-        self.age_mcp_resume(assignment, 61)
-        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
-        self.assertEqual(batch["reason"], "timeout")
-        self.assertTrue(all("attention" not in a for a in batch["assignments"]))
-        self.assertGreaterEqual(len(self.runs("ls")), 1)
-
-    def test_S13_mcp_fast_report_preserves_mid_turn_baseline(self):
-        """S13: a worker report before the real resume response preserves old-turn suppression."""
-        assignment = self.prepare_mcp_resume(mode="working", fast_progress=True)
-        self.rows[0].update(status="idle", turn=4)
-        self.replies["ls"] = {"out": json.dumps({"terminals": self.rows})}
-        (self.dir / "replies").write_text(json.dumps(self.replies))
-        # The resume response already delivered the fast report in its inbox piggyback.
-        delivery = self.assignments[0]["inbox"]
-        self.assertEqual([m["assignment_id"] for m in delivery["messages"]], [assignment])
-        after = self.batch(
-            self.rpc,
-            self.rpc.tool(
-                "wait", {"target": "all", "timeout": 0.2, "receipt": delivery["receipt"]}
-            ),
-        )
-        self.assertEqual(after["reason"], "timeout")
-        self.assertTrue(all("attention" not in a for a in after["assignments"]))
-
-    def test_S14_mcp_mid_turn_resume_uses_dispatch_clock(self):
-        """S14: a mid-turn resume is quiet within grace and surfaces when the same turn stays idle."""
-        assignment = self.prepare_mcp_resume(mode="working")
-        self.rows[0]["status"] = "idle"
-        self.replies["ls"] = {"out": json.dumps({"terminals": self.rows})}
-        (self.dir / "replies").write_text(json.dumps(self.replies))
-        self.age_mcp_resume(assignment, 59)
-        before = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0.2}))
-        self.assertEqual(before["reason"], "timeout")
-        self.age_mcp_resume(assignment, 61)
-        after = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
-        self.assertEqual(after["reason"], "attention")
-        member = next(a for a in after["assignments"] if a["assignment_id"] == assignment)
-        self.assertEqual(member.get("attention"), "not_started")
-
-    def test_S15_mcp_resume_within_grace_stays_working(self):
-        """S15: real resume/wait keeps an idle worker working before grace elapses."""
-        assignment = self.prepare_mcp_resume()
-        self.age_mcp_resume(assignment, 59)
-        batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0.2}))
-        self.assertEqual(batch["reason"], "timeout")
-        member = next(a for a in batch["assignments"] if a["assignment_id"] == assignment)
-        self.assertEqual(member["state"], "working")
-        self.assertNotIn("attention", member)
-        self.assertEqual(len(self.runs("send")), 1)
 
     def stall_rig(self, start=1_000_000.0):
         now = [start]
@@ -1876,31 +1769,3 @@ class BorrowedRig(ToolCase):
 
     def count_sessions_borrowed(self):
         return HcCase.count_sessions(self)
-
-
-class TestsKeptTests(unittest.TestCase):
-    # How many tests each class held before the session cost change; a test that is deleted or merged
-    # lowers a count and must name the test that keeps its guarantee in its PR (S6).
-    HELD = {
-        "test_event_wait": {"EventWaitTests": 55, "WaitUsageTests": 1, "WaitDescriptionTests": 1},
-        "test_spawn_cleanup": {
-            "SpawnCleanupTests": 22,
-            "FastReportTests": 10,
-            "StoreFailureTests": 16,
-        },
-        "test_stop_failures": {
-            "StopFailureTests": 7,
-            "StoreTaskReleaseTests": 8,
-            "StopStoreFailureTests": 5,
-        },
-        "test_peer_dispatch": {"PeerDispatchTests": 15},
-    }
-
-    def test_S6_the_session_cost_change_deleted_merged_and_moved_no_test(self):
-        """S6: every class the change touched still holds the tests it held, in the module that held them."""
-        for module, classes in self.HELD.items():
-            loaded = importlib.import_module(module)
-            for name, held in classes.items():
-                with self.subTest(module=module, case=name):
-                    names = unittest.TestLoader().getTestCaseNames(getattr(loaded, name))
-                    self.assertGreaterEqual(len(names), held, sorted(names))

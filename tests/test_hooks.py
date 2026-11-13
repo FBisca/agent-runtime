@@ -1,5 +1,7 @@
 """Plugin hooks driven as subprocesses with real payloads, plus settings.json and hooks.json wiring."""
 
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -11,6 +13,7 @@ import time
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 PLUGIN = Path(__file__).resolve().parents[1]
 HOOKS = PLUGIN / "hooks"
@@ -32,7 +35,37 @@ from agent_runtime import (
 pytestmark = pytest.mark.integration
 
 
+def _load(script):
+    spec = importlib.util.spec_from_file_location("hook_" + script.stem, script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PRE_MODULE = _load(PRE)
+
+
+def run_pre_raw(raw, args=(), env=None):
+    """The PreToolUse hook's `main` in process on raw stdin: its decision as printed, and its exit code."""
+    out = io.StringIO()
+    with (
+        mock.patch.object(sys, "stdin", io.StringIO(raw)),
+        mock.patch.object(sys, "stdout", out),
+        mock.patch.dict(os.environ, env if env is not None else os.environ, clear=env is not None),
+    ):
+        code = PRE_MODULE.main(list(args))
+    return code, out.getvalue()
+
+
+def run_pre(payload, args=(), env=None):
+    """Pure verdict logic runs in process; the boundary tests below still start the hook as a process."""
+    _, out = run_pre_raw(json.dumps(payload), args, env)
+    return json.loads(out) if out.strip() else None
+
+
 def run(script, payload, *args):
+    if script == PRE:
+        return run_pre(payload, args)
     done = subprocess.run(
         [sys.executable, "-B", str(script), *args],
         input=json.dumps(payload),
@@ -199,14 +232,8 @@ class NativeChildGuardTests(unittest.TestCase):
         """agent-runtime/R90"""
         for extra in ((), ("--cli", "codex")):
             for raw in ("not json", "", "{", "[]", "null", "42"):
-                done = subprocess.run(
-                    [sys.executable, "-B", str(PRE), *extra],
-                    input=raw,
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                )
-                self.assertEqual((done.returncode, done.stdout.strip()), (0, ""), (extra, raw))
+                code, out = run_pre_raw(raw, extra)
+                self.assertEqual((code, out.strip()), (0, ""), (extra, raw))
 
     def test_subagent_start_notice_names_allowed_reads(self):
         """agent-runtime/R74"""
@@ -315,7 +342,7 @@ class RawHcTests(unittest.TestCase):
         self.assertIsNone(run(PRE, bash("hc get w"), "--cli", "codex"))
 
     def test_S17_garbage_input_does_not_deny(self):
-        """agent-runtime-tools/S17"""
+        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
         done = subprocess.run(
             [sys.executable, "-B", str(PRE)], input="not json", capture_output=True, text=True
         )
@@ -432,7 +459,9 @@ class PlanContractTests(unittest.TestCase):
         )
         fake.chmod(0o755)
 
-    def hook(self, payload, role="lead", path=True, home=None, timeout=20, extra_env=None):
+    def hook(
+        self, payload, role="lead", path=True, home=None, timeout=20, extra_env=None, process=False
+    ):
         """The hook run as `role` says the runtime resolves this session; `path=False` leaves no agent-runtime."""
         env = {
             "PATH": (str(self.bin) + os.pathsep if path else "") + "/usr/bin:/bin",
@@ -441,6 +470,8 @@ class PlanContractTests(unittest.TestCase):
             "FAKE_ASKED": str(self.asked),
         }
         env.update(extra_env or {})
+        if not process:
+            return run_pre(payload, env=env)
         done = subprocess.run(
             [sys.executable, "-B", str(PRE)],
             input=json.dumps(payload),
@@ -650,10 +681,12 @@ class PlanContractTests(unittest.TestCase):
             "sys.addaudithook(audit)\n"
         )
         extra = {"PYTHONPATH": self.temp.name}
-        self.assertIsNone(self.hook(bash("rm " + str(ledger)), extra_env=extra))
+        self.assertIsNone(self.hook(bash("rm " + str(ledger)), extra_env=extra, process=True))
         self.assertFalse(log.exists())
         self.assertTrue(
-            denied(self.hook(bash("rm " + str(ledger)), role="worker", extra_env=extra))
+            denied(
+                self.hook(bash("rm " + str(ledger)), role="worker", extra_env=extra, process=True)
+            )
         )
         self.assertTrue(log.exists())
 

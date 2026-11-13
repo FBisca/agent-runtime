@@ -177,6 +177,51 @@ class Session:
         self.proc.stderr.close()
 
 
+class InProcessSession:
+    """The server's request handling in this process: the same `handle` and `hc_tools` the stdio server
+    runs, with no subprocess for the server itself. Tests that only prove what a tool decides use it; the
+    boundary tests that need the pipe, the thread per call or the process ancestry keep `Session`."""
+
+    def __init__(self, env):
+        sys.path.insert(0, str(RUNTIME_SRC))
+        from agent_runtime import hc_tools, mcp_server
+
+        self.mcp_server, self.hc_tools = mcp_server, hc_tools
+        self.env = dict(env)
+        self.state = {}  # what one server process shares across its calls
+        self.next_id = 0
+
+    def send(self, method, params=None, notify=False):
+        message = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        if notify:
+            return None
+        self.next_id += 1
+        message["id"] = self.next_id
+        if method == "tools/call":
+            name = (params or {}).get("name")
+            arguments = (params or {}).get("arguments")
+            if name not in self.mcp_server.TOOL_NAMES:
+                return self.mcp_server.rpc_error(self.next_id, -32602, "unknown tool: %s" % name)
+            # clear=True: the tool may read the process environment (HOME) as well as the env it is given
+            with mock.patch.dict(os.environ, self.env, clear=True):
+                result = self.mcp_server.call_tool(
+                    name,
+                    arguments if isinstance(arguments, dict) else {},
+                    self.env,
+                    self.hc_tools.Context(self.state),
+                )
+            return {"jsonrpc": "2.0", "id": self.next_id, "result": result}
+        return self.mcp_server.handle(message, self.env)
+
+    def handshake(self):
+        return self.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
+
+    def close(self):
+        pass
+
+
 class ServerCase(unittest.TestCase):
     def start(self, hc_body=None, env=None):
         temp = tempfile.TemporaryDirectory()

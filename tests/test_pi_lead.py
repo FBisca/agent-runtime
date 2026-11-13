@@ -48,11 +48,15 @@ class PiIdentityTests(unittest.TestCase):
             self.assertIsNone(lib.cli_of_args(other), other)
 
     def test_pi_marker_never_resolves_to_claude(self):
-        """agent-runtime/P2-S1"""
-        self.assertEqual(lib.detect_cli({"PI_CODING_AGENT": "true"}), "pi")
-        info = lib.resolve(
-            {"PI_CODING_AGENT": "true", "HC_TERMINAL_ID": "t0"}, None, lambda t: {"parent": None}
-        )
+        """agent-runtime/P2-S1: the env marker alone decides, so no real process ancestry is read (a test run
+        from inside a Claude session would otherwise find that session above it)"""
+        with mock.patch.object(lib, "ancestor_cli", return_value=None):
+            self.assertEqual(lib.detect_cli({"PI_CODING_AGENT": "true"}), "pi")
+            info = lib.resolve(
+                {"PI_CODING_AGENT": "true", "HC_TERMINAL_ID": "t0"},
+                None,
+                lambda t: {"parent": None},
+            )
         self.assertEqual((info["cli"], info["role"]), ("pi", "lead"))
 
     def test_pi_generation_is_the_pi_process_pid_and_start_time(self):
@@ -167,13 +171,20 @@ class PiPolicyTests(unittest.TestCase):
     def test_policy_limits_the_directory_a_worker_may_run_in(self):
         """agent-runtime/P2-S4"""
         env = self.env()
-        self.write(env, {"hosts": {"pi": RULES}})
+        self.write(env, {"hosts": {"pi": dict(RULES, backends=["claude", "codex", "pi"])}})
         with mock.patch.object(lib, "parent_cli", return_value="pi"):
             host = host_policy.host_of(env)
-            arguments = {"kind": "worker", "name": "w1", "task": "t", "cli": "claude"}
-            with self.assertRaises(host_policy.Refused):
-                host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cwd="/etc"), None)
-            host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cwd="/tmp"), None)
+            for cli in ("claude", "pi"):  # the guarantee holds for a Pi spawn too (pi-worker/S7)
+                arguments = {"kind": "worker", "name": "w1", "task": "t", "cli": cli}
+                with (
+                    mock.patch.object(lib, "run_command") as ran,
+                    self.assertRaisesRegex(host_policy.Refused, "may not start a worker in"),
+                ):
+                    host_policy.authorize(
+                        env, host, "lead", "spawn", dict(arguments, cwd="/etc"), None
+                    )
+                ran.assert_not_called()
+                host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cwd="/tmp"), None)
 
     def test_a_malformed_policy_refuses_instead_of_trusting(self):
         """agent-runtime/P2-S4"""
@@ -521,30 +532,6 @@ class PiLeadTests(ToolCase):
         )
         self.assertTrue(denied["isError"], text)
         self.assertIn("not authorized", text)
-        self.assertEqual(self.runs("run"), [])
-
-    def test_S4_a_pi_lead_may_not_start_a_worker_outside_the_authorized_directory(self):
-        """agent-runtime/P2-S4: the path scope of a mutation."""
-        self.policy(**RULES)
-        session = self.pi_session(self.lead_replies())
-        denied, text = self.call(
-            session,
-            "spawn",
-            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/etc"},
-        )
-        self.assertTrue(denied["isError"], text)
-        self.assertIn("may not start a worker in", text)
-        self.assertEqual(self.runs("run"), [])
-
-    def test_S4_a_pi_lead_may_not_omit_the_backend(self):
-        """agent-runtime/P2-S4: the runtime never picks a provider for a Pi lead."""
-        self.policy(**RULES)
-        session = self.pi_session(self.lead_replies())
-        denied, text = self.call(
-            session, "spawn", {"kind": "worker", "name": "w1", "task": "work", "cwd": "/tmp"}
-        )
-        self.assertTrue(denied["isError"], text)
-        self.assertIn("explicit cli", text)
         self.assertEqual(self.runs("run"), [])
 
     def test_S4_a_forged_pi_session_is_refused(self):

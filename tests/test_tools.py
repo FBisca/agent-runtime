@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from test_mcp_server import SERVER, Session
+from test_mcp_server import SERVER, InProcessSession, Session
 
 pytestmark = pytest.mark.integration
 
@@ -207,7 +207,9 @@ class ToolCase(unittest.TestCase):
         self.log = self.dir / "log"
         self.log.write_text("")
 
-    def start(self, replies=None, env=None, new_cli=False):
+    in_process = False
+
+    def start(self, replies=None, env=None, new_cli=False, process=False):
         replies = dict(replies or {})
         replies.setdefault("get:t0", {"out": raw("lead", None)})
         replies.setdefault("get:t1", {"out": raw("worker", "t0")})
@@ -230,7 +232,13 @@ class ToolCase(unittest.TestCase):
             "CODEX_THREAD_ID": "test-session",
         }
         full.update(env or {})
-        session = Session(full, new_cli=new_cli)
+        # The tool's decision runs in process; a test that is about the pipe, the process ancestry or a
+        # call in its own thread asks for the server process.
+        session = (
+            InProcessSession(full)
+            if self.in_process and not (process or new_cli)
+            else Session(full, new_cli=new_cli)
+        )
         self.addCleanup(session.close)
         session.handshake()
         return session
@@ -242,6 +250,12 @@ class ToolCase(unittest.TestCase):
     def runs(self, command=None):
         calls = [json.loads(l) for l in self.log.read_text().splitlines()]
         return [c for c in calls if command is None or c[0] == command]
+
+
+class InProcessToolCase(ToolCase):
+    """Tool decisions that need no server process of their own run in this one."""
+
+    in_process = True
 
 
 class IdentityTests(ToolCase):
@@ -300,7 +314,7 @@ class IdentityTests(ToolCase):
         self.assertEqual(seen, [assignment])
 
 
-class SpawnTests(ToolCase):
+class SpawnTests(InProcessToolCase):
     ARGS = {"kind": "worker", "name": "w1", "task": "do x", "cwd": "/tmp/c"}
 
     def test_S2_claude_worker_runs_hc_run_bg_with_task_and_report_line(self):
@@ -480,6 +494,17 @@ class SpawnTests(ToolCase):
         explicit = self.spawn_argv(cli="codex", agent="implementer")
         self.assertTrue(explicit[-1].startswith("CODEX IMPLEMENTER RULES"))
         self.assertEqual(len(codex), 3)
+
+    def test_S13_a_refusal_still_crosses_the_server_process(self):
+        """The tool's validation runs in process; one call shows its refusal through the stdio server."""
+        session = self.start(process=True)
+        result, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp", "model": "bad model"},
+        )
+        self.assertTrue(result["isError"], text)
+        self.assertEqual(self.runs("run"), [])
 
     def test_invalid_agent_is_an_error(self):
         """agent-runtime/R139"""
@@ -736,7 +761,7 @@ class SpawnTests(ToolCase):
         self.assertEqual(self.runs("run"), [])
 
 
-class ProfileTests(ToolCase):
+class ProfileTests(InProcessToolCase):
     ARGS = {"kind": "worker", "name": "w1", "task": "profile task", "cwd": "/tmp"}
     PROMPT = (
         "profile task\n\nWhen done or stuck, call the agent-runtime report tool with your result."
@@ -1113,7 +1138,7 @@ class ProfileTests(ToolCase):
         self.assertEqual(self.runs("run"), [])
 
 
-class SendTests(ToolCase):
+class SendTests(InProcessToolCase):
     CHILD = {"get:w1": {"out": raw("w1", "t0")}}
 
     def test_S4_message_refuses_a_terminal_that_is_not_my_child(self):
@@ -1153,7 +1178,7 @@ class SendTests(ToolCase):
         self.assertEqual(self.runs("send"), [])
 
 
-class WaitCollectStopReportTests(ToolCase):
+class WaitCollectStopReportTests(InProcessToolCase):
     def test_S5_wait_any_waits_on_children_and_returns_their_status(self):
         """agent-runtime-tools/S5"""
         listing = json.dumps(
@@ -1199,7 +1224,9 @@ class WaitCollectStopReportTests(ToolCase):
 
     def test_S5_long_wait_does_not_block_ping_and_cancel_ends_it(self):
         """agent-runtime-tools/S5"""
-        session = self.start({"wait": {"sleep": 30}, "ls": {"out": json.dumps({"terminals": []})}})
+        session = self.start(
+            {"wait": {"sleep": 30}, "ls": {"out": json.dumps({"terminals": []})}}, process=True
+        )
         write = lambda m: (
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
@@ -1283,7 +1310,7 @@ class WaitCollectStopReportTests(ToolCase):
     def test_long_collect_does_not_block_ping_and_cancel_ends_it(self):
         """agent-runtime/R34
         agent-runtime-dispatch/S1; retains transport cancellation coverage."""
-        session = self.start({"read": {"sleep": 30}})
+        session = self.start({"read": {"sleep": 30}}, process=True)
         write = lambda m: (
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
@@ -1381,7 +1408,7 @@ class WaitCollectStopReportTests(ToolCase):
         self.assertEqual(self.runs("send"), [])
 
 
-class StopCleanupTests(ToolCase):
+class StopCleanupTests(InProcessToolCase):
     def test_S7_stop_still_removes_a_terminal_that_already_exited(self):
         """agent-runtime-tools/S7"""
         session = self.start(
@@ -1393,7 +1420,7 @@ class StopCleanupTests(ToolCase):
 
     def test_S2_cancelling_spawn_ends_the_terminal_it_started(self):
         """agent-runtime-tools/S2"""
-        session = self.start({"run": {"sleep": 30}})
+        session = self.start({"run": {"sleep": 30}}, process=True)
         write = lambda m: (
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
@@ -1420,7 +1447,7 @@ class StopCleanupTests(ToolCase):
         )
 
 
-class RuntimeGapTests(ToolCase):
+class RuntimeGapTests(InProcessToolCase):
     def test_S9_herdmates_worker_tools_return_a_gap_naming_the_native_tool(self):
         """agent-runtime-tools/S9"""
         session = self.start(env={"HERDR_PANE_ID": "p1", "CLAUDECODE": "1"})

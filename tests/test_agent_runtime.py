@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -222,9 +222,14 @@ class CliTests(unittest.TestCase):
         path.write_text("#!/bin/sh\n" + body + "\n")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
-    def run_cli(self, *args, env=None):
+    def run_cli(self, *args, env=None, process=False):
+        """The resolve logic runs in process; `process=True` starts the symlinked executable (the boundary)."""
         full = {"PATH": str(self.bindir) + ":/usr/bin:/bin"}
         full.update(env or {})
+        if not process:
+            code, out = run_main(*args, env=full)
+            self.assertEqual(code, 0)
+            return out.strip()
         done = subprocess.run(
             [sys.executable, "-B", str(BIN), *args],
             env=full,
@@ -236,18 +241,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         return done.stdout.strip()
 
-    def hc_out(self, text):
+    def hc_out(self, text, process=False):
         self.fake_hc("cat <<'EOF'\n%s\nEOF" % text)
-        return self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"})
+        return self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}, process=process)
 
     def test_null_parent_through_symlink_is_lead(self):
-        """agent-runtime/R3"""
-        self.assertEqual(self.hc_out('{"parent": null}'), "runtime=hc role=lead cli=claude")
+        """agent-runtime/R3; S13: the executable through its symlink is the boundary"""
+        self.assertEqual(
+            self.hc_out('{"parent": null}', process=True), "runtime=hc role=lead cli=claude"
+        )
 
     def test_parent_through_symlink_is_worker(self):
         """agent-runtime/R4"""
         self.assertEqual(
-            self.hc_out('{"parent": "tX"}'), "runtime=hc role=worker parent=tX cli=claude"
+            self.hc_out('{"parent": "tX"}', process=True),
+            "runtime=hc role=worker parent=tX cli=claude",
         )
 
     def test_non_string_empty_or_spaced_parent_is_unknown(self):
@@ -812,7 +820,7 @@ class CallTests(unittest.TestCase):
     def hc_calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def call(self, *args, hc_terminal: str | None = "t0", extra_env=None):
+    def call(self, *args, hc_terminal: str | None = "t0", extra_env=None, process=False):
         env = {
             "PATH": "%s:/usr/bin:/bin" % self.bin,
             "HOME": str(self.dir / "home"),
@@ -822,6 +830,20 @@ class CallTests(unittest.TestCase):
         if hc_terminal:
             env["HC_TERMINAL_ID"] = hc_terminal
         env.update(extra_env or {})
+        if not process:
+            # The call's decision runs in process; `process=True` is the executable as a host starts it
+            out, err = io.StringIO(), io.StringIO()
+            with (
+                patch.dict(app.os.environ, env, clear=True),
+                patch.object(sys, "stdin", io.StringIO("")),
+                # the CLI's parent is the test runner, the first row of the fake process table
+                patch.object(os, "getppid", return_value=os.getpid()),
+                patch.object(app, "ps_entry", app.real_ps_entry),  # this table is the fake `ps`
+                redirect_stdout(out),
+                redirect_stderr(err),
+            ):
+                code = app.main(["call", *args])
+            return code, out.getvalue(), err.getvalue()
         done = subprocess.run(
             [sys.executable, "-B", str(BIN), "call", *args],
             env=env,
@@ -833,8 +855,10 @@ class CallTests(unittest.TestCase):
         return done.returncode, done.stdout, done.stderr
 
     def test_S1_hc_terminal_runs_the_tool_and_prints_its_json(self):
-        """agent-runtime/R150"""
-        code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
+        """agent-runtime/R150; S13: the one test that starts the executable as a host does"""
+        code, out, err = self.call(
+            "status", "--lead", "L1", "--json", '{"name": "w1"}', process=True
+        )
         self.assertEqual(code, 0, err)
         info = json.loads(out)
         self.assertEqual((info["name"], info["parent"]), ("w1", "t0"))
