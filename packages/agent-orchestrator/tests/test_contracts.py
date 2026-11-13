@@ -500,6 +500,16 @@ class RequirementViolationTests(unittest.TestCase):
                 self.rejects(review, field)
         self.rejects(review2(verdict="block", items=[self.item(requirement_violation={})]), "B1")
         self.rejects(review2(verdict="block", items=[self.item(requirement_violation="R2")]), "B1")
+        # An explicit null asserts nothing: it names no source, requirement, expectation or observed behaviour,
+        # so both readers read it as absent rather than sending the reviewer to repair a shape that claims nothing.
+        for kind, verdict in (("concern", "pass"), ("blocking", "block")):
+            review = review2(
+                verdict=verdict, items=[self.item(kind=kind, requirement_violation=None)]
+            )
+            self.assertEqual(contracts.validate_review(review)["items"], review["items"])
+            self.assertEqual(
+                contracts.ReviewV2.model_validate(review).model_dump(exclude_unset=True), review
+            )
 
     def test_S4_a_concern_without_a_violation_and_a_legacy_review_still_read(self):
         concern = dict(NIT, kind="concern", summary="optional refactor")
