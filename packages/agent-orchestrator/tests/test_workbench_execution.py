@@ -33,10 +33,13 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
         return found
 
     def hand_merged_failure(self):
-        self.write_plan([scenario("S1", check_item())], [ticket("T1", ("S1",), risk=["state"])])
-        sha = self.merged_on_main("almost")
-        self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
-        self.drive([self.worker("almost")])
+        def build():
+            self.write_plan([scenario("S1", check_item())], [ticket("T1", ("S1",), risk=["state"])])
+            sha = self.merged_on_main("almost")
+            self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
+            self.drive([self.worker("almost")])
+
+        self.from_snapshot(self.snapshot_key("hand_merged_failure"), build)
 
     def rewrite_receipt(self, stem, change):
         """Change a receipt on disk and keep the ledger's sha256 of it in step, as a receipt that was produced for

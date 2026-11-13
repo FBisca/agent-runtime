@@ -16,7 +16,7 @@ import pytest
 import yaml
 from agent_orchestrator import plan as yaml_plan
 from agent_orchestrator import verify
-from fixtures import load_script, report_wait, spawn_id
+from fixtures import WORLDS, load_script, report_wait, spawn_id
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -24,6 +24,9 @@ pytestmark = pytest.mark.integration
 PROBE = "probe\n"
 GOOD = "grep -qx done src/a/feature.txt && test -f checks/probe.txt"
 STATES = ["APPROVED", "RUNNING", "DELIVERED", "VERIFYING"]
+SNAPSHOTS: dict[
+    type, dict[str, Path]
+] = {}  # test class -> the worlds its tests start from, by what built them
 
 
 def scenario(sid, evidence=None):
@@ -107,7 +110,34 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.routed(plan, "T1"), [])
 
 
-class AcceptanceFixture(GateFixture):
+class SnapshotFixture:
+    """Mixin for a `RunFixture` class: the tests of a class that only read a run's result share one run of it."""
+
+    def from_snapshot(self, key, build):
+        """Leave the world as `build` leaves it: the first test of the class to name `key` builds it, every later one
+        starts from a copy of that. A run's approval and ledger name the world's path, so the copy goes back to the same
+        path, and a test that changes what it finds changes its own copy."""
+        cls = type(self)
+        if cls not in SNAPSHOTS:
+            SNAPSHOTS[cls] = {}
+            self.addClassCleanup(SNAPSHOTS.pop, cls, None)
+        held = SNAPSHOTS[cls]
+        if key in held:
+            shutil.rmtree(self.root)
+            shutil.copytree(held[key], self.root, symlinks=True)
+            return
+        build()
+        kept = Path(WORLDS[cls].scratch.name) / ("snapshot-%d" % len(held))
+        shutil.copytree(self.root, kept, symlinks=True)
+        held[key] = kept
+
+    def snapshot_key(self, *parts):
+        """What decides the world a build leaves: its arguments and what the worker is scripted to report."""
+        scripted = [getattr(self, name, None) for name in ("COVERS", "extra_files")]
+        return json.dumps([parts, scripted], sort_keys=True, default=str)
+
+
+class AcceptanceFixture(SnapshotFixture, GateFixture):
     def setUp(self):
         super().setUp()
         self.plan.unlink()
@@ -200,10 +230,14 @@ class AcceptanceFixture(GateFixture):
         return self.run_driver("--repo", str(self.repo))
 
     def delivered(self, gate="done", lands="done", scenarios=None, tickets=None):
-        self.write_plan(scenarios, tickets)
-        if lands:
-            self.merged_on_main(lands)
-        self.drive([self.worker(gate), self.reviewer(), self.default_mutator()])
+        def build():
+            self.write_plan(scenarios, tickets)
+            if lands:
+                self.merged_on_main(lands)
+            self.drive([self.worker(gate), self.reviewer(), self.default_mutator()])
+
+        key = self.snapshot_key("delivered", gate, lands, scenarios, tickets)
+        self.from_snapshot(key, build)
 
     def receipts(self, phase=None):
         found = [
@@ -237,6 +271,41 @@ class AcceptanceFixture(GateFixture):
 
     def history(self):
         return [h["state"] for h in self.status()["history"]]
+
+
+class DeliveredSnapshotTests(unittest.TestCase):
+    def test_S12_a_delivered_plan_is_driven_once_per_class_and_a_test_that_changes_it_takes_a_copy(
+        self,
+    ):
+        """orchestrator-engine/R2: test-cost/S12 — the tests that only read a delivered plan share one drive."""
+        seen = []
+
+        class Readers(AcceptanceFixture, unittest.TestCase):
+            def test_first(self):
+                self.delivered()
+                seen.append(len(self.receipts("integration")))
+                for path in (self.run_dir / "receipts").glob("*.json"):
+                    path.unlink()  # a test that changes the plan: the next one must not see it
+
+            def test_second(self):
+                self.delivered()
+                seen.append(len(self.receipts("integration")))
+
+            def test_third(self):
+                self.delivered()
+                seen.append(len(self.receipts("integration")))
+
+        real = AcceptanceFixture.drive
+        with mock.patch.object(
+            AcceptanceFixture, "drive", autospec=True, side_effect=real
+        ) as drive:
+            suite = unittest.defaultTestLoader.loadTestsFromTestCase(Readers)
+            result = unittest.TextTestRunner(stream=io.StringIO()).run(suite)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertEqual(
+            drive.call_count, 1, "the delivered plan was driven again for a later test"
+        )
+        self.assertEqual(seen, [1, 1, 1], "a test saw what an earlier test changed")
 
 
 class TicketGateTests(AcceptanceFixture, unittest.TestCase):
@@ -419,10 +488,15 @@ class WholeSuiteTests(AcceptanceFixture, unittest.TestCase):
         return self.run_events("full")
 
     def deliver(self, *extra):
-        self.write_plan()
-        self.merged_on_main("done")
-        self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
-        self.run_driver("--repo", str(self.repo), *extra)
+        def build():
+            self.write_plan()
+            self.merged_on_main("done")
+            self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
+            self.run_driver("--repo", str(self.repo), *extra)
+
+        config = self.repo / ".orchestrate" / "config.yaml"
+        declared = config.read_text(encoding="utf-8") if config.exists() else None
+        self.from_snapshot(self.snapshot_key("deliver", extra, declared), build)
 
     def test_S6_a_failing_whole_suite_on_the_integrated_commit_rejects_the_plan(self):
         self.declare_full("test -f src/a/never.txt")
