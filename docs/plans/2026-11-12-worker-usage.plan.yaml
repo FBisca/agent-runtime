@@ -1,0 +1,199 @@
+schema: plan/1
+slug: worker-usage
+goal: >-
+  Every Claude, Codex and Pi worker's token usage, call counts and (where the CLI itself reports it) dollar cost reach
+  the orchestrator: `wait` carries a per-assignment numeric usage dict, and each run's metrics.json and attempts.jsonl
+  total it per ticket, with null for any figure an assignment did not report.
+spec: docs/specs/agent-runtime.md
+outcome: [S12, S13]
+
+scenarios:
+  # The measurement: usage.assignment_usage(env, worker)
+  - id: S1
+    when: >-
+      a Claude worker's transcript is measured and it repeats an assistant record under the same `message.id`
+      (streamed content blocks), carries a `<synthetic>` model record, and its Task subagents wrote
+      `<session>/subagents/*.jsonl`
+    then: >-
+      each `message.id` counts once for tokens and model calls, every `tool_use` block counts as a tool call,
+      `<synthetic>` records count for nothing, and each subagent record is credited to the assignment whose marked
+      prompt is the latest at or before its timestamp; `input_tokens` is the transcript's `input_tokens`,
+      `cached_input_tokens` its `cache_read_input_tokens`, `cache_write_tokens` its `cache_creation_input_tokens`;
+      the transcript is found under `~/.claude/projects/<cwd with every non-alphanumeric character a dash>/`
+  - id: S2
+    when: >-
+      a Codex worker's rollout is measured, its cumulative `total_token_usage` repeats an identical total or carries
+      `info: null`, and the session has a child thread (`thread_source: guardian_review`, same `session_id`) in its
+      own rollout file whose totals start from zero
+    then: >-
+      the worker binds to its root thread's rollout, never to a child's; each assignment's figures are the increase
+      of the root's cumulative total across its slice; a child thread's figures are credited to the assignment whose
+      marked prompt is the latest at or before the child's records, and a child never starts a slice; a repeated
+      total adds nothing and counts as no model call; `input_tokens` is the gross input minus
+      `cached_input_tokens`, `reasoning_tokens` is `reasoning_output_tokens`; `function_call` and
+      `custom_tool_call` items count as tool calls
+  - id: S3
+    when: 'a Pi worker is measured'
+    then: >-
+      its session is found under `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions/--<cwd slug>--/` by the marker in
+      its first user prompt after the spawn time, its per-message `usage` is summed per slice (`input`, `cacheRead`,
+      `cacheWrite`, `output`, `reasoning`), assistant messages count as model calls, `toolCall` blocks as tool calls,
+      and `cost_usd` is the sum of the messages' `cost.total`
+  - id: S4
+    when: >-
+      a Claude transcript carries `cost-state` checkpoints with a cumulative `totalCostUSD`
+    then: >-
+      each checkpoint's increase over the previous one is credited to the assignment active when it was written; an
+      assignment whose slice holds no checkpoint carries `cost_usd` 0 when a later checkpoint exists in the session,
+      and no `cost_usd` when none does
+  - id: S5
+    when: 'a Codex worker is measured, or any CLI record lacks a figure'
+    then: >-
+      Codex usage never carries `cost_usd`; a figure is in an assignment's dict when at least one record of its slice
+      carries it and is absent, never 0, when none does; no dollar figure is ever computed from a rate
+  - id: S6
+    when: >-
+      a worker was resumed, so its session holds several user prompts that carry `assignment_id=<id>`, and the
+      assistant output, a tool call's arguments or a tool result also mention an assignment id
+    then: >-
+      each assignment's slice runs from the prompt whose last marker is its id to the next such prompt; a prompt is a
+      Claude `user` record that is neither `isMeta`, a compact summary nor a tool result, a Codex root-thread `user`
+      message, or a Pi `user` message; a marker in any other record (assistant output, tool call or result, a
+      subagent's or child thread's prompt) starts no slice
+  - id: S7
+    when: >-
+      the worker has no metadata, no bound log, or a log that is missing, unreadable, truncated mid-line or not JSON
+    then: >-
+      `assignment_usage` returns what it could measure (an empty dict when nothing), never raises, and the complete
+      lines before a truncated last line still count
+  - id: S8
+    when: '`assignment_usage` is called again after the log grew'
+    then: >-
+      it reads only the bytes appended since the last call, from the offsets kept in `<worker>.usage.json` (0600),
+      and returns exactly what a fresh parse of the whole log returns; a log that shrank or was replaced is re-read
+      from the start; the sidecar holds offsets and numbers only, never prompt, tool or file text
+
+  # The surface
+  - id: S9
+    when: 'the lead calls `wait` and the returned batch names assignments of bound workers'
+    then: >-
+      each such assignment row carries `usage`, the dict for that assignment; a row whose worker has no measurement
+      carries no `usage` key; the store's byte budget reserves a worst-case usage dict per budgeted row, so the
+      response stays under its cap; a failure while measuring never fails the wait; the tool descriptions and
+      parameters are unchanged
+
+  # The orchestrator
+  - id: S10
+    when: '`events.rollup` totals a ticket whose assignments reported usage dicts with different keys'
+    then: >-
+      each key is the sum over the ticket's assignments when every assignment reported it, and `null` when any did
+      not; a ticket with no usage at all stays `unknown`
+  - id: S11
+    when: 'the driver writes `attempts.jsonl`'
+    then: >-
+      each record is schema 3: `tokens` carries `input`, `output`, `cached`, `cache_write` and `reasoning`; the record
+      carries `cost_usd`; `counters.model_calls` and `counters.tool_calls` are summed from usage; every one of these is
+      `null` when any of the attempt's assignments lacks it; `evidence-manifest.json` names the new fields
+
+  # Outcome
+  - id: S12
+    when: >-
+      a Claude, a Codex and a Pi worker, each spawned on one assignment and resumed on a second, have written session
+      logs that record usage, and `usage.assignment_usage` measures each
+    then: >-
+      each of the six assignments gets exactly its own slice's tokens, model calls, tool calls and (Claude, Pi) cost
+      under the names of S1 to S5, and a worker with no log gets an empty dict
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest tests/test_worker_usage_outcome.py -q --junitxml="$EEC_JUNIT"
+      oracle: [test_worker_usage_outcome.py.oracle]
+      place: tests/
+      baseline: fail
+      timeout: 300
+  - id: S13
+    when: >-
+      an orchestrated ticket's worker reports usage with `cost_usd` and its reviewer reports usage without it
+    then: >-
+      metrics.json sums the ticket's tokens and calls with `cost_usd` null, and attempts.jsonl (schema 3) carries the
+      summed tokens, model and tool calls with `cost_usd` null; when both report `cost_usd`, both files sum it
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_usage_metrics_outcome.py -q
+        --junitxml="$EEC_JUNIT"
+      oracle: [test_usage_metrics_outcome.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 300
+
+tickets:
+  - id: T1
+    delivers: >-
+      `usage.assignment_usage(env, worker)` for Claude and Codex: per-assignment slices by marked user prompt, the
+      Claude dedup, subagent attribution and `cost-state` cost, the Claude project-directory slug fixed for every
+      non-alphanumeric character, the Codex root-thread binding with cumulative deltas and guardian child threads
+      credited by time, the normalized keys, call counts, fail open, and the incremental sidecar; trimmed fixtures
+    satisfies: [S1, S2, S4, S5, S6, S7, S8]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/usage.py
+      - tests/test_usage.py
+      - tests/test_usage_parse.py
+      - tests/fixtures/usage/
+    size: regular
+    difficulty: complex
+    risk: [state]
+    evidence_waiver: >-
+      The sidecar's state is verified by S8's tests in tests/test_usage_parse.py (incremental equals fresh, shrink and
+      replace re-read) and end to end by S12's oracle.
+  - id: T2
+    delivers: 'Pi binding and measurement in `assignment_usage`, with its fixture; the outcome oracle S12 passes'
+    satisfies: [S3, S7, S8, S12]
+    blocked_by: [T1]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/usage.py
+      - tests/test_usage.py
+      - tests/test_usage_parse.py
+      - tests/fixtures/usage/
+      - tests/test_worker_usage_outcome.py
+    size: small
+    difficulty: simple
+  - id: T3
+    delivers: >-
+      `wait` attaches each returned assignment's `usage`, once per returned batch, with the worst-case dict reserved in
+      the store's budget and measurement failures swallowed; the predecessor plan's T3 to T6 marked superseded
+    satisfies: [S9]
+    blocked_by: [T1]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/hc_tools.py
+      - packages/agent-runtime/src/agent_runtime/dispatch_store.py
+      - packages/agent-runtime/src/agent_runtime/dispatch_wait.py
+      - tests/test_tools.py
+      - tests/test_budgets.py
+      - tests/test_event_wait.py
+      - docs/plans/2026-11-06-worker-token-metrics.plan.md
+    size: regular
+    difficulty: complex
+    risk: [concurrency]
+    evidence_waiver: >-
+      The wait loop's concurrency is unchanged: usage is attached after the store read returns, outside the listener
+      and the transaction; tests/test_event_wait.py and tests/test_budgets.py cover the wait and its cap.
+  - id: T4
+    delivers: >-
+      The orchestrator's null rule in `events.rollup` and `evidence.sum_tokens`, attempts.jsonl schema 3 with
+      `cache_write`, `reasoning`, `cost_usd` and the model and tool call counters, the manifest, and the metrics table's
+      columns; the outcome oracle S13 passes
+    satisfies: [S10, S11, S13]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/events.py
+      - packages/agent-orchestrator/src/agent_orchestrator/evidence.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_events.py
+      - packages/agent-orchestrator/tests/test_evidence.py
+      - packages/agent-orchestrator/tests/evidence-manifest.json
+      - packages/agent-orchestrator/tests/test_usage_metrics_outcome.py
+    size: regular
+    difficulty: simple
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-12T17:40:02.128215+00:00'
+  base: 9dbb1298967f8ab7083fcf1587ba1275200cb71d
+  digest: e38c639fc15463b5a81062dad0511377251268254ba1bebff9b7d11ed5ead633
