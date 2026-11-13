@@ -247,3 +247,123 @@ class ScopeAndIntegrityTests(VerifyFixture):
             sorted(c for c, _ in self.found(self.gate({"S1": ["tests/test_a.py::test_new"]}))),
             ["covers", "integrity", "scope"],
         )
+
+
+FOLDER = "docs/plans/2026-11-12-demo"
+FOLDER_PLAN_REL = FOLDER + "/plan.yaml"
+
+
+def folder_model(**ticket):
+    """A plan in its own folder: its acceptance file is placed at pkg/acceptance/billing/test_probe.py."""
+    data = model(**ticket).model_dump(by_alias=True, exclude_none=True)
+    evidence = data["scenarios"][0]["evidence"]
+    for key in ("oracle", "place"):
+        evidence.pop(key, None)
+    evidence.update(acceptance=["test_probe.py"], package="pkg")
+    data["domain"] = "billing"
+    return yaml_plan.Plan.model_validate(data)
+
+
+class FolderPlanIntegrityTests(VerifyFixture):
+    covers = {"S1": ["tests/test_a.py::test_new"], "S2": ["tests/test_a.py::test_new"]}
+
+    def setUp(self):
+        super().setUp()
+        self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
+
+    def folder_gate(self, plan_rel=FOLDER_PLAN_REL, **ticket):
+        report = {"contract": 3, "task_id": "t1", "covers": self.covers}
+        return self.found(
+            verify.invariants(
+                folder_model(**ticket),
+                "T1",
+                report,
+                repo=self.repo,
+                base="main",
+                plan_rel=plan_rel,
+            )
+        )
+
+    def test_S7_touching_a_file_of_the_plan_folder_is_an_integrity_failure_naming_it(self):
+        for name in ("plan.yaml", "plan.md", "acceptance/test_probe.py", "negatives/probe.patch"):
+            with self.subTest(name):
+                self.write("%s/%s" % (FOLDER, name), "x\n")
+                found = self.folder_gate(paths=["docs/", "tests/test_a.py"])
+                self.assertEqual(
+                    found,
+                    [
+                        (
+                            "integrity",
+                            "%s/%s is in the plan folder; a ticket never edits the plan or its "
+                            "acceptance files" % (FOLDER, name),
+                        )
+                    ],
+                )
+                (self.repo / FOLDER / name).unlink()
+
+    def test_S7_touching_an_acceptance_destination_is_an_integrity_failure_naming_it(self):
+        self.write("pkg/acceptance/billing/test_probe.py", "def test_p(): pass\n")
+        found = self.folder_gate(paths=["pkg/", "tests/test_a.py"])
+        self.assertEqual(
+            found,
+            [
+                (
+                    "integrity",
+                    "pkg/acceptance/billing/test_probe.py is an acceptance destination; the driver "
+                    "places the acceptance file there, a ticket never does",
+                )
+            ],
+        )
+
+    def test_S7_the_destination_follows_the_repo_config_not_the_default(self):
+        (self.repo / ".orchestrate").mkdir()
+        self.write(".orchestrate/config.yaml", "acceptance:\n  dir: accept\n")
+        self.write("pkg/acceptance/billing/test_probe.py", "def test_p(): pass\n")
+        self.write("pkg/accept/billing/test_probe.py", "def test_p(): pass\n")
+        found = self.folder_gate(paths=["pkg/", ".orchestrate/", "tests/test_a.py"])
+        self.assertEqual(
+            [(c, e.split(" ")[0]) for c, e in found],
+            [("integrity", "pkg/accept/billing/test_probe.py")],
+        )
+
+    def test_S7_a_plan_outside_the_repository_protects_no_folder_and_still_protects_destinations(
+        self,
+    ):
+        self.write("docs/plans/plan.yaml", "x: 1\n")
+        self.write("pkg/acceptance/billing/test_probe.py", "def test_p(): pass\n")
+        found = self.folder_gate(plan_rel=None, paths=["docs/", "pkg/", "tests/test_a.py"])
+        self.assertEqual(
+            [(c, e.split(" ")[0]) for c, e in found],
+            [("integrity", "pkg/acceptance/billing/test_probe.py")],
+        )
+
+    def test_S7_a_file_beside_the_plan_folder_is_only_a_scope_matter(self):
+        self.write("docs/plans/2026-11-12-demo-two/plan.yaml", "x: 1\n")
+        found = self.folder_gate(paths=["docs/", "tests/test_a.py"])
+        self.assertEqual(found, [])
+
+
+class DriverPlanPathTests(unittest.TestCase):
+    """What the driver hands verify as the plan's repo path."""
+
+    def rel(self, plan_path, repo="/repo"):
+        from agent_orchestrator import driver
+
+        stub = driver.Driver.__new__(driver.Driver)
+        stub.plan_path, stub.repo = Path(plan_path), Path(repo)
+        return stub.plan_rel_for_integrity()
+
+    def test_S7_a_folder_plan_in_the_repository_is_named_by_its_repo_path(self):
+        self.assertEqual(
+            self.rel("/repo/docs/plans/2026-11-12-demo/plan.yaml"),
+            "docs/plans/2026-11-12-demo/plan.yaml",
+        )
+
+    def test_S7_a_folder_plan_outside_the_repository_has_no_repo_path(self):
+        self.assertIsNone(self.rel("/elsewhere/plans/2026-11-12-demo/plan.yaml"))
+
+    def test_S7_a_legacy_plan_outside_the_repository_keeps_its_docs_plans_name(self):
+        self.assertEqual(
+            self.rel("/elsewhere/plans/2026-11-10-demo.plan.yaml"),
+            "docs/plans/2026-11-10-demo.plan.yaml",
+        )
