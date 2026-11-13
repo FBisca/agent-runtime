@@ -6653,13 +6653,15 @@ def main(argv=None):
         sub.add_argument("--repo", help="Repository root; default the current repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
         sub.add_argument("--json", action="store_true", help="Accepted; the answer is always JSON")
-    for verb in ("check", "approve"):
+    for verb in ("check", "approve", "amend"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
         sub.add_argument("--repo", help="Repository root; default the plan file's repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
         if verb == "approve":
             sub.add_argument("--base", default="origin/main")
+        if verb == "amend":
+            sub.add_argument("--reason", required=True, help="Why the approved plan changes")
     inspect = commands.add_parser(
         "inspect", help="Read checkout identity and installed command paths"
     )
@@ -6900,13 +6902,26 @@ def main(argv=None):
     if args.command == "plan":
         if args.plan_command == "schema":
             return yaml_plan.Plan.model_json_schema(by_alias=True)
-        if args.plan_command == "approve":
+        if args.plan_command in ("approve", "amend"):
             caller = resolve_runtime()
             if isinstance(caller, dict) and caller.get("role") == "worker":
                 raise PlanError(
-                    "approval: caller is a spawned worker, parent %s — approval belongs to the Lead "
-                    "(the person in their own session); ask the Lead to run plan approve"
-                    % caller.get("parent", "unknown")
+                    "%s: caller is a spawned worker, parent %s — %s belongs to the Lead "
+                    "(the person in their own session); ask the Lead to run plan %s"
+                    % (
+                        "approval" if args.plan_command == "approve" else "amend",
+                        caller.get("parent", "unknown"),
+                        args.plan_command,
+                        args.plan_command,
+                    )
+                )
+            if args.plan_command == "amend":
+                return yaml_plan.amend(
+                    args.plan,
+                    reason=args.reason,
+                    repo=args.repo,
+                    state_dir=args.state_dir,
+                    runtime_id=os.environ.get("HERDR_PANE_ID") or os.environ.get("HC_TERMINAL_ID"),
                 )
             return {
                 "approval": yaml_plan.approve(
