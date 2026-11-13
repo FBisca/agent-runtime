@@ -1125,7 +1125,8 @@ class Driver:
             route_record = data["routes"]
         narrate.NARRATOR.banner(
             plan=self.slug,
-            goal=self.model.goal,
+            # a legacy markdown plan has no model, so no goal to show
+            goal=self.model.goal if self.model else "",
             statuses=[ticket["Status"] for ticket in plan["tickets"]],
             repo=str(self.repo),
             base=self.args.base,
