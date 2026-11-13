@@ -202,7 +202,10 @@ class MetricsTests(MetricsFixture):
             ],
         )
         tickets = self.view(path)["metrics"]["tickets"]
-        self.assertEqual(tickets["T1"]["tokens"], {"input": 150, "output": 10, "cached": None})
+        self.assertEqual(
+            tickets["T1"]["tokens"],
+            {"input": 150, "output": 10, "cached": None, "cache_write": None, "reasoning": None},
+        )
         self.assertEqual(tickets["T1"]["model"], "opus")
         self.assertIsNone(tickets["T2"]["tokens"])
         self.assertIsNone(tickets["T2"]["model"])
