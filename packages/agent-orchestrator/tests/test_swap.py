@@ -4,8 +4,9 @@ import unittest
 from datetime import datetime, timezone
 
 import pytest
-from fixtures import spawn_id
+from fixtures import load_script, spawn_id
 from test_reuse import ReuseFixture
+from test_step_routes import RoutedRunFixture
 
 pytestmark = pytest.mark.integration
 
@@ -119,27 +120,30 @@ class SwapTests(ReuseFixture, unittest.TestCase):
             [(r["name"], r["unit"], r["context"]) for r in rows], [("demo-t1", "t1", "unknown")]
         )
 
+
+class ContextReserveTests(RoutedRunFixture, unittest.TestCase):
+    """What the swap check makes of a measurement and the run's reserve, read in process; the swaps above show it acting."""
+
+    def verdict(self, usage, *flags):
+        self.settle(*flags)
+        return load_script().context_verdict(usage, self.settled.args.context_reserve)["status"]
+
     def test_S19_a_stale_or_unusable_measurement_counts_as_unknown(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
         stale = dict(sample(190000), observed_at="2020-01-01T00:00:00+00:00")
-        self.waits([with_usage(self.worker_done(), stale)])
-        self.run_driver()
-        self.assertEqual(len(self.calls("resume")), 1)
-        self.assertEqual([r["context"] for r in self.run_events("context")], ["unknown"])
+        self.assertEqual(self.verdict(stale), "unknown")
+        self.assertEqual(self.verdict(dict(sample(190000), source="")), "unknown")
 
     def test_S19_an_agent_with_room_is_resumed_without_a_swap(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
-        self.waits([with_usage(self.worker_done(), sample(50000))])
-        self.run_driver()
-        self.assertEqual(len(self.calls("resume")), 1)
-        self.assertEqual(self.run_events("swap", "context"), [])
+        self.assertEqual(self.verdict(sample(50000)), "room_available")
 
     def test_S19_the_reserve_is_set_by_a_flag(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
-        self.waits([with_usage(self.worker_done(), sample(190000))])
-        self.run_driver("--context-reserve", "1000")
-        self.assertEqual(len(self.calls("resume")), 1)
-        self.assertEqual(self.run_events("swap"), [])
+        self.assertEqual(self.verdict(sample(190000)), "checkpoint")
+        self.assertEqual(
+            self.verdict(sample(190000), "--context-reserve", "1000"), "room_available"
+        )
 
 
 if __name__ == "__main__":

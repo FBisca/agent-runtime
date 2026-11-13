@@ -303,34 +303,6 @@ class Results(RepoCase):
         run = self.run_check(junit(PASSING + PASSING, tests=2))
         self.assertEqual((run.receipt["result"], self.result(run)), ("PASS", "PASS"))
 
-    def test_S13_an_exit_with_no_cases_executed_is_UNKNOWN(self):
-        run = self.run_check(junit("", tests=0))
-        self.assertEqual(run.receipt["result"], "UNKNOWN")
-        self.assertEqual(run.receipt["reason"], "no cases executed")
-
-    def test_S13_a_skipped_or_xfailed_case_is_UNKNOWN(self):
-        for label, cases in (("skipped", PASSING + SKIPPED), ("xfailed", PASSING + XFAILED)):
-            with self.subTest(label):
-                run = self.run_check(junit(cases, tests=2, skipped=1))
-                self.assertEqual(run.receipt["result"], "UNKNOWN")
-                self.assertEqual(run.receipt["reason"], "cases skipped")
-
-    def test_S13_an_assertion_failure_is_FAIL(self):
-        run = self.run_check(junit(PASSING + FAILING, tests=2, failures=1) + "exit 1")
-        self.assertEqual((run.receipt["result"], self.result(run)), ("FAIL", "FAIL"))
-
-    def test_S13_only_an_assertion_failure_counts_as_one_in_the_junit_counts(self):
-        for cases, assertions in (
-            (PASSING + FAILING, 1),
-            (PASSING + UNITTEST_ASSERTION, 1),
-            (PASSING + MISSING, 0),
-            (FAILING + MISSING, 1),
-        ):
-            with self.subTest(cases=cases):
-                run = self.run_check(junit(cases, tests=2, failures=2) + "exit 1")
-                self.assertEqual(run.receipt["result"], "FAIL")
-                self.assertEqual(run.receipt["junit"]["assertions"], assertions)
-
     def test_S13_a_check_that_dies_on_an_unbound_variable_never_ran_and_is_UNKNOWN_env(self):
         run = self.run_check('test -n "$EEC_UNDECLARED_VARIABLE"')
         self.assertEqual(self.result(run), "UNKNOWN (env)")
@@ -343,15 +315,6 @@ class Results(RepoCase):
         run = self.run_check(script, base_env={**os.environ, "TMPDIR": str(self.root)})
         self.assertIn("unbound variable", run.log)
         self.assertEqual(run.receipt["label"], "FAIL")
-
-    def test_S13_an_unbound_variable_beside_junit_is_not_taken_for_a_missing_env(self):
-        run = self.run_check(junit(PASSING + FAILING, tests=2, failures=1) + "exit 1")
-        self.assertEqual(run.receipt["label"], "FAIL")
-
-    def test_S13_a_collection_or_setup_error_is_FAIL_error(self):
-        run = self.run_check(junit(ERRORING, tests=1, errors=1) + "exit 2")
-        self.assertEqual(self.result(run), "FAIL (error)")
-        self.assertEqual(run.receipt["result"], "FAIL")
 
     def test_S13_a_timeout_is_UNKNOWN_and_the_process_group_is_killed(self):
         marker = self.root / "child.pid"
@@ -369,10 +332,6 @@ class Results(RepoCase):
         else:
             os.kill(pid, signal.SIGKILL)
             self.fail("the check's child survived the timeout")
-
-    def test_S13_exit_127_is_UNKNOWN_missing_tool(self):
-        run = self.run_check("no-such-tool-xyz --version")
-        self.assertEqual(self.result(run), "UNKNOWN (missing tool)")
 
     def test_S13_an_unset_env_name_is_UNKNOWN_env_and_the_check_never_runs(self):
         marker = self.root / "ran"
@@ -406,6 +365,62 @@ class Results(RepoCase):
         run = self.run_check(f"echo x >> {counter}; exit 1")
         self.assertEqual(run.receipt["result"], "FAIL")
         self.assertEqual(counter.read_text().count("x"), 1)
+
+
+class Classification(unittest.TestCase):
+    """What a finished check's exit code and JUnit file make of it, read from a fixture JUnit file with no process."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "junit.xml"
+
+    def classified(self, code, cases=None, **counts):
+        """(label, junit counts) of a check that exited `code` and wrote `cases` (nothing when None)."""
+        if cases is not None:
+            body = junit(cases, **counts).split("\n", 1)[1].rsplit("\nXML", 1)[0]
+            self.path.write_text(body, encoding="utf-8")
+        found = runner.junit_counts(self.path)
+        result, reason = runner.classify(code, found)
+        return runner.label(result, reason), found
+
+    def test_S13_an_exit_with_no_cases_executed_is_UNKNOWN(self):
+        self.assertEqual(self.classified(0, "", tests=0)[0], "UNKNOWN (no cases executed)")
+
+    def test_S13_a_skipped_or_xfailed_case_is_UNKNOWN(self):
+        for label, cases in (("skipped", PASSING + SKIPPED), ("xfailed", PASSING + XFAILED)):
+            with self.subTest(label):
+                self.assertEqual(
+                    self.classified(0, cases, tests=2, skipped=1)[0], "UNKNOWN (cases skipped)"
+                )
+
+    def test_S13_an_assertion_failure_is_FAIL(self):
+        self.assertEqual(self.classified(1, PASSING + FAILING, tests=2, failures=1)[0], "FAIL")
+
+    def test_S13_only_an_assertion_failure_counts_as_one_in_the_junit_counts(self):
+        for cases, assertions in (
+            (PASSING + FAILING, 1),
+            (PASSING + UNITTEST_ASSERTION, 1),
+            (PASSING + MISSING, 0),
+            (FAILING + MISSING, 1),
+        ):
+            with self.subTest(cases=cases):
+                label, counts = self.classified(1, cases, tests=2, failures=2)
+                self.assertEqual(label, "FAIL")
+                self.assertEqual(counts["assertions"], assertions)
+
+    def test_S13_a_collection_or_setup_error_is_FAIL_error(self):
+        self.assertEqual(self.classified(2, ERRORING, tests=1, errors=1)[0], "FAIL (error)")
+
+    def test_S13_exit_127_is_UNKNOWN_missing_tool(self):
+        self.assertEqual(self.classified(127)[0], "UNKNOWN (missing tool)")
+
+    def test_S13_an_unbound_variable_beside_junit_is_not_taken_for_a_missing_env(self):
+        self.assertEqual(self.classified(1, PASSING + FAILING, tests=2, failures=1)[0], "FAIL")
+
+    def test_S13_an_unreadable_junit_file_is_UNKNOWN(self):
+        self.path.write_text("<not xml", encoding="utf-8")
+        self.assertEqual(self.classified(0)[0], "UNKNOWN (unreadable JUnit)")
 
 
 class NegativeControl(RepoCase):

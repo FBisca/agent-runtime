@@ -8,7 +8,7 @@ import unittest
 
 import pytest
 from agent_orchestrator import narrate
-from fixtures import RunFixture  # noqa: E402
+from test_step_routes import RoutedRunFixture  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
@@ -23,7 +23,7 @@ def route(klass="small", backend="claude", model="haiku", **extra):
     return entry
 
 
-class RouteDriverTests(RunFixture, unittest.TestCase):
+class RouteDriverTests(RoutedRunFixture, unittest.TestCase):
     """The driver: an invalid route config stops the run before a worker exists."""
 
     def routes_file(self, data):
@@ -55,8 +55,7 @@ class RouteDriverTests(RunFixture, unittest.TestCase):
                 route(klass="large", backend="claude", model="opus"),
             )
         )
-        result = self.run_driver("--routes-file", path)
-        head = result.stderr.split("started worker", 1)[0]
+        head = self.settle("--routes-file", path).stderr
         self.assertIn(narrate.LOGO[0], head)
         self.assertIn("  plan     demo · ", head)
         self.assertRegex(head, r"\n    medium   codex  · gpt-m · high\n")
@@ -77,9 +76,10 @@ class RouteDriverTests(RunFixture, unittest.TestCase):
                 route(klass="large", backend="claude", model="opus"),
             )
         )
-        self.run_driver("--brain-cli", "codex", "--routes-file", path)
-        worker = {call["args"]["name"]: call["args"] for call in self.calls("spawn")}["demo-t1"]
-        self.assertEqual((worker["cli"], worker["model"]), ("claude", "haiku"))
+        self.settle("--brain-cli", "codex", "--routes-file", path)
+        small = self.settled.routes["small"]
+        self.assertEqual((small.backend, small.model), ("claude", "haiku"))
+        self.assertEqual(self.gate("reviewer", "large", "high")[:2], ("codex", "gpt-m"))
 
     def test_S3_a_typed_route_config_answers_the_run_without_the_legacy_table(self):
         """orchestrator-engine/R2: P4/S3 — the route config is self-sufficient; the legacy table is a fallback, not a prerequisite."""
@@ -91,14 +91,10 @@ class RouteDriverTests(RunFixture, unittest.TestCase):
                 route(klass="large", backend="claude", model="opus"),
             )
         )
-        self.run_driver("--routes-file", path)
-        spawns = {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
-        self.assertEqual(
-            (spawns["demo-t1"]["cli"], spawns["demo-t1"]["model"]), ("claude", "haiku")
-        )
-        self.assertEqual(
-            (spawns["demo-t3"]["cli"], spawns["demo-t3"]["model"]), ("claude", "sonnet")
-        )
+        self.settle("--routes-file", path)
+        routes = self.settled.routes
+        self.assertEqual((routes["small"].backend, routes["small"].model), ("claude", "haiku"))
+        self.assertEqual((routes["medium"].backend, routes["medium"].model), ("claude", "sonnet"))
 
 
 if __name__ == "__main__":

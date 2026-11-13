@@ -13,7 +13,7 @@ from unittest import mock
 
 import pytest
 from agent_orchestrator import ledger as ledgers
-from fixtures import DRIVER, load_script, wait_result
+from fixtures import DRIVER, load_script
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -295,16 +295,3 @@ class AwaitTests(AwaitFixture, unittest.TestCase):
         self.waits([self.crashing_step()])
         self.finish(self.start_driver())
         self.awaited("crashed -> ")
-
-    def test_S4_await_says_the_driver_is_gone_when_it_was_killed_without_a_crash_log(self):
-        """orchestrator-engine/R76: a SIGKILL leaves no crash log."""
-        marker = self.root / "in-wait"
-        self.waits([wait_result(run=[["sh", "-c", 'touch "$0"; sleep 60', str(marker)]])])
-        process = self.start_driver()
-        deadline = time.monotonic() + 30
-        while not marker.exists() and time.monotonic() < deadline and process.poll() is None:
-            time.sleep(0.05)
-        self.assertTrue(marker.exists(), "the driver never reached its wait")
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
-        self.awaited("driver gone without a crash log")

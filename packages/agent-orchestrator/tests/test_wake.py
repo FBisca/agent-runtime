@@ -1,15 +1,14 @@
 """The Lead's channel: requests and wakes, `await`, `decide`, the wake queue, held messages, pr-ready, plan-invalid."""
 
 import json
-import subprocess
 import sys
-import time
 import unittest
+from unittest import mock
 
 import pytest
 import yaml
 from agent_orchestrator import contracts
-from fixtures import DRIVER, assignment, load_script, plan_data, report_wait, resume_id, wait_result
+from fixtures import assignment, load_script, plan_data, report_wait, resume_id, wait_result
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -186,50 +185,42 @@ class AwaitTests(WakeFixture, unittest.TestCase):
     def test_S2_await_waits_for_a_wake_that_arrives_later(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S2"""
         (self.run_dir).mkdir(parents=True)
-        waiting = subprocess.Popen(
-            [
-                *DRIVER,
-                "await",
-                str(self.plan),
-                "--state-dir",
-                str(self.state_dir),
-                "--poll-seconds",
-                "0.1",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            time.sleep(0.5)
-            self.assertIsNone(waiting.poll())
+        spec = load_script()
+        polls = []
+
+        def poll(seconds):
+            """The wait itself: the wake lands during the first one, so `await` has polled and found nothing."""
+            polls.append(seconds)
             (self.run_dir / "wakes.jsonl").write_text(
                 json.dumps({"kind": "decision", "unit": "t1", "text": "decision t1: x -> /p"})
                 + "\n"
             )
-            out, err = waiting.communicate(timeout=20)
-        finally:
-            waiting.kill()
-        self.assertEqual((waiting.returncode, out), (0, "decision t1: x -> /p\n"), err)
+
+        clock = mock.Mock(wraps=spec.time)
+        clock.sleep.side_effect = poll
+        with mock.patch.object(spec, "time", clock):
+            result = self.cli(
+                "await", str(self.plan), "--state-dir", str(self.state_dir), "--poll-seconds", "0.1"
+            )
+        self.assertEqual(polls, [0.1])
+        self.assertEqual(
+            (result.returncode, result.stdout), (0, "decision t1: x -> /p\n"), result.stderr
+        )
 
     def test_S2_an_unfinished_run_with_nothing_to_print_does_not_say_finished(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S2"""
         self.run_dir.mkdir(parents=True)
         (self.run_dir / "events.jsonl").write_text(json.dumps({"kind": "start"}) + "\n")
-        with self.assertRaises(subprocess.TimeoutExpired):
-            subprocess.run(
-                [
-                    *DRIVER,
-                    "await",
-                    str(self.plan),
-                    "--state-dir",
-                    str(self.state_dir),
-                    "--poll-seconds",
-                    "0.1",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=1,
+        spec = load_script()
+
+        class PollObserved(Exception):
+            pass
+
+        clock = mock.Mock(wraps=spec.time)
+        clock.sleep.side_effect = PollObserved
+        with mock.patch.object(spec, "time", clock), self.assertRaises(PollObserved):
+            self.cli(
+                "await", str(self.plan), "--state-dir", str(self.state_dir), "--poll-seconds", "0.1"
             )
 
 
