@@ -835,5 +835,63 @@ class PiUsageTests(UsageCase):
         self.assertEqual(self.measure("pw")["PA2"]["model_calls"], 1)
 
 
+class OutcomeTests(UsageCase):
+    # The Pi session helpers are shared with PiUsageTests.
+    pi_dir = PiUsageTests.pi_dir
+    pi_fixture = PiUsageTests.pi_fixture
+    pi_log = PiUsageTests.pi_log
+
+    def test_S12_each_of_three_workers_gets_exactly_its_own_slices_and_a_worker_without_a_log_gets_nothing(
+        self,
+    ):
+        """worker-usage/S12: a Claude, a Codex and a Pi worker, each resumed on a second assignment."""
+        self.register("cw", "claude", "CA1")
+        self.register("xw", "codex", "XA1")
+        self.register("pw", "pi", "PA1")
+        self.register("nw", "pi", "N-1")
+        self.claude_fixture()
+        self.codex_fixture()
+        self.pi_log()
+
+        claude = self.measure("cw")
+        self.assertEqual(list(claude), ["CA1", "CA2"])
+        self.assertEqual(
+            claude["CA1"],
+            {
+                "input_tokens": 117,
+                "cached_input_tokens": 2100,
+                "cache_write_tokens": 50,
+                "output_tokens": 53,
+                "model_calls": 3,
+                "tool_calls": 4,
+                "cost_usd": 0.25,
+            },
+        )
+        self.assertEqual(claude["CA2"]["model_calls"], 2)
+        self.assertEqual(claude["CA2"]["tool_calls"], 1)
+        self.assertAlmostEqual(claude["CA2"]["cost_usd"], 0.15, places=6)
+
+        codex = self.measure("xw")
+        self.assertEqual(list(codex), ["XA1", "XA2"])
+        self.assertEqual(codex["XA1"]["output_tokens"], 120)
+        self.assertEqual(codex["XA1"]["model_calls"], 2)
+        self.assertEqual(codex["XA2"]["output_tokens"], 80)
+        self.assertEqual(codex["XA2"]["model_calls"], 3)
+        self.assertNotIn("cost_usd", codex["XA1"])
+        self.assertNotIn("cost_usd", codex["XA2"])
+
+        pi = self.measure("pw")
+        self.assertEqual(list(pi), ["PA1", "PA2"])
+        self.assertEqual(pi["PA1"]["output_tokens"], 100)
+        self.assertEqual(pi["PA1"]["model_calls"], 2)
+        self.assertEqual(pi["PA1"]["tool_calls"], 1)
+        self.assertAlmostEqual(pi["PA1"]["cost_usd"], 0.02, places=6)
+        self.assertEqual(pi["PA2"]["output_tokens"], 10)
+        self.assertEqual(pi["PA2"]["tool_calls"], 2)
+        self.assertAlmostEqual(pi["PA2"]["cost_usd"], 0.005, places=6)
+
+        self.assertEqual(self.measure("nw"), {})
+
+
 if __name__ == "__main__":
     unittest.main()
