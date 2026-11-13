@@ -24,7 +24,11 @@ class FullSuiteAtVerify(AcceptanceFixture, unittest.TestCase):
         path = self.run_dir / "events.jsonl"
         if not path.is_file():
             return []
-        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
         return [row for row in rows if row.get("kind") == "full"]
 
     def deliver(self, *extra):
