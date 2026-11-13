@@ -110,6 +110,19 @@ class ResolverTests(ResolverFixture):
         self.assertFalse(PlanLayout.is_plan_file(Path("x/a.plan.md")))
 
 
+class NoRepositoryTests(ResolverFixture):
+    def test_S1_a_question_about_the_repository_without_one_is_refused_naming_the_way_out(self):
+        layout = PlanLayout(self.folder_plan)
+        self.assertEqual(layout.kind, "folder")
+        for ask in (
+            lambda: layout.place(self.folder_plan),
+            lambda: layout.owns("docs/plans/x/plan.yaml"),
+            lambda: layout.may_delete_folder(),
+        ):
+            with self.assertRaisesRegex(ValueError, "needs the repository"):
+                ask()
+
+
 class AskedByTests(ResolverFixture):
     def test_S1_verifys_integrity_rule_asks_the_resolver(self):
         folder = verify.integrity(None, self.folder(), "docs/plans/2026-11-13-demo/plan.md")

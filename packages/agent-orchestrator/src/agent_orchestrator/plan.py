@@ -372,10 +372,18 @@ class PlanLayout:
             return [self.path]
         return [self.path, self.narrative, self.oracle_dir]
 
+    @property
+    def repository(self):
+        """The repository the layout was built with; asking for a place in it without one is a mistake."""
+        if self.repo is None:
+            raise ValueError("this answer needs the repository: build PlanLayout(path, repo)")
+        return self.repo
+
     def place(self, path):
         """`path` relative to the repository, or None when it is outside it."""
+        repo = self.repository  # read outside the try: a missing repository is no "outside"
         try:
-            return Path(path).relative_to(self.repo).as_posix()
+            return Path(path).relative_to(repo).as_posix()
         except ValueError:
             return None
 
@@ -400,7 +408,8 @@ class PlanLayout:
 
     def holds_repo(self):
         folder = self.folder
-        return folder is not None and (self.repo == folder or self.repo.is_relative_to(folder))
+        repo = self.repository
+        return folder is not None and (repo == folder or repo.is_relative_to(folder))
 
     def may_delete_folder(self):
         """Whether the plan has a folder of its own that may be deleted: a folder that is the repository, or holds
