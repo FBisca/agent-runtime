@@ -1085,36 +1085,49 @@ class Driver:
         plan = self.last_plan = self.read_plan()
         self.slug = plan["slug"]
         self.brain_cli = getattr(self.args, "brain_cli", None)
-        # The route config this run uses, in the plan's order: the file the run names, then the repository's own
-        # policy, then the user's default. With one, the legacy table is a fallback, not a prerequisite, so it is
-        # not read; with none, the legacy table answers and says it is deprecated.
-        self.routes_file, self.route_source = routes.find_config(
-            explicit=getattr(self.args, "routes_file", None),
-            repo=self.repo,
-            home=routes.user_config_dir(),
-        )
-        if self.routes_file:
-            self.models, self.brain_models = {}, {}
-        else:
-            self.models = class_models(self.args.models_file, self.args.cli, required=True)
-            self.brain_models = (
-                class_models(self.args.models_file, self.brain_cli, required=True)
-                if self.brain_cli
-                else self.models
-            )
-        self.routes, self.step_routes = self.load_routes()
-        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.ledger_path, self.run_dir = locate_state(
+        # The run directory is only named once the routes are settled: a run that stops here has not started.
+        self.ledger_path, run_dir = locate_state(
             self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
+        pinned = self.recorded_routes()
+        if pinned:
+            self.pin_routes(pinned)
+        else:
+            self.args.cli = self.args.cli or "claude"
+            # The route config this run uses, in the plan's order: the file the run names, then the repository's own
+            # policy, then the user's default. With one, the legacy table is a fallback, not a prerequisite, so it is
+            # not read; with none, the legacy table answers and says it is deprecated.
+            self.routes_file, self.route_source = routes.find_config(
+                explicit=getattr(self.args, "routes_file", None),
+                repo=self.repo,
+                home=routes.user_config_dir(),
+            )
+            if self.routes_file:
+                self.models, self.brain_models = {}, {}
+            else:
+                self.models = class_models(self.args.models_file, self.args.cli, required=True)
+                self.brain_models = (
+                    class_models(self.args.models_file, self.brain_cli, required=True)
+                    if self.brain_cli
+                    else self.models
+                )
+            self.routes, self.step_routes = self.load_routes()
+        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         narrate.NARRATOR.roots = [self.run_dir]  # the pane names a run file by its place in the run
         # The ledger first: it carries the kind marker before any file a worker can read exists.
         with ledger(self.ledger_path) as data:
             self.lead = data.setdefault("lead", "orchestrate:" + self.slug)
-            data["routes"] = routes.record(
-                self.routes, self.route_source or "legacy", self.routes_file, self.step_routes
-            )
+            if not pinned:  # a resumed run keeps the record it already has
+                data["routes"] = routes.record(
+                    self.routes,
+                    self.route_source or "legacy",
+                    self.routes_file,
+                    self.step_routes,
+                    cli=self.args.cli,
+                    brain_cli=self.brain_cli,
+                )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
             # the ledger owns the plan's state; the plan file is never written
             if not data.get("plan"):
@@ -3402,6 +3415,91 @@ class Driver:
         otherwise."""
         return getattr(self, "brain_cli", None) or self.args.cli
 
+    def recorded_routes(self):
+        """The routes an existing run's ledger recorded, or None for a run that has not started.
+
+        A run that started and has no complete record cannot be recovered from whatever policy is there now:
+        it stops here, before any worker, unless --routes-file names the config that migrates it."""
+        data = ledgers.snapshot(self.ledger_path)
+        if data is None or not ("lead" in data or "routes" in data):
+            return None
+        pinned, why = routes.read_record(data.get("routes"))
+        if pinned is None:
+            if getattr(self.args, "routes_file", None):
+                return None  # the explicit config migrates the run and records the complete routes
+            raise PlanError(
+                "cannot resume %s: %s, and the policy now in force may not be what it ran on. Pass "
+                "--routes-file with the typed route config to migrate it; the complete resolved routes "
+                "are then recorded in the ledger before the run resumes" % (self.slug, why)
+            )
+        return pinned
+
+    def pin_routes(self, pinned):
+        """The recorded routes answer the run; an explicit argument that says otherwise stops it.
+
+        An argument that matches the record is accepted and one the command line omits is not a conflict. The
+        ledger is not written until the run is clear to resume."""
+        args = self.args
+        try:
+            chosen = routes.overrides(getattr(args, "route", None))
+            chosen_steps = routes.step_overrides(getattr(args, "step", None))
+        except routes.RouteError as error:
+            raise PlanError("invalid route override: %s" % error) from None
+        classes = {route.klass: route for route in chosen}
+        steps = {route.step: route for route in chosen_steps}
+        via = {route.klass: "--route" for route in chosen}
+        via.update({route.step: "--step" for route in chosen_steps})
+        dropped = []
+        explicit = getattr(args, "routes_file", None)
+        if explicit:
+            try:
+                config = routes.load(explicit)
+                resolved = routes.resolve(config, pinned.cli, {})
+            except routes.RouteError as error:
+                raise PlanError("invalid route config %s: %s" % (explicit, error)) from None
+            # An explicit file is the whole routing of the run, so a step the ledger has and it lacks differs too.
+            via = {name: "--routes-file" for name in (*routes.CLASSES, *routes.STEPS)} | via
+            classes = routes.apply_overrides(resolved, chosen)
+            steps = routes.apply_step_overrides({s.step: s for s in config.steps}, chosen_steps)
+            dropped = sorted(set(pinned.steps) - set(steps))
+        found = routes.conflicts(
+            pinned, classes, steps, cli=args.cli, brain_cli=self.brain_cli, via=via
+        )
+        found += [
+            "--routes-file: step %s is recorded as %s, the file names no such step"
+            % (name, routes.describe(pinned.steps[name]))
+            for name in dropped
+        ]
+        if found:
+            raise PlanError(
+                "cannot resume %s: the arguments conflict with the routes its ledger recorded (%s). Drop "
+                "the conflicting argument to keep the recorded routes; the ledger is unchanged"
+                % (self.slug, "; ".join(found))
+            )
+        args.cli = args.cli or pinned.cli
+        self.brain_cli = self.brain_cli or pinned.brain_cli
+        self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps)
+        self.routes_file, self.route_source = pinned.path, pinned.source
+        self.models, self.brain_models = {}, {}
+        if self.brain_cli:
+            wanted = [s for s in ("reviewer", "gaps") if s not in self.step_routes]
+            medium = self.routes["medium"]
+            if wanted and medium.backend != self.brain_cli:
+                raise PlanError(
+                    "cannot resume %s: the recorded medium route runs on %s, not on the brain backend %s the "
+                    "%s gate(s) would spawn on. Pass --step %s=%s/MODEL[@EFFORT] for them, or --routes-file "
+                    "with a medium route on %s to migrate"
+                    % (
+                        self.slug,
+                        medium.backend,
+                        self.brain_cli,
+                        "/".join(wanted),
+                        wanted[0],
+                        self.brain_cli,
+                        self.brain_cli,
+                    )
+                )
+
     def load_routes(self):
         """The class -> route map this run uses: the typed route config when one was found, the legacy
         'Model classes' table otherwise. An invalid route config stops the run here, before any worker.
@@ -3461,7 +3559,7 @@ class Driver:
         brain = getattr(self, "brain_cli", None)
         if not brain:
             return self.routes[klass].model
-        if self.routes_file:
+        if not self.brain_models:
             route = self.routes.get("medium")
             if route is None or route.backend != brain:
                 raise PlanError(
@@ -6990,7 +7088,12 @@ def main(argv=None):
         default=40000,
         help="Tokens an implementer or reviewer must have left before a resume; below it the driver swaps in a fresh agent",
     )
-    sub.add_argument("--cli", choices=("claude", "codex", "pi"), default="claude")
+    sub.add_argument(
+        "--cli",
+        choices=("claude", "codex", "pi"),
+        help="The worker backend (default claude). A run that resumes keeps the backend its ledger recorded; "
+        "an explicit --cli that differs from it stops the run",
+    )
     sub.add_argument(
         "--brain-cli",
         choices=("claude", "codex", "pi"),
