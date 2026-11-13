@@ -13,7 +13,7 @@ from test_workbench import WorkbenchFixture, graph
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 T0 = datetime(2026, 11, 12, 10, 0, 0, tzinfo=timezone.utc)
 
 
