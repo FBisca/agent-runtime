@@ -844,6 +844,11 @@ def cell(text, limit=160):
     return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
 
 
+def show(value):
+    """A plan field as one line: a list joined, anything else as it reads."""
+    return ", ".join(value) if isinstance(value, list) else str(value)
+
+
 def item_text(item):
     """What a finding says, whichever contract wrote it: a contract 2 `summary`, a contract 1 `problem` or deferred
     `note`, a converge or CI `excerpt`."""
@@ -1058,6 +1063,7 @@ class Driver:
         self.approval: yaml_plan.Approval | None = (
             None  # the approval block of the YAML plan the loop last read
         )
+        self.drain = None  # {"cause", "error"} while the plan is edited or unloadable and no new worker starts
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1095,25 +1101,250 @@ class Driver:
                 )
 
     def read_plan(self):
+        """The plan as the run gates and dispatches it: the approved snapshot, until an amendment is adopted.
+
+        A plan edited since its approval, or one that no longer loads, does not stop a run in flight: the run drains
+        on the last approved snapshot (`begin_drain`) until the file is back to its approved bytes or carries a valid
+        approval of its own (`adopt_amendment`). Before the run holds an approved plan there is nothing to drain on, so the
+        refusal stands."""
         if self.discarded and self.last_plan is not None:
             return (
                 self.last_plan
             )  # its folder is gone by design; the approved model was read before
-        require_yaml(self.plan_path)
-        model = load_approved(
-            self.plan_path,
-            repo=self.repo,
-            state_dir=self.args.state_dir,
-            require_approval=True,
-        )
-        self.model = model  # verify gates a ticket against the approved plan
-        self.approval = model.approval
+        started = getattr(self, "run_dir", None) is not None
+        try:
+            require_yaml(self.plan_path)
+            model = load_approved(
+                self.plan_path,
+                repo=self.repo,
+                state_dir=self.args.state_dir,
+                require_approval=True,
+            )
+            if self.model is not None and model.slug != self.model.slug:
+                raise PlanError(
+                    "the plan's slug changed from %s to %s: the slug names the run's ledger, so no amendment can "
+                    "change it" % (self.model.slug, model.slug)
+                )
+        except PlanError as error:
+            if self.model is None or not started:
+                raise
+            self.begin_drain(error)
+            model = self.model
+        else:
+            settled = self.model is not None and started
+            if settled and model.approval.digest != self.approved_digest():
+                held = self.model
+                self.model, self.approval = model, model.approval
+                self.adopt_amendment(held, self.legacy_of(model))
+            elif settled and self.drain:
+                self.end_drain()
+            elif not settled:
+                self.model, self.approval = model, model.approval
+        return self.legacy_of(model)
+
+    def legacy_of(self, model):
+        """The loop's view of `model`, with the ticket statuses the ledger holds."""
         ledger_path = state_layout(self.args.state_dir, self.plan_path, self.repo, model.slug)[0]
         statuses = {}
         data = ledgers.snapshot(ledger_path)  # a read: it never waits for a writer
         if data is not None:
             statuses = dict(data.get("ticket_status", {}))
         return model.legacy(statuses)
+
+    # ---- a plan that changes under a live run: drain, then adopt ---------------------------------------------------
+    # The edit is itself the signal (an approval no longer matches its bytes, or the file does not load). The run goes
+    # on with what is already running and starts nothing new, so nobody has to stop the driver and kill its workers.
+    # `plan amend` writes the approval snapshot before it replaces the file: a read finds the old plan or the new one.
+
+    def approved_digest(self):
+        """The digest of the approval this run gates against; the drain and adoption code only runs once a plan is
+        held, so a missing one is a bug, not a state."""
+        if self.approval is None:
+            raise PlanError("the run holds no approved plan yet")
+        return self.approval.digest
+
+    def begin_drain(self, error):
+        """Drain once per edit: one event and one wake, however many reads find the file still changed."""
+        if self.drain:
+            return
+        cause = "edited" if str(error).startswith("approval: changed") else "unloadable"
+        # The load error names `plan approve` as its way out; a live run's way out is `plan amend`.
+        text = re.sub(
+            r"(; )?approval: after fixing \S+, run agent-orchestrator plan approve \S+",
+            "",
+            str(error),
+        )
+        text = " ".join(re.sub(r" — run agent-orchestrator plan approve \S+", "", text).split())[
+            :500
+        ]
+        self.drain = {"cause": cause, "error": text}
+        self.log("drain", state="draining", cause=cause, error=text, digest=self.approved_digest())
+        narrate.say("warn", None, "draining: the plan is %s: %s" % (cause, text))
+        self.wake(
+            "drain",
+            None,
+            "drain: %s is %s (%s) -> the run goes on with what is running and starts no new worker; restore the "
+            "file to the approved plan, or finish the edit and run `agent-orchestrator plan amend %s --reason "
+            "<why>` to adopt it" % (self.plan_path, cause, text, self.plan_path),
+        )
+
+    def end_drain(self):
+        """The file is back to the approved bytes."""
+        self.log(
+            "drain",
+            state="ended",
+            cause=(self.drain or {}).get("cause"),
+            digest=self.approved_digest(),
+        )
+        narrate.say("info", None, "the plan is back to its approved bytes: the drain ended")
+        self.drain = None
+
+    def adopt_amendment(self, held, plan):
+        """The plan carries a valid approval other than the one this run holds: gate and dispatch against it from
+        now on. `held` is the model the run held until now."""
+        if self.model is None:
+            raise PlanError("the run holds no plan to adopt an amendment into")
+        digest = self.approved_digest()
+        amendment = next((a for a in reversed(self.model.amendments) if a.digest == digest), None)
+        self.log(
+            "amended",
+            prev_digest=held.approval.digest,
+            digest=digest,
+            reason=amendment.reason[:500] if amendment else None,
+            tickets=amendment.tickets if amendment else None,
+            drained=True if self.drain else None,
+        )
+        narrate.say("info", None, "adopted the amended plan %s" % digest[:12])
+        self.drain = None
+        self.last_plan = plan
+        with self.book() as data:
+            self.resume_plan_state(
+                data
+            )  # a ticket the amendment added reopens a plan that had delivered
+        self.resume_changed(held, plan)
+
+    def resume_changed(self, held, plan):
+        """Each open attempt (working or parked) whose ticket's `paths`, `satisfies` or `delivers` the amendment
+        changed gets its next packet and its worker is resumed on it; any other attempt is left alone."""
+        if self.model is None:
+            return
+        before = {t.id.lower(): t for t in held.tickets}
+        changed = {}
+        for ticket in self.model.tickets:
+            old = before.get(ticket.id.lower())
+            if old and any(
+                getattr(old, field) != getattr(ticket, field)
+                for field in ("paths", "satisfies", "delivers")
+            ):
+                changed[ticket.id.lower()] = (old, ticket)
+        if not changed:
+            return
+        rows = {t["#"].lower(): t for t in plan["tickets"]}
+        with self.book() as data:
+            open_ = [
+                (task_id, copy.deepcopy(task))
+                for task_id, task in data["tasks"].items()
+                if task["packet"].get("unit") in changed
+                and task["status"] not in ("COMPLETE", "RELEASED")
+                and (not task.get("gate") or task.get("gate") in PARKED)
+                and task.get("runtime_id")
+            ]
+        for task_id, task in open_:
+            unit = task["packet"]["unit"]
+            try:
+                self.next_packet(task_id, task, rows[unit], plan, *changed[unit])
+            except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                self.log("error", unit=unit, task=task_id, gate="amend", error=str(error)[:500])
+                narrate.say("fail", None, "could not hand %s its new packet: %s" % (task_id, error))
+                self.wake(
+                    "amend-failed",
+                    unit,
+                    "amend-failed %s: its worker could not be given the amended contract: %s -> look at its "
+                    "terminal" % (unit, cell(error, 300)),
+                    key="%s:%s" % (task_id, self.approved_digest()),
+                )
+
+    def next_packet(self, task_id, task, row, plan, old, new):
+        """Write the attempt's next packet `task.v<n>.md`, set its ownership reservation to the new paths and resume
+        its worker on the packet. Two workers never share a checkout, so the new paths cannot clash with another
+        attempt's reservation."""
+        packet, unit = task["packet"], task["packet"]["unit"]
+        scenarios = [plan["scenarios"][sid] for sid in satisfied(row, plan["scenarios"])[0]]
+        fields = self.contract_fields(row, scenarios)
+        successor = dict(packet, **fields)
+        task_dir = self.run_dir / task_id
+        task_dir.mkdir(exist_ok=True, mode=0o700)
+        version = next(n for n in range(2, 1000) if not (task_dir / ("task.v%d.md" % n)).exists())
+        packet_md = task_dir / ("task.v%d.md" % version)
+        changes = [
+            "- %s: %s -> %s" % (field, show(getattr(old, field)), show(getattr(new, field)))
+            for field in ("paths", "satisfies", "delivers")
+            if getattr(old, field) != getattr(new, field)
+        ]
+        packet_md.write_text(
+            self.task_text(plan, row, successor, scenarios, task_dir)
+            + "\n".join(
+                [
+                    "## Your contract changed",
+                    "",
+                    "The plan was amended (%s). This packet replaces your earlier ones: keep the work already in "
+                    "this checkout and finish against the contract above. What changed:"
+                    % self.approved_digest()[:12],
+                    *changes,
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        with self.book() as data:
+            data["tasks"][task_id]["packet"].update(
+                fields
+            )  # the ownership reservation: the new paths
+            data["tasks"][task_id]["updated_at"] = now()
+        resumed = False
+        name = packet["worker"]
+        if self.pane_alive(name):
+            answer = runtime_call(
+                self.lead,
+                "resume",
+                {
+                    "name": name,
+                    "task": "Your contract changed: the plan was amended. Read %s and follow it: it replaces your "
+                    "earlier task packet; keep the work already in this checkout." % packet_md,
+                },
+            )
+            assignment_id = assignment_of(answer)
+            with self.book() as data:
+                data["tasks"][task_id]["assignment_id"] = assignment_id
+                if name in (data.get("agents") or {}):
+                    data["agents"][name]["assignment_id"] = assignment_id
+                    if answer.get("address"):
+                        data["agents"][name]["address"] = answer["address"]
+            self.touched.add(name)
+            self.log(
+                "agent",
+                name=name,
+                role="worker",
+                unit=unit,
+                how="resume",
+                assignment_id=assignment_id,
+            )
+            resumed = True
+        self.log(
+            "repacket",
+            unit=unit,
+            task=task_id,
+            packet=packet_md.name,
+            resumed=resumed,
+            digest=self.approved_digest(),
+        )
+        narrate.say(
+            "info",
+            "build",
+            "%s: new packet %s%s"
+            % (name, packet_md.name, "" if resumed else " (no live worker to tell)"),
+            task=task_id,
+        )
 
     def start(self):
         plan = self.last_plan = self.read_plan()
@@ -1217,9 +1448,14 @@ class Driver:
                     + self.start_gaps(plan)
                 )
                 self.refresh_attention()
-            else:  # the last valid plan keeps the work going; what the user's edit might have changed waits for a valid file
-                dispatched = self.dispatch_ready(plan)
-            if idle and not dispatched and not acted and not self.awaiting():
+            else:
+                # A drain: running attempts, reviews and the merge bookkeeping go on, and no worker starts (a first
+                # dispatch, a reopened unit, the archive, a verification of an outcome that may be about to change).
+                acted += self.advance_mutations()
+                dispatched = 0
+                self.refresh_attention()
+            # A drain has no timeout: the run waits for the Lead to amend the plan or restore it.
+            if idle and not dispatched and not acted and not self.awaiting() and not self.drain:
                 # An open task whose agent the runtime no longer lists is work the run would otherwise drop.
                 dispatched = self.reconcile(finishing=True)
                 if not dispatched:
@@ -1229,6 +1465,7 @@ class Driver:
                 wait["receipt"] = self.receipt
             result = runtime_call(self.lead, "wait", wait, timeout=self.args.wait_seconds + 60)
             self.receipt = result.get("receipt")
+            self.read_plan()  # an edit made while the run waited is seen before anything acts on the answer
             self.receive(result)
             self.idle_ticks(result.get("assignments") or [])
             self.unfinished = {i for i in result.get("unfinished") or [] if isinstance(i, str)}
@@ -1250,10 +1487,10 @@ class Driver:
                 self.idle()
 
     def current_plan(self):
-        """(plan, valid): the plan file as it stands. A stale approval or a plan edited since is an error: it never
-        falls back to dispatching the last valid plan."""
+        """(plan, open): the plan the run holds, and whether it may start work. A plan edited since its approval is
+        drained, not dispatched: `open` is False and nothing new starts until the edit is amended or undone."""
         self.last_plan = self.read_plan()
-        return self.last_plan, True
+        return self.last_plan, not self.drain
 
     def idle(self):
         """Back off after an iteration that dispatched, advanced and handled nothing: the runtime's wait returns
@@ -1691,6 +1928,10 @@ class Driver:
             "awaiting-merge": self.step_merge,
             "cleanup": self.step_cleanup,
         }
+        if (
+            self.drain
+        ):  # a fix round and a retry start a worker attempt: they wait for the drain to end
+            del steps["fix-pending"], steps["redo-pending"]
         acted = 0
         with self.book() as data:
             answered = [
@@ -6150,7 +6391,10 @@ class Driver:
         return acted
 
     def redispatch(self, task_id, said):
-        """Release the orphaned attempt and put the unit's worker on a new one, in the same checkout and branch."""
+        """Release the orphaned attempt and put the unit's worker on a new one, in the same checkout and branch. A
+        draining run starts no attempt: the orphan stays open and the next reconciliation after the drain takes it."""
+        if self.drain:
+            return 0
         task = self.task(task_id)
         unit, name = task["packet"]["unit"], task["packet"]["worker"]
         plan = self.last_plan
@@ -6279,6 +6523,20 @@ class Driver:
             ]
         return earlier[-1] if earlier else None
 
+    def contract_fields(self, ticket, scenarios):
+        """The packet fields a ticket's contract fixes: what it delivers, the paths it owns, the scenarios it
+        satisfies and the checks its worker runs. A dispatch and an adopted amendment write the same ones."""
+        owns = [p.strip() for p in ticket["Paths"].split(",") if p.strip()]
+        checks, affected, full = self.tier_checks(owns)
+        return {
+            "objective": ticket["What it delivers"],
+            "owns": owns,
+            "acceptance": [re.sub(r"^- \*\*(S\d+[a-z]?)\*\*", r"\1:", s) for s in scenarios],
+            "checks": checks,
+            **({"affected": affected} if affected else {}),
+            **({"full": full} if full else {}),
+        }
+
     def dispatch(self, plan, ticket, task_id=None, note=""):
         number = ticket["#"][1:]
         name = worker_name(plan["slug"], number)
@@ -6303,20 +6561,13 @@ class Driver:
         effort = self.step_effort("implementer", route.effort or matrix_effort)
         checkout = self.worktree(name, "feat/" + name)
         scenarios = [plan["scenarios"][sid] for sid in satisfied(ticket, plan["scenarios"])[0]]
-        owns = [p.strip() for p in ticket["Paths"].split(",") if p.strip()]
-        checks, affected, full = self.tier_checks(owns)
         packet = {
             "task_id": task_id,
             "worker": name,
             "plan": str(self.plan_path),
-            "objective": ticket["What it delivers"],
             "checkout": str(checkout),
             "backend": backend,
-            "owns": owns,
-            "acceptance": [re.sub(r"^- \*\*(S\d+[a-z]?)\*\*", r"\1:", s) for s in scenarios],
-            "checks": checks,
-            **({"affected": affected} if affected else {}),
-            **({"full": full} if full else {}),
+            **self.contract_fields(ticket, scenarios),
             "depends_on": [],
             "unit": "t" + number,
             "size": size,
