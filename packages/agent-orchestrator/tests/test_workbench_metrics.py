@@ -191,6 +191,26 @@ class MetricsTests(MetricsFixture):
         self.assertEqual(t1["escalations"], {"ci": 2, "stuck": 1})
         self.assertEqual(t1["findings"], 2)
 
+    def test_S3_findings_are_counted_by_their_source_and_kind(self):
+        path = self.approved("bench")
+        self.write_ledger("bench", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
+        found = {"kind": "finding", "unit": "t1", "task": "t1"}
+        self.write_events(
+            "bench",
+            [
+                {"at": at(0), "kind": "start", "pid": 1},
+                dict(found, at=at(1), source="review", finding_kind="concern"),
+                dict(found, at=at(2), source="review", finding_kind="concern"),
+                dict(found, at=at(3), source="verify", finding_kind="blocking"),
+                dict(found, at=at(4)),
+            ],
+        )
+        t1 = self.view(path)["metrics"]["tickets"]["T1"]
+        self.assertEqual(t1["findings"], 4)
+        self.assertEqual(
+            t1["reasons"], {"review/concern": 2, "unknown/unknown": 1, "verify/blocking": 1}
+        )
+
     def test_S29_tokens_and_model_come_from_the_attempts_and_the_route_and_are_null_when_unmeasured(
         self,
     ):
