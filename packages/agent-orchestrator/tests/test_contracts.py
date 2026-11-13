@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 import pytest
-from agent_orchestrator import contracts
+from agent_orchestrator import contracts, driver
 
 pytestmark = pytest.mark.unit
 
@@ -461,3 +461,39 @@ class DescribeTests(unittest.TestCase):
         self.assertEqual(driver.describe(item).splitlines()[0], "C1 (concern): src/a.py racy")
         lined = {**item, "line": 7}
         self.assertEqual(driver.describe(lined).splitlines()[0], "C1 (concern): src/a.py:7 racy")
+
+
+class AffectedNotRunTests(unittest.TestCase):
+    AFFECTED = "pytest --base origin/main src/a/"
+
+    def task(self):
+        return {
+            "packet": {
+                "checks": ["ruff check", self.AFFECTED],
+                "affected": self.AFFECTED,
+                "unit": "t1",
+            }
+        }
+
+    def report(self, affected, fast=None):
+        return report(
+            checks=[
+                fast or {"command": "ruff check", "outcome": "passed"},
+                dict(command=self.AFFECTED, **affected),
+            ]
+        )
+
+    def test_S5_affected_not_run_with_a_reason_is_accepted(self):
+        driver.require_completable(
+            self.task(), self.report({"outcome": "not_run", "reason": "no test selected"})
+        )
+
+    def test_S5_affected_not_run_without_a_reason_is_refused(self):
+        for affected in ({"outcome": "not_run"}, {"outcome": "not_run", "reason": "  "}):
+            with self.assertRaises(ValueError):
+                driver.require_completable(self.task(), self.report(affected))
+
+    def test_S5_fast_not_run_is_still_refused(self):
+        fast = {"command": "ruff check", "outcome": "not_run", "reason": "skipped"}
+        with self.assertRaises(ValueError):
+            driver.require_completable(self.task(), self.report({"outcome": "passed"}, fast=fast))
