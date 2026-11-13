@@ -647,7 +647,7 @@ class RunFixture(_Case):
         data.setdefault("ticket_status", {})[ticket] = status
         path.write_text(json.dumps(data), encoding="utf-8")
 
-    def events(self, *kinds):
+    def run_events(self, *kinds):
         """The run's events.jsonl as dicts, optionally only the given kinds."""
         path = self.run_dir_of() / "events.jsonl"
         rows = (

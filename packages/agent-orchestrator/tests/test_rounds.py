@@ -55,7 +55,7 @@ class RoundCapTests(GateFixture, unittest.TestCase):
             [self.worker_done(report=self.report("t1", review_rounds=9)), self.worker_done("t1r1")]
         )
         self.run_driver()
-        self.assertEqual(self.events("escalation"), [])
+        self.assertEqual(self.run_events("escalation"), [])
         self.assertEqual(len(self.calls("resume")), 2)
         self.assertEqual(self.ledger()["rounds"], {"t1": 2})
 

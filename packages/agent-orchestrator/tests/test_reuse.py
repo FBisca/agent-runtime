@@ -48,7 +48,7 @@ class ReuseFixture(GateFixture):
         return BLOCKING
 
     def states_of(self, task_id):
-        gates = [e["gate"] for e in self.events("state") if e["task"] == task_id]
+        gates = [e["gate"] for e in self.run_events("state") if e["task"] == task_id]
         return [new for old, new in gates if new and new != old]
 
 
@@ -118,7 +118,7 @@ class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
         blocked = self.review2(verdict="block", items=[dict(BLOCKING, id="B3", file="src/a/x.py")])
         self.waits(self.first_block() + [self.fix_report(), self.re_review(blocked)])
         self.run_driver()
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.events("state")])
+        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
         self.assertEqual(self.task("t1r1")["gate"], "superseded")
         self.assertTrue((self.run_dir / "t1r2" / "findings.json").exists())
 
@@ -133,7 +133,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
             self.first_block() + [self.fix_report(), self.re_review(self.blocked_again(OFF_SCOPE))]
         )
         self.run_driver()
-        scopes = self.events("scope")
+        scopes = self.run_events("scope")
         self.assertEqual(
             [(e["unit"], e["id"], e["file"]) for e in scopes], [("t1", "B2", "src/zzz/other.py")]
         )
@@ -143,7 +143,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         )
         self.assertFalse((self.run_dir / "t1r2").exists())  # no further fix round
         self.assertIn(
-            "ready-for-ci", [e["gate"][1] for e in self.events("state")]
+            "ready-for-ci", [e["gate"][1] for e in self.run_events("state")]
         )  # the gate did not hold
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
@@ -154,9 +154,9 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
             self.first_block() + [self.fix_report(), self.re_review(self.blocked_again(inside))]
         )
         self.run_driver()
-        self.assertEqual(self.events("scope"), [])
+        self.assertEqual(self.run_events("scope"), [])
         self.assertTrue((self.run_dir / "t1r2" / "findings.json").exists())
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.events("state")])
+        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
 
     def test_S9_a_blocking_item_that_references_an_earlier_finding_still_gates(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
@@ -165,7 +165,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
             self.first_block() + [self.fix_report(), self.re_review(self.blocked_again(again))]
         )
         self.run_driver()
-        self.assertEqual(self.events("scope"), [])
+        self.assertEqual(self.run_events("scope"), [])
         self.assertEqual(
             [
                 i["id"]
@@ -184,13 +184,13 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         self.run_driver()
         items = json.loads((self.run_dir / "t1r2" / "findings.json").read_text())["items"]
         self.assertEqual([i["id"] for i in items], ["B4"])
-        self.assertEqual([e["id"] for e in self.events("scope")], ["B2"])
+        self.assertEqual([e["id"] for e in self.run_events("scope")], ["B2"])
 
     def test_S9_a_first_review_is_not_filtered(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
         self.waits(self.first_block(OFF_SCOPE))
         self.run_driver()
-        self.assertEqual(self.events("scope"), [])
+        self.assertEqual(self.run_events("scope"), [])
         self.assertTrue((self.run_dir / "t1r1" / "findings.json").exists())
 
 
@@ -241,7 +241,7 @@ class PaneStopTests(ReuseFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(self.request()["event"], "review")
-        kinds = [e["kind"] for e in self.events("decision", "stop")]
+        kinds = [e["kind"] for e in self.run_events("decision", "stop")]
         self.assertEqual(
             kinds[0], "decision"
         )  # nothing is stopped while the request is open; the skip that parks the unit does

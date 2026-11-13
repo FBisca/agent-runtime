@@ -29,7 +29,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
     def payload_trouble(self):
         return [
             e
-            for e in self.events("payload-warning", "contract-error")
+            for e in self.run_events("payload-warning", "contract-error")
             if e.get("where") == "review"
         ]
 

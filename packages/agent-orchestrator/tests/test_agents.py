@@ -75,9 +75,9 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
             (task["status"], task["runtime_id"], task["assignment_id"]),
             ("ACTIVE", "term-demo-t1", resume_id("demo-t1")),
         )
-        hows = [e["how"] for e in self.events("agent") if e["name"] == "demo-t1"]
+        hows = [e["how"] for e in self.run_events("agent") if e["name"] == "demo-t1"]
         self.assertEqual(hows, ["attach"] if point == "assignment_of" else ["spawn", "attach"])
-        self.assertTrue(self.events("intent")[-1].get("recovering") or point == "bind")
+        self.assertTrue(self.run_events("intent")[-1].get("recovering") or point == "bind")
 
     def test_S33_it_spawns_only_when_no_such_agent_exists(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S33"""

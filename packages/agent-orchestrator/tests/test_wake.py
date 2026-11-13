@@ -515,7 +515,7 @@ class HeldMessageTests(WakeFixture, unittest.TestCase):
         # the held report went through converge and review instead of being dropped
         self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
         self.assertEqual(self.task()["status"], "COMPLETE")
-        self.assertEqual([e["held"] for e in self.events("held")], ["complete"])
+        self.assertEqual([e["held"] for e in self.run_events("held")], ["complete"])
         self.assertEqual(
             self.calls("resume"), []
         )  # the worker had already finished: nothing to hand over again
@@ -535,7 +535,7 @@ class HeldMessageTests(WakeFixture, unittest.TestCase):
         self.assertEqual(len(lines), 2, lines)
         self.assertIn("also need the schema", lines[1])
         self.assertEqual(self.request(nth=2)["event"], "decision")
-        self.assertEqual([e["held"] for e in self.events("held")], ["decision"])
+        self.assertEqual([e["held"] for e in self.run_events("held")], ["decision"])
 
     def test_S7_the_event_that_caused_the_request_is_not_held_again(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S7"""
@@ -547,7 +547,7 @@ class HeldMessageTests(WakeFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assertEqual(self.events("held"), [])
+        self.assertEqual(self.run_events("held"), [])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
 
@@ -660,7 +660,7 @@ class AlertTests(WakeFixture, unittest.TestCase):
         self.waits([self.blocked(), self.decide_step("t1", "skip")])
         self.run_driver("--notify-terminal", "t175")
         self.assertEqual(len(self.sends()), 1)
-        failed = self.events("notify-failed")
+        failed = self.run_events("notify-failed")
         self.assertEqual(len(failed), 1)
         self.assertIn("no such terminal", failed[0]["error"])
         self.assert_request_skipped()
