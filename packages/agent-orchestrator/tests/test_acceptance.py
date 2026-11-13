@@ -394,7 +394,7 @@ class WholeSuiteTests(AcceptanceFixture, unittest.TestCase):
         config.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def full_events(self):
-        return [e for e in self.events("full")]
+        return self.run_events("full")
 
     def deliver(self, *extra):
         self.write_plan()
