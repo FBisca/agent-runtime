@@ -4,9 +4,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from agent_orchestrator import contracts
+from agent_orchestrator import contracts, driver
 
 pytestmark = pytest.mark.unit
 
@@ -461,3 +462,90 @@ class DescribeTests(unittest.TestCase):
         self.assertEqual(driver.describe(item).splitlines()[0], "C1 (concern): src/a.py racy")
         lined = {**item, "line": 7}
         self.assertEqual(driver.describe(lined).splitlines()[0], "C1 (concern): src/a.py:7 racy")
+
+
+class AffectedNotRunTests(unittest.TestCase):
+    AFFECTED = "pytest --base origin/main src/a/"
+
+    def task(self):
+        return {
+            "packet": {
+                "checks": ["ruff check", self.AFFECTED],
+                "affected": self.AFFECTED,
+                "unit": "t1",
+            }
+        }
+
+    def report(self, affected, fast=None):
+        return report(
+            checks=[
+                fast or {"command": "ruff check", "outcome": "passed"},
+                dict(command=self.AFFECTED, **affected),
+            ]
+        )
+
+    def test_S5_affected_not_run_with_a_reason_is_accepted(self):
+        driver.require_completable(
+            self.task(), self.report({"outcome": "not_run", "reason": "no test selected"})
+        )
+
+    def test_S5_affected_not_run_without_a_reason_is_refused(self):
+        for affected in ({"outcome": "not_run"}, {"outcome": "not_run", "reason": "  "}):
+            with self.assertRaises(ValueError):
+                driver.require_completable(self.task(), self.report(affected))
+
+    def test_S5_fast_not_run_is_still_refused(self):
+        fast = {"command": "ruff check", "outcome": "not_run", "reason": "skipped"}
+        with self.assertRaises(ValueError):
+            driver.require_completable(self.task(), self.report({"outcome": "passed"}, fast=fast))
+
+
+class TierBriefTests(unittest.TestCase):
+    """The brief and the required checks a ticket worker gets, from the repo config and `--gate`."""
+
+    CONFIG = (
+        "checks:\n"
+        "  fast: uv run ruff check\n"
+        "  affected: uv run pytest --base {base} {paths}\n"
+        "  full:\n"
+        "    run: uv run pytest -n auto\n"
+    )
+    OWNS = ["src/a/", "docs/with space.md"]
+    AFFECTED = "uv run pytest --base origin/main src/a/ 'docs/with space.md'"
+
+    def drive(self, gate=(), config=CONFIG):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        repo = Path(temp.name)
+        if config:
+            (repo / ".orchestrate").mkdir()
+            (repo / ".orchestrate" / "config.yaml").write_text(config, encoding="utf-8")
+        run = object.__new__(driver.Driver)
+        run.repo = repo
+        run.run_dir = repo / "run"
+        run.plan_path = repo / "plan.yaml"
+        run.args = SimpleNamespace(gate=list(gate), base="origin/main")
+        checks, affected, full = run.tier_checks(self.OWNS)
+        packet = {"task_id": "t1", "worker": "demo-t1", "checkout": "/w", "owns": self.OWNS}
+        packet.update(checks=checks, **({"affected": affected} if affected else {}))
+        packet.update(**({"full": full} if full else {}))
+        ticket = {"#": "T1", "What it delivers": "x"}
+        return packet, run.task_text(None, ticket, packet, [], repo / "run" / "t1")
+
+    def test_S2_the_brief_lists_fast_and_the_rendered_affected_and_names_full_as_not_run(self):
+        packet, text = self.drive()
+        self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])
+        self.assertIn(
+            "Before you report COMPLETE, run: uv run ruff check; " + self.AFFECTED + ".", text
+        )
+        others = [line for line in text.splitlines() if "uv run pytest -n auto" in line]
+        self.assertEqual(len(others), 1, text)
+        self.assertIn("do not run", others[0])
+        self.assertNotIn("full CI gate", text)
+
+    def test_S3_a_named_gate_is_the_required_checks_alone_and_the_tiers_are_not_applied(self):
+        packet, text = self.drive(gate=["scripts/checks.sh"])
+        self.assertEqual(packet["checks"], ["scripts/checks.sh"])
+        self.assertIn("Before you report COMPLETE, run: scripts/checks.sh.", text)
+        self.assertNotIn("uv run ruff check", text)
+        self.assertNotIn("uv run pytest -n auto", text)

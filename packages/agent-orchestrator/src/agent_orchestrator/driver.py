@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import config as repo_config
 from . import contracts, events, evidence, routes, runner, verify, workbench
 from . import ledger as ledgers
 from . import plan as yaml_plan
@@ -280,6 +281,18 @@ def require_completable(task, report):
         for c in checks
         if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
     }
+    # The rendered `affected` check may be `not_run` with a reason: the selection found no test to run.
+    affected = task["packet"].get("affected")
+    if isinstance(affected, str):
+        passed |= {
+            normalise_check(c["command"])
+            for c in checks
+            if c.get("outcome") == "not_run"
+            and isinstance(c.get("command"), str)
+            and isinstance(c.get("reason"), str)
+            and c["reason"].strip()
+            and normalise_check(c["command"]) == normalise_check(affected)
+        }
     missing = [command for key, command in required.items() if key not in passed]
     require(
         not missing,
@@ -5355,6 +5368,21 @@ class Driver:
             count += 1
         return count
 
+    def tier_checks(self, owns):
+        """The checks a worker runs: the named `--gate` alone, else the repo's `fast` and rendered `affected` tiers.
+        Returns (checks, the rendered affected command or None, the `full` command the worker leaves to verify)."""
+        if self.args.gate:
+            return list(self.args.gate), None, None
+        tiers = repo_config.load(self.repo).checks
+        if tiers is None or not (tiers.fast or tiers.affected):
+            return [], None, None
+        affected = None
+        if tiers.affected:
+            affected = tiers.affected.replace("{base}", shlex.quote(self.args.base)).replace(
+                "{paths}", " ".join(shlex.quote(p) for p in owns)
+            )
+        return [c for c in (tiers.fast, affected) if c], affected, tiers.full_run
+
     def dispatch(self, plan, ticket, task_id=None, note=""):
         number = ticket["#"][1:]
         name = worker_name(plan["slug"], number)
@@ -5375,6 +5403,8 @@ class Driver:
         effort = self.step_effort("implementer", route.effort or matrix_effort)
         checkout = self.worktree(name, "feat/" + name)
         scenarios = [plan["scenarios"][sid] for sid in satisfied(ticket, plan["scenarios"])[0]]
+        owns = [p.strip() for p in ticket["Paths"].split(",") if p.strip()]
+        checks, affected, full = self.tier_checks(owns)
         packet = {
             "task_id": task_id,
             "worker": name,
@@ -5382,9 +5412,11 @@ class Driver:
             "objective": ticket["What it delivers"],
             "checkout": str(checkout),
             "backend": backend,
-            "owns": [p.strip() for p in ticket["Paths"].split(",") if p.strip()],
+            "owns": owns,
             "acceptance": [re.sub(r"^- \*\*(S\d+[a-z]?)\*\*", r"\1:", s) for s in scenarios],
-            "checks": list(self.args.gate),
+            "checks": checks,
+            **({"affected": affected} if affected else {}),
+            **({"full": full} if full else {}),
             "depends_on": [],
             "unit": "t" + number,
             "size": size,
@@ -5477,7 +5509,7 @@ class Driver:
         return path
 
     def task_text(self, _plan, ticket, packet, scenarios, task_dir):
-        gate = self.args.gate or ["the repository's full CI gate (see its AGENTS.md / CLAUDE.md)"]
+        gate = packet["checks"] or ["the repository's full CI gate (see its AGENTS.md / CLAUDE.md)"]
         return "\n".join(
             [
                 "Contract: %s" % (self.run_dir / "contract.md"),
@@ -5499,6 +5531,14 @@ class Driver:
                 *scenarios,
                 "",
                 "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
+                *(
+                    [
+                        "`%s` is the whole suite: do not run it; verify and CI run it."
+                        % packet["full"],
+                    ]
+                    if packet.get("full")
+                    else []
+                ),
                 "Then open a draft pull request against %s." % self.args.base.partition("/")[2],
                 "",
             ]
