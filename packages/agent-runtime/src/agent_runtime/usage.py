@@ -219,6 +219,16 @@ def claude_project_slug(cwd):
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 
 
+def pi_session_directory(env, cwd):
+    """Pi keeps a cwd's sessions in <PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions/--<cwd slug>--/."""
+    home = env.get("HOME") or os.path.expanduser("~")
+    raw = env.get("PI_CODING_AGENT_DIR") or ""
+    if raw.startswith("~"):
+        raw = home + raw[1:]
+    agent = Path(raw) if raw else Path(home) / ".pi/agent"
+    return agent / "sessions" / ("--%s--" % cwd.lstrip("/").replace("/", "-"))
+
+
 def _message_text(content):
     if isinstance(content, str):
         return content
@@ -270,6 +280,18 @@ def _session_match(path, metadata):
                 if record.get("type") != "response_item" or payload.get("role") != "user":
                     continue
                 content = payload.get("content")
+            elif metadata["cli"] == "pi":
+                if record.get("type") == "session":
+                    session_id, session_cwd = record.get("id"), record.get("cwd")
+                    continue
+                message = record.get("message")
+                if record.get("type") != "message" or not isinstance(message, dict):
+                    continue
+                if message.get("role") == "assistant":
+                    return None
+                if message.get("role") != "user":
+                    continue
+                content = message.get("content")
             else:
                 if record.get("type") == "assistant":
                     return None
@@ -290,8 +312,8 @@ def _session_match(path, metadata):
                 if not session_id:
                     uuid = SESSION_UUID_RE.search(path.stem)
                     session_id = uuid.group() if uuid else path.stem.rsplit("-", 1)[-1]
-            else:
-                session_id = path.stem
+            elif metadata["cli"] == "claude":
+                session_id = path.stem  # a Pi session's id is its header's, not its file name
             return session_id if isinstance(session_id, str) and session_id else None
     except (OSError, ValueError, TypeError, RecursionError):
         return None
@@ -308,7 +330,7 @@ def resolve_session_log(env, worker):
     """
     try:
         metadata = read_worker_metadata(env, worker)
-        if not metadata or metadata.get("cli") not in ("codex", "claude"):
+        if not metadata or metadata.get("cli") not in ("codex", "claude", "pi"):
             return None
         assignment = metadata.get("assignment_id")
         spawned = metadata.get("spawned_ms")
@@ -338,14 +360,17 @@ def resolve_session_log(env, worker):
             cwd = metadata.get("cwd")
             if not isinstance(cwd, str) or not cwd:
                 return None
-            home = env.get("HOME") or os.path.expanduser("~")
-            directory = Path(home) / ".claude/projects" / claude_project_slug(cwd)
-            current = env.get("CLAUDE_CODE_SESSION_ID")
-            if current and Path(current).name == current:
-                result = bind(directory / (current + ".jsonl"))
-                if result is not None:
-                    return result
-            candidates = directory.glob("*.jsonl")
+            if metadata["cli"] == "pi":
+                candidates = pi_session_directory(env, cwd).glob("*.jsonl")
+            else:
+                home = env.get("HOME") or os.path.expanduser("~")
+                directory = Path(home) / ".claude/projects" / claude_project_slug(cwd)
+                current = env.get("CLAUDE_CODE_SESSION_ID")
+                if current and Path(current).name == current:
+                    result = bind(directory / (current + ".jsonl"))
+                    if result is not None:
+                        return result
+                candidates = directory.glob("*.jsonl")
         for path in candidates:
             result = bind(path)
             if result is not None:
@@ -374,6 +399,13 @@ CLAUDE_TOKEN_KEYS = (
     ("output_tokens", "output_tokens"),
 )
 CODEX_CALL_TYPES = ("function_call", "custom_tool_call")
+PI_TOKEN_KEYS = (
+    ("input", "input_tokens"),
+    ("cacheRead", "cached_input_tokens"),
+    ("cacheWrite", "cache_write_tokens"),
+    ("output", "output_tokens"),
+    ("reasoning", "reasoning_tokens"),
+)
 
 
 class _Reset(Exception):
@@ -565,6 +597,47 @@ def _codex_record(state, entry, role, record):
             _add(slot, target, change.get(source))
 
 
+def _pi_record(state, entry, role, record):
+    """A Pi message: a user message starts a slice, an assistant message is one model call."""
+    message = record.get("message")
+    if record.get("type") != "message" or not isinstance(message, dict):
+        return
+    at = _parse_time(record.get("timestamp"))
+    if at is not None:
+        entry["at"] = at
+    else:
+        at = entry.get("at")
+    if message.get("role") == "user":
+        assignment = _last_marker(_message_text(message.get("content")))
+        if assignment:
+            _start_slice(state, entry, at, assignment)
+    elif message.get("role") == "assistant":
+        assignment = _credited(state, role, at)
+        if not assignment:
+            return
+        slot = _slot(state, assignment)
+        slot["model_calls"] += 1
+        fields = message.get("usage")
+        if isinstance(fields, dict):
+            for source, target in PI_TOKEN_KEYS:
+                _add(slot, target, fields.get(source))
+            cost = fields.get("cost")
+            if isinstance(cost, dict):
+                _add(slot, "cost_usd", cost.get("total"))
+        content = message.get("content")
+        if isinstance(content, list):
+            slot["tool_calls"] += sum(
+                1
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "toolCall"
+            )
+
+
+def _no_side_logs(env, root, metadata):
+    """Pi keeps no child log: a session is one file."""
+    return []
+
+
 def _crc(stream, start, length):
     stream.seek(start)
     return zlib.crc32(stream.read(length))
@@ -660,6 +733,7 @@ def _codex_side_logs(env, root, metadata):
 HARNESSES = {
     "claude": (_claude_record, _claude_side_logs),
     "codex": (_codex_record, _codex_side_logs),
+    "pi": (_pi_record, _no_side_logs),
 }
 
 

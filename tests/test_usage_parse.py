@@ -660,5 +660,180 @@ class CodexUsageTests(UsageCase):
         self.assertEqual(self.measure("xw"), grown)
 
 
+PI_SESSION = "019a0000-0000-7000-8000-0000000000fe"
+
+
+class PiUsageTests(UsageCase):
+    def pi_dir(self):
+        """<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions/--<cwd slug>--/, the cwd without its leading slash."""
+        slug = "--" + str(self.cwd).lstrip("/").replace("/", "-") + "--"
+        return self.home / ".pi" / "agent" / "sessions" / slug
+
+    def pi_fixture(self):
+        return (FIXTURES / "pi-session.jsonl").read_text().replace("CWD", str(self.cwd))
+
+    def pi_log(self, rows=None):
+        directory = self.pi_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / ("2026-11-12T10-00-00-000Z_%s.jsonl" % PI_SESSION)
+        if rows is None:
+            path.write_text(self.pi_fixture())
+        else:
+            write_jsonl(path, rows)
+        return path
+
+    def test_S3_each_slice_sums_its_messages_usage_calls_tools_and_cost(self):
+        self.register("pw", "pi", "PA1")
+        self.pi_log()
+        got = self.measure("pw")
+        self.assertEqual(list(got), ["PA1", "PA2"])
+        self.assertEqual(
+            got["PA1"],
+            {
+                "input_tokens": 350,
+                "cached_input_tokens": 2100,
+                "cache_write_tokens": 100,
+                "output_tokens": 100,
+                "reasoning_tokens": 10,
+                "model_calls": 2,
+                "tool_calls": 1,
+                "cost_usd": 0.02,
+            },
+        )
+        self.assertEqual(
+            got["PA2"],
+            {
+                "input_tokens": 20,
+                "cached_input_tokens": 1300,
+                "cache_write_tokens": 0,
+                "output_tokens": 10,
+                "model_calls": 1,
+                "tool_calls": 2,
+                "cost_usd": 0.005,
+            },
+        )
+
+    def test_S3_the_session_is_bound_by_the_first_prompt_after_spawn_under_the_cwd_slug(self):
+        self.register("pw", "pi", "PA1")
+        path = self.pi_log()
+        self.assertEqual(usage.resolve_session_log(self.env, "pw"), path)
+        # Another worker's marker in the only session of this cwd: nothing is bound.
+        other = self.pi_dir() / "other.jsonl"
+        other.write_text(path.read_text().replace("assignment_id=PA1", "assignment_id=PA7"))
+        path.unlink()
+        self.assertIsNone(usage.resolve_session_log(self.env, "pw"))
+        self.assertEqual(self.measure("pw"), {})
+
+    def test_S3_the_pi_agent_directory_comes_from_the_environment(self):
+        self.register("pw", "pi", "PA1")
+        alternative = self.root / "alt-pi"
+        self.env["PI_CODING_AGENT_DIR"] = str(alternative)
+        slug = "--" + str(self.cwd).lstrip("/").replace("/", "-") + "--"
+        (alternative / "sessions" / slug).mkdir(parents=True)
+        path = alternative / "sessions" / slug / ("x_%s.jsonl" % PI_SESSION)
+        path.write_text(self.pi_fixture())
+        self.assertEqual(usage.resolve_session_log(self.env, "pw"), path)
+        self.assertEqual(self.measure("pw")["PA1"]["model_calls"], 2)
+
+    def test_S7_a_truncated_pi_tail_counts_only_the_complete_lines(self):
+        self.register("pw", "pi", "PA1")
+        rows = self.pi_fixture().splitlines()
+        self.pi_log([json.loads(line) for line in rows[:5]])
+        log = next(self.pi_dir().glob("*.jsonl"))
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write("not json at all\n[1, 2]\n")
+            stream.write(rows[5][:60])
+        got = self.measure("pw")
+        self.assertEqual(got["PA1"]["input_tokens"], 300)
+        self.assertEqual(got["PA1"]["model_calls"], 1)
+        self.assertEqual(got["PA1"]["tool_calls"], 1)
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write(rows[5][60:] + "\n")
+        completed = self.measure("pw")["PA1"]
+        self.assertEqual((completed["input_tokens"], completed["model_calls"]), (350, 2))
+
+    def test_S7_a_pi_log_without_a_usage_record_carries_no_figure(self):
+        self.register("pw", "pi", "PA1")
+        header = {
+            "type": "session",
+            "version": 3,
+            "id": PI_SESSION,
+            "timestamp": "2026-11-12T10:00:00.000Z",
+            "cwd": str(self.cwd),
+        }
+        prompt_row = {
+            "type": "message",
+            "id": "u1",
+            "timestamp": "2026-11-12T10:00:01.000Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": prompt("do", "PA1")}]},
+        }
+        self.pi_log([header, prompt_row])
+        self.assertEqual(self.measure("pw"), {"PA1": {"model_calls": 0, "tool_calls": 0}})
+
+    def test_S8_a_second_pi_call_reads_only_the_appended_bytes_and_matches_a_fresh_parse(self):
+        self.register("pw", "pi", "PA1")
+        log = self.pi_log()
+        first = self.measure("pw")
+        appended = {
+            "type": "message",
+            "id": "late",
+            "timestamp": "2026-11-12T10:00:30.000Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "tc9",
+                        "name": "bash",
+                        "arguments": {"command": "pwd"},
+                    }
+                ],
+                "usage": {
+                    "input": 1,
+                    "output": 2,
+                    "cacheRead": 3,
+                    "cacheWrite": 4,
+                    "reasoning": 5,
+                    "cost": {"total": 0.001},
+                },
+            },
+        }
+        append_jsonl(log, [appended])
+        grown = self.measure("pw")
+        self.assertEqual(grown["PA2"]["output_tokens"], 12)
+        self.assertEqual(grown["PA2"]["model_calls"], 2)
+        self.assertEqual(grown["PA2"]["tool_calls"], 3)
+        self.assertAlmostEqual(grown["PA2"]["cost_usd"], 0.006, places=6)
+        self.assertEqual(grown["PA1"], first["PA1"])
+        self.assertTrue(self.sidecar("pw").is_file())
+        self.sidecar("pw").unlink()
+        self.assertEqual(self.measure("pw"), grown)
+
+    def test_S8_a_pi_log_that_shrank_or_was_replaced_is_read_again_from_the_start(self):
+        self.register("pw", "pi", "PA1")
+        log = self.pi_log()
+        self.measure("pw")
+        rows = [json.loads(line) for line in self.pi_fixture().splitlines()]
+        write_jsonl(log, rows[:4])  # shrank
+        shrunk = self.measure("pw")
+        self.assertEqual(
+            shrunk,
+            {
+                "PA1": {
+                    "input_tokens": 300,
+                    "cached_input_tokens": 900,
+                    "cache_write_tokens": 100,
+                    "output_tokens": 40,
+                    "reasoning_tokens": 10,
+                    "model_calls": 1,
+                    "tool_calls": 1,
+                    "cost_usd": 0.012,
+                }
+            },
+        )
+        self.pi_log()  # replaced by the full log
+        self.assertEqual(self.measure("pw")["PA2"]["model_calls"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
