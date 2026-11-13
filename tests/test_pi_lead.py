@@ -48,11 +48,15 @@ class PiIdentityTests(unittest.TestCase):
             self.assertIsNone(lib.cli_of_args(other), other)
 
     def test_pi_marker_never_resolves_to_claude(self):
-        """agent-runtime/P2-S1"""
-        self.assertEqual(lib.detect_cli({"PI_CODING_AGENT": "true"}), "pi")
-        info = lib.resolve(
-            {"PI_CODING_AGENT": "true", "HC_TERMINAL_ID": "t0"}, None, lambda t: {"parent": None}
-        )
+        """agent-runtime/P2-S1: the env marker alone decides, so no real process ancestry is read (a test run
+        from inside a Claude session would otherwise find that session above it)"""
+        with mock.patch.object(lib, "ancestor_cli", return_value=None):
+            self.assertEqual(lib.detect_cli({"PI_CODING_AGENT": "true"}), "pi")
+            info = lib.resolve(
+                {"PI_CODING_AGENT": "true", "HC_TERMINAL_ID": "t0"},
+                None,
+                lambda t: {"parent": None},
+            )
         self.assertEqual((info["cli"], info["role"]), ("pi", "lead"))
 
     def test_pi_generation_is_the_pi_process_pid_and_start_time(self):
