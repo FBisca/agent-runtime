@@ -69,6 +69,20 @@ def dashboard(sid, name, at_least):
     )
 
 
+def home_tests(sid, name, at_least):
+    """Home's node tests for one scenario: `<sid> home ...` (the control plan's own `<sid> ...` tests share the ID, so the
+    prefix names these)."""
+    passed, failed, output = node_tests(pattern=r"^%s home" % sid)
+    assert failed == 0, output
+    assert passed >= at_least, "%s %s: %d node tests passed, expected at least %d\n%s" % (
+        sid,
+        name,
+        passed,
+        at_least,
+        output,
+    )
+
+
 def source(name):
     return (MOD / name).read_text()
 
@@ -268,3 +282,31 @@ def test_S11_data_colours_are_the_fixed_palette_by_slot_and_no_chart_is_coloured
 
 def test_S15_a_narrow_dashboard_is_one_column_of_shorter_charts_and_home_has_two_cards_to_a_row():
     dashboard("S15", "narrow", 1)
+
+
+def test_S12_each_home_card_carries_a_picture_of_its_dashboard_and_a_card_with_no_data_has_none():
+    home_tests("S12", "pictures", 3)
+    # The picture draws the model's slots from the data palette, never a state colour.
+    charts = (MOD / "views" / "charts.js").read_text()
+    assert "pictureView" in charts
+    assert "pictureView" in (MOD / "views" / "home.js").read_text()
+
+
+def test_S13_home_draws_the_header_with_expand_and_refresh_as_a_plan_and_a_dashboard_do():
+    main = source("main.js")
+    # The header closure carries both buttons; home's branch adds it before its body, as the plan's and the dashboard's do.
+    header = re.search(
+        r"const header = \(head, back = null\) => headerView\(head, \{(.*?)\}\);", main, re.S
+    )
+    assert header, "main.js builds one header for every screen"
+    assert "onRefresh" in header.group(1) and "expand: this.expandFor()" in header.group(1)
+    assert re.search(r"root\.child\(header\(null\)\);\s*return show\(homeScreen\(", main), (
+        "home draws the header"
+    )
+
+
+def test_S14_home_lists_needs_me_with_a_glyph_and_an_action_and_each_plan_with_recency_live_agents_and_prs():
+    home_tests("S14", "needs me and plans", 3)
+    home = (MOD / "views" / "home.js").read_text()
+    assert "item.glyph" in home and "item.action" in home
+    assert "row.recency" in home and "row.prs" in home and "row.live" in home

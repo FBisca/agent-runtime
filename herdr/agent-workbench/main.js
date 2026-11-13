@@ -29,6 +29,9 @@ const activeSpace = () => spaces().find((s) => s.active) ?? null;
 
 const runAll = (commands) => { for (const [command, args] of commands) run(command, args); };
 
+// The one thing the mod opens: a GitHub pull request, and only a URL `prLink` accepts.
+const openPr = (url, cx) => { if (prLink(url)) cx.open_url(url); };
+
 export default class AgentWorkbench extends View {
   init(initial, cx) {
     // The tab bar's button is this mod too (props `{ toggle: true }`): it fetches nothing and watches nothing.
@@ -142,7 +145,7 @@ export default class AgentWorkbench extends View {
     const machine = this.machine;
     const live = liveTerminals(terminals(), machine);
     const onOpen = (open, cx) => { run(open.command, open.args); cx.notify(); };
-    const home = homeView(state.plans.value, state.totals.status === "ok" ? state.totals.value : null, live);
+    const home = homeView(state.plans.value, state.totals.status === "ok" ? state.totals.value : null, live, Date.now());
 
     if (this.nav.screen === "dashboard") {
       const view = dashboardView(this.nav.card, state.totals.status === "ok" ? state.totals.value : null, layout, this.nav.filter ?? null);
@@ -158,8 +161,7 @@ export default class AgentWorkbench extends View {
       const handlers = {
         onFilter: filter,
         onClear: (cx) => filter(this.nav.filter, cx),
-        // The one thing the mod opens: a GitHub pull request, and only a URL `prLink` accepts.
-        onLink: (url, cx) => { if (prLink(url)) cx.open_url(url); },
+        onLink: openPr,
       };
       return root.child(header({ title: view.headline.label }, back)).child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar()
         .child(dashboardScreen(view, handlers, t)));
@@ -178,7 +180,10 @@ export default class AgentWorkbench extends View {
         onPlan: (path, cx) => this.go({ type: "plan", path }, cx),
         onOlder: (cx) => { this.olderOpen = !this.olderOpen; cx.notify(); },
         onOpen,
+        onLink: openPr,
       };
+      // Home has the header too: the project, Expand and refresh, as a plan and a dashboard do.
+      root.child(header(null));
       return show(homeScreen(home, this.olderOpen, layout, handlers, t));
     }
     const plan = state.plan;
