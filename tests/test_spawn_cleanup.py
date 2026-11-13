@@ -7,8 +7,9 @@ import sys
 import time
 from unittest import mock
 
+import test_event_wait as event_helpers
 from test_mcp_server import RUNTIME_SRC
-from test_tools import ToolCase, raw, unwrap
+from test_tools import raw, unwrap
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
@@ -27,7 +28,7 @@ ENV = {
 ARGS = {"kind": "worker", "name": "w1", "task": "x", "cwd": "/tmp"}
 
 
-class SpawnCleanupTests(ToolCase):
+class SpawnCleanupTests(event_helpers.HcCase):
     def test_S20_unknown_profile_is_rejected_before_hc_run(self):
         """S20: unknown profile names register no assignment and start no terminal."""
         lead = self.start({}, ENV)
@@ -192,7 +193,7 @@ class SpawnCleanupTests(ToolCase):
 
     def test_interrupted_hc_run_discards_only_an_orphan_we_started(self):
         """agent-runtime/R72"""
-        self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.install_hc({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
             "HOME": str(self.dir / "home"),
@@ -228,7 +229,7 @@ class SpawnCleanupTests(ToolCase):
 
     def test_bind_error_removes_the_terminal(self):
         """agent-runtime/R72"""
-        self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.install_hc({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
             "HOME": str(self.dir / "home"),
@@ -277,7 +278,7 @@ class SpawnCleanupTests(ToolCase):
 
     def test_failed_spawn_releases_its_linked_task(self):
         """agent-runtime/R72; agent-runtime/R69"""
-        self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}}, ENV)
+        self.install_hc({"run": {"out": json.dumps({"first_message": {"sent": False}})}}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
             "HOME": str(self.dir / "home"),
@@ -307,7 +308,7 @@ class SpawnCleanupTests(ToolCase):
 
     def test_unresolvable_identity_starts_no_terminal_and_registers_nothing(self):
         """agent-runtime/R73"""
-        self.start({}, ENV)
+        self.install_hc({}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
             "HOME": str(self.dir / "home"),
@@ -442,7 +443,7 @@ class SpawnCleanupTests(ToolCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
 
-class FastReportTests(ToolCase):
+class FastReportTests(event_helpers.HcCase):
     """A report that lands while hc run is still in flight (publish binds the pending assignment)."""
 
     def setUp(self):
@@ -455,7 +456,7 @@ class FastReportTests(ToolCase):
         self.env.update(ENV)
 
     def spawn_with_fast_report(self, replies, kind, link_task=True):
-        self.start(replies, ENV)
+        self.install_hc(replies, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
         seen = {}
@@ -505,6 +506,12 @@ class FastReportTests(ToolCase):
             )
             kinds = [json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")]
         self.assertEqual([k for k in kinds if k == "failed"], ["failed"])
+
+    def test_S11_a_spawn_driven_in_process_starts_no_server(self):
+        """S11: the spawn handler reads the fake binary and the store; no server answers for it."""
+        started = self.count_sessions()
+        self.check_unsent("blocked")
+        self.assertEqual(started, [])
 
     def test_unsent_spawn_after_a_blocked_report_fails_and_releases_the_task(self):
         """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
@@ -571,7 +578,7 @@ class FastReportTests(ToolCase):
 
     def test_a_live_worker_bound_by_a_concurrent_spawn_is_not_discarded(self):
         """agent-runtime/R94; agent-runtime/R72"""
-        self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
         scope, generation = hc_tools.dispatch_identity(self.env)[:2]
@@ -603,7 +610,7 @@ class FastReportTests(ToolCase):
 
     def test_respawn_of_a_finished_worker_after_a_fast_blocked_report_is_cleaned_up(self):
         """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
-        self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         scope, generation = hc_tools.dispatch_identity(self.env)[:2]
         team = store.team(scope, "t0", generation)
@@ -656,7 +663,7 @@ class FastReportTests(ToolCase):
 
     def test_a_store_error_in_the_orphan_check_keeps_the_original_error_and_still_fails(self):
         """agent-runtime/R94; agent-runtime/R72"""
-        self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         real_run = hc_tools.run
 
         def run(argv, env_, ctx, timeout=10):
@@ -677,7 +684,7 @@ class FastReportTests(ToolCase):
 
     def test_a_completed_result_is_mentioned_when_hc_run_times_out(self):
         """agent-runtime/R95; agent-runtime/R72"""
-        self.start({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
         seen = {}
@@ -704,7 +711,7 @@ class FastReportTests(ToolCase):
 
     def test_failure_after_the_exit_was_observed_adds_no_second_failed_message(self):
         """agent-runtime/R84; agent-runtime/R69"""
-        self.start(
+        self.install_hc(
             {
                 "run": {"out": json.dumps({"first_message": {"sent": False}})},
                 "get:w1": {"out": raw("w1", "t0")},
@@ -738,7 +745,7 @@ class FastReportTests(ToolCase):
 
     def test_resume_failing_after_the_report_landed_keeps_the_report_and_task(self):
         """agent-runtime/R86; agent-runtime/R80"""
-        self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
+        self.install_hc({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         scope, generation = hc_tools.dispatch_identity(self.env)[:2]
         team = store.team(scope, "t0", generation)
@@ -779,7 +786,7 @@ class FastReportTests(ToolCase):
 LOCKED = sqlite3.OperationalError("database is locked")
 
 
-class StoreFailureTests(ToolCase):
+class StoreFailureTests(event_helpers.HcCase):
     """A store failure in a tool handler rolls back what is reversible and names what is not (S7, S8)."""
 
     def setUp(self):
@@ -797,7 +804,7 @@ class StoreFailureTests(ToolCase):
 
     def lead(self, replies=None, task=False):
         """A lead with one live, bound worker w1 at t9; `task` links a task t1 to its assignment."""
-        self.start(dict({"get:w1": {"out": raw("w1", "t0")}}, **(replies or {})), ENV)
+        self.install_hc(dict({"get:w1": {"out": raw("w1", "t0")}}, **(replies or {})), ENV)
         self.store = Store(self.env)
         self.scope, generation = hc_tools.dispatch_identity(self.env)[:2]
         self.team = self.store.team(self.scope, "t0", generation)
@@ -821,6 +828,13 @@ class StoreFailureTests(ToolCase):
     def task_row(self):
         with self.store.transaction() as db:
             return dict(db.execute("SELECT status,owner,assignment FROM tasks").fetchone())
+
+    def test_S11_a_store_failure_driven_in_process_starts_no_server(self):
+        """S11: the tool handler reads the fake binary and the store; no server answers for it."""
+        started = self.count_sessions()
+        self.lead()
+        self.call_tool("message", {"to": "w1", "text": "hi"})
+        self.assertEqual(started, [])
 
     def test_S7_resume_store_failure_before_the_send_fails_the_pending_assignment(self):
         """agent-runtime/R246"""

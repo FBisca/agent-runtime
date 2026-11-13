@@ -10,7 +10,6 @@ from agent_runtime.dispatch_events import endpoints
 from agent_runtime.dispatch_store import Store
 from test_event_wait import AsyncRPC, Session
 from test_mcp_server import FakeCli
-from test_tools import ToolCase
 
 pytestmark = pytest.mark.integration
 
@@ -21,18 +20,19 @@ pytestmark = pytest.mark.integration
 RESUME_BOUND = 10
 
 
-class PeerDispatchTests(ToolCase):
-    prepare = event_helpers.EventWaitTests.prepare
-    spawn = event_helpers.EventWaitTests.spawn
-    publish = event_helpers.EventWaitTests.publish
-    batch = event_helpers.EventWaitTests.batch
-    pending = event_helpers.EventWaitTests.pending
-    begin = event_helpers.EventWaitTests.begin
-
+class PeerDispatchTests(event_helpers.EventRig):
     def tool(self, tool_name, **arguments):
         result = self.rpc.get(self.rpc.tool(tool_name, arguments))["result"]
         self.assertFalse(result["isError"], result)
         return result
+
+    def test_S11_a_dispatch_test_that_talks_to_no_worker_starts_none(self):
+        """S11: stop and wait go through the lead's server; no worker session is started for them."""
+        started = self.count_sessions()
+        self.prepare()
+        self.tool("stop", name="w1")
+        self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
+        self.assertEqual(started, ["t0"])
 
     NUDGE = "call wait(target=all) to receive their reports"
 
