@@ -493,6 +493,17 @@ class SpawnTests(InProcessToolCase):
         self.assertTrue(explicit[-1].startswith("CODEX IMPLEMENTER RULES"))
         self.assertEqual(len(codex), 3)
 
+    def test_S13_a_refusal_still_crosses_the_server_process(self):
+        """The tool's validation runs in process; one call shows its refusal through the stdio server."""
+        session = self.start(process=True)
+        result, text = self.call(
+            session,
+            "spawn",
+            {"kind": "worker", "name": "w1", "task": "t", "cwd": "/tmp", "model": "bad model"},
+        )
+        self.assertTrue(result["isError"], text)
+        self.assertEqual(self.runs("run"), [])
+
     def test_invalid_agent_is_an_error(self):
         """agent-runtime/R139"""
         for agent in (
