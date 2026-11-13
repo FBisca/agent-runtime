@@ -10,4 +10,4 @@ checks:
   fast: uv run pytest
   affected: uv run pytest --impacted --impacted-git-mode=branch --impacted-base-branch={base}
   full:
-    run: uv run pytest -n auto
+    run: uv run --frozen --all-packages pytest -n auto
