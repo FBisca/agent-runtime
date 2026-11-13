@@ -3915,6 +3915,11 @@ class Driver:
             if (data.get("integration") or {}).get("digest") != approval.digest:
                 enter_plan_state(data, "DELIVERED")
 
+    def plan_model(self):
+        """The approved plan/1 model; an archive only runs for a YAML plan, which holds one."""
+        assert self.model is not None
+        return self.model
+
     def contract(self):
         """(model, approval) of the approved YAML plan this drive holds."""
         assert self.model is not None and self.approval is not None
@@ -4621,7 +4626,7 @@ class Driver:
             "status": "COMPLETE",
             "summary": "the driver archived the plan: oracles placed, plan files copied, spec section appended",
             "acceptance_met": True,
-            "files": [self.model.spec] + [rel for rel, _ in self.yaml_copies()],
+            "files": [self.plan_model().spec] + [rel for rel, _ in self.yaml_copies()],
             "decisions": [],
             "interfaces": [],
             "remaining": [],
@@ -4663,7 +4668,7 @@ class Driver:
         """{scenario id: its test nodes}: the tickets' `covers`, then the scenario's own placed oracle paths."""
         covers = self.ticket_covers()
         placed: dict[str, list[str]] = {}
-        for scenario in self.model.scenarios:
+        for scenario in self.plan_model().scenarios:
             evidence_ = scenario.evidence
             if evidence_ and evidence_.promote and evidence_.place:
                 placed[scenario.id] = [
@@ -4672,7 +4677,7 @@ class Driver:
                 ]
         return {
             s.id: list(dict.fromkeys(covers.get(s.id, []) + placed.get(s.id, [])))
-            for s in self.model.scenarios
+            for s in self.plan_model().scenarios
         }
 
     def archive_missing(self):
@@ -4680,7 +4685,7 @@ class Driver:
         nodes = self.scenario_nodes()
         return [
             s.id
-            for s in self.model.scenarios
+            for s in self.plan_model().scenarios
             if not (s.evidence and s.evidence.human) and not nodes[s.id]
         ]
 
@@ -4694,7 +4699,7 @@ class Driver:
         number = max((int(n) for n in re.findall(r"\bR(\d+)\b", spec_text)), default=0)
         numbered = dict(held)
         parts = []
-        new = [s for s in self.model.scenarios if s.id not in held]
+        new = [s for s in self.plan_model().scenarios if s.id not in held]
         if new:
             parts += ["## Requirements: %s" % slug, ""]
             for scenario in new:
@@ -4717,7 +4722,7 @@ class Driver:
             "| Requirement | Scenario | Test nodes |",
             "|---|---|---|",
         ]
-        for scenario in self.model.scenarios:
+        for scenario in self.plan_model().scenarios:
             human = scenario.evidence.human if scenario.evidence else None
             cellular = (
                 "human: " + self.flat(human).replace("|", "\\|")
@@ -4754,7 +4759,7 @@ class Driver:
                 target = path / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(source.read_bytes())
-        spec = path / self.model.spec
+        spec = path / self.plan_model().spec
         try:
             before = spec.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -4785,7 +4790,7 @@ class Driver:
                 "commit",
                 "-q",
                 "-m",
-                "docs(%s): archive the plan into %s" % (self.slug, self.model.spec),
+                "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec),
             ],
             timeout=TREE_TIMEOUT,
         )
@@ -4815,7 +4820,7 @@ class Driver:
                 "--body",
                 "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
                 "with its Coverage table, written by the driver."
-                % (self.plan_rel(), self.model.spec),
+                % (self.plan_rel(), self.plan_model().spec),
             ],
             timeout=120,
             cwd=packet["checkout"],

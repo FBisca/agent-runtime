@@ -73,13 +73,13 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
         """orchestrator-engine/R34: the archive has no worker to rebase it."""
         real = self.gh_process
 
-        def conflicting(argv, timeout=None, **kw):
+        def conflicting(argv, timeout=None, cwd=None):
             # only the archive's PR conflicts: the ticket's PR (7) answers as the fake always does
             if argv[:3] == ["pr", "view", "https://github.com/o/r/pull/9"]:
                 row = {"state": "OPEN", "isDraft": True, "mergeStateStatus": "DIRTY"}
                 row.update(mergeable="CONFLICTING", mergeCommit=None)
                 return fake_gh.Completed(argv, 0, json.dumps(row))
-            return real(argv, timeout=timeout, **kw)
+            return real(argv, timeout=timeout, cwd=cwd)
 
         self.gh_process = conflicting
         self.waits(self.ticket_merged() + [self.gaps_done(), self.decide_step("archive", "skip")])
