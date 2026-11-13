@@ -70,6 +70,8 @@ function planRow(row, onPlan, onOpen, t) {
 /** `home` is the model's `homeView`; `handlers` are `{onCard, onPlan, onOlder, onOpen}`. */
 export function homeScreen(home, olderOpen, layout, handlers, t) {
   const { onCard, onPlan, onOlder, onOpen } = handlers;
+  // A PR row opens its plan; the row carries the plan's name, so its path is found among the plans listed.
+  const pathOf = (slug) => [...home.active, ...home.older.rows].find((r) => r.slug === slug && r.selectable)?.path ?? null;
   return v_flex().id("home").gap(2).p(8)
     .when(Boolean(home.cards), (el) => el.child(cards(home.cards, layout, onCard, t)))
     .when(home.needs.length > 0, (el) => el.child(heading("Needs me", t)).children(home.needs.map((n) => needsRow(n, onPlan, t))))
@@ -77,7 +79,7 @@ export function homeScreen(home, olderOpen, layout, handlers, t) {
     .children(home.active.map((row) => planRow(row, onPlan, onOpen, t)))
     .when(home.awaitingMerge.length > 0, (el) => el.child(heading("To merge", t)).children(home.awaitingMerge.map((m, i) =>
       h_flex().id(`merge-${i}`).gap(8).px(8).py(4).rounded(6).items_center().text_size(12)
-        .when(Boolean(m.path), (e) => e.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onPlan(m.path, cx)))
+        .when(Boolean(pathOf(m.plan)), (e) => e.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onPlan(pathOf(m.plan), cx)))
         .child(div().flex_none().font_semibold().child(m.plan))
         .child(div().flex_none().text_color(t.muted).child(m.ticket))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(m.pr ?? "")))))

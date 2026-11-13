@@ -473,7 +473,7 @@ export function homeView(plans, totals, live = null) {
   const awaitingMerge = [];
   for (const row of planRows(plans?.plans)) {
     for (const m of byPlan.get(row.slug)?.awaiting_merge ?? []) {
-      awaitingMerge.push({ plan: row.slug, ticket: m.ticket, pr: m.pr ?? null, path: row.selectable ? row.path : null });
+      awaitingMerge.push({ plan: row.slug, ticket: m.ticket, pr: m.pr ?? null });
     }
   }
   return {

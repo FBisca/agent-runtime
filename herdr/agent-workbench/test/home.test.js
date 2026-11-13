@@ -85,7 +85,7 @@ test("S7 home gives the five cards, Needs me one row per plan, the active plans 
       ["alpha-t4", "worker", "T4", "unknown", null, null],
     ],
   );
-  assert.deepEqual(home.awaitingMerge, [{ plan: "alpha", ticket: "T3", pr: PR, path: "/r/docs/plans/alpha/plan.yaml" }]);
+  assert.deepEqual(home.awaitingMerge, [{ plan: "alpha", ticket: "T3", pr: PR }]);
   assert.equal(home.older.count, 1);
   assert.deepEqual(home.older.rows.map((r) => r.slug), ["old"]);
   assert.equal(olderLabel(1, false), "1 older ▸");
