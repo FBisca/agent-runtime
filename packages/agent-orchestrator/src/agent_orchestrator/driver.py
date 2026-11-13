@@ -6835,14 +6835,15 @@ def main(argv=None):
     for verb, what in (
         ("plans", "Every plan of a repository with its state and ticket counts"),
         ("plan", "One YAML plan's ticket graph: blocked_by edges, layers, states and revision"),
+        ("totals", "The last seven days of every plan, summed for the cards and their dashboards"),
     ):
         sub = bench.add_parser(verb, help=what)
         sub.add_argument(
-            "path" if verb == "plans" else "plan",
-            nargs="?" if verb == "plans" else None,
-            help="A plan file, or the directory holding plans"
-            if verb == "plans"
-            else "The plan file",
+            "plan" if verb == "plan" else "path",
+            nargs=None if verb == "plan" else "?",
+            help="The plan file"
+            if verb == "plan"
+            else "A plan file, or the directory holding plans",
         )
         sub.add_argument("--repo", help="Repository root; default the current repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)

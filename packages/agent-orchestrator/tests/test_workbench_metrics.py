@@ -133,7 +133,7 @@ class MetricsTests(MetricsFixture):
         self.assertLessEqual(len(metrics["errors"]["last"]), 120)
         t1 = metrics["tickets"]["T1"]
         self.assertAlmostEqual(t1["elapsed_seconds"], 32 * 60, delta=1)
-        for phase, seconds in (("work", 600), ("review", 600), ("ci", 600)):
+        for phase, seconds in (("work", 600), ("review", 600), ("ci", 600), ("merge", 60)):
             self.assertAlmostEqual(t1["phases"][phase], seconds, delta=1, msg=phase)
         self.assertEqual(t1["ci_failures"], 2)
         self.assertEqual(t1["fix_rounds"], 0)
@@ -142,7 +142,7 @@ class MetricsTests(MetricsFixture):
         self.assertIsNone(t1["model"])
         self.assertEqual(metrics["tickets"]["T2"]["fix_rounds"], 1)
         lane = metrics["timeline"]["T1"]
-        self.assertEqual([segment["phase"] for segment in lane], ["work", "review", "ci"])
+        self.assertEqual([segment["phase"] for segment in lane], ["work", "review", "ci", "merge"])
         self.assertEqual(datetime.fromisoformat(lane[0]["start"]), T0)
         self.assertEqual(datetime.fromisoformat(lane[2]["end"]), T0 + timedelta(minutes=31))
 
@@ -232,3 +232,44 @@ class MetricsTests(MetricsFixture):
         before = tree_digest(self.state_dir)
         self.assertIsNotNone(self.view(path)["metrics"])
         self.assertEqual(tree_digest(self.state_dir), before)
+
+    def test_S4_the_wait_at_awaiting_merge_is_a_merge_phase_that_ends_at_the_merge(self):
+        path = self.approved("bench")
+        self.write_ledger("bench", {"T1": "COMPLETE"}, plan_state="RUNNING")
+        self.write_events(
+            "bench",
+            [
+                {"at": at(0), "kind": "start", "pid": 1},
+                state(0, "t1", status=(None, "RESERVED")),
+                state(2, "t1", gate=(None, "reported")),
+                state(2, "t1", gate=("reported", "reviewing")),
+                state(4, "t1", gate=("reviewing", "ready-for-ci")),
+                state(6, "t1", gate=("ready-for-ci", "awaiting-merge")),
+                state(30, "t1", gate=("awaiting-merge", "cleanup")),
+                state(31, "t1", gate=("cleanup", "done"), status=("ACTIVE", "COMPLETE")),
+                {"at": at(32), "kind": "finish"},
+            ],
+        )
+        metrics = self.view(path)["metrics"]
+        phases = metrics["tickets"]["T1"]["phases"]
+        self.assertAlmostEqual(phases["merge"], 24 * 60, delta=1)
+        self.assertAlmostEqual(phases["ci"], 2 * 60, delta=1)
+        lane = metrics["timeline"]["T1"]
+        self.assertEqual([seg["phase"] for seg in lane[-2:]], ["ci", "merge"])
+        self.assertEqual(lane[-2]["end"], lane[-1]["start"])
+        self.assertEqual(datetime.fromisoformat(lane[-1]["end"]), T0 + timedelta(minutes=30))
+
+    def test_S4_a_merge_wait_still_open_has_no_end_and_no_duration(self):
+        path = self.approved("bench")
+        self.write_ledger("bench", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
+        self.write_events(
+            "bench",
+            [
+                {"at": at(0), "kind": "start", "pid": 1},
+                state(0, "t1", status=(None, "RESERVED")),
+                state(6, "t1", gate=("ready-for-ci", "awaiting-merge")),
+            ],
+        )
+        metrics = self.view(path)["metrics"]
+        self.assertIsNone(metrics["tickets"]["T1"]["phases"]["merge"])
+        self.assertEqual(metrics["timeline"]["T1"][-1]["end"], None)
