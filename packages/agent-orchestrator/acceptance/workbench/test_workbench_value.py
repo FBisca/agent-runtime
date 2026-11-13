@@ -215,15 +215,18 @@ class MetricsTests(ValueFixture):
         path = self.approved("bench", [], [])
         self.write_ledger("bench", {"T1": "COMPLETE", "T2": "IN PROGRESS"}, plan_state="RUNNING")
         pr = "https://example.invalid/pull/7"
-        ci = lambda minutes, gate: {
-            "at": at(minutes),
-            "kind": "ci",
-            "unit": "t1",
-            "task": "t1",
-            "gate": gate,
-            "state": "failed",
-            "pr": pr,
-        }
+
+        def ci(minutes, gate):
+            return {
+                "at": at(minutes),
+                "kind": "ci",
+                "unit": "t1",
+                "task": "t1",
+                "gate": gate,
+                "state": "failed",
+                "pr": pr,
+            }
+
         run = self.events(
             "bench",
             [
