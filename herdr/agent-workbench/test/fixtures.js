@@ -7,22 +7,32 @@ export const PLANS = {
   schema_version: 1,
   repo: REPO,
   plans: [
-    {
-      slug: "old-plan", format: "markdown", path: DIR + "2026-10-30-old-plan.plan.md", legacy: true,
-      state: "ARCHIVED", tickets: { total: 3, by_state: { COMPLETE: 3 } },
-    },
+    // Printed first although its file is the oldest: the order is the command's (newest activity), not the file name's.
     {
       slug: "broken", format: "yaml", path: DIR + "2026-11-09-broken.plan.yaml", legacy: false,
-      state: null, tickets: null, error: { kind: "invalid_plan", message: "cycle: T1 -> T2 -> T1" },
+      state: null, group: "active", last_activity: "2026-11-12T11:00:00+00:00", tickets: null,
+      error: { kind: "invalid_plan", message: "cycle: T1 -> T2 -> T1" },
     },
     {
       slug: "agent-workbench", format: "yaml", path: DIR + "2026-11-11-agent-workbench.plan.yaml", legacy: false,
-      state: "RUNNING", tickets: { total: 3, by_state: { COMPLETE: 1, "IN PROGRESS": 1, "TO-DO": 1 } },
+      state: "RUNNING", group: "active", last_activity: "2026-11-12T10:00:00+00:00",
+      tickets: { total: 3, by_state: { COMPLETE: 1, "IN PROGRESS": 1, "TO-DO": 1 } },
     },
     {
       slug: "second", format: "yaml", path: DIR + "2026-11-10-second.plan.yaml", legacy: false,
-      state: "APPROVED", tickets: { total: 1, by_state: { "TO-DO": 1 } },
+      state: "APPROVED", group: "active", last_activity: "2026-11-10T09:00:00+00:00",
+      tickets: { total: 1, by_state: { "TO-DO": 1 } },
     },
+    {
+      slug: "old-plan", format: "markdown", path: DIR + "2026-10-30-old-plan.plan.md", legacy: true,
+      state: "ARCHIVED", group: "older", last_activity: "2026-10-30T09:00:00+00:00",
+      tickets: { total: 3, by_state: { COMPLETE: 3 } },
+    },
+  ],
+  needs_me: [
+    { plan: "agent-workbench", ticket: "T2", kind: "needs_you" },
+    { plan: "second", ticket: null, kind: "ready_to_drive" },
+    { plan: "broken", ticket: null, kind: "fix_plan" },
   ],
 };
 
@@ -68,3 +78,28 @@ export const refusal = (kind, message, wayOut) => ({
   stdout: JSON.stringify({ schema_version: 1, error: { kind, message, way_out: wayOut } }),
   stderr: "workbench: " + message + "\n",
 });
+
+// What `workbench plan --json` adds for a driven plan (`metrics`), as the orchestrator computes it. T3 never ran.
+export const METRICS = {
+  wall_seconds: 3725,
+  span: { start: "2026-11-11T10:00:00+00:00", end: "2026-11-11T12:00:00+00:00" },
+  first_pass_rate: 0.5,
+  errors: { by_gate: { ci: 2, review: 1 }, last: "gate ci failed" },
+  tickets: {
+    T1: {
+      elapsed_seconds: 1800, phases: { work: 1200, review: 540, ci: null }, fix_rounds: 1, review_rounds: 2,
+      findings: 3, ci_failures: 0, escalations: { review_loop: 1 }, model: "opus", tokens: null,
+    },
+    T2: {
+      elapsed_seconds: null, phases: { work: 0, review: null, ci: null }, fix_rounds: 0, review_rounds: 0,
+      findings: 0, ci_failures: 1, escalations: {}, model: null, tokens: null,
+    },
+  },
+  timeline: {
+    T1: [
+      { phase: "work", start: "2026-11-11T10:00:00+00:00", end: "2026-11-11T10:20:00+00:00" },
+      { phase: "review", start: "2026-11-11T10:20:00+00:00", end: "2026-11-11T10:30:00+00:00" },
+    ],
+    T2: [{ phase: "work", start: "2026-11-11T11:00:00+00:00", end: null }],
+  },
+};

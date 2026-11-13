@@ -36,10 +36,10 @@ class SilentSupportReviewers(AcceptanceFixture, unittest.TestCase):
         return [w for w in self.wakes() if name in w.get("text", "") and "idle" in w["text"]]
 
     def landed(self):
-        return self.events("output-landed")
+        return self.run_events("output-landed")
 
     def test_S8_a_mutation_reviewer_silent_after_writing_its_patch_is_accepted(self):
-        """orchestrator-engine/R77: orchestrator-audit-fixes/S8"""
+        """orchestrator-engine/R82: orchestrator-audit-fixes/S8"""
         self.write_plan()
         self.merged_on_main("done")
         self.waits([self.worker("done"), self.reviewer(), self.silent_mutator()])
@@ -51,7 +51,7 @@ class SilentSupportReviewers(AcceptanceFixture, unittest.TestCase):
         self.assertNotIn("demo-mut-s1-2", self.spawned())
 
     def test_S8_a_mutation_reviewer_silent_with_a_bad_patch_is_judged_as_a_reported_one(self):
-        """orchestrator-engine/R77: orchestrator-audit-fixes/S8 — output that fails validation is an ineffective
+        """orchestrator-engine/R82: orchestrator-audit-fixes/S8 — output that fails validation is an ineffective
         attempt, exactly as when the reviewer reports it."""
         self.write_plan()
         self.merged_on_main("done")
@@ -62,22 +62,8 @@ class SilentSupportReviewers(AcceptanceFixture, unittest.TestCase):
         self.assertIn("demo-mut-s1-2", self.spawned())
         self.assertEqual(self.ledger()["mutation"]["S1"]["history"][0]["outcome"], "invalid")
 
-    def test_S8_a_gaps_reviewer_silent_after_writing_gaps_md_is_done(self):
-        """orchestrator-engine/R77: orchestrator-audit-fixes/S8"""
-        self.write_plan()
-        self.merged_on_main("done")
-        archiver = self.archive_steps()[0]
-        self.waits(
-            [self.worker("done"), self.reviewer(), self.default_mutator(), archiver]
-            + [self.silent_gaps()]
-        )
-        self.run_driver("--repo", str(self.repo))
-        self.assertEqual([e["agent"] for e in self.landed()], [GAPS])
-        self.assertTrue(self.ledger()["gaps"]["ended"])
-        self.assertEqual(self.idle_wakes(GAPS), [])
-
     def test_S9_a_mutation_reviewer_silent_with_no_patch_gets_an_idle_request(self):
-        """orchestrator-engine/R77: orchestrator-audit-fixes/S9"""
+        """orchestrator-engine/R82: orchestrator-audit-fixes/S9"""
         self.write_plan()
         self.merged_on_main("done")
         steps = [self.worker("done"), self.reviewer()] + [self.silent_mutator(write=False)] * 6
@@ -90,23 +76,8 @@ class SilentSupportReviewers(AcceptanceFixture, unittest.TestCase):
         self.assertTrue(receipt["mutation"]["killed"], "its late complete is still accepted")
         self.assertIn("ACCEPTED", self.history())
 
-    def test_S9_a_gaps_reviewer_silent_with_no_gaps_md_gets_an_idle_request(self):
-        """orchestrator-engine/R77: orchestrator-audit-fixes/S9"""
-        self.write_plan()
-        self.merged_on_main("done")
-        archiver, done = self.archive_steps()
-        self.waits(
-            [self.worker("done"), self.reviewer(), self.default_mutator(), archiver]
-            + [self.silent_gaps(write=False)] * 6
-            + [done]
-        )
-        self.run_driver("--repo", str(self.repo), "--idle-minutes", "0")
-        (wake,) = self.idle_wakes(GAPS)
-        self.assertIn(str(self.run_dir / "gaps.md"), wake["text"])
-        self.assertTrue(self.ledger()["gaps"]["ended"], "its late complete ended it")
-
     def test_S9_a_silent_reviewer_that_writes_nothing_is_asked_about_once(self):
-        """orchestrator-engine/R77: orchestrator-audit-fixes/S9 — one wake per attempt, however long it stays quiet."""
+        """orchestrator-engine/R82: orchestrator-audit-fixes/S9 — one wake per attempt, however long it stays quiet."""
         self.write_plan()
         self.merged_on_main("done")
         steps = [self.worker("done"), self.reviewer()] + [self.silent_mutator(write=False)] * 12
@@ -120,7 +91,7 @@ class SilentWorker(GateFixture, unittest.TestCase):
         return wait_result([assignment("demo-t1", "working", "idle")], write=write)
 
     def test_S11_the_idle_request_names_the_next_write_once_report_not_the_newest(self):
-        """orchestrator-engine/R78: orchestrator-audit-fixes/S11"""
+        """orchestrator-engine/R83: orchestrator-audit-fixes/S11"""
         unfinished = self.report("t1", acceptance_met=False)
         self.waits(
             [self.silent_worker(write=[[str(self.run_dir / "t1" / "report.json"), unfinished]])]
@@ -134,7 +105,7 @@ class SilentWorker(GateFixture, unittest.TestCase):
         self.assertNotIn(str(self.run_dir / "t1" / "report.json"), reason)
 
     def test_S11_a_first_try_is_asked_for_report_json(self):
-        """orchestrator-engine/R78: orchestrator-audit-fixes/S11"""
+        """orchestrator-engine/R83: orchestrator-audit-fixes/S11"""
         self.waits([self.silent_worker()] * 5 + [self.skipped()])
         self.run_driver("--idle-minutes", "0")
         self.assertIn(str(self.run_dir / "t1" / "report.json"), self.request()["reason"])
@@ -147,15 +118,15 @@ class LateReviewerComplete(GateFixture, unittest.TestCase):
         return wait_result([assignment(REVIEWER, "working", "idle")])
 
     def gates(self):
-        return [e["gate"][1] for e in self.events("state") if e["task"] == "t1"]
+        return [e["gate"][1] for e in self.run_events("state") if e["task"] == "t1"]
 
     def test_S10_a_complete_before_the_lead_decides_finishes_the_review_and_closes_the_request(
         self,
     ):
-        """orchestrator-engine/R79: orchestrator-audit-fixes/S10"""
+        """orchestrator-engine/R84: orchestrator-audit-fixes/S10"""
         self.waits([self.worker_done(tests=True)] + [self.silent()] * 4 + [self.reviewer_done()])
         self.run_driver("--idle-minutes", "0")
-        self.assertEqual(self.events("escalation")[0]["cause"], "idle")
+        self.assertEqual(self.run_events("escalation")[0]["cause"], "idle")
         self.assertIn("reviewed", self.gates())
         task = self.task()
         self.assertIn("reviewed_commit", task)
@@ -167,7 +138,7 @@ class LateReviewerComplete(GateFixture, unittest.TestCase):
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
     def test_S10_a_complete_after_the_lead_decided_is_ignored(self):
-        """orchestrator-engine/R79: orchestrator-audit-fixes/S10 — the decision and the complete reach the driver in
+        """orchestrator-engine/R84: orchestrator-audit-fixes/S10 — the decision and the complete reach the driver in
         one wait, the decision first: the request is no longer undecided."""
         entry = assignment(REVIEWER, "complete")
         late = self.decide_step("t1", "mark blocked", messages=[envelope(entry, "complete")])

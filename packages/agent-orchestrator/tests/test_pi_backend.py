@@ -18,7 +18,7 @@ class PiBackendTests(ArchiveFixture, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.waits(self.ticket_merged())
 
     def spawns(self):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
@@ -63,11 +63,11 @@ class PiBackendTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual((gaps["cli"], gaps["model"], gaps["effort"]), ("codex", "gpt-m", "medium"))
 
     def test_S5_the_worker_tiers_stay_on_the_worker_backend(self):
-        """orchestrator-engine/R2: pi-worker-driver/S5 — the implementer and the archive worker stay on Pi."""
+        """orchestrator-engine/R2: pi-worker-driver/S5 — the implementer stays on Pi; the driver archives with no agent."""
         self.run_driver("--cli", "pi", "--brain-cli", "codex")
         spawns = self.spawns()
         self.assertEqual(spawns[WORKER]["cli"], "pi")
-        self.assertEqual(spawns[ARCHIVE]["cli"], "pi")
+        self.assertNotIn(ARCHIVE, spawns)
 
     def test_S6_a_claude_run_keeps_every_tier_where_it_is(self):
         """orchestrator-engine/R2: pi-worker-driver/S6 — without a brain backend nothing moves."""

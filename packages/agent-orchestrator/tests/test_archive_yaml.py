@@ -1,4 +1,4 @@
-"""The archive brief for a YAML plan: its spec, its plan files and oracles copied byte-identical, no Status, no renames."""
+"""The archive of a YAML plan: where its plan files and oracles land, and the spec the tests commit."""
 
 import tempfile
 import unittest
@@ -8,14 +8,8 @@ from unittest import mock
 
 import pytest
 from fixtures import load_script
-from test_archive import ARCHIVE, ArchiveFixture
 
 pytestmark = pytest.mark.integration
-
-
-def owns_of(task_md):
-    line = next(line for line in task_md.splitlines() if line.startswith("Owns"))
-    return [item.strip() for item in line.split(": ", 1)[1].rstrip(".").split(",")]
 
 
 def commit_spec(case, text):
@@ -26,73 +20,6 @@ def commit_spec(case, text):
     case.git(case.repo, "add", "docs/specs/demo.md")
     case.git(case.repo, "commit", "-q", "-m", "spec")
     case.git(case.repo, "push", "-q", "origin", "main")
-
-
-class YamlArchiveTests(ArchiveFixture, unittest.TestCase):
-    def test_S29_yaml_archive_brief_copies_plan_files_and_places_oracles(self):
-        narrative = self.plan.parent / "demo.plan.md"
-        narrative.write_text("# demo\n", encoding="utf-8")
-        plan_before = self.plan.read_bytes()
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
-        self.run_driver()
-        self.assertIn(ARCHIVE, self.spawned())
-        self.assertEqual(self.plan.read_bytes(), plan_before)
-
-        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
-        owns = owns_of(task_md)
-        oracle_dir = self.plan.parent / "demo.oracle"
-        for needle in (
-            "docs/specs/demo.md",
-            str(self.plan),
-            str(narrative),
-            str(oracle_dir),
-            "byte-identical",
-        ):
-            self.assertIn(needle, task_md)
-        # The driver places the oracle under its promoted name before the worker starts.
-        self.assertIn("Already placed by the driver", task_md)
-        self.assertIn("`src/a/test_oracle.py`", task_md)
-        self.assertIn("src/a/test_oracle.py", owns)
-        self.assertIn("docs/specs/demo.md", owns)
-        self.assertNotIn("docs/specs/,", owns)
-        self.assertNotIn("src/a/test_oracle.py.oracle", task_md)
-        self.assertNotIn("Status: ARCHIVED", task_md)
-        self.assertNotIn("Rename each test", task_md)
-        self.assertNotIn("Create the living spec", task_md)
-
-    def test_S29_a_scenario_the_spec_already_holds_is_not_appended_again(self):
-        """A ticket that wrote its scenario into the spec leaves the archive nothing to append for it."""
-        commit_spec(
-            self,
-            "# Demo\nPaths: src/a/\n\n- **R7** WHEN a, THEN b. (from demo/S1)\n- **R8** WHEN x. (from other/S1)\n",
-        )
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
-        self.run_driver()
-        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("keep as they are: S1 (R7).", task_md)
-        self.assertIn("append none", task_md)
-        self.assertNotIn("Append each scenario", task_md)
-        self.assertNotIn("Scenarios, verbatim", task_md)
-
-    def test_S29_a_requirement_naming_several_scenarios_keeps_all_of_them(self):
-        """One requirement may carry several scenarios: the brief keeps every one of them."""
-        commit_spec(
-            self,
-            "# Demo\nPaths: src/a/\n\n- **R7** WHEN a, THEN b. (from demo/S1, S2)\n",
-        )
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
-        self.run_driver()
-        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("keep as they are: S1 (R7), S2 (R7).", task_md)
-        self.assertIn("append none", task_md)
-        self.assertNotIn("Append each scenario", task_md)
-
-    def test_S29_no_narrative_step_when_plan_md_is_missing(self):
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
-        self.run_driver()
-        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
-        self.assertNotIn(".plan.md", task_md)
-        self.assertNotIn(".plan.md", " ".join(owns_of(task_md)))
 
 
 class YamlArchiveDestinationTests(unittest.TestCase):

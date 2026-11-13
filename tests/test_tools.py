@@ -10,6 +10,7 @@ import time
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -1231,6 +1232,47 @@ class WaitCollectStopReportTests(ToolCase):
         for timeout in (-1, True, "3"):
             result, _ = self.call(session, "wait", {"target": "any", "timeout": timeout})
             self.assertTrue(result["isError"])
+
+    def returned_batch(self, usage_of):
+        """hc_tools.wait on a canned batch of three rows (two of one resumed worker), usage_of measuring."""
+        batch = {
+            "reason": "completed",
+            "messages": [],
+            "assignments": [
+                {"assignment_id": "A1", "name": "ok", "state": "complete"},
+                {"assignment_id": "A2", "name": "ok", "state": "complete"},
+                {"assignment_id": "A3", "name": "boom", "state": "complete"},
+                {"assignment_id": "A4", "name": "none", "state": "complete"},
+            ],
+            "unfinished": [],
+            "receipt": None,
+            "more": False,
+        }
+        ctx = SimpleNamespace(actor=None, owned_team="team", store=object())
+        env = {"AGENT_RUNTIME_DISPATCH": "1", "HC_TERMINAL_ID": "t0"}
+        with (
+            mock.patch.object(hc_tools.dispatch_wait, "wait", return_value=batch),
+            mock.patch.object(hc_tools.usage, "assignment_usage", side_effect=usage_of) as measure,
+        ):
+            result = hc_tools.wait({"target": "all", "timeout": 0}, env, ctx)
+        return json.loads(result["content"][0]["text"]), measure
+
+    def test_S9_a_failure_while_measuring_never_fails_the_wait(self):
+        """S9: one worker's measurement raising costs that row its usage, not the wait; each worker is measured once."""
+
+        def usage_of(env, worker):
+            if worker == "boom":
+                raise RuntimeError("log exploded")
+            return {"A1": {"input_tokens": 1}, "A2": {"input_tokens": 2}} if worker == "ok" else {}
+
+        body, measure = self.returned_batch(usage_of)
+        rows = {a["assignment_id"]: a for a in body["assignments"]}
+        self.assertEqual(rows["A1"]["usage"], {"input_tokens": 1})
+        self.assertEqual(rows["A2"]["usage"], {"input_tokens": 2})
+        self.assertNotIn("usage", rows["A3"])
+        self.assertNotIn("usage", rows["A4"])
+        self.assertEqual(sorted(c.args[1] for c in measure.call_args_list), ["boom", "none", "ok"])
+        self.assertEqual(body["reason"], "completed")
 
     def test_long_collect_does_not_block_ping_and_cancel_ends_it(self):
         """agent-runtime/R34

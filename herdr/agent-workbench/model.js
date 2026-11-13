@@ -117,24 +117,61 @@ export function progressOf(counts) {
 
 // ---- the plan list ------------------------------------------------------------------------------------------
 
-const base = (path) => String(path).split("/").pop();
-
-/** The plans as rows: active before archived, newest (by dated file name) first. A Markdown plan is `legacy` and has
- *  no graph to open; a plan that did not load keeps its error and no progress. */
+/** The plans as rows, in the order the command printed them (active before older, newest activity first: the
+ *  orchestrator's order, not recomputed here). A Markdown plan is `legacy` and has no graph to open; a plan that did
+ *  not load keeps its error and no progress. `group` is null when the answer does not say. */
 export function planRows(plans) {
-  const rows = (plans ?? []).map((p) => ({
+  return (plans ?? []).map((p) => ({
     path: p.path,
     slug: p.slug,
     format: p.format,
     legacy: Boolean(p.legacy),
     state: p.state ?? null,
+    group: p.group ?? null,
     look: planState(p.state),
     progress: progressOf(p.tickets),
     error: p.error ?? null,
     selectable: p.format === "yaml" && !p.legacy,
   }));
-  const archived = (r) => (r.state === "ARCHIVED" ? 1 : 0);
-  return rows.sort((a, b) => archived(a) - archived(b) || base(b.path).localeCompare(base(a.path)));
+}
+
+// What each `needs_me` kind says, and the way to act on it. Only kinds, plans and tickets come from the answer; the
+// words are the mod's. The ways name commands the person runs or the place to look, never text from a run.
+const NEEDS = {
+  needs_you: (t) => ({ title: `${t} needs you`, wayOut: `Open ${t}'s attempt below and answer in its terminal` }),
+  unverified: (t) => ({ title: `${t} merged unverified`, wayOut: `Open ${t}: its gates say what was not proven` }),
+  driver_gone: () => ({ title: "the driver is gone", wayOut: "Run /orchestrate on this plan to drive it again" }),
+  error: () => ({ title: "the driver hit an error", wayOut: "Open the plan: the run's last error is in its header" }),
+  ready_to_approve: () => ({ title: "draft ready to approve", wayOut: "Review it, then approve it with /start-planning" }),
+  ready_to_drive: () => ({ title: "approved, not driven", wayOut: "Run /orchestrate to build it" }),
+  fix_plan: () => ({ title: "the plan does not load", wayOut: "Open the plan file and fix what the error says" }),
+  lead_pending: (t) => ({ title: `${t} waits on its Lead`, wayOut: `Answer ${t}'s Lead escalation in its terminal` }),
+};
+
+const needsItem = (item, rows) => {
+  const make = NEEDS[item.kind];
+  const text = make ? make(item.ticket ?? "a ticket") : { title: item.kind, wayOut: "Open the plan to see why" };
+  return {
+    plan: item.plan,
+    ticket: item.ticket ?? null,
+    kind: item.kind,
+    path: rows.find((r) => r.slug === item.plan && r.selectable)?.path ?? null,
+    ...text,
+  };
+};
+
+/** The list the mod opens on: Needs me, then the active plans, then one `older` line that is collapsed until opened.
+ *  `olderLine(open)` is null when no plan is older, else its label and the rows it lists (none while collapsed). An
+ *  answer that carries no `group` has nothing to fold away, so every plan is listed active. */
+export function planSections(answer) {
+  const rows = planRows(answer?.plans);
+  const older = rows.filter((r) => r.group === "older");
+  const active = rows.filter((r) => r.group !== "older");
+  const needsMe = (Array.isArray(answer?.needs_me) ? answer.needs_me : []).map((i) => needsItem(i, rows));
+  const olderLine = (open) => (older.length
+    ? { label: `${older.length} older ${open ? "▾" : "▸"}`, rows: open ? older : [] }
+    : null);
+  return { needsMe, active, older, olderLine };
 }
 
 /** The plan shown: the one the person picked if it is still listed, else the first that loads. */
@@ -269,9 +306,82 @@ export function runtimeAgents(terminals, plans, machine) {
   return rows;
 }
 
+// ---- metrics: measured by the orchestrator, only worded here; a value it did not measure reads unknown, never 0 ----
+
+const UNKNOWN = "unknown";
+const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** A duration in seconds: `42s`, `9m 00s`, `1h 02m`. */
+export function duration(seconds) {
+  const n = num(seconds);
+  if (n === null) return UNKNOWN;
+  const s = Math.round(n);
+  const two = (v) => String(v).padStart(2, "0");
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${two(Math.floor((s % 3600) / 60))}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m ${two(s % 60)}s`;
+  return `${s}s`;
+}
+
+const count = (v) => (num(v) === null ? UNKNOWN : String(v));
+
+function errorsText(errors) {
+  if (!errors || typeof errors.by_gate !== "object" || errors.by_gate === null) return UNKNOWN;
+  const gates = Object.entries(errors.by_gate);
+  if (!gates.length) return "none";
+  return `${gates.reduce((sum, [, n]) => sum + n, 0)} (${gates.map(([gate, n]) => `${gate} ${n}`).join(", ")})`;
+}
+
+/** The plan header's measures, or null when the plan carries no metrics (never driven: nothing is drawn). */
+export function metricsHeader(metrics) {
+  if (!metrics) return null;
+  const rate = num(metrics.first_pass_rate);
+  return {
+    wall: duration(metrics.wall_seconds),
+    firstPass: rate === null ? UNKNOWN : `${Math.round(rate * 100)}%`,
+    errors: errorsText(metrics.errors),
+  };
+}
+
+/** The inspector's measures for one ticket as label/text rows; a ticket the run never measured is unknown throughout. */
+function measuresOf(m) {
+  const phases = m?.phases ?? {};
+  const escalations = m?.escalations ? Object.entries(m.escalations) : null;
+  return [
+    ["Elapsed", duration(m?.elapsed_seconds)],
+    ["Work", duration(phases.work)],
+    ["Review", duration(phases.review)],
+    ["CI", duration(phases.ci)],
+    ["Fix rounds", count(m?.fix_rounds)],
+    ["Review rounds", count(m?.review_rounds)],
+    ["Findings", count(m?.findings)],
+    ["CI failures", count(m?.ci_failures)],
+    ["Escalations", escalations ? (escalations.length ? escalations.map(([c, n]) => `${c} ${n}`).join(", ") : "none") : UNKNOWN],
+    ["Model", m?.model ?? UNKNOWN],
+  ].map(([label, text]) => ({ label, text }));
+}
+
+/** The timeline's lanes: one per ticket in the plan's order, a segment per phase placed as fractions of the run's span
+ *  (an open segment runs to the span's end). Null unless wide and the plan has metrics with a span. */
+export function timelineOf(metrics, tickets, layout) {
+  if (layout !== "wide" || !metrics) return null;
+  const start = Date.parse(metrics.span?.start), end = Date.parse(metrics.span?.end);
+  if (!(end > start)) return null;
+  const span = end - start;
+  const at = (iso) => Math.min(Math.max((Date.parse(iso) - start) / span, 0), 1);
+  return {
+    lanes: tickets.map((ticket) => ({
+      id: ticket.id,
+      segments: (metrics.timeline?.[ticket.id] ?? []).map((seg) => {
+        const left = at(seg.start);
+        return { phase: seg.phase, left, width: (seg.end ? at(seg.end) : 1) - left };
+      }),
+    })),
+  };
+}
+
 /** Everything the one inspector shows for a ticket. Attempts and gates are null when the answer does not carry them.
  *  `live` (from `liveTerminals`) joins each attempt to its terminal by address; without it every terminal is unknown. */
-export function inspector(ticket, tickets, live = null) {
+export function inspector(ticket, tickets, live = null, metrics = null) {
   const known = byId(tickets);
   const attempts = Array.isArray(ticket.attempts) ? ticket.attempts : null;
   const gates = Array.isArray(ticket.gates) ? ticket.gates : null;
@@ -296,6 +406,7 @@ export function inspector(ticket, tickets, live = null) {
       claimed: Boolean(a.claimed),
       latest: Boolean(a.latest),
     })),
+    measures: metrics ? measuresOf(metrics.tickets?.[ticket.id]) : null,
     gates: gates && gates.map((g) => ({
       scenario: g.scenario,
       phase: g.phase ?? null,
@@ -314,6 +425,7 @@ export function planHeader(plan) {
     goal: plan.goal ?? null,
     state: planState(plan.state),
     progress: progressOf(plan.counts),
+    metrics: metricsHeader(plan.metrics),
     drift: revision.drift ? { approved: revision.approved_digest, current: revision.current_digest } : null,
   };
 }
@@ -347,15 +459,56 @@ function findNode(node, id) {
   return null;
 }
 
-/** The button's state and the Herdr commands a click runs, or null when the layout has no panel holding the workbench. */
-export function panelToggle(root) {
+// The terminals' node, and the width the panel takes back when the workbench collapses (Herdr's own default).
+const MAIN = "main";
+export const PANEL_PX = 520;
+
+/** Whether the panel shows the workbench, and whether the terminals are expanded over (the panel took the work area). */
+function showingWorkbench(root) {
   const panel = findNode(root, "panel"), body = findNode(root, "panel-body");
   if (!panel || !(body?.children ?? []).some((c) => c.id === WORKBENCH_PANEL)) return null;
-  const on = !panel.hidden && body.active === WORKBENCH_PANEL;
+  return { panel, on: !panel.hidden && body.active === WORKBENCH_PANEL, expanded: findNode(root, MAIN)?.hidden === true };
+}
+
+/** The button's state and the Herdr commands a click runs, or null when the layout has no panel holding the workbench.
+ *  Closing while expanded first gives the terminals back and the width the panel had (`restorePx`, 520 when unknown). */
+export function panelToggle(root, restorePx = null) {
+  const shown = showingWorkbench(root);
+  if (!shown) return null;
+  const { on, expanded } = shown;
   const commands = on
-    ? [["layout.hide", { id: "panel" }]]
+    ? [
+      ...(expanded ? [["layout.show", { id: MAIN }], ["layout.resize", { id: "panel", px: restorePx ?? PANEL_PX }]] : []),
+      ["layout.hide", { id: "panel" }],
+    ]
     : [["layout.select", { stack: "panel-body", child: WORKBENCH_PANEL }], ["layout.show", { id: "panel" }]];
   return { on, commands };
+}
+
+/** The expand over the terminals: while the panel shows the workbench beside the terminals, `expand` hides them and
+ *  gives the panel the whole work area (weight 1); once expanded, `commands` collapse back to `restorePx` (520 when
+ *  unknown). `width` is the panel's px now, the one to remember before expanding; null when Herdr sizes it by weight.
+ *  Null when no expand is offered: the panel does not show the workbench, or no terminals sit beside it. */
+export function panelExpand(root, restorePx = null) {
+  const shown = showingWorkbench(root);
+  if (!shown) return null;
+  const { panel, on, expanded } = shown;
+  if (expanded) {
+    return {
+      expanded: true, offer: false,
+      commands: [["layout.show", { id: MAIN }], ["layout.resize", { id: "panel", px: restorePx ?? PANEL_PX }]],
+      width: null,
+    };
+  }
+  const beside = (findNode(root, "work-body")?.children ?? []).some((c) => c.id === MAIN);
+  if (!on || !beside) return null;
+  const px = panel.size?.px;
+  return {
+    expanded: false,
+    offer: true,
+    commands: [["layout.hide", { id: MAIN }], ["layout.resize", { id: "panel", weight: 1 }]],
+    width: typeof px === "number" ? px : null,
+  };
 }
 
 // Herdr's tabs mod restores each space's panel only when it is in `workspace.panels` and hides it otherwise, so a

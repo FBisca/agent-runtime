@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   readPlans, readPlan, planRows, pickPlan, ticketLayers, inspector, relatives, planHeader,
-  layoutFor, screenFor, compactRow, notice, pickTicket, NARROW_BELOW,
+  layoutFor, screenFor, compactRow, notice, pickTicket, NARROW_BELOW, planSections,
 } from "../model.js";
 import { PLANS, PLAN, WORKBENCH_PATH, SECOND_PATH, BROKEN_PATH, ok, refusal } from "./fixtures.js";
 
@@ -10,8 +10,8 @@ const rows = () => planRows(readPlans(ok(PLANS)).value.plans);
 
 test("S12 plans list YAML with state and progress and Markdown marked legacy, active before archived, newest first", () => {
   const list = rows();
-  assert.deepEqual(list.map((r) => r.slug), ["agent-workbench", "second", "broken", "old-plan"]);
-  const yaml = list[0];
+  assert.deepEqual(list.map((r) => r.slug), ["broken", "agent-workbench", "second", "old-plan"]);
+  const yaml = list[1];
   assert.equal(yaml.state, "RUNNING");
   assert.deepEqual(yaml.progress, { done: 1, working: 1, blocked: 0, total: 3 });
   assert.equal(yaml.legacy, false);
@@ -27,7 +27,7 @@ test("S12 the first runnable YAML plan is selected unless the person picked one 
   assert.equal(pickPlan(list, SECOND_PATH), SECOND_PATH);
   assert.equal(pickPlan(list, "/gone.plan.yaml"), WORKBENCH_PATH);
   assert.equal(pickPlan([], null), null);
-  assert.equal(pickPlan(planRows([PLANS.plans[0]]), null), null, "only a legacy plan: nothing to open");
+  assert.equal(pickPlan(planRows([PLANS.plans[3]]), null), null, "only a legacy plan: nothing to open");
 });
 
 test("S12 tickets are grouped into layers in the answer's order, each with blocked-by chips that carry the blocker's state", () => {
@@ -153,4 +153,39 @@ test("S14 a compact row is one line: glyph, id, summary and state", () => {
   const [t1, t2] = ticketLayers(PLAN.tickets).flatMap((l) => l.tickets);
   assert.equal(compactRow(t1), "✓ T1 workbench plans and workbench plan, read-only · complete");
   assert.equal(compactRow(t2), "◉ T2 Attempts, gates and outcome · in progress");
+});
+
+const answer = () => readPlans(ok(PLANS)).value;
+
+test("S30 Needs me comes first with the way to act on each item, in the order the command printed them", () => {
+  const { needsMe } = planSections(answer());
+  assert.deepEqual(needsMe.map((n) => [n.plan, n.ticket, n.kind]), [
+    ["agent-workbench", "T2", "needs_you"], ["second", null, "ready_to_drive"], ["broken", null, "fix_plan"],
+  ]);
+  for (const item of needsMe) {
+    assert.ok(item.title && item.wayOut, item.kind + " says what and the way to act");
+  }
+  assert.match(needsMe[0].wayOut, /T2/, "the way out names the ticket");
+  assert.equal(needsMe[1].path, SECOND_PATH, "an item opens the plan it names");
+});
+
+test("S30 active plans follow in the command's order, then one collapsed older line that expands to the older plans", () => {
+  const { active, older, olderLine } = planSections(answer());
+  assert.deepEqual(active.map((r) => r.slug), answer().plans.filter((p) => p.group === "active").map((p) => p.slug));
+  assert.deepEqual(active.map((r) => r.slug), ["broken", "agent-workbench", "second"], "not the file-name order");
+  assert.deepEqual(older.map((r) => r.slug), ["old-plan"]);
+  assert.equal(olderLine(false).label, "1 older ▸");
+  assert.equal(olderLine(false).rows.length, 0, "collapsed: no older plan is listed");
+  assert.equal(olderLine(true).label, "1 older ▾");
+  assert.deepEqual(olderLine(true).rows.map((r) => r.slug), ["old-plan"]);
+});
+
+test("S30 no older plans means no older line, and an answer without needs_me or group still lists every plan", () => {
+  const only = { ...answer(), plans: PLANS.plans.slice(0, 2), needs_me: undefined };
+  const s = planSections(only);
+  assert.equal(s.olderLine(false), null);
+  assert.deepEqual(s.needsMe, []);
+  const bare = planSections({ plans: PLANS.plans.map(({ group, ...p }) => p) });
+  assert.equal(bare.active.length, 4, "no group is told: nothing is hidden behind a collapsed line");
+  assert.equal(bare.olderLine(false), null);
 });

@@ -29,7 +29,11 @@ BACKENDS = (
     "pi",
 )  # the worker backends; each of them runs a worker, so each of them may be routed to
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-STEPS = ("implementer", "reviewer", "gaps", "archive")
+STEPS = ("implementer", "reviewer", "gaps")
+# The archive has no agent, so it has no route: naming it is refused with the way out.
+ARCHIVE_ROUTE_REFUSAL = (
+    "the route names the step 'archive': the archive has no agent; remove the `archive` route"
+)
 ROUTE_FIELDS = ("class", "backend", "model", "effort")
 # What a route field may name, and what to call it when it names something else.
 ALLOWED = {"class": CLASSES, "backend": BACKENDS, "effort": EFFORTS, "step": STEPS}
@@ -102,12 +106,11 @@ class RouteEntry(BaseModel):
 class StepEntry(BaseModel):
     """One step of a config: the step, the backend it runs on, the model and the effort.
 
-    A step is one spawn site of a run: the implementer, the reviewer, the gaps reviewer or the
-    archive worker. A step route is the run's answer for that step, whatever the class routes say."""
+    A step is one spawn site of a run: the implementer, the reviewer or the gaps reviewer. A step route is the run's answer for that step, whatever the class routes say."""
 
     model_config = ConfigDict(extra="forbid")
 
-    step: Literal["implementer", "reviewer", "gaps", "archive"]
+    step: Literal["implementer", "reviewer", "gaps"]
     backend: Literal["claude", "codex", "pi"]
     model: str = Field(min_length=1)
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
@@ -195,6 +198,9 @@ def validate(data):
     """The validated route config of a mapping, or a RouteError that says what is wrong with it."""
     if not isinstance(data, dict):
         raise RouteError("the route config must be an object")
+    named = [e.get("step") for e in data.get("steps") or [] if isinstance(e, dict)]
+    if "archive" in named:
+        raise RouteError(ARCHIVE_ROUTE_REFUSAL)
     try:
         document = RouteDocument.model_validate(data)
     except ValidationError as error:
@@ -321,6 +327,8 @@ def override(text):
     It is validated like a config route: an unknown class, an unknown backend or an unknown effort is an error,
     never a fall back to another billable model."""
     klass, backend, model, effort = _override_parts(text)
+    if klass == "archive":
+        raise RouteError("the route override %r: %s" % (text, ARCHIVE_ROUTE_REFUSAL))
     if klass not in CLASSES:
         raise RouteError(
             "the route override %r names the class '%s', which is not a model class (%s)"
@@ -337,8 +345,10 @@ def overrides(texts):
 def step_override(text):
     """One explicit step override, read from the command line: `step=backend/model[@effort]`.
 
-    A step is one spawn site of a run: `implementer`, `reviewer`, `gaps` or `archive`."""
+    A step is one spawn site of a run: `implementer`, `reviewer` or `gaps`."""
     step, backend, model, effort = _override_parts(text, "step", "step")
+    if step == "archive":
+        raise RouteError("the step override %r: %s" % (text, ARCHIVE_ROUTE_REFUSAL))
     if step not in STEPS:
         raise RouteError(
             "the step override %r names the step '%s', which is not a step (%s)"

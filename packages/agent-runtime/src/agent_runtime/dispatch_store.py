@@ -28,6 +28,23 @@ MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
 # structuredContent copies) stays under MAX_RESPONSE_BYTES. A base payload (tool result before an
 # inbox piggyback) stays under MAX_BASE_BYTES, so a legal 64 KiB report always fits beside it.
 MAX_RESPONSE_BYTES, MAX_BASE_BYTES, MAX_PAGE_BYTES = 196608, 98304, 65536
+# `wait` attaches a usage dict to each returned row after this store read. Every figure it can carry,
+# at a width no real count reaches, is budgeted per row, so the attached response stays under its cap.
+WORST_USAGE = {
+    **dict.fromkeys(
+        (
+            "input_tokens",
+            "cached_input_tokens",
+            "cache_write_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "model_calls",
+            "tool_calls",
+        ),
+        10**20 - 1,
+    ),
+    "cost_usd": 1234567890.1234567,
+}
 STALL_NEXT = (
     "no progress for 15 minutes: collect it, message it, ask the user, or stop it; "
     "the runtime never stops it or marks it complete"
@@ -1071,7 +1088,7 @@ class Store:
                 params.extend((team, target, target))
             unfinished = [a["assignment_id"] for a in assignments if a["state"] != "complete"]
             # Worst-case fixed fields (receipt, longest reason, a runtime_state added by wait) are
-            # budgeted before selection so the receipt below names exactly what fits.
+            # budgeted before selection so the receipt below names exactly what fits; usage is attached by wait.
             fixed = len(
                 json.dumps(
                     {
@@ -1080,6 +1097,7 @@ class Store:
                         "assignments": [
                             dict(
                                 a,
+                                usage=WORST_USAGE,
                                 runtime_state="interrupted",
                                 attention="not_started",
                                 next=max(

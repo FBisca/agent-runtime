@@ -215,7 +215,7 @@ class RunTests(RunFixture, unittest.TestCase):
         self.refuse(["demo-t1"])
         self.set_plan(("T1",))
         result = self.run_driver(expect=1)
-        self.assertIn("T1 not dispatched", result.stderr)
+        self.assertRegex(result.stderr, r"T1\s+build\s+✗ not dispatched")
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RESERVED")
         self.assertIn("not dispatched", self.ticket_status("T1"))
         self.refuse([])
@@ -243,7 +243,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
                 self.setUp()
                 self.crashed(state)
                 self.run_driver()
-                (orphaned,) = self.events("orphaned")
+                (orphaned,) = self.run_events("orphaned")
                 self.assertEqual(
                     (orphaned["unit"], orphaned["task"], orphaned["answer"]), ("t1", "t1", answer)
                 )
@@ -253,7 +253,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         """orchestrator-engine/R22"""
         self.crashed("working")
         self.run_driver(expect=1)
-        self.assertEqual(self.events("orphaned"), [])
+        self.assertEqual(self.run_events("orphaned"), [])
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.task()["status"], "ACTIVE")
 
@@ -261,7 +261,9 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         """orchestrator-engine/R51, orchestrator-engine/R64"""
         self.crashed("working")
         self.run_driver(expect=1)
-        self.assertEqual(len(self.events("finish")), 1, "only the first, healthy drive finished")
+        self.assertEqual(
+            len(self.run_events("finish")), 1, "only the first, healthy drive finished"
+        )
         (stranded,) = self.wakes_of("stranded")
         self.assertIn("t1", stranded["text"])
         self.assertIn("working", stranded["text"])
@@ -281,7 +283,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
                 )
                 self.waits([wait_result(), wait_result(), self.reviewer_done()])
                 self.run_driver()
-                self.assertEqual(self.events("orphaned"), [])
+                self.assertEqual(self.run_events("orphaned"), [])
                 self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
                 self.assertEqual(self.task()["status"], "COMPLETE")
 
@@ -292,7 +294,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
                 self.setUp()
                 self.crashed(state)
                 self.run_driver(expect=1)
-                self.assertEqual(len(self.events("finish")), 1, "only the first drive finished")
+                self.assertEqual(len(self.run_events("finish")), 1, "only the first drive finished")
                 (stranded,) = self.wakes_of("stranded")
                 self.assertIn("t1", stranded["text"])
                 self.assertIn("no report", stranded["text"])
@@ -303,7 +305,9 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.crashed("unreadable")
         self.run_driver(expect=1)
         self.run_driver(expect=1)
-        self.assertEqual(len(self.events("finish")), 1, "only the first, healthy drive finished")
+        self.assertEqual(
+            len(self.run_events("finish")), 1, "only the first, healthy drive finished"
+        )
         self.assertEqual(len(self.wakes_of("stranded")), 1, "the Lead is told once")
 
     def test_S2a_a_loss_the_loop_meets_before_it_would_finish_is_reconciled_first(self):
@@ -315,10 +319,10 @@ class RecoveryTests(GateFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assertEqual(len(self.events("orphaned")), 1)
+        self.assertEqual(len(self.run_events("orphaned")), 1)
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])
         self.assertEqual(self.task("t1o1")["status"], "ACTIVE")
-        self.assertEqual(self.events("finish")[-1]["kind"], "finish")
+        self.assertEqual(self.run_events("finish")[-1]["kind"], "finish")
 
     def test_S2a_a_task_it_cannot_settle_raises_stranded_and_the_run_does_not_finish(self):
         """orchestrator-engine/R23"""
@@ -329,7 +333,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
             ]
         )
         self.run_driver(expect=1)
-        self.assertEqual(self.events("finish"), [])
+        self.assertEqual(self.run_events("finish"), [])
         (stranded,) = self.wakes_of("stranded")
         self.assertIn("t1", stranded["text"])
         self.assertEqual(self.spawned(), ["demo-t1"])
@@ -347,7 +351,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
                 self.run_driver(expect=1)
                 self.assertEqual(self.spawned(), ["demo-t1"])
                 self.assertEqual(self.task()["status"], "ACTIVE")
-                self.assertEqual(self.events("orphaned"), [])
+                self.assertEqual(self.run_events("orphaned"), [])
                 (stranded,) = self.wakes_of("stranded")
                 self.assertIn("t1", stranded["text"])
                 self.assertIn(error, stranded["text"])
@@ -361,7 +365,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.gone("demo-t1-review")
         self.waits([wait_result(), self.skipped()])
         self.run_driver()
-        self.assertEqual(self.events("orphaned")[0]["task"], "t1")
+        self.assertEqual(self.run_events("orphaned")[0]["task"], "t1")
         self.assertEqual(self.request()["event"], "review")
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review"])
         self.assertNotIn("t1o1", self.ledger()["tasks"])
@@ -386,7 +390,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.gone("demo-t1")
         self.waits([wait_result(), self.skipped()])
         self.run_driver()
-        self.assertEqual(self.events("orphaned")[0]["task"], "t1")
+        self.assertEqual(self.run_events("orphaned")[0]["task"], "t1")
         self.assertEqual(self.request()["event"], "answers")
         self.assertEqual(self.spawned(), ["demo-t1"])
 
@@ -518,7 +522,7 @@ class RecoveryTests(GateFixture, unittest.TestCase):
         self.assertIn("name_taken", wake["text"])
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])  # the refused one, then the retry
         self.assertEqual(self.task()["status"], "ACTIVE")
-        self.assertEqual(len(self.events("start")), 1)
+        self.assertEqual(len(self.run_events("start")), 1)
 
     def test_S5_without_the_lead_s_todo_the_same_run_does_not_try_again(self):
         """orchestrator-engine/R29"""

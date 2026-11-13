@@ -51,9 +51,9 @@ class CompatTests(GateFixture, unittest.TestCase):
         self.assertIn(
             "rename the helper someday", (self.run_dir / "deferred.md").read_text(encoding="utf-8")
         )
-        kinds = [(e["finding_kind"], e["id"]) for e in self.events("finding")]
+        kinds = [(e["finding_kind"], e["id"]) for e in self.run_events("finding")]
         self.assertEqual(kinds, [("deferred", "D1"), ("blocking", "M1")])
-        self.assertEqual(self.events()[0]["kind"], "import")
+        self.assertEqual(self.run_events()[0]["kind"], "import")
 
     def test_S34_metrics_of_a_run_dir_without_events_come_from_the_ledger(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S34"""

@@ -48,7 +48,7 @@ test("S15 a path with spaces or shell syntax is one argv element, never parsed b
   data.setScope(SCOPE);
   const done = data.refresh();
   await tick();
-  h.calls[0].resolve(ok({ ...PLANS, plans: [{ ...PLANS.plans[2], path: awkward }] }));
+  h.calls[0].resolve(ok({ ...PLANS, plans: [{ ...PLANS.plans[1], path: awkward }] }));
   await tick();
   assert.deepEqual(h.calls[1].args, ["workbench", "plan", awkward, "--json"]);
   h.calls[1].resolve(ok(PLAN));
@@ -120,7 +120,7 @@ test("S15 an answer older than the latest request is dropped: a space change dur
   assert.equal(data.state().plans.status, "loading", "the answer for /a is not shown for /b");
   assert.equal(h.calls.length, 2);
   assert.equal(h.calls[1].options.cwd, "/b");
-  h.calls[1].resolve(ok({ ...PLANS, plans: [PLANS.plans[3]] }));
+  h.calls[1].resolve(ok({ ...PLANS, plans: [PLANS.plans[2]] }));
   await tick();
   h.calls[2].resolve(ok(PLAN));
   await run;

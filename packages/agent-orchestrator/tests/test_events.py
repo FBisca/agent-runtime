@@ -6,7 +6,7 @@ import unittest
 
 import pytest
 from fixtures import DRIVER, load_script
-from test_archive import ARCHIVE, ArchiveFixture
+from test_archive import ArchiveFixture
 from test_decider import DeciderFixture
 from test_gates import DEFERRED, MAJOR
 
@@ -20,9 +20,9 @@ class EventTests(ArchiveFixture, unittest.TestCase):
     @pytest.mark.integration
     def test_S27_every_state_change_is_one_json_line_logged_before_the_next_step(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
-        states = [e for e in self.events("state") if e["task"] == "t1"]
+        states = [e for e in self.run_events("state") if e["task"] == "t1"]
         gates = [e["gate"][1] for e in states if e["gate"][0] != e["gate"][1]]
         self.assertTrue(
             subsequence(
@@ -45,7 +45,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
             subsequence(["RESERVED", "ACTIVE", "PARTIAL", "COMPLETE"], statuses), statuses
         )
         self.assertEqual({e["unit"] for e in states}, {"t1"})
-        self.assertTrue(all(e["at"] for e in self.events()))
+        self.assertTrue(all(e["at"] for e in self.run_events()))
         # the reviewer was spawned only after the converge pass was on the log
         reviewer_spawn = next(
             c for c in self.calls("spawn") if c["args"]["name"] == "demo-t1-review"
@@ -54,7 +54,6 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         last = [e for e in logged if e["kind"] == "state" and e["task"] == "t1"][-1]
         self.assertEqual(last["gate"][1], "converged")
         self.assert_intents_precede_spawns()
-        self.assertIn(ARCHIVE, [e["name"] for e in self.events("intent")])
 
     @pytest.mark.integration
     def test_S27_findings_are_logged_with_their_kind_and_source(self):
@@ -62,10 +61,10 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         review = self.review(verdict="block", major=[MAJOR], deferred=[DEFERRED])
         self.waits([self.worker_done(tests=True), self.reviewer_done(review)])
         self.run_driver()
-        findings = [(e["source"], e["finding_kind"], e["id"]) for e in self.events("finding")]
+        findings = [(e["source"], e["finding_kind"], e["id"]) for e in self.run_events("finding")]
         self.assertEqual(findings, [("review", "deferred", "D1"), ("review", "blocking", "M1")])
         self.assertEqual(
-            [(e["unit"], e["source"]) for e in self.events("round")], [("t1", "review")]
+            [(e["unit"], e["source"]) for e in self.run_events("round")], [("t1", "review")]
         )
 
     @pytest.mark.integration
@@ -73,7 +72,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
         self.waits([self.worker_done(), self.worker_done("t1r1", tests=True)])
         self.run_driver()
-        found = self.events("finding")
+        found = self.run_events("finding")
         self.assertTrue(
             found
             and all(e["source"] == "verify" and e["finding_kind"] == "blocking" for e in found)
@@ -85,7 +84,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         self.prs(["OPEN"] * 4 + ["MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
-        self.assertGreaterEqual(len(self.events("idle")), 2)
+        self.assertGreaterEqual(len(self.run_events("idle")), 2)
 
     @pytest.mark.integration
     def test_S27_metrics_are_rebuilt_from_events_after_a_crash(self):
@@ -97,8 +96,6 @@ class EventTests(ArchiveFixture, unittest.TestCase):
                 worker,
                 self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
                 self.worker_done("t1r1"),
-                self.archive_done(),
-                self.gaps_done(),
             ]
         )
         self.run_driver()
@@ -175,6 +172,60 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(ticket["usage"], {"input_tokens": 7})
         self.assertEqual(ticket["route"]["model"], "haiku")
 
+    @pytest.mark.unit
+    def test_S10_a_key_is_summed_when_every_assignment_reports_it_else_null(self):
+        """worker-usage/S10"""
+        spec = load_script()
+        at = "2026-11-07T00:00:00+00:00"
+
+        def usage(assignment, figures):
+            return {
+                "at": at,
+                "kind": "usage",
+                "unit": "t1",
+                "assignment_id": assignment,
+                "usage": figures,
+            }
+
+        rows = [
+            {"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}},
+            usage("a1", {"input_tokens": 1, "cost_usd": 0.5, "tool_calls": 2}),
+            usage("a2", {"input_tokens": 2, "tool_calls": 3}),
+        ]
+        ticket = spec.events.rollup(rows, "demo")["tickets"]["t1"]
+        self.assertEqual(ticket["usage"], {"input_tokens": 3, "cost_usd": None, "tool_calls": 5})
+        rows = [{"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}}]
+        self.assertEqual(spec.events.rollup(rows, "demo")["tickets"]["t1"]["usage"], "unknown")
+
+    @pytest.mark.unit
+    def test_S10_the_metrics_table_shows_each_usage_figure_in_its_column_and_null_as_null(self):
+        """worker-usage/S10"""
+        spec = load_script()
+        ticket = {
+            "route": {"size": "small", "difficulty": "simple"},
+            "review_rounds": 0,
+            "escalations": 0,
+            "decider_calls": 0,
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 4,
+                "cached_input_tokens": 5,
+                "cache_write_tokens": None,
+                "reasoning_tokens": 6,
+                "model_calls": 7,
+                "tool_calls": 8,
+                "cost_usd": None,
+            },
+        }
+        table = spec.metrics_table(
+            {"slug": "demo", "tickets": {"t1": ticket}, "lead": {"model_turns": 1}}
+        )
+        header, line = table.splitlines()[1:3]
+        for column in ("input", "output", "cached", "cache_write", "reasoning", "model_calls"):
+            self.assertIn(column, header.split())
+        self.assertIn("cost_usd", header.split())
+        self.assertEqual(line.split()[-8:], ["3", "4", "5", "null", "6", "7", "8", "null"])
+
 
 class DecisionEventTests(DeciderFixture, unittest.TestCase):
     @pytest.mark.integration
@@ -182,13 +233,13 @@ class DecisionEventTests(DeciderFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
         self.waits([self.blocked(), self.decided("skip", reason="not needed")])
         self.run_driver()
-        decisions = self.events("decision")
+        decisions = self.run_events("decision")
         self.assertEqual(
             [(d["unit"], d["action"], d["reason"]) for d in decisions],
             [("t1", "skip", "not needed")],
         )
         self.assertEqual(
-            [(e["unit"], e["cause"]) for e in self.events("escalation")], [("t1", "blocked")]
+            [(e["unit"], e["cause"]) for e in self.run_events("escalation")], [("t1", "blocked")]
         )
 
 

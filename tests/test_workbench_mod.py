@@ -94,8 +94,14 @@ def test_S17_a_Runtime_section_lists_live_agents_no_attempt_names():
     scenario("S17", 6)
 
 
-# Open, and the tab bar's panel button (R19).
-ALLOWED_COMMANDS = {'"agent.focus"', '"layout.select"', '"layout.show"', '"layout.hide"'}
+# Open, the tab bar's panel button (R19), and the header's expand over the terminals (S33).
+ALLOWED_COMMANDS = {
+    '"agent.focus"',
+    '"layout.select"',
+    '"layout.show"',
+    '"layout.hide"',
+    '"layout.resize"',
+}
 
 
 def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling():
@@ -146,3 +152,33 @@ def test_S24_the_workbench_layout_puts_the_button_beside_herdrs_tabs():
     }
     assert "workbench" in [c["id"] for c in by_id["panel-body"]["children"]]
     assert (MOD / "workbench.svg").is_file()
+
+
+def test_S33_the_header_expands_the_panel_over_the_terminals_and_collapses_it_back():
+    scenario("S33", 4)
+
+
+def test_S30_the_mod_opens_on_needs_me_the_active_plans_and_a_collapsed_older_line():
+    scenario("S30", 3)
+
+
+def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight_one_fills_the_area():
+    layout = json.loads((MOD.parent / "layouts" / "workbench.json").read_text())
+
+    def nodes(node):
+        yield node
+        for child in node.get("children", []):
+            yield from nodes(child)
+
+    panel = {n["id"]: n for n in nodes(layout)}["panel"]
+    assert panel["size"] == {"px": 520}
+    assert panel["min"] == 280
+    assert "max" not in panel
+
+
+def test_S31_the_header_and_inspector_show_a_plans_measures_unknown_never_zero():
+    scenario("S31", 3)
+
+
+def test_S32_a_timeline_shows_one_lane_per_ticket_when_wide():
+    scenario("S32", 2)

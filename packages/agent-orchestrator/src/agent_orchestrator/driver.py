@@ -22,7 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import contracts, events, evidence, routes, runner, verify, workbench
+from . import config as repo_config
+from . import contracts, events, evidence, narrate, routes, runner, verify, workbench
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .plan import PlanError
@@ -280,6 +281,18 @@ def require_completable(task, report):
         for c in checks
         if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
     }
+    # The rendered `affected` check may be `not_run` with a reason: the selection found no test to run.
+    affected = task["packet"].get("affected")
+    if isinstance(affected, str):
+        passed |= {
+            normalise_check(c["command"])
+            for c in checks
+            if c.get("outcome") == "not_run"
+            and isinstance(c.get("command"), str)
+            and isinstance(c.get("reason"), str)
+            and c["reason"].strip()
+            and normalise_check(c["command"]) == normalise_check(affected)
+        }
     missing = [command for key, command in required.items() if key not in passed]
     require(
         not missing,
@@ -654,9 +667,9 @@ def runtime_process(argv, timeout=None):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
-def gh_process(argv, timeout=None):
-    """One `gh` process."""
-    return subprocess.run(["gh", *argv], capture_output=True, text=True, timeout=timeout)
+def gh_process(argv, timeout=None, cwd=None):
+    """One `gh` process; `cwd` names the repository for a call whose argv does not (`pr create`)."""
+    return subprocess.run(["gh", *argv], capture_output=True, text=True, timeout=timeout, cwd=cwd)
 
 
 def runtime_call(lead, tool, arguments, timeout=120):
@@ -699,10 +712,6 @@ def assignment_of(result):
             "the runtime answered without an assignment_id: %s" % json.dumps(result)[:200]
         )
     return found
-
-
-def event(message):
-    print("[orchestrate] " + message, file=sys.stderr, flush=True)
 
 
 GATES = (
@@ -757,7 +766,9 @@ ATTENTION = {
     "decision": "asked for a decision",
     "exited": "ended without a report",
 }
-ARCHIVE = "archive"  # the unit (and task id) of the archive worker
+ARCHIVE = "archive"  # the unit (and task id) of the driver's own archive
+ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or replace
+DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
 
 
 def next_path(directory, stem, suffix):
@@ -928,15 +939,30 @@ def legacy_imports(data):
     return rows
 
 
+USAGE_COLUMNS = (
+    ("input", "input_tokens"),
+    ("output", "output_tokens"),
+    ("cached", "cached_input_tokens"),
+    ("cache_write", "cache_write_tokens"),
+    ("reasoning", "reasoning_tokens"),
+    ("model_calls", "model_calls"),
+    ("tool_calls", "tool_calls"),
+    ("cost_usd", "cost_usd"),
+)
+
+
 def metrics_table(metrics):
-    rows = [("unit", "route", "rounds", "escalations", "deciders", "usage")]
+    rows = [
+        ("unit", "route", "rounds", "escalations", "deciders", *(name for name, _ in USAGE_COLUMNS))
+    ]
     for unit, row in metrics["tickets"].items():
         route = "%s·%s" % (row["route"]["size"], row["route"]["difficulty"])
-        usage = (
-            row["usage"]
-            if isinstance(row["usage"], str)
-            else json.dumps(row["usage"], separators=(",", ":"))
-        )
+        usage = row["usage"]
+        # A figure nobody reported prints as null, never as 0 or as a blank.
+        figures = [
+            usage if isinstance(usage, str) else json.dumps((usage or {}).get(key))
+            for _, key in USAGE_COLUMNS
+        ]
         rows.append(
             (
                 unit,
@@ -944,14 +970,14 @@ def metrics_table(metrics):
                 str(row["review_rounds"]),
                 str(row["escalations"]),
                 str(row["decider_calls"]),
-                usage,
+                *figures,
             )
         )
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     lines = ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
     return "\n".join(
         [
-            "[orchestrate] metrics for %s" % metrics["slug"],
+            "metrics for %s" % metrics["slug"],
             *lines,
             "lead model turns: %d" % metrics["lead"]["model_turns"],
         ]
@@ -1071,6 +1097,7 @@ class Driver:
             self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        narrate.NARRATOR.roots = [self.run_dir]  # the pane names a run file by its place in the run
         # The ledger first: it carries the kind marker before any file a worker can read exists.
         with ledger(self.ledger_path) as data:
             self.lead = data.setdefault("lead", "orchestrate:" + self.slug)
@@ -1112,6 +1139,7 @@ class Driver:
                     + self.dispatch_ready(plan)
                     + self.attend_people(plan)
                     + self.start_archive(plan)
+                    + self.start_gaps(plan)
                 )
                 self.refresh_attention()
             else:  # the last valid plan keeps the work going; what the user's edit might have changed waits for a valid file
@@ -1411,7 +1439,12 @@ class Driver:
                         held = (task["packet"]["task_id"], message.get("text") or "")
                         break
                 else:
-                    event("complete from assignment %s matches no open gate" % assignment_id)
+                    narrate.say(
+                        "warn",
+                        None,
+                        "a complete from assignment %s matches no open step; ignored"
+                        % assignment_id,
+                    )
             if closing:
                 self.close_request(
                     closing,
@@ -1470,13 +1503,14 @@ class Driver:
     def parked_assignments(self):
         """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the runtime, not work."""
         with self.book() as data:
-            gaps = data.get("gaps") or {}
-            return {
+            parked = {
                 agent.get("assignment_id")
                 for task in data["tasks"].values()
                 if task.get("gate") in PARKED
                 for agent in (task, task.get("review") or {}, task.get("decision") or {})
-            } - {None} | ({gaps.get("assignment_id")} if gaps.get("ended") else set())
+            } - {None}
+            # The gaps reviewer is advisory: its open assignment never keeps the run up, ended or not.
+            return parked | {(data.get("gaps") or {}).get("assignment_id")}
 
     def on_agent_attention(self, assignment_id, kind, text="", quiet=False, silent=False):
         """An agent reported `blocked` or `decision`, or its assignment failed or ended with no report. Each event is
@@ -1509,17 +1543,26 @@ class Driver:
             if silent:
                 return self.support_silent(assignment_id)
             if self.mutation_ended(assignment_id):
-                return event("mutation reviewer %s: %s" % (ATTENTION[kind], text or "no patch yet"))
+                return narrate.say(
+                    "warn",
+                    "mutation",
+                    "mutation reviewer %s: %s" % (ATTENTION[kind], text or "no patch yet"),
+                )
             with self.book() as data:
                 if (data.get("gaps") or {}).get("assignment_id") == assignment_id:
                     data["gaps"]["ended"] = (
                         True  # the gaps review is advisory: it never blocks or pauses anything
                     )
-                    return event("gaps reviewer %s: %s" % (ATTENTION[kind], text or "no gaps.md"))
+                    return narrate.say(
+                        "warn",
+                        "gaps",
+                        "gaps reviewer %s: %s" % (ATTENTION[kind], text or "no gaps.md"),
+                    )
             if not quiet:
-                event(
-                    "assignment %s %s: already handled or not an open assignment"
-                    % (assignment_id, ATTENTION[kind])
+                narrate.say(
+                    "info",
+                    None,
+                    "assignment %s %s; already handled, ignored" % (assignment_id, ATTENTION[kind]),
                 )
             return
         task_id, role, name = hit
@@ -1560,7 +1603,7 @@ class Driver:
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.errors.append("poll: %s" % error)
             self.log("error", gate="poll", error=str(error)[:500])
-            event("the pull request poll failed: %s" % error)
+            narrate.say("fail", None, "could not poll the pull requests: %s" % error)
         steps = {
             "reported": self.step_reported,
             "converged": self.step_converged,
@@ -1595,7 +1638,12 @@ class Driver:
                     gate="answers",
                     error=str(error)[:500],
                 )
-                event("%s answers failed: %s" % (task_id, error))
+                narrate.say(
+                    "fail",
+                    "review",
+                    "handling the worker's answers failed: %s" % error,
+                    task=task_id,
+                )
         with self.book() as data:
             ids = [task_id for task_id, task in data["tasks"].items() if task.get("gate") in steps]
         for task_id in ids:
@@ -1618,7 +1666,12 @@ class Driver:
                         gate=gate,
                         error=str(error)[:500],
                     )
-                    event("%s gate %s failed: %s" % (task_id, gate, error))
+                    narrate.say(
+                        "fail",
+                        narrate.step_of(gate),
+                        "step %s failed: %s" % (gate, error),
+                        task=task_id,
+                    )
                     break
                 acted += 1
         return acted
@@ -1682,7 +1735,7 @@ class Driver:
         except (OSError, subprocess.TimeoutExpired) as caught:
             error = str(caught)
         if error is not None:
-            event("could not alert %s: %s" % (terminal, error))
+            narrate.say("warn", None, "could not wake the Lead in %s: %s" % (terminal, error))
             self.log("notify-failed", terminal=terminal, error=error[:500])
 
     def request(self, task_id, kind, reason, fix=None, answerer=None):
@@ -1705,7 +1758,7 @@ class Driver:
             )
             if fix:
                 task["fix"] = fix
-        event("%s needs a decision (%s): %s" % (task_id, kind, reason))
+        narrate.say("ask", "decide", "Lead decision needed (%s): %s" % (kind, reason), task=task_id)
         self.log("escalation", unit=unit, task=task_id, cause=kind, reason=reason[:500])
         self.write_status(unit.upper(), "IN PROGRESS · decision pending: " + cell(reason))
         self.write_request(task_id)
@@ -1728,6 +1781,7 @@ class Driver:
                 task["event"]["kind"],
                 task["event"]["reason"],
                 [str(c) for c in candidates if c.exists()],
+                menu=ARCHIVE_MENU if unit == ARCHIVE else None,
             )
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             write_atomic(path, json.dumps(row, indent=2) + "\n")
@@ -1950,7 +2004,12 @@ class Driver:
             warnings=warned + 1,
             reason=reason[:200],
         )
-        event("%s: warned %s that %s is not readable yet (%s)" % (unit, name, path, reason[:120]))
+        narrate.say(
+            "warn",
+            "review" if where == "review" else "build",
+            "asked %s to fix %s: %s" % (name, path, reason),
+            task=task_id,
+        )
         return True
 
     def contract_error(self, task_id, where, error):
@@ -2117,7 +2176,8 @@ class Driver:
                 report,
                 repo=packet["checkout"],
                 base=self.args.base,
-                plan_rel=self.plan_rel(),
+                plan_rel=self.plan_rel_for_integrity(),
+                layout_repo=self.repo,
             )
         except verify.VerifyError as error:
             return "error", [str(error)[:500]]
@@ -2146,6 +2206,23 @@ class Driver:
                 rounds[unit] = unit_summary(data, unit)["failed_reviews"]
             rounds[unit] += 1
             failures = rounds[unit]
+        if unit == ARCHIVE:
+            # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
+            self.record_report(task_id, report, remaining=remaining)
+            self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
+            self.undraft_archive(task_id)
+            return self.request(
+                task_id,
+                source,
+                "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
+                "leaves the archive to you"
+                % (
+                    "the archive pull request conflicts with its base"
+                    if source == "conflict"
+                    else "the archive failed its %s gate" % source,
+                    "; ".join(remaining),
+                ),
+            )
         self.record_report(task_id, report, review_rounds=1, remaining=remaining)
         fix = {
             "source": source,
@@ -2236,8 +2313,12 @@ class Driver:
             },
         )
         self.mark(task_id, gate="reviewing", review=dict(review, assignment_id=assignment_id))
-        event(
-            "spawned %s (%s, %s, %s)" % (name, self.gate_label("reviewer", "large"), model, effort)
+        narrate.say(
+            "start",
+            "review",
+            "started reviewer %s · %s · %s · %s"
+            % (name, self.gate_label("reviewer", "large"), model, effort),
+            task=task_id,
         )
 
     def review_text(self, packet, review_path, delta=None):
@@ -2595,9 +2676,12 @@ class Driver:
                 ci_head=None,
                 delta={"from": reviewed, "findings": answers["findings"]},
             )
-            return event(
-                "%s: %s disputed with changes_code; delta re-review from %s"
-                % (task_id, ", ".join(changing), (reviewed or "the base")[:7])
+            return narrate.say(
+                "info",
+                "review",
+                "worker disputed %s with code changes; re-reviewing the delta from %s"
+                % (", ".join(changing), (reviewed or "the base")[:7]),
+                task=task_id,
             )
         self.mark(task_id, answers=dict(answers, state="done"))
 
@@ -2607,10 +2691,10 @@ class Driver:
     # marks it ready (`gh pr ready`) once the last review passed with green checks. From then on the unit waits for
     # the merge: it holds no worker slot and the driver only polls `gh` for it.
 
-    def gh(self, argv, timeout=60):
+    def gh(self, argv, timeout=60, cwd=None):
         """Run `gh` and return (exit code, stdout, stderr). A `gh` that cannot run is an error, not a guess."""
         try:
-            result = gh_process(argv, timeout=timeout)
+            result = gh_process(argv, timeout=timeout, **({"cwd": cwd} if cwd else {}))
         except subprocess.TimeoutExpired:
             return 1, "", "gh timed out"
         except OSError as error:
@@ -2750,7 +2834,7 @@ class Driver:
             self.log(
                 "draft", unit=unit, task=task_id, pr=url, outcome="draft" if code == 0 else "failed"
             )
-            event("%s: the pull request is a draft again (%s)" % (task_id, url))
+            narrate.say("info", "fix", "%s back to draft while it is fixed" % url, task=task_id)
         self.mark(task_id, draft_done=True)
 
     def undraft(self, task_id, url):
@@ -2763,13 +2847,16 @@ class Driver:
             "draft", unit=unit, task=task_id, pr=url, outcome="draft" if code == 0 else "failed"
         )
         if code != 0:
-            event(
-                "%s: could not put %s back to draft (%s); trying again on a later round"
-                % (task_id, url, (err or out).strip()[:200])
+            narrate.say(
+                "warn",
+                "fix",
+                "could not put %s back to draft (%s); trying again next round"
+                % (url, (err or out).strip()),
+                task=task_id,
             )
             return False
         self.unready(unit)
-        event("%s: the pull request is a draft again (%s)" % (task_id, url))
+        narrate.say("info", "fix", "%s back to draft while it is fixed" % url, task=task_id)
         return True
 
     def unready(self, unit):
@@ -2830,12 +2917,14 @@ class Driver:
                 )
             if state == "error":
                 return self.request(task_id, "ci", "gh pr checks failed for %s" % url)
-            event("%s: no checks yet, or they are still running; polling again" % task_id)
+            narrate.say("wait", "ci", "waiting for CI on %s" % url, task=task_id)
             return False  # no fix round: the unit is polled again on a later round
         before = task.get("updated_from")
         if before and task.get("ci_head") in (None, before):
             # green read before GitHub moved the head is the old head's green, not the update's
-            event("%s: the checks are not yet those of the updated branch; polling again" % task_id)
+            narrate.say(
+                "wait", "ci", "waiting for CI on the updated branch of %s" % url, task=task_id
+            )
             return False
         waiting = (task.get("answers") or {}).get("state") in ("working", "reported")
         if waiting:  # green, but the implementer's answers may still change the code: pr-ready waits for them
@@ -2847,7 +2936,7 @@ class Driver:
                     task_id, "ci", "gh pr ready failed: %s" % (err or out).strip()[:200]
                 )
             self.mark(task_id, pr_ready=True)
-            event("%s: the pull request is ready for review (%s)" % (task_id, url))
+            narrate.say("done", "ci", "CI green; %s ready for review" % url, task=task_id)
         unit = self.unit_of(task_id)
         # an update-branch moves the head without a new report: the live head keys the wake, so it is sent again
         head = (
@@ -2866,10 +2955,20 @@ class Driver:
             self.conflict(task_id, url, view)
             return True
         if kind == "unknown":
-            event(
-                "%s: the merge state of %s is not known yet (%s); polling again"
-                % (task_id, url, view.get("error") or "UNKNOWN")
-            )
+            if view.get("error"):
+                narrate.say(
+                    "warn",
+                    "merge",
+                    "could not read whether %s can merge: %s; trying again" % (url, view["error"]),
+                    task=task_id,
+                )
+            else:
+                narrate.say(
+                    "wait",
+                    "merge",
+                    "waiting for GitHub to compute whether %s can merge" % url,
+                    task=task_id,
+                )
             return False
         if kind == "behind":
             return self.update_branch(task_id, url, view) is not False
@@ -2885,7 +2984,12 @@ class Driver:
         unit = self.unit_of(task_id)
         if code == 0:
             self.log("update-branch", unit=unit, task=task_id, pr=url, outcome="updated")
-            event("%s: the branch was updated; no review needed" % unit)
+            narrate.say(
+                "info",
+                "merge",
+                "%s was behind its base; branch updated, CI runs again (no new review)" % url,
+                task=task_id,
+            )
             self.mark(
                 task_id,
                 gate="ready-for-ci",
@@ -3025,7 +3129,7 @@ class Driver:
             "COMPLETE %s · merged %s%s" % (now()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
         self.mark_merged(task_id, merge_commit=commit)
-        event("%s merged: %s" % (task_id, url))
+        narrate.say("done", "merge", "merged %s" % url, task=task_id)
 
     def mark_merged(self, task_id, **fields):
         """The unit's cleanup gate, and for the archive unit the plan's ARCHIVED, in one transaction: a crash between
@@ -3043,7 +3147,7 @@ class Driver:
         gone = self.task(task_id)["packet"]["checkout"]
         if not Path(gone).exists():
             self.log("merged-checkout-missing", task=task_id, checkout=gone)
-            event("%s merged, but its checkout %s no longer exists" % (task_id, gone))
+            narrate.say("warn", "merge", "merged, but its checkout %s is gone" % gone, task=task_id)
         try:
             with self.book() as data:
                 try:
@@ -3086,7 +3190,7 @@ class Driver:
             )
         self.mark_merged(task_id, pr=url, merge_commit=commit)
         self.stop_unit_agents(unit, "merged")
-        event("%s merged early: %s" % (unit, url))
+        narrate.say("done", "merge", "merged early: %s" % url, task=task_id)
 
     def reported_checks(self, task_id):
         """The checks of the newest attempt of the unit that holds a report: a fix round's own attempt usually has
@@ -3221,11 +3325,11 @@ class Driver:
         run(["git", "-C", str(self.repo), "worktree", "remove", str(path)], timeout=60)
         run(["git", "-C", str(self.repo), "worktree", "prune"], timeout=60)
         self.mark(task_id, gate="done", cleanup="panes stopped, worktree removed")
-        event("%s panes stopped and worktree removed" % task_id)
+        narrate.say("done", "cleanup", "panes stopped, worktree removed", task=task_id)
 
     def keep(self, task_id, reason):
         self.mark(task_id, gate="done", cleanup="kept: " + reason)
-        event("%s worktree kept: %s" % (task_id, reason))
+        narrate.say("warn", "cleanup", "worktree kept: %s" % reason, task=task_id)
 
     # ---- agents: one door for every spawn ---------------------------------------------------------------------
     # `ensure_agent` records the intent in the ledger (`agents[name]`) and the log, starts the agent under its stable
@@ -3273,7 +3377,7 @@ class Driver:
         path = self.routes_file
         steps = {}
         if not path:
-            event(routes.legacy_warning(self.args.models_file))
+            narrate.say("warn", "setup", routes.legacy_warning(self.args.models_file))
             resolved = routes.legacy(self.args.cli, self.models)
         else:
             try:
@@ -3445,9 +3549,12 @@ class Driver:
             reserve=self.args.context_reserve,
             model=verdict["model"],
         )
-        event(
-            "%s is below the context reserve (%d tokens left): swapping in a fresh %s"
-            % (name, verdict["remaining_tokens"], role)
+        narrate.say(
+            "info",
+            None,
+            "%s is low on context (%d tokens left); swapping in a fresh %s"
+            % (name, verdict["remaining_tokens"], role),
+            task=unit,
         )
         return True
 
@@ -3500,7 +3607,9 @@ class Driver:
             try:
                 self.stop_agent(name, unit, why)
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                event("could not stop %s (%s): %s" % (name, why, error))
+                narrate.say(
+                    "warn", None, "could not stop %s (%s): %s" % (name, why, error), task=unit
+                )
                 self.log("error", unit=unit, name=name, gate="stop", error=str(error)[:500])
 
     def pane_alive(self, name):
@@ -3572,7 +3681,12 @@ class Driver:
         self.mark(new_id, answer_ids=list(fix.get("answer_ids") or []))
         self.mark(task_id, gate="superseded", fix_task=new_id, held=[])
         self.replay_held(task, new_id)
-        event("fix round %s for %s from %s findings" % (new_id, packet["worker"], fix["source"]))
+        narrate.say(
+            "start",
+            "fix",
+            "fix round for %s from %s findings" % (packet["worker"], fix["source"]),
+            task=new_id,
+        )
 
     def hand_round(self, task, successor, task_md, text, fresh=False, answer=None):
         """Close the unit's open task, claim its successor and put a worker on it: the live pane is resumed, a gone
@@ -3641,11 +3755,19 @@ class Driver:
             try:
                 self.stop_agent(name, unit, "replaced")
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                event("could not stop %s before replacing it: %s" % (name, error))
+                narrate.say(
+                    "warn",
+                    None,
+                    "could not stop %s before replacing it: %s" % (name, error),
+                    task=successor["task_id"],
+                )
         address, assignment_id = self.ensure_agent(name, "worker", unit, spawn, fresh=True)
-        event(
-            "%s: spawned a fresh worker for %s (%s)"
-            % (name, successor["task_id"], "replacing the pane" if alive else "pane is gone")
+        narrate.say(
+            "start",
+            None,
+            "started a fresh worker %s (%s)"
+            % (name, "replacing the pane" if alive else "the old pane is gone"),
+            task=successor["task_id"],
         )
         return address, assignment_id
 
@@ -3666,7 +3788,7 @@ class Driver:
         except contracts.ContractError as error:
             return self.request(task_id, "decision", str(error))
         action, reason, unit = decision["action"], decision["reason"], task["packet"]["unit"]
-        event("%s decided %r: %s" % (task_id, action, reason))
+        narrate.say("info", "decide", "Lead decided %s: %s" % (action, reason), task=task_id)
         self.log("decision", unit=unit, task=task_id, action=action, reason=reason[:500])
         held = task.get("held") or []
         if action in ("mark blocked", "skip"):
@@ -3685,6 +3807,8 @@ class Driver:
             return self.write_status(
                 unit.upper(), ("BLOCKED" if blocked else "SKIPPED") + " · " + cell(reason)
             )
+        if unit == ARCHIVE:
+            return self.retry_archive(task_id)
         self.write_status(unit.upper(), "IN PROGRESS")
         answers = task.get("answers") or {}
         named = (task.get("request") or {}).get("answerer")
@@ -3692,13 +3816,13 @@ class Driver:
             # The Lead decided a request that named the silent answerer: the hand-over below puts that pane on a new
             # assignment, so the old answers assignment can never report. Left `working`, pr-ready would wait on it
             # for ever; `failed` is what the old exit path recorded. Any other request leaves a busy answerer alone:
-            # its complete is still received (R80).
+            # its complete is still received (R85).
             self.mark(task_id, answers=dict(answers, state="failed"))
             why = (
                 "the Lead decided %r on a request that named the answerer %s, so its assignment is replaced "
                 "and pr-ready no longer waits on the answers" % (action, task["packet"]["worker"])
             )
-            event("%s answers dropped: %s" % (task_id, why))
+            narrate.say("warn", "decide", "answers dropped: %s" % why, task=task_id)
             self.log("answers-dropped", unit=unit, task=task_id, assignment_id=named, why=why)
         finished = next((m for m in held if m["kind"] == "complete"), None)
         if finished and self.report_is_valid(task_id):
@@ -3747,7 +3871,7 @@ class Driver:
             )
             self.keep_address(data, task_id, packet["worker"])
         self.replay_held(task, task_id)
-        event("answer for %s: %s resumed on the same task id" % (task_id, packet["worker"]))
+        narrate.say("info", "decide", "answer sent; %s resumed" % packet["worker"], task=task_id)
 
     def answer_text(self, task, decision):
         packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
@@ -3863,7 +3987,12 @@ class Driver:
         )
         self.mark(task_id, gate="superseded", held=[])
         self.replay_held(task, new_id)
-        event("retry %s for %s after %s" % (new_id, packet["worker"], task["event"]["kind"]))
+        narrate.say(
+            "start",
+            "fix",
+            "retry for %s after %s" % (packet["worker"], task["event"]["kind"]),
+            task=new_id,
+        )
 
     def redo_text(self, task, new_id, new_dir, redo):
         packet, unit = task["packet"], task["packet"]["unit"]
@@ -4030,6 +4159,11 @@ class Driver:
             if (data.get("integration") or {}).get("digest") != approval.digest:
                 enter_plan_state(data, "DELIVERED")
 
+    def plan_model(self):
+        """The approved plan/1 model; an archive only runs for a YAML plan, which holds one."""
+        assert self.model is not None
+        return self.model
+
     def contract(self):
         """(model, approval) of the approved YAML plan this drive holds."""
         assert self.model is not None and self.approval is not None
@@ -4042,9 +4176,15 @@ class Driver:
         )
 
     def oracles(self):
-        """The approved oracle bytes: the approval snapshot's, never the authored directory's."""
+        """The approved test and negative bytes: the approval snapshot's, never the authored directory's."""
         snapshot = snapshot_dir(self.contract()[1], self.args.state_dir)
-        return yaml_plan.payloads(snapshot / "oracle")
+        return yaml_plan.snapshot_files(snapshot, self.plan_path)
+
+    def inputs(self, item):
+        """(oracles, place, negative) the runner takes for `item`, from the approved bytes."""
+        return yaml_plan.runner_inputs(
+            self.plan_path, self.contract()[0], item, self.oracles(), self.repo
+        )
 
     def run_evidence(self, scenario_id, phase, commit):
         """One run of a scenario's evidence at `commit`, its receipt written and its sha256 in the ledger."""
@@ -4052,7 +4192,7 @@ class Driver:
         scenario = verify.scenario_of(model, scenario_id)
         assert scenario is not None and scenario.evidence is not None
         item = scenario.evidence
-        files = self.oracles()
+        oracles, place, negative = self.inputs(item)
         prior = self.earlier_receipts(scenario_id, phase)
         result = runner.run_evidence(
             self.repo,
@@ -4061,11 +4201,11 @@ class Driver:
             phase=phase,
             digest=approval.digest,
             check=item.check or "",
-            oracles={name: files[name] for name in item.oracle},
-            place=item.place,
+            oracles=oracles,
+            place=place,
             env_names=item.env,
             timeout=item.timeout,
-            negative=(item.negative, files[item.negative]) if item.negative else None,
+            negative=negative,
         )
         receipt = result.receipt
         # A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it.
@@ -4233,7 +4373,9 @@ class Driver:
                 "at": now(),
             }
         self.log("evidence-unverified", unit=unit.lower(), task=task_id, scenarios=bad)
-        event("%s merged with its evidence unverified: %s" % (unit, ", ".join(bad)))
+        narrate.say(
+            "warn", "merge", "merged with its evidence unverified: %s" % ", ".join(bad), task=unit
+        )
 
     def integrate(self, plan):
         """A YAML plan whose every agent ticket is COMPLETE is DELIVERED, verified on one pinned default-branch
@@ -4257,7 +4399,7 @@ class Driver:
             if message not in self.errors:
                 self.errors.append(message)
                 self.log("error", gate="integration", error=message)
-                event(message)
+                narrate.say("fail", "verify", message)
             return steps
 
     def pin_default_branch(self):
@@ -4339,7 +4481,9 @@ class Driver:
             enter_plan_state(data, "DELIVERED")
             enter_plan_state(data, "VERIFYING")
         self.log("integration", sha=sha, tree=tree, attempt=attempt)
-        event("verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12]))
+        narrate.say(
+            "start", "verify", "verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12])
+        )
         passed = [
             scenario.id
             for scenario in verify.check_scenarios(self.model)
@@ -4366,7 +4510,7 @@ class Driver:
                 item = scenario.evidence
                 if scenario.id not in passed or scenario.id not in model.outcome:
                     continue
-                if item is None or not (item.check and item.oracle) or item.baseline != "fail":
+                if item is None or not (item.check and item.has_tests) or item.baseline != "fail":
                     continue
                 stems = verify.receipt_stems(data, scenario.id, "baseline")
                 try:
@@ -4417,8 +4561,9 @@ class Driver:
             % (self.plan_path, scenario_id),
             "- Oracle: %s (the files named %s, approved bytes)"
             % (
-                yaml_plan.snapshot_path(approval, self.args.state_dir).parent / "oracle",
-                ", ".join(item.oracle),
+                yaml_plan.snapshot_path(approval, self.args.state_dir).parent
+                / ("acceptance" if item.acceptance else "oracle"),
+                ", ".join(item.acceptance or item.oracle),
             ),
             "- Check: `%s`" % item.check,
             "- Delivered code: commit %s of %s" % (sha, self.repo),
@@ -4429,9 +4574,9 @@ class Driver:
             % scenario_id,
             "",
             "Rules:",
-            "- Mutate delivered code only. Never edit the oracle or the file it is placed as (%s%s); such a patch "
+            "- Mutate delivered code only. Never edit the oracle or the file it is placed as (%s); such a patch "
             "counts as ineffective."
-            % (item.place or "", ", ".join(n.removesuffix(".oracle") for n in item.oracle)),
+            % ", ".join(yaml_plan.placed_files(self.plan_path, self.model, item, self.repo)),
             "- Do not touch the repository checkout. Make the change in a scratch worktree "
             "(`git worktree add --detach <dir> %s`), write `git diff` there to %s, then remove the worktree."
             % (sha, patch),
@@ -4470,13 +4615,15 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            event("mutation reviewer %s not started: %s" % (name, error))
+            narrate.say("fail", "mutation", "mutation reviewer %s not started: %s" % (name, error))
             record_update.update(ended=True, error=str(error)[:300])
         else:
             record_update["assignment_id"] = assignment_id
-            event(
-                "spawned %s (%s, %s, %s)"
-                % (name, self.gate_label("reviewer", "medium"), model_name, effort)
+            narrate.say(
+                "start",
+                "mutation",
+                "started mutation reviewer %s · %s · %s · %s"
+                % (name, self.gate_label("reviewer", "medium"), model_name, effort),
             )
         with self.book() as data:
             data["mutation"][scenario_id].update(record_update)
@@ -4549,11 +4696,7 @@ class Driver:
             for line in patch.decode("utf-8", "replace").splitlines()
             if line.startswith(("--- a/", "+++ b/"))
         }
-        placed = {
-            (item.place or "").rstrip("/") + "/" + name.removesuffix(".oracle")
-            for name in item.oracle
-        }
-        placed = {p.lstrip("/") for p in placed}
+        placed = set(yaml_plan.placed_files(self.plan_path, self.model, item, self.repo))
         if not touched:
             return (
                 "invalid",
@@ -4566,7 +4709,7 @@ class Driver:
                 "the patch edits the oracle's file %s" % sorted(touched & placed)[0],
                 None,
             )
-        files = self.oracles()
+        oracles, place, _ = self.inputs(item)
         run_ = runner.run_mutation(
             self.repo,
             record["sha"],
@@ -4574,8 +4717,8 @@ class Driver:
             digest=self.contract()[1].digest,
             check=item.check,
             patch=patch,
-            oracles={name: files[name] for name in item.oracle},
-            place=item.place,
+            oracles=oracles,
+            place=place,
             env_names=item.env,
             timeout=item.timeout,
             attempt_number=number,
@@ -4628,9 +4771,10 @@ class Driver:
                 else:
                     entry["ended"] = False
             self.log("mutation", scenario=scenario_id, attempt=record["attempt"], outcome=outcome)
-            event(
-                "mutation %s attempt %d: %s — %s"
-                % (scenario_id, record["attempt"], outcome, detail)
+            narrate.say(
+                "done" if outcome == "killed" else "warn",
+                "mutation",
+                "%s attempt %d: %s — %s" % (scenario_id, record["attempt"], outcome, detail),
             )
             if outcome != "killed" and record["attempt"] < MUTATION_ATTEMPTS:
                 self.spawn_mutation_reviewer(scenario_id, record["attempt"] + 1)
@@ -4672,16 +4816,28 @@ class Driver:
             )
         self.log("acceptance", state=result["state"], items=result["items"])
 
-    # ---- archive: one more worker unit, a gaps review, then the outcome evidence ----------------------------------
-    # When every agent ticket is COMPLETE the driver claims unit `archive` (small, simple) like a ticket and starts
-    # a medium gaps reviewer beside it. The archive's report is gated by the outcome evidence alone (a failure is a
-    # fix round), then the normal CI and merge gates. The gaps review is advisory: `<run>/gaps.md`, never a gate.
+    # ---- archive: the driver's own unit, no agent --------------------------------------------------------------
+    # When every agent ticket is COMPLETE and the plan is accepted, the driver claims unit `archive`, builds the
+    # archive branch itself (oracles placed, plan files copied, one section appended to the spec), pushes it, opens
+    # the pull request and writes the unit's report. The report then takes the same gates as any other: the outcome
+    # evidence on the head, CI, the merge. A problem no worker could fix (a scenario with no test node, a failing
+    # outcome, a conflict) asks the Lead, whose menu is `retry` (rebuild from the current base) and `skip`.
 
     def plan_rel(self):
         try:
             return self.plan_path.relative_to(self.repo).as_posix()
         except ValueError:
             return "docs/plans/" + self.plan_path.name
+
+    def plan_rel_for_integrity(self):
+        """The plan's path in the repository, or None for a folder plan kept outside it: its folder is no repo path a
+        ticket could touch, and the fallback name every such plan shares (`docs/plans/plan.yaml`) is no plan's."""
+        if yaml_plan.is_folder_plan(self.plan_path):
+            try:
+                return self.plan_path.relative_to(self.repo).as_posix()
+            except ValueError:
+                return None
+        return self.plan_rel()
 
     def start_archive(self, plan):
         agents = [t for t in plan["tickets"] if is_agent(t)]
@@ -4691,80 +4847,307 @@ class Driver:
             return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
+        # A task bound to a worker is an archive of an earlier driver: it keeps its ledger task. A task bound to
+        # the driver that never reported is one this driver died building: it is built again.
         if held and held["runtime_id"]:
-            return 0
+            interrupted = (
+                held["runtime_id"] == DRIVER_ID
+                and held["status"] == "ACTIVE"
+                and not held.get("gate")
+            )
+            if not interrupted:
+                return 0
         try:
-            self.dispatch_archive(plan, agents)
+            self.claim_archive()
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.failed.add(ARCHIVE)
             self.errors.append("archive: %s" % error)
-            event("archive not dispatched: %s" % error)
+            narrate.say("fail", "archive", "archive not started: %s" % error)
             return 0
-        self.start_gaps(plan)
+        self.build_archive(ARCHIVE)
         return 1
 
-    def dispatch_archive(self, plan, agents):
+    def claim_archive(self):
         name = self.slug[: 32 - len("-archive")].rstrip("-_") + "-archive"
         klass, effort = MATRIX[("small", "simple")]
-        backend = self.step_backend("archive", self.args.cli)
-        model = self.step_model("archive", self.routes[klass].model)
-        effort = self.step_effort("archive", effort)
         checkout = self.worktree(name, "feat/" + name)
-        # The driver places the oracles itself: the worker's scope is the spec and those places only.
         plan_model = self.model
         assert plan_model is not None  # read_plan sets it before any unit is dispatched
-        self.place_oracles(checkout)
-        owns = (
-            [plan_model.spec]
-            + [rel for rel, _ in self.yaml_copies()]
-            + [rel for rel, _ in self.yaml_places(plan_model)]
-        )
-        acceptance = YAML_ARCHIVE_ACCEPTANCE
         packet = {
             "task_id": ARCHIVE,
             "worker": name,
             "plan": str(self.plan_path),
             "objective": "Archive the plan into the living spec",
             "checkout": str(checkout),
-            "backend": backend,
-            "owns": owns,
-            "acceptance": acceptance,
-            "checks": list(self.args.gate),
+            "backend": self.args.cli,
+            "owns": [plan_model.spec]
+            + [rel for rel, _ in self.yaml_copies()]
+            + [rel for rel, _ in self.yaml_places(plan_model)],
+            "acceptance": YAML_ARCHIVE_ACCEPTANCE,
+            "checks": [],  # no local gate: the pull request's CI and the outcome re-run are the gates
             "depends_on": [],
             "unit": ARCHIVE,
             "size": "small",
             "difficulty": "simple",
             "class": klass,
             "effort": effort,
-            "model": model,
+            "model": "driver",
         }
         with self.book() as data:
             claim(data, packet)
-        task_dir = self.run_dir / ARCHIVE
-        task_dir.mkdir(exist_ok=True, mode=0o700)
-        task_md = task_dir / "task.md"
-        if not task_md.exists():
-            task_md.write_text(self.archive_text(plan, packet, task_dir), encoding="utf-8")
-        address, assignment_id = self.ensure_agent(
-            name,
-            "worker",
-            ARCHIVE,
-            {
-                "kind": "worker",
-                "name": name,
-                "task": "Read %s and follow it." % task_md,
-                "cwd": str(checkout),
-                "cli": backend,
-                "model": model,
-                "effort": effort,
-            },
-        )
+            task = data["tasks"][ARCHIVE]
+            if not task["runtime_id"]:
+                bind(data, ARCHIVE, DRIVER_ID)
+        (self.run_dir / ARCHIVE).mkdir(exist_ok=True, mode=0o700)
+
+    def build_archive(self, task_id):
+        """Build, push and open the archive, then hand its report to the gates. Any trouble asks the Lead."""
+        try:
+            missing = self.archive_missing()
+            if missing:
+                return self.request(
+                    task_id,
+                    "archive",
+                    "no test node for %s: add a node to a ticket report's `covers` and `retry`, or `skip` and "
+                    "archive by hand" % ", ".join(missing),
+                )
+            head = self.archive_branch(task_id)
+            url = self.archive_pr(task_id)
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            return self.request(
+                task_id,
+                "archive",
+                "the archive could not be built: %s. `retry` builds it again from the current base, `skip` "
+                "leaves it to you" % " ".join(str(error).split())[:400],
+            )
+        path = next_path(self.run_dir / task_id, "report", ".json")[0]
+        report = {
+            "contract": contracts.VERSION,
+            "task_id": task_id,
+            "status": "COMPLETE",
+            "summary": "the driver archived the plan: oracles placed, plan files copied, spec section appended",
+            "acceptance_met": True,
+            "files": [self.plan_model().spec] + [rel for rel, _ in self.yaml_copies()],
+            "decisions": [],
+            "interfaces": [],
+            "remaining": [],
+            "checks": [],
+            "review_rounds": 0,
+            "usage": "unknown",
+            "head": head,
+            "pr": url,
+        }
+        write_atomic(path, json.dumps(report, indent=2) + "\n")
+        self.mark(task_id, gate="reported")
+        self.log("archive-built", task=task_id, pr=url, head=head)
+        narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
+
+    def ticket_covers(self):
+        """{scenario: [node, ...]}: the union of every ticket report's `covers`. The report file is read again, so a
+        node the Lead added after a request counts; the ledger's copy is the fallback."""
         with self.book() as data:
-            bind(data, ARCHIVE, str(address))
-            data["tasks"][ARCHIVE]["assignment_id"] = assignment_id
-            self.keep_address(data, ARCHIVE, name)
-        self.spawned.append(name)
-        event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
+            rows = [
+                (t.get("report_path"), t.get("report"))
+                for t in data["tasks"].values()
+                if t["packet"].get("unit") != ARCHIVE
+            ]
+        found: dict[str, list[str]] = {}
+        for path, stored in rows:
+            report = None
+            if path:
+                try:
+                    report = contracts.load(path, contracts.validate_report)
+                except (contracts.ContractError, ValueError):
+                    report = None
+            for sid, nodes in ((report or stored or {}).get("covers") or {}).items():
+                for node in nodes:
+                    if node not in found.setdefault(sid, []):
+                        found[sid].append(node)
+        return found
+
+    def scenario_nodes(self):
+        """{scenario id: its test nodes}: the tickets' `covers`, then the scenario's own placed oracle paths."""
+        covers = self.ticket_covers()
+        placed: dict[str, list[str]] = {}
+        for scenario in self.plan_model().scenarios:
+            evidence_ = scenario.evidence
+            if evidence_ and evidence_.promote and evidence_.place:
+                placed[scenario.id] = [
+                    evidence_.place.rstrip("/") + "/" + name.removesuffix(".oracle")
+                    for name in evidence_.oracle
+                ]
+        return {
+            s.id: list(dict.fromkeys(covers.get(s.id, []) + placed.get(s.id, [])))
+            for s in self.plan_model().scenarios
+        }
+
+    def archive_missing(self):
+        """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no placed oracle."""
+        nodes = self.scenario_nodes()
+        return [
+            s.id
+            for s in self.plan_model().scenarios
+            if not (s.evidence and s.evidence.human) and not nodes[s.id]
+        ]
+
+    @staticmethod
+    def flat(text):
+        return " ".join(str(text).split())
+
+    def spec_section(self, spec_text, held):
+        """The text appended to the spec: the requirements it lacks, then the Coverage table of every scenario."""
+        slug, nodes = self.slug, self.scenario_nodes()
+        number = max((int(n) for n in re.findall(r"\bR(\d+)\b", spec_text)), default=0)
+        numbered = dict(held)
+        parts = []
+        new = [s for s in self.plan_model().scenarios if s.id not in held]
+        if new:
+            parts += ["## Requirements: %s" % slug, ""]
+            for scenario in new:
+                number += 1
+                numbered[scenario.id] = "R%d" % number
+                parts.append(
+                    "- **R%d** WHEN %s, THEN %s (from %s/%s)"
+                    % (
+                        number,
+                        self.flat(scenario.when),
+                        self.flat(scenario.then),
+                        slug,
+                        scenario.id,
+                    )
+                )
+            parts.append("")
+        parts += [
+            "## Coverage: %s" % slug,
+            "",
+            "| Requirement | Scenario | Test nodes |",
+            "|---|---|---|",
+        ]
+        for scenario in self.plan_model().scenarios:
+            human = scenario.evidence.human if scenario.evidence else None
+            cellular = (
+                "human: " + self.flat(human).replace("|", "\\|")
+                if human
+                else "<br>".join("`%s`" % node for node in nodes[scenario.id])
+            )
+            parts.append("| %s | %s | %s |" % (numbered[scenario.id], scenario.id, cellular))
+        return "\n".join(parts) + "\n"
+
+    def archive_branch(self, task_id):
+        """The archive branch, rebuilt from the current base: oracles placed, plan files copied, the spec section
+        appended, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
+        packet = self.task(task_id)["packet"]
+        path, branch = Path(packet["checkout"]), "feat/" + packet["worker"]
+        remote = self.args.base.partition("/")[0]
+        run(
+            ["git", "-C", str(self.repo), "fetch", "-q", remote, self.args.base.partition("/")[2]],
+            timeout=120,
+        )
+        run(["git", "-C", str(path), "reset", "-q", "--hard"], timeout=TREE_TIMEOUT)
+        run(["git", "-C", str(path), "clean", "-fdq"], timeout=TREE_TIMEOUT)
+        run(
+            ["git", "-C", str(path), "checkout", "-q", "-B", branch, self.args.base],
+            timeout=TREE_TIMEOUT,
+        )
+        self.place_oracles(path)
+        for rel, source in self.yaml_copies():
+            if source.is_dir():
+                for child in sorted(p for p in source.rglob("*") if p.is_file()):
+                    target = path / rel.rstrip("/") / child.relative_to(source)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(child.read_bytes())
+            else:
+                target = path / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+        spec = path / self.plan_model().spec
+        try:
+            before = spec.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            before = ""
+        section = self.spec_section(before, self.held_requirements(spec))
+        body = (before if before.endswith("\n") else before + "\n") + "\n" if before.strip() else ""
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(body + section, encoding="utf-8")
+        run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
+        identity = (
+            []
+            if subprocess.run(
+                ["git", "-C", str(path), "config", "user.email"], capture_output=True, text=True
+            ).stdout.strip()
+            else [
+                "-c",
+                "user.name=agent-orchestrator",
+                "-c",
+                "user.email=agent-orchestrator@localhost",
+            ]
+        )
+        run(
+            [
+                "git",
+                "-C",
+                str(path),
+                *identity,
+                "commit",
+                "-q",
+                "-m",
+                "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec),
+            ],
+            timeout=TREE_TIMEOUT,
+        )
+        run(
+            ["git", "-C", str(path), "push", "-q", "--force", remote, "HEAD:refs/heads/" + branch],
+            timeout=300,
+        )
+        return head_of(path)
+
+    def archive_pr(self, task_id):
+        """The archive's pull request: the one an earlier build opened while it is still open, else a new draft."""
+        existing = self.pr_of(task_id)
+        if existing and self.pr_view(existing).get("state") == "OPEN":
+            return existing
+        packet = self.task(task_id)["packet"]
+        code, out, err = self.gh(
+            [
+                "pr",
+                "create",
+                "--draft",
+                "--base",
+                self.args.base.partition("/")[2],
+                "--head",
+                "feat/" + packet["worker"],
+                "--title",
+                "docs(%s): archive the plan" % self.slug,
+                "--body",
+                "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
+                "with its Coverage table, written by the driver."
+                % (self.plan_rel(), self.plan_model().spec),
+            ],
+            timeout=120,
+            cwd=packet["checkout"],
+        )
+        found = re.findall(r"https?://\S+/pull/\d+", out or "")
+        if code != 0 or not found:
+            raise ValueError(
+                "gh pr create failed: %s" % ((err or out).strip()[:300] or "no url printed")
+            )
+        return found[-1]
+
+    def undraft_archive(self, task_id):
+        """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a failing one."""
+        url = self.pr_of(task_id)
+        if url and self.unit_flag(ARCHIVE, "pr_ready"):
+            self.undraft(task_id, url)
+
+    def retry_archive(self, task_id):
+        """The Lead's `retry`: the archive branch is rebuilt from the current base and pushed again. A pull request
+        that was readied goes back to draft first, so nobody merges a branch that is changing."""
+        url = self.pr_of(task_id)
+        if url and self.unit_flag(ARCHIVE, "pr_ready") and not self.undraft(task_id, url):
+            return False
+        self.unready(ARCHIVE)
+        self.mark(task_id, status="ACTIVE", gate=None, ci_state=None, ci_rows=None, ci_head=None)
+        self.build_archive(task_id)
 
     def oracle_targets(self, model):
         """(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without
@@ -4793,7 +5176,7 @@ class Driver:
         return self.plan_path.with_name(self.plan_path.name.removesuffix(".plan.yaml") + ".plan.md")
 
     def yaml_copies(self):
-        """(repo-relative destination, approved source) for the plan files the archive worker copies byte-identical.
+        """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
         The narrative is copied only when the plan has one."""
         oracle = yaml_plan.oracle_dir(self.plan_path)
         copies = [(self.plan_rel(), self.plan_path)]
@@ -4826,78 +5209,14 @@ class Driver:
         )
         return {sid: rid for rid, ids in found for sid in (part.strip() for part in ids.split(","))}
 
-    def scenario_steps(self, spec, plan):
-        """The brief's steps and scenario list: a ticket may have written its scenarios into the spec already, and
-        appending them again duplicates them."""
-        held = self.held_requirements(spec)
-        pending = [text for sid, text in plan["scenarios"].items() if sid not in held]
-        steps = []
-        if held:
-            steps.append(
-                "- Already in the spec with their provenance, keep as they are: %s."
-                % ", ".join("%s (%s)" % (sid, rid) for sid, rid in held.items())
-            )
-        if not pending:
-            return steps + ["- Every scenario is already in the spec: append none."], [""]
-        steps.append(
-            "- Append each scenario below as a requirement with the next free number and its provenance: "
-            "`- **R4** WHEN ..., THEN ... (from %s/S3)`." % self.slug
-        )
-        return steps, ["Scenarios, verbatim:", "", *pending, ""]
-
-    def yaml_archive_text(self, model, plan, packet, task_dir):
-        """The archive brief for a YAML plan: the plan's spec is the living spec; the driver has already placed the
-        oracles, and the worker writes requirements and a Coverage table."""
-        copies = "\n".join(
-            "- Copy byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
-            for rel, source in self.yaml_copies()
-        )
-        places = "\n".join(
-            "- Already placed by the driver, byte-identical, do not edit: `%s`." % rel
-            for rel, _ in self.yaml_places(model)
-        )
-        steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / model.spec, plan)
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (task_dir / "report.json"),
-                "",
-                "# Archive %s into its living spec" % self.slug,
-                "",
-                "Plan: %s (repo path `%s`)." % (self.plan_path, self.plan_rel()),
-                "Checkout: %s on branch feat/%s (new, from %s). Work only here."
-                % (packet["checkout"], packet["worker"], self.args.base),
-                "Owns (edit nothing else): %s." % ", ".join(packet["owns"]),
-                "",
-                "Steps:",
-                "- The living spec is `%s`, named by plan.yaml. Do not create a new spec file."
-                % model.spec,
-                *steps,
-                "- Give the spec a `Coverage` table: one row per requirement of this plan, with the test node ids "
-                "(`path::test_name`) that prove it. Take the node ids from the tickets' reports and the placed oracles.",
-                copies,
-                places,
-                "- The driver placed the promoted oracles before you started. The archive renames no test, leaves "
-                "plan.yaml untouched, and writes no Status.",
-                "- Run before you report COMPLETE: %s. Then open a pull request against %s."
-                % (
-                    "; ".join(packet["checks"]) or "the repository's full CI gate",
-                    self.args.base.partition("/")[2],
-                ),
-                "The driver then re-runs the outcome evidence on your branch's head; a failure comes back as a fix round.",
-                "",
-                *verbatim,
-            ]
-        )
-
-    def archive_text(self, plan, packet, task_dir):
-        return self.yaml_archive_text(self.model, plan, packet, task_dir)
-
     def start_gaps(self, _plan):
-        """Spawn the advisory gaps reviewer once. Its failure never blocks anything."""
+        """Spawn the advisory gaps reviewer once, after the archive PR has merged (S6). Its failure never blocks
+        anything. Returns 1 when it acted, 0 otherwise."""
+        if self.plan_state() != "ARCHIVED":
+            return 0
         with self.book() as data:
             if data.get("gaps"):
-                return
+                return 0
             merges = [
                 (tid, t.get("pr"), t.get("merge_commit"))
                 for tid, t in data["tasks"].items()
@@ -4951,15 +5270,19 @@ class Driver:
                 },
             )
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            event("gaps reviewer not started: %s" % error)
+            narrate.say("fail", "gaps", "gaps reviewer not started: %s" % error)
             gaps = {"name": name, "path": str(path), "ended": True, "error": str(error)}
         else:
             gaps = {"name": name, "path": str(path), "assignment_id": assignment_id, "ended": False}
-            event(
-                "spawned %s (%s, %s, %s)" % (name, self.gate_label("gaps", "medium"), model, effort)
+            narrate.say(
+                "start",
+                "gaps",
+                "started gaps reviewer %s · %s · %s · %s"
+                % (name, self.gate_label("gaps", "medium"), model, effort),
             )
         with self.book() as data:
             data["gaps"] = gaps
+        return 1
 
     # ---- metrics: what a run cost, from the ledger and the runtime's own usage numbers ----------------------
 
@@ -5085,7 +5408,7 @@ class Driver:
         task_id = ticket["#"].lower()
         self.failed.add(task_id)
         self.errors.append("%s: %s" % (ticket["#"], error))
-        event("%s %s: %s" % (ticket["#"], what, error))
+        narrate.say("fail", "build", "%s: %s" % (what, error), task=ticket["#"])
         self.write_status(ticket["#"], "TO-DO · %s: %s" % (what, cell(error, 120)))
         self.wake(
             "not-dispatched",
@@ -5153,7 +5476,7 @@ class Driver:
         ):  # the exit code follows what is stranded now, not what the Lead was told first
             self.errors.append(reason)
         self.log("stranded", unit=unit, task=task_id, name=name, error=str(error)[:500])
-        event("%s stranded: %s" % (task_id, error))
+        narrate.say("fail", None, "stranded, nothing will settle it: %s" % error, task=task_id)
 
     def reconcile(self, finishing=False):
         """Settle every open task whose assignment `wait` does not list. Returns how many it acted on; a task it
@@ -5204,7 +5527,12 @@ class Driver:
                 assignment_id=assignment_id,
                 answer=said,
             )
-            event("%s orphaned: %s (%s) answers %s" % (task_id, name, role, said))
+            narrate.say(
+                "warn",
+                "review" if role != "worker" else "build",
+                "%s %s is gone (runtime: %s)" % (role, name, said),
+                task=task_id,
+            )
             if role != "worker":  # the path an agent the runtime reported as exited takes
                 self.on_agent_attention(
                     assignment_id, "exited", "the runtime answered " + said, quiet=True
@@ -5251,7 +5579,7 @@ class Driver:
             else:
                 self.not_dispatched(ticket, error, "not re-dispatched as " + new_id)
             return 0
-        event("%s: dispatched again as %s after %s" % (unit.upper(), new_id, said))
+        narrate.say("start", "build", "dispatched again after %s" % said, task=new_id)
         return 1
 
     def attend_people(self, plan):
@@ -5263,7 +5591,7 @@ class Driver:
                 continue
             needs = cell(ticket["What it delivers"] or "your action")
             self.write_status(ticket["#"], "needs you: " + needs)
-            event("%s needs you: %s" % (ticket["#"], needs))
+            narrate.say("ask", None, "needs you: %s" % needs, task=ticket["#"])
             # attention.md and the pane are not read by a Lead that ended its turn; only a wake reaches it.
             self.wake(
                 "person", ticket["#"], "person %s: %s" % (ticket["#"], needs), key=ticket["#"]
@@ -5300,12 +5628,11 @@ class Driver:
                     "the user set %s to %s"
                     % (ticket["#"], "TO-DO: retry" if again else "COMPLETE: done by hand"),
                 )
-            event(
-                "%s %s"
-                % (
-                    ticket["#"],
-                    "reopened by the user: fresh attempt" if again else "completed by hand",
-                )
+            narrate.say(
+                "info",
+                None,
+                "reopened by you: fresh attempt" if again else "completed by hand",
+                task=ticket["#"],
             )
             if not again:
                 continue
@@ -5322,6 +5649,33 @@ class Driver:
             count += 1
         return count
 
+    def tier_checks(self, owns):
+        """The checks a worker runs: the named `--gate` alone, else the repo's `fast` and rendered `affected` tiers.
+        Returns (checks, the rendered affected command or None, the `full` command the worker leaves to verify)."""
+        if self.args.gate:
+            return list(self.args.gate), None, None
+        tiers = repo_config.load(self.repo).checks
+        if tiers is None or not (tiers.fast or tiers.affected):
+            return [], None, None
+        affected = None
+        if tiers.affected:
+            affected = tiers.affected.replace("{base}", shlex.quote(self.args.base)).replace(
+                "{paths}", " ".join(shlex.quote(p) for p in owns)
+            )
+        return [c for c in (tiers.fast, affected) if c], affected, tiers.full_run
+
+    def last_attempt(self, unit, task_id):
+        """The packet of the unit's most recent other attempt that carries a class, or None."""
+        with self.book() as data:
+            earlier = [
+                task["packet"]
+                for other_id, task in data["tasks"].items()
+                if other_id != task_id
+                and task["packet"].get("unit") == unit
+                and "class" in task["packet"]
+            ]
+        return earlier[-1] if earlier else None
+
     def dispatch(self, plan, ticket, task_id=None, note=""):
         number = ticket["#"][1:]
         name = worker_name(plan["slug"], number)
@@ -5336,12 +5690,18 @@ class Driver:
             )
         size, difficulty = ticket["Size"].strip(), ticket["Difficulty"].strip()
         klass, matrix_effort = MATRIX[(size, difficulty)]
+        last = self.last_attempt("t" + number, task_id)
+        if last and ROUTE["class"].index(last["class"]) > ROUTE["class"].index(klass):
+            # A retry the driver raised keeps its class: a re-dispatch never drops below the last attempt.
+            klass, matrix_effort = last["class"], last.get("effort") or matrix_effort
         route = self.routes[klass]
         backend = self.step_backend("implementer", route.backend)
         model = self.step_model("implementer", route.model)
         effort = self.step_effort("implementer", route.effort or matrix_effort)
         checkout = self.worktree(name, "feat/" + name)
         scenarios = [plan["scenarios"][sid] for sid in satisfied(ticket, plan["scenarios"])[0]]
+        owns = [p.strip() for p in ticket["Paths"].split(",") if p.strip()]
+        checks, affected, full = self.tier_checks(owns)
         packet = {
             "task_id": task_id,
             "worker": name,
@@ -5349,9 +5709,11 @@ class Driver:
             "objective": ticket["What it delivers"],
             "checkout": str(checkout),
             "backend": backend,
-            "owns": [p.strip() for p in ticket["Paths"].split(",") if p.strip()],
+            "owns": owns,
             "acceptance": [re.sub(r"^- \*\*(S\d+[a-z]?)\*\*", r"\1:", s) for s in scenarios],
-            "checks": list(self.args.gate),
+            "checks": checks,
+            **({"affected": affected} if affected else {}),
+            **({"full": full} if full else {}),
             "depends_on": [],
             "unit": "t" + number,
             "size": size,
@@ -5405,7 +5767,12 @@ class Driver:
             self.keep_address(data, task_id, name)
         self.write_status(ticket["#"], "IN PROGRESS")
         self.spawned.append(name)
-        event("spawned %s (%s, %s, %s)" % (name, klass, packet["model"], effort))
+        narrate.say(
+            "start",
+            "build",
+            "started worker %s · %s · %s · %s" % (name, klass, packet["model"], effort),
+            task=task_id,
+        )
 
     def worktree(self, name, branch):
         path = self.repo.parent / (self.repo.name + ".worktrees") / name
@@ -5444,7 +5811,7 @@ class Driver:
         return path
 
     def task_text(self, _plan, ticket, packet, scenarios, task_dir):
-        gate = self.args.gate or ["the repository's full CI gate (see its AGENTS.md / CLAUDE.md)"]
+        gate = packet["checks"] or ["the repository's full CI gate (see its AGENTS.md / CLAUDE.md)"]
         return "\n".join(
             [
                 "Contract: %s" % (self.run_dir / "contract.md"),
@@ -5466,6 +5833,14 @@ class Driver:
                 *scenarios,
                 "",
                 "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
+                *(
+                    [
+                        "`%s` is the whole suite: do not run it; verify and CI run it."
+                        % packet["full"],
+                    ]
+                    if packet.get("full")
+                    else []
+                ),
                 "Then open a draft pull request against %s." % self.args.base.partition("/")[2],
                 "",
             ]
@@ -5528,14 +5903,15 @@ def load_approved(path, *, repo, state_dir, **kwargs):
 
 
 def is_yaml(plan_path):
-    return Path(plan_path).name.endswith(".plan.yaml")
+    name = Path(plan_path).name
+    return name.endswith(".plan.yaml") or yaml_plan.is_folder_plan(plan_path)
 
 
 def require_yaml(plan_path):
     """A plan is a plan/1 YAML file; a Markdown plan is refused with the way out."""
     if not is_yaml(plan_path):
         raise PlanError(
-            "%s is not a plan/1 YAML plan (<name>.plan.yaml): the Markdown plan format is no longer read. "
+            "%s is not a plan/1 YAML plan (<name>.plan.yaml, or plan.yaml in its own folder): the Markdown plan format is no longer read. "
             "Rewrite it as plan/1 YAML and run `plan check <plan.yaml>`, then `plan approve`"
             % plan_path
         )
@@ -5558,7 +5934,7 @@ def read_repo_config(args):
     if args.command == "plan" and getattr(args, "plan_command", None) == "schema":
         return
     if not plan or args.command not in ("plan", "status", "verify", "run", "accept", "launch"):
-        return
+        return None
     where = Path(args.repo).resolve() if args.repo else Path(plan).resolve().parent
     found = subprocess.run(
         ["git", "-C", str(where), "rev-parse", "--show-toplevel"],
@@ -5567,7 +5943,15 @@ def read_repo_config(args):
         timeout=15,
     )
     if found.returncode == 0:
-        yaml_plan.repo_config(Path(found.stdout.strip()).resolve())
+        return yaml_plan.repo_config(Path(found.stdout.strip()).resolve())
+    return None
+
+
+CHECKS_WARNING = (
+    "plan check: %s declares no checks node — add checks.fast, checks.affected and checks.full "
+    "to brief workers with the cheap check tiers; until then workers run the repository's full CI "
+    "gate (or the --gate commands)"
+)
 
 
 def repo_key(repo):
@@ -6463,13 +6847,15 @@ def main(argv=None):
         sub.add_argument("--repo", help="Repository root; default the current repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
         sub.add_argument("--json", action="store_true", help="Accepted; the answer is always JSON")
-    for verb in ("check", "approve"):
+    for verb in ("check", "approve", "amend"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
         sub.add_argument("--repo", help="Repository root; default the plan file's repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
         if verb == "approve":
             sub.add_argument("--base", default="origin/main")
+        if verb == "amend":
+            sub.add_argument("--reason", required=True, help="Why the approved plan changes")
     inspect = commands.add_parser(
         "inspect", help="Read checkout identity and installed command paths"
     )
@@ -6552,7 +6938,7 @@ def main(argv=None):
         "--brain-cli",
         choices=("claude", "codex", "pi"),
         help="The backend the review gates (the reviewer and the gaps reviewer) spawn on, with its "
-        "medium model; the implementer and the archive worker stay on --cli",
+        "medium model; the implementer stays on --cli",
     )
     sub.add_argument(
         "--agent",
@@ -6601,7 +6987,7 @@ def main(argv=None):
         default=[],
         metavar="STEP=BACKEND/MODEL[@EFFORT]",
         help="An explicit route for one step of the run: 'reviewer=codex/gpt-l@xhigh'. The steps are "
-        "implementer, reviewer, gaps and archive. It wins over the route config and over --brain-cli",
+        "implementer, reviewer and gaps. It wins over the route config and over --brain-cli",
     )
     sub.add_argument(
         "--notify-terminal",
@@ -6701,19 +7087,35 @@ def main(argv=None):
     args, extra = parser.parse_known_args(argv)
     if extra and args.command != "launch":
         parser.error("unrecognized arguments: " + " ".join(extra))
-    read_repo_config(args)
+    config = read_repo_config(args)
+    if args.command == "plan" and args.plan_command == "check":
+        if config is not None and config.checks is None:
+            print(CHECKS_WARNING % ".orchestrate/config.yaml", file=sys.stderr)
     if args.command == "launch":
         return launch(args, extra)  # unknown options are forwarded to `run`, which validates them
     if args.command == "plan":
         if args.plan_command == "schema":
             return yaml_plan.Plan.model_json_schema(by_alias=True)
-        if args.plan_command == "approve":
+        if args.plan_command in ("approve", "amend"):
             caller = resolve_runtime()
             if isinstance(caller, dict) and caller.get("role") == "worker":
                 raise PlanError(
-                    "approval: caller is a spawned worker, parent %s — approval belongs to the Lead "
-                    "(the person in their own session); ask the Lead to run plan approve"
-                    % caller.get("parent", "unknown")
+                    "%s: caller is a spawned worker, parent %s — %s belongs to the Lead "
+                    "(the person in their own session); ask the Lead to run plan %s"
+                    % (
+                        "approval" if args.plan_command == "approve" else "amend",
+                        caller.get("parent", "unknown"),
+                        args.plan_command,
+                        args.plan_command,
+                    )
+                )
+            if args.plan_command == "amend":
+                return yaml_plan.amend(
+                    args.plan,
+                    reason=args.reason,
+                    repo=args.repo,
+                    state_dir=args.state_dir,
+                    runtime_id=os.environ.get("HERDR_PANE_ID") or os.environ.get("HC_TERMINAL_ID"),
                 )
             return {
                 "approval": yaml_plan.approve(

@@ -149,7 +149,7 @@ class AwaitFixture(GateFixture):
 
 class CrashGuardTests(AwaitFixture, unittest.TestCase):
     def crash_events(self):
-        return self.events("crash")
+        return self.run_events("crash")
 
     def crash_wakes(self):
         return [w for w in self.wakes() if "crashed" in w.get("text", "")]

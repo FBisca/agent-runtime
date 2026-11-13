@@ -177,6 +177,33 @@ class BudgetTests(ToolCase):
         )
         self.assertEqual(final["messages"], [])
 
+    def test_S9_the_budget_reserves_a_worst_case_usage_dict_for_every_row(self):
+        """S9: a row that later carries every usage figure at its widest still leaves the response under its cap."""
+        store = Store({"HOME": str(self.dir / "home")})
+        team = store.team("usage", "t0", "lead")
+        ids = []
+        for n in range(32):
+            assignment = store.register(team, "w%02d%s" % (n, "n" * 40))["assignment_id"]
+            store.bind(assignment, "t%d" % (n + 1), "usage")
+            store.publish("usage", "t%d" % (n + 1), "t0", assignment, "x" * 4000, "progress")
+            ids.append(assignment)
+        widest = {
+            "input_tokens": 10**20 - 1,
+            "cached_input_tokens": 10**20 - 1,
+            "cache_write_tokens": 10**20 - 1,
+            "output_tokens": 10**20 - 1,
+            "reasoning_tokens": 10**20 - 1,
+            "model_calls": 10**20 - 1,
+            "tool_calls": 10**20 - 1,
+            "cost_usd": 1234567890.1234567,
+        }
+        reserve = MAX_BASE_BYTES  # a piggybacked inbox shares the response, so the budget binds
+        batch = store.read(team, "t0", "all", assignment_ids=ids, reserve=reserve)
+        self.assertTrue(batch["more"])
+        for row in batch["assignments"]:
+            row["usage"] = dict(widest)
+        self.assertLessEqual(canonical(batch) + reserve, MAX_RESPONSE_BYTES)
+
     def test_structured_base_at_the_cap_still_admits_the_first_message(self):
         """agent-runtime/R61
         agent-runtime-dispatch/S28"""

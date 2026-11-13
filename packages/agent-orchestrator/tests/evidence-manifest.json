@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "record": "attempt",
   "file": "attempts.jsonl",
   "written_by": "agent_orchestrator/evidence.py",
@@ -17,8 +17,9 @@
     "elapsed_seconds": "the seconds between the two, or null when one of them is missing",
     "outcome": "the attempt's final status (COMPLETE, RELEASED, BLOCKED, ...)",
     "claimed": "true when the attempt's report claims a completed, accepted and checked task (the worker's word, not a receipt), false when it does not, null while it is unknown",
-    "counters": "tool_calls, model_calls, tool_loops, retries, interventions and human_rescues; a count that was not measured is null",
-    "tokens": "the input, output and cached token figures, labelled; a figure nobody reported is null",
+    "counters": "tool_calls, model_calls (both summed from the assignments' usage), tool_loops, retries, interventions and human_rescues; a count that was not measured, or that any assignment did not report, is null",
+    "tokens": "the input, output, cached, cache_write and reasoning token figures, labelled, summed over the attempt's assignments; a figure any assignment did not report is null",
+    "cost_usd": "the dollar cost the CLIs reported, summed over the attempt's assignments; null when any assignment did not report it (never computed from a rate)",
     "gates": "the gates the attempt went through and how each ended",
     "checks": "the attempt's own checks, with their outcomes"
   }

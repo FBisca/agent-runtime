@@ -1,10 +1,11 @@
-"""The archive unit, the gaps reviewer, the outcome evidence on the archive head, and the run metrics."""
+"""The archive unit the driver builds itself, the gaps reviewer, the outcome evidence on the archive head, and the run metrics."""
 
 import json
 import unittest
 
+import fake_gh
 import pytest
-from fixtures import assignment, load_script, report_wait, resume_id, spawn_id, wait_result
+from fixtures import load_script, report_wait
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -18,26 +19,6 @@ Paths: src/a/
 - **R3** WHEN e THEN f. (from demo/S3)
 """
 TESTS = "".join('def test_%s():\n    """demo/R%d"""\n\n' % (n, i) for i, n in enumerate("abc", 1))
-
-
-def plan_copies(plan, tree):
-    """The write steps of an archive worker that copied a YAML plan's files byte-identical: the plan, its narrative
-    and its oracle directory, beside the plan in the archive checkout."""
-    if not plan.name.endswith(".plan.yaml"):
-        return []
-    beside = tree / "docs" / "plans"
-    stem = plan.name.removesuffix(".plan.yaml")
-    writes = [[str(beside / plan.name), plan.read_text(encoding="utf-8")]]
-    narrative = plan.with_name(stem + ".plan.md")
-    if narrative.exists():
-        writes.append([str(beside / narrative.name), narrative.read_text(encoding="utf-8")])
-    oracle = plan.with_name(stem + ".oracle")
-    if oracle.is_dir():
-        for child in sorted(oracle.iterdir()):
-            writes.append(
-                [str(beside / oracle.name / child.name), child.read_text(encoding="utf-8")]
-            )
-    return writes
 
 
 class ArchiveFixture(GateFixture):
@@ -56,28 +37,6 @@ class ArchiveFixture(GateFixture):
         )
         return [self.worker_done(tests=True), self.reviewer_done()]
 
-    def archive_done(self, task_id="archive", id=None):
-        """The archive worker copied the plan files byte-identical and reported; the driver placed the oracles."""
-        fix_round = int(task_id.split("r")[-1]) if task_id != "archive" else 0
-        step = report_wait(
-            ARCHIVE,
-            "complete",
-            id=id or (resume_id(ARCHIVE, fix_round) if fix_round else spawn_id(ARCHIVE)),
-        )
-        step["write"] = [
-            [
-                str(self.run_dir / task_id / "report.json"),
-                self.report(task_id, pr="https://github.com/o/r/pull/9"),
-            ]
-        ]
-        step["write"] += plan_copies(self.plan, self.archive_tree)
-        return step
-
-    def gaps_done(self):
-        step = report_wait("demo-gaps", "complete")
-        step["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-        return step
-
 
 class ArchiveTests(ArchiveFixture, unittest.TestCase):
     def test_S15_nothing_archives_while_an_agent_ticket_is_unfinished(self):
@@ -91,7 +50,7 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
 
     def test_S15_a_passing_archive_goes_to_ci_and_merge(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S15"""
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
         task = self.task("archive")
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
@@ -100,35 +59,31 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
             {"https://github.com/o/r/pull/7", "https://github.com/o/r/pull/9"},
         )
         self.assertEqual(self.calls("resume"), [])
+        self.assertNotIn(ARCHIVE, self.spawned())
         self.assertNotIn("demo-archive-review", self.spawned())
 
 
 class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
-    def test_S12_a_conflicting_archive_pr_is_rebased_with_no_review(self):
-        """orchestrator-engine/R34: orchestrator-pr-merge-state/S12"""
-        dirty = {"state": "OPEN", "mergeStateStatus": "DIRTY", "mergeable": "CONFLICTING"}
-        merged = self.ticket_merged()
-        merged_t1 = {
-            "state": "MERGED",
-            "mergeCommit": {"oid": self.git(self.repo, "rev-parse", "HEAD")},
-        }
-        self.prs(
-            [merged_t1, dirty, "MERGED"]
-        )  # T1 merges; the archive PR conflicts once, then merges
-        rebased = self.archive_done("archiver1", id=spawn_id(ARCHIVE, 2))
-        self.waits(merged + [self.archive_done(), self.gaps_done(), rebased])
+    def test_S5_a_conflicting_archive_pr_asks_the_lead_and_spawns_no_worker(self):
+        """orchestrator-engine/R34: the archive has no worker to rebase it."""
+        real = self.gh_process
+
+        def conflicting(argv, timeout=None, cwd=None):
+            # only the archive's PR conflicts: the ticket's PR (7) answers as the fake always does
+            if argv[:3] == ["pr", "view", "https://github.com/o/r/pull/9"]:
+                row = {"state": "OPEN", "isDraft": True, "mergeStateStatus": "DIRTY"}
+                row.update(mergeable="CONFLICTING", mergeCommit=None)
+                return fake_gh.Completed(argv, 0, json.dumps(row))
+            return real(argv, timeout=timeout, cwd=cwd)
+
+        self.gh_process = conflicting
+        self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
         self.run_driver()
-        findings = json.loads(
-            (self.run_dir / "archiver1" / "findings.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(findings["source"], "conflict")
-        archive_pr = "https://github.com/o/r/pull/9"
-        self.assertIn(["pr", "ready", archive_pr, "--undo"], self.gh_calls("pr", "ready"))
-        self.assertEqual(self.spawned().count(ARCHIVE), 2)  # the rebase worker is fresh
-        self.assertNotIn("demo-archive-review", self.spawned())
-        self.assertEqual(self.events("error"), [])
-        task = self.task("archiver1")
-        self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
+        self.assertEqual(self.spawned().count(ARCHIVE), 0)
+        request = self.request("archive")
+        self.assertEqual(request["menu"], ["retry", "skip"])
+        self.assertIn("conflicts with its base", request["reason"])
+        self.assertEqual(self.task("archive")["gate"], "skipped")
 
 
 class MetricsTests(ArchiveFixture, unittest.TestCase):
@@ -141,7 +96,7 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
         worker = self.with_usage(
             self.worker_done(tests=True), {"input_tokens": 100, "output_tokens": 20}
         )
-        self.waits([worker, self.reviewer_done(), self.archive_done(), self.gaps_done()])
+        self.waits([worker, self.reviewer_done()])
         result = self.run_driver()
         metrics = json.loads((self.run_dir / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(metrics["lead"]["model_turns"], 0)
@@ -167,30 +122,12 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual((t1["decider_calls"], t1["escalations"], t1["usage"]), (0, 1, "unknown"))
 
 
-class HeldRequirementTests(ArchiveFixture, unittest.TestCase):
-    def test_S29_the_archive_appends_only_the_scenarios_the_spec_lacks(self):
-        """The archive keeps a requirement a ticket already wrote, and appends the rest."""
-        from test_archive_yaml import commit_spec
-
-        commit_spec(
-            self,
-            "# Demo\nPaths: src/a/\n\n- **R9** WHEN a THEN b. (from demo/S1)\n- **R4** WHEN a. (from other/S1)\n",
-        )
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
-        self.run_driver()
-        task_md = (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("keep as they are: S1 (R9).", task_md)
-        self.assertIn("Every scenario is already in the spec: append none.", task_md)
-        self.assertNotIn("Scenarios, verbatim:", task_md)
-
-
 class PromotionTests(ArchiveFixture, unittest.TestCase):
-    """A YAML plan archives by promotion: the driver places the oracles, the worker writes the spec."""
+    """A YAML plan archives by promotion: the driver places the oracles and writes the spec."""
 
     def archive_run(self):
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver()
-        return (self.run_dir / "archive" / "task.md").read_text(encoding="utf-8")
 
     def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_receipts_and_a_valid_digest(
         self,
@@ -207,24 +144,13 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         check = self.cli("plan", "check", str(self.plan), *argv)
         self.assertEqual(check.returncode, 0, check.stderr + check.stdout)
 
-    def test_S25_the_driver_places_each_promote_oracle_before_the_archive_worker_starts(self):
-        task_md = self.archive_run()
-        oracle = self.plan.parent / "demo.oracle" / "test_oracle.py.oracle"
-        placed = self.archive_tree / "src" / "a" / "test_oracle.py"
-        # The worker's step writes nothing under src/a/, so only the driver can have put the file there.
-        self.assertEqual(placed.read_bytes(), oracle.read_bytes())
-        self.assertIn("Already placed", task_md)
-
-    def test_S25_the_archive_worker_owns_the_spec_the_copied_plan_files_and_the_places(self):
-        task_md = self.archive_run()
-        line = next(line for line in task_md.splitlines() if line.startswith("Owns"))
-        owns = [item.strip() for item in line.split(": ", 1)[1].rstrip(".").split(",")]
-        self.assertEqual(owns[0], "docs/specs/demo.md")
-        self.assertEqual(owns[-1], "src/a/test_oracle.py")
-        self.assertIn("docs/plans/demo.plan.yaml", owns)
-        for needle in ("(from demo/S", "Coverage", "renames no test", "plan.yaml"):
-            self.assertIn(needle, task_md)
-        self.assertNotIn("Place byte-identical", task_md)  # the driver places; the worker does not
+    def test_S25_the_driver_places_each_promote_oracle_in_the_archive_worktree(self):
+        self.archive_run()
+        oracle = (self.plan.parent / "demo.oracle" / "test_oracle.py.oracle").read_text()
+        # the worktree is gone after the merge: the pushed branch is what holds the placed file
+        self.assertEqual(
+            self.git(self.origin, "show", "feat/demo-archive:src/a/test_oracle.py") + "\n", oracle
+        )
 
     def test_S25_the_driver_reruns_outcome_evidence_on_the_archive_head(self):
         self.archive_run()
@@ -270,36 +196,42 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         )
         self.assertEqual(again["state"], "REJECTED")
 
-    def edited(self):
-        step = self.archive_done()
-        step["write"].append(
-            [str(self.archive_tree / "src/a/test_oracle.py"), "def test_o():\n    assert 1\n"]
-        )
-        return step
 
-    def test_S25_an_edited_placed_oracle_is_a_fix_round_not_a_masked_rerun(self):
-        restored = self.archive_done("archiver1", id=resume_id(ARCHIVE, 1))
-        restored["write"].append(
-            [
-                str(self.archive_tree / "src/a/test_oracle.py"),
-                (self.plan.parent / "demo.oracle" / "test_oracle.py.oracle").read_text(
-                    encoding="utf-8"
-                ),
-            ]
-        )
-        self.waits(self.ticket_merged() + [self.edited(), restored, self.gaps_done()])
-        self.run_driver()
-        findings = (self.run_dir / "archiver1" / "findings.json").read_text(encoding="utf-8")
-        self.assertIn("src/a/test_oracle.py", findings)
-        self.assertIn(
-            "S1.archive.1", self.ledger()["receipts"]
-        )  # evidence ran only after the restore
+GAPS = "demo-gaps"
 
-    def test_S25_an_archive_pr_merged_during_a_fix_round_still_archives_the_plan(self):
-        merged = wait_result([assignment(ARCHIVE, "working", None, id=resume_id(ARCHIVE, 1))])
-        merged.setdefault("write", []).append([str(self.home / "view-early.json"), '["MERGED"]'])
-        self.waits(self.ticket_merged() + [self.edited(), merged, self.gaps_done()])
+
+class GapsAfterArchiveTests(ArchiveFixture, unittest.TestCase):
+    def test_S6_before_the_archive_merges_no_gaps_reviewer_exists(self):
+        """orchestrator-engine/R2: deterministic-archive/S6 — the archive PR is closed unmerged, so nothing gaps."""
+        real = self.gh_process
+
+        def closed_archive(argv, timeout=None, cwd=None):
+            if argv[:3] == ["pr", "view", "https://github.com/o/r/pull/9"]:
+                row = {"state": "CLOSED", "isDraft": False, "mergeStateStatus": "UNKNOWN"}
+                row.update(mergeable="UNKNOWN", mergeCommit=None)
+                return fake_gh.Completed(argv, 0, json.dumps(row))
+            return real(argv, timeout=timeout, cwd=cwd)
+
+        self.gh_process = closed_archive
+        self.waits(self.ticket_merged() + [{}, {}, self.decide_step("archive", "skip")])
         self.run_driver()
-        history = [h["state"] for h in self.ledger()["plan"]["history"]]
-        self.assertEqual(history[-2:], ["ACCEPTED", "ARCHIVED"])
-        self.assertEqual(self.events("merged-early")[-1]["unit"], "archive")
+        self.assertNotIn(GAPS, self.spawned())
+        self.assertFalse(self.task("archive").get("merge_commit"))
+
+    def test_S6_once_the_archive_merges_the_gaps_reviewer_starts_and_is_the_only_one(self):
+        """orchestrator-engine/R2: deterministic-archive/S6 — the merged archive spawns the reviewer exactly once."""
+        self.waits(self.ticket_merged())
+        self.run_driver()
+        self.assertEqual(self.task("archive")["gate"], "done")
+        self.assertEqual(self.spawned().count(GAPS), 1)
+
+    def test_S6_the_run_ends_while_the_gaps_reviewer_is_still_open(self):
+        """orchestrator-engine/R2: deterministic-archive/S6 — its assignment stays open in the runtime; the run ends."""
+        held = {"agents": [GAPS]}  # the reviewer holds its assignment open and never reports
+        self.waits(self.ticket_merged() + [held] * 10)  # more waits than the run needs
+        self.run_driver()
+        self.assertEqual(self.spawned().count(GAPS), 1)
+        self.assertEqual(self.task("archive")["gate"], "done")
+        self.assertFalse(self.ledger()["gaps"]["ended"])
+        left = json.loads((self.home / "waits.json").read_text(encoding="utf-8"))
+        self.assertTrue(left, "the run drained every held wait: it waited on gaps")

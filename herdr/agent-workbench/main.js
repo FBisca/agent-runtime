@@ -3,16 +3,17 @@
 // writes nothing. Layout is the model's (model.js); the views only draw what it hands them.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, exec, watchFolder, home, theme, terminals, run, layout, props, shared, setShared } from "herdr";
+import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
-  panelToggle, panelsWith,
+  layoutFor, screenFor, planRows, planSections, ticketLayers, pickTicket, relatives, inspector, planHeader, timelineOf, notice, liveTerminals, runtimeAgents, runtimeNote,
+  panelToggle, panelsWith, panelExpand, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { planList } from "./views/plans.js";
 import { layeredList, compactList } from "./views/tickets.js";
 import { inspectorView } from "./views/inspector.js";
+import { timelineView } from "./views/timeline.js";
 import { runtimeView } from "./views/runtime.js";
 import { noticeView, loadingView } from "./views/notices.js";
 import { toggleView } from "./views/toggle.js";
@@ -20,7 +21,12 @@ import { toggleView } from "./views/toggle.js";
 // The orchestrator's ledger and run directories live under here; a change in any of them is a reason to refresh.
 const STATE_DIR = "/.local/state/orchestrate";
 
+// The panel's width before the expand, kept in the shared state: the tab bar's button is another instance and closes it.
+const RESTORE_PX = "agent-workbench.panel_px";
+
 const activeSpace = () => spaces().find((s) => s.active) ?? null;
+
+const runAll = (commands) => { for (const [command, args] of commands) run(command, args); };
 
 export default class AgentWorkbench extends View {
   init(initial, cx) {
@@ -30,7 +36,8 @@ export default class AgentWorkbench extends View {
     this.data = createData({ exec });
     this.size = null;
     this.drilled = false; // narrow only: the inspector replaces the list
-    this.pickerOpen = false;
+    this.pickerOpen = true; // opens on the list: Needs me, the active plans, older
+    this.olderOpen = false;
     this.ticket = null;
     this.spaceKey = null;
     this.syncSpace();
@@ -62,6 +69,7 @@ export default class AgentWorkbench extends View {
     this.spaceKey = key;
     this.ticket = null;
     this.drilled = false;
+    this.pickerOpen = true;
     this.project = space?.name ?? null;
     this.machine = space?.machine ?? null;
     if (space) this.data.setScope({ folder: space.folder, machine: space.machine });
@@ -71,9 +79,21 @@ export default class AgentWorkbench extends View {
   renderToggle() {
     const missing = panelsWith(shared("workspace.panels"));
     if (missing) setShared("workspace.panels", missing);
-    const toggle = panelToggle(layout());
-    const onToggle = (cx) => { for (const [command, args] of toggle.commands) run(command, args); cx.notify(); };
+    const toggle = panelToggle(herdrLayout(), shared(RESTORE_PX));
+    const onToggle = (cx) => { runAll(toggle.commands); cx.notify(); };
     return toggleView(toggle, { t: theme(), onToggle });
+  }
+
+  // The expand is the header's button: it hides the terminals and gives the panel the work area, and collapses back.
+  expandFor() {
+    const expand = panelExpand(herdrLayout(), shared(RESTORE_PX));
+    if (!expand) return null;
+    const onClick = (cx) => {
+      if (!expand.expanded) setShared(RESTORE_PX, expand.width ?? PANEL_PX);
+      runAll(expand.commands);
+      cx.notify();
+    };
+    return { expanded: expand.expanded, onClick };
   }
 
   render(cx) {
@@ -92,6 +112,7 @@ export default class AgentWorkbench extends View {
       t, project, narrow: layout === "narrow", pickerOpen: this.pickerOpen, loading: state.plans.status === "loading",
       onPicker: (cx) => { this.pickerOpen = !this.pickerOpen; cx.notify(); },
       onRefresh: (cx) => this.fetch(cx),
+      expand: this.expandFor(),
     });
 
     if (state.plans.status === "loading") return root.child(header(null)).child(loadingView("Looking for plans…", t));
@@ -117,7 +138,10 @@ export default class AgentWorkbench extends View {
     root.child(header(head));
     const show = (el) => root.child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar().child(el));
 
-    if (this.pickerOpen || !picked) return show(planList(rows, state.selected, onPick, t));
+    const onOlder = (cx) => { this.olderOpen = !this.olderOpen; cx.notify(); };
+    if (this.pickerOpen || !picked) {
+      return show(planList(planSections(state.plans.value), this.olderOpen, state.selected, { onPick, onOlder }, t));
+    }
     if (!plan || plan.status === "loading") return show(loadingView("Loading " + picked.slug + "…", t));
     if (plan.status === "error") return show(noticeView(notice(plan.error, { plan: picked.slug }), t));
 
@@ -132,12 +156,14 @@ export default class AgentWorkbench extends View {
     const onOpen = (open, cx) => { run(open.command, open.args); cx.notify(); };
     const runtime = runtimeView(runtimeAgents(all, state.loaded, machine), { t, onOpen }, runtimeNote(machine));
     const ctx = { t, selected, kin: relatives(tickets, selected), onSelect: select };
-    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live) : null;
+    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live, plan.value.metrics) : null;
     const screen = screenFor(layout, this.drilled, Boolean(selected));
     if (screen === "inspector") {
       return show(inspectorView(detail, { t, onOpen, onBack: (cx) => { this.drilled = false; cx.notify(); } }));
     }
     if (screen === "list") return show(v_flex().child(compactList(layers, ctx)).child(runtime));
+    const timeline = timelineOf(plan.value.metrics, tickets, layout);
+    if (timeline) root.child(timelineView(timeline, t));
     return root.child(h_flex().id("body").flex_1().min_h(0)
       .child(div().id("layers").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(layeredList(layers, ctx)).child(runtime))
       .child(div().id("detail").w(360).flex_none().h_full().overflow_y_scrollbar().border_l(1).border_color(t.border)
