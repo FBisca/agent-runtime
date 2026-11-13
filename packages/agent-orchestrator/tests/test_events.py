@@ -122,6 +122,10 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(json.loads(metrics_path.read_text(encoding="utf-8")), written)
         self.assertEqual(json.loads(result.stdout), written)
 
+
+class RollupTests(unittest.TestCase):
+    """The rollup and the metrics table are pure: no fixture builds a repository for them."""
+
     @pytest.mark.unit
     def test_S27_the_rollup_counts_events_alone(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
