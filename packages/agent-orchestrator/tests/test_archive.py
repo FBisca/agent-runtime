@@ -228,8 +228,10 @@ class GapsAfterArchiveTests(ArchiveFixture, unittest.TestCase):
     def test_S6_the_run_ends_while_the_gaps_reviewer_is_still_open(self):
         """orchestrator-engine/R2: deterministic-archive/S6 — its assignment stays open in the runtime; the run ends."""
         held = {"agents": [GAPS]}  # the reviewer holds its assignment open and never reports
-        self.waits(self.ticket_merged() + [held, held, held])
+        self.waits(self.ticket_merged() + [held] * 10)  # more waits than the run needs
         self.run_driver()
         self.assertEqual(self.spawned().count(GAPS), 1)
         self.assertEqual(self.task("archive")["gate"], "done")
         self.assertFalse(self.ledger()["gaps"]["ended"])
+        left = json.loads((self.home / "waits.json").read_text(encoding="utf-8"))
+        self.assertTrue(left, "the run drained every held wait: it waited on gaps")
