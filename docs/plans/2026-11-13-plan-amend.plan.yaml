@@ -1,0 +1,313 @@
+schema: plan/1
+slug: plan-amend
+goal: >-
+  An approved plan can change mid-run without stopping its driver: an edit drains the run instead of crashing it,
+  `plan amend` re-approves at the approval's own base and the live driver adopts it, in-flight workers carry on under
+  their new contract, and an agent Lead can drive the whole exchange through typed JSON; a ticket whose Paths could
+  never pass covers is refused before it is built.
+spec: docs/specs/orchestrator-engine.md
+outcome: [S1, S5, S8, S17]
+
+scenarios:
+  # The lint: a ticket covers can never pass is refused before it is built
+  - id: S1
+    when: >-
+      `plan check`, `plan approve` or `plan amend` reads a plan in which an agent-owned ticket satisfies a scenario
+      and none of its `paths` is a directory or a test file
+    then: >-
+      it is refused naming the ticket, the scenarios it satisfies and the way out (add a test file, or a directory
+      that holds its tests, to its `paths`); no approval is written; a person-owned ticket is never linted
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_plan_lint.py -m integration
+        -k "S1 or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_plan_lint.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 600
+  - id: S2
+    when: the lint decides whether a path is a test file
+    then: >-
+      a path is a test file when its file name matches one of the patterns `test_*`, `*_test.*`, `*.test.*`,
+      `*.spec.*`, or one of its directories is `tests`; `.orchestrate/config.yaml` may replace the patterns with
+      `tests.patterns` (a list of file-name globs), and a non-list or empty value is refused naming its dotted path
+  - id: S3
+    when: the driver loads an approved plan that the lint would refuse
+    then: >-
+      the run proceeds as today: the lint runs in `plan check`, `plan approve` and `plan amend` only, never in the
+      driver's load, so a plan approved before the lint keeps running
+
+  # The covers gate points at the way out
+  - id: S4
+    when: >-
+      the covers gate fails a report because the ticket's `paths` hold no test file or directory (the lint's
+      predicate)
+    then: >-
+      the request's reason says the ticket's Paths can hold no test, and its menu's first option is `amend`; the
+      lint and the gate decide it with one shared function
+
+  # Amending a live run
+  - id: S5
+    when: >-
+      while a driver runs, the Lead edits the approved plan (a running ticket's `paths` and a new ticket), then runs
+      `plan amend <plan> --reason <why>`
+    then: >-
+      the same drive drains instead of crashing, records `drain` and wakes the Lead naming `plan amend`; it
+      dispatches the new ticket only after it adopts the amendment (an `amended` event with `prev_digest` and
+      `digest`); the running ticket's worker is resumed, not respawned, on a new packet `task.v2.md` that carries the
+      new paths; the plan's `amendments` list records the entry
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_live_amend.py -m integration
+        -k "S5 or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_live_amend.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 600
+  - id: S6
+    when: '`plan amend` runs on a plan that carries no approval, or is called by a spawned worker'
+    then: >-
+      it is refused and writes nothing: an unapproved plan names `plan approve` as the way out; a worker caller is
+      refused as `plan approve` refuses it, naming the Lead
+  - id: S7
+    when: >-
+      `plan amend` reads an edit that changes or drops a ticket the ledger marks COMPLETE, or changes the `when` or
+      `then` of a scenario a COMPLETE ticket satisfies
+    then: >-
+      it is refused naming each such ticket or scenario and the way out (add a new ticket); an edit to such a
+      scenario's `evidence` is accepted
+  - id: S8
+    when: >-
+      `plan amend` re-approves a plan after a ticket merged that turns a `baseline: pass` check red on `origin/main`
+    then: >-
+      the amendment succeeds: its baselines run at the current approval's `base`, which the new approval keeps, never
+      at `origin/main`; the new digest differs and the `amendments` entry names the previous one; a fresh
+      `plan approve` of the same edit at `origin/main` is still refused
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_amend_base.py -m integration
+        -k "S8 or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_amend_base.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 600
+  - id: S9
+    when: '`plan amend` re-approves a plan whose check evidence items are partly unchanged'
+    then: >-
+      only new or changed items run their baseline (changed: the check, oracle bytes, place, env, timeout or negative
+      differ); each unchanged item's baseline receipt is re-issued under the new digest through the runner's persist
+      path, carrying `carried_from: <previous digest>`, and passes the receipt ledger's tamper check
+  - id: S10
+    when: '`plan amend` succeeds'
+    then: >-
+      it appends to the plan's top-level `amendments` list one entry `{prev_digest, digest, at, by, reason,
+      tickets}` (`tickets`: the IDs whose entry changed or was added) and replaces the `approval` block, both keeping
+      the author's comments; neither `amendments` nor `approval` enters the digest; `by` is the git email, plus the
+      caller's runtime id when an agent ran it
+  - id: S11
+    when: '`plan amend` runs while a driver holds the plan''s run lock'
+    then: >-
+      it does not need that lock: it holds a lock of its own, so a second concurrent `plan amend` is refused naming
+      the holder; it writes the approval snapshot before it replaces the plan file, so a driver reading in between
+      sees either the old approved plan or the new one
+
+  # The driver drains and adopts
+  - id: S12
+    when: >-
+      the live driver reads a plan whose YAML or oracle files differ from its approved snapshot, or whose YAML does
+      not load
+    then: >-
+      it keeps running on the last approved snapshot and drains: it starts no worker attempt (first dispatch, fix
+      round, redo, re-dispatch) while running attempts, reviews, CI watching and the COMPLETE-on-merge bookkeeping go
+      on; it records one `drain` event and one `drain` wake naming the cause (with the load error, if any) and
+      `plan amend`; an edit to the brief alone does not drain
+  - id: S13
+    when: a draining driver next reads the plan
+    then: >-
+      the drain ends when the plan carries a valid approval matching its bytes (an `amended` event with
+      `prev_digest` and `digest`, and the driver now gates against the new contract) or when the file is back to the
+      approved bytes (a `drain` event with state `ended`); a drain has no timeout
+  - id: S14
+    when: >-
+      the driver adopts an amendment that changes the `paths`, `satisfies` or `delivers` of a ticket with an open
+      attempt (working or parked)
+    then: >-
+      it writes the attempt's next packet `task.v<n>.md`, sets the ledger's ownership reservation to the new paths,
+      and resumes the same worker with a message naming that packet and saying its contract changed; a ticket the
+      amendment did not change is left alone
+  - id: S15
+    when: the driver adopts an amendment while a unit is parked `awaiting-amendment` and its ticket did not change
+    then: the same worker is resumed with a message that the amendment was adopted and its contract is unchanged
+
+  # The Lead's channel: typed, and drivable by an agent
+  - id: S16
+    when: the driver writes a request, or reads one written before this change
+    then: >-
+      a new request is contract 3: each menu option is `{action, summary, inputs}`, `inputs` mapping each input name
+      to `{type, required}` (`reason` always, `answer` for `answer`), and `amend` is an option; a contract 2 request
+      with a string menu is still read and decided
+  - id: S17
+    when: >-
+      an agent Lead runs `decide <plan> <unit> --json <file|->` with a decision object, `amend` among the actions
+    then: >-
+      the decision is validated and written exactly as the flag form writes it, stdout is one JSON object naming the
+      action, and a refusal is one JSON object `{error, reason, way_out}` on stderr with exit 2 and nothing written;
+      an `amend` decision parks the unit `awaiting-amendment` with no resume and no new attempt; the flag form keeps
+      working
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_decide_json.py -m integration
+        -k "S17 or control" -q --junitxml="$EEC_JUNIT"
+      oracle: [test_decide_json.py.oracle]
+      place: packages/agent-orchestrator/tests/
+      baseline: fail
+      timeout: 600
+  - id: S18
+    when: a unit is parked `awaiting-amendment`
+    then: >-
+      the idle tick never asks about it, it is not re-dispatched or reconciled as orphaned, and a run whose only
+      remaining units are parked this way ends as a run with only parked units ends
+
+  # Re-dispatch keeps the route
+  - id: S19
+    when: >-
+      the driver starts a new attempt of a unit that already had one: an orphan re-dispatch, a reserved attempt, or a
+      reopened parked unit
+    then: >-
+      the attempt's class is the higher of the unit's last attempt's class and the one the routes compute now, with
+      that class's model and effort; it is never lower than the last attempt's
+  - id: S20
+    when: a Lead follows the orchestrate skill and the plan must change mid-run
+    then: >-
+      the skill's Gate tells it to edit the plan and run `plan amend --reason` with the user's yes, without stopping
+      the driver, and its pause section lists `amend` and `decide --json`
+    evidence:
+      human: >-
+        Felippe reads agent-skills skills/orchestrate/SKILL.md and confirms its Gate names `plan amend --reason` with
+        the user's yes and no driver stop, and its pause section lists `amend` and `decide --json`
+
+tickets:
+  - id: T1
+    delivers: >-
+      `plan check`, `plan approve` (and later `plan amend`) refuse an agent ticket whose Paths can hold no test, with
+      default test patterns and `tests.patterns` in the repo config; the driver's load is not linted
+    satisfies: [S1, S2, S3]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/config.py
+      - packages/agent-orchestrator/tests/test_plan_lint_rules.py
+      - packages/agent-orchestrator/tests/test_config.py
+      - packages/agent-orchestrator/tests/test_verify.py
+    size: regular
+    difficulty: simple
+  - id: T2
+    delivers: >-
+      `plan amend <plan> --reason`: re-approval at the approval's own base under its own lock, the frozen-ticket
+      refusal, the `amendments` history, and the refusals for an unapproved plan and a worker caller
+    satisfies: [S6, S7, S8, S10, S11]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_plan_amend.py
+      - packages/agent-orchestrator/tests/test_plan.py
+      - packages/agent-orchestrator/tests/test_run_lock.py
+    size: regular
+    difficulty: complex
+    risk: [state, concurrency]
+    blocked_by: [T1]
+  - id: T3
+    delivers: >-
+      `plan amend` re-runs only new or changed baselines and re-issues the unchanged items' receipts under the new
+      digest with `carried_from`
+    satisfies: [S9]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/src/agent_orchestrator/runner.py
+      - packages/agent-orchestrator/src/agent_orchestrator/verify.py
+      - packages/agent-orchestrator/tests/test_amend_receipts.py
+    size: regular
+    difficulty: complex
+    risk: [state]
+    evidence_waiver: >-
+      the receipt carry-over is verified by test_amend_receipts.py against the runner's real persist path and the
+      receipt ledger's tamper check (R32), and verify's receipt-digest rule is exercised by the S8 evidence run
+    blocked_by: [T2]
+  - id: T4
+    delivers: >-
+      the live driver drains on an edited or unloadable plan, adopts an amendment on its next read, and resumes each
+      in-flight worker whose contract changed on its next packet
+    satisfies: [S5, S12, S13, S14]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/events.py
+      - packages/agent-orchestrator/tests/test_drain.py
+      - packages/agent-orchestrator/tests/test_run.py
+    size: regular
+    difficulty: complex
+    risk: [concurrency, state]
+    blocked_by: [T2]
+  - id: T5
+    delivers: >-
+      request and decision contract 3 with typed menu options and `amend`, `decide --json` for agent Leads, and the
+      `awaiting-amendment` park that the driver releases on adoption
+    satisfies: [S15, S16, S17, S18]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/contracts.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_decide_contract.py
+      - packages/agent-orchestrator/tests/test_contracts.py
+      - packages/agent-orchestrator/tests/test_wake.py
+      - packages/agent-orchestrator/tests/test_archive.py
+      - packages/agent-orchestrator/tests/test_archive_driver.py
+    size: regular
+    difficulty: complex
+    risk: [state]
+    blocked_by: [T4]
+  - id: T6
+    delivers: >-
+      a covers failure caused by Paths that can hold no test says so in its request and leads the menu with `amend`
+    satisfies: [S4]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/verify.py
+      - packages/agent-orchestrator/tests/test_gates.py
+    size: small
+    difficulty: simple
+    blocked_by: [T1, T5]
+  - id: T7
+    delivers: >-
+      every re-dispatch path keeps the unit's last route, never lower than its last attempt's class
+    satisfies: [S19]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_route_redispatch.py
+    size: small
+    difficulty: simple
+  - id: T8
+    delivers: >-
+      the orchestrate skill's Gate and pause sections point at `plan amend` and `decide --json`
+    satisfies: [S20]
+    paths: [skills/orchestrate/SKILL.md]
+    owner: fbisca
+    repo: ../agent-skills
+    blocked_by: [T4, T5]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-13T17:29:57.617935+00:00'
+  base: 970b3f829cf1f459dbbc48bdb6c82d0d15f4c6ff
+  digest: e16aff16cae3bc44aabd9339690a3d64303960e5da8113242760d09c124ce62b
+amendments:
+- prev_digest: fe2850e1a116b3468dea5c5096ff46c0573f05545d43726f16c72b973ad15b34
+  digest: 3cfd190335b6e11f3766fee99d6932ffcd4df3593e021cdc7bacc423fcb2ecef
+  at: '2026-11-13T12:39:14.757200+00:00'
+  by: felippe.bisca@gmail.com (t28q)
+  reason: '#235 renamed RunFixture.events to run_events; the S5 oracle reads events.jsonl
+    itself so it collects on both sides of the rename'
+  tickets: []
+- prev_digest: 3cfd190335b6e11f3766fee99d6932ffcd4df3593e021cdc7bacc423fcb2ecef
+  digest: e16aff16cae3bc44aabd9339690a3d64303960e5da8113242760d09c124ce62b
+  at: '2026-11-13T17:29:57.617935+00:00'
+  by: felippe.bisca@gmail.com (t28q)
+  reason: 'S20 is skill text in agent-skills: no test node can prove it, so a person
+    confirms it (human evidence); the archive asked for a node'
+  tickets: []
