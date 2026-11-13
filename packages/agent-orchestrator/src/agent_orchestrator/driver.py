@@ -21,6 +21,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 from . import config as repo_config
@@ -1224,7 +1225,7 @@ class Driver:
             self.resume_plan_state(
                 data
             )  # a ticket the amendment added reopens a plan that had delivered
-        self.release_amendment(self.resume_changed(held, plan))
+        self.release_amendment(self.resume_changed(held, plan), plan)
 
     def resume_changed(self, held, plan):
         """Each open attempt (working or parked) whose ticket's `paths`, `satisfies` or `delivers` the amendment
@@ -1353,18 +1354,51 @@ class Driver:
         )
         return True
 
-    def release_amendment(self, handed):
-        """The driver adopted an amendment: every unit parked `awaiting-amendment` goes on. A unit whose ticket the
-        amendment changed was handed its new packet (`handed`: task id -> whether its worker was told, None when that
-        failed, by `resume_changed`); any other is resumed with a
-        message that the amendment was adopted and its contract is unchanged. A worker that cannot be told is not
-        released: the Lead is woken, and the unit stays parked."""
+    def hand_amendment(self, task_id, task, row, plan):
+        """Tell a parked unit's worker the amendment was adopted: its next packet when its ticket's contract differs
+        from the packet it holds, else a message that the contract is unchanged. True when a live worker was told."""
+        packet, unit = task["packet"], task["packet"]["unit"]
+        scenarios = [plan["scenarios"][sid] for sid in satisfied(row, plan["scenarios"])[0]]
+        fields = self.contract_fields(row, scenarios)
+        if any(packet.get(key) != fields[key] for key in ("objective", "owns", "acceptance")):
+            old = SimpleNamespace(
+                paths=packet["owns"],
+                satisfies=[line.split(":")[0] for line in packet["acceptance"]],
+                delivers=packet["objective"],
+            )
+            new = SimpleNamespace(
+                paths=fields["owns"],
+                satisfies=[line.split(":")[0] for line in fields["acceptance"]],
+                delivers=fields["objective"],
+            )
+            return self.next_packet(task_id, task, row, plan, old, new)
+        report = next_path(self.run_dir / task_id, "report", ".json")[0]
+        return self.resume_worker(
+            task_id,
+            packet,
+            "The plan was amended and the amendment was adopted (%s); your contract is unchanged. Read %s and "
+            "carry on with this task, in this checkout. Report with task_id `%s` to %s (files are write-once; an "
+            "earlier report stays where it is)."
+            % (self.approved_digest()[:12], self.run_dir / unit / "task.md", task_id, report),
+        )
+
+    def release_amendment(self, handed, plan):
+        """The run holds an approval other than the one a unit parked `awaiting-amendment` under (an amendment was
+        adopted, or the run was restarted on an amended plan): the unit goes on. A unit whose ticket the amendment
+        changed was handed its new packet (`handed`: task id -> whether its worker was told, None when that failed, by
+        `resume_changed`); any other unit is compared with its ticket here, since a restarted run holds no earlier
+        plan to compare. A unit whose contract is unchanged is resumed with a message that the amendment was adopted. A
+        worker that cannot be told is not released: the Lead is woken, and the unit stays parked."""
+        digest = self.approval.digest if self.approval else None
         with self.book() as data:
             parked = [
                 (task_id, copy.deepcopy(task))
                 for task_id, task in data["tasks"].items()
-                if task.get("gate") == AMENDING and task["status"] not in ("COMPLETE", "RELEASED")
+                if task.get("gate") == AMENDING
+                and task["status"] not in ("COMPLETE", "RELEASED")
+                and task.get("amend_from") != digest
             ]
+        rows = {t["#"].lower(): t for t in plan["tickets"]}
         for task_id, task in parked:
             unit, packet = task["packet"]["unit"], task["packet"]
             if task_id in handed:
@@ -1372,21 +1406,10 @@ class Driver:
                 if alive is None:
                     continue
             else:
-                report = next_path(self.run_dir / task_id, "report", ".json")[0]
                 try:
-                    alive = self.resume_worker(
-                        task_id,
-                        packet,
-                        "The plan was amended and the amendment was adopted (%s); your contract is unchanged. "
-                        "Read %s and carry on with this task, in this checkout. Report with task_id `%s` to %s "
-                        "(files are write-once; an earlier report stays where it is)."
-                        % (
-                            self.approved_digest()[:12],
-                            self.run_dir / unit / "task.md",
-                            task_id,
-                            report,
-                        ),
-                    )
+                    if unit not in rows:
+                        raise ValueError("its ticket is no longer in the plan")
+                    alive = self.hand_amendment(task_id, task, rows[unit], plan)
                 except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                     self.log("error", unit=unit, task=task_id, gate="amend", error=str(error)[:500])
                     self.wake(
@@ -1510,6 +1533,8 @@ class Driver:
             max_workers=self.args.max_workers,
             route_source=self.route_source or "legacy",
         )
+        # A unit parked for an amendment by a run that ended: the plan may have been amended since.
+        self.release_amendment({}, plan)
 
     def loop(self):
         idle = False
@@ -4568,7 +4593,13 @@ class Driver:
         Lead edits the plan and runs `plan amend`; the adopted amendment releases the unit (`release_amendment`)."""
         unit, name = task["packet"]["unit"], task["packet"]["worker"]
         with self.book() as data:
-            data["tasks"][task_id].update(gate=AMENDING, updated_at=now(), held=[])
+            # the digest it parked under: a park outlives the run, and any later approval releases it
+            data["tasks"][task_id].update(
+                gate=AMENDING,
+                updated_at=now(),
+                held=[],
+                amend_from=self.approval.digest if self.approval else None,
+            )
         for message in task.get("held") or []:
             self.log("held-dropped", unit=unit, task=task_id, held=message["kind"], why="amend")
         self.write_status(unit.upper(), "IN PROGRESS · awaiting amendment: " + cell(reason))
@@ -6556,9 +6587,7 @@ class Driver:
             parked = [
                 (task_id, copy.deepcopy(task))
                 for task_id, task in data["tasks"].items()
-                if task.get("gate") in PARKED
-                and task.get("gate") != AMENDING  # it waits for the amendment, not for a Status
-                and task["status"] not in ("COMPLETE", "RELEASED")
+                if task.get("gate") in PARKED and task["status"] not in ("COMPLETE", "RELEASED")
             ]
         count = 0
         for task_id, task in parked:

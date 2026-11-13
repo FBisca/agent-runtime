@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 from agent_orchestrator import contracts
-from fixtures import ROWS, assignment, wait_result
+from fixtures import DRIVER, ROWS, assignment, wait_result
 from test_drain import DrainFixture
 from test_wake import WakeFixture
 
@@ -311,3 +311,68 @@ class OnlyParked(WakeFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.task()["gate"], "blocked")
         self.assertEqual([e["kind"] for e in self.run_events("finish", "crash")], ["finish"])
+
+
+class RestartAfterAmend(DrainFixture, WakeFixture, unittest.TestCase):
+    """The run that parked a unit ends (only parked units are left); the Lead amends the plan with no driver running;
+    a new `run` of the plan goes on with the unit."""
+
+    rows = ("T1",)
+
+    def park_and_end(self):
+        self.waits(
+            [self.blocked(), self.decide_step("t1", "amend", "T1 needs a test path"), wait_result()]
+        )
+        self.run_driver()
+        self.assertEqual(self.task()["gate"], "awaiting-amendment")
+        self.assertEqual([e["kind"] for e in self.run_events("finish", "crash")], ["finish"])
+
+    def amend_now(self, change):
+        self.plan.write_text(self.edit(change), encoding="utf-8")
+        amended = self.cli(*self.amend_argv()[len(DRIVER) :])
+        self.assertEqual(amended.returncode, 0, amended.stderr)
+
+    def restart(self):
+        self.waits([wait_result(), wait_result()])
+        self.run_driver()
+
+    def test_S15_a_new_run_resumes_the_worker_parked_by_a_run_that_ended(self):
+        self.park_and_end()
+        self.amend_now(lambda data: data.update(goal="deliver, with the amended contract"))
+        self.restart()
+        resumed = [
+            r["args"]["task"] for r in self.calls("resume") if r["args"]["name"] == "demo-t1"
+        ]
+        self.assertEqual(len(resumed), 1, resumed)
+        self.assertIn("amendment was adopted", resumed[0])
+        self.assertIn("contract is unchanged", resumed[0])
+        task = self.task()
+        self.assertEqual((task["gate"], task["status"]), (None, "ACTIVE"))
+        self.assertEqual(self.spawned().count("demo-t1"), 1, "the same worker, not a new one")
+        self.assertEqual(len(self.run_events("amend-released")), 1)
+
+    def test_S15_a_new_run_hands_the_parked_worker_the_packet_its_changed_ticket_needs(self):
+        self.park_and_end()
+        self.amend_now(lambda data: data["tickets"][0].update(paths=["src/a/", "tests/test_a.py"]))
+        self.restart()
+        resumed = [
+            r["args"]["task"] for r in self.calls("resume") if r["args"]["name"] == "demo-t1"
+        ]
+        self.assertEqual(len(resumed), 1, resumed)
+        self.assertIn("task.v2.md", resumed[0])
+        self.assertIn("tests/test_a.py", (self.run_dir / "t1" / "task.v2.md").read_text("utf-8"))
+        self.assertIn("tests/test_a.py", self.task()["packet"]["owns"])
+        self.assertEqual(self.task()["gate"], None)
+
+    def test_S15_a_new_run_with_no_amendment_leaves_the_unit_parked(self):
+        self.park_and_end()
+        self.restart()
+        self.assertEqual(self.calls("resume"), [])
+        self.assertEqual(self.task()["gate"], "awaiting-amendment")
+
+    def test_S18_a_unit_parked_for_an_amendment_reopens_when_its_status_is_set_to_todo(self):
+        self.park_and_end()
+        self.reset_status("IN PROGRESS", "TO-DO")
+        self.restart()
+        self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RELEASED")
+        self.assertEqual(self.spawned().count("demo-t1"), 2, "a fresh attempt of the unit")
