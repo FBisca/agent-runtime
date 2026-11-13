@@ -66,6 +66,13 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         )
         return str(path)
 
+    def restarts(self, *args):
+        """The same command again. The fake worker never reports, so the restart ends stranded (exit 1): what
+        it must not do is stop on its routes, which is exit 2 before any worker."""
+        result = self.run_driver(*args, expect=1)
+        self.assertNotIn("cannot resume", result.stderr)
+        self.assertIn("stranded", result.stderr)
+
     def worker(self, name="demo-t1"):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}[name]
 
@@ -256,6 +263,50 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.seed()
         path = self.routes_file(route("small", "gemini", "x"))
         self.refused("--routes-file", path, mention=("gemini",))
+
+    def test_S3_a_legacy_run_with_a_brain_backend_restarts_with_the_same_command(self):
+        """orchestrator-engine/R90: S3 — the table answered the brain's models, so the record carries them."""
+        self.run_driver("--brain-cli", "codex")
+        record = self.ledger()["routes"]
+        self.assertEqual(record["brain_cli"], "codex")
+        self.assertEqual(
+            {name: (step["backend"], step["model"]) for name, step in record["steps"].items()},
+            {"reviewer": ("codex", "gpt-m"), "gaps": ("codex", "gpt-m")},
+        )
+        self.restarts("--brain-cli", "codex")
+        self.assertEqual(self.ledger()["routes"], record)
+
+    def test_S3_a_legacy_run_with_a_brain_backend_restarts_without_the_flag(self):
+        """orchestrator-engine/R90: S3 — an omitted --brain-cli is not a conflict; the record answers."""
+        self.run_driver("--brain-cli", "codex")
+        self.restarts()
+
+    def test_S3_a_record_that_cannot_route_its_gates_takes_the_steps_the_argument_adds(self):
+        """orchestrator-engine/R90: S3 — the refusal's way out: --step names the gates, the record keeps them."""
+        record = recorded(cli="claude", medium=("claude", "sonnet", None))
+        record["brain_cli"] = "codex"
+        self.seed(record)
+        self.refused("--brain-cli", "codex", mention=("--step", "reviewer"))
+        self.run_driver(
+            "--step",
+            "reviewer=codex/gpt-m",
+            "--step",
+            "gaps=codex/gpt-m@high",
+            "--brain-cli",
+            "codex",
+        )
+        steps = self.ledger()["routes"]["steps"]
+        self.assertEqual(steps["reviewer"]["model"], "gpt-m")
+        self.assertEqual(steps["gaps"]["effort"], "high")
+
+    def test_S3_a_step_argument_may_not_replace_a_step_while_adding_the_missing_ones(self):
+        """orchestrator-engine/R90: S3 — only a step the record lacks is added; a recorded one still conflicts."""
+        record = recorded(cli="claude", steps={"reviewer": ("codex", "gpt-l", "xhigh")})
+        record["brain_cli"] = "codex"
+        self.seed(record)
+        self.refused(
+            "--step", "reviewer=codex/gpt-m", "--step", "gaps=codex/gpt-m", mention=("reviewer",)
+        )
 
 
 if __name__ == "__main__":

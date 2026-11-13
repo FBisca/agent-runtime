@@ -1090,6 +1090,7 @@ class Driver:
             self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
         pinned = self.recorded_routes()
+        self.added_steps = {}
         if pinned:
             self.pin_routes(pinned)
         else:
@@ -1127,6 +1128,10 @@ class Driver:
                     self.step_routes,
                     cli=self.args.cli,
                     brain_cli=self.brain_cli,
+                )
+            elif self.added_steps:  # steps the record lacked, given by the command line
+                data["routes"]["steps"].update(
+                    routes.record(self.routes, "", None, self.added_steps)["steps"]
                 )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
             # the ledger owns the plan's state; the plan file is never written
@@ -3462,6 +3467,15 @@ class Driver:
             classes = routes.apply_overrides(resolved, chosen)
             steps = routes.apply_step_overrides({s.step: s for s in config.steps}, chosen_steps)
             dropped = sorted(set(pinned.steps) - set(steps))
+        # A record whose gates cannot be routed (its medium route is not on the brain backend and it names no step
+        # for them) takes the gate steps the command line adds: that is the way out the refusal below names.
+        brain = self.brain_cli or pinned.brain_cli
+        gates = (
+            [s for s in ("reviewer", "gaps") if s not in pinned.steps]
+            if brain and pinned.classes["medium"].backend != brain
+            else []
+        )
+        added = {name: steps.pop(name) for name in gates if name in steps}
         found = routes.conflicts(
             pinned, classes, steps, cli=args.cli, brain_cli=self.brain_cli, via=via
         )
@@ -3478,7 +3492,8 @@ class Driver:
             )
         args.cli = args.cli or pinned.cli
         self.brain_cli = self.brain_cli or pinned.brain_cli
-        self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps)
+        self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps) | added
+        self.added_steps = added
         self.routes_file, self.route_source = pinned.path, pinned.source
         self.models, self.brain_models = {}, {}
         if self.brain_cli:
@@ -3511,6 +3526,14 @@ class Driver:
         if not path:
             narrate.say("warn", "setup", routes.legacy_warning(self.args.models_file))
             resolved = routes.legacy(self.args.cli, self.models)
+            if self.brain_cli:
+                # The table answers the gates on the brain backend's own column. Recording that as step routes
+                # keeps the record complete: a restart need not read the table again to route the gates.
+                medium = self.brain_models["medium"]
+                steps = {
+                    step: routes.StepRoute(step, self.brain_cli, medium)
+                    for step in ("reviewer", "gaps")
+                }
         else:
             try:
                 config = routes.load(path)
