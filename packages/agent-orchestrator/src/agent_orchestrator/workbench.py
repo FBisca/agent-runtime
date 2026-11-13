@@ -4,16 +4,19 @@ Both commands are read-only: they take no lock, import no old ledger and create 
 may run them beside a live driver. Every answer is one JSON object with `schema_version`; a refusal is one too, with
 an `error` that names its kind and the way out. A count, token or duration nothing measured is null, never 0.
 
+`workbench totals` sums the last seven days of every plan (see `workbench_totals`).
+
 The driver owns the ledger and the state layout, and imports this module; the helpers it owns are imported late.
 """
 
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import evidence, verify, workbench_needs
+from . import evidence, verify, workbench_needs, workbench_totals
 from . import plan as yaml_plan
 from . import workbench_metrics as metrics
 from .plan import DiscoveryError, PlanError
@@ -225,6 +228,59 @@ def plans(args):
         "plans": [shown for shown, _ in rows],
         "needs_me": [item for _, items in rows for item in items],
     }
+
+
+def now():
+    return datetime.now(timezone.utc)
+
+
+def totals_source(entry, repo, args):
+    """The totals' inputs for one plan file, or None for a Markdown plan (never run). A plan that no longer loads (an
+    archived one whose acceptance files were promoted away) is still read: its ledger names its tickets."""
+    from . import driver
+
+    if entry["format"] == "markdown":
+        return None
+    path = Path(entry["path"])
+    try:
+        status = approved_view(path, repo, args)[2]
+    except (PlanError, ValueError, KeyError, OSError):
+        status = None
+    if status:
+        ledger, run_dir = Path(status["ledger"]), Path(status["run_dir"])
+        ids = [t["id"] for t in status["tickets"]]
+        slug = status["slug"]
+    else:
+        slug = entry["slug"]
+        ledger, run_dir = driver.locate_state(args.state_dir, path, repo, slug)
+        ids = []
+    data = {}
+    if ledger.is_file():
+        try:
+            data = driver.read_ledger_file(ledger)
+        except (PlanError, ValueError, OSError):
+            data = {}
+    if not ids:
+        ids = list((data.get("ticket_status") or {}))
+    return workbench_totals.Source(slug, run_dir, ids, data.get("tasks"))
+
+
+def totals(args):
+    """`workbench totals [path] [--repo R]`: the last seven days of the repository's plans, summed for the home cards
+    and each card's dashboard. Reads the plans' ledgers and logs and writes nothing."""
+    repo = repository_of(args, args.path)
+    try:
+        found = without_twins(yaml_plan.discover(repo, args.path))
+    except DiscoveryError as error:
+        raise refusal(error, "totals") from None
+    if not found:
+        raise WorkbenchError(
+            "no_plans",
+            "no plan files in %s" % repo,
+            "pass an explicit plan path or --repo R, or write a plan with /start-planning",
+        )
+    sources = [s for s in (totals_source(entry, repo, args) for entry in found) if s]
+    return {**workbench_totals.totals(sources, now()), "repo": str(repo)}
 
 
 def layers_of(tickets):
@@ -630,4 +686,6 @@ def run(args):
     """The answer of a `workbench` command, or a WorkbenchError."""
     if args.workbench_command == "plans":
         return plans(args)
+    if args.workbench_command == "totals":
+        return totals(args)
     return plan(args)

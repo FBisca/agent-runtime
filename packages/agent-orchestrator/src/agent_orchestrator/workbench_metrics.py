@@ -5,27 +5,31 @@ live run from it. Every figure here is a pure function of the lines on disk. A f
 0; an open phase has a null end and a null duration.
 
 Phases come from a unit's gate transitions: `work` runs from the unit's first RESERVED to `reported`, `review` from
-`reviewing` until the gate leaves it, `ci` from `ready-for-ci` until the gate leaves it. Wall time sums each drive
+`reviewing` until the gate leaves it, `ci` from `ready-for-ci` until the gate leaves it and `merge` from
+`awaiting-merge` until the gate leaves it: the driver leaves it for cleanup when it sees the merge, so that wait is the
+person's time and ends at the merge. A ticket is merged when its gate first reaches `cleanup` (or `done`). Wall time sums each drive
 (`start` to its `finish`, else its last event): the driver is sometimes down for an hour, and that hour is nobody's
 time. Stdlib only.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import events, evidence
 
 LAST_ERROR_LIMIT = 120
-PHASES = ("work", "review", "ci")
+PHASES = ("work", "review", "ci", "merge")
 
 
 def moment(row):
-    """The row's `at` as a datetime, or None when it is missing or unreadable."""
+    """The row's `at` as a datetime (UTC when it names no zone, so two rows always compare), or None when it is missing
+    or unreadable."""
     try:
-        return datetime.fromisoformat(row["at"])
+        when = datetime.fromisoformat(row["at"])
     except (KeyError, TypeError, ValueError):
         return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
 def seconds(start, end):
@@ -102,6 +106,8 @@ class Lane:
         self.first = None
         self.last = None
         self.done = None
+        self.dispatched = None
+        self.merged = None
         self.model = None
         self.fix_tasks = set()
         self.reviews = 0
@@ -127,6 +133,7 @@ class Lane:
         status = (list(row.get("status") or [None, None]) + [None, None])[:2]
         if status[1] == "RESERVED":
             self.begin("work", when)
+            self.dispatched = self.dispatched or when
         if new == "reported":
             self.close("work", when)
         if new == "reviewing" and old != "reviewing":
@@ -138,6 +145,12 @@ class Lane:
             self.begin("ci", when)
         if old == "ready-for-ci" and new != "ready-for-ci":
             self.close("ci", when)
+        if new == "awaiting-merge" and old != "awaiting-merge":
+            self.begin("merge", when)
+        if old == "awaiting-merge" and new != "awaiting-merge":
+            self.close("merge", when)
+        if new in ("cleanup", "done") and self.merged is None:
+            self.merged = when
         if new == "done" and self.done is None:
             self.done = when
         route = row.get("route")
@@ -193,12 +206,20 @@ def errors_of(rows):
     return {"by_gate": dict(sorted(by_gate.items())), "last": last}
 
 
+def stamp(when):
+    return when.isoformat() if when else None
+
+
 def compute(run_dir, ticket_ids):
     """The metrics of the run in `run_dir` for the plan's tickets, or None when the run has no events."""
     rows = events.read(Path(run_dir) / "events.jsonl")
     if not rows:
         return None
-    attempts = evidence.read(Path(run_dir) / "attempts.jsonl")
+    return compute_rows(rows, evidence.read(Path(run_dir) / "attempts.jsonl"), ticket_ids)
+
+
+def compute_rows(rows, attempts, ticket_ids):
+    """The same metrics from a log already read (`rows`, not empty) and the run's attempt records."""
     drives = drives_of(rows)
     stamps = [t for t in map(moment, rows) if t]
     run_start = drives[0][0] if drives else (min(stamps) if stamps else None)
@@ -219,6 +240,8 @@ def compute(run_dir, ticket_ids):
             elapsed = seconds(lane.first, end)
         tickets[ticket] = {
             "elapsed_seconds": elapsed,
+            "dispatched_at": stamp(lane.dispatched),
+            "merged_at": stamp(lane.merged),
             "phases": lane.phases(),
             "fix_rounds": len(lane.fix_tasks),
             "review_rounds": lane.reviews,

@@ -93,6 +93,17 @@ def test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address():
     scenario("S16", 6)
 
 
+def test_S7_home_gives_the_cards_needs_me_per_plan_the_active_plans_with_workers_the_prs_and_the_older_count():
+    scenario("S7", 7)
+
+
+def test_S8_the_mod_opens_on_home_a_plan_or_a_card_opens_over_it_and_back_returns_home():
+    scenario("S8", 4)
+    assert not (MOD / "views" / "plans.js").exists(), "there is no plan picker"
+    assert "pickPlan" not in source("model.js")
+    assert "pickerOpen" not in source("main.js")
+
+
 def test_S9_a_plans_header_is_a_way_back_its_name_and_its_whole_goal():
     scenario("S9", 1)
 

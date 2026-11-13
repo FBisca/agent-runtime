@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  readPlans, readPlan, planRows, pickPlan, ticketLayers, inspector, relatives, planHeader,
+  readPlans, readPlan, planRows, ticketLayers, inspector, relatives, planHeader,
   layoutFor, screenFor, compactRow, notice, pickTicket, NARROW_BELOW, planSections,
 } from "../model.js";
-import { PLANS, PLAN, WORKBENCH_PATH, SECOND_PATH, BROKEN_PATH, ok, refusal } from "./fixtures.js";
+import { PLANS, PLAN, WORKBENCH_PATH, SECOND_PATH, ok, refusal } from "./fixtures.js";
 
 const rows = () => planRows(readPlans(ok(PLANS)).value.plans);
 
@@ -19,15 +19,6 @@ test("S12 plans list YAML with state and progress and Markdown marked legacy, ac
   const legacy = list[3];
   assert.equal(legacy.legacy, true);
   assert.equal(legacy.selectable, false, "a Markdown plan has no graph to open");
-});
-
-test("S12 the first runnable YAML plan is selected unless the person picked one that is still listed", () => {
-  const list = rows();
-  assert.equal(pickPlan(list, null), WORKBENCH_PATH);
-  assert.equal(pickPlan(list, SECOND_PATH), SECOND_PATH);
-  assert.equal(pickPlan(list, "/gone.plan.yaml"), WORKBENCH_PATH);
-  assert.equal(pickPlan([], null), null);
-  assert.equal(pickPlan(planRows([PLANS.plans[3]]), null), null, "only a legacy plan: nothing to open");
 });
 
 test("S12 tickets are grouped into layers in the answer's order, each with blocked-by chips that carry the blocker's state", () => {
@@ -130,7 +121,6 @@ test("S13 a plan that does not load is a row with its error; the other plans sta
   assert.equal(broken.progress, null, "null counts are not zero progress");
   assert.equal(broken.selectable, true, "its error is shown in place when it is selected");
   assert.equal(list.filter((r) => r.selectable && !r.error).length, 2);
-  assert.equal(pickPlan(list, BROKEN_PATH), BROKEN_PATH);
 });
 
 test("S14 below the threshold the mod is narrow, at it and above (or before it is measured) it is wide", () => {
