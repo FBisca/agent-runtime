@@ -64,8 +64,8 @@ def covered(start, end, drives):
 
 
 def tokens_of(records):
-    """The summed input/output/cached figures of a unit's attempt records, a label nobody measured None; None when
-    no label was measured."""
+    """The summed token figures of a unit's attempt records, one per `evidence.TOKEN_KEYS` label, a label nobody
+    measured None; None when no label was measured."""
     counted = dict.fromkeys(evidence.TOKEN_KEYS)
     for record in records:
         for label in counted:
