@@ -256,7 +256,7 @@ class NativeChildGuardTests(unittest.TestCase):
 
 class RawHcTests(unittest.TestCase):
     def test_S17_mutating_hc_is_denied_for_every_caller(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """agent-runtime-tools/S17"""
         for sub in ("run --bg x", "send w hi", "kill w", "rm w", "file write f", "file edit f"):
             for extra in ({}, {"agent_id": "sub-1"}):
                 out = run(PRE, bash("hc " + sub, **extra))
@@ -264,7 +264,7 @@ class RawHcTests(unittest.TestCase):
                 self.assertIn(DENY_TEXT, out["hookSpecificOutput"]["permissionDecisionReason"])
 
     def test_S17_keys_and_interrupt_ask_the_main_agent_and_deny_subagents(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """agent-runtime-tools/S17"""
         for sub in ("keys w enter", "interrupt w"):
             out = run(PRE, bash("hc " + sub))["hookSpecificOutput"]
             self.assertEqual(out["permissionDecision"], "ask", sub)
@@ -276,7 +276,7 @@ class RawHcTests(unittest.TestCase):
         self.assertTrue(denied(run(PRE, bash("hc keys w enter; hc kill w"))))
 
     def test_S17_command_substitutions_are_inspected(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """agent-runtime-tools/S17"""
         for command in (
             "echo `hc kill w`",
             'echo "$(hc send w hi)"',
@@ -288,14 +288,14 @@ class RawHcTests(unittest.TestCase):
         self.assertIsNone(run(PRE, bash("echo $(hc get w) `hc ls`")))
 
     def test_S17_unparseable_or_non_string_commands_mentioning_hc_are_denied(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """agent-runtime-tools/S17"""
         for command in ("hc send w 'unterminated", ["hc", "kill", "w"], {"cmd": "hc kill w"}):
             self.assertTrue(denied(run(PRE, bash(command))), command)
         self.assertIsNone(run(PRE, bash("echo 'unterminated")))
         self.assertIsNone(run(PRE, bash(["ls"])))
 
     def test_S17_reads_stay_allowed(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """agent-runtime-tools/S17"""
         for command in (
             "hc get w",
             "hc ls",
@@ -309,7 +309,7 @@ class RawHcTests(unittest.TestCase):
             self.assertIsNone(run(PRE, bash(command)), command)
 
     def test_S17_wrapped_and_nested_forms_are_denied(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """agent-runtime-tools/S17"""
         for command in (
             "FOO=1 hc send w hi",
             "timeout 5 hc kill w",
@@ -329,7 +329,7 @@ class RawHcTests(unittest.TestCase):
             self.assertTrue(denied(run(PRE, bash(command))), command)
 
     def test_S17_codex_payload_is_supported_and_ignores_other_tools(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """agent-runtime-tools/S17"""
         self.assertTrue(denied(run(PRE, bash("hc send w hi"), "--cli", "codex")))
         self.assertIsNone(
             run(

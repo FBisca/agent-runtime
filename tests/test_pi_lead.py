@@ -171,13 +171,20 @@ class PiPolicyTests(unittest.TestCase):
     def test_policy_limits_the_directory_a_worker_may_run_in(self):
         """agent-runtime/P2-S4"""
         env = self.env()
-        self.write(env, {"hosts": {"pi": RULES}})
+        self.write(env, {"hosts": {"pi": dict(RULES, backends=["claude", "codex", "pi"])}})
         with mock.patch.object(lib, "parent_cli", return_value="pi"):
             host = host_policy.host_of(env)
-            arguments = {"kind": "worker", "name": "w1", "task": "t", "cli": "claude"}
-            with self.assertRaises(host_policy.Refused):
-                host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cwd="/etc"), None)
-            host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cwd="/tmp"), None)
+            for cli in ("claude", "pi"):  # the guarantee holds for a Pi spawn too (pi-worker/S7)
+                arguments = {"kind": "worker", "name": "w1", "task": "t", "cli": cli}
+                with (
+                    mock.patch.object(lib, "run_command") as ran,
+                    self.assertRaisesRegex(host_policy.Refused, "may not start a worker in"),
+                ):
+                    host_policy.authorize(
+                        env, host, "lead", "spawn", dict(arguments, cwd="/etc"), None
+                    )
+                ran.assert_not_called()
+                host_policy.authorize(env, host, "lead", "spawn", dict(arguments, cwd="/tmp"), None)
 
     def test_a_malformed_policy_refuses_instead_of_trusting(self):
         """agent-runtime/P2-S4"""
