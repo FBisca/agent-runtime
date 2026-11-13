@@ -1,5 +1,6 @@
 """Event waits through real MCP processes; fake hc, explicit reconciliation barriers."""
 
+import functools
 import importlib
 import json
 import queue
@@ -170,7 +171,9 @@ class EventRig(HcCase):
         }
         self.lead = self.start(self.replies, self.env)
         self.assignments = [self.spawn(self.lead, name) for name in ("w1", "w2")]
-        self.workers = LazySessions(self.worker_session)
+        # Bound to EventRig, not to self: test_budgets, test_diagnostics and test_tasks borrow prepare on a plain
+        # ToolCase that has no worker_session.
+        self.workers = LazySessions(functools.partial(EventRig.worker_session, self))
         self.rpc = AsyncRPC(self.lead)
         self.addCleanup(self.rpc.close)
 
@@ -1855,6 +1858,24 @@ class WaitDescriptionTests(ToolCase):
                 for p in tool["inputSchema"]["properties"].values()
             )
         self.assertLessEqual(words, 400)
+
+
+class BorrowedRig(ToolCase):
+    """What test_budgets, test_diagnostics and test_tasks do: borrow the rig's helpers on a plain ToolCase."""
+
+    prepare = EventRig.prepare
+    spawn = EventRig.spawn
+    publish = EventRig.publish
+
+    def test_a_plain_tool_case_that_borrows_prepare_gets_the_lead_and_lazy_workers(self):
+        started = self.count_sessions_borrowed()
+        self.prepare()
+        self.assertEqual(started, ["t0"])
+        self.publish(0)
+        self.assertEqual(started, ["t0", "t1"])
+
+    def count_sessions_borrowed(self):
+        return HcCase.count_sessions(self)
 
 
 class TestsKeptTests(unittest.TestCase):
