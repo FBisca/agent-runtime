@@ -1113,6 +1113,17 @@ class Driver:
             if data["plan"]["state"] == "APPROVED":
                 enter_plan_state(data, "RUNNING")
             self.resume_plan_state(data)
+            route_record = data["routes"]
+        narrate.NARRATOR.banner(
+            plan=self.slug,
+            goal=self.model.goal,
+            statuses=[ticket["Status"] for ticket in plan["tickets"]],
+            repo=str(self.repo),
+            base=self.args.base,
+            max_workers=self.args.max_workers,
+            gates=list(getattr(self.args, "gate", None) or []),
+            routes=route_record,
+        )
         contract = self.run_dir / "contract.md"
         if not contract.exists():
             contract.write_text(CONTRACT, encoding="utf-8")
