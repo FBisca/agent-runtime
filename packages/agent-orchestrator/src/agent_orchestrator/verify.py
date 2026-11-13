@@ -174,6 +174,12 @@ def node_problem(repo, node, base, files, added):
     return None
 
 
+def holds_no_test(ticket, repo):
+    """The lint's predicate, shared with the covers gate: the ticket's Paths hold no test file or directory, so no
+    node the ticket maps could ever count. The plan's repo config decides the test patterns."""
+    return yaml_plan.holds_no_test(ticket.paths, yaml_plan.repo_config(repo).test_patterns)
+
+
 def covers(model, ticket, report, repo, base, files, added):
     contract = report.get("contract")
     if contract != 3:

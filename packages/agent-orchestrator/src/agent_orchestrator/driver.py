@@ -719,6 +719,8 @@ ATTENTION = {
 }
 ARCHIVE = "archive"  # the unit (and task id) of the driver's own archive
 ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or replace
+# A covers gate that can never pass because the ticket's Paths hold no test: the way out is the plan, so `amend` leads.
+NO_TEST_MENU = ("amend",) + tuple(action for action in contracts.ACTIONS if action != "amend")
 DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
 
 
@@ -2656,13 +2658,21 @@ class Driver:
                         item,
                     )
                 if failures > self.fix_cap(unit):
-                    kind = "gate"
+                    kind, menu = "gate", None
                     reason = "%s failed its gates %d times; last: %s" % (
                         unit,
                         failures,
                         "; ".join(remaining),
                     )
-                    asked = self.book_request(data, task_id, kind, reason, fix=fix)
+                    if source == "verify" and self.covers_without_test(unit, items):
+                        menu = NO_TEST_MENU
+                        reason = (
+                            "%s failed its covers gate %d times because the ticket's Paths can hold no test, "
+                            "so the gate can never pass: add a test file, or a directory that holds its tests, "
+                            "to its paths (`amend`); last: %s"
+                            % (unit, failures, "; ".join(remaining))
+                        )
+                    asked = self.book_request(data, task_id, kind, reason, fix=fix, menu=menu)
                 else:
                     data["tasks"][task_id].update(gate="fix-pending", fix=fix, updated_at=now())
         # Nothing below is the round's to book twice. The draft is attempted now and, when gh refuses, left in `fix`
@@ -2673,6 +2683,17 @@ class Driver:
             self.mark(task_id, fix=dict(fix, draft=None))
         if asked is not None:
             self.announce_request(task_id, kind, reason, asked)
+
+    def covers_without_test(self, unit, items):
+        """Whether a verify failure is a covers failure on a ticket whose Paths hold no test (the lint's predicate)."""
+        ticket = next(
+            (t for t in (self.model.tickets if self.model else []) if t.id == unit.upper()), None
+        )
+        return (
+            ticket is not None
+            and any(isinstance(i, dict) and i.get("check") == "covers" for i in items)
+            and verify.holds_no_test(ticket, self.repo)
+        )
 
     def fix_cap(self, unit):
         """The fix rounds a unit may use: its `Max fix rounds:` plan line, else --max-fix-rounds."""
