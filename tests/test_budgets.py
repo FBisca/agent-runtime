@@ -1,13 +1,19 @@
 """Complete-envelope budgets, lossless pagination and host output limits (D22)."""
 
 import json
-from pathlib import Path
 
 import pytest
 import test_event_wait as event_helpers
 from agent_runtime import dispatch_wait, hc_tools
-from agent_runtime.dispatch_store import MAX_BASE_BYTES, MAX_RESPONSE_BYTES, Store, StoreError
+from agent_runtime.dispatch_store import (
+    MAX_BASE_BYTES,
+    MAX_RESPONSE_BYTES,
+    Store,
+    StoreError,
+    uid,
+)
 from test_mcp_server import TOOLS
+from test_team_limit import team_of
 from test_tools import ToolCase
 
 pytestmark = pytest.mark.integration
@@ -18,20 +24,92 @@ def canonical(payload):
 
 
 class BudgetTests(ToolCase):
-    prepare = event_helpers.EventWaitTests.prepare
     spawn = event_helpers.EventWaitTests.spawn
-    publish = event_helpers.EventWaitTests.publish
+
+    def prepare(self):
+        """The lead's session and its two spawned workers, w1 and w2. A budget test seeds what the workers report
+        through the store, so no worker session starts."""
+        rows = [
+            {"name": "w1", "address": "t1", "parent": "t0", "status": "working"},
+            {"name": "w2", "address": "t2", "parent": "t0", "status": "working"},
+            {"name": "child", "address": "t3", "parent": "t1", "status": "working"},
+        ]
+        lead = {"name": "lead", "address": "t0", "parent": None, "status": "working"}
+        self.rows = rows
+        self.replies = {
+            "get:t0": {"out": json.dumps(lead)},
+            "ls": {"out": json.dumps({"terminals": rows})},
+        }
+        for row in rows:
+            for key in (row["name"], row["address"]):
+                self.replies["get:" + key] = {"out": json.dumps(row)}
+        self.env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_SCOPE": "events",
+            "CODEX_THREAD_ID": "event-lead",
+            "HC_TERMINAL_ID": "t0",
+            "AGENT_RUNTIME_DISPATCH": "1",
+        }
+        self.lead = self.start(self.replies, self.env)
+        self.assignments = [self.spawn(self.lead, name) for name in ("w1", "w2")]
+        self.rpc = event_helpers.AsyncRPC(self.lead)
+        self.addCleanup(self.rpc.close)
+
+    def seed_tasks(self, count, filler):
+        """`count` pending tasks in the lead's team, written through the store in the order `task create` numbers
+        them. Returns their ids."""
+        store = Store(self.env)
+        team, _ = team_of(store)
+        ids = []
+        with store.transaction() as db:
+            for number in range(count):
+                task = uid()
+                db.execute(
+                    "INSERT INTO tasks VALUES (?,?,?,'pending',NULL,NULL,'[]')",
+                    (task, team, "%03d%s" % (number, filler)),
+                )
+                ids.append(task)
+        return ids
+
+    def seed_report(self, index, kind, text):
+        """A report of worker `index` (w1, w2) as its publish leaves it, with no worker session call. Returns its
+        message id."""
+        store = Store(self.env)
+        _, scope = team_of(store)
+        name = "w%d" % (index + 1)
+        return store.publish(
+            scope,
+            "t%d" % (index + 1),
+            "t0",
+            self.assignments[index]["assignment_id"],
+            text,
+            kind,
+            caller_name=name,
+        )["message_id"]
 
     def ask(self, tool, ok=True, **arguments):
         result = self.rpc.get(self.rpc.tool(tool, arguments))["result"]
         self.assertEqual(result["isError"], not ok, result)
         return result
 
+    def test_S10_a_seeded_backlog_is_read_back_as_the_lead_would_have_created_it(self):
+        """The 70 tasks and the large reports a budget test needs are seeded through the store: only the call whose
+        budget is under test goes through the server."""
+        self.prepare()
+        created = self.seed_tasks(3, "backlog")
+        sent = self.seed_report(0, "progress", "x" * 100)
+        listed = self.ask("task", action="list")["structuredContent"]
+        self.assertEqual([t["task_id"] for t in listed["tasks"]], created)
+        self.assertEqual({t["status"] for t in listed["tasks"]}, {"pending"})
+        waited = self.ask("wait", target="any", timeout=0)["structuredContent"]
+        self.assertEqual([m["message_id"] for m in waited["messages"]], [sent])
+
     def test_maximum_legal_report_fits_the_complete_wait_envelope(self):
         """agent-runtime/R61
         agent-runtime-dispatch/S28"""
         self.prepare()
-        self.publish(0, kind="progress", text="é" * 10900)  # 65400 JSON bytes after escaping
+        self.seed_report(0, "progress", "é" * 10900)  # 65400 JSON bytes after escaping
         result = self.ask("wait", target="any", timeout=0)
         payload = result["structuredContent"]
         self.assertEqual(len(payload["messages"]), 1)
@@ -43,15 +121,9 @@ class BudgetTests(ToolCase):
         """agent-runtime/R61
         agent-runtime-dispatch/S28"""
         self.prepare()
-        created = [
-            self.ask("task", action="create", subject="%03d%s" % (i, "s" * 996))[
-                "structuredContent"
-            ]["task_id"]
-            for i in range(70)
-        ]
+        created = self.seed_tasks(70, "s" * 996)
         sent = [
-            self.publish(i, kind="progress", text=chr(97 + n) * 60000)["message_id"]
-            for n, i in enumerate((0, 1, 0))
+            self.seed_report(i, "progress", chr(97 + n) * 60000) for n, i in enumerate((0, 1, 0))
         ]
         # Reads piggyback the inbox only with a receipt (D15): the mutating create below delivers the first page.
         seed = self.ask("task", action="create", subject="seed")["structuredContent"]
