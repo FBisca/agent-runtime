@@ -16,7 +16,9 @@ import os
 from datetime import datetime
 
 # 2: `verified` became `claimed`. A worker's report claims a completion; only the driver's receipt verifies one.
-SCHEMA_VERSION = 2
+# 3: `tokens` gained `cache_write` and `reasoning`, the record gained `cost_usd`, and the call counters are summed from
+# usage; each is null when any assignment of the attempt did not report it.
+SCHEMA_VERSION = 3
 
 FIELDS = (
     "schema_version",
@@ -33,6 +35,7 @@ FIELDS = (
     "claimed",
     "counters",
     "tokens",
+    "cost_usd",
     "gates",
     "checks",
 )
@@ -48,34 +51,39 @@ TOKEN_KEYS = {
         "cached_tokens",
         "cache_read_tokens",
     ),
+    "cache_write": ("cache_write_tokens",),
+    "reasoning": ("reasoning_tokens",),
 }
 
 TERMINAL = ("COMPLETE", "RELEASED", "BLOCKED")
 
 
+def number(usage, keys):
+    """The first of `keys` that `usage` reports as a number, else `None`."""
+    if isinstance(usage, dict):
+        for key in keys:
+            candidate = usage.get(key)
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+                return candidate
+    return None
+
+
 def tokens(usage):
-    """One usage report as labelled input/output/cached figures. A figure the runtime did not report is `None`."""
-    counted = {}
-    for label, keys in TOKEN_KEYS.items():
-        value = None
-        if isinstance(usage, dict):
-            for key in keys:
-                candidate = usage.get(key)
-                if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
-                    value = candidate
-                    break
-        counted[label] = value
-    return counted
+    """One usage report as labelled token figures. A figure the runtime did not report is `None`."""
+    return {label: number(usage, keys) for label, keys in TOKEN_KEYS.items()}
+
+
+def total(usages, keys):
+    """A figure summed over every assignment's usage; `None` when any of them lacks it (or there is none)."""
+    numbers = [number(usage, keys) for usage in usages]
+    if not numbers or any(n is None for n in numbers):
+        return None
+    return sum(numbers)
 
 
 def sum_tokens(usages):
-    """The usage of every assignment of an attempt, summed per label; a label nobody reported is `None`."""
-    counted = {}
-    for label in TOKEN_KEYS:
-        numbers = [tokens(usage)[label] for usage in usages]
-        numbers = [number for number in numbers if number is not None]
-        counted[label] = sum(numbers) if numbers else None
-    return counted
+    """The usage of every assignment of an attempt, summed per label; a label any assignment did not report is `None`."""
+    return {label: total(usages, keys) for label, keys in TOKEN_KEYS.items()}
 
 
 def elapsed(started, finished):
@@ -127,14 +135,17 @@ def record(task_id, task, rows, number):
     if not finished and task.get("status") in TERMINAL:
         finished = task.get("updated_at")
     ids = assignments(task)
-    usages = [
-        row.get("usage")
+    # The last report of an assignment stands (the runtime's usage is cumulative); an assignment that reported
+    # nothing is a gap in every figure, not a zero.
+    latest = {
+        row.get("assignment_id"): row.get("usage")
         for row in rows
         if row.get("kind") == "usage" and row.get("assignment_id") in ids
-    ]
+    }
+    usages = [latest.get(key) for key in sorted(ids)]
     counters = {
-        "tool_calls": None,
-        "model_calls": None,
+        "tool_calls": total(usages, ("tool_calls",)),
+        "model_calls": total(usages, ("model_calls",)),
         "tool_loops": sum(1 for row in mine if row.get("kind") == "idle"),
         "retries": sum(1 for row in mine if row.get("kind") == "round"),
         "interventions": sum(1 for row in mine if row.get("kind") == "escalation"),
@@ -163,6 +174,7 @@ def record(task_id, task, rows, number):
         "claimed": claimed(task),
         "counters": counters,
         "tokens": sum_tokens(usages),
+        "cost_usd": total(usages, ("cost_usd",)),
         "gates": gates,
         "checks": report.get("checks") or [],
     }

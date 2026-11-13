@@ -173,6 +173,60 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(ticket["usage"], {"input_tokens": 7})
         self.assertEqual(ticket["route"]["model"], "haiku")
 
+    @pytest.mark.unit
+    def test_S10_a_key_is_summed_when_every_assignment_reports_it_else_null(self):
+        """worker-usage/S10"""
+        spec = load_script()
+        at = "2026-11-07T00:00:00+00:00"
+
+        def usage(assignment, figures):
+            return {
+                "at": at,
+                "kind": "usage",
+                "unit": "t1",
+                "assignment_id": assignment,
+                "usage": figures,
+            }
+
+        rows = [
+            {"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}},
+            usage("a1", {"input_tokens": 1, "cost_usd": 0.5, "tool_calls": 2}),
+            usage("a2", {"input_tokens": 2, "tool_calls": 3}),
+        ]
+        ticket = spec.events.rollup(rows, "demo")["tickets"]["t1"]
+        self.assertEqual(ticket["usage"], {"input_tokens": 3, "cost_usd": None, "tool_calls": 5})
+        rows = [{"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}}]
+        self.assertEqual(spec.events.rollup(rows, "demo")["tickets"]["t1"]["usage"], "unknown")
+
+    @pytest.mark.unit
+    def test_S10_the_metrics_table_shows_each_usage_figure_in_its_column_and_null_as_null(self):
+        """worker-usage/S10"""
+        spec = load_script()
+        ticket = {
+            "route": {"size": "small", "difficulty": "simple"},
+            "review_rounds": 0,
+            "escalations": 0,
+            "decider_calls": 0,
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 4,
+                "cached_input_tokens": 5,
+                "cache_write_tokens": None,
+                "reasoning_tokens": 6,
+                "model_calls": 7,
+                "tool_calls": 8,
+                "cost_usd": None,
+            },
+        }
+        table = spec.metrics_table(
+            {"slug": "demo", "tickets": {"t1": ticket}, "lead": {"model_turns": 1}}
+        )
+        header, line = table.splitlines()[1:3]
+        for column in ("input", "output", "cached", "cache_write", "reasoning", "model_calls"):
+            self.assertIn(column, header.split())
+        self.assertIn("cost_usd", header.split())
+        self.assertEqual(line.split()[-8:], ["3", "4", "5", "null", "6", "7", "8", "null"])
+
 
 class DecisionEventTests(DeciderFixture, unittest.TestCase):
     @pytest.mark.integration
