@@ -127,5 +127,79 @@ class NarrateTests(unittest.TestCase):
         self.assertEqual((len(cut), cut[-1]), (narrate.WIDTH, "…"))
 
 
+class BannerTests(unittest.TestCase):
+    """orchestrator-engine/R90: the run's banner, written once when a drive starts."""
+
+    ROUTES = {
+        "source": "user",
+        "path": "/Users/me/.config/agent-runtime/routes.yaml",
+        "classes": {
+            "large": {"class": "large", "backend": "claude", "model": "opus", "effort": "xhigh"},
+            "medium": {"class": "medium", "backend": "codex", "model": "gpt-m", "effort": "high"},
+            "small": {"class": "small", "backend": "claude", "model": "haiku", "effort": None},
+        },
+        "steps": {
+            "review": {"step": "review", "backend": "codex", "model": "gpt-sol", "effort": None},
+        },
+    }
+
+    def banner(self, stream=None, color=False, **overrides):
+        self.out = stream if stream is not None else io.StringIO()
+        n = narrate.Narrator(stream=self.out, color=color, env={}, home="/Users/me")
+        run = {
+            "plan": "demo",
+            "goal": "Ship the demo\n  end to end",
+            "statuses": ["DONE", "TO-DO", "TO-DO", "IN PROGRESS"],
+            "repo": "/Users/me/src/demo",
+            "base": "origin/main",
+            "max_workers": 3,
+            "gates": ["uv run pytest", "ruff check"],
+            "routes": self.ROUTES,
+        }
+        run.update(overrides)
+        n.banner(**run)
+        return self.out.getvalue().split("\n")
+
+    def test_the_banner_is_the_logo_then_the_run_and_its_routes(self):
+        lines = self.banner()
+        self.assertEqual(lines[: len(narrate.LOGO)], list(narrate.LOGO))
+        self.assertEqual(
+            lines[len(narrate.LOGO) :],
+            [
+                "",
+                "  plan     demo · Ship the demo end to end",
+                "  tickets  4 · 1 done · 1 in progress · 2 to-do",
+                "  repo     ~/src/demo · base origin/main",
+                "  workers  max 3",
+                "  gates    uv run pytest · ruff check",
+                "  routes   ~/.config/agent-runtime/routes.yaml (user)",
+                "    small    claude · haiku   · effort by matrix",
+                "    medium   codex  · gpt-m   · high",
+                "    large    claude · opus    · xhigh",
+                "  steps",
+                "    review   codex  · gpt-sol · effort by step",
+                "",
+                "",
+            ],
+        )
+
+    def test_a_legacy_run_without_gates_or_steps_says_so(self):
+        legacy = {
+            "source": "legacy",
+            "path": None,
+            "classes": {"small": dict(self.ROUTES["classes"]["small"])},
+            "steps": {},
+        }
+        lines = self.banner(gates=[], routes=legacy)
+        self.assertIn("  routes   legacy table (deprecated)", lines)
+        self.assertFalse([line for line in lines if line.lstrip().startswith(("gates", "steps"))])
+
+    def test_the_logo_is_coloured_only_on_a_terminal(self):
+        lines = self.banner(stream=Tty(), color=None)
+        self.assertTrue(lines[0].startswith("\x1b[36m"), repr(lines[0]))
+        self.assertIn("\x1b[2mplan", "\n".join(lines))
+        self.assertNotIn("\x1b", "\n".join(self.banner()))
+
+
 if __name__ == "__main__":
     unittest.main()
