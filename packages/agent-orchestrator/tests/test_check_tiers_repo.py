@@ -24,7 +24,8 @@ class AgentRuntimeTiersTests(unittest.TestCase):
         self.assertEqual(checks.fast, "uv run pytest")
         self.assertIn("--impacted", checks.affected)
         self.assertIn("{base}", checks.affected)
-        self.assertEqual(checks.full_run, "uv run pytest -n auto")
+        # Verify runs the full suite in a fresh worktree, where plain `uv run` installs the root project only.
+        self.assertEqual(checks.full_run, "uv run --frozen --all-packages pytest -n auto")
         self.assertTrue(checks.full_verify)
 
 
