@@ -8,7 +8,8 @@ The state lives in files under `FAKE_RUNTIME_HOME`, so a run can be scripted bef
 `calls.jsonl` (every call), `waits.json` (the scripted wait steps), `states.json` (the agents' states: a name's state is what `status` answers, `error` makes the call fail, `not_found`
 answers `unknown` the way hc does for a terminal it has none of, and `unreadable` answers `unknown` for a failed
 read), `refuse.json`
-(the names the runtime refuses to spawn), `stopped.json` (the names the driver stopped) and `assignments.json` (the
+(the names the runtime refuses to spawn), `refuse_resume.json` (name -> the error text the runtime refuses each resume of
+that name with, as it does a pane blocked on a login), `stopped.json` (the names the driver stopped) and `assignments.json` (the
 assignment ids each agent was given).
 
 A wait step may name the agents it reports for: `agents` lists the agents the runtime still holds open, `complete`
@@ -202,6 +203,15 @@ def process(argv, timeout=None):
         write_json(stopped_path, read_json(stopped_path) + [args["name"]])
         return Completed(argv, 0, json.dumps({"name": args["name"], "state": "exited"}))
     if tool == "resume":
+        refusals = read_json(os.path.join(home, "refuse_resume.json"), {})
+        if args["name"] in refusals:
+            return Completed(
+                argv,
+                1,
+                json.dumps(
+                    {"content": [{"type": "text", "text": refusals[args["name"]]}], "isError": True}
+                ),
+            )
         assignment = answer(args["name"], "r%d-%s" % (nth, args["name"]))
         remember_assignment(home, args["name"], assignment["assignment_id"])
         return Completed(argv, 0, json.dumps(assignment))
