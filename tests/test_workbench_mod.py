@@ -174,3 +174,11 @@ def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight
     assert panel["size"] == {"px": 520}
     assert panel["min"] == 280
     assert "max" not in panel
+
+
+def test_S31_the_header_and_inspector_show_a_plans_measures_unknown_never_zero():
+    scenario("S31", 3)
+
+
+def test_S32_a_timeline_shows_one_lane_per_ticket_when_wide():
+    scenario("S32", 2)

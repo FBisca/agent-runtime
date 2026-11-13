@@ -78,3 +78,28 @@ export const refusal = (kind, message, wayOut) => ({
   stdout: JSON.stringify({ schema_version: 1, error: { kind, message, way_out: wayOut } }),
   stderr: "workbench: " + message + "\n",
 });
+
+// What `workbench plan --json` adds for a driven plan (`metrics`), as the orchestrator computes it. T3 never ran.
+export const METRICS = {
+  wall_seconds: 3725,
+  span: { start: "2026-11-11T10:00:00+00:00", end: "2026-11-11T12:00:00+00:00" },
+  first_pass_rate: 0.5,
+  errors: { by_gate: { ci: 2, review: 1 }, last: "gate ci failed" },
+  tickets: {
+    T1: {
+      elapsed_seconds: 1800, phases: { work: 1200, review: 540, ci: null }, fix_rounds: 1, review_rounds: 2,
+      findings: 3, ci_failures: 0, escalations: { review_loop: 1 }, model: "opus", tokens: null,
+    },
+    T2: {
+      elapsed_seconds: null, phases: { work: 0, review: null, ci: null }, fix_rounds: 0, review_rounds: 0,
+      findings: 0, ci_failures: 1, escalations: {}, model: null, tokens: null,
+    },
+  },
+  timeline: {
+    T1: [
+      { phase: "work", start: "2026-11-11T10:00:00+00:00", end: "2026-11-11T10:20:00+00:00" },
+      { phase: "review", start: "2026-11-11T10:20:00+00:00", end: "2026-11-11T10:30:00+00:00" },
+    ],
+    T2: [{ phase: "work", start: "2026-11-11T11:00:00+00:00", end: null }],
+  },
+};

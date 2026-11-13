@@ -20,6 +20,9 @@ export function headerView(head, ctx) {
     .when(Boolean(head) && Boolean(head.progress), (el) => el
       .child(progressBar(head.progress, t))
       .child(div().text_size(11).text_color(t.dim).child(progressText(head.progress))))
+    .when(Boolean(head) && Boolean(head.metrics), (el) => el.child(
+      div().text_size(11).text_color(t.dim).truncate()
+        .child(`wall ${head.metrics.wall} · first pass ${head.metrics.firstPass} · driver errors ${head.metrics.errors}`)))
     .when(Boolean(head) && Boolean(head.drift), (el) => el.child(
       div().text_size(11).text_color(t.blocked).truncate()
         .child(`changed since approval · approved ${head.drift.approved?.slice(0, 8)} · now ${head.drift.current?.slice(0, 8)}`)));
