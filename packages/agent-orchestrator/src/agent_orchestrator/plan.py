@@ -10,6 +10,7 @@ import fcntl
 import functools
 import hashlib
 import os
+import posixpath
 import shutil
 import subprocess
 import tempfile
@@ -32,6 +33,11 @@ from pydantic import (
 from . import config, runner
 
 DEFAULT_STATE = "~/.local/state/orchestrate"
+# A plan in its own folder is always named this; a legacy plan is `<name>.plan.yaml` beside `<name>.oracle/`.
+FOLDER_PLAN = "plan.yaml"
+# The folder's subdirectories whose every file the approval digests.
+FOLDER_PAYLOADS = ("acceptance", "negatives")
+ARCHIVE_MODES = ("promote", "discard")
 ScenarioId = Annotated[str, Field(pattern=r"^S\d+[a-z]?$")]
 TicketId = Annotated[str, Field(pattern=r"^T\d+$")]
 Text = Annotated[str, Field(min_length=1)]
@@ -67,12 +73,30 @@ class Evidence(Mapping):
     baseline: Literal["pass", "fail"] | None = None
     oracle: list[RepoPath] = Field(default_factory=list)
     place: RepoPath | None = None
+    acceptance: list[RepoPath] = Field(
+        default_factory=list,
+        description="Folder plans: test files in the plan folder's acceptance/, placed for the check at "
+        "<package>/<acceptance.dir>/<domain>/<file>",
+    )
+    package: RepoPath | None = Field(
+        default=None,
+        description="Folder plans: the repository directory (or .) whose acceptance dir the files are placed in",
+    )
     timeout: Annotated[int, Field(gt=0)] = 600
     env: list[Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]] = Field(
         default_factory=list
     )
-    negative: RepoPath | None = None
+    negative: RepoPath | None = Field(
+        default=None,
+        description="A patch that must make the check fail; a legacy plan names an oracle file, a folder plan a "
+        "path relative to the plan folder",
+    )
     promote: bool = True
+
+    @property
+    def has_tests(self):
+        """Whether the item brings test files of its own: legacy oracles or a folder plan's acceptance files."""
+        return bool(self.oracle or self.acceptance)
 
     @model_validator(mode="after")
     def evidence_kind(self):
@@ -84,12 +108,12 @@ class Evidence(Mapping):
             raise ValueError("human evidence may only contain human; remove check options")
         return self
 
-    @field_validator("place", "negative")
+    @field_validator("place", "negative", "package")
     @classmethod
     def paths(cls, value):
         return literal_path(value) if value is not None else value
 
-    @field_validator("oracle")
+    @field_validator("oracle", "acceptance")
     @classmethod
     def oracle_paths(cls, values):
         return [literal_path(v) for v in values]
@@ -150,7 +174,20 @@ class Plan(Mapping):
     schema_version: Literal["plan/1"] = Field(alias="schema")
     slug: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
     goal: Text
-    spec: RepoPath
+    spec: RepoPath | None = Field(
+        default=None,
+        description="The living spec the archive writes; required unless the plan is a folder plan that discards",
+    )
+    domain: Annotated[str, Field(pattern=r"^[a-z0-9-]+$")] | None = Field(
+        default=None,
+        description="Folder plans: the slug of the folder under <package>/<acceptance.dir>/ that promoted tests "
+        "join; required to promote",
+    )
+    archive: Literal["promote", "discard"] | None = Field(
+        default=None,
+        description="Folder plans: what archive does with the plan folder; the repo config's archive.mode when "
+        "absent",
+    )
     outcome: Annotated[list[ScenarioId], Field(min_length=1)]
     scenarios: Annotated[list[Scenario], Field(min_length=1)]
     tickets: Annotated[list[Ticket], Field(min_length=1)]
@@ -159,7 +196,7 @@ class Plan(Mapping):
     @field_validator("spec")
     @classmethod
     def spec_path(cls, value):
-        return literal_path(value)
+        return literal_path(value) if value is not None else value
 
     def legacy(self, statuses=None):
         """Keep the existing loop's routes and blocking semantics in one place."""
@@ -252,6 +289,10 @@ def read_yaml(path):
         ) from None
 
 
+def is_folder_plan(path):
+    return Path(path).name == FOLDER_PLAN
+
+
 def oracle_dir(path):
     path = Path(path)
     stem = path.name.removesuffix(".plan.yaml")
@@ -301,6 +342,7 @@ def semantic_problems(data, path, repo):
     def defect(loc, why, fix):
         problems.append(f"{loc}: {why} — {fix}")
 
+    folder = is_folder_plan(path)
     scenarios = data.get("scenarios")
     tickets = data.get("tickets")
     scenarios = scenarios if isinstance(scenarios, list) else []
@@ -455,6 +497,8 @@ def semantic_problems(data, path, repo):
                 "baseline",
                 "oracle",
                 "place",
+                "acceptance",
+                "package",
                 "negative",
                 "timeout",
                 "env",
@@ -474,6 +518,8 @@ def semantic_problems(data, path, repo):
                     f"{name} is reserved: the runner owns the check's HOME, PATH and XDG_* variables",
                     "drop the name; the runner supplies a scratch value",
                 )
+        if folder:
+            continue  # a folder plan's evidence is read by folder_problems
         names = ev.get("oracle", [])
         names = names if isinstance(names, list) else []
         if names and not ev.get("place"):
@@ -531,6 +577,175 @@ def semantic_problems(data, path, repo):
                         f"placed oracle {placed} already exists or escapes repo",
                         "choose an unused location inside the repo",
                     )
+    if folder:
+        problems += folder_problems(data, path, repo, scenarios)
+    else:
+        problems += legacy_problems(data, scenarios)
+    return problems
+
+
+# What a folder plan says in place of each legacy evidence key.
+LEGACY_KEYS = {
+    "oracle": "acceptance (files in the plan folder's acceptance/)",
+    "place": "package (the destination follows from package, acceptance.dir and domain)",
+    "promote": "the top-level archive: promote | discard",
+}
+SKIPPED = {
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".tox",
+    ".mypy_cache",
+    ".ruff_cache",
+}
+
+
+def legacy_problems(data, scenarios):
+    """A legacy plan keeps its keys: the folder plan's are refused, each naming the legacy key to use."""
+    problems = []
+    for key in ("domain", "archive"):
+        if key in data:
+            problems.append(
+                f"{key}: only a plan in its own folder (<folder>/plan.yaml) has this key — remove it, "
+                "or move the plan into a folder"
+            )
+    if data.get("spec") is None:
+        problems.append("spec: Field required — supply the required field")
+    for i, scenario in enumerate(scenarios):
+        ev = scenario.get("evidence") if isinstance(scenario, dict) else None
+        for key, legacy in (("acceptance", "oracle"), ("package", "place")):
+            if isinstance(ev, dict) and key in ev:
+                problems.append(
+                    f"scenarios[{i}].evidence.{key}: only a plan in its own folder has this key — "
+                    f"use {legacy} (the legacy plan's {legacy} key), or move the plan into a folder"
+                )
+    return problems
+
+
+def package_files(package, skip):
+    """{basename: first path} of every file in `package`, minus VCS, caches and the `skip` trees: pytest imports a
+    test module by its basename, so a promoted file needs a name no other module in the package has."""
+    found = {}
+    for here, dirs, names in os.walk(package):
+        dirs[:] = sorted(
+            d for d in dirs if d not in SKIPPED and Path(here, d).resolve() not in skip
+        )
+        for name in sorted(names):
+            found.setdefault(name, Path(here, name))
+    return found
+
+
+def folder_problems(data, path, repo, scenarios):
+    """The rules of a plan in its own folder: the folder keys, their files, and what a promote may not clobber."""
+    problems = []
+
+    def defect(loc, why, fix):
+        problems.append(f"{loc}: {why} — {fix}")
+
+    cfg = repo_config(repo)
+    folder = Path(path).resolve().parent
+    mode = data.get("archive") if data.get("archive") in ARCHIVE_MODES else cfg.archive_mode
+    promote = mode == "promote"
+    domain = data.get("domain")
+    if promote and domain is None:
+        defect(
+            "domain",
+            "a plan that promotes needs a domain",
+            "set domain: <slug> (the folder under <package>/%s/ the tests join), or set archive: discard"
+            % cfg.acceptance_dir,
+        )
+    if promote and data.get("spec") is None:
+        defect(
+            "spec",
+            "a plan that promotes needs the living spec the archive writes",
+            "set spec: <repo-relative path>, or set archive: discard",
+        )
+    skip = {folder, cfg.plans_dir.resolve()}
+    indexes = {}
+    for i, scenario in enumerate(scenarios):
+        ev = scenario.get("evidence") if isinstance(scenario, dict) else None
+        if not isinstance(ev, dict):
+            continue
+        prefix = f"scenarios[{i}].evidence"
+        for key, new in LEGACY_KEYS.items():
+            if key in ev:
+                defect(f"{prefix}.{key}", "a plan in its own folder has no such key", f"use {new}")
+        names = ev.get("acceptance", [])
+        names = names if isinstance(names, list) else []
+        package = ev.get("package")
+        package_dir = None
+        if isinstance(package, str):
+            try:
+                literal_path(package)
+                package_dir = (repo / package).resolve()
+                package_dir.relative_to(repo)
+            except ValueError:
+                defect(
+                    f"{prefix}.package",
+                    f"package {package} is outside the repository",
+                    "name a directory inside the repository, or . for its root",
+                )
+                package_dir = None
+        elif names:
+            defect(
+                f"{prefix}.package",
+                "acceptance files need a package to be placed in",
+                "set package: <directory inside the repository> or .",
+            )
+        for j, name in enumerate(names):
+            if not isinstance(name, str):
+                continue
+            where = f"{prefix}.acceptance[{j}]"
+            try:
+                literal_path(name)
+                source = (folder / "acceptance" / name).resolve()
+                source.relative_to((folder / "acceptance").resolve())
+                exists = source.is_file()
+            except ValueError:
+                exists = False
+            if not exists:
+                defect(
+                    where,
+                    f"acceptance file {folder / 'acceptance' / name} is missing or outside the plan's acceptance/",
+                    "add the file to the plan's acceptance/ or remove the reference",
+                )
+                continue
+            if not promote or package_dir is None or not isinstance(domain, str):
+                continue
+            if package_dir not in indexes:
+                indexes[package_dir] = package_files(package_dir, skip)
+            clash = indexes[package_dir].get(Path(name).name)
+            if clash is not None:
+                defect(
+                    where,
+                    f"the basename {Path(name).name} matches {clash.relative_to(repo)} in the package, and "
+                    "pytest imports modules by basename",
+                    "rename the acceptance file",
+                )
+            placed = package_dir / cfg.acceptance_dir / domain / name
+            if placed.exists() or placed.is_symlink() or not placed.resolve().is_relative_to(repo):
+                defect(
+                    where,
+                    f"the destination {placed} already exists or is outside the repository",
+                    "choose another domain or rename the file",
+                )
+        negative = ev.get("negative")
+        if isinstance(negative, str):
+            try:
+                literal_path(negative)
+                source = (folder / negative).resolve()
+                source.relative_to(folder)
+                exists = source.is_file()
+            except ValueError:
+                exists = False
+            if not exists:
+                defect(
+                    f"{prefix}.negative",
+                    f"negative file {folder / negative} is missing or outside the plan folder",
+                    "add the patch to the plan folder (negatives/) or remove the reference",
+                )
     return problems
 
 
@@ -550,6 +765,77 @@ def payloads(directory):
         if directory.exists()
         else {}
     )
+
+
+def folder_files(path, data):
+    """{folder-relative name: bytes} of a folder plan's acceptance/ and negatives/ and of each negative the plan
+    names: what approval digests, snapshots and later compares. Interpreter caches are not the plan's."""
+    folder = Path(path).parent
+    names = set()
+    for sub in FOLDER_PAYLOADS:
+        base = folder / sub
+        if base.is_dir():
+            names.update(
+                p.relative_to(folder).as_posix()
+                for p in base.rglob("*")
+                if p.is_file() and "__pycache__" not in p.relative_to(base).parts
+            )
+    for scenario in data.get("scenarios", []) if isinstance(data, dict) else []:
+        named = scenario.get("evidence", {}).get("negative") if isinstance(scenario, dict) else None
+        if isinstance(named, str) and (folder / named).is_file():
+            names.add(posixpath.normpath(named))
+    return {n: (folder / n).read_bytes() for n in sorted(names)}
+
+
+def approved_files(path, data):
+    """The files an approval of `path` covers, by the name the digest and the snapshot use."""
+    return folder_files(path, data) if is_folder_plan(path) else payloads(oracle_dir(path))
+
+
+def snapshot_files(snapshot, path):
+    """The files of an approval snapshot directory: `oracle/` for a legacy plan, the folder-relative names for a
+    folder plan (everything beside its plan.yaml)."""
+    if not is_folder_plan(path):
+        return payloads(snapshot / "oracle")
+    return {n: b for n, b in payloads(snapshot).items() if n != "plan.yaml"}
+
+
+def file_path(path, name):
+    """Where a snapshot file name lives in the authored plan, for a message."""
+    return Path(path).parent / name if is_folder_plan(path) else oracle_dir(path) / name
+
+
+def destination(model, item, repo):
+    """The repo-relative directory a folder plan's acceptance files are placed in for `item`:
+    `<package>/<acceptance.dir>/<domain>`. A plan with no domain (it discards) has none."""
+    parts = [item.package or ".", repo_config(repo).acceptance_dir] + (
+        [model.domain] if model.domain else []
+    )
+    return posixpath.normpath(posixpath.join(*parts))
+
+
+def runner_inputs(path, model, item, files, repo):
+    """(oracles, place, negative) the runner takes for an evidence item: test file bytes by name, the directory they
+    are placed in, and the negative patch as (name, bytes). One derivation for the baseline, the runs and the
+    mutation checks, whichever layout the plan has."""
+    negative = (item.negative, files[item.negative]) if item.negative else None
+    if not is_folder_plan(path):
+        return {name: files[name] for name in item.oracle}, item.place, negative
+    return (
+        {name: files["acceptance/" + name] for name in item.acceptance},
+        destination(model, item, repo) if item.acceptance else None,
+        negative,
+    )
+
+
+def placed_files(path, model, item, repo):
+    """Repo-relative path of each test file an evidence item places."""
+    if not is_folder_plan(path):
+        return [
+            ((item.place or "").rstrip("/") + "/" + name.removesuffix(".oracle")).lstrip("/")
+            for name in item.oracle
+        ]
+    return [posixpath.join(destination(model, item, repo), name) for name in item.acceptance]
 
 
 def digest(repo_identity, base, plan_bytes, files):
@@ -577,14 +863,14 @@ def verify_snapshot(path, model, repo, state_dir):
     if errors or not isinstance(snap_data, dict):
         raise PlanError(f"approval: invalid snapshot {snap} — {way_out}")
     old_plan = snap.read_bytes()
-    old_files = payloads(snap.parent / "oracle")
+    old_files = snapshot_files(snap.parent, path)
     live_data, _ = read_yaml(path)
-    live_files = payloads(oracle_dir(path))
+    live_files = approved_files(path, live_data)
     changed = []
     if canonical(live_data) != old_plan:
         changed.append(str(path))
     changed += [
-        str(oracle_dir(path) / n)
+        str(file_path(path, n))
         for n in sorted(old_files.keys() | live_files.keys())
         if old_files.get(n) != live_files.get(n)
     ]
@@ -663,7 +949,7 @@ def approved_text(text, approval):
     return prefix + (eol if prefix and not prefix.endswith("\n") else "") + block + text[end:]
 
 
-def baseline(model, repo, base_sha, approval_digest, files):
+def baseline(path, model, repo, base_sha, approval_digest, files):
     """Run every check item of the plan once at `base` and judge it against its `baseline:` (D24).
 
     Scenarios whose items would run the same thing share one run, and every run shares one worktree, so a plan pays
@@ -677,10 +963,11 @@ def baseline(model, repo, base_sha, approval_digest, files):
     with runner.Workspace(repo, base_sha) as shared:
         for scenario in checked:
             item = scenario.evidence
+            oracles, place, negative = runner_inputs(path, model, item, files, repo)
             key = (
                 item.check,
-                tuple(sorted(item.oracle)),
-                item.place,
+                tuple(sorted(oracles)),
+                place,
                 tuple(item.env),
                 item.timeout,
                 item.negative,
@@ -690,7 +977,6 @@ def baseline(model, repo, base_sha, approval_digest, files):
                 run = runner.Run(copy.deepcopy(first.receipt), first.log)
                 run.receipt["scenario"] = scenario.id
             else:
-                negative = (item.negative, files[item.negative]) if item.negative else None
                 run = seen[key] = runner.run_evidence(
                     repo,
                     base_sha,
@@ -698,15 +984,15 @@ def baseline(model, repo, base_sha, approval_digest, files):
                     phase="baseline",
                     digest=approval_digest,
                     check=item.check,
-                    oracles={name: files[name] for name in item.oracle},
-                    place=item.place,
+                    oracles=oracles,
+                    place=place,
                     env_names=item.env,
                     timeout=item.timeout,
                     negative=negative,
                     workspace=shared,
                 )
             ok, observed, calibrated = runner.judge_baseline(
-                run.receipt, item.baseline, bool(item.oracle)
+                run.receipt, item.baseline, item.has_tests
             )
             if not ok:
                 refusals.append(
@@ -792,11 +1078,11 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
 def approve_locked(path, repo, model, state_dir, base):
     data, _ = read_yaml(path)
     plan_bytes = canonical(data)
-    files = payloads(oracle_dir(path))
+    files = approved_files(path, data)
     base_sha = git(repo, "rev-parse", "--verify", base + "^{commit}")
     sha = digest(identity(repo), base_sha, plan_bytes, files)
     # A refusal here leaves no file behind: the runner writes nothing until the runs are accepted.
-    runs = baseline(model, repo, base_sha, sha, files)
+    runs = baseline(path, model, repo, base_sha, sha, files)
     if runs:
         ledger, receipts = state_paths(repo, model.slug, state_dir)
         for run, calibration in runs:
@@ -820,13 +1106,13 @@ def approve_locked(path, repo, model, state_dir, base):
     if (
         not snap.is_file()
         or snap.read_bytes() != plan_bytes
-        or payloads(target / "oracle") != files
+        or snapshot_files(target, path) != files
     ):
         temporary = Path(tempfile.mkdtemp(prefix=".approval-", dir=approvals))
         try:
             (temporary / "plan.yaml").write_bytes(plan_bytes)
             for name, content in files.items():
-                dest = temporary / "oracle" / name
+                dest = temporary / name if is_folder_plan(path) else temporary / "oracle" / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
             if target.exists():
