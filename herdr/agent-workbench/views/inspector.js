@@ -46,6 +46,10 @@ export function inspectorView(view, ctx) {
       : none("nothing blocks it")))
     .when(view.dependents.length > 0, (el) => el.child(section("Blocks", t,
       div().text_size(12).text_color(t.muted).child(view.dependents.join(", ")))))
+    .when(Boolean(view.measures), (el) => el.child(section("Measures", t, ...view.measures.map((m) =>
+      h_flex().gap(8).text_size(12)
+        .child(div().w(96).flex_none().text_color(t.dim).child(m.label))
+        .child(div().flex_1().min_w(0).whitespace_normal().text_color(m.text === "unknown" ? t.dim : t.foreground).child(m.text))))))
     .child(section("Attempts", t, ...(view.attempts === null
       ? [none("this agent-orchestrator does not report attempts")]
       : view.attempts.length ? view.attempts.map((a) => attemptRow(a, t, onOpen)) : [none("none yet")])))

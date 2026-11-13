@@ -6,13 +6,14 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, planSections, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
+  layoutFor, screenFor, planRows, planSections, ticketLayers, pickTicket, relatives, inspector, planHeader, timelineOf, notice, liveTerminals, runtimeAgents, runtimeNote,
   panelToggle, panelsWith, panelExpand, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { planList } from "./views/plans.js";
 import { layeredList, compactList } from "./views/tickets.js";
 import { inspectorView } from "./views/inspector.js";
+import { timelineView } from "./views/timeline.js";
 import { runtimeView } from "./views/runtime.js";
 import { noticeView, loadingView } from "./views/notices.js";
 import { toggleView } from "./views/toggle.js";
@@ -155,12 +156,14 @@ export default class AgentWorkbench extends View {
     const onOpen = (open, cx) => { run(open.command, open.args); cx.notify(); };
     const runtime = runtimeView(runtimeAgents(all, state.loaded, machine), { t, onOpen }, runtimeNote(machine));
     const ctx = { t, selected, kin: relatives(tickets, selected), onSelect: select };
-    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live) : null;
+    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live, plan.value.metrics) : null;
     const screen = screenFor(layout, this.drilled, Boolean(selected));
     if (screen === "inspector") {
       return show(inspectorView(detail, { t, onOpen, onBack: (cx) => { this.drilled = false; cx.notify(); } }));
     }
     if (screen === "list") return show(v_flex().child(compactList(layers, ctx)).child(runtime));
+    const timeline = timelineOf(plan.value.metrics, tickets, layout);
+    if (timeline) root.child(timelineView(timeline, t));
     return root.child(h_flex().id("body").flex_1().min_h(0)
       .child(div().id("layers").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(layeredList(layers, ctx)).child(runtime))
       .child(div().id("detail").w(360).flex_none().h_full().overflow_y_scrollbar().border_l(1).border_color(t.border)

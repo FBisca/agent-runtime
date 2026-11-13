@@ -306,9 +306,82 @@ export function runtimeAgents(terminals, plans, machine) {
   return rows;
 }
 
+// ---- metrics: measured by the orchestrator, only worded here; a value it did not measure reads unknown, never 0 ----
+
+const UNKNOWN = "unknown";
+const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** A duration in seconds: `42s`, `9m 00s`, `1h 02m`. */
+export function duration(seconds) {
+  const n = num(seconds);
+  if (n === null) return UNKNOWN;
+  const s = Math.round(n);
+  const two = (v) => String(v).padStart(2, "0");
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${two(Math.floor((s % 3600) / 60))}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m ${two(s % 60)}s`;
+  return `${s}s`;
+}
+
+const count = (v) => (num(v) === null ? UNKNOWN : String(v));
+
+function errorsText(errors) {
+  if (!errors || typeof errors.by_gate !== "object" || errors.by_gate === null) return UNKNOWN;
+  const gates = Object.entries(errors.by_gate);
+  if (!gates.length) return "none";
+  return `${gates.reduce((sum, [, n]) => sum + n, 0)} (${gates.map(([gate, n]) => `${gate} ${n}`).join(", ")})`;
+}
+
+/** The plan header's measures, or null when the plan carries no metrics (never driven: nothing is drawn). */
+export function metricsHeader(metrics) {
+  if (!metrics) return null;
+  const rate = num(metrics.first_pass_rate);
+  return {
+    wall: duration(metrics.wall_seconds),
+    firstPass: rate === null ? UNKNOWN : `${Math.round(rate * 100)}%`,
+    errors: errorsText(metrics.errors),
+  };
+}
+
+/** The inspector's measures for one ticket as label/text rows; a ticket the run never measured is unknown throughout. */
+function measuresOf(m) {
+  const phases = m?.phases ?? {};
+  const escalations = m?.escalations ? Object.entries(m.escalations) : null;
+  return [
+    ["Elapsed", duration(m?.elapsed_seconds)],
+    ["Work", duration(phases.work)],
+    ["Review", duration(phases.review)],
+    ["CI", duration(phases.ci)],
+    ["Fix rounds", count(m?.fix_rounds)],
+    ["Review rounds", count(m?.review_rounds)],
+    ["Findings", count(m?.findings)],
+    ["CI failures", count(m?.ci_failures)],
+    ["Escalations", escalations ? (escalations.length ? escalations.map(([c, n]) => `${c} ${n}`).join(", ") : "none") : UNKNOWN],
+    ["Model", m?.model ?? UNKNOWN],
+  ].map(([label, text]) => ({ label, text }));
+}
+
+/** The timeline's lanes: one per ticket in the plan's order, a segment per phase placed as fractions of the run's span
+ *  (an open segment runs to the span's end). Null unless wide and the plan has metrics with a span. */
+export function timelineOf(metrics, tickets, layout) {
+  if (layout !== "wide" || !metrics) return null;
+  const start = Date.parse(metrics.span?.start), end = Date.parse(metrics.span?.end);
+  if (!(end > start)) return null;
+  const span = end - start;
+  const at = (iso) => Math.min(Math.max((Date.parse(iso) - start) / span, 0), 1);
+  return {
+    lanes: tickets.map((ticket) => ({
+      id: ticket.id,
+      segments: (metrics.timeline?.[ticket.id] ?? []).map((seg) => {
+        const left = at(seg.start);
+        return { phase: seg.phase, left, width: (seg.end ? at(seg.end) : 1) - left };
+      }),
+    })),
+  };
+}
+
 /** Everything the one inspector shows for a ticket. Attempts and gates are null when the answer does not carry them.
  *  `live` (from `liveTerminals`) joins each attempt to its terminal by address; without it every terminal is unknown. */
-export function inspector(ticket, tickets, live = null) {
+export function inspector(ticket, tickets, live = null, metrics = null) {
   const known = byId(tickets);
   const attempts = Array.isArray(ticket.attempts) ? ticket.attempts : null;
   const gates = Array.isArray(ticket.gates) ? ticket.gates : null;
@@ -333,6 +406,7 @@ export function inspector(ticket, tickets, live = null) {
       claimed: Boolean(a.claimed),
       latest: Boolean(a.latest),
     })),
+    measures: metrics ? measuresOf(metrics.tickets?.[ticket.id]) : null,
     gates: gates && gates.map((g) => ({
       scenario: g.scenario,
       phase: g.phase ?? null,
@@ -351,6 +425,7 @@ export function planHeader(plan) {
     goal: plan.goal ?? null,
     state: planState(plan.state),
     progress: progressOf(plan.counts),
+    metrics: metricsHeader(plan.metrics),
     drift: revision.drift ? { approved: revision.approved_digest, current: revision.current_digest } : null,
   };
 }
