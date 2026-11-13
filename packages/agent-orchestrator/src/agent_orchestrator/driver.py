@@ -4661,15 +4661,62 @@ class Driver:
         narrate.say(
             "start", "verify", "verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12])
         )
+        full_failed = self.verify_full(sha, tree, attempt)
         passed = [
             scenario.id
             for scenario in verify.check_scenarios(self.model)
             if self.run_evidence(scenario.id, "integration", sha).receipt["result"] == "PASS"
         ]
-        # The plan settles once every mutation check has: an unkilled oracle is not an accepted outcome.
-        if not self.start_mutations(sha, passed):
+        # The plan settles once every mutation check has: an unkilled oracle is not an accepted outcome. A plan whose
+        # whole suite failed is rejected whatever its mutations show, so none is started for it.
+        if full_failed or not self.start_mutations(sha, passed):
             self.settle_acceptance()
         return 2
+
+    def verify_full(self, sha, tree, attempt):
+        """The repo's whole suite (`checks.full.run`), once for this verify pass, on the pinned commit; True when it
+        failed. `--skip-full` or `checks.full.verify: false` leave it to CI: a `skipped` event says so and why. A
+        repo that declares no `full` has nothing to run or skip."""
+        tiers = repo_config.load(self.repo).checks
+        if tiers is None or not tiers.full_run:
+            return False
+        command = tiers.full_run
+        reason = (
+            "--skip-full"
+            if getattr(self.args, "skip_full", False)
+            else None
+            if tiers.full_verify
+            else "checks.full.verify: false"
+        )
+        record = {
+            "state": "skipped" if reason else None,
+            "sha": sha,
+            "tree": tree,
+            "digest": self.contract()[1].digest,
+            "attempt": attempt,
+            "command": command,
+            "log": str(self.run_dir / "full.log"),
+            "at": now(),
+        }
+        if reason:
+            record["reason"] = reason
+        else:
+            narrate.say(
+                "start", "verify", "running the whole suite on %s: %s" % (sha[:12], command)
+            )
+            result = verify.run_full(self.repo, sha, command, self.run_dir / "full.log")
+            record.update(state=result["state"], exit=result["exit"], detail=result["detail"])
+        with self.book() as data:
+            data["full"] = record
+        self.log(
+            "full",
+            **{
+                k: v
+                for k, v in record.items()
+                if k in ("state", "sha", "command", "log", "reason", "exit", "attempt")
+            },
+        )
+        return record["state"] == "FAIL"
 
     # ---- the mutation check (S21) ----------------------------------------------------------------------------
     # An outcome oracle that was uncalibrated at baseline (it failed for a missing interface, so its assertions were
@@ -7140,6 +7187,12 @@ def main(argv=None):
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument(
         "--gate", action="append", default=[], help="CI command a worker must pass (repeatable)"
+    )
+    sub.add_argument(
+        "--skip-full",
+        action="store_true",
+        help="Verify does not run the repo's whole suite (`checks.full.run`); CI runs it. "
+        "A repo can say so for every run with `checks.full.verify: false`",
     )
     sub.add_argument(
         "--state-dir",

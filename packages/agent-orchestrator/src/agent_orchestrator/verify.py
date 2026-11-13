@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 
 from . import plan as yaml_plan
+from . import runner
 
 HUNK = re.compile(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@")
 NODE_PARAMS = re.compile(r"\[.*\]$")
@@ -244,6 +245,56 @@ def items(findings, command, log_path):
         }
         for number, finding in enumerate(findings, 1)
     ]
+
+
+# ---- the whole suite: `checks.full.run`, once per verify pass on the pinned default-branch commit -------------------
+
+FULL_TIMEOUT = 3600
+
+
+def run_full(repo, sha, command, log_path, *, timeout=FULL_TIMEOUT, base_env=None):
+    """Run the repo's whole suite once, as evidence checks run: under bash in a scratch worktree of `sha`, in the
+    evidence runner's environment (no virtualenv on PATH, a temporary HOME). Its whole output goes to `log_path`.
+    Returns {"state": "PASS" | "FAIL", "exit", "detail"}; a command that outlives `timeout` is a FAIL."""
+    base_env = dict(os.environ if base_env is None else base_env)
+    scratch = Path(tempfile.mkdtemp(prefix="eec-full-"))
+    tree = None
+    try:
+        env, _ = runner.check_env(base_env, (), scratch, scratch / "junit.xml")
+        tree = runner.worktree(repo, sha, scratch, "tree")
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        code, timed_out = runner.execute(command, tree, env, timeout, log_path)
+    finally:
+        if tree is not None:
+            runner.drop_worktree(repo, tree)
+        shutil.rmtree(scratch, ignore_errors=True)
+    if timed_out:
+        return {"state": "FAIL", "exit": None, "detail": "killed after %ss" % timeout}
+    return {
+        "state": "PASS" if code == 0 else "FAIL",
+        "exit": code,
+        "detail": None if code == 0 else "exited %s" % code,
+    }
+
+
+def full_failure(data, pin):
+    """The acceptance item of a whole suite that failed on this integration run, or None. A record of an earlier
+    run (another attempt) does not count: each verify pass runs the suite again."""
+    full = data.get("full") or {}
+    if full.get("state") != "FAIL" or full.get("attempt") != pin.get("attempt"):
+        return None
+    return {
+        "scenario": "full",
+        "state": "FAIL",
+        "reason": "`%s` %s on %s; its output is %s. Fix the failure, or run again with --skip-full to leave the "
+        "whole suite to CI"
+        % (
+            full.get("command"),
+            full.get("detail") or "failed",
+            str(full.get("sha"))[:12],
+            full.get("log"),
+        ),
+    }
 
 
 # ---- evidence: which items run at a ticket's gate, and whether a plan's receipts add up to acceptance ----------
@@ -496,6 +547,9 @@ def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
         elif state != "PASS" and human:
             state, reason = "HUMAN_ACCEPTED", "accepted by %s over %s" % (record.get("by"), state)
         items.append({"scenario": sc.id, "state": state, "reason": reason})
+    failed = None if problem else full_failure(data, pin)
+    if failed:
+        items.append(failed)
     if (data.get("plan") or {}).get("state") == "ARCHIVED":
         mark_archive(model, data, receipts_dir, digest, items)
     states = {item["state"] for item in items}

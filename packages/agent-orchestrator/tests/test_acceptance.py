@@ -404,6 +404,103 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL", "PASS"])
 
 
+class WholeSuiteTests(AcceptanceFixture, unittest.TestCase):
+    """`checks.full.run` at verify: once per pass on the pinned commit, or left to CI (check-tiers S6, S7)."""
+
+    def declare_full(self, run, verify=None):
+        config = self.repo / ".orchestrate" / "config.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["checks:", "  full:", "    run: '%s'" % run.replace("'", "''")]
+        if verify is not None:
+            lines.append("    verify: %s" % ("true" if verify else "false"))
+        config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def full_events(self):
+        return self.run_events("full")
+
+    def deliver(self, *extra):
+        self.write_plan()
+        self.merged_on_main("done")
+        self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
+        self.run_driver("--repo", str(self.repo), *extra)
+
+    def test_S6_a_failing_whole_suite_on_the_integrated_commit_rejects_the_plan(self):
+        self.declare_full("test -f src/a/never.txt")
+        self.deliver()
+        self.assertEqual(self.history(), STATES + ["REJECTED"])
+        (wake,) = [w for w in self.wakes() if w["kind"] == "plan-rejected"]
+        self.assertIn("test -f src/a/never.txt", wake["text"])
+        self.assertIn("--skip-full", wake["text"])
+        log = self.run_dir / "full.log"
+        self.assertTrue(log.is_file())
+        self.assertIn(str(log), wake["text"])
+        (event,) = self.full_events()
+        self.assertEqual(event["state"], "FAIL")
+
+    def test_S6_a_passing_whole_suite_runs_once_on_the_pinned_commit_and_the_plan_is_accepted(self):
+        runs = self.root / "full-runs.txt"
+        self.declare_full(
+            'test "$(cat src/a/feature.txt)" = done && git rev-parse HEAD >> %s' % runs
+        )
+        self.deliver()
+        main = self.git(self.origin, "rev-parse", "main")
+        self.assertEqual(self.history()[: len(STATES) + 1], STATES + ["ACCEPTED"])
+        self.assertEqual(
+            runs.read_text(encoding="utf-8").split(), [main]
+        )  # once, at the pinned commit
+        (event,) = self.full_events()
+        self.assertEqual((event["state"], event["sha"]), ("PASS", main))
+
+    def test_S7_skip_full_leaves_the_whole_suite_to_ci(self):
+        self.declare_full("test -f src/a/never.txt")
+        self.deliver("--skip-full")
+        self.assertEqual(self.history()[: len(STATES) + 1], STATES + ["ACCEPTED"])
+        (event,) = self.full_events()
+        self.assertEqual((event["state"], event["reason"]), ("skipped", "--skip-full"))
+
+    def test_S7_a_repo_that_sets_full_verify_false_leaves_the_whole_suite_to_ci(self):
+        self.declare_full("test -f src/a/never.txt", verify=False)
+        self.deliver()
+        self.assertEqual(self.history()[: len(STATES) + 1], STATES + ["ACCEPTED"])
+        (event,) = self.full_events()
+        self.assertEqual(
+            (event["state"], event["reason"]), ("skipped", "checks.full.verify: false")
+        )
+
+    def test_S6_the_whole_suite_runs_in_a_scratch_checkout_not_the_repo_and_logs_to_full_log(self):
+        where = self.root / "full-where.txt"
+        self.declare_full("pwd -P >> %s; echo whole-suite-output" % where)
+        self.deliver()
+        (ran_in,) = where.read_text(encoding="utf-8").split()
+        self.assertNotEqual(ran_in, str(self.repo.resolve()))
+        self.assertFalse(Path(ran_in).exists(), "the scratch checkout is removed afterwards")
+        self.assertIn("whole-suite-output", (self.run_dir / "full.log").read_text(encoding="utf-8"))
+
+    def test_S6_a_failing_whole_suite_still_runs_the_plans_evidence(self):
+        self.declare_full("test -f src/a/never.txt")
+        self.deliver()
+        self.assertEqual([r["result"] for r in self.receipts("integration")], ["PASS"])
+
+    def test_S7_skip_full_still_lets_the_plans_failing_evidence_reject_the_plan(self):
+        self.declare_full("true")
+        self.write_plan()
+        self.merged_on_main("almost")
+        self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
+        self.run_driver("--repo", str(self.repo), "--skip-full")
+        self.assertEqual(self.history(), STATES + ["REJECTED"])
+        (event,) = self.full_events()
+        self.assertEqual(event["state"], "skipped")
+
+    def test_S7_a_run_without_a_declared_full_records_no_skip(self):
+        self.deliver("--skip-full")
+        self.assertEqual(self.full_events(), [])
+
+    def test_control_a_plan_whose_evidence_holds_is_accepted_without_a_config(self):
+        self.deliver()
+        self.assertEqual(self.history()[: len(STATES) + 1], STATES + ["ACCEPTED"])
+        self.assertEqual(self.full_events(), [])
+
+
 class HumanTests(AcceptanceFixture, unittest.TestCase):
     SCENARIOS = None
 
