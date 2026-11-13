@@ -117,24 +117,61 @@ export function progressOf(counts) {
 
 // ---- the plan list ------------------------------------------------------------------------------------------
 
-const base = (path) => String(path).split("/").pop();
-
-/** The plans as rows: active before archived, newest (by dated file name) first. A Markdown plan is `legacy` and has
- *  no graph to open; a plan that did not load keeps its error and no progress. */
+/** The plans as rows, in the order the command printed them (active before older, newest activity first: the
+ *  orchestrator's order, not recomputed here). A Markdown plan is `legacy` and has no graph to open; a plan that did
+ *  not load keeps its error and no progress. `group` is null when the answer does not say. */
 export function planRows(plans) {
-  const rows = (plans ?? []).map((p) => ({
+  return (plans ?? []).map((p) => ({
     path: p.path,
     slug: p.slug,
     format: p.format,
     legacy: Boolean(p.legacy),
     state: p.state ?? null,
+    group: p.group ?? null,
     look: planState(p.state),
     progress: progressOf(p.tickets),
     error: p.error ?? null,
     selectable: p.format === "yaml" && !p.legacy,
   }));
-  const archived = (r) => (r.state === "ARCHIVED" ? 1 : 0);
-  return rows.sort((a, b) => archived(a) - archived(b) || base(b.path).localeCompare(base(a.path)));
+}
+
+// What each `needs_me` kind says, and the way to act on it. Only kinds, plans and tickets come from the answer; the
+// words are the mod's. The ways name commands the person runs or the place to look, never text from a run.
+const NEEDS = {
+  needs_you: (t) => ({ title: `${t} needs you`, wayOut: `Open ${t}'s attempt below and answer in its terminal` }),
+  unverified: (t) => ({ title: `${t} merged unverified`, wayOut: `Open ${t}: its gates say what was not proven` }),
+  driver_gone: () => ({ title: "the driver is gone", wayOut: "Run /orchestrate on this plan to drive it again" }),
+  error: () => ({ title: "the driver hit an error", wayOut: "Open the plan: the run's last error is in its header" }),
+  ready_to_approve: () => ({ title: "draft ready to approve", wayOut: "Review it, then approve it with /start-planning" }),
+  ready_to_drive: () => ({ title: "approved, not driven", wayOut: "Run /orchestrate to build it" }),
+  fix_plan: () => ({ title: "the plan does not load", wayOut: "Open the plan file and fix what the error says" }),
+  lead_pending: (t) => ({ title: `${t} waits on its Lead`, wayOut: `Answer ${t}'s Lead escalation in its terminal` }),
+};
+
+const needsItem = (item, rows) => {
+  const make = NEEDS[item.kind];
+  const text = make ? make(item.ticket ?? "a ticket") : { title: item.kind, wayOut: "Open the plan to see why" };
+  return {
+    plan: item.plan,
+    ticket: item.ticket ?? null,
+    kind: item.kind,
+    path: rows.find((r) => r.slug === item.plan && r.selectable)?.path ?? null,
+    ...text,
+  };
+};
+
+/** The list the mod opens on: Needs me, then the active plans, then one `older` line that is collapsed until opened.
+ *  `olderLine(open)` is null when no plan is older, else its label and the rows it lists (none while collapsed). An
+ *  answer that carries no `group` has nothing to fold away, so every plan is listed active. */
+export function planSections(answer) {
+  const rows = planRows(answer?.plans);
+  const older = rows.filter((r) => r.group === "older");
+  const active = rows.filter((r) => r.group !== "older");
+  const needsMe = (Array.isArray(answer?.needs_me) ? answer.needs_me : []).map((i) => needsItem(i, rows));
+  const olderLine = (open) => (older.length
+    ? { label: `${older.length} older ${open ? "▾" : "▸"}`, rows: open ? older : [] }
+    : null);
+  return { needsMe, active, older, olderLine };
 }
 
 /** The plan shown: the one the person picked if it is still listed, else the first that loads. */

@@ -27,6 +27,7 @@ decides is how an answer, or the lack of one, reads (`readPlans`, `notice`).
 
 ## Rules
 
+- The mod opens on the plan list: Needs me (the answer's `needs_me`, each with its way to act), the active plans in the order the command printed, one collapsed "N older" line (`planSections`).
 - Never call `writeTextFile`, a shell or any command but the two workbench verbs. The Herdr commands it runs are
   `agent.focus` (Open) and the panel button's `layout.select`, `layout.show` and `layout.hide`; an attempt joins a terminal by exact address, never by name, and a remote space joins nothing.
 - An unknown value is shown as unknown (or its own text), never filled in; a failure is shown where it belongs
