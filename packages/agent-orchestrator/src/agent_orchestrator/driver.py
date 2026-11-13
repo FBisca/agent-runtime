@@ -906,6 +906,18 @@ def head_of(checkout):
     return run(["git", "-C", str(checkout), "rev-parse", "HEAD"])
 
 
+def is_flaky(receipt, prior):
+    """A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it. Only
+    under the same approval digest: an amended contract runs other oracle bytes, and a FAIL under the old ones says
+    nothing about the new."""
+    return receipt["result"] == "PASS" and any(
+        r.get("tree") == receipt["tree"]
+        and r.get("digest") == receipt.get("digest")
+        and r.get("result") == "FAIL"
+        for r in prior
+    )
+
+
 def check_commit(claimed, head, what="review.json"):
     """A claimed commit is at least 7 hex characters and is the checkout's HEAD (or an abbreviation of it)."""
     contracts.need(
@@ -4601,10 +4613,7 @@ class Driver:
             negative=negative,
         )
         receipt = result.receipt
-        # A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it.
-        if receipt["result"] == "PASS" and any(
-            r.get("tree") == receipt["tree"] and r.get("result") == "FAIL" for r in prior
-        ):
+        if is_flaky(receipt, prior):
             receipt.update(
                 result="UNKNOWN",
                 reason="flaky",
