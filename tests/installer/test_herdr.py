@@ -56,7 +56,8 @@ class HerdrComponentTests(HerdrCase):
             os.readlink(self.mod()), str(self.checkout_dir / "herdr" / "agent-workbench")
         )
         self.assertEqual(
-            os.readlink(self.layout()), str(self.checkout_dir / "herdr" / "layouts" / "workbench.json")
+            os.readlink(self.layout()),
+            str(self.checkout_dir / "herdr" / "layouts" / "workbench.json"),
         )
         self.assertEqual(
             json.loads(self.layout().read_text(encoding="utf-8")),
@@ -224,7 +225,8 @@ class HerdrComponentTests(HerdrCase):
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertTrue(self.layout().is_symlink())
         self.assertEqual(
-            os.readlink(self.layout()), str(self.checkout_dir / "herdr" / "layouts" / "workbench.json")
+            os.readlink(self.layout()),
+            str(self.checkout_dir / "herdr" / "layouts" / "workbench.json"),
         )
 
     def test_s13_uninstall_removes_the_layout_link_and_keeps_the_checkout(self):
