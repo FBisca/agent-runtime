@@ -294,7 +294,7 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | `test_route_selection_run.py` | R2, R4 | `orchestrator-routing-decoupling/S2`–`S4` — the route a run resolves |
 | `test_routes.py` | R2, R4 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3` — the typed route schema |
 | `test_routes_driver.py` | R2, R4, R90 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3`, `orchestrator-banner` — the route config a run reads and the banner that names it |
-| `test_routes_typed_selection.py` | R19, R20, R103 | `remove-legacy-routing/S1`, `S2`, `S4`, `S6`, `S7` — the typed route file a new run is routed by |
+| `test_routes_typed_selection.py` | R19, R20, R107 | `remove-legacy-routing/S1`, `S2`, `S4`, `S6`, `S7` — the typed route file a new run is routed by |
 | `test_routes_docs.py` | R19, R20, R94 | `remove-legacy-routing/S8` — the routing documents describe typed routes and no table |
 | `test_routes_resume.py` | R92 | `remove-legacy-routing/S3` — the routes a resumed run keeps |
 | `test_step_routes.py` | R2, R8–R11 | `orchestrator-routing-effort-role/S3`, `S8`–`S10` — the step routes |
