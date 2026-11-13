@@ -29,3 +29,12 @@ class ReviewBriefTests(unittest.TestCase):
         text = self.brief()
         self.assertIn("Run targeted tests only", text)
         self.assertIn("CI already ran the suites", text)
+
+    def test_S3_the_brief_asks_a_requirement_violation_to_be_blocking_with_its_metadata(self):
+        """orchestrator-engine/R136"""
+        text = self.brief()
+        self.assertIn("requirement_violation", text)
+        for field in ("source", "id", "expected", "observed"):
+            self.assertIn("`%s`" % field, text)
+        self.assertIn("blocking", text)
+        self.assertIn("rare", text)

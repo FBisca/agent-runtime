@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from agent_orchestrator import contracts, driver
@@ -455,6 +456,72 @@ class ContractTests(unittest.TestCase):
             {"contract": 3, "action": "amend", "reason": "x", "answer": "y"},
             "answer",
         )
+
+
+VIOLATION = {
+    "source": "docs/spec.md",
+    "id": "R2",
+    "expected": "exit 2 means no command ran",
+    "observed": "state save failed after the command ran, and exit 2 was returned",
+}
+
+
+class RequirementViolationTests(unittest.TestCase):
+    """An asserted requirement violation blocks with its metadata; an optional observation is untouched."""
+
+    def rejects(self, value, needle):
+        """Both readers refuse it, each naming the item and what it lacks."""
+        for validate in (contracts.validate_review, contracts.ReviewV2.model_validate):
+            with self.assertRaises(ValueError) as caught:
+                validate(value)
+            self.assertIn(needle, str(caught.exception))
+
+    def item(self, **over):
+        return dict(BLOCKING, **dict({"requirement_violation": VIOLATION}, **over))
+
+    def test_S3_an_asserted_requirement_violation_must_be_a_blocking_item(self):
+        for kind in ("concern", "question", "nit", "deferred"):
+            self.rejects(review2(items=[self.item(kind=kind)]), "B1")
+        validated = contracts.validate_review(review2(verdict="block", items=[self.item()]))
+        self.assertEqual(validated, review2(verdict="block", items=[self.item()]))
+
+    def test_S3_a_requirement_violation_names_its_source_requirement_expected_and_observed(self):
+        for field in ("source", "id", "expected", "observed"):
+            for bad in (None, "", " ", 7):
+                violation: dict[str, Any] = dict(VIOLATION)
+                if bad is None:
+                    del violation[field]
+                else:
+                    violation[field] = bad
+                review = review2(
+                    verdict="block", items=[self.item(requirement_violation=violation)]
+                )
+                self.rejects(review, "B1")
+                self.rejects(review, field)
+        self.rejects(review2(verdict="block", items=[self.item(requirement_violation={})]), "B1")
+        self.rejects(review2(verdict="block", items=[self.item(requirement_violation="R2")]), "B1")
+        # An explicit null asserts nothing: it names no source, requirement, expectation or observed behaviour,
+        # so both readers read it as absent rather than sending the reviewer to repair a shape that claims nothing.
+        for kind, verdict in (("concern", "pass"), ("blocking", "block")):
+            review = review2(
+                verdict=verdict, items=[self.item(kind=kind, requirement_violation=None)]
+            )
+            self.assertEqual(contracts.validate_review(review)["items"], review["items"])
+            self.assertEqual(
+                contracts.ReviewV2.model_validate(review).model_dump(exclude_unset=True), review
+            )
+
+    def test_S4_a_concern_without_a_violation_and_a_legacy_review_still_read(self):
+        concern = dict(NIT, kind="concern", summary="optional refactor")
+        self.assertEqual(contracts.validate_review(review2(items=[concern]))["items"], [concern])
+        self.assertEqual(
+            contracts.ReviewV2.model_validate(review2(items=[concern])).model_dump(
+                exclude_unset=True
+            ),
+            review2(items=[concern]),
+        )
+        legacy = review(verdict="pass")
+        self.assertEqual(contracts.validate_review(legacy), legacy)
 
 
 def contract_report_keys(text):

@@ -515,5 +515,57 @@ class ClarificationTests(EnvelopeFixture, unittest.TestCase):
         )
 
 
+VIOLATION = {
+    "source": "docs/spec.md",
+    "id": "R2",
+    "expected": "exit 2 means no command ran",
+    "observed": "exit 2 after execution",
+}
+
+
+class RequirementViolationTests(EnvelopeFixture, unittest.TestCase):
+    """A review that asserts a requirement violation blocks with its metadata, or is refused before CI."""
+
+    def refused(self, item, verdict="pass"):
+        """The reviewer is warned twice, then the Lead is asked; the unit never reaches CI."""
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                *self.repeated(self.reviewer_done(self.review2(verdict=verdict, items=[item]))),
+                self.skipped(),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.request()["event"], "review")
+        self.assertEqual(
+            len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead"
+        )
+        self.assertTrue(self.run_events("contract-error"))
+        gates = [e["gate"] for e in self.run_events("state") if e["task"] == "t1"]
+        self.assertNotIn("ready-for-ci", gates, "a refused review advanced the unit to CI")
+        return self.request()["reason"]
+
+    def test_S3_a_concern_asserting_a_requirement_violation_is_refused_before_ci(self):
+        reason = self.refused(dict(CONCERN, requirement_violation=VIOLATION))
+        self.assertIn(CONCERN["id"], reason)
+        self.assertIn("requirement_violation", reason)
+        self.assertIn("blocking", reason)
+
+    def test_S3_a_requirement_violation_missing_its_observed_behavior_is_refused(self):
+        violation = {k: v for k, v in VIOLATION.items() if k != "observed"}
+        reason = self.refused(dict(BLOCKING, requirement_violation=violation), "block")
+        self.assertIn(BLOCKING["id"], reason)
+        self.assertIn("observed", reason)
+
+    def test_S4_a_concern_without_a_requirement_violation_still_reaches_ci(self):
+        self.waits(
+            [self.worker_done(tests=True), self.reviewer_done(self.review2(items=[CONCERN]))]
+        )
+        self.run_driver()
+        self.assertEqual(self.task()["gate"], "done")
+        self.assertTrue(self.checks_log())
+        self.assertFalse((self.run_dir / "t1r1" / "findings.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

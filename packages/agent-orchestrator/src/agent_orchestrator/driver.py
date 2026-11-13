@@ -2828,6 +2828,11 @@ class Driver:
                 "",
                 "Block only on MAJOR defects: wrong behaviour, data loss, or a scenario that is not really tested. "
                 "Everything else is a `concern`, `question`, `nit` or `deferred` item; it never blocks.",
+                "A defect that breaks a numbered requirement is a `blocking` item that also asserts "
+                "`requirement_violation` {`source`, `id`, `expected`, `observed`}: the spec or plan file, the requirement "
+                "id, what it promises and what the code does instead, each nonempty, beside the item's own file, line, "
+                "fix and evidence. A rare or post-launch failure is still a violation: rarity does not make it an "
+                "observation, and the driver refuses a requirement_violation on a nonblocking item.",
                 "Touch nothing in the repository.",
                 "Run targeted tests only: name the test files or node ids the change touches. The implementer's checks "
                 "and CI already ran the suites; read their results in the report and the pull request's checks.",
