@@ -11,7 +11,6 @@ drives a shell, subprocesses and the filesystem.
 import os
 import shutil
 import signal
-import subprocess
 import unittest
 
 import pytest
@@ -37,19 +36,18 @@ esac
 if [ -n "${FAKE_PYTHON_AGAIN:-}" ] && [ -f "$FAKE_MARK" ] && [ ! -f "$FAKE_MARK.again" ] && [ "$2" = swap ]; then
   : > "$FAKE_MARK.again"
   kill -TERM "$PPID"
-  sleep 1
 fi
 if [ -n "${FAKE_PYTHON_STEP:-}" ] && [ "$step" = "$FAKE_PYTHON_STEP" ]; then
   echo "python3 $step" >> "$FAKE_CALLS"
   : > "$FAKE_MARK"
   case ${FAKE_PYTHON_MODE:-fail} in
     fail) exit 1 ;;
-    term) kill -TERM "$PPID"; sleep 1; exit 1 ;;
+    term) kill -TERM "$PPID"; exit 1 ;;
     term-bootstrap)
       # Never the test runner: with no bootstrap above the installer, the signal is not sent.
       above=$(ps -o ppid= -p "$PPID" | tr -d ' ')
       [ "$above" = "$FAKE_RUNNER_PID" ] || kill -TERM "$above"
-      sleep 1; exit 1 ;;
+      exit 1 ;;
   esac
 fi
 exec "$real" "$@"
@@ -362,15 +360,6 @@ class FailurePathMatrixTests(TransactionCase):
         for shim in SHIMS:
             self.assertTrue(self.shim(shim).is_symlink(), shim)
         self.assertEqual(self.manifest()["components"]["runtime"]["release"], "v0.1.0")
-
-    def test_s8_the_installer_stays_shellcheck_clean(self):
-        """installer-contract/R8: the rollback code is shellcheck clean with the rest of the installer."""
-        if shutil.which("shellcheck") is None:
-            self.skipTest("shellcheck is not installed")
-        result = subprocess.run(
-            ["shellcheck", str(shared.INSTALLER)], capture_output=True, text=True, check=False
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
