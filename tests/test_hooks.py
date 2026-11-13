@@ -1225,7 +1225,9 @@ class StopGuardTests(HookStoreCase):
         """The context reminder and the Stop guard read the same rule as the server: a newer row that is
         dead and empty does not hide the lead's own team, and a newer row that owns the terminal does."""
         self.unseen()  # the lead's own team holds work
-        dead = self.store.team("scope", "t0", DEAD_GENERATION)  # a newer row that left nothing behind
+        dead = self.store.team(
+            "scope", "t0", DEAD_GENERATION
+        )  # a newer row that left nothing behind
         self.assertIsNotNone(self.prompt())
         self.assertEqual(self.stop()[0], {"decision": "block", "reason": self.REASON % (1, 0)})
 
@@ -1459,7 +1461,8 @@ class StopGuardTests(HookStoreCase):
         self.worker(self.store, team)
         out, err, code = child.run(STOP, self.STOP)
         self.assertEqual((out["decision"], code), ("block", 0), err)
-        self.store.team("scope", "t5", "1:newer")  # a newer team supersedes the hook's
+        newer = self.store.team("scope", "t5", "1:newer")  # a newer team supersedes the hook's
+        self.worker(self.store, newer)  # it still holds work, so it owns the terminal
         self.assertIsNone(child.run(STOP, self.STOP)[0])
         self.assertIsNone(self.stop()[0])  # t0 leads no team with needs
         other = dispatch_store.Store(self.env)

@@ -86,7 +86,9 @@ class DispatchTests(ToolCase):
         """The binding and the authorization agree on who owns the terminal: a session that left nothing
         behind never takes the terminal from the lead that still works."""
         lead = self.lead()
-        self.call(lead, "wait", {"target": "all", "timeout": 0})  # the lead's own team row exists now
+        self.call(
+            lead, "wait", {"target": "all", "timeout": 0}
+        )  # the lead's own team row exists now
         store = Store({"HOME": str(self.dir / "home")})
         with store.transaction() as db:
             scope, lead_id, team = db.execute(

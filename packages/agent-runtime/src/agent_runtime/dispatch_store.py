@@ -153,13 +153,17 @@ def team_empty(db, team):
     if db.execute("SELECT 1 FROM last_wait WHERE team=? LIMIT 1", (team,)).fetchone():
         return False
     # The task and operation tables arrived with later store versions: an older one has neither.
-    if db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
-    ).fetchone() and db.execute("SELECT 1 FROM tasks WHERE team=? LIMIT 1", (team,)).fetchone():
+    if (
+        db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'").fetchone()
+        and db.execute("SELECT 1 FROM tasks WHERE team=? LIMIT 1", (team,)).fetchone()
+    ):
         return False
-    if db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
-    ).fetchone() and db.execute("SELECT 1 FROM operations WHERE team=? LIMIT 1", (team,)).fetchone():
+    if (
+        db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
+        ).fetchone()
+        and db.execute("SELECT 1 FROM operations WHERE team=? LIMIT 1", (team,)).fetchone()
+    ):
         return False
     return True
 
@@ -171,7 +175,8 @@ def owning_team(db, scope, lead, own_team=None, own_generation=None):
     row of own_generation) is never skipped for it, so a caller always has a team; when every other row
     would be skipped, the newest one owns the terminal."""
     rows = db.execute(
-        "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC", (scope, lead)
+        "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC",
+        (scope, lead),
     ).fetchall()
     for row in rows:
         if row["id"] == own_team or (
