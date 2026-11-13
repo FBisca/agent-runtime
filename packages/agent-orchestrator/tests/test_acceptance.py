@@ -197,7 +197,7 @@ class AcceptanceFixture(GateFixture):
 
     def drive(self, steps):
         self.waits(steps)
-        self.run_driver("--repo", str(self.repo))
+        return self.run_driver("--repo", str(self.repo))
 
     def delivered(self, gate="done", lands="done", scenarios=None, tickets=None):
         self.write_plan(scenarios, tickets)
@@ -282,6 +282,28 @@ class TicketGateTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual((receipt["result"], receipt["reason"]), ("UNKNOWN", "timeout"))
         (finding,) = self.first_findings()["items"]
         self.assertIn("UNKNOWN", finding["excerpt"])
+
+    def test_the_gate_says_it_picked_up_a_report_and_each_evidence_run_as_it_starts_and_ends(self):
+        """A gate runs for minutes in a scratch tree: the pane must not look idle while it does."""
+        self.write_plan()
+        self.merged_on_main("done")
+        result = self.drive([self.worker("done"), self.reviewer(), self.default_mutator()])
+        lines = result.stderr.splitlines()
+        picked = next(i for i, line in enumerate(lines) if "checking its report" in line)
+        started = next(i for i, line in enumerate(lines) if "running S1 evidence" in line)
+        ended = next(i for i, line in enumerate(lines) if "S1 evidence PASS" in line)
+        self.assertLess(picked, started)
+        self.assertLess(started, ended)
+        self.assertIn("ticket", lines[started])
+
+    def test_a_failing_evidence_run_is_said_as_a_failure(self):
+        check = "grep -qx done src/a/feature.txt && test -f checks/probe.txt"
+        self.write_plan([scenario("S1", check_item(check))])
+        result = self.drive([self.worker("almost")])
+        self.assertTrue(
+            any("S1 evidence FAIL" in line and "✗" in line for line in result.stderr.splitlines()),
+            result.stderr,
+        )
 
     def test_S16_a_ticket_that_routes_no_evidence_runs_none(self):
         self.write_plan(
