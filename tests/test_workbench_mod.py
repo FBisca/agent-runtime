@@ -158,6 +158,10 @@ def test_S33_the_header_expands_the_panel_over_the_terminals_and_collapses_it_ba
     scenario("S33", 4)
 
 
+def test_S30_the_mod_opens_on_needs_me_the_active_plans_and_a_collapsed_older_line():
+    scenario("S30", 3)
+
+
 def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight_one_fills_the_area():
     layout = json.loads((MOD.parent / "layouts" / "workbench.json").read_text())
 

@@ -8,21 +8,30 @@ export const PLANS = {
   repo: REPO,
   plans: [
     {
-      slug: "old-plan", format: "markdown", path: DIR + "2026-10-30-old-plan.plan.md", legacy: true,
-      state: "ARCHIVED", tickets: { total: 3, by_state: { COMPLETE: 3 } },
-    },
-    {
-      slug: "broken", format: "yaml", path: DIR + "2026-11-09-broken.plan.yaml", legacy: false,
-      state: null, tickets: null, error: { kind: "invalid_plan", message: "cycle: T1 -> T2 -> T1" },
-    },
-    {
       slug: "agent-workbench", format: "yaml", path: DIR + "2026-11-11-agent-workbench.plan.yaml", legacy: false,
-      state: "RUNNING", tickets: { total: 3, by_state: { COMPLETE: 1, "IN PROGRESS": 1, "TO-DO": 1 } },
+      state: "RUNNING", group: "active", last_activity: "2026-11-12T10:00:00+00:00",
+      tickets: { total: 3, by_state: { COMPLETE: 1, "IN PROGRESS": 1, "TO-DO": 1 } },
     },
     {
       slug: "second", format: "yaml", path: DIR + "2026-11-10-second.plan.yaml", legacy: false,
-      state: "APPROVED", tickets: { total: 1, by_state: { "TO-DO": 1 } },
+      state: "APPROVED", group: "active", last_activity: "2026-11-10T09:00:00+00:00",
+      tickets: { total: 1, by_state: { "TO-DO": 1 } },
     },
+    {
+      slug: "broken", format: "yaml", path: DIR + "2026-11-09-broken.plan.yaml", legacy: false,
+      state: null, group: "active", last_activity: null, tickets: null,
+      error: { kind: "invalid_plan", message: "cycle: T1 -> T2 -> T1" },
+    },
+    {
+      slug: "old-plan", format: "markdown", path: DIR + "2026-10-30-old-plan.plan.md", legacy: true,
+      state: "ARCHIVED", group: "older", last_activity: "2026-10-30T09:00:00+00:00",
+      tickets: { total: 3, by_state: { COMPLETE: 3 } },
+    },
+  ],
+  needs_me: [
+    { plan: "agent-workbench", ticket: "T2", kind: "needs_you" },
+    { plan: "second", ticket: null, kind: "ready_to_drive" },
+    { plan: "broken", ticket: null, kind: "fix_plan" },
   ],
 };
 

@@ -6,7 +6,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
+  layoutFor, screenFor, planRows, planSections, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
   panelToggle, panelsWith, panelExpand, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
@@ -35,7 +35,8 @@ export default class AgentWorkbench extends View {
     this.data = createData({ exec });
     this.size = null;
     this.drilled = false; // narrow only: the inspector replaces the list
-    this.pickerOpen = false;
+    this.pickerOpen = true; // opens on the list: Needs me, the active plans, older
+    this.olderOpen = false;
     this.ticket = null;
     this.spaceKey = null;
     this.syncSpace();
@@ -67,6 +68,7 @@ export default class AgentWorkbench extends View {
     this.spaceKey = key;
     this.ticket = null;
     this.drilled = false;
+    this.pickerOpen = true;
     this.project = space?.name ?? null;
     this.machine = space?.machine ?? null;
     if (space) this.data.setScope({ folder: space.folder, machine: space.machine });
@@ -135,7 +137,10 @@ export default class AgentWorkbench extends View {
     root.child(header(head));
     const show = (el) => root.child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar().child(el));
 
-    if (this.pickerOpen || !picked) return show(planList(rows, state.selected, onPick, t));
+    const onOlder = (cx) => { this.olderOpen = !this.olderOpen; cx.notify(); };
+    if (this.pickerOpen || !picked) {
+      return show(planList(planSections(state.plans.value), this.olderOpen, state.selected, { onPick, onOlder }, t));
+    }
     if (!plan || plan.status === "loading") return show(loadingView("Loading " + picked.slug + "…", t));
     if (plan.status === "error") return show(noticeView(notice(plan.error, { plan: picked.slug }), t));
 
