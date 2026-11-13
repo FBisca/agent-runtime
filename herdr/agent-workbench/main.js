@@ -8,7 +8,7 @@ import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdr
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
   layoutFor, screenFor, planRows, homeView, dashboardView, initialNav, navigate, ticketLayers, pickTicket, relatives, inspector, planHeader,
-  timelineOf, notice, liveTerminals, panelToggle, panelsWith, panelExpand, PANEL_PX,
+  timelineOf, notice, liveTerminals, panelToggle, panelsWith, panelExpand, prLink, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { homeScreen } from "./views/home.js";
@@ -145,16 +145,24 @@ export default class AgentWorkbench extends View {
     const home = homeView(state.plans.value, state.totals.status === "ok" ? state.totals.value : null, live);
 
     if (this.nav.screen === "dashboard") {
-      const card = home.cards?.find((c) => c.id === this.nav.card);
-      if (!card) {
+      const view = dashboardView(this.nav.card, state.totals.status === "ok" ? state.totals.value : null, layout, this.nav.filter ?? null);
+      if (!view.headline) {
         // The totals are still coming, or did not come: a dashboard has nothing to draw from, so say so.
         const waiting = state.totals.status === "loading";
         return root.child(header({ title: "Last 7 days" }, back)).child(waiting
           ? loadingView("Loading the week…", t)
           : noticeView(notice(state.totals.error ?? { kind: "no_json", message: "no totals" }, { project }), t));
       }
-      return root.child(header({ title: card.label }, back)).child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(dashboardScreen(card, dashboardView(card.id, state.totals.value, layout), t)));
+      // A click filter is view state in the navigation: it selects rows the answer holds and fetches nothing.
+      const filter = (picked, cx) => { this.nav = navigate(this.nav, { type: "filter", filter: picked }); cx.notify(); };
+      const handlers = {
+        onFilter: filter,
+        onClear: (cx) => filter(this.nav.filter, cx),
+        // The one thing the mod opens: a GitHub pull request, and only a URL `prLink` accepts.
+        onLink: (url, cx) => { if (prLink(url)) cx.open_url(url); },
+      };
+      return root.child(header({ title: view.headline.label }, back)).child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar()
+        .child(dashboardScreen(view, handlers, t)));
     }
 
     const picked = this.nav.screen === "plan" ? rows.find((r) => r.path === this.nav.path) ?? null : null;

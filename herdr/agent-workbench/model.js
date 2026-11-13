@@ -488,53 +488,353 @@ export function homeView(plans, totals, live = null) {
 /** How many cards fit a row: two when narrow, so a card keeps room for its number. */
 export const cardsPerRow = (layout) => (layout === "narrow" ? 2 : 5);
 
+/** Plans are one to a row at every width: a plan card has more to say than a card's number. */
+export const plansPerRow = () => 1;
+
+// ---- a card's dashboard --------------------------------------------------------------------------------------------
+
 const list = (v) => (Array.isArray(v) ? v : []);
 const entries = (v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.entries(v) : []);
-const at = (r) => `${r.plan} ${r.ticket}`;
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const percent = (r) => (num(r) === null ? UNKNOWN : `${Math.round(r * 100)}%`);
 const tokenSum = (r) => (num(r?.input) === null && num(r?.output) === null ? null : (r.input ?? 0) + (r.output ?? 0));
 const tokenText = (r) => { const n = tokenSum(r); return n === null ? UNKNOWN : tokenCount(n); };
-const countBars = (pairs) => pairs.map(([label, value]) => ({ label, value, text: String(value) }));
+const sum = (values) => values.reduce((total, v) => total + v, 0);
 
-// One builder per card: `bars` are the aggregates, `lists` the tickets behind them. Each reads only its own section of
-// the totals answer, so a missing section draws nothing rather than a guess.
-const DETAIL = {
-  ticket_time: (totals) => ({
-    bars: entries(totals.time?.steps).map(([label, s]) => ({
-      label, value: num(s?.median), text: num(s?.median) === null ? UNKNOWN : `${duration(s.median)} · max ${duration(s.max)}`,
-    })),
-    lists: [{ title: "Slowest tickets", rows: list(totals.time?.slowest).map((r) => ({ label: at(r), text: duration(r.seconds) })) }],
-  }),
+// The mod's data palette has four slots (aqua, violet, magenta, green: `ui.js` holds the colours). The model hands out
+// slots by what a thing is, never by where it arrives, so a reason or a step keeps its colour whatever the order.
+export const DATA_SLOTS = 4;
+
+export const STEP_ORDER = ["work", "review", "ci", "merge"];
+
+/** A step's slot in the data palette; a step the mod does not know has none (a neutral). */
+export const stepLook = (step) => {
+  const at = STEP_ORDER.indexOf(step);
+  return { slot: at < 0 ? null : at, shade: 1 };
+};
+
+// A finding's reason is `"<source>/<finding_kind>"`. Fixed order: the gate, the review's kinds from blocking to deferred, CI,
+// then a merge conflict; a reason this mod does not know follows them, by name.
+export const REASON_ORDER = [
+  "verify/blocking", "review/blocking", "review/concern", "review/question", "review/nit", "review/deferred",
+  "ci/blocking", "conflict/blocking",
+];
+const REASON_SLOT = { verify: 0, review: 1, ci: 2, conflict: 3 };
+// A review's kinds are shades of one colour, strongest first, so the source reads at a glance and the kind in its label.
+const REVIEW_SHADE = { blocking: 1, concern: 0.8, question: 0.6, nit: 0.45, deferred: 0.3 };
+const REASON_WORD = { "verify/blocking": "gate check", "ci/blocking": "CI failed", "conflict/blocking": "merge conflict" };
+
+export function orderedReasons(keys) {
+  const rank = (k) => { const at = REASON_ORDER.indexOf(k); return at < 0 ? REASON_ORDER.length : at; };
+  return [...keys].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** How a reason reads and which slot and shade of the palette it takes. An unknown reason reads as itself, in a neutral. */
+export function reasonLook(key) {
+  const [source, kind] = String(key).split("/");
+  const slot = REASON_SLOT[source] ?? null;
+  const word = REASON_WORD[key] ?? (source === "review" && kind ? `review · ${kind}` : String(key));
+  return { slot, shade: source === "review" ? (REVIEW_SHADE[kind] ?? 0.5) : 1, label: word };
+}
+
+/** A round top for an axis: 1, 2 or 5 times a power of ten, covering `value`. */
+export function niceTop(value) {
+  if (!(value > 0)) return 1;
+  const base = 10 ** Math.floor(Math.log10(value));
+  const factor = value / base;
+  return ([1, 2, 5, 10].find((f) => factor <= f + 1e-9) ?? 10) * base;
+}
+
+const AXIS_WORD = {
+  count: (v) => String(v),
+  percent: (v) => `${Math.round(v * 100)}%`,
+  seconds: (v) => duration(v),
+};
+
+/** The axis of a scaled chart: 0, half and a round top that covers `value`, worded in `unit`. */
+export function axisFor(value, unit = "count", top = null) {
+  const max = top ?? niceTop(value);
+  const ticks = [0, max / 2, max];
+  return { max, ticks, unit, labels: ticks.map((v) => (v === 0 && unit !== "percent" ? "0" : AXIS_WORD[unit](v))) };
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// This runtime has no Intl: a day is worded by hand, in UTC like every day the CLI returns.
+const dayName = (ms) => { const d = new Date(ms); return `${WEEKDAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; };
+
+/** When a thing happened, read against the end of the window the answer covers: `5m ago`, `3h ago`, then the day. */
+export function relativeTime(iso, end) {
+  const at = Date.parse(iso ?? "");
+  if (!Number.isFinite(at)) return null;
+  const to = Date.parse(end ?? "");
+  if (!Number.isFinite(to)) return dayName(at);
+  const seconds = (to - at) / 1000;
+  if (seconds < 3600) return `${Math.max(1, Math.floor(seconds / 60))}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return dayName(at);
+}
+
+/** The URL of a GitHub pull request, only when it is exactly `https://github.com/<owner>/<repo>/pull/<n>`: the one thing
+ *  a chip opens. Anything else is shown and never opened. */
+export function prLink(url) {
+  if (typeof url !== "string") return null;
+  const match = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9._-]+)\/pull\/[0-9]+$/.exec(url);
+  return match && match[2] !== "." && match[2] !== ".." ? url : null;
+}
+
+/** How a PR reads: `#n` from the URL's number, and the link only when `prLink` accepts it. */
+function prOf(pr) {
+  if (typeof pr !== "string" || !pr) return { link: null, linkText: null };
+  const number = /\/pull\/([0-9]+)\/?$/.exec(pr)?.[1];
+  return { link: prLink(pr), linkText: number ? `#${number}` : pr.slice(0, 24) };
+}
+
+const dayOf = (iso) => (typeof iso === "string" && /^\d{4}-\d\d-\d\d/.test(iso) ? iso.slice(0, 10) : null);
+
+// What a dashboard's click filters select, by the kind of filter. A filter of another kind is not the card's: it selects all.
+const SAME = {
+  day: (f, r) => r.day === f.day,
+  reason: (f, r) => Object.hasOwn(r.reasons ?? {}, f.key),
+  cell: (f, r) => r.plan === f.plan && r.cause === f.cause,
+};
+const FILTER_OF = { merged: "day", first_pass: "reason", escalations: "cell" };
+const EMPTY = {
+  day: (f) => `Nothing merged on ${dayName(Date.parse(f.day))}.`,
+  reason: (f) => `No fixed ticket had ${reasonLook(f.key).label} findings.`,
+  cell: (f) => `No ${f.cause} escalation among ${f.plan}'s latest.`,
+};
+
+// What an applied filter reads as, in the line above the rows.
+const FILTER_TEXT = {
+  day: (f) => dayName(Date.parse(f.day)),
+  reason: (f) => reasonLook(f.key).label,
+  cell: (f) => `${f.plan} · ${f.cause}`,
+};
+
+const row = (label, text, extra = {}) => ({
+  label, text, link: null, linkText: null, plan: null, day: null, reasons: null, cause: null, ...extra,
+});
+
+// One builder per card of what it lists, from the answer's own sections.
+const LIST = {
   merged: (totals) => ({
-    bars: countBars(list(totals.merged?.by_day).map((d) => [d.day, d.count])),
-    lists: [{ title: "Merged", rows: list(totals.merged?.tickets).map((r) => ({ label: at(r), text: r.pr ?? "" })) }],
+    title: "Merged",
+    rows: list(totals.merged?.tickets).map((r) => row(`${r.plan} ${r.ticket}`, relativeTime(r.merged_at, totals.window?.end) ?? "", {
+      ...prOf(r.pr), plan: r.plan, day: dayOf(r.merged_at),
+    })),
   }),
   first_pass: (totals) => ({
-    bars: entries(totals.first_pass?.by_plan).map(([label, v]) => ({ label, value: num(v), text: percent(v) })),
-    lists: [{
-      title: "Fixed tickets",
-      rows: list(totals.first_pass?.fixed).map((r) => ({ label: at(r), text: `${plural(r.fix_rounds, "fix round")} · ${plural(r.findings, "finding")}` })),
-    }],
+    title: "Fixed tickets",
+    rows: list(totals.first_pass?.fixed).map((r) => row(
+      `${r.plan} ${r.ticket}`, `${plural(r.fix_rounds, "fix round")} · ${plural(r.findings, "finding")}`,
+      { plan: r.plan, reasons: r.reasons && typeof r.reasons === "object" ? r.reasons : null },
+    )),
   }),
   escalations: (totals) => ({
-    bars: countBars([...entries(totals.escalations?.by_cause), ...entries(totals.escalations?.by_plan)]),
-    lists: [{ title: "Latest", rows: list(totals.escalations?.latest).map((r) => ({ label: at(r), text: `${r.cause} · ${r.at}` })) }],
+    title: "Latest",
+    rows: list(totals.escalations?.latest).map((r) => row(
+      // A unit of no ticket (the archive) names itself; an answer from before it did names the plan alone.
+      [r.plan, r.unit ?? r.ticket].filter(Boolean).join(" "),
+      [r.cause, relativeTime(r.at, totals.window?.end)].filter(Boolean).join(" · "),
+      { plan: r.plan, cause: r.cause, day: dayOf(r.at) },
+    )),
   }),
   tokens: (totals) => ({
-    bars: [...entries(totals.tokens?.by_plan), ...entries(totals.tokens?.by_model)]
-      .map(([label, v]) => ({ label, value: tokenSum(v), text: tokenText(v) })),
-    lists: [{ title: "Top tickets", rows: list(totals.tokens?.top).map((r) => ({ label: at(r), text: `${tokenText(r)} · ${r.model ?? UNKNOWN}` })) }],
+    title: "Top tickets",
+    rows: list(totals.tokens?.top).map((r) => row(`${r.plan} ${r.ticket}`, `${tokenText(r)} · ${r.model ?? UNKNOWN}`, { plan: r.plan })),
+  }),
+  ticket_time: (totals) => ({
+    title: "Slowest tickets",
+    rows: list(totals.time?.slowest).map((r) => row(`${r.plan} ${r.ticket}`, duration(r.seconds), { ...prOf(r.pr), plan: r.plan })),
   }),
 };
 
-/** A card's dashboard detail from the totals answer: `bars` only when wide (a narrow panel has no room for them),
- *  `lists` always; a list with no rows is left out. */
-export function dashboardView(card, totals, layout) {
-  const detail = totals && DETAIL[card]?.(totals);
-  if (!detail) return { bars: [], lists: [] };
-  const bars = layout === "narrow" ? [] : detail.bars;
-  return { bars, lists: detail.lists.filter((l) => l.rows.length) };
+// Which card, of `cardsOf`, each part of a totals answer belongs to: its change, and its week as a series.
+const CHANGE_OF = { merged: "merged", first_pass: "first_pass_rate", escalations: "escalations", tokens: "tokens", ticket_time: "median_ticket_seconds" };
+const SPARK = {
+  merged: (t) => list(t.merged?.by_day).map((d) => num(d.count)),
+  first_pass: (t) => list(t.first_pass?.by_day).map((d) => num(d.rate)),
+  escalations: (t) => list(t.escalations?.by_day).map((d) => num(d.count)),
+  tokens: (t) => list(t.tokens?.by_day).map((d) => num(d.output)),
+  ticket_time: (t) => list(t.time?.by_day).map((d) => num(d.median)),
+};
+
+// A sparkline is the whole week: an answer from before the series (days with something, not every date) draws none.
+const sparkOf = (card, totals) => {
+  const values = SPARK[card](totals);
+  return values.length >= (num(totals.window?.days) ?? 7) ? values : [];
+};
+
+/** The change against last week as the headline words it: `▲ 300% vs last week`, and when there is none (the CLI says
+ *  null: last week was unmeasured or 0; or it does not say) `first week measured`, never 0%. */
+export function changeText(change) {
+  if (num(change) === null) return "first week measured";
+  const n = Math.round(Math.abs(change) * 100);
+  if (n === 0) return "no change vs last week";
+  return `${change > 0 ? "▲" : "▼"} ${n}% vs last week`;
+}
+
+const chartHeight = (layout) => (layout === "narrow" ? 120 : 200);
+
+const hasCount = (values) => values.some((v) => v > 0);
+
+const FILTER_DIM = (filter, kind, matches) => Boolean(filter) && filter.kind === kind && !matches;
+
+function mergedCharts(totals, filter) {
+  const days = list(totals.merged?.by_day);
+  // Plans arrive per day; the columns need them across the week, so the colour of a plan is its rank in the week.
+  if (!days.length || days.some((d) => !d.by_plan || typeof d.by_plan !== "object")) return [];
+  if (!hasCount(days.map((d) => d.count))) return [];
+  const week = new Map();
+  for (const d of days) for (const [plan, n] of entries(d.by_plan)) week.set(plan, (week.get(plan) ?? 0) + n);
+  const ranked = [...week.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([plan]) => plan);
+  const shown = ranked.slice(0, DATA_SLOTS);
+  const series = shown.map((key, slot) => ({ key, slot }));
+  if (ranked.length > DATA_SLOTS) series.push({ key: "other", slot: null });
+  const columns = days.map((d) => {
+    const folded = new Map();
+    for (const [plan, n] of entries(d.by_plan)) {
+      const key = shown.includes(plan) ? plan : "other";
+      folded.set(key, (folded.get(key) ?? 0) + n);
+    }
+    const parts = series.filter((s) => folded.has(s.key)).map((s) => ({ key: s.key, value: folded.get(s.key), slot: s.slot }));
+    const ms = Date.parse(d.day);
+    return {
+      day: d.day, label: Number.isFinite(ms) ? WEEKDAYS[new Date(ms).getUTCDay()] : d.day, total: d.count, parts,
+      filter: { kind: "day", day: d.day }, dim: FILTER_DIM(filter, "day", filter?.day === d.day),
+    };
+  });
+  return [{
+    kind: "stacked-columns", id: "days", title: "Merged per day, by plan", series, days: columns,
+    axis: axisFor(Math.max(...columns.map((c) => c.total))),
+  }];
+}
+
+const ROUND_ROWS = [["0", "first pass"], ["1", "1 round"], ["2", "2 rounds"], ["3+", "3+ rounds"]];
+
+function firstPassCharts(totals, filter) {
+  const charts = [];
+  const rate = num(totals.cards?.first_pass_rate);
+  if (rate !== null) charts.push({ kind: "ring", id: "ring", title: "First pass", value: rate, text: percent(rate) });
+  const rounds = totals.first_pass?.rounds;
+  if (rounds && typeof rounds === "object") {
+    const rows = ROUND_ROWS.map(([key, label]) => ({ key, label, value: num(rounds[key]) ?? 0, text: String(num(rounds[key]) ?? 0) }));
+    if (hasCount(rows.map((r) => r.value))) {
+      charts.push({ kind: "bars", id: "rounds", title: "Tickets by fix rounds", rows, axis: axisFor(Math.max(...rows.map((r) => r.value))) });
+    }
+  }
+  const reasons = entries(totals.first_pass?.by_reason).filter(([, n]) => num(n) > 0);
+  if (reasons.length) {
+    const total = sum(reasons.map(([, n]) => n));
+    const byKey = new Map(reasons);
+    const parts = orderedReasons(byKey.keys()).map((key) => ({
+      key, value: byKey.get(key), share: byKey.get(key) / total, ...reasonLook(key),
+      filter: { kind: "reason", key }, dim: FILTER_DIM(filter, "reason", filter?.key === key),
+    }));
+    charts.push({ kind: "stack", id: "reasons", title: "Findings by reason", parts, axis: axisFor(1, "percent", 1) });
+  }
+  return charts;
+}
+
+function escalationCharts(totals, filter, layout) {
+  const causes = entries(totals.escalations?.by_cause).filter(([, n]) => num(n) > 0);
+  const matrix = entries(totals.escalations?.by_plan_cause);
+  if (layout !== "narrow" && matrix.length) {
+    const names = [...new Set([...causes.map(([c]) => c), ...matrix.flatMap(([, by]) => Object.keys(by ?? {}))])];
+    const cells = matrix.flatMap(([plan, by]) => names.map((cause) => ({
+      plan, cause, value: num(by?.[cause]) ?? 0, filter: { kind: "cell", plan, cause },
+      dim: FILTER_DIM(filter, "cell", filter?.plan === plan && filter?.cause === cause),
+    })));
+    const max = Math.max(...cells.map((c) => c.value));
+    if (max > 0) {
+      return [{
+        kind: "heatmap", id: "plan-cause", title: "Escalations · plan × cause", plans: matrix.map(([p]) => p), causes: names,
+        cells: cells.map((c) => ({ ...c, intensity: c.value / max })), max,
+      }];
+    }
+  }
+  if (!causes.length) return [];
+  const rows = causes.map(([key, value]) => ({ key, label: key, value, text: String(value) }));
+  return [{ kind: "bars", id: "causes", title: "Escalations by cause", rows, axis: axisFor(Math.max(...rows.map((r) => r.value))) }];
+}
+
+function tokenCharts(totals) {
+  const rows = entries(totals.tokens?.by_plan).filter(([, v]) => num(v?.tickets) > 0).map(([label, v]) => {
+    const measured = num(v.measured) ?? 0;
+    return { label, measured, unmeasured: v.tickets - measured, text: `${measured}/${v.tickets} · ${tokenText(v)}` };
+  });
+  if (!rows.length) return [];
+  return [{
+    kind: "coverage", id: "coverage", title: "Tickets with tokens measured", rows,
+    axis: axisFor(Math.max(...rows.map((r) => r.measured + r.unmeasured))),
+  }];
+}
+
+function timeCharts(totals) {
+  const charts = [];
+  const tickets = list(totals.time?.tickets).filter((t) => STEP_ORDER.some((s) => num(t.phases?.[s]) !== null));
+  if (tickets.length) {
+    const seconds = (t) => Math.max(num(t.seconds) ?? 0, sum(STEP_ORDER.map((s) => num(t.phases?.[s]) ?? 0)));
+    const axis = axisFor(Math.max(...tickets.map(seconds)), "seconds");
+    const lanes = tickets.map((t) => {
+      let at = 0;
+      const segments = [];
+      for (const step of STEP_ORDER) {
+        const value = num(t.phases?.[step]);
+        if (value === null) continue; // an unmeasured phase is no segment
+        segments.push({ step, seconds: value, left: at / axis.max, width: value / axis.max, slot: stepLook(step).slot });
+        at += value;
+      }
+      return { label: `${t.plan} ${t.ticket}`, seconds: t.seconds, text: duration(t.seconds), segments };
+    });
+    charts.push({ kind: "swimlanes", id: "slow", title: "Slowest tickets · where the time went", lanes, axis });
+  }
+  const steps = STEP_ORDER.map((step) => [step, totals.time?.steps?.[step]]).filter(([, s]) => num(s?.median) !== null);
+  if (steps.length) {
+    const rows = steps.map(([step, s]) => ({ step, median: s.median, p90: num(s.p90) }));
+    charts.push({
+      kind: "spread", id: "steps", title: "Per step · median and p90", rows,
+      axis: axisFor(Math.max(...rows.map((r) => r.p90 ?? r.median)), "seconds"),
+    });
+  }
+  return charts;
+}
+
+const CHARTS = {
+  merged: (totals, filter) => mergedCharts(totals, filter),
+  first_pass: (totals, filter) => firstPassCharts(totals, filter),
+  escalations: (totals, filter, layout) => escalationCharts(totals, filter, layout),
+  tokens: (totals) => tokenCharts(totals),
+  ticket_time: (totals) => timeCharts(totals),
+};
+
+/** A card's dashboard from the totals answer: the headline (value, change against last week, the week's series), the
+ *  number of columns, the charts the answer carries a section for (a section it lacks draws none), and the rows behind
+ *  them. `filter` is the click filter of the navigation: it keeps only the rows it selects and dims what the charts show
+ *  of the rest; `empty` says so when none is left. */
+export function dashboardView(card, totals, layout, filter = null) {
+  const columns = layout === "narrow" ? 1 : 2;
+  const cards = cardsOf(totals);
+  const headline = cards?.find((c) => c.id === card);
+  if (!headline || !CHARTS[card]) return { headline: null, columns, charts: [], rows: [], rowsTitle: null, filtered: null, empty: null };
+  const kind = FILTER_OF[card];
+  const applied = filter && filter.kind === kind ? filter : null;
+  const { title, rows: all } = LIST[card](totals);
+  const rows = applied ? all.filter((r) => SAME[kind](applied, r)) : all;
+  return {
+    headline: {
+      label: headline.label, value: headline.value, note: headline.note,
+      change: changeText(totals.change?.[CHANGE_OF[card]]), spark: sparkOf(card, totals),
+    },
+    columns,
+    chartHeight: chartHeight(layout),
+    charts: CHARTS[card](totals, applied, layout),
+    rowsTitle: title,
+    filtered: applied ? FILTER_TEXT[kind](applied) : null,
+    rows,
+    empty: applied && !rows.length ? EMPTY[kind](applied) : null,
+  };
 }
 
 // ---- navigation ---------------------------------------------------------------------------------------------
@@ -542,11 +842,23 @@ export function dashboardView(card, totals, layout) {
 /** Where the mod opens: on home. There is no plan picker. */
 export const initialNav = () => ({ screen: "home" });
 
-/** A plan or a card opens over home; back from either returns to it. An action the mod does not know changes nothing. */
+const sameFilter = (a, b) => {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+};
+
+/** A plan or a card opens over home; back from either returns to it. A click filter lives on the open dashboard: the
+ *  same filter again clears it, another replaces it, and a card opened afresh has none. An action the mod does not know
+ *  changes nothing. */
 export function navigate(nav, action) {
   switch (action?.type) {
     case "plan": return { screen: "plan", path: action.path };
     case "card": return { screen: "dashboard", card: action.id };
+    case "filter": {
+      if (nav.screen !== "dashboard" || !action.filter) return nav;
+      const same = nav.filter && sameFilter(nav.filter, action.filter);
+      return { ...nav, filter: same ? null : { ...action.filter } };
+    }
     case "back": return initialNav();
     default: return nav;
   }

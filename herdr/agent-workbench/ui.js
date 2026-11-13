@@ -51,3 +51,16 @@ export const control = (id, label, onClick, t, active = false) =>
   div().id(id).flex_none().px(6).py(2).rounded(5).text_size(11).cursor_pointer()
     .text_color(active ? t.foreground : t.dim).when(active, (el) => el.bg(t.raised))
     .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(onClick).child(label);
+
+// The mod's data palette: aqua, violet, magenta, green, in that order, validated on the dark surface (#17191d) for
+// colour-vision. The theme has no categorical colours, so the data's are fixed here and never taken from the state colours
+// above (`done`, `working`, `blocked`), which mean a state everywhere else. The model hands out a slot, never a colour.
+export const DATA_PALETTE = ["#199e70", "#9085e9", "#d55181", "#008300"];
+
+/** A data colour: the slot's, at `shade` of its strength (a review's kinds are shades of one colour). A thing with no slot
+ *  is the theme's dim neutral. */
+export function dataColor(slot, t, shade = 1) {
+  if (slot === null || slot === undefined) return t.dim;
+  const hex = DATA_PALETTE[slot % DATA_PALETTE.length];
+  return shade >= 1 ? hex : hex + Math.round(shade * 255).toString(16).padStart(2, "0");
+}

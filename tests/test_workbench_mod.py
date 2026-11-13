@@ -9,8 +9,8 @@ import json
 import os
 import re
 import shutil
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -49,6 +49,20 @@ def scenario(sid, at_least):
     assert failed == 0, output
     assert passed >= at_least, "%s: %d node tests passed, expected at least %d\n%s" % (
         sid,
+        passed,
+        at_least,
+        output,
+    )
+
+
+def dashboard(sid, name, at_least):
+    """The dashboard's node tests for one scenario: `<sid> dashboard ...` (the control plan's own `<sid> ...` tests share the
+    ID, so the prefix names these)."""
+    passed, failed, output = node_tests(pattern=r"^%s dashboard" % sid)
+    assert failed == 0, output
+    assert passed >= at_least, "%s %s: %d node tests passed, expected at least %d\n%s" % (
+        sid,
+        name,
         passed,
         at_least,
         output,
@@ -219,3 +233,38 @@ def test_S31_the_header_and_inspector_show_a_plans_measures_unknown_never_zero()
 
 def test_S32_a_timeline_shows_one_lane_per_ticket_when_wide():
     scenario("S32", 2)
+
+
+def test_S7_a_dashboard_opens_on_its_value_its_change_against_last_week_and_its_sparkline_with_axes_on_every_scaled_chart():
+    dashboard("S7", "headline and axes", 3)
+
+
+def test_S8_each_cards_dashboard_draws_its_charts_and_no_chart_for_a_section_the_answer_lacks():
+    dashboard("S8", "charts", 7)
+
+
+def test_S9_a_click_filters_the_dashboards_rows_the_same_click_clears_it_and_back_clears_it():
+    dashboard("S9", "filters", 3)
+
+
+def test_S10_rows_name_their_unit_read_relative_time_and_open_only_a_github_pull_request():
+    dashboard("S10", "rows", 3)
+    main = source("main.js")
+    # The one thing the mod opens is a GitHub pull request, and the mod checks it again before it opens it.
+    assert main.count("open_url(") == 1
+    assert re.search(r"if \(prLink\(url\)\) cx\.open_url\(url\)", main)
+
+
+def test_S11_data_colours_are_the_fixed_palette_by_slot_and_no_chart_is_coloured_with_a_state_colour():
+    dashboard("S11", "palette", 2)
+    ui = source("ui.js")
+    palette = [ui.index(hex_) for hex_ in ("#199e70", "#9085e9", "#d55181", "#008300")]
+    assert palette == sorted(palette), "aqua, violet, magenta, green, in that order"
+    for name in ("charts.js", "dashboard.js"):
+        text = (MOD / "views" / name).read_text()
+        assert not re.search(r"\bt\.(done|working|blocked)\b", text), name
+        assert not re.search(r"#[0-9a-fA-F]{6}", text), name
+
+
+def test_S15_a_narrow_dashboard_is_one_column_of_shorter_charts_and_home_has_two_cards_to_a_row():
+    dashboard("S15", "narrow", 1)
