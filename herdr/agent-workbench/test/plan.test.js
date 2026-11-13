@@ -1,4 +1,5 @@
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { planCards, ticketCard, planTimeline, cardLayers, planColumns, liveTerminals } from "../model.js";
 import { RICH_PLAN as PLAN, HOME_TERMINALS, GH } from "./fixtures.js";
@@ -92,4 +93,24 @@ test("S17 plan lays its cards and tickets out by the width the inspector leaves"
   assert.deepEqual(planColumns("wide", 800), { cards: 2, tickets: 1, inspector: true });
   assert.deepEqual(planColumns("wide", 1200), { cards: 5, tickets: 2, inspector: true });
   assert.deepEqual(planColumns("wide", null), { cards: 5, tickets: 2, inspector: true }, "unmeasured is wide");
+});
+
+// What a person compares with the prototype (S18's human check) leaves traces a test can hold: which picture each card
+// draws, that the tokens one marks what is unmeasured, and that plan cards stand at home's one height.
+test("S18 plan's five cards draw the pictures the prototype drew: rings, step and cause stacks and hatched coverage", () => {
+  const pictures = Object.fromEntries(planCards(PLAN).map((c) => [c.id, c.picture]));
+  assert.deepEqual(Object.values(pictures).map((p) => p.kind), ["ring", "ring", "stack", "stack", "coverage"]);
+  assert.equal(pictures.progress.tone, "done", "progress is a state, in the state's colour");
+  assert.equal(pictures.tokens.unmeasured, 2, "the unmeasured tickets are what the view hatches");
+  assert.ok(planCards({ ...PLAN, metrics: null }).slice(1).every((c) => c.picture === null), "no data, no picture");
+});
+
+test("S18 plan's cards stand at home's one height, and its timeline marks merges and hatches nothing it did not measure", () => {
+  const read = (name) => readFileSync(new URL(`../views/${name}`, import.meta.url), "utf8");
+  const height = (name) => /const CARD_H = (\d+);/.exec(read(name))?.[1];
+  assert.ok(height("plan.js"), "the plan view sets a card height");
+  assert.equal(height("plan.js"), height("home.js"));
+  const wide = planTimeline(PLAN.metrics, PLAN.tickets, "wide");
+  assert.deepEqual(wide.lanes.map((l) => l.merged !== null), [true, false, false], "only a merged ticket carries a mark");
+  assert.deepEqual(wide.lanes.find((l) => l.id === "T2").segments.map((s) => s.step), ["work"]);
 });

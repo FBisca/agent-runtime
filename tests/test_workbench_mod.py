@@ -332,3 +332,7 @@ def test_S16_an_open_plan_has_five_cards_from_its_own_metrics_and_a_value_it_doe
 
 def test_S17_each_ticket_is_a_card_of_its_measures_phases_agents_and_pr_and_the_timeline_marks_each_merge():
     plan_tests("S17", "ticket cards and timeline", 5)
+
+
+def test_S18_an_open_plans_cards_pictures_and_timeline_are_the_ones_the_prototype_drew():
+    plan_tests("S18", "pictures and timeline", 2)
