@@ -1,6 +1,6 @@
 # Plan: Orchestrator audit fixes
 
-Slug: `orchestrator-audit-fixes`. Living spec: `docs/specs/orchestrator-engine.md`. Status: AWAITING APPROVAL.
+Slug: `orchestrator-audit-fixes`. Living spec: `docs/specs/orchestrator-engine.md`. Status: APPROVED 2026-11-12.
 
 Contract: [`2026-11-11-orchestrator-audit-fixes.plan.yaml`](2026-11-11-orchestrator-audit-fixes.plan.yaml) (scenarios,
 tickets, evidence). Oracle: [`2026-11-11-orchestrator-audit-fixes.oracle/`](2026-11-11-orchestrator-audit-fixes.oracle/).
@@ -60,6 +60,9 @@ D-C).
 | D13 | The ledger keeps `version: 1` and gains `"kind": "agent-orchestrator/ledger"`, written on create and on the next locked write of a legacy ledger, before any worker-visible output | A second `schema` field | One authoritative version field; the marker lets the runtime hook find custom roots | grill Q17, Q20 |
 | D14 | New requirement ids continue from R70; tests cite `orchestrator-engine/R<n>` | — | — | grill Q13 |
 | D15 | This plan follows #150, #154 and runtime T5/T6; driver-adopts-workers rebases on it | Run before the open PRs | Both PRs edit `driver.py` now | grill Q14 |
+| D16 | `test_gates.py`'s silent-idle S13 test, which D5 reverses, is deleted on main in its own PR (#204) before T2 rebases | Add `test_gates.py` to T2's Paths | A contract change needs re-approval and a driver restart, which kills nested agents | Lead, 2026-11-12, after T2's scope finding |
+| D17 | T5's Paths gain `tests/conftest.py`, `tests/fake_runtime.py` and `acceptance/workbench/test_workbench_value.py` | Land them on main first, as D16 did | Once `plan approve` asks the runtime under a host marker, other files' tests need the lookup stubbed; the E731 in `test_workbench_value.py` already fails `ruff check` on main. `plan amend` needs no driver restart | Lead, 2026-11-13, after T5's scope block |
+| D18 | T5's runtime stub moves to `packages/agent-orchestrator/conftest.py` | Keep it in `tests/conftest.py` | The `acceptance/` suites approve plans under the same Lead marker, and CI runs them; one conftest above both covers every suite | Lead, 2026-11-13, after T5's CI failure |
 
 ## Scenarios
 

@@ -234,8 +234,35 @@ tickets:
       - packages/agent-orchestrator/src/agent_orchestrator/plan.py
       - packages/agent-orchestrator/src/agent_orchestrator/runtime_client.py
       - packages/agent-orchestrator/tests/test_plan.py
+      - packages/agent-orchestrator/tests/conftest.py
+      - packages/agent-orchestrator/conftest.py
+      - packages/agent-orchestrator/tests/fake_runtime.py
+      - packages/agent-orchestrator/acceptance/workbench/test_workbench_value.py
       - docs/specs/orchestrator-engine.md
     size: small
     difficulty: complex
     blocked_by: [T4]
     risk: [security]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-13T13:24:06.028160+00:00'
+  base: b61e98eb97578fefd060b1513e6db0dd4177d431
+  digest: 95b89f0820aae5fcd64e14c0d93d9babe5dd88094c13475d757d156c99c4032c
+amendments:
+- prev_digest: 9c25f976939857373e886211b80d74ec7833b008f2b49da01cddce04a3de8d95
+  digest: 5bd05aee0d9a308c9b8e6254acea894e6a7f45b9d16068a7bc60d0b9d9a01f00
+  at: '2026-11-13T12:57:21.247897+00:00'
+  by: felippe.bisca@gmail.com (t2c0)
+  reason: T5 needs conftest.py and fake_runtime.py to stub the runtime lookup for
+    other tests, and the E731 fix in test_workbench_value.py that already breaks ruff
+    on main
+  tickets:
+  - T5
+- prev_digest: 5bd05aee0d9a308c9b8e6254acea894e6a7f45b9d16068a7bc60d0b9d9a01f00
+  digest: 95b89f0820aae5fcd64e14c0d93d9babe5dd88094c13475d757d156c99c4032c
+  at: '2026-11-13T13:24:06.028160+00:00'
+  by: felippe.bisca@gmail.com (t2c0)
+  reason: 'the runtime stub must cover the acceptance suites too: one conftest at
+    the package root'
+  tickets:
+  - T5
