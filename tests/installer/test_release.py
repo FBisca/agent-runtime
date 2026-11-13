@@ -856,7 +856,7 @@ class ReleaseEnvironmentTests(ReleaseCase):
             self.assertEqual((existing / name).read_bytes(), entry[1], name)
 
     def test_s8_shellcheck_is_happy_with_the_installer_and_the_release_scripts(self):
-        """installer-contract/R8: the installer and every script under scripts/ are shellcheck clean."""
+        """installer-contract/R8: the installer and every script under scripts/ are shellcheck clean; the one shellcheck test, the keeper of the two per-module copies dropped."""
         if shutil.which("shellcheck") is None:
             self.skipTest("shellcheck is not installed")
         scripts = sorted((REPO / "scripts").glob("*.sh"))
