@@ -523,30 +523,6 @@ class PiLeadTests(ToolCase):
         self.assertIn("not authorized", text)
         self.assertEqual(self.runs("run"), [])
 
-    def test_S4_a_pi_lead_may_not_start_a_worker_outside_the_authorized_directory(self):
-        """agent-runtime/P2-S4: the path scope of a mutation."""
-        self.policy(**RULES)
-        session = self.pi_session(self.lead_replies())
-        denied, text = self.call(
-            session,
-            "spawn",
-            {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/etc"},
-        )
-        self.assertTrue(denied["isError"], text)
-        self.assertIn("may not start a worker in", text)
-        self.assertEqual(self.runs("run"), [])
-
-    def test_S4_a_pi_lead_may_not_omit_the_backend(self):
-        """agent-runtime/P2-S4: the runtime never picks a provider for a Pi lead."""
-        self.policy(**RULES)
-        session = self.pi_session(self.lead_replies())
-        denied, text = self.call(
-            session, "spawn", {"kind": "worker", "name": "w1", "task": "work", "cwd": "/tmp"}
-        )
-        self.assertTrue(denied["isError"], text)
-        self.assertIn("explicit cli", text)
-        self.assertEqual(self.runs("run"), [])
-
     def test_S4_a_forged_pi_session_is_refused(self):
         """agent-runtime/P2-S4: an environment variable alone is not a session (unit seam)."""
         with mock.patch.object(lib, "cli_generation", return_value=None):

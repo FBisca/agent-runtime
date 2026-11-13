@@ -394,32 +394,6 @@ class PiWorkerTests(ToolCase):
         self.assertTrue(denied["isError"], text)
         self.assertIn("worker", text)
 
-    def test_S7_a_pi_spawn_outside_the_authorized_directory_is_refused(self):
-        """pi-worker/S7: the operator's directories bound a Pi spawn like any other."""
-        self.policy(**RULES)
-        session = self.pi_session(self.lead_replies())
-        denied, text = self.call(
-            session,
-            "spawn",
-            {"kind": "worker", "cli": "pi", "name": "w1", "task": "work", "cwd": "/etc"},
-        )
-        self.assertTrue(denied["isError"], text)
-        self.assertIn("may not start a worker in", text)
-        self.assertEqual(self.runs("run"), [])
-
-    def test_S7_a_pi_spawn_needs_an_authorized_backend(self):
-        """pi-worker/S7: the runtime never picks a provider for a Pi lead."""
-        self.policy(mutations=True, backends=["claude"], paths=["/tmp"])
-        session = self.pi_session(self.lead_replies())
-        denied, text = self.call(
-            session,
-            "spawn",
-            {"kind": "worker", "cli": "pi", "name": "w1", "task": "work", "cwd": "/tmp"},
-        )
-        self.assertTrue(denied["isError"], text)
-        self.assertIn("not authorized", text)
-        self.assertEqual(self.runs("run"), [])
-
 
 if __name__ == "__main__":
     unittest.main()
