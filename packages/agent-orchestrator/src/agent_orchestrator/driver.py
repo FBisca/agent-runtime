@@ -31,6 +31,7 @@ from .plan import PlanError
 from .runtime_client import (
     OPERATION_ADOPTED,
     CliRuntimeClient,
+    approval_refusal,
     operation_state,
     refuses_operation_ids,
 )
@@ -5540,7 +5541,9 @@ class Driver:
 
     def start_archive(self, plan):
         agents = [t for t in plan["tickets"] if is_agent(t)]
-        if not agents or not all(is_done(t) for t in agents) or ARCHIVE in self.failed:
+        # Verify starts on the agent tickets; the archive waits for every ticket, a person's included, because a
+        # scenario only a person can prove has its test node from that person's `complete`.
+        if not agents or not all(is_done(t) for t in plan["tickets"]) or ARCHIVE in self.failed:
             return 0
         if self.plan_state() not in ACCEPTED_STATES:
             return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
@@ -5718,13 +5721,18 @@ class Driver:
         narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
 
     def ticket_covers(self):
-        """{scenario: [node, ...]}: the union of every ticket report's `covers`. The report file is read again, so a
+        """{scenario: [node, ...]}: the union of every ticket report's `covers` and of the nodes `complete` recorded for
+        a person ticket. The report file is read again, so a
         node the Lead added after a request counts; the ledger's copy is the fallback."""
         with self.book() as data:
             rows = [
                 (t.get("report_path"), t.get("report"))
                 for t in data["tasks"].values()
                 if t["packet"].get("unit") != ARCHIVE
+            ]
+            # a person ticket has no report: its nodes are the ones `complete` recorded
+            rows += [
+                (None, {"covers": covers}) for covers in (data.get("person_covers") or {}).values()
             ]
         found: dict[str, list[str]] = {}
         for path, stored in rows:
@@ -6761,7 +6769,15 @@ def read_repo_config(args):
     plan = getattr(args, "plan", None)
     if args.command == "plan" and getattr(args, "plan_command", None) == "schema":
         return
-    if not plan or args.command not in ("plan", "status", "verify", "run", "accept", "launch"):
+    if not plan or args.command not in (
+        "plan",
+        "status",
+        "verify",
+        "run",
+        "accept",
+        "complete",
+        "launch",
+    ):
         return None
     where = Path(args.repo).resolve() if args.repo else Path(plan).resolve().parent
     found = subprocess.run(
@@ -7098,6 +7114,67 @@ def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
         else:
             result["state"] = "REJECTED"
     return result
+
+
+def complete_person_ticket(args):
+    """`complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...`: the Lead records a person-owned ticket done, with
+    the test nodes (a node in another repository included) that prove the scenarios it satisfies. The status and the
+    nodes go into the ledger under its lock, so a live driver keeps them and the next run archives with them."""
+    refusal = approval_refusal(verb="complete")
+    if refusal:
+        # The runtime's wording is about approval; its reason is the part before the dash.
+        raise Refused(
+            "complete: %s — recording a person's ticket belongs to the Lead (the person in their own session): "
+            "a worker: ask the Lead to run complete; a Lead runs it from a terminal with no agent host, or from "
+            "its hc Lead terminal" % refusal.split(" — ")[0]
+        )
+    note = " ".join(args.note.split())
+    if not note:
+        raise Refused("complete: needs a --note saying what was done, kept in the ticket's status")
+    covers: dict[str, list[str]] = {}
+    for item in args.cover or []:
+        scenario_id, separator, node = item.partition("=")
+        if not (separator and scenario_id.strip() and node.strip()):
+            raise Refused(
+                "complete: --cover %r is not S<n>=<node>, such as --cover S2=other-repo/tests/test_x.py::test_y"
+                % item
+            )
+        found = covers.setdefault(scenario_id.strip(), [])
+        if node.strip() not in found:
+            found.append(node.strip())
+    model, _, ledger_path, _, seen = acceptance_context(args)
+    ticket = next((t for t in model.tickets if t.id.lower() == args.ticket.lower()), None)
+    if ticket is None:
+        raise Refused(
+            "complete: no ticket %s in %s; its tickets are %s"
+            % (args.ticket, model.slug, ", ".join(t.id for t in model.tickets))
+        )
+    if ticket.owner.strip().lower() == "agent":
+        raise Refused(
+            "complete: %s is an agent ticket; the driver's workers complete it, and `complete` records only a "
+            "person-owned ticket" % ticket.id
+        )
+    for scenario_id in covers:
+        if scenario_id not in ticket.satisfies:
+            raise Refused(
+                "complete: --cover names %s, which %s does not satisfy (it satisfies %s)"
+                % (scenario_id, ticket.id, ", ".join(ticket.satisfies))
+            )
+    require(ledger_path.is_file(), "complete: %s has no run yet; run it first" % model.slug)
+    status = "COMPLETE %s · %s" % (datetime.now(timezone.utc).date().isoformat(), note)
+    try:
+        with ledger(ledger_path, snapshot=seen, keys=("plan",)) as data:
+            data.setdefault("ticket_status", {})[ticket.id] = status
+            recorded = data.setdefault("person_covers", {})
+            if covers:
+                recorded[ticket.id] = covers
+            else:
+                recorded.pop(ticket.id, None)
+            if not recorded:
+                del data["person_covers"]
+    except ledgers.LedgerStale as error:
+        raise Refused("complete: %s" % error) from None
+    return {"ticket": ticket.id, "status": status, "covers": covers}
 
 
 def accept_item(args):
@@ -7920,6 +7997,22 @@ def main(argv=None):
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
     sub = commands.add_parser(
+        "complete",
+        help="The Lead records a person-owned ticket COMPLETE, with the test nodes that prove its scenarios",
+    )
+    sub.add_argument("plan")
+    sub.add_argument("ticket", help="The person-owned ticket, such as T2")
+    sub.add_argument("--note", required=True, help="What was done: kept in the ticket's status")
+    sub.add_argument(
+        "--cover",
+        action="append",
+        metavar="S<n>=<node>",
+        help="A test node that proves a scenario the ticket satisfies; a node in another repository is "
+        "<repo-name>/<path>::<test>. Repeat for more",
+    )
+    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
+    sub = commands.add_parser(
         "launch", help="Check the plan and start `run` in a Herdr terminal named orchestrate-<slug>"
     )
     sub.add_argument("plan")
@@ -7978,6 +8071,8 @@ def main(argv=None):
         return verify_plan(args)
     if args.command == "accept":
         return accept_item(args)
+    if args.command == "complete":
+        return complete_person_ticket(args)
     if args.command == "run":
         return drive(args)
     if args.command == "await":
