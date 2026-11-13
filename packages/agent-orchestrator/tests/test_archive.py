@@ -96,7 +96,9 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
         worker = self.with_usage(
             self.worker_done(tests=True), {"input_tokens": 100, "output_tokens": 20}
         )
-        self.waits([worker, self.reviewer_done()])
+        # The reviewer reports too: a ticket total is a sum only when every assignment reported.
+        reviewer = self.with_usage(self.reviewer_done(), {"input_tokens": 0, "output_tokens": 0})
+        self.waits([worker, reviewer])
         result = self.run_driver()
         metrics = json.loads((self.run_dir / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(metrics["lead"]["model_turns"], 0)

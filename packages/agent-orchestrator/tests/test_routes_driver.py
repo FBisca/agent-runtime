@@ -7,6 +7,7 @@ import json
 import unittest
 
 import pytest
+from agent_orchestrator import narrate
 from fixtures import RunFixture  # noqa: E402
 
 pytestmark = pytest.mark.integration
@@ -58,6 +59,22 @@ class RouteDriverTests(RunFixture, unittest.TestCase):
         """orchestrator-engine/R2: P4/S1 — the legacy path is kept for a transition, with an explicit warning."""
         result = self.run_driver()
         self.assertIn("legacy routing config", result.stderr)
+
+    def test_a_run_opens_with_its_banner_naming_each_class_route(self):
+        """orchestrator-engine/R90: the drive's first lines are the banner: the plan, its tickets and its routes."""
+        path = self.routes_file(
+            config(
+                route(klass="small", backend="claude", model="haiku"),
+                route(klass="medium", backend="codex", model="gpt-m", effort="high"),
+                route(klass="large", backend="claude", model="opus"),
+            )
+        )
+        result = self.run_driver("--routes-file", path)
+        head = result.stderr.split("started worker", 1)[0]
+        self.assertIn(narrate.LOGO[0], head)
+        self.assertIn("  plan     demo · ", head)
+        self.assertRegex(head, r"\n    medium   codex  · gpt-m · high\n")
+        self.assertIn("routes.json (explicit)", head)
 
     def test_S1_a_legacy_run_with_a_brain_backend_the_table_lacks_fails(self):
         """orchestrator-engine/R2: P4/S1 — the legacy path stays strict: a class the table does not name is an error, not a fallback."""

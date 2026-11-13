@@ -2,7 +2,7 @@
 
 One Herdr pane that shows a plan's ticket graph from the orchestrator's own loader and ledger. It runs only
 `agent-orchestrator workbench plans|plan --json` (fixed argv, no shell, in the shown space's folder) and writes
-nothing. Requirements: `docs/specs/agent-workbench.md` (R12 to R18).
+nothing. Requirements: `docs/specs/agent-workbench.md`.
 
 ## Where things live
 
@@ -10,9 +10,10 @@ nothing. Requirements: `docs/specs/agent-workbench.md` (R12 to R18).
 |---|---|---|
 | `model.js` | pure: reads an answer or its failure, rows, layers, chips, inspector, layout rule | yes |
 | `data.js` | the fetch: one in flight, stale guard, flush, watch loop (`exec` is handed in) | yes, with a fake `exec` |
-| `ui.js`, `views/` (`runtime.js`: unplanned live agents) | draw what the model hands them, colours from `theme()` | no: they import Herdr |
+| `ui.js`, `views/` | draw what the model hands them, colours from `theme()` | no: they import Herdr |
 | `main.js` | the `View`: follows the shown space, timers, the watcher | no |
 | `test/` | `*.test.js`, one test per scenario named with its S-ID, and `fixtures.js` (answers as the CLI prints them) | |
+| `acceptance/` | the promoted plan acceptance tests (`*.test.js`); the pytest runner runs them beside `test/` | yes |
 
 The mod renders; it never recomputes. Layers, order, edges, verified and nulls are the orchestrator's. What the mod
 decides is how an answer, or the lack of one, reads (`readPlans`, `notice`).
@@ -29,6 +30,7 @@ decides is how an answer, or the lack of one, reads (`readPlans`, `notice`).
 
 - The mod opens on the plan list: Needs me (the answer's `needs_me`, each with its way to act), the active plans in the order the command printed, one collapsed "N older" line (`planSections`).
 - A selected plan with `metrics` shows wall time, first-pass rate and driver errors in its header, a Measures section in the inspector and, at wide widths, a timeline (`timelineOf`). What the orchestrator did not measure reads `unknown`, never 0.
+- An open plan's header is a way back (←), the plan's name as the title and its whole goal: wrapped fully when wide, in at most three lines when narrow (`planHeader`). The repository's name is not shown. Each ticket row names its agents by the ledger's name and role (`ticketWorkers`): `live` with Herdr's status and an Open at the exact address, `not live` when no live terminal has it, `unknown` with no address. There is no Runtime section.
 - Never call `writeTextFile`, a shell or any command but the two workbench verbs. The Herdr commands it runs are
   `agent.focus` (Open) and the panel button's `layout.select`, `layout.show` and `layout.hide`; an attempt joins a terminal by exact address, never by name, and a remote space joins nothing.
 - An unknown value is shown as unknown (or its own text), never filled in; a failure is shown where it belongs

@@ -19,6 +19,9 @@ PYPROJECT = ROOT / "pyproject.toml"
 CONFIG = ROOT / ".orchestrate" / "config.yaml"
 ACCEPTANCE_GLOB = "packages/*/acceptance"
 ORCHESTRATOR_TESTS = "packages/agent-orchestrator/tests"
+# The repository root is a package too (`package: .`): its tests/ and its promoted acceptance/.
+ROOT_ACCEPTANCE = "acceptance"
+ROOT_TESTS = "tests"
 
 
 pytestmark = pytest.mark.unit
@@ -36,6 +39,12 @@ def test_S13_root_config_collects_the_orchestrator_acceptance_dir():
 def test_S13_root_config_puts_the_orchestrator_tests_on_the_import_path():
     ini = _pytest_config()
     assert ORCHESTRATOR_TESTS in ini["pythonpath"]
+
+
+def test_S13_root_config_collects_the_root_acceptance_dir_with_the_root_tests_importable():
+    ini = _pytest_config()
+    assert ROOT_ACCEPTANCE in ini["testpaths"]
+    assert ROOT_TESTS in ini["pythonpath"]
 
 
 def test_S13_repo_config_names_plans_acceptance_and_promote():
@@ -81,6 +90,25 @@ def test_S13_promoted_acceptance_tests_are_collected_in_any_package(tmp_path):
         "def test_promoted_in_another_package():\n    assert True\n", encoding="utf-8"
     )
 
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "root_helper.py").write_text(
+        "ROOT = 'from-root-tests'\n", encoding="utf-8"
+    )
+    root_domain = tmp_path / "acceptance" / "demo"
+    root_domain.mkdir(parents=True)
+    (root_domain / "test_z.py").write_text(
+        textwrap.dedent(
+            """\
+            from root_helper import ROOT
+
+
+            def test_promoted_at_the_root_imports_root_tests():
+                assert ROOT == "from-root-tests"
+            """
+        ),
+        encoding="utf-8",
+    )
+
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-rA"],
         cwd=tmp_path,
@@ -92,4 +120,5 @@ def test_S13_promoted_acceptance_tests_are_collected_in_any_package(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "test_promoted_imports_package_fixtures" in result.stdout
     assert "test_promoted_in_another_package" in result.stdout
-    assert "2 passed" in result.stdout
+    assert "test_promoted_at_the_root_imports_root_tests" in result.stdout
+    assert "3 passed" in result.stdout
