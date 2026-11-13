@@ -6,12 +6,13 @@ import json
 import os
 import sys
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 import pytest
 import yaml
+from agent_orchestrator import plan as yaml_plan
 from fixtures import (
     RunFixture,
     assignment,
@@ -121,9 +122,9 @@ class GateFixture(RunFixture):
             step["write"].append([str(self.worktree / name_), text])
         return step
 
-    def use_yaml_plan(self, paths=("src/a/",), oracle=False):
+    def use_yaml_plan(self, paths=("src/a/",), oracle=False, lint=True):
         """Replace the plan with an approved one-ticket plan (and, with `oracle`, an oracle placed
-        under src/a/)."""
+        under src/a/). With `lint=False` the plan is approved as one approved before the lint existed."""
         evidence = {"human": "confirm"}
         if oracle:
             directory = self.plan.parent / "demo.oracle"
@@ -169,6 +170,9 @@ class GateFixture(RunFixture):
             ),
             redirect_stdout(out),
             redirect_stderr(out),
+            mock.patch.object(yaml_plan, "lint_problems", return_value=[])
+            if not lint
+            else nullcontext(),
         ):
             code = load_script().run_cli(
                 [
@@ -822,6 +826,41 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1"])
         task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
         self.assertIn("test_nope", task_md)
+
+    def test_S4_a_covers_failure_on_paths_that_hold_no_test_says_so_and_leads_with_amend(self):
+        self.use_yaml_plan(paths=("src/a/x.py",), lint=False)
+        self.extra_files = {"src/a/x.py": "x = 1\n"}
+        self.waits(
+            [
+                self.worker_done(report=self.report("t1", covers={})),
+                self.worker_done("t1r1", report=self.report("t1r1", covers={})),
+                self.worker_done("t1r2", report=self.report("t1r2", covers={})),
+                self.worker_done("t1r3", report=self.report("t1r3", covers={})),
+                self.skipped(),
+            ]
+        )
+        self.run_driver()
+        request = self.request()
+        self.assertEqual(request["task"], "t1r3")
+        self.assertIn("the ticket's Paths can hold no test", request["reason"])
+        first = request["menu"][0]
+        self.assertEqual(first["action"] if isinstance(first, dict) else first, "amend")
+
+    def test_S4_a_covers_failure_on_paths_that_hold_a_test_keeps_the_plain_reason_and_menu(self):
+        self.waits(
+            [
+                self.worker_done(tests=True, report=self.report("t1", covers={})),
+                self.worker_done("t1r1", tests=True, report=self.report("t1r1", covers={})),
+                self.worker_done("t1r2", tests=True, report=self.report("t1r2", covers={})),
+                self.worker_done("t1r3", tests=True, report=self.report("t1r3", covers={})),
+                self.skipped(),
+            ]
+        )
+        self.run_driver()
+        request = self.request()
+        self.assertNotIn("Paths can hold no test", request["reason"])
+        first = request["menu"][0]
+        self.assertEqual(first["action"] if isinstance(first, dict) else first, "retry")
 
     def test_S9_a_satisfied_scenario_left_unmapped_is_a_fix_round(self):
         report = self.report("t1", covers={})
