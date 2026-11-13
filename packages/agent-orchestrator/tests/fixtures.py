@@ -234,22 +234,88 @@ else:
     _Case = object
 
 
+class ClassWorld:
+    """The directory one test class runs in: built and approved by its first test, restored for every later one.
+
+    A plan's approval names the repository's git dir and the state it wrote, so a copy of an approved world at another
+    path is no longer approved. Every test of the class therefore runs at the same path, and a test starts from a copy
+    of the world as the first test found it, approved. Both the approval and PATH (which holds the fakes' directory)
+    stay put across the class."""
+
+    base: str  # set by the first test, once its world is built
+    plan: Path
+
+    def __init__(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        base = Path(self.scratch.name).resolve()
+        self.root = base / "world"
+        self.pristine = base / "pristine"
+        self.ready = False
+
+    def enter(self, build):
+        """Leave `root` as a fresh test finds it: `build` runs for the first test, a copy of its result after."""
+        if self.root.exists():
+            shutil.rmtree(self.root)
+        if self.ready:
+            shutil.copytree(self.pristine, self.root, symlinks=True)
+            return
+        self.root.mkdir()
+        build()
+        shutil.copytree(self.root, self.pristine, symlinks=True)
+        self.ready = True
+
+
+WORLDS: dict[type, ClassWorld] = {}
+
+
 class RunFixture(_Case):
-    """Mixin for TestCase classes: temp repo with an origin, a plan, a fake agent-runtime on PATH."""
+    """Mixin for TestCase classes: temp repo with an origin, a plan, a fake agent-runtime on PATH.
+
+    The world is built, and its plan approved, once per test class (`ClassWorld`)."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve()
+        cls = type(self)
+        if cls not in WORLDS:
+            WORLDS[cls] = world = ClassWorld()
+
+            def close():
+                WORLDS.pop(cls, None)
+                world.scratch.cleanup()
+
+            self.addClassCleanup(close)
+        world = WORLDS[cls]
+        self.root = world.root
         self.origin = self.root / "origin.git"
         self.repo = self.root / "repo"
+        self.state_dir = self.root / "state"
+        self.home = self.root / "fake"
+        # The table no run reads now; a test puts it where a run must not look.
+        self.models = self.root / "CLAUDE.md"
+        # What a run is routed by: one typed route file per backend, named as the user's profiles are.
+        self.route_files = {
+            backend: self.root / "routes" / name
+            for backend, name in (
+                ("claude", "routes.json"),
+                ("codex", "routes-codex.json"),
+                ("pi", "routes-pi.json"),
+            )
+        }
+        self.route_file = self.route_files["claude"]
+        first = not world.ready
+        world.enter(self.build_world)
+        if first:
+            world.base = self.git(self.repo, "rev-parse", "HEAD")
+            world.plan = self.plan
+        self.base = world.base
+        self.plan = world.plan
+
+    def build_world(self):
+        """The repo with its origin, the fakes' state and the route files, and the plan approved: the first test's
+        setUp, whose result every later test of the class starts from."""
         template = template_repo()
         shutil.copytree(template / "origin.git", self.origin)
         shutil.copytree(template / "repo", self.repo)
         self.git(self.repo, "remote", "set-url", "origin", str(self.origin))
-        self.base = self.git(self.repo, "rev-parse", "HEAD")
-        self.state_dir = self.root / "state"
-        self.home = self.root / "fake"
         self.home.mkdir()
         fake = self.home / "agent-runtime"
         fake.write_text(wrapper("fake_runtime"), encoding="utf-8")
@@ -263,22 +329,18 @@ class RunFixture(_Case):
         self.refuse([])
         self.waits([])
         self.states({})
-        models = self.root / "CLAUDE.md"
-        models.write_text(
+        self.models.write_text(
             "## Model classes\n\n| Class | Claude | Codex |\n|---|---|---|\n"
             '| small | `model: "haiku"` | `gpt-s` |\n| medium | `model: "sonnet"` | `gpt-m` |\n'
             '| large | `model: "opus"` | `gpt-l` |\n',
             encoding="utf-8",
         )
-        self.models = models  # the table no run reads now; a test puts it where a run must not look
-        # What a run is routed by: one typed route file per backend, named as the user's profiles are.
-        self.route_files = {}
-        for backend, name, models in (
-            ("claude", "routes.json", ("haiku", "sonnet", "opus")),
-            ("codex", "routes-codex.json", ("gpt-s", "gpt-m", "gpt-l")),
-            ("pi", "routes-pi.json", ("minimax/MiniMax-M3.1-Flash",) * 3),
+        for backend, models in (
+            ("claude", ("haiku", "sonnet", "opus")),
+            ("codex", ("gpt-s", "gpt-m", "gpt-l")),
+            ("pi", ("minimax/MiniMax-M3.1-Flash",) * 3),
         ):
-            path = self.root / "routes" / name
+            path = self.route_files[backend]
             path.parent.mkdir(exist_ok=True)
             path.write_text(
                 json.dumps(
@@ -292,8 +354,6 @@ class RunFixture(_Case):
                 ),
                 encoding="utf-8",
             )
-            self.route_files[backend] = path
-        self.route_file = self.route_files["claude"]
         self.set_plan()
 
     def set_plan(self, rows=("T1", "T2", "T3", "T4", "T5"), **kwargs):
