@@ -422,9 +422,9 @@ class RunFixture(_Case):
             argv[1:], timeout=timeout
         )  # the fake reads the argv without the program name
 
-    def gh_process(self, argv, timeout=None):
+    def gh_process(self, argv, timeout=None, cwd=None):
         """The fake `gh`'s answer, in process."""
-        return fake_gh.process(argv, timeout=timeout)
+        return fake_gh.process(argv, timeout=timeout)  # the fake has no working directory
 
     payload_grace = 0.05  # the payload wait, shortened so a test does not pay the real grace
 

@@ -173,8 +173,8 @@ class MergeTests(GateFixture, unittest.TestCase):
         """Run `act` when the driver first reads the PR as MERGED: the world as it is at the merge, not before."""
         real, fired = self.gh_process, []
 
-        def process(argv, timeout=None):
-            result = real(argv, timeout=timeout)
+        def process(argv, timeout=None, cwd=None):
+            result = real(argv, timeout=timeout, cwd=cwd)
             if argv[:2] == ["pr", "view"] and "MERGED" in result.stdout and not fired:
                 fired.append(1)
                 act()

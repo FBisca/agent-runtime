@@ -17,7 +17,6 @@ import yaml
 from agent_orchestrator import plan as yaml_plan
 from agent_orchestrator import verify
 from fixtures import load_script, report_wait, spawn_id
-from test_archive import plan_copies
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -197,23 +196,10 @@ class AcceptanceFixture(GateFixture):
         return step
 
     def archive_steps(self):
-        """The archive worker and the gaps reviewer of a plan that was accepted."""
-        archiver = report_wait("demo-archive", "complete", id=spawn_id("demo-archive"))
-        archiver["write"] = plan_copies(
-            self.plan, self.root / "repo.worktrees" / "demo-archive"
-        ) + [
-            [
-                str(self.run_dir / "archive" / "report.json"),
-                self.report("archive", pr="https://github.com/o/r/pull/9"),
-            ],
-            [
-                str(self.root / "repo.worktrees" / "demo-archive" / "docs" / "specs" / "demo.md"),
-                "# Demo\nPaths: src/a/\n",
-            ],
-        ]
+        """The gaps reviewer of a plan that was accepted: the driver archives it with no agent."""
         gaps = report_wait("demo-gaps", "complete")
         gaps["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-        return [archiver, gaps]
+        return [gaps]
 
     def drive(self, steps, archive=False):
         self.waits(steps + (self.archive_steps() if archive else []))
@@ -332,7 +318,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         pin = self.ledger()["integration"]
         self.assertEqual(pin["sha"], self.git(self.origin, "rev-parse", "main"))
         self.assertEqual(pin["tree"], self.origin_tree())
-        self.assertIn("demo-archive", self.spawned(), "an accepted plan may be archived")
+        self.assertEqual(len(self.gh_calls("pr", "create")), 1, "an accepted plan is archived")
         self.assertEqual(self.verify().returncode, 0)
 
     def test_S17_an_integration_that_fails_rejects_the_plan_and_asks_the_lead(self):
@@ -340,7 +326,7 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(self.history(), STATES + ["REJECTED"])
         self.assertEqual(self.status()["tickets"][0]["state"], "COMPLETE")
         self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL"])
-        self.assertNotIn("demo-archive", self.spawned(), "a rejected plan is not archived")
+        self.assertEqual(self.gh_calls("pr", "create"), [], "a rejected plan is not archived")
         (wake,) = [w for w in self.wakes() if w["kind"] == "plan-rejected"]
         for way_out in ("S1", "ticket", "run", "accept"):
             self.assertIn(way_out, wake["text"])
@@ -421,7 +407,7 @@ class HumanTests(AcceptanceFixture, unittest.TestCase):
     def test_S18_a_human_item_waits_for_a_person_and_the_archive_waits_for_it(self):
         self.delivered_with_human()
         self.assertEqual(self.history(), STATES)
-        self.assertNotIn("demo-archive", self.spawned())
+        self.assertEqual(self.gh_calls("pr", "create"), [])
         self.assertTrue([w for w in self.wakes() if w["kind"] == "plan-needs-accept"])
         self.assertNotEqual(self.verify().returncode, 0)
 
@@ -447,7 +433,7 @@ class HumanTests(AcceptanceFixture, unittest.TestCase):
         self.delivered_with_human()
         self.assertEqual(self.accept("S2").returncode, 0)
         self.drive([], archive=True)
-        self.assertIn("demo-archive", self.spawned())
+        self.assertEqual(len(self.gh_calls("pr", "create")), 1)
 
     def test_S18_the_lead_human_accepts_a_rejected_item(self):
         self.delivered(lands="almost")
@@ -463,7 +449,7 @@ class HumanTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(self.accept("S1").returncode, 0)
         self.drive([], archive=True)
         self.assertEqual(self.history()[-2:], ["ACCEPTED_WITH_HUMAN", "ARCHIVED"])
-        self.assertEqual(self.spawned().count("demo-archive"), 1)
+        self.assertEqual(len(self.gh_calls("pr", "create")), 1)
         self.assertEqual(self.receipts("archive"), [], "an item a person accepted is not re-run")
 
     def test_S18_accept_refuses_an_item_that_passes_and_a_spawned_worker(self):
@@ -627,7 +613,7 @@ class RejectionTests(AcceptanceFixture, unittest.TestCase):
         self.delivered(lands="almost")
         self.assertEqual(self.history()[-1], "REJECTED")
         self.assertNotIn("ACCEPTED", self.history())
-        self.assertNotIn("demo-archive", self.spawned())
+        self.assertEqual(self.gh_calls("pr", "create"), [])
         self.assertNotEqual(self.verify().returncode, 0)
 
     def test_S22_a_contract_edited_after_approval_spawns_no_worker(self):

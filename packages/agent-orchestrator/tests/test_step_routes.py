@@ -9,7 +9,7 @@ import json
 import unittest
 
 import pytest
-from test_archive import ARCHIVE, ArchiveFixture
+from test_archive import ArchiveFixture
 
 pytestmark = pytest.mark.integration
 
@@ -19,11 +19,11 @@ WORKER = "demo-t1"
 
 
 class StepRouteTests(ArchiveFixture, unittest.TestCase):
-    """A run whose steps are routed one by one: the worker, the reviewer, the gaps and the archive."""
+    """A run whose steps are routed one by one: the worker, the reviewer and the gaps. The archive has no agent, so no route."""
 
     def setUp(self):
         super().setUp()
-        self.waits(self.ticket_merged() + [self.archive_done(), self.gaps_done()])
+        self.waits(self.ticket_merged() + [self.gaps_done()])
 
     def spawns(self):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
@@ -67,7 +67,6 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
                 steps=[
                     self.step("reviewer", "codex", "gpt-l", effort="xhigh"),
                     self.step("gaps", "pi", "minimax/MiniMax-M3.1-Flash", effort="low"),
-                    self.step("archive", "codex", "gpt-s", effort="medium"),
                 ],
             )
         )
@@ -84,10 +83,6 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(
             (spawns[GAPS]["cli"], spawns[GAPS]["model"], spawns[GAPS]["effort"]),
             ("pi", "minimax/MiniMax-M3.1-Flash", "low"),
-        )
-        self.assertEqual(
-            (spawns[ARCHIVE]["cli"], spawns[ARCHIVE]["model"], spawns[ARCHIVE]["effort"]),
-            ("codex", "gpt-s", "medium"),
         )
 
     def test_S8_a_step_route_for_the_implementer_overrides_the_class_route(self):
@@ -106,12 +101,11 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
         )
 
     def test_S3_a_gate_without_a_step_route_keeps_todays_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — no step route, no new effort: the reviewer high, the gaps medium, the archive low."""
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — no step route, no new effort: the reviewer high, the gaps medium."""
         self.run_driver()
         spawns = self.spawns()
         self.assertEqual(spawns[REVIEW]["effort"], "high")
         self.assertEqual(spawns[GAPS]["effort"], "medium")
-        self.assertEqual(spawns[ARCHIVE]["effort"], "low")
 
     def test_S3_a_step_route_names_the_gates_effort(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — the gates' effort comes from their own step, not from a constant."""
@@ -121,7 +115,6 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
                 steps=[
                     self.step("reviewer", "claude", "opus", effort="xhigh"),
                     self.step("gaps", "claude", "sonnet", effort="low"),
-                    self.step("archive", "claude", "haiku", effort="max"),
                 ],
             )
         )
@@ -129,7 +122,6 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
         spawns = self.spawns()
         self.assertEqual(spawns[REVIEW]["effort"], "xhigh")
         self.assertEqual(spawns[GAPS]["effort"], "low")
-        self.assertEqual(spawns[ARCHIVE]["effort"], "max")
 
     def test_S9_the_brain_names_one_backend_for_every_gate_step(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — `--brain-cli` still answers for the reviewer and the gaps reviewer alike."""

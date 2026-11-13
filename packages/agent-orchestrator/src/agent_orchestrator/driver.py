@@ -654,9 +654,9 @@ def runtime_process(argv, timeout=None):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
-def gh_process(argv, timeout=None):
-    """One `gh` process."""
-    return subprocess.run(["gh", *argv], capture_output=True, text=True, timeout=timeout)
+def gh_process(argv, timeout=None, cwd=None):
+    """One `gh` process; `cwd` names the repository for a call whose argv does not (`pr create`)."""
+    return subprocess.run(["gh", *argv], capture_output=True, text=True, timeout=timeout, cwd=cwd)
 
 
 def runtime_call(lead, tool, arguments, timeout=120):
@@ -757,7 +757,9 @@ ATTENTION = {
     "decision": "asked for a decision",
     "exited": "ended without a report",
 }
-ARCHIVE = "archive"  # the unit (and task id) of the archive worker
+ARCHIVE = "archive"  # the unit (and task id) of the driver's own archive
+ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or replace
+DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
 
 
 def next_path(directory, stem, suffix):
@@ -1604,6 +1606,7 @@ class Driver:
                 task["event"]["kind"],
                 task["event"]["reason"],
                 [str(c) for c in candidates if c.exists()],
+                menu=ARCHIVE_MENU if unit == ARCHIVE else None,
             )
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             write_atomic(path, json.dumps(row, indent=2) + "\n")
@@ -2017,6 +2020,23 @@ class Driver:
                 rounds[unit] = unit_summary(data, unit)["failed_reviews"]
             rounds[unit] += 1
             failures = rounds[unit]
+        if unit == ARCHIVE:
+            # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
+            self.record_report(task_id, report, remaining=remaining)
+            self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
+            self.undraft_archive(task_id)
+            return self.request(
+                task_id,
+                source,
+                "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
+                "leaves the archive to you"
+                % (
+                    "the archive pull request conflicts with its base"
+                    if source == "conflict"
+                    else "the archive failed its %s gate" % source,
+                    "; ".join(remaining),
+                ),
+            )
         self.record_report(task_id, report, review_rounds=1, remaining=remaining)
         fix = {
             "source": source,
@@ -2478,10 +2498,10 @@ class Driver:
     # marks it ready (`gh pr ready`) once the last review passed with green checks. From then on the unit waits for
     # the merge: it holds no worker slot and the driver only polls `gh` for it.
 
-    def gh(self, argv, timeout=60):
+    def gh(self, argv, timeout=60, cwd=None):
         """Run `gh` and return (exit code, stdout, stderr). A `gh` that cannot run is an error, not a guess."""
         try:
-            result = gh_process(argv, timeout=timeout)
+            result = gh_process(argv, timeout=timeout, **({"cwd": cwd} if cwd else {}))
         except subprocess.TimeoutExpired:
             return 1, "", "gh timed out"
         except OSError as error:
@@ -3556,6 +3576,8 @@ class Driver:
             return self.write_status(
                 unit.upper(), ("BLOCKED" if blocked else "SKIPPED") + " · " + cell(reason)
             )
+        if unit == ARCHIVE:
+            return self.retry_archive(task_id)
         self.write_status(unit.upper(), "IN PROGRESS")
         answers = task.get("answers") or {}
         if answers.get("state") == "working":
@@ -3892,6 +3914,11 @@ class Driver:
         elif state in ACCEPTED_STATES:
             if (data.get("integration") or {}).get("digest") != approval.digest:
                 enter_plan_state(data, "DELIVERED")
+
+    def plan_model(self):
+        """The approved plan/1 model; an archive only runs for a YAML plan, which holds one."""
+        assert self.model is not None
+        return self.model
 
     def contract(self):
         """(model, approval) of the approved YAML plan this drive holds."""
@@ -4500,10 +4527,12 @@ class Driver:
             )
         self.log("acceptance", state=result["state"], items=result["items"])
 
-    # ---- archive: one more worker unit, a gaps review, then the outcome evidence ----------------------------------
-    # When every agent ticket is COMPLETE the driver claims unit `archive` (small, simple) like a ticket and starts
-    # a medium gaps reviewer beside it. The archive's report is gated by the outcome evidence alone (a failure is a
-    # fix round), then the normal CI and merge gates. The gaps review is advisory: `<run>/gaps.md`, never a gate.
+    # ---- archive: the driver's own unit, no agent --------------------------------------------------------------
+    # When every agent ticket is COMPLETE and the plan is accepted, the driver claims unit `archive`, builds the
+    # archive branch itself (oracles placed, plan files copied, one section appended to the spec), pushes it, opens
+    # the pull request and writes the unit's report. The report then takes the same gates as any other: the outcome
+    # evidence on the head, CI, the merge. A problem no worker could fix (a scenario with no test node, a failing
+    # outcome, a conflict) asks the Lead, whose menu is `retry` (rebuild from the current base) and `skip`.
 
     def plan_rel(self):
         try:
@@ -4519,80 +4548,308 @@ class Driver:
             return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
+        # A task bound to a worker is an archive of an earlier driver: it keeps its ledger task. A task bound to
+        # the driver that never reported is one this driver died building: it is built again.
         if held and held["runtime_id"]:
-            return 0
+            interrupted = (
+                held["runtime_id"] == DRIVER_ID
+                and held["status"] == "ACTIVE"
+                and not held.get("gate")
+            )
+            if not interrupted:
+                return 0
         try:
-            self.dispatch_archive(plan, agents)
+            self.claim_archive()
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.failed.add(ARCHIVE)
             self.errors.append("archive: %s" % error)
-            event("archive not dispatched: %s" % error)
+            event("archive not started: %s" % error)
             return 0
+        self.build_archive(ARCHIVE)
         self.start_gaps(plan)
         return 1
 
-    def dispatch_archive(self, plan, agents):
+    def claim_archive(self):
         name = self.slug[: 32 - len("-archive")].rstrip("-_") + "-archive"
         klass, effort = MATRIX[("small", "simple")]
-        backend = self.step_backend("archive", self.args.cli)
-        model = self.step_model("archive", self.routes[klass].model)
-        effort = self.step_effort("archive", effort)
         checkout = self.worktree(name, "feat/" + name)
-        # The driver places the oracles itself: the worker's scope is the spec and those places only.
         plan_model = self.model
         assert plan_model is not None  # read_plan sets it before any unit is dispatched
-        self.place_oracles(checkout)
-        owns = (
-            [plan_model.spec]
-            + [rel for rel, _ in self.yaml_copies()]
-            + [rel for rel, _ in self.yaml_places(plan_model)]
-        )
-        acceptance = YAML_ARCHIVE_ACCEPTANCE
         packet = {
             "task_id": ARCHIVE,
             "worker": name,
             "plan": str(self.plan_path),
             "objective": "Archive the plan into the living spec",
             "checkout": str(checkout),
-            "backend": backend,
-            "owns": owns,
-            "acceptance": acceptance,
-            "checks": list(self.args.gate),
+            "backend": self.args.cli,
+            "owns": [plan_model.spec]
+            + [rel for rel, _ in self.yaml_copies()]
+            + [rel for rel, _ in self.yaml_places(plan_model)],
+            "acceptance": YAML_ARCHIVE_ACCEPTANCE,
+            "checks": [],  # no local gate: the pull request's CI and the outcome re-run are the gates
             "depends_on": [],
             "unit": ARCHIVE,
             "size": "small",
             "difficulty": "simple",
             "class": klass,
             "effort": effort,
-            "model": model,
+            "model": "driver",
         }
         with self.book() as data:
             claim(data, packet)
-        task_dir = self.run_dir / ARCHIVE
-        task_dir.mkdir(exist_ok=True, mode=0o700)
-        task_md = task_dir / "task.md"
-        if not task_md.exists():
-            task_md.write_text(self.archive_text(plan, packet, task_dir), encoding="utf-8")
-        address, assignment_id = self.ensure_agent(
-            name,
-            "worker",
-            ARCHIVE,
-            {
-                "kind": "worker",
-                "name": name,
-                "task": "Read %s and follow it." % task_md,
-                "cwd": str(checkout),
-                "cli": backend,
-                "model": model,
-                "effort": effort,
-            },
-        )
+            task = data["tasks"][ARCHIVE]
+            if not task["runtime_id"]:
+                bind(data, ARCHIVE, DRIVER_ID)
+        (self.run_dir / ARCHIVE).mkdir(exist_ok=True, mode=0o700)
+
+    def build_archive(self, task_id):
+        """Build, push and open the archive, then hand its report to the gates. Any trouble asks the Lead."""
+        try:
+            missing = self.archive_missing()
+            if missing:
+                return self.request(
+                    task_id,
+                    "archive",
+                    "no test node for %s: add a node to a ticket report's `covers` and `retry`, or `skip` and "
+                    "archive by hand" % ", ".join(missing),
+                )
+            head = self.archive_branch(task_id)
+            url = self.archive_pr(task_id)
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            return self.request(
+                task_id,
+                "archive",
+                "the archive could not be built: %s. `retry` builds it again from the current base, `skip` "
+                "leaves it to you" % " ".join(str(error).split())[:400],
+            )
+        path = next_path(self.run_dir / task_id, "report", ".json")[0]
+        report = {
+            "contract": contracts.VERSION,
+            "task_id": task_id,
+            "status": "COMPLETE",
+            "summary": "the driver archived the plan: oracles placed, plan files copied, spec section appended",
+            "acceptance_met": True,
+            "files": [self.plan_model().spec] + [rel for rel, _ in self.yaml_copies()],
+            "decisions": [],
+            "interfaces": [],
+            "remaining": [],
+            "checks": [],
+            "review_rounds": 0,
+            "usage": "unknown",
+            "head": head,
+            "pr": url,
+        }
+        write_atomic(path, json.dumps(report, indent=2) + "\n")
+        self.mark(task_id, gate="reported")
+        self.log("archive-built", task=task_id, pr=url, head=head)
+        event("archive built by the driver: %s" % url)
+
+    def ticket_covers(self):
+        """{scenario: [node, ...]}: the union of every ticket report's `covers`. The report file is read again, so a
+        node the Lead added after a request counts; the ledger's copy is the fallback."""
         with self.book() as data:
-            bind(data, ARCHIVE, str(address))
-            data["tasks"][ARCHIVE]["assignment_id"] = assignment_id
-            self.keep_address(data, ARCHIVE, name)
-        self.spawned.append(name)
-        event("spawned %s (%s, %s, %s)" % (name, klass, model, effort))
+            rows = [
+                (t.get("report_path"), t.get("report"))
+                for t in data["tasks"].values()
+                if t["packet"].get("unit") != ARCHIVE
+            ]
+        found: dict[str, list[str]] = {}
+        for path, stored in rows:
+            report = None
+            if path:
+                try:
+                    report = contracts.load(path, contracts.validate_report)
+                except (contracts.ContractError, ValueError):
+                    report = None
+            for sid, nodes in ((report or stored or {}).get("covers") or {}).items():
+                for node in nodes:
+                    if node not in found.setdefault(sid, []):
+                        found[sid].append(node)
+        return found
+
+    def scenario_nodes(self):
+        """{scenario id: its test nodes}: the tickets' `covers`, then the scenario's own placed oracle paths."""
+        covers = self.ticket_covers()
+        placed: dict[str, list[str]] = {}
+        for scenario in self.plan_model().scenarios:
+            evidence_ = scenario.evidence
+            if evidence_ and evidence_.promote and evidence_.place:
+                placed[scenario.id] = [
+                    evidence_.place.rstrip("/") + "/" + name.removesuffix(".oracle")
+                    for name in evidence_.oracle
+                ]
+        return {
+            s.id: list(dict.fromkeys(covers.get(s.id, []) + placed.get(s.id, [])))
+            for s in self.plan_model().scenarios
+        }
+
+    def archive_missing(self):
+        """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no placed oracle."""
+        nodes = self.scenario_nodes()
+        return [
+            s.id
+            for s in self.plan_model().scenarios
+            if not (s.evidence and s.evidence.human) and not nodes[s.id]
+        ]
+
+    @staticmethod
+    def flat(text):
+        return " ".join(str(text).split())
+
+    def spec_section(self, spec_text, held):
+        """The text appended to the spec: the requirements it lacks, then the Coverage table of every scenario."""
+        slug, nodes = self.slug, self.scenario_nodes()
+        number = max((int(n) for n in re.findall(r"\bR(\d+)\b", spec_text)), default=0)
+        numbered = dict(held)
+        parts = []
+        new = [s for s in self.plan_model().scenarios if s.id not in held]
+        if new:
+            parts += ["## Requirements: %s" % slug, ""]
+            for scenario in new:
+                number += 1
+                numbered[scenario.id] = "R%d" % number
+                parts.append(
+                    "- **R%d** WHEN %s, THEN %s (from %s/%s)"
+                    % (
+                        number,
+                        self.flat(scenario.when),
+                        self.flat(scenario.then),
+                        slug,
+                        scenario.id,
+                    )
+                )
+            parts.append("")
+        parts += [
+            "## Coverage: %s" % slug,
+            "",
+            "| Requirement | Scenario | Test nodes |",
+            "|---|---|---|",
+        ]
+        for scenario in self.plan_model().scenarios:
+            human = scenario.evidence.human if scenario.evidence else None
+            cellular = (
+                "human: " + self.flat(human).replace("|", "\\|")
+                if human
+                else "<br>".join("`%s`" % node for node in nodes[scenario.id])
+            )
+            parts.append("| %s | %s | %s |" % (numbered[scenario.id], scenario.id, cellular))
+        return "\n".join(parts) + "\n"
+
+    def archive_branch(self, task_id):
+        """The archive branch, rebuilt from the current base: oracles placed, plan files copied, the spec section
+        appended, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
+        packet = self.task(task_id)["packet"]
+        path, branch = Path(packet["checkout"]), "feat/" + packet["worker"]
+        remote = self.args.base.partition("/")[0]
+        run(
+            ["git", "-C", str(self.repo), "fetch", "-q", remote, self.args.base.partition("/")[2]],
+            timeout=120,
+        )
+        run(["git", "-C", str(path), "reset", "-q", "--hard"], timeout=TREE_TIMEOUT)
+        run(["git", "-C", str(path), "clean", "-fdq"], timeout=TREE_TIMEOUT)
+        run(
+            ["git", "-C", str(path), "checkout", "-q", "-B", branch, self.args.base],
+            timeout=TREE_TIMEOUT,
+        )
+        self.place_oracles(path)
+        for rel, source in self.yaml_copies():
+            if source.is_dir():
+                for child in sorted(p for p in source.rglob("*") if p.is_file()):
+                    target = path / rel.rstrip("/") / child.relative_to(source)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(child.read_bytes())
+            else:
+                target = path / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+        spec = path / self.plan_model().spec
+        try:
+            before = spec.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            before = ""
+        section = self.spec_section(before, self.held_requirements(spec))
+        body = (before if before.endswith("\n") else before + "\n") + "\n" if before.strip() else ""
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(body + section, encoding="utf-8")
+        run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
+        identity = (
+            []
+            if subprocess.run(
+                ["git", "-C", str(path), "config", "user.email"], capture_output=True, text=True
+            ).stdout.strip()
+            else [
+                "-c",
+                "user.name=agent-orchestrator",
+                "-c",
+                "user.email=agent-orchestrator@localhost",
+            ]
+        )
+        run(
+            [
+                "git",
+                "-C",
+                str(path),
+                *identity,
+                "commit",
+                "-q",
+                "-m",
+                "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec),
+            ],
+            timeout=TREE_TIMEOUT,
+        )
+        run(
+            ["git", "-C", str(path), "push", "-q", "--force", remote, "HEAD:refs/heads/" + branch],
+            timeout=300,
+        )
+        return head_of(path)
+
+    def archive_pr(self, task_id):
+        """The archive's pull request: the one an earlier build opened while it is still open, else a new draft."""
+        existing = self.pr_of(task_id)
+        if existing and self.pr_view(existing).get("state") == "OPEN":
+            return existing
+        packet = self.task(task_id)["packet"]
+        code, out, err = self.gh(
+            [
+                "pr",
+                "create",
+                "--draft",
+                "--base",
+                self.args.base.partition("/")[2],
+                "--head",
+                "feat/" + packet["worker"],
+                "--title",
+                "docs(%s): archive the plan" % self.slug,
+                "--body",
+                "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
+                "with its Coverage table, written by the driver."
+                % (self.plan_rel(), self.plan_model().spec),
+            ],
+            timeout=120,
+            cwd=packet["checkout"],
+        )
+        found = re.findall(r"https?://\S+/pull/\d+", out or "")
+        if code != 0 or not found:
+            raise ValueError(
+                "gh pr create failed: %s" % ((err or out).strip()[:300] or "no url printed")
+            )
+        return found[-1]
+
+    def undraft_archive(self, task_id):
+        """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a failing one."""
+        url = self.pr_of(task_id)
+        if url and self.unit_flag(ARCHIVE, "pr_ready"):
+            self.undraft(task_id, url)
+
+    def retry_archive(self, task_id):
+        """The Lead's `retry`: the archive branch is rebuilt from the current base and pushed again. A pull request
+        that was readied goes back to draft first, so nobody merges a branch that is changing."""
+        url = self.pr_of(task_id)
+        if url and self.unit_flag(ARCHIVE, "pr_ready") and not self.undraft(task_id, url):
+            return False
+        self.unready(ARCHIVE)
+        self.mark(task_id, status="ACTIVE", gate=None, ci_state=None, ci_rows=None, ci_head=None)
+        self.build_archive(task_id)
 
     def oracle_targets(self, model):
         """(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without
@@ -4621,7 +4878,7 @@ class Driver:
         return self.plan_path.with_name(self.plan_path.name.removesuffix(".plan.yaml") + ".plan.md")
 
     def yaml_copies(self):
-        """(repo-relative destination, approved source) for the plan files the archive worker copies byte-identical.
+        """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
         The narrative is copied only when the plan has one."""
         oracle = yaml_plan.oracle_dir(self.plan_path)
         copies = [(self.plan_rel(), self.plan_path)]
@@ -4653,73 +4910,6 @@ class Driver:
             re.MULTILINE,
         )
         return {sid: rid for rid, ids in found for sid in (part.strip() for part in ids.split(","))}
-
-    def scenario_steps(self, spec, plan):
-        """The brief's steps and scenario list: a ticket may have written its scenarios into the spec already, and
-        appending them again duplicates them."""
-        held = self.held_requirements(spec)
-        pending = [text for sid, text in plan["scenarios"].items() if sid not in held]
-        steps = []
-        if held:
-            steps.append(
-                "- Already in the spec with their provenance, keep as they are: %s."
-                % ", ".join("%s (%s)" % (sid, rid) for sid, rid in held.items())
-            )
-        if not pending:
-            return steps + ["- Every scenario is already in the spec: append none."], [""]
-        steps.append(
-            "- Append each scenario below as a requirement with the next free number and its provenance: "
-            "`- **R4** WHEN ..., THEN ... (from %s/S3)`." % self.slug
-        )
-        return steps, ["Scenarios, verbatim:", "", *pending, ""]
-
-    def yaml_archive_text(self, model, plan, packet, task_dir):
-        """The archive brief for a YAML plan: the plan's spec is the living spec; the driver has already placed the
-        oracles, and the worker writes requirements and a Coverage table."""
-        copies = "\n".join(
-            "- Copy byte-identical (`cmp` must match): `%s` to `%s`." % (source, rel)
-            for rel, source in self.yaml_copies()
-        )
-        places = "\n".join(
-            "- Already placed by the driver, byte-identical, do not edit: `%s`." % rel
-            for rel, _ in self.yaml_places(model)
-        )
-        steps, verbatim = self.scenario_steps(Path(packet["checkout"]) / model.spec, plan)
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (task_dir / "report.json"),
-                "",
-                "# Archive %s into its living spec" % self.slug,
-                "",
-                "Plan: %s (repo path `%s`)." % (self.plan_path, self.plan_rel()),
-                "Checkout: %s on branch feat/%s (new, from %s). Work only here."
-                % (packet["checkout"], packet["worker"], self.args.base),
-                "Owns (edit nothing else): %s." % ", ".join(packet["owns"]),
-                "",
-                "Steps:",
-                "- The living spec is `%s`, named by plan.yaml. Do not create a new spec file."
-                % model.spec,
-                *steps,
-                "- Give the spec a `Coverage` table: one row per requirement of this plan, with the test node ids "
-                "(`path::test_name`) that prove it. Take the node ids from the tickets' reports and the placed oracles.",
-                copies,
-                places,
-                "- The driver placed the promoted oracles before you started. The archive renames no test, leaves "
-                "plan.yaml untouched, and writes no Status.",
-                "- Run before you report COMPLETE: %s. Then open a pull request against %s."
-                % (
-                    "; ".join(packet["checks"]) or "the repository's full CI gate",
-                    self.args.base.partition("/")[2],
-                ),
-                "The driver then re-runs the outcome evidence on your branch's head; a failure comes back as a fix round.",
-                "",
-                *verbatim,
-            ]
-        )
-
-    def archive_text(self, plan, packet, task_dir):
-        return self.yaml_archive_text(self.model, plan, packet, task_dir)
 
     def start_gaps(self, _plan):
         """Spawn the advisory gaps reviewer once. Its failure never blocks anything."""
@@ -6367,7 +6557,7 @@ def main(argv=None):
         "--brain-cli",
         choices=("claude", "codex", "pi"),
         help="The backend the review gates (the reviewer and the gaps reviewer) spawn on, with its "
-        "medium model; the implementer and the archive worker stay on --cli",
+        "medium model; the implementer stays on --cli",
     )
     sub.add_argument(
         "--agent",
@@ -6416,7 +6606,7 @@ def main(argv=None):
         default=[],
         metavar="STEP=BACKEND/MODEL[@EFFORT]",
         help="An explicit route for one step of the run: 'reviewer=codex/gpt-l@xhigh'. The steps are "
-        "implementer, reviewer, gaps and archive. It wins over the route config and over --brain-cli",
+        "implementer, reviewer and gaps. It wins over the route config and over --brain-cli",
     )
     sub.add_argument(
         "--notify-terminal",

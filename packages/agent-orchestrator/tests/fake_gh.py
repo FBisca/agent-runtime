@@ -7,7 +7,7 @@ Every call is logged with the plan and events as they stand. `pr view` answers `
 otherwise a draft answers the next `view-draft.json` state (OPEN when there is none) and the next `prs.json` state is
 used after that PR is made ready. Each queue's last answer repeats. `pr checks` uses `checks-ready.json` while the PR
 is ready, when scripted, then `checks-<number>.json`, falling back to `checks.json`. Draft flags are per PR.
-`pr ready --undo` uses `undo.json`, `pr update-branch` uses `update.json`; `run view` returns a canned failed log. A draft that is never made ready
+`pr ready --undo` uses `undo.json`, `pr update-branch` uses `update.json`, `pr create` prints the url in `create.json` (default pull/9); `run view` returns a canned failed log. A draft that is never made ready
 raises after 100 polls, exposing a missing transition without hanging the suite.
 """
 
@@ -43,7 +43,7 @@ def pop(home, name, default=None):
     return item
 
 
-def process(argv, timeout=None):
+def process(argv, timeout=None, cwd=None):
     """The answer to one `gh` argv (without the `gh` itself)."""
     home = os.environ["FAKE_RUNTIME_HOME"]
     events_path = os.environ.get("FAKE_EVENTS", "")
@@ -81,6 +81,12 @@ def process(argv, timeout=None):
             with open(ready, "w", encoding="utf-8") as stream:
                 stream.write("1")
         return Completed(argv, 0, "")
+    if argv[:2] == ["pr", "create"]:
+        # The printed url is the new PR; `create.json` scripts [exit, stdout, stderr] answers (the last repeats).
+        code, out, err = (
+            pop(home, "create.json", [0, "https://github.com/o/r/pull/9\n", ""]) + ["", ""]
+        )[:3]
+        return Completed(argv, code, out, err)
     if argv[:2] == ["pr", "update-branch"]:
         code, err = (pop(home, "update.json", [0, ""]) + [""])[:2]
         return Completed(argv, code, "", err)
