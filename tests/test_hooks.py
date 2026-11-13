@@ -1239,6 +1239,17 @@ class StopGuardTests(HookStoreCase):
         self.assertIsNone(self.prompt())
         self.assertIsNone(self.stop()[0])
 
+    def test_S7_a_lead_behind_a_dead_empty_team_may_end_its_turn_once_it_has_seen_the_result(self):
+        """The ownership rule does not change when the lead stops: a lead whose wait result it has seen
+        may end its turn, while the reminder still points at its own team."""
+        self.unseen()  # the lead's own team holds work
+        self.store.team("scope", "t0", DEAD_GENERATION)  # a newer row that left nothing behind
+        self.assertEqual(self.stop()[0], {"decision": "block", "reason": self.REASON % (1, 0)})
+
+        self.last_wait(self.store, self.team_id, "attention", 2)  # the lead has seen the result
+        self.assertIn("workers need you", self.line(self.prompt()))
+        self.assertIsNone(self.stop()[0])
+
     def test_blocks_with_the_wait_reason_when_work_is_unseen(self):
         """agent-runtime/R119"""
         ident = self.unseen()
