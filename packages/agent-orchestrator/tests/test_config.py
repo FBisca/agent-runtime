@@ -151,7 +151,12 @@ class TestPatternTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertTrue(plan.is_test_path(path, patterns))
-        for path in ("src/feature.py", "pyproject.toml", ".orchestrate/config.yaml", "src/attests.py"):
+        for path in (
+            "src/feature.py",
+            "pyproject.toml",
+            ".orchestrate/config.yaml",
+            "src/attests.py",
+        ):
             with self.subTest(path=path):
                 self.assertFalse(plan.is_test_path(path, patterns))
 

@@ -38,7 +38,15 @@ class LintRules(RunFixture, unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = load_script().run_cli(
-                ["plan", verb, str(path), "--repo", str(self.repo), "--state-dir", str(self.state_dir)]
+                [
+                    "plan",
+                    verb,
+                    str(path),
+                    "--repo",
+                    str(self.repo),
+                    "--state-dir",
+                    str(self.state_dir),
+                ]
             )
         return code, out.getvalue() + err.getvalue()
 
