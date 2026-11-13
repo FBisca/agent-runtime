@@ -347,15 +347,56 @@ function findNode(node, id) {
   return null;
 }
 
-/** The button's state and the Herdr commands a click runs, or null when the layout has no panel holding the workbench. */
-export function panelToggle(root) {
+// The terminals' node, and the width the panel takes back when the workbench collapses (Herdr's own default).
+const MAIN = "main";
+export const PANEL_PX = 520;
+
+/** Whether the panel shows the workbench, and whether the terminals are expanded over (the panel took the work area). */
+function showingWorkbench(root) {
   const panel = findNode(root, "panel"), body = findNode(root, "panel-body");
   if (!panel || !(body?.children ?? []).some((c) => c.id === WORKBENCH_PANEL)) return null;
-  const on = !panel.hidden && body.active === WORKBENCH_PANEL;
+  return { panel, on: !panel.hidden && body.active === WORKBENCH_PANEL, expanded: findNode(root, MAIN)?.hidden === true };
+}
+
+/** The button's state and the Herdr commands a click runs, or null when the layout has no panel holding the workbench.
+ *  Closing while expanded first gives the terminals back and the width the panel had (`restorePx`, 520 when unknown). */
+export function panelToggle(root, restorePx = null) {
+  const shown = showingWorkbench(root);
+  if (!shown) return null;
+  const { on, expanded } = shown;
   const commands = on
-    ? [["layout.hide", { id: "panel" }]]
+    ? [
+      ...(expanded ? [["layout.show", { id: MAIN }], ["layout.resize", { id: "panel", px: restorePx ?? PANEL_PX }]] : []),
+      ["layout.hide", { id: "panel" }],
+    ]
     : [["layout.select", { stack: "panel-body", child: WORKBENCH_PANEL }], ["layout.show", { id: "panel" }]];
   return { on, commands };
+}
+
+/** The expand over the terminals: while the panel shows the workbench beside the terminals, `expand` hides them and
+ *  gives the panel the whole work area (weight 1); once expanded, `commands` collapse back to `restorePx` (520 when
+ *  unknown). `width` is the panel's px now, the one to remember before expanding; null when Herdr sizes it by weight.
+ *  Null when no expand is offered: the panel does not show the workbench, or no terminals sit beside it. */
+export function panelExpand(root, restorePx = null) {
+  const shown = showingWorkbench(root);
+  if (!shown) return null;
+  const { panel, on, expanded } = shown;
+  if (expanded) {
+    return {
+      expanded: true, offer: false,
+      commands: [["layout.show", { id: MAIN }], ["layout.resize", { id: "panel", px: restorePx ?? PANEL_PX }]],
+      width: null,
+    };
+  }
+  const beside = (findNode(root, "work-body")?.children ?? []).some((c) => c.id === MAIN);
+  if (!on || !beside) return null;
+  const px = panel.size?.px;
+  return {
+    expanded: false,
+    offer: true,
+    commands: [["layout.hide", { id: MAIN }], ["layout.resize", { id: "panel", weight: 1 }]],
+    width: typeof px === "number" ? px : null,
+  };
 }
 
 // Herdr's tabs mod restores each space's panel only when it is in `workspace.panels` and hides it otherwise, so a

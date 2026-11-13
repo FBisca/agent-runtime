@@ -3,11 +3,11 @@
 // writes nothing. Layout is the model's (model.js); the views only draw what it hands them.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, exec, watchFolder, home, theme, terminals, run, layout, props, shared, setShared } from "herdr";
+import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
   layoutFor, screenFor, planRows, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
-  panelToggle, panelsWith,
+  panelToggle, panelsWith, panelExpand, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { planList } from "./views/plans.js";
@@ -20,7 +20,12 @@ import { toggleView } from "./views/toggle.js";
 // The orchestrator's ledger and run directories live under here; a change in any of them is a reason to refresh.
 const STATE_DIR = "/.local/state/orchestrate";
 
+// The panel's width before the expand, kept in the shared state: the tab bar's button is another instance and closes it.
+const RESTORE_PX = "agent-workbench.panel_px";
+
 const activeSpace = () => spaces().find((s) => s.active) ?? null;
+
+const runAll = (commands) => { for (const [command, args] of commands) run(command, args); };
 
 export default class AgentWorkbench extends View {
   init(initial, cx) {
@@ -71,9 +76,21 @@ export default class AgentWorkbench extends View {
   renderToggle() {
     const missing = panelsWith(shared("workspace.panels"));
     if (missing) setShared("workspace.panels", missing);
-    const toggle = panelToggle(layout());
-    const onToggle = (cx) => { for (const [command, args] of toggle.commands) run(command, args); cx.notify(); };
+    const toggle = panelToggle(herdrLayout(), shared(RESTORE_PX));
+    const onToggle = (cx) => { runAll(toggle.commands); cx.notify(); };
     return toggleView(toggle, { t: theme(), onToggle });
+  }
+
+  // The expand is the header's button: it hides the terminals and gives the panel the work area, and collapses back.
+  expandFor() {
+    const expand = panelExpand(herdrLayout(), shared(RESTORE_PX));
+    if (!expand) return null;
+    const onClick = (cx) => {
+      if (!expand.expanded) setShared(RESTORE_PX, expand.width ?? PANEL_PX);
+      runAll(expand.commands);
+      cx.notify();
+    };
+    return { expanded: expand.expanded, onClick };
   }
 
   render(cx) {
@@ -92,6 +109,7 @@ export default class AgentWorkbench extends View {
       t, project, narrow: layout === "narrow", pickerOpen: this.pickerOpen, loading: state.plans.status === "loading",
       onPicker: (cx) => { this.pickerOpen = !this.pickerOpen; cx.notify(); },
       onRefresh: (cx) => this.fetch(cx),
+      expand: this.expandFor(),
     });
 
     if (state.plans.status === "loading") return root.child(header(null)).child(loadingView("Looking for plans…", t));

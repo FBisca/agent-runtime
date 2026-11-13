@@ -4,7 +4,7 @@ import { h_flex, v_flex } from "gpui-base";
 import { badge, control, progressBar, progressText } from "../ui.js";
 
 export function headerView(head, ctx) {
-  const { t, project, narrow, pickerOpen, loading, onPicker, onRefresh } = ctx;
+  const { t, project, narrow, pickerOpen, loading, onPicker, onRefresh, expand } = ctx;
   const name = head ? head.slug : "plans";
   return v_flex().id("header").flex_none().gap(6).px(12).py(8).border_b(1).border_color(t.border)
     .child(h_flex().gap(8).items_center()
@@ -12,6 +12,8 @@ export function headerView(head, ctx) {
       .child(control("plan-picker", `${name} ${pickerOpen ? "▴" : "▾"}`, (_e, cx) => onPicker(cx), t, pickerOpen))
       .child(div().flex_1())
       .when(Boolean(head), (el) => el.child(badge(head.state.word, head.state.tone, t)))
+      .when(Boolean(expand), (el) => el.child(control("expand", expand.expanded ? "Collapse" : "Expand",
+        (_e, cx) => expand.onClick(cx), t, expand.expanded)))
       .child(control("refresh", loading ? "…" : "↻", (_e, cx) => onRefresh(cx), t)))
     .when(Boolean(head) && !narrow && Boolean(head.goal), (el) =>
       el.child(div().text_size(12).text_color(t.muted).truncate().child(head.goal)))
