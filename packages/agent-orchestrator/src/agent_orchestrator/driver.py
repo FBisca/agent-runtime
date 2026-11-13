@@ -4153,7 +4153,8 @@ class Driver:
             applying = applying or self.decided_action(task)
         elif gate not in ("redo-pending", "fix-pending") or not applying:
             return False
-        worker, from_gate = task["packet"]["worker"], None
+        worker, from_gate, menu = task["packet"]["worker"], None, None
+        way_out = "retry it once the pane works, or fresh worker, mark blocked or skip"
         if (
             gate == "decided"
             and applying == "answer"
@@ -4163,10 +4164,16 @@ class Driver:
             # The answer was for the reviewer: the new request names it and keeps the review routing, so the Lead's next
             # `answer` reaches the reviewer again, not the implementer.
             worker, from_gate = task["review"]["name"], "reviewing"
+            # `retry` and `fresh worker` on this request resume the implementer, not the reviewer: name and offer only
+            # the actions that reach the reviewer.
+            way_out = "answer again once the pane works, or mark blocked or skip"
+            menu = ("answer", "mark blocked", "skip")
         # the wake cuts a reason at 200 characters: the way out comes first, the runtime's words (all in the file) after
-        reason = (
-            "the Lead's decision (%s) could not reach %s; retry it once the pane works, or fresh worker, mark blocked "
-            "or skip: %s" % (applying or "decision", worker, " ".join(str(error).split())[:600])
+        reason = "the Lead's decision (%s) could not reach %s; %s: %s" % (
+            applying or "decision",
+            worker,
+            way_out,
+            " ".join(str(error).split())[:600],
         )
         with self.book() as data:
             if "decision" in data["tasks"][task_id]:
@@ -4178,7 +4185,7 @@ class Driver:
             gate=gate,
             error=str(error)[:500],
         )
-        self.request(task_id, "handover", reason, from_gate=from_gate)
+        self.request(task_id, "handover", reason, menu=menu, from_gate=from_gate)
         return True
 
     def decided_action(self, task):
