@@ -573,6 +573,28 @@ class AffectedNotRunTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             driver.require_completable(self.task(), self.report({"outcome": "passed"}, fast=fast))
 
+    def test_S1_an_affected_command_another_tier_also_requires_is_never_waived_not_run(self):
+        # A packet written before equivalent tiers were folded together: the same command twice, a launcher
+        # spelling apart, so the `not_run` allowance would waive a required `fast` check.
+        task = {
+            "packet": {
+                "checks": ["uv run pytest -q", "python3 -m pytest -q"],
+                "affected": "python3 -m pytest -q",
+                "unit": "t1",
+            }
+        }
+        skipped = report(
+            checks=[
+                {
+                    "command": "python3 -m pytest -q",
+                    "outcome": "not_run",
+                    "reason": "no test selected",
+                }
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "required checks"):
+            driver.require_completable(task, skipped)
+
 
 class TierBriefTests(unittest.TestCase):
     """The brief and the required checks a ticket worker gets, from the repo config and `--gate`."""
@@ -623,3 +645,42 @@ class TierBriefTests(unittest.TestCase):
         self.assertIn("Before you report COMPLETE, run: scripts/checks.sh.", text)
         self.assertNotIn("uv run ruff check", text)
         self.assertNotIn("uv run pytest -n auto", text)
+
+    def test_S1_overlapping_tiers_require_one_command_and_never_forbid_it(self):
+        config = "checks:\n  fast: uv run pytest -q\n  affected: uv run pytest -q\n  full:\n    run: uv run pytest -q\n"
+        packet, text = self.drive(config=config)
+        self.assertEqual(packet["checks"], ["uv run pytest -q"])
+        self.assertNotIn("full", packet)
+        self.assertEqual(
+            [
+                line
+                for line in text.splitlines()
+                if line.startswith("Before you report COMPLETE, run:")
+            ],
+            ["Before you report COMPLETE, run: uv run pytest -q."],
+        )
+        self.assertNotIn("do not run", text)
+
+    def test_S1_launcher_spellings_of_one_command_are_required_once(self):
+        config = (
+            "checks:\n  fast: uv run pytest -q\n  affected: python3 -m pytest -q\n"
+            "  full:\n    run: pytest -q\n"
+        )
+        packet, text = self.drive(config=config)
+        self.assertEqual(packet["checks"], ["uv run pytest -q"])
+        self.assertNotIn("affected", packet)
+        self.assertNotIn("do not run", text)
+        driver.require_completable(
+            {"packet": dict(packet, unit="t1")},
+            report(checks=[{"command": "python3 -m pytest -q", "outcome": "passed"}]),
+        )
+
+    def test_S2_a_distinct_full_is_verify_owned_while_fast_and_affected_are_kept(self):
+        packet, text = self.drive()
+        self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])
+        self.assertEqual(packet["affected"], self.AFFECTED)
+        self.assertEqual(packet["full"], "uv run pytest -n auto")
+        (full,) = [line for line in text.splitlines() if "uv run pytest -n auto" in line]
+        self.assertIn("do not run", full)
+        self.assertIn("verify", full)
+        self.assertIn("CI", full)

@@ -264,6 +264,18 @@ def normalise_check(command):
     return " ".join(tokens)
 
 
+def unique_checks(commands):
+    """Each required command once, in the spelling it was declared: tiers that render the same gate add no second
+    requirement, so a worker is never asked to run one command twice, nor told not to run one it must pass."""
+    seen, unique = set(), []
+    for command in commands:
+        key = normalise_check(command)
+        if key not in seen:
+            seen.add(key)
+            unique.append(command)
+    return unique
+
+
 def merged_snapshot(path):
     """The checkout's snapshot, or None when the tree is gone: after a merge the snapshot is evidence, not a
     precondition."""
@@ -289,9 +301,11 @@ def require_completable(task, report):
         for c in checks
         if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
     }
-    # The rendered `affected` check may be `not_run` with a reason: the selection found no test to run.
+    # The rendered `affected` check may be `not_run` with a reason: the selection found no test to run. A command
+    # another tier also requires is never that, so the allowance is only for a tier that stands alone.
+    keys = [normalise_check(c) for c in task["packet"]["checks"]]
     affected = task["packet"].get("affected")
-    if isinstance(affected, str):
+    if isinstance(affected, str) and keys.count(normalise_check(affected)) == 1:
         passed |= {
             normalise_check(c["command"])
             for c in checks
@@ -537,7 +551,7 @@ CONTRACT = """# Contract for every task in this run
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
 - A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node, unless the plan's evidence for it brings its own test files (acceptance files or oracles) or is `human` (a person checks it): map such a scenario only to tests this ticket changes, never to a test written to stand in for the check.
-- COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
+- COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. Each required command is required once, a launcher spelling apart, and the one `not_run` allowance (`affected` with a `reason`, when no test was selected) never waives a command another tier also requires. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
 - Red-first: one test per scenario, named with its S-ID, seen failing before the code exists.
@@ -6748,9 +6762,10 @@ class Driver:
 
     def tier_checks(self, owns):
         """The checks a worker runs: the named `--gate` alone, else the repo's `fast` and rendered `affected` tiers.
-        Returns (checks, the rendered affected command or None, the `full` command the worker leaves to verify)."""
+        Each required command appears once. Returns (checks, the rendered affected command when it is a
+        requirement of its own, the `full` command the worker leaves to verify when it is not one of them)."""
         if self.args.gate:
-            return list(self.args.gate), None, None
+            return unique_checks(self.args.gate), None, None
         tiers = repo_config.load(self.repo).checks
         if tiers is None or not (tiers.fast or tiers.affected):
             return [], None, None
@@ -6759,7 +6774,19 @@ class Driver:
             affected = tiers.affected.replace("{base}", shlex.quote(self.args.base)).replace(
                 "{paths}", " ".join(shlex.quote(p) for p in owns)
             )
-        return [c for c in (tiers.fast, affected) if c], affected, tiers.full_run
+        checks = unique_checks([c for c in (tiers.fast, affected) if c])
+        # A rendered `affected` that repeats `fast` adds no requirement, so it keeps no `not_run` allowance of its
+        # own; and a command the worker must pass is never the one it is told not to run.
+        if (
+            affected is not None
+            and tiers.fast
+            and normalise_check(affected) == normalise_check(tiers.fast)
+        ):
+            affected = None
+        full = tiers.full_run
+        if full and normalise_check(full) in {normalise_check(c) for c in checks}:
+            full = None
+        return checks, affected, full
 
     def last_attempt(self, unit, task_id):
         """The packet of the unit's most recent other attempt that carries a class, or None."""

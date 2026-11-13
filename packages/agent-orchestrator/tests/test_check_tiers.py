@@ -4,7 +4,7 @@ rendered for its ticket, never the whole suite (check-tiers/S2, S3)."""
 import unittest
 
 import pytest
-from fixtures import RunFixture
+from fixtures import RunFixture, load_script
 
 pytestmark = pytest.mark.integration
 
@@ -17,19 +17,48 @@ checks:
 """
 
 AFFECTED = "uv run pytest --impacted --impacted-base-branch origin/main src/a/ 'src/my dir/'"
+AFFECTED_ONE_PATH = "uv run pytest --impacted --impacted-base-branch origin/main src/a/"
+# Every tier renders the same command: one requirement, and nothing to tell the worker not to run.
+OVERLAPPING = """\
+checks:
+  fast: uv run pytest -q
+  affected: uv run pytest -q
+  full:
+    run: uv run pytest -q
+"""
+# The same command in three launcher spellings: still one requirement, still never forbidden.
+ONE_COMMAND = """\
+checks:
+  fast: uv run pytest -q
+  affected: python3 -m pytest -q
+  full:
+    run: pytest -q
+"""
+
+
+def report(checks):
+    return {
+        "acceptance_met": True,
+        "remaining": [],
+        "review_rounds": 0,
+        "usage": "unknown",
+        "checks": checks,
+    }
 
 
 class CheckTiersBrief(RunFixture, unittest.TestCase):
-    def declare_tiers(self):
-        config = self.repo / ".orchestrate" / "config.yaml"
-        config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text(CONFIG, encoding="utf-8")
+    def declare(self, config, mutate=None):
+        path = self.repo / ".orchestrate" / "config.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(config, encoding="utf-8")
+        self.set_plan(("T1",), mutate=mutate)
 
+    def declare_tiers(self):
         def two_paths(data):
             # A second path with a space: `{paths}` is shell-quoted and space-joined.
             data["tickets"][0]["paths"] = ["src/a/", "src/my dir/"]
 
-        self.set_plan(("T1",), mutate=two_paths)
+        self.declare(CONFIG, two_paths)
 
     def brief(self):
         return (self.run_dir_of("demo") / "t1" / "task.md").read_text(encoding="utf-8")
@@ -65,6 +94,43 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.declare_tiers()
         self.run_driver("--gate", "scripts/checks.sh")
         self.assertEqual(self.required(), ["scripts/checks.sh"])
+
+    def test_S1_overlapping_tiers_require_the_command_once_and_never_forbid_it(self):
+        self.declare(OVERLAPPING)
+        self.run_driver()
+        self.assertEqual(self.required(), ["uv run pytest -q"])
+        brief = self.brief()
+        (run,) = [x for x in brief.splitlines() if x.startswith("Before you report COMPLETE, run:")]
+        self.assertEqual(run.count("uv run pytest -q"), 1)
+        self.assertEqual(
+            [x for x in brief.splitlines() if "do not run" in x],
+            [],
+        )
+        # The required set and COMPLETE validation are the same set: passed once is enough, absent is not.
+        task = self.ledger()["tasks"]["t1"]
+        load_script().require_completable(
+            task, report([{"command": "uv run pytest -q", "outcome": "passed"}])
+        )
+        with self.assertRaisesRegex(ValueError, "required checks"):
+            load_script().require_completable(task, report([]))
+
+    def test_S1_launcher_spellings_of_one_command_are_one_required_assignment(self):
+        self.declare(ONE_COMMAND)
+        self.run_driver()
+        self.assertEqual(self.required(), ["uv run pytest -q"])
+        self.assertEqual([x for x in self.brief().splitlines() if "do not run" in x], [])
+        load_script().require_completable(
+            self.ledger()["tasks"]["t1"],
+            report([{"command": "python3 -m pytest -q", "outcome": "passed"}]),
+        )
+
+    def test_S2_fast_and_affected_are_kept_when_only_full_is_distinct(self):
+        self.declare(CONFIG)
+        self.run_driver()
+        self.assertEqual(self.required(), ["uv run pytest -q", AFFECTED_ONE_PATH])
+        packet = self.ledger()["tasks"]["t1"]["packet"]
+        self.assertEqual(packet["affected"], AFFECTED_ONE_PATH)
+        self.assertEqual(packet["full"], "uv run pytest -n 4")
 
     def test_control_a_named_gate_without_a_config_is_the_required_check(self):
         self.set_plan(("T1",))
