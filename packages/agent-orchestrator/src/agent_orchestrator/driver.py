@@ -2208,6 +2208,8 @@ class Driver:
                 task["event"]["reason"],
                 [str(c) for c in candidates if c.exists()],
                 menu=task["request"].get("menu") or (ARCHIVE_MENU if unit == ARCHIVE else None),
+                # An intent request keeps the string menu (contract 2): its readers compare the two action names.
+                typed=task["event"]["kind"] != "intent",
             )
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             write_atomic(path, json.dumps(row, indent=2) + "\n")

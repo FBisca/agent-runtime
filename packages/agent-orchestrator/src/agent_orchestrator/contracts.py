@@ -651,16 +651,18 @@ def validate_request(request):
     return request
 
 
-def make_request(unit, task, event, reason, evidence, created_at=None, menu=None):
+def make_request(unit, task, event, reason, evidence, created_at=None, menu=None, typed=True):
+    """A request for the Lead. `typed=False` writes contract 2, whose menu lists the action names: a request kind
+    whose readers still compare the string menu."""
     return validate_request(
         {
-            "contract": LEAD_VERSION,
+            "contract": LEAD_VERSION if typed else 2,
             "unit": unit,
             "task": task,
             "event": event,
             "reason": reason,
             "evidence": list(evidence),
-            "menu": [menu_option(action) for action in (menu or ACTIONS)],
+            "menu": [menu_option(a) if typed else a for a in (menu or ACTIONS)],
             "status": "open",
             "decision": None,
             "created_at": created_at or datetime.now(timezone.utc).isoformat(),

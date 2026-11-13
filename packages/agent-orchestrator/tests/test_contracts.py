@@ -405,6 +405,13 @@ class ContractTests(unittest.TestCase):
         self.assertEqual([o["action"] for o in request["menu"]], ["retry", "skip"])
         self.assertEqual(contracts.menu_actions(request), ["retry", "skip"])
 
+    def test_S16_a_request_can_still_be_written_with_a_string_menu_as_contract_2(self):
+        request = contracts.make_request(
+            "t1", "t1", "intent", "x", [], menu=("retry", "skip"), typed=False
+        )
+        self.assertEqual((request["contract"], request["menu"]), (2, ["retry", "skip"]))
+        self.assertEqual(contracts.validate_request(request), request)
+
     def test_S16_a_contract_2_request_with_a_string_menu_is_still_read(self):
         old = {
             "contract": 2,
