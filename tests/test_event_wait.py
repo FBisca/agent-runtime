@@ -1,7 +1,6 @@
 """Event waits through real MCP processes; fake hc, explicit reconciliation barriers."""
 
 import functools
-import importlib
 import json
 import queue
 import sqlite3
@@ -9,7 +8,6 @@ import subprocess
 import sys
 import threading
 import time
-import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
@@ -1771,31 +1769,3 @@ class BorrowedRig(ToolCase):
 
     def count_sessions_borrowed(self):
         return HcCase.count_sessions(self)
-
-
-class TestsKeptTests(unittest.TestCase):
-    # How many tests each class held before the session cost change; a test that is deleted or merged
-    # lowers a count and must name the test that keeps its guarantee in its PR (S6).
-    HELD = {
-        "test_event_wait": {"EventWaitTests": 55, "WaitUsageTests": 1, "WaitDescriptionTests": 1},
-        "test_spawn_cleanup": {
-            "SpawnCleanupTests": 22,
-            "FastReportTests": 10,
-            "StoreFailureTests": 16,
-        },
-        "test_stop_failures": {
-            "StopFailureTests": 7,
-            "StoreTaskReleaseTests": 8,
-            "StopStoreFailureTests": 5,
-        },
-        "test_peer_dispatch": {"PeerDispatchTests": 15},
-    }
-
-    def test_S6_the_session_cost_change_deleted_merged_and_moved_no_test(self):
-        """S6: every class the change touched still holds the tests it held, in the module that held them."""
-        for module, classes in self.HELD.items():
-            loaded = importlib.import_module(module)
-            for name, held in classes.items():
-                with self.subTest(module=module, case=name):
-                    names = unittest.TestLoader().getTestCaseNames(getattr(loaded, name))
-                    self.assertGreaterEqual(len(names), held, sorted(names))

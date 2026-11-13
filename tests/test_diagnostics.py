@@ -6,8 +6,9 @@ import sqlite3
 import pytest
 import test_event_wait as event_helpers
 from agent_runtime.dispatch_store import Store
-from test_event_wait import Session
-from test_tools import ToolCase
+from test_event_wait import LazySessions
+from test_mcp_server import InProcessSession, Session
+from test_tools import InProcessToolCase
 
 pytestmark = pytest.mark.integration
 
@@ -15,13 +16,67 @@ pytestmark = pytest.mark.integration
 SCREEN = "screen says finished"
 
 
-class DiagnosticTests(ToolCase):
+class InProcessRPC:
+    """The lead's tool calls answered in process: what `AsyncRPC` gives a test, with no server behind it."""
+
+    def __init__(self, session):
+        self.session, self.replies, self.sequence = session, {}, 0
+
+    def tool(self, name, arguments):
+        self.sequence += 1
+        self.replies[self.sequence] = self.session.send(
+            "tools/call", {"name": name, "arguments": arguments}
+        )
+        return self.sequence
+
+    def get(self, request_id):
+        return self.replies.pop(request_id)
+
+
+class Rig(InProcessToolCase):
+    """A lead with two workers registered through its tools, every session in process: diagnostics prove what
+    the tools decide, so the server process is left to the boundary tests."""
+
     # The helpers come through the module: binding the class here would collect it a second time in
     # this file, and the whole class would run twice in every parallel run.
-    prepare = event_helpers.EventWaitTests.prepare
     spawn = event_helpers.EventWaitTests.spawn
     publish = event_helpers.EventWaitTests.publish
 
+    def prepare(self):
+        def terminal(name, address, parent="t0", state="working"):
+            return {"name": name, "address": address, "parent": parent, "status": state}
+
+        self.rows = [terminal("w1", "t1"), terminal("w2", "t2"), terminal("child", "t3", "t1")]
+        self.replies = {
+            "get:t0": {"out": json.dumps(terminal("lead", "t0", None))},
+            "ls": {"out": json.dumps({"terminals": self.rows})},
+        }
+        for row in self.rows:
+            for key in (row["name"], row["address"]):
+                self.replies["get:" + key] = {"out": json.dumps(row)}
+        self.env = {
+            "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
+            "HOME": str(self.dir / "home"),
+            "HC_SCOPE": "events",
+            "CODEX_THREAD_ID": "event-lead",
+            "HC_TERMINAL_ID": "t0",
+            "AGENT_RUNTIME_DISPATCH": "1",
+        }
+        self.lead = self.start(self.replies, self.env)
+        self.assignments = [self.spawn(self.lead, name) for name in ("w1", "w2")]
+        self.workers = LazySessions(self.worker_session)
+        self.rpc = InProcessRPC(self.lead)
+
+    def worker_session(self, index):
+        address = ("t1", "t2")[index]
+        session = InProcessSession(
+            dict(self.env, HC_TERMINAL_ID=address, CODEX_THREAD_ID="worker-" + address)
+        )
+        session.handshake()
+        return session
+
+
+class DiagnosticTests(Rig):
     def setUp(self):
         super().setUp()
         self.prepare()
@@ -73,6 +128,7 @@ class DiagnosticTests(ToolCase):
         env["PATH"] = str(
             self.dir / "bin"
         )  # no ps: the CLI ancestry (and so the session generation) is invisible
+        # S13: the process ancestry is the boundary here, so this one keeps the server process
         session = Session(env)
         self.addCleanup(session.close)
         session.handshake()
@@ -82,8 +138,7 @@ class DiagnosticTests(ToolCase):
         """agent-runtime/R70"""
         self.replies["get:t0"] = {"rc": 1, "out": "", "err": "timed out"}
         self.save()
-        session = Session(dict(self.env, CODEX_THREAD_ID="other"))
-        self.addCleanup(session.close)
+        session = InProcessSession(dict(self.env, CODEX_THREAD_ID="other"))
         session.handshake()
         self.all_three(lambda name, arguments: self.call(session, name, arguments)[0])
 
@@ -128,11 +183,7 @@ class DiagnosticTests(ToolCase):
         self.assertEqual(self.runs("read"), [r for r in self.runs("read") if r[1] == "child"])
 
 
-class ReceiptGatedInboxTests(ToolCase):
-    prepare = event_helpers.EventWaitTests.prepare
-    spawn = event_helpers.EventWaitTests.spawn
-    publish = event_helpers.EventWaitTests.publish
-
+class ReceiptGatedInboxTests(Rig):
     def read_calls(self):
         return (
             ("status", {"name": "w1"}),

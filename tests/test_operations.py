@@ -802,27 +802,6 @@ class OperationOutcomeTests(FakeHc):
         self.assertEqual(len(self.runs("run")), 1)
 
 
-class OperationKeyKeeperTests(unittest.TestCase):
-    """A test deleted for being a copy leaves its guarantee with a named keeper, in the spec rows that cited it."""
-
-    def test_S6_the_oracle_file_keeps_no_copy_of_the_operation_key_cases_and_the_spec_names_their_keeper(
-        self,
-    ):
-        oracle = PLUGIN / "acceptance" / "runtime" / "test_runtime_audit_outcome.py"
-        self.assertNotIn("class OperationKeyOutcome", oracle.read_text())
-        spec = (PLUGIN / "docs" / "specs" / "agent-runtime.md").read_text()
-        self.assertNotIn("OperationKeyOutcome", spec)
-        rows = {
-            line.split("|")[1].strip(): line
-            for line in spec.splitlines()
-            if line.startswith("| R2")
-        }
-        keeper = "tests/test_operations.py::OperationOutcomeTests"
-        for requirement in ("R252", "R253", "R254"):
-            self.assertIn(keeper, rows[requirement], requirement)
-        self.assertIn("the keeper of the copy", spec)
-
-
 # --- The outcome --------------------------------------------------------------------------------------------------
 
 

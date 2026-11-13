@@ -235,7 +235,9 @@ class ToolCase(unittest.TestCase):
         # The tool's decision runs in process; a test that is about the pipe, the process ancestry or a
         # call in its own thread asks for the server process.
         session = (
-            InProcessSession(full) if self.in_process and not (process or new_cli) else Session(full, new_cli=new_cli)
+            InProcessSession(full)
+            if self.in_process and not (process or new_cli)
+            else Session(full, new_cli=new_cli)
         )
         self.addCleanup(session.close)
         session.handshake()
