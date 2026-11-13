@@ -8,14 +8,14 @@ import unittest
 from pathlib import Path
 
 import pytest
-from fixtures import load_script
+from fixtures import RunFixture, load_script
 
 pytestmark = pytest.mark.integration
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "agent_orchestrator"
 
 
-class MarkdownRemovedTests(unittest.TestCase):
+class MarkdownRemovedTests(RunFixture, unittest.TestCase):
     def test_S28_a_markdown_plan_passed_to_run_is_refused_naming_yaml_and_plan_check(self):
         spec = load_script()
         with tempfile.TemporaryDirectory() as temp:
@@ -25,7 +25,7 @@ class MarkdownRemovedTests(unittest.TestCase):
             )
             err = io.StringIO()
             with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-                code = spec.run_cli(["run", str(plan), "--state-dir", str(Path(temp) / "state")])
+                code = spec.run_cli(self.driver_args(plan=plan, routed=False))
         self.assertEqual(code, 2, err.getvalue())
         self.assertIn("plan/1 YAML", err.getvalue())
         self.assertIn("plan check", err.getvalue())

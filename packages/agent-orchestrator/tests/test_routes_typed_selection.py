@@ -43,17 +43,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
     def drive(self, *args):
         """A run with no model table argument: the routes come from the files alone."""
         self.alias_state(self.plan)
-        return self.cli(
-            "run",
-            str(self.plan),
-            "--state-dir",
-            str(self.state_dir),
-            "--wait-seconds",
-            "1",
-            "--idle-interval",
-            "0",
-            *args,
-        )
+        return self.cli(*self.driver_args(*args, routed=False))
 
     def worker(self, name="demo-t1"):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}[name]

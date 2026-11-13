@@ -101,19 +101,7 @@ class MergeTests(GateFixture, unittest.TestCase):
             FAKE_PLAN=str(self.state_dir / "demo.json"),
             FAKE_CHECKOUT=str(self.worktree),
         )
-        argv = [
-            "orchestrate",
-            "run",
-            str(self.plan),
-            "--state-dir",
-            str(self.state_dir),
-            "--routes-file",
-            str(self.route_file),
-            "--wait-seconds",
-            "1",
-            "--idle-interval",
-            "30",
-        ]
+        argv = ["orchestrate", *self.driver_args("--idle-interval", "30")]
         with (
             mock.patch.dict(os.environ, env),
             mock.patch.object(sys, "argv", argv),

@@ -361,19 +361,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
             + [self.decided("skip"), wait_result([assignment("demo-t3", "complete")])]
         )
         env = self.env()
-        argv = [
-            "orchestrate",
-            "run",
-            str(self.plan),
-            "--state-dir",
-            str(self.state_dir),
-            "--routes-file",
-            str(self.route_file),
-            "--wait-seconds",
-            "1",
-            "--idle-interval",
-            "30",
-        ]
+        argv = ["orchestrate", *self.driver_args("--idle-interval", "30")]
         with (
             mock.patch.dict(os.environ, env),
             mock.patch.object(sys, "argv", argv),

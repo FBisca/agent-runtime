@@ -744,20 +744,7 @@ class RejectionTests(AcceptanceFixture, unittest.TestCase):
     def run_driver_result(self):
         return self.in_process(
             load_script(),
-            [
-                "run",
-                str(self.plan),
-                "--state-dir",
-                str(self.state_dir),
-                "--routes-file",
-                str(self.route_file),
-                "--wait-seconds",
-                "1",
-                "--idle-interval",
-                "0",
-                "--repo",
-                str(self.repo),
-            ],
+            self.driver_args("--repo", str(self.repo)),
         )
 
 
