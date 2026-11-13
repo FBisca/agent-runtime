@@ -175,10 +175,13 @@ class CoversTests(VerifyFixture):
             [("covers", "S2: no test node in covers; map the scenario to the tests that prove it")],
         )
 
-    def test_S9_a_report_without_covers_leaves_every_satisfied_scenario_unmapped(self):
+    def test_S9_a_report_without_covers_leaves_unmapped_each_scenario_whose_evidence_brings_no_tests(
+        self,
+    ):
+        # S1's evidence places its own test file, which the ticket's evidence gate runs: a ticket never changes it.
         findings = self.gate({})
         self.assertEqual(
-            [e.split(":")[0] for c, e in self.found(findings) if c == "covers"], ["S1", "S2"]
+            [e.split(":")[0] for c, e in self.found(findings) if c == "covers"], ["S2"]
         )
 
 
