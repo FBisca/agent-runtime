@@ -69,7 +69,7 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual([a["task_id"] for a in attempts], ledger_tasks, "no attempt dropped")
 
     def test_S8_the_attempt_maps_to_the_address_the_runtime_returned(self):
-        self.delivered(archive=True)
+        self.delivered()
         (attempt,) = self.t1(self.view())["attempts"]
         self.assertEqual(attempt["address"], "term-demo-t1")
         self.assertEqual(attempt["assignment_id"], spawn_id("demo-t1"))
@@ -90,14 +90,14 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
         self.assertIs(t1["attempts"][0]["claimed"], True)
 
     def test_S9_a_ticket_whose_evidence_passed_is_verified(self):
-        self.delivered(archive=True)
+        self.delivered()
         t1 = self.t1(self.view())
         self.assertIs(t1["verified"], True)
         self.assertEqual([g["result"] for g in t1["gates"]], ["PASS"])
         self.assertIsNone(t1["gates"][0]["reason"])
 
     def test_S10_an_accepted_plans_outcome_and_item_states_are_what_verify_computes(self):
-        self.delivered(archive=True)
+        self.delivered()
         outcome = self.view()["outcome"]
         verdict = self.verdict()
         self.assertEqual(verdict["state"], "ACCEPTED")
@@ -109,7 +109,7 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual([i["freshness"] for i in outcome["items"]], ["fresh"])
 
     def test_S10_a_receipt_that_no_longer_matches_its_sha256_is_stale_and_says_why(self):
-        self.delivered(archive=True)
+        self.delivered()
         path = self.run_dir / "receipts" / "S1.integration.1.json"
         path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
         (item,) = self.view()["outcome"]["items"]
@@ -118,21 +118,21 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(self.verdict()["items"][0]["state"], "UNKNOWN")
 
     def test_S10_a_receipt_for_another_approval_digest_is_stale(self):
-        self.delivered(archive=True)
+        self.delivered()
         self.rewrite_receipt("S1.integration.1", lambda r: r.update(digest="0" * 64))
         (item,) = self.view()["outcome"]["items"]
         self.assertEqual((item["freshness"], item["state"]), ("stale", "UNKNOWN"))
         self.assertIn("another approval digest", item["reason"])
 
     def test_S10_a_receipt_for_another_tree_is_stale(self):
-        self.delivered(archive=True)
+        self.delivered()
         self.rewrite_receipt("S1.integration.1", lambda r: r.update(tree="1" * 40))
         (item,) = self.view()["outcome"]["items"]
         self.assertEqual((item["freshness"], item["state"]), ("stale", "UNKNOWN"))
         self.assertIn("another tree", item["reason"])
 
     def test_S10_a_receipt_file_that_is_gone_is_missing(self):
-        self.delivered(archive=True)
+        self.delivered()
         (self.run_dir / "receipts" / "S1.integration.1.json").unlink()
         (item,) = self.view()["outcome"]["items"]
         self.assertEqual((item["freshness"], item["state"]), ("missing", "UNKNOWN"))

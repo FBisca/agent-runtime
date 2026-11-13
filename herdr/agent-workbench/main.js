@@ -6,14 +6,14 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
-  layoutFor, screenFor, planRows, planSections, ticketLayers, pickTicket, relatives, inspector, planHeader, notice, liveTerminals, runtimeAgents, runtimeNote,
+  layoutFor, screenFor, planRows, planSections, ticketLayers, pickTicket, relatives, inspector, planHeader, timelineOf, notice, liveTerminals,
   panelToggle, panelsWith, panelExpand, PANEL_PX,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { planList } from "./views/plans.js";
 import { layeredList, compactList } from "./views/tickets.js";
 import { inspectorView } from "./views/inspector.js";
-import { runtimeView } from "./views/runtime.js";
+import { timelineView } from "./views/timeline.js";
 import { noticeView, loadingView } from "./views/notices.js";
 import { toggleView } from "./views/toggle.js";
 
@@ -107,9 +107,10 @@ export default class AgentWorkbench extends View {
     const project = this.project ?? "no space";
     if (!this.spaceKey) return root.child(loadingView("No space is shown.", t));
 
-    const header = (head) => headerView(head, {
-      t, project, narrow: layout === "narrow", pickerOpen: this.pickerOpen, loading: state.plans.status === "loading",
-      onPicker: (cx) => { this.pickerOpen = !this.pickerOpen; cx.notify(); },
+    // An open plan's header has a way back to the plan list; the list's has none.
+    const header = (head, back = null) => headerView(head, {
+      t, project, narrow: layout === "narrow", loading: state.plans.status === "loading",
+      onBack: back,
       onRefresh: (cx) => this.fetch(cx),
       expand: this.expandFor(),
     });
@@ -133,12 +134,13 @@ export default class AgentWorkbench extends View {
     };
     const picked = rows.find((r) => r.path === state.selected) ?? null;
     const plan = state.plan;
-    const head = plan?.status === "ok" ? planHeader(plan.value) : picked ? { slug: picked.slug, state: picked.look } : null;
-    root.child(header(head));
+    const head = plan?.status === "ok" ? planHeader(plan.value, layout) : picked ? { title: picked.slug, slug: picked.slug, state: picked.look } : null;
+    const listing = this.pickerOpen || !picked;
+    root.child(listing ? header(null) : header(head, (cx) => { this.pickerOpen = true; cx.notify(); }));
     const show = (el) => root.child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar().child(el));
 
     const onOlder = (cx) => { this.olderOpen = !this.olderOpen; cx.notify(); };
-    if (this.pickerOpen || !picked) {
+    if (listing) {
       return show(planList(planSections(state.plans.value), this.olderOpen, state.selected, { onPick, onOlder }, t));
     }
     if (!plan || plan.status === "loading") return show(loadingView("Loading " + picked.slug + "…", t));
@@ -146,23 +148,24 @@ export default class AgentWorkbench extends View {
 
     const tickets = plan.value.tickets;
     const selected = pickTicket(tickets, this.ticket);
-    const layers = ticketLayers(tickets);
     const select = (id, cx) => { this.ticket = id; this.drilled = true; cx.notify(); };
     // terminals() is live: render runs again when Herdr's terminals change, so nothing here polls it.
     const machine = this.machine;
     const all = terminals();
     const live = liveTerminals(all, machine);
+    const layers = ticketLayers(tickets, live);
     const onOpen = (open, cx) => { run(open.command, open.args); cx.notify(); };
-    const runtime = runtimeView(runtimeAgents(all, state.loaded, machine), { t, onOpen }, runtimeNote(machine));
-    const ctx = { t, selected, kin: relatives(tickets, selected), onSelect: select };
-    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live) : null;
+    const ctx = { t, selected, kin: relatives(tickets, selected), onSelect: select, onOpen };
+    const detail = selected ? inspector(tickets.find((x) => x.id === selected), tickets, live, plan.value.metrics) : null;
     const screen = screenFor(layout, this.drilled, Boolean(selected));
     if (screen === "inspector") {
       return show(inspectorView(detail, { t, onOpen, onBack: (cx) => { this.drilled = false; cx.notify(); } }));
     }
-    if (screen === "list") return show(v_flex().child(compactList(layers, ctx)).child(runtime));
+    if (screen === "list") return show(compactList(layers, ctx));
+    const timeline = timelineOf(plan.value.metrics, tickets, layout);
+    if (timeline) root.child(timelineView(timeline, t));
     return root.child(h_flex().id("body").flex_1().min_h(0)
-      .child(div().id("layers").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(layeredList(layers, ctx)).child(runtime))
+      .child(div().id("layers").flex_1().min_w(0).h_full().overflow_y_scrollbar().child(layeredList(layers, ctx)))
       .child(div().id("detail").w(360).flex_none().h_full().overflow_y_scrollbar().border_l(1).border_color(t.border)
         .when(Boolean(detail), (el) => el.child(inspectorView(detail, { t, onOpen, onBack: null })))));
   }

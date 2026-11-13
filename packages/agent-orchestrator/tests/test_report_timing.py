@@ -49,7 +49,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.waits([self.turn_ended(), self.answer(), self.worker_done()])
         self.run_driver()
         self.assertFalse(self.asked())
-        self.assertEqual(len(self.events("report-landed")), 1)
+        self.assertEqual(len(self.run_events("report-landed")), 1)
         self.assertEqual((self.task().get("report") or {}).get("task_id"), "t1")
 
     def test_S0_a_report_on_disk_is_not_a_reason_to_ask_a_human(self):
@@ -79,7 +79,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: 0)):
             self.run_driver("--idle-minutes", "10")
         self.assertFalse(self.asked(), "an idle worker was asked about at once")
-        self.assertEqual(self.events("escalation"), [])
+        self.assertEqual(self.run_events("escalation"), [])
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S5_a_worker_that_never_reports_is_asked_about_by_the_idle_watchdog(self):

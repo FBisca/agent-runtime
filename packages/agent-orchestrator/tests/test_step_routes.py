@@ -23,7 +23,7 @@ class StepRouteTests(ArchiveFixture, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
 
     def spawns(self):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}

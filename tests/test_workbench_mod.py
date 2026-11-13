@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import subprocess
 from pathlib import Path
 
@@ -31,6 +32,8 @@ def node_tests(pattern=None, path=None):
     if pattern:
         command.append("--test-name-pattern=%s" % pattern)
     command.extend(sorted(str(p) for p in (MOD / "test").glob("*.test.js")))
+    # The promoted acceptance tests stay in CI after the plan that wrote them is archived.
+    command.extend(sorted(str(p) for p in (MOD / "acceptance").rglob("*.test.js")))
     done = subprocess.run(command, capture_output=True, text=True, timeout=120, cwd=MOD)
     passed = re.search(r"^# pass (\d+)$", done.stdout, re.M)
     failed = re.search(r"^# fail (\d+)$", done.stdout, re.M)
@@ -90,8 +93,19 @@ def test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address():
     scenario("S16", 6)
 
 
-def test_S17_a_Runtime_section_lists_live_agents_no_attempt_names():
-    scenario("S17", 6)
+def test_S9_a_plans_header_is_a_way_back_its_name_and_its_whole_goal():
+    scenario("S9", 1)
+
+
+def test_S10_a_ticket_names_its_agents_live_only_at_their_exact_address_with_Open():
+    scenario("S10", 4)
+
+
+def test_S11_there_is_no_Runtime_section():
+    scenario("S11", 1)
+    assert not (MOD / "views" / "runtime.js").exists()
+    for file in [MOD / "main.js", MOD / "model.js", *sorted((MOD / "views").glob("*.js"))]:
+        assert "Runtime" not in file.read_text(), file.name
 
 
 # Open, the tab bar's panel button (R19), and the header's expand over the terminals (S33).
@@ -115,6 +129,18 @@ def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_pol
             assert command in ALLOWED_COMMANDS, (file.name, command)
     assert "setInterval" not in source("main.js")
     assert "terminals()" in source("main.js")
+
+
+def test_S18_the_pytest_runner_also_runs_the_node_tests_under_acceptance(tmp_path, monkeypatch):
+    # A failing node test under acceptance/ must fail the runner, so the file is part of what `node --test` is given.
+    (tmp_path / "acceptance").mkdir()
+    (tmp_path / "test").mkdir()
+    (tmp_path / "acceptance" / "x.test.js").write_text(
+        'import test from "node:test";\ntest("S99 red", () => { throw new Error("boom"); });\n'
+    )
+    monkeypatch.setattr(sys.modules[__name__], "MOD", tmp_path)
+    passed, failed, _ = node_tests()
+    assert (passed, failed) == (0, 1)
 
 
 def test_S18_node_test_runs_the_mods_pure_modules_from_pytest():
@@ -174,3 +200,11 @@ def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight
     assert panel["size"] == {"px": 520}
     assert panel["min"] == 280
     assert "max" not in panel
+
+
+def test_S31_the_header_and_inspector_show_a_plans_measures_unknown_never_zero():
+    scenario("S31", 3)
+
+
+def test_S32_a_timeline_shows_one_lane_per_ticket_when_wide():
+    scenario("S32", 2)

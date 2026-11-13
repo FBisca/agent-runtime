@@ -331,7 +331,10 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
         """orchestrator-engine/R2: P3.T3/S2"""
         worker = self.worker_done(tests=True)
         worker["assignments"][0]["usage"] = {"input_tokens": 100, "output_tokens": 20}
-        self.waits([worker, self.reviewer_done()])
+        reviewer = self.reviewer_done()
+        # The reviewer reports too: a ticket total is a sum only when every assignment reported.
+        reviewer["assignments"][0]["usage"] = {"input_tokens": 0, "output_tokens": 0}
+        self.waits([worker, reviewer])
         self.run_driver()
         metrics = json.loads((self.run_dir / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(set(metrics) >= {"slug", "lead", "tickets", "events"}, True)

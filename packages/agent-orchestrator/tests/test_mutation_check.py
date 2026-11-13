@@ -23,12 +23,12 @@ class MutationFixture(AcceptanceFixture):
         step["write"] = [[str(self.run_dir / "mutation" / ("S1.%d.patch" % attempt)), patch]]
         return step
 
-    def mutated(self, *patches, archive=False):
+    def mutated(self, *patches):
         self.write_plan()
         self.merged_on_main("done")
         steps = [self.worker("done"), self.reviewer()]
         steps += [self.mutator(n, patch) for n, patch in enumerate(patches, 1)]
-        self.drive(steps, archive)
+        self.drive(steps)
 
     def mutation_receipts(self):
         return self.receipts("mutation")
@@ -38,7 +38,7 @@ class MutationCheckTests(MutationFixture, unittest.TestCase):
     def test_S21_an_uncalibrated_oracle_that_passes_at_integration_is_killed_by_a_reviewers_mutation(
         self,
     ):
-        self.mutated(KILLS, archive=True)
+        self.mutated(KILLS)
         self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         spawned = self.spawned()
         self.assertIn("demo-mut-s1-1", spawned)
@@ -55,7 +55,7 @@ class MutationCheckTests(MutationFixture, unittest.TestCase):
         self.assertEqual(self.verify().returncode, 0)
 
     def test_S21_an_ineffective_mutation_gets_one_more_attempt_with_a_fresh_reviewer(self):
-        self.mutated(SURVIVES, KILLS, archive=True)
+        self.mutated(SURVIVES, KILLS)
         self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         spawned = self.spawned()
         self.assertIn("demo-mut-s1-1", spawned)
@@ -99,13 +99,13 @@ class MutationCheckTests(MutationFixture, unittest.TestCase):
     def test_S21_an_item_that_is_not_an_uncalibrated_new_oracle_runs_no_mutation(self):
         self.write_plan([scenario("S1", {"check": "true", "baseline": "pass"})])
         self.merged_on_main("done")
-        self.drive([self.worker("done"), self.reviewer()], archive=True)
+        self.drive([self.worker("done"), self.reviewer()])
         self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
         self.assertFalse([n for n in self.spawned() if "-mut-" in n])
         self.assertEqual(self.mutation_receipts(), [])
 
     def test_S21_the_mutation_reviewer_gets_the_oracle_the_delivered_commit_and_a_patch_path(self):
-        self.mutated(KILLS, archive=True)
+        self.mutated(KILLS)
         task = (self.run_dir / "mutation" / "S1.1-task.md").read_text(encoding="utf-8")
         sha = self.ledger()["integration"]["sha"]
         for needed in (sha, "probe.txt.oracle", "S1.1.patch", str(self.plan)):

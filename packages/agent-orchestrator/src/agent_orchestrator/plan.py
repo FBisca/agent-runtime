@@ -7,6 +7,7 @@ presentation are preserved on disk but do not affect the contract digest.
 
 import copy
 import fcntl
+import fnmatch
 import functools
 import hashlib
 import os
@@ -14,7 +15,7 @@ import posixpath
 import shutil
 import subprocess
 import tempfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -31,6 +32,7 @@ from pydantic import (
 )
 
 from . import config, runner
+from . import ledger as ledgers
 
 DEFAULT_STATE = "~/.local/state/orchestrate"
 # A plan in its own folder is always named this; a legacy plan is `<name>.plan.yaml` beside `<name>.oracle/`.
@@ -170,6 +172,15 @@ class Approval(Mapping):
     digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
+class Amendment(Mapping):
+    prev_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    at: Text
+    by: Text
+    reason: Text
+    tickets: list[TicketId] = Field(default_factory=list)
+
+
 class Plan(Mapping):
     schema_version: Literal["plan/1"] = Field(alias="schema")
     slug: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
@@ -192,6 +203,10 @@ class Plan(Mapping):
     scenarios: Annotated[list[Scenario], Field(min_length=1)]
     tickets: Annotated[list[Ticket], Field(min_length=1)]
     approval: Approval | None = None
+    amendments: list[Amendment] = Field(
+        default_factory=list,
+        description="The history `plan amend` appends to: neither it nor the approval is part of the digest",
+    )
 
     @field_validator("spec")
     @classmethod
@@ -331,6 +346,32 @@ def _toplevel(directory):
 def _identity(repo):
     common = Path(git(repo, "rev-parse", "--git-common-dir"))
     return str((Path(repo) / common).resolve())
+
+
+def is_test_path(path, patterns):
+    """Whether `path` can hold a test: its file name matches a pattern or one of its directories is `tests`."""
+    parts = Path(path).parts
+    name = "" if str(path).endswith("/") else parts[-1] if parts else ""
+    directories = parts if str(path).endswith("/") else parts[:-1]
+    return "tests" in directories or any(fnmatch.fnmatchcase(name, p) for p in patterns)
+
+
+def holds_no_test(paths, patterns):
+    """True when none of `paths` is a directory (a trailing slash) or a test file: no test can be added there."""
+    return not any(str(p).endswith("/") or is_test_path(p, patterns) for p in paths)
+
+
+def lint_problems(model, repo):
+    """Problems `plan check`, `plan approve` and `plan amend` refuse; the driver's load never runs this, so a plan
+    approved before a rule existed keeps running."""
+    patterns = repo_config(repo).test_patterns
+    return [
+        f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
+        "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
+        "tests, to its paths"
+        for i, ticket in enumerate(model.tickets)
+        if ticket.owner.strip().lower() == "agent" and holds_no_test(ticket.paths, patterns)
+    ]
 
 
 def semantic_problems(data, path, repo):
@@ -749,9 +790,13 @@ def folder_problems(data, path, repo, scenarios):
     return problems
 
 
+# What a person or `plan amend` writes about the contract, not the contract: neither enters the digest.
+UNDIGESTED = ("approval", "amendments")
+
+
 def canonical(data):
     return yaml.safe_dump(
-        {k: v for k, v in data.items() if k != "approval"}, sort_keys=True
+        {k: v for k, v in data.items() if k not in UNDIGESTED}, sort_keys=True
     ).encode("utf-8")
 
 
@@ -882,7 +927,12 @@ def verify_snapshot(path, model, repo, state_dir):
     return Plan.model_validate(snap_data).model_copy(update={"approval": model.approval})
 
 
-def load(path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, verify=True):
+def load(
+    path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, verify=True, lint=None
+):
+    """`lint` runs the refusals that only authoring commands make. It defaults to on for `plan check` (which
+    verifies without requiring an approval) and off for the driver's load, which requires one."""
+    lint = verify and not require_approval if lint is None else lint
     path = Path(path).resolve()
     data, problems = read_yaml(path)
     model = None
@@ -907,6 +957,8 @@ def load(path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, ve
             )
         raise PlanError("; ".join(problems))
     assert model is not None
+    if lint and (found := lint_problems(model, repo)):
+        raise PlanError("; ".join(found))
     if model.approval and verify:
         return verify_snapshot(path, model, repo, state_dir)
     if require_approval and model.approval is None:
@@ -916,20 +968,20 @@ def load(path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, ve
     return model
 
 
-def approved_text(text, approval):
+def replaced_text(text, name, new):
+    """`text` with its top-level `name` set to `new` (appended when absent), every other byte kept: the
+    author's comments survive."""
     node = yaml.compose(text, Loader=yaml.SafeLoader)
-    existing = next(((k, v) for k, v in node.value if k.value == "approval"), None)
+    existing = next(((k, v) for k, v in node.value if k.value == name), None)
     if node.flow_style:
-        entry = yaml.safe_dump(
-            {"approval": approval}, default_flow_style=True, width=10000
-        ).strip()[1:-1]
+        entry = yaml.safe_dump({name: new}, default_flow_style=True, width=10000).strip()[1:-1]
         if existing:
             key, value = existing
             return text[: key.start_mark.index] + entry + text[value.end_mark.index :]
         end = node.end_mark.index - 1
         return text[:end] + (", " if node.value else "") + entry + text[end:]
     eol = "\r\n" if "\r\n" in text else "\n"
-    block = yaml.safe_dump({"approval": approval}, sort_keys=False).replace("\n", eol)
+    block = yaml.safe_dump({name: new}, sort_keys=False).replace("\n", eol)
     if existing:
         key, value = existing
         start, end = key.start_mark.index, value.end_mark.index
@@ -949,34 +1001,55 @@ def approved_text(text, approval):
     return prefix + (eol if prefix and not prefix.endswith("\n") else "") + block + text[end:]
 
 
-def baseline(path, model, repo, base_sha, approval_digest, files):
+def approved_text(text, approval):
+    return replaced_text(text, "approval", approval)
+
+
+def evidence_key(path, model, item, files, repo):
+    """What one check evidence item runs: the check, its oracle bytes (by hash), place, env names, timeout and
+    negative. Two items with one key observe the same thing at one commit."""
+    oracles, place, negative = runner_inputs(path, model, item, files, repo)
+    return (
+        item.check,
+        tuple(sorted((name, runner.sha256(content)) for name, content in oracles.items())),
+        place,
+        tuple(item.env),
+        item.timeout,
+        (negative[0], runner.sha256(negative[1])) if negative else None,
+    )
+
+
+def checked_scenarios(model):
+    return [s for s in model.scenarios if s.evidence is not None and s.evidence.check]
+
+
+def baseline(path, model, repo, base_sha, approval_digest, files, carried=None):
     """Run every check item of the plan once at `base` and judge it against its `baseline:` (D24).
 
     Scenarios whose items would run the same thing share one run, and every run shares one worktree, so a plan pays
-    for each distinct check and one venv, not for each scenario. Returns the runs to persist, each with the
-    calibration to record; raises PlanError naming every item that is not what it claims, before anything is
-    written."""
-    runs, refusals, seen = [], [], {}
-    checked = [s for s in model.scenarios if s.evidence is not None and s.evidence.check]
+    for each distinct check and one venv, not for each scenario. `carried` maps a scenario ID to the Run of its
+    unchanged item, re-issued from an earlier approval: it is judged like a fresh run and not run again. Returns
+    the runs to persist, each with the calibration to record; raises PlanError naming every item that is not what
+    it claims, before anything is written."""
+    runs, refusals, seen, carried = [], [], {}, carried or {}
+    checked = checked_scenarios(model)
     if not checked:
         return runs
-    with runner.Workspace(repo, base_sha) as shared:
+    with ExitStack() as stack:
+        shared = None
         for scenario in checked:
             item = scenario.evidence
             oracles, place, negative = runner_inputs(path, model, item, files, repo)
-            key = (
-                item.check,
-                tuple(sorted(oracles)),
-                place,
-                tuple(item.env),
-                item.timeout,
-                item.negative,
-            )
-            if key in seen:
+            key = evidence_key(path, model, item, files, repo)
+            if scenario.id in carried:
+                run = seen[key] = carried[scenario.id]
+            elif key in seen:
                 first = seen[key]
                 run = runner.Run(copy.deepcopy(first.receipt), first.log)
                 run.receipt["scenario"] = scenario.id
             else:
+                if shared is None:
+                    shared = stack.enter_context(runner.Workspace(repo, base_sha))
                 run = seen[key] = runner.run_evidence(
                     repo,
                     base_sha,
@@ -1013,6 +1086,42 @@ def baseline(path, model, repo, base_sha, approval_digest, files):
     return runs
 
 
+def carried_baselines(path, repo, old, old_files, model, files, previous, sha, state_dir):
+    """The baseline Runs `plan amend` re-issues instead of running: each check item whose evidence is the same in the
+    approved snapshot `old` and in the edit, and whose receipt for the previous digest still passes the receipt
+    ledger's tamper check, under the new digest `sha`. A changed or new item, or one whose receipt cannot be vouched
+    for, is not here and runs."""
+    from . import (
+        verify,
+    )  # verify reads plans, so it imports this module: the import waits until it is called
+
+    ledger, receipts = state_paths(repo, model.slug, state_dir)
+    found = ledgers.snapshot(ledger)  # a read: it never waits for the driver
+    if not found:
+        return {}
+    try:
+        was = Plan.model_validate(old)
+    except ValidationError:
+        return {}
+    before = {s.id: s.evidence for s in checked_scenarios(was)}
+    tree = git(repo, "rev-parse", previous.base + "^{tree}")
+    carried = {}
+    for scenario in checked_scenarios(model):
+        item = scenario.evidence
+        if scenario.id not in before:
+            continue
+        if evidence_key(path, was, before[scenario.id], old_files, repo) != evidence_key(
+            path, model, item, files, repo
+        ):
+            continue
+        kept = verify.carryable_baseline(found, scenario.id, receipts, previous.digest, tree)
+        if kept is not None:
+            carried[scenario.id] = runner.reissue(
+                *kept, scenario=scenario.id, digest=sha, carried_from=previous.digest
+            )
+    return carried
+
+
 def state_paths(repo, slug, state_dir):
     """(ledger path, receipts directory) of a plan: `<state>/<repo-key>/<slug>.json` and `.../<slug>/receipts` (D17).
 
@@ -1029,32 +1138,55 @@ def state_paths(repo, slug, state_dir):
 
 
 @contextmanager
-def run_lock(repo, slug):
-    """The plan's run lock, the file `driver.run_lock` holds for a whole run (`<git common dir>/agent-orchestrator/
-    <slug>.lock`, flock, non-blocking), so a live driver refuses approval and a driver refuses to start under one.
-    The protocol is the driver's; it is written here because the driver's helper runs git through a function its
-    callers replace."""
+def plan_lock(repo, filename, who, refusal):
+    """A non-blocking flock on `<git common dir>/agent-orchestrator/<filename>`, the protocol of `driver.run_lock`
+    (it is written here because the driver's helper runs git through a function its callers replace). The file names
+    its holder; `refusal` is the PlanError text for a held lock, given that holder."""
     common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     directory = common / "agent-orchestrator"
     directory.mkdir(exist_ok=True, mode=0o700)
-    fd = os.open(directory / (slug + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fd = os.open(directory / filename, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "r+", encoding="utf-8") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            holder = lock.read().strip() or "another driver"
-            raise PlanError(
-                "plan %s is being driven by %s; stop that driver (close its orchestrate-%s pane), then "
-                "run plan approve again" % (slug, holder, slug)
-            ) from None
+            raise PlanError(refusal(lock.read().strip() or "another process")) from None
         lock.seek(0)
         lock.truncate()
         lock.write(
-            "plan approve, pid %d since %s\n"
-            % (os.getpid(), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            "%s, pid %d since %s\n"
+            % (who, os.getpid(), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         )
         lock.flush()
         yield
+
+
+def run_lock(repo, slug):
+    """The plan's run lock, the file a driver holds for a whole run, so a live driver refuses approval and a driver
+    refuses to start under one."""
+    return plan_lock(
+        repo,
+        slug + ".lock",
+        "plan approve",
+        lambda holder: (
+            "plan %s is being driven by %s; stop that driver (close its orchestrate-%s pane), then "
+            "run plan approve again" % (slug, holder, slug)
+        ),
+    )
+
+
+def amend_lock(repo, slug):
+    """The lock of one `plan amend` at a time. It is not the run lock: a live driver holds that for its whole run
+    and an amendment must go through it, so two amendments exclude each other here and a driver never needs it."""
+    return plan_lock(
+        repo,
+        slug + ".amend.lock",
+        "plan amend",
+        lambda holder: (
+            "plan %s is being amended by %s; wait for that plan amend to finish, then run it again"
+            % (slug, holder)
+        ),
+    )
 
 
 def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
@@ -1064,7 +1196,7 @@ def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
     anything is written."""
     path = Path(path).resolve()
     repo = repository(path, repo)
-    model = load(path, repo=repo, verify=False)
+    model = load(path, repo=repo, verify=False, lint=True)
     with run_lock(repo, model.slug):
         try:
             return approve_locked(path, repo, model, state_dir, base)
@@ -1088,17 +1220,34 @@ def approve_locked(path, repo, model, state_dir, base):
         for run, calibration in runs:
             runner.persist(run, receipts, calibration)
         runner.record_receipts(ledger, [run for run, _ in runs])
-    email = subprocess.run(
-        ["git", "-C", str(repo), "config", "user.email"], capture_output=True, text=True, timeout=15
-    ).stdout.strip()
     approval = {
-        "by": email or os.environ.get("USER") or "unknown",
+        "by": git_email(repo),
         "at": datetime.now(timezone.utc).isoformat(),
         "base": base_sha,
         "digest": sha,
     }
     # Only the top-level approval span is replaced; the author's comments survive.
-    text = approved_text(path.read_bytes().decode("utf-8"), approval)
+    publish(
+        path,
+        approved_text(path.read_bytes().decode("utf-8"), approval),
+        plan_bytes,
+        files,
+        sha,
+        state_dir,
+    )
+    return approval
+
+
+def git_email(repo):
+    email = subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email"], capture_output=True, text=True, timeout=15
+    ).stdout.strip()
+    return email or os.environ.get("USER") or "unknown"
+
+
+def publish(path, text, plan_bytes, files, sha, state_dir):
+    """Write the approval snapshot of digest `sha`, then replace the plan file with `text`, in that order: a driver
+    that reads the file in between finds the snapshot of the old approval and of the new one."""
     approvals = Path(state_dir).expanduser() / "approvals"
     approvals.mkdir(parents=True, exist_ok=True)
     target = approvals / sha
@@ -1130,7 +1279,125 @@ def approve_locked(path, repo, model, state_dir, base):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    return approval
+
+
+def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
+    """Re-approve an approved plan after an edit, at the base its approval already has.
+
+    The baselines run at that base, not at `origin/main`: a ticket that merged since may have turned a
+    `baseline: pass` check red, and the plan's evidence is still judged against the tree it was approved on. The
+    amendment holds its own lock, never the run lock, so a live driver is not stopped; a ticket the ledger marks
+    COMPLETE is frozen, and nothing is written when the amendment is refused."""
+    path = Path(path).resolve()
+    repo = repository(path, repo)
+    model = load(path, repo=repo, verify=False, lint=False)
+    if model.approval is None:
+        raise PlanError(
+            f"approval: {path} is unapproved, so there is nothing to amend — run agent-orchestrator plan approve {path}"
+        )
+    if not reason.strip():
+        raise PlanError("amend: --reason is empty — say why the plan changes")
+    if found := lint_problems(model, repo):
+        raise PlanError("; ".join(found))
+    with amend_lock(repo, model.slug):
+        try:
+            return amend_locked(path, repo, model, state_dir, reason, runtime_id)
+        except runner.RunnerError as error:
+            raise PlanError(
+                "approval: %s — the plan was not amended; fix that and run plan amend again" % error
+            ) from None
+
+
+def completed(repo, slug, state_dir):
+    """The ticket IDs the plan's ledger marks COMPLETE."""
+    ledger, _ = state_paths(repo, slug, state_dir)
+    found = ledgers.snapshot(ledger)  # a read: it never waits for the driver
+    statuses = (found or {}).get("ticket_status") or {}
+    return {
+        t for t, status in statuses.items() if str(status).strip().upper().startswith("COMPLETE")
+    }
+
+
+def frozen_problems(old, new, done):
+    """What an edit may not do to the tickets in `done`: change or drop them, or change the `when` or `then` of a
+    scenario they satisfy. A scenario's `evidence` may change."""
+    before, after = ({t["id"]: t for t in d.get("tickets", [])} for d in (old, new))
+    scenarios = (
+        {s["id"]: s for s in d.get("scenarios", []) if isinstance(s, dict)} for d in (old, new)
+    )
+    old_scenarios, new_scenarios = scenarios
+    problems = []
+    for ticket in sorted(done & before.keys()):
+        if ticket not in after:
+            problems.append(f"{ticket} is COMPLETE and the edit drops it")
+        elif after[ticket] != before[ticket]:
+            problems.append(f"{ticket} is COMPLETE and the edit changes it")
+        for sid in before[ticket]["satisfies"]:
+            was, now = old_scenarios.get(sid), new_scenarios.get(sid)
+            if was and (now is None or (was["when"], was["then"]) != (now["when"], now["then"])):
+                problems.append(
+                    f"{sid} is satisfied by COMPLETE {ticket} and the edit changes its when or then"
+                )
+    return problems
+
+
+def amend_locked(path, repo, model, state_dir, reason, runtime_id):
+    previous = model.approval
+    way_out = f"run agent-orchestrator plan approve {path}"
+    snap = snapshot_path(previous, state_dir)
+    if not snap.is_file():
+        raise PlanError(f"approval: snapshot of the approved plan missing at {snap} — {way_out}")
+    old, errors = read_yaml(snap)
+    old_bytes, old_files = snap.read_bytes(), snapshot_files(snap.parent, path)
+    if (
+        errors
+        or not isinstance(old, dict)
+        or digest(identity(repo), previous.base, old_bytes, old_files) != previous.digest
+    ):
+        raise PlanError(
+            f"approval: the approval block of {path} does not match its snapshot {snap} — {way_out}"
+        )
+    data, _ = read_yaml(path)
+    problems = frozen_problems(old, data, completed(repo, model.slug, state_dir))
+    if problems:
+        raise PlanError(
+            "amend: "
+            + "; ".join(problems)
+            + " — a finished ticket is frozen: restore it and add a new ticket for the change"
+        )
+    plan_bytes = canonical(data)
+    files = approved_files(path, data)
+    base_sha = git(repo, "rev-parse", "--verify", previous.base + "^{commit}")
+    sha = digest(identity(repo), base_sha, plan_bytes, files)
+    if sha == previous.digest:
+        raise PlanError(
+            f"amend: {path} holds the approved contract, nothing to amend — edit the plan, then run plan amend again"
+        )
+    carried = carried_baselines(path, repo, old, old_files, model, files, previous, sha, state_dir)
+    runs = baseline(path, model, repo, base_sha, sha, files, carried)
+    if runs:
+        ledger, receipts = state_paths(repo, model.slug, state_dir)
+        for run, calibration in runs:
+            runner.persist(run, receipts, calibration)
+        runner.record_receipts(ledger, [run for run, _ in runs])
+    email, at = git_email(repo), datetime.now(timezone.utc).isoformat()
+    approval = {"by": email, "at": at, "base": base_sha, "digest": sha}
+    was = {t["id"]: t for t in old.get("tickets", [])}
+    entry = {
+        "prev_digest": previous.digest,
+        "digest": sha,
+        "at": at,
+        "by": f"{email} ({runtime_id})" if runtime_id else email,
+        "reason": reason.strip(),
+        "tickets": [t["id"] for t in data.get("tickets", []) if was.get(t["id"]) != t],
+    }
+    text = replaced_text(
+        path.read_bytes().decode("utf-8"),
+        "amendments",
+        list(data.get("amendments") or []) + [entry],
+    )
+    publish(path, replaced_text(text, "approval", approval), plan_bytes, files, sha, state_dir)
+    return {"approval": approval, "amendment": entry}
 
 
 PLAN_SUFFIXES = (".plan.yaml", ".plan.md")

@@ -180,9 +180,13 @@ def needs_of(plan, state, tickets, run):
     if run:
         if state == "RUNNING" and run["started"] and not run["finished"] and not alive(run["pid"]):
             items.append(item(None, "driver_gone"))
-        if run["error"]:
+        gone = (
+            state == "RUNNING" and run["started"] and not run["finished"] and not alive(run["pid"])
+        )
+        # Only a driver clears an error or an answered-for escalation: with none, they would sit there for good.
+        if run["error"] and not gone:
             items.append(item(None, "error"))
         ids = {ticket["id"].lower(): ticket["id"] for ticket in tickets}
-        for unit in run["asking"]:
+        for unit in [] if gone else run["asking"]:
             items.append(item(ids.get(unit.lower(), unit), "lead_pending"))
     return items

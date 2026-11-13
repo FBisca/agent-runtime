@@ -196,7 +196,7 @@ export function verifiedOf(ticket) {
 const byId = (tickets) => new Map(tickets.map((t) => [t.id, t]));
 
 /** One ticket row: its summary, state, blocked-by chips (each with the blocker's own state) and verified. */
-export function ticketRow(ticket, tickets) {
+export function ticketRow(ticket, tickets, live = null) {
   const known = byId(tickets);
   return {
     id: ticket.id,
@@ -205,16 +205,17 @@ export function ticketRow(ticket, tickets) {
     look: stateLook(ticket.state),
     verified: verifiedOf(ticket),
     chips: (ticket.blocked_by ?? []).map((id) => ({ id, look: stateLook(known.get(id)?.state) })),
+    workers: ticketWorkers(ticket, live),
   };
 }
 
 /** The tickets grouped by layer, in the answer's order (the orchestrator orders them by layer, then plan order). */
-export function ticketLayers(tickets) {
+export function ticketLayers(tickets, live = null) {
   const layers = [];
   for (const ticket of tickets) {
     let group = layers.at(-1);
     if (!group || group.layer !== ticket.layer) layers.push((group = { layer: ticket.layer, tickets: [] }));
-    group.tickets.push(ticketRow(ticket, tickets));
+    group.tickets.push(ticketRow(ticket, tickets, live));
   }
   return layers;
 }
@@ -264,51 +265,100 @@ export function attemptTerminal(address, live) {
   return { state: "not live", word: "not live", why: "no live terminal has this address", open: null };
 }
 
-const isAgent = (t) => Boolean(t.program?.agent) || (t.status !== null && t.status !== undefined && t.status !== "");
+/** An agent of a ticket as its row names it: the ledger's name and role, and where its terminal stands. The terminal
+ *  is joined by the address the ledger recorded and nothing else, never by a name (a terminal with the same name
+ *  elsewhere is another agent). `status` is Herdr's, only for a live one; Open only for a live one. */
+export function ticketWorkers(ticket, live = null) {
+  return (Array.isArray(ticket.agents) ? ticket.agents : []).map((a) => {
+    const terminal = attemptTerminal(a.address ?? null, live);
+    return {
+      name: a.name,
+      role: a.role ?? null,
+      address: a.address ?? null,
+      state: terminal.state,
+      word: terminal.word,
+      status: terminal.state === "live" ? (live.live.get(a.address)?.status ?? null) : null,
+      open: terminal.open,
+    };
+  });
+}
 
-/** What the Runtime section says instead of a list when it cannot tell: an attempt's address records no machine, so
- *  in a space on another machine nothing says which live agents an attempt names. Null when it can tell. */
-export const runtimeNote = (machine) =>
-  machine ? "Cannot tell which live agents a plan names in a space on another machine." : null;
+// ---- metrics: measured by the orchestrator, only worded here; a value it did not measure reads unknown, never 0 ----
 
-/** The live agent terminals no attempt of the given plans names, as rows in tree order (a terminal under the one that
- *  started it, depth 0 for the first of each tree). Nothing is made up for them: no plan, no ticket. Only on this
- *  computer (bare addresses): in a space on another machine it lists none, see `runtimeNote`. */
-export function runtimeAgents(terminals, plans, machine) {
-  if (!Array.isArray(terminals) || machine) return [];
-  const named = new Set();
-  for (const plan of plans ?? []) {
-    for (const ticket of plan.tickets ?? []) {
-      for (const a of ticket.attempts ?? []) if (a.address) named.add(a.address);
-    }
-  }
-  const here = (address) => !address.includes("/");
-  const agents = terminals.filter((t) =>
-    t && t.state === "live" && typeof t.address === "string" && here(t.address) && isAgent(t) && !named.has(t.address));
-  const listed = new Set(agents.map((t) => t.address));
-  const rows = [];
-  const seen = new Set();
-  const add = (t, depth) => {
-    if (seen.has(t.address)) return;
-    seen.add(t.address);
-    rows.push({
-      address: t.address,
-      name: t.name || t.program?.name || t.address,
-      status: t.status ?? null,
-      parent: t.parent ?? null,
-      depth,
-      open: openTerminal(t.address),
-    });
-    for (const kid of agents) if (kid.parent === t.address) add(kid, depth + 1);
+const UNKNOWN = "unknown";
+const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** A duration in seconds: `42s`, `9m 00s`, `1h 02m`. */
+export function duration(seconds) {
+  const n = num(seconds);
+  if (n === null) return UNKNOWN;
+  const s = Math.round(n);
+  const two = (v) => String(v).padStart(2, "0");
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${two(Math.floor((s % 3600) / 60))}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m ${two(s % 60)}s`;
+  return `${s}s`;
+}
+
+const count = (v) => (num(v) === null ? UNKNOWN : String(v));
+
+function errorsText(errors) {
+  if (!errors || typeof errors.by_gate !== "object" || errors.by_gate === null) return UNKNOWN;
+  const gates = Object.entries(errors.by_gate);
+  if (!gates.length) return "none";
+  return `${gates.reduce((sum, [, n]) => sum + n, 0)} (${gates.map(([gate, n]) => `${gate} ${n}`).join(", ")})`;
+}
+
+/** The plan header's measures, or null when the plan carries no metrics (never driven: nothing is drawn). */
+export function metricsHeader(metrics) {
+  if (!metrics) return null;
+  const rate = num(metrics.first_pass_rate);
+  return {
+    wall: duration(metrics.wall_seconds),
+    firstPass: rate === null ? UNKNOWN : `${Math.round(rate * 100)}%`,
+    errors: errorsText(metrics.errors),
   };
-  for (const t of agents) if (!t.parent || !listed.has(t.parent)) add(t, 0);
-  for (const t of agents) add(t, 0); // a parent cycle has no root: every agent is still listed, once
-  return rows;
+}
+
+/** The inspector's measures for one ticket as label/text rows; a ticket the run never measured is unknown throughout. */
+function measuresOf(m) {
+  const phases = m?.phases ?? {};
+  const escalations = m?.escalations ? Object.entries(m.escalations) : null;
+  return [
+    ["Elapsed", duration(m?.elapsed_seconds)],
+    ["Work", duration(phases.work)],
+    ["Review", duration(phases.review)],
+    ["CI", duration(phases.ci)],
+    ["Fix rounds", count(m?.fix_rounds)],
+    ["Review rounds", count(m?.review_rounds)],
+    ["Findings", count(m?.findings)],
+    ["CI failures", count(m?.ci_failures)],
+    ["Escalations", escalations ? (escalations.length ? escalations.map(([c, n]) => `${c} ${n}`).join(", ") : "none") : UNKNOWN],
+    ["Model", m?.model ?? UNKNOWN],
+  ].map(([label, text]) => ({ label, text }));
+}
+
+/** The timeline's lanes: one per ticket in the plan's order, a segment per phase placed as fractions of the run's span
+ *  (an open segment runs to the span's end). Null unless wide and the plan has metrics with a span. */
+export function timelineOf(metrics, tickets, layout) {
+  if (layout !== "wide" || !metrics) return null;
+  const start = Date.parse(metrics.span?.start), end = Date.parse(metrics.span?.end);
+  if (!(end > start)) return null;
+  const span = end - start;
+  const at = (iso) => Math.min(Math.max((Date.parse(iso) - start) / span, 0), 1);
+  return {
+    lanes: tickets.map((ticket) => ({
+      id: ticket.id,
+      segments: (metrics.timeline?.[ticket.id] ?? []).map((seg) => {
+        const left = at(seg.start);
+        return { phase: seg.phase, left, width: (seg.end ? at(seg.end) : 1) - left };
+      }),
+    })),
+  };
 }
 
 /** Everything the one inspector shows for a ticket. Attempts and gates are null when the answer does not carry them.
  *  `live` (from `liveTerminals`) joins each attempt to its terminal by address; without it every terminal is unknown. */
-export function inspector(ticket, tickets, live = null) {
+export function inspector(ticket, tickets, live = null, metrics = null) {
   const known = byId(tickets);
   const attempts = Array.isArray(ticket.attempts) ? ticket.attempts : null;
   const gates = Array.isArray(ticket.gates) ? ticket.gates : null;
@@ -333,6 +383,7 @@ export function inspector(ticket, tickets, live = null) {
       claimed: Boolean(a.claimed),
       latest: Boolean(a.latest),
     })),
+    measures: metrics ? measuresOf(metrics.tickets?.[ticket.id]) : null,
     gates: gates && gates.map((g) => ({
       scenario: g.scenario,
       phase: g.phase ?? null,
@@ -343,17 +394,25 @@ export function inspector(ticket, tickets, live = null) {
   };
 }
 
-/** The plan's header: its name, state, one progress bar, and the digests when it changed after approval. */
-export function planHeader(plan) {
+/** The plan's header: a way back, the plan's name as the title and its whole goal (wrapping fully when wide, in at most
+ *  three lines when narrow: `goalLines`), its state, one progress bar, and the digests when it changed after approval.
+ *  The repository is not part of it. */
+export function planHeader(plan, layout = "wide") {
   const revision = plan.revision ?? {};
   return {
+    title: plan.slug,
     slug: plan.slug,
+    back: true,
     goal: plan.goal ?? null,
+    goalLines: layout === "narrow" ? GOAL_LINES_NARROW : null,
     state: planState(plan.state),
     progress: progressOf(plan.counts),
+    metrics: metricsHeader(plan.metrics),
     drift: revision.drift ? { approved: revision.approved_digest, current: revision.current_digest } : null,
   };
 }
+
+export const GOAL_LINES_NARROW = 3;
 
 // ---- layout -------------------------------------------------------------------------------------------------
 

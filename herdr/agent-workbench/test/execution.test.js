@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspector, runtimeAgents, runtimeNote, liveTerminals } from "../model.js";
+import { inspector, liveTerminals } from "../model.js";
 import { PLAN } from "./fixtures.js";
 
 // A terminal as Herdr's terminals() describes it: address, state, parent, status, program. Local addresses are bare.
@@ -56,51 +56,4 @@ test("S16 an answer read while terminals() is not available shows unknown, never
 test("S16 an address is matched exactly: t7 is not t70, and a name is never an address", () => {
   const [a] = view([attempt("t7")], local([term("t70"), term("x", { name: "t7" })]));
   assert.equal(a.terminal.state, "not live");
-});
-
-const plans = (...addresses) => [{
-  ...PLAN,
-  tickets: [{ ...PLAN.tickets[0], attempts: addresses.map((address, i) => attempt(address, { task_id: "t" + i })) }],
-}];
-
-test("S17 live agent terminals no attempt names are listed with their parent tree, each offering Open", () => {
-  const all = [
-    term("t1"), // named by an attempt
-    term("t2"),
-    term("t3", { parent: "t2" }),
-    term("t4", { parent: "t3" }),
-    term("t5", { parent: "t1" }), // a sub-agent of a planned worker is itself unplanned
-  ];
-  const section = runtimeAgents(all, plans("t1"), null);
-  assert.deepEqual(section.map((r) => [r.address, r.depth, r.parent]), [["t2", 0, null], ["t3", 1, "t2"], ["t4", 2, "t3"], ["t5", 0, "t1"]]);
-  for (const r of section) assert.deepEqual(r.open, { command: "agent.focus", args: { terminal: r.address } });
-  assert.deepEqual(Object.keys(section[0]).filter((k) => /plan|ticket/i.test(k)), [], "no plan or ticket is made up for them");
-});
-
-test("S17 only live agents count: an ended terminal, a plain shell and a null-address attempt do not hide or add rows", () => {
-  const all = [
-    term("t1", { state: "ended" }),
-    term("t2", { status: null, program: { key: "shell", name: "zsh", agent: false, shell: true } }),
-    term("t3"),
-  ];
-  assert.deepEqual(runtimeAgents(all, plans(null), null).map((r) => r.address), ["t3"]);
-});
-
-test("S17 an attempt of any shown plan names its terminal, and none are listed when every live agent is planned", () => {
-  const all = [term("t1"), term("t2")];
-  assert.deepEqual(runtimeAgents(all, [...plans("t1"), ...plans("t2")], null), []);
-});
-
-test("S17 a local space lists only the bare addresses; a space on another machine lists none, since no attempt address can be told from its terminals", () => {
-  const all = [term("t1"), term("box/t2"), term("other/t3")];
-  assert.deepEqual(runtimeAgents(all, [], null).map((r) => r.address), ["t1"]);
-  assert.deepEqual(runtimeAgents(all, [], "box"), [], "attempts record no machine: listing box/t2 could list a worker an attempt names");
-  assert.match(runtimeNote("box"), /another machine/);
-  assert.equal(runtimeNote(null), null);
-});
-
-test("S17 a parent cycle or a parent that is not listed still lists every agent once", () => {
-  const all = [term("t1", { parent: "t2" }), term("t2", { parent: "t1" }), term("t3", { parent: "t9" })];
-  const section = runtimeAgents(all, [], null);
-  assert.deepEqual(section.map((r) => r.address).sort(), ["t1", "t2", "t3"]);
 });
