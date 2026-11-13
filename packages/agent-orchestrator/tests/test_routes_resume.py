@@ -49,6 +49,11 @@ def route(klass, backend, model, **extra):
 class RouteResumeTests(RunFixture, unittest.TestCase):
     """The driver resumes a run: what its ledger recorded is what its workers run on."""
 
+    def run_driver(self, *extra, **kwargs):
+        """A restart names no route file of its own unless the test says so: the ledger answers."""
+        kwargs.setdefault("routed", False)
+        return super().run_driver(*extra, **kwargs)
+
     def seed(self, record="absent"):
         """The ledger a run that already started leaves: its lead and, unless `absent`, its route record."""
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +93,7 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         return result
 
     def test_S3_a_resume_keeps_the_recorded_routes_over_a_changed_policy(self):
-        """orchestrator-engine/R92: S3 — the legacy table now says haiku for small, the ledger says codex."""
+        """orchestrator-engine/R94: S3 — the legacy table now says haiku for small, the ledger says codex."""
         self.seed(recorded())
         self.run_driver()
         worker = self.worker()
@@ -97,7 +102,7 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         )
 
     def test_S3_a_resume_keeps_the_recorded_routes_over_a_changed_route_file(self):
-        """orchestrator-engine/R92: S3 — a repository policy that now names other routes does not move the run."""
+        """orchestrator-engine/R94: S3 — a repository policy that now names other routes does not move the run."""
         self.seed(recorded())
         policy = self.repo / ".orchestrate"
         policy.mkdir()
@@ -118,14 +123,14 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("codex", "gpt-s"))
 
     def test_S3_a_resume_keeps_the_recorded_routes_when_the_policy_is_missing(self):
-        """orchestrator-engine/R92: S3 — neither the recorded route file nor the legacy table is there; the record answers."""
+        """orchestrator-engine/R94: S3 — neither the recorded route file nor the legacy table is there; the record answers."""
         self.models.unlink()
         self.seed(recorded())
         self.run_driver()
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("codex", "gpt-s"))
 
     def test_S3_a_resume_keeps_legacy_recorded_routes_over_a_changed_table(self):
-        """orchestrator-engine/R92: S3 — a legacy record is a record: the table's later edit does not reach the run."""
+        """orchestrator-engine/R94: S3 — a legacy record is a record: the table's later edit does not reach the run."""
         self.seed(
             recorded(
                 source="legacy",
@@ -140,7 +145,7 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual((worker["cli"], worker["model"]), ("claude", "old-haiku"))
 
     def test_S3_a_resume_keeps_the_recorded_step_routes(self):
-        """orchestrator-engine/R92: S3 — the implementer step's recorded route answers the worker."""
+        """orchestrator-engine/R94: S3 — the implementer step's recorded route answers the worker."""
         self.seed(recorded(steps={"implementer": ("codex", "gpt-step", "xhigh")}))
         self.run_driver()
         worker = self.worker()
@@ -149,29 +154,29 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         )
 
     def test_S3_a_resume_leaves_the_recorded_routes_in_the_ledger_as_they_were(self):
-        """orchestrator-engine/R92: S3 — the record is not rewritten from a policy the run no longer reads."""
+        """orchestrator-engine/R94: S3 — the record is not rewritten from a policy the run no longer reads."""
         record = recorded()
         self.seed(record)
         self.run_driver()
         self.assertEqual(self.ledger()["routes"], record)
 
     def test_S3_a_conflicting_route_argument_fails_before_any_spawn(self):
-        """orchestrator-engine/R92: S3 — small is recorded on codex/gpt-s@high; the argument says claude/haiku."""
+        """orchestrator-engine/R94: S3 — small is recorded on codex/gpt-s@high; the argument says claude/haiku."""
         self.seed(recorded())
         self.refused("--route", "small=claude/haiku", mention=("--route", "small", "gpt-s"))
 
     def test_S3_a_conflicting_step_argument_fails_before_any_spawn(self):
-        """orchestrator-engine/R92: S3 — the ledger names no reviewer route; the argument would add one."""
+        """orchestrator-engine/R94: S3 — the ledger names no reviewer route; the argument would add one."""
         self.seed(recorded())
         self.refused("--step", "reviewer=codex/gpt-l@xhigh", mention=("--step", "reviewer"))
 
     def test_S3_a_step_argument_that_differs_from_the_recorded_step_fails(self):
-        """orchestrator-engine/R92: S3 — a recorded step route is not replaced on resume."""
+        """orchestrator-engine/R94: S3 — a recorded step route is not replaced on resume."""
         self.seed(recorded(steps={"reviewer": ("codex", "gpt-l", "xhigh")}))
         self.refused("--step", "reviewer=codex/gpt-l@high", mention=("--step", "reviewer"))
 
     def test_S3_a_conflicting_routes_file_fails_before_any_spawn(self):
-        """orchestrator-engine/R92: S3 — the file resolves to routes other than the ledger's."""
+        """orchestrator-engine/R94: S3 — the file resolves to routes other than the ledger's."""
         self.seed(recorded())
         path = self.routes_file(
             route("small", "claude", "haiku"),
@@ -181,18 +186,18 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.refused("--routes-file", path, mention=("--routes-file", "small"))
 
     def test_S3_a_conflicting_cli_argument_fails_before_any_spawn(self):
-        """orchestrator-engine/R92: S3 — the run was recorded on claude and codex classes; --cli pi names neither."""
+        """orchestrator-engine/R94: S3 — the run was recorded on claude and codex classes; --cli pi names neither."""
         self.seed(recorded(cli="claude"))
         self.refused("--cli", "pi", mention=("--cli", "pi"))
 
     def test_S3_a_route_argument_that_matches_the_ledger_is_accepted(self):
-        """orchestrator-engine/R92: S3 — the same route said again is not a conflict."""
+        """orchestrator-engine/R94: S3 — the same route said again is not a conflict."""
         self.seed(recorded())
         self.run_driver("--route", "small=codex/gpt-s@high")
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("codex", "gpt-s"))
 
     def test_S3_a_routes_file_that_resolves_to_the_recorded_routes_is_accepted(self):
-        """orchestrator-engine/R92: S3 — the file is not the one recorded, but it says the same thing."""
+        """orchestrator-engine/R94: S3 — the file is not the one recorded, but it says the same thing."""
         self.seed(recorded())
         path = self.routes_file(
             route("small", "codex", "gpt-s", effort="high"),
@@ -203,32 +208,32 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("codex", "gpt-s"))
 
     def test_S3_a_cli_argument_that_matches_the_ledger_is_accepted(self):
-        """orchestrator-engine/R92: S3 — --cli says the backend the run was recorded on."""
+        """orchestrator-engine/R94: S3 — --cli says the backend the run was recorded on."""
         self.seed(recorded(cli="claude"))
         self.run_driver("--cli", "claude")
         self.assertEqual(self.worker()["model"], "gpt-s")
 
     def test_S3_a_missing_route_record_needs_a_routes_file(self):
-        """orchestrator-engine/R92: S3 — a started run with no record cannot be recovered from a policy alone."""
+        """orchestrator-engine/R94: S3 — a started run with no record cannot be recovered from a policy alone."""
         self.seed()
         self.refused(mention=("--routes-file", "demo"))
 
     def test_S3_an_incomplete_route_record_needs_a_routes_file(self):
-        """orchestrator-engine/R92: S3 — a record that lacks a class is not a record."""
+        """orchestrator-engine/R94: S3 — a record that lacks a class is not a record."""
         record = recorded()
         del record["classes"]["large"]
         self.seed(record)
         self.refused(mention=("--routes-file", "large"))
 
     def test_S3_a_route_record_that_lacks_the_steps_is_incomplete(self):
-        """orchestrator-engine/R92: S3 — a record that never said what its steps run on cannot pin them."""
+        """orchestrator-engine/R94: S3 — a record that never said what its steps run on cannot pin them."""
         record = recorded()
         del record["steps"]
         self.seed(record)
         self.refused(mention=("--routes-file",))
 
     def test_S3_a_routes_file_migrates_a_missing_record_and_records_the_complete_routes(self):
-        """orchestrator-engine/R92: S3 — the file answers the run, and the ledger then holds every class and step."""
+        """orchestrator-engine/R94: S3 — the file answers the run, and the ledger then holds every class and step."""
         self.seed()
         path = self.routes_file(
             route("small", "codex", "gpt-s", effort="high"),
@@ -245,7 +250,7 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual(record["path"], path)
 
     def test_S3_a_routes_file_completes_an_incomplete_record(self):
-        """orchestrator-engine/R92: S3 — migrating replaces the partial record with the complete resolved routes."""
+        """orchestrator-engine/R94: S3 — migrating replaces the partial record with the complete resolved routes."""
         record = recorded()
         del record["classes"]["medium"]
         self.seed(record)
@@ -259,30 +264,35 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual(sorted(self.ledger()["routes"]["classes"]), ["large", "medium", "small"])
 
     def test_S3_an_invalid_routes_file_does_not_migrate_a_missing_record(self):
-        """orchestrator-engine/R92: S3 — the migration file is validated before the ledger is written."""
+        """orchestrator-engine/R94: S3 — the migration file is validated before the ledger is written."""
         self.seed()
         path = self.routes_file(route("small", "gemini", "x"))
         self.refused("--routes-file", path, mention=("gemini",))
 
-    def test_S3_a_legacy_run_with_a_brain_backend_restarts_with_the_same_command(self):
-        """orchestrator-engine/R92: S3 — the table answered the brain's models, so the record carries them."""
-        self.run_driver("--brain-cli", "codex")
-        record = self.ledger()["routes"]
-        self.assertEqual(record["brain_cli"], "codex")
-        self.assertEqual(
-            {name: (step["backend"], step["model"]) for name, step in record["steps"].items()},
-            {"reviewer": ("codex", "gpt-m"), "gaps": ("codex", "gpt-m")},
+    def start_with_a_brain(self):
+        """A new run whose medium class, which the gates run on, sits on the brain backend."""
+        path = self.routes_file(
+            route("small", "claude", "haiku"),
+            route("medium", "codex", "gpt-m"),
+            route("large", "claude", "opus"),
         )
+        self.run_driver("--brain-cli", "codex", "--routes-file", path)
+        return self.ledger()["routes"]
+
+    def test_S3_a_run_with_a_brain_backend_restarts_with_the_same_command(self):
+        """orchestrator-engine/R94: S3 — the record carries the brain backend, and a restart naming it again matches."""
+        record = self.start_with_a_brain()
+        self.assertEqual(record["brain_cli"], "codex")
         self.restarts("--brain-cli", "codex")
         self.assertEqual(self.ledger()["routes"], record)
 
-    def test_S3_a_legacy_run_with_a_brain_backend_restarts_without_the_flag(self):
-        """orchestrator-engine/R92: S3 — an omitted --brain-cli is not a conflict; the record answers."""
-        self.run_driver("--brain-cli", "codex")
+    def test_S3_a_run_with_a_brain_backend_restarts_without_the_flag(self):
+        """orchestrator-engine/R94: S3 — an omitted --brain-cli is not a conflict; the record answers."""
+        self.start_with_a_brain()
         self.restarts()
 
     def test_S3_a_record_that_cannot_route_its_gates_takes_the_steps_the_argument_adds(self):
-        """orchestrator-engine/R92: S3 — the refusal's way out: --step names the gates, the record keeps them."""
+        """orchestrator-engine/R94: S3 — the refusal's way out: --step names the gates, the record keeps them."""
         record = recorded(cli="claude", medium=("claude", "sonnet", None))
         record["brain_cli"] = "codex"
         self.seed(record)
@@ -300,7 +310,7 @@ class RouteResumeTests(RunFixture, unittest.TestCase):
         self.assertEqual(steps["gaps"]["effort"], "high")
 
     def test_S3_a_step_argument_may_not_replace_a_step_while_adding_the_missing_ones(self):
-        """orchestrator-engine/R92: S3 — only a step the record lacks is added; a recorded one still conflicts."""
+        """orchestrator-engine/R94: S3 — only a step the record lacks is added; a recorded one still conflicts."""
         record = recorded(cli="claude", steps={"reviewer": ("codex", "gpt-l", "xhigh")})
         record["brain_cli"] = "codex"
         self.seed(record)

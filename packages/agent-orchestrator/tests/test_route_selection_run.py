@@ -101,7 +101,7 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self.run_driver()
+        self.run_driver(routed=False)
         worker = self.workers()["demo-t1"]
         self.assertEqual((worker["cli"], worker["model"]), ("codex", "gpt-s"))
         self.assertEqual(self.ledger()["routes"]["source"], "repo")
@@ -121,7 +121,7 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             encoding="utf-8",
         )
         with mock.patch.dict(os.environ, {"HOME": str(home)}):
-            self.run_driver()
+            self.run_driver(routed=False)
         worker = self.workers()["demo-t1"]
         self.assertEqual((worker["cli"], worker["model"]), ("codex", "gpt-s"))
         self.assertEqual(self.ledger()["routes"]["source"], "user")
@@ -167,15 +167,6 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             (worker["cli"], worker["model"], worker["effort"]), ("codex", "gpt-s", "high")
         )
         self.assertEqual(self.ledger()["routes"]["classes"]["small"]["backend"], "codex")
-
-    def test_S2_a_legacy_run_still_answers_with_the_model_classes_table(self):
-        """orchestrator-engine/R2: P4/S2 — with no config at all the legacy table answers, as before."""
-        self.run_driver()
-        worker = self.workers()["demo-t1"]
-        self.assertEqual(
-            (worker["cli"], worker["model"], worker["effort"]), ("claude", "haiku", "low")
-        )
-        self.assertEqual(self.ledger()["routes"]["source"], "legacy")
 
     def test_S1_a_route_naming_pi_and_the_top_effort_reaches_the_worker_spawn(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi and max are expressible, and the spawn carries both."""

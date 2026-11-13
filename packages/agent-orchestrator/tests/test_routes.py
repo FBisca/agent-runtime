@@ -1,6 +1,6 @@
 """The typed route schema: what a worker runs on, validated before any worker is spawned.
 
-S1 — a run with no route config keeps the legacy 'Model classes' decisions.
+S1 — a run with no typed route config is refused, naming the files it looked for.
 S3 — an invalid route config fails the run before any worker is spawned.
 """
 
@@ -23,13 +23,6 @@ def route(klass="small", backend="claude", model="haiku", **extra):
     entry = {"class": klass, "backend": backend, "model": model}
     entry.update(extra)
     return entry
-
-
-LEGACY_TABLE = (
-    "## Model classes\n\n| Class | Claude | Codex |\n|---|---|---|\n"
-    '| small | `model: "haiku"` | `gpt-s` |\n| medium | `model: "sonnet"` | `gpt-m` |\n'
-    '| large | `model: "opus"` | `gpt-l` |\n'
-)
 
 
 class RouteSchemaTests(unittest.TestCase):
@@ -120,7 +113,7 @@ class RouteSchemaTests(unittest.TestCase):
         """orchestrator-engine/R2: P4/S3 — a class with no route must not fall back to another billable model."""
         config_data = config(route(klass="small"), route(klass="medium"))
         with self.assertRaises(routes.RouteError) as caught:
-            routes.resolve(routes.validate(config_data), "claude", {})
+            routes.resolve(routes.validate(config_data))
         self.assertIn("large", str(caught.exception))
 
     def test_S3_a_route_with_an_unknown_effort_is_refused(self):
@@ -134,46 +127,62 @@ class RouteSchemaTests(unittest.TestCase):
             route(klass="medium", model="sonnet"),
             route(klass="large", model="opus"),
         )
-        resolved = routes.resolve(routes.validate(config_data), "claude", {})
+        resolved = routes.resolve(routes.validate(config_data))
         self.assertEqual(
             {klass: entry.model for klass, entry in resolved.items()},
             {"small": "haiku", "medium": "sonnet", "large": "opus"},
         )
 
-    def test_S1_the_legacy_table_answers_the_same_models_as_before(self):
-        """orchestrator-engine/R2: P4/S1 — with no route config the legacy 'Model classes' table answers, class for class."""
+    def test_S1_no_config_is_refused_naming_the_backend_profile_and_the_way_out(self):
+        """orchestrator-engine/R19: a run with no typed config is refused, and the refusal says how to supply one."""
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "CLAUDE.md"
-            path.write_text(LEGACY_TABLE, encoding="utf-8")
-            models = orchestrate.class_models(str(path), "claude")
-            legacy = routes.legacy("claude", models)
-        self.assertEqual({klass: entry.model for klass, entry in legacy.items()}, models)
-        self.assertEqual(
-            {klass: entry.backend for klass, entry in legacy.items()},
-            {klass: "claude" for klass in models},
-        )
+            for backend, name in (
+                ("claude", "routes.json"),
+                ("codex", "routes-codex.json"),
+                ("pi", "routes-pi.json"),
+            ):
+                with self.assertRaises(routes.RouteError) as caught:
+                    routes.find_config(repo=temp, home=temp, backend=backend)
+                self.assertIn(name, str(caught.exception))
+                self.assertIn("--routes-file", str(caught.exception))
 
-    def test_S1_a_legacy_route_leaves_the_effort_to_the_matrix(self):
-        """orchestrator-engine/R2: P4/S1 — the legacy table names no effort; the size/difficulty matrix does."""
-        legacy = routes.legacy("claude", {"small": "haiku"})
-        self.assertIsNone(legacy["small"].effort)
-
-    def test_S3_an_unreadable_legacy_table_is_no_table_when_it_is_only_a_fallback(self):
-        """orchestrator-engine/R2: P4/S3 — with a route config the legacy table is a fallback; a missing one is not an error."""
+    def test_S2_each_backend_reads_only_its_own_profile(self):
+        """orchestrator-engine/R19: the Claude profile never answers a Codex or Pi run."""
         with tempfile.TemporaryDirectory() as temp:
-            missing = str(Path(temp) / "no-such-CLAUDE.md")
-            self.assertEqual(orchestrate.class_models(missing, "claude", required=False), {})
-            with self.assertRaises(orchestrate.PlanError):
-                orchestrate.class_models(missing, "claude")
+            (Path(temp) / "routes.json").write_text("{}", encoding="utf-8")
+            (Path(temp) / "routes-codex.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(
+                routes.find_config(home=temp, backend="codex"),
+                (str(Path(temp) / "routes-codex.json"), "user"),
+            )
+            with self.assertRaises(routes.RouteError):
+                routes.find_config(home=temp, backend="pi")
+
+    def test_S6_the_order_is_explicit_then_repository_then_profile(self):
+        """orchestrator-engine/R19: an explicit file wins over repository policy, which wins over the profile."""
+        with tempfile.TemporaryDirectory() as temp:
+            home, repo = Path(temp) / "home", Path(temp) / "repo"
+            (repo / ".orchestrate").mkdir(parents=True)
+            home.mkdir()
+            (home / "routes.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(
+                routes.find_config(repo=repo, home=home), (str(home / "routes.json"), "user")
+            )
+            (repo / ".orchestrate" / "routes.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(
+                routes.find_config(repo=repo, home=home),
+                (str(repo / ".orchestrate" / "routes.json"), "repo"),
+            )
+            self.assertEqual(
+                routes.find_config(explicit="x.json", repo=repo, home=home), ("x.json", "explicit")
+            )
 
     def driver_with(self, config_data, brain_cli):
         """A driver that answered the routes, without running anything."""
         driver = object.__new__(orchestrate.Driver)
         driver.brain_cli = brain_cli
         driver.routes_file = "routes.json"
-        driver.routes = routes.resolve(routes.validate(config_data), "claude", {})
-        driver.brain_models = {}
-        driver.args = type("Args", (), {"models_file": "CLAUDE.md"})()
+        driver.routes = routes.resolve(routes.validate(config_data))
         return driver
 
     def test_S3_a_typed_route_config_supplies_the_brain_model(self):
