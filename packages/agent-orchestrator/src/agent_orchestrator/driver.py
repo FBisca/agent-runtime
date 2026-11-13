@@ -2365,12 +2365,14 @@ class Driver:
             self.warn_sender(task_id, where, path, str(error))
             return None
 
-    def warn_sender(self, task_id, where, path, reason):
+    def warn_sender(self, task_id, where, path, reason, accept=False):
         """Tell the agent that sent the report what the driver still needs from it. False when the Lead must ask.
 
         A payload that agent can still fix is its own news; a payload from an agent that is gone, or one it was
-        already warned about `PAYLOAD_WARNINGS` times, belongs to the Lead.
+        already warned about `PAYLOAD_WARNINGS` times, belongs to the Lead. `accept=True` is a file that reads but
+        cannot be accepted as it stands, so the warning says so rather than calling it unreadable.
         """
+        verb = "accept" if accept else "read"
         task, unit = self.task(task_id), self.unit_of(task_id)
         record = task.get(where) or {}
         sender = (
@@ -2388,19 +2390,21 @@ class Driver:
             self.contract_error(
                 task_id,
                 where,
-                "cannot read %s: %s, after %d warning(s) to the agent that sent the report"
-                % (path, reason, warned),
+                "cannot %s %s: %s, after %d warning(s) to the agent that sent the report"
+                % (verb, path, reason, warned),
             )
             return False
         name = sender.get("name") or sender.get("worker")
         if not name or not self.agent_live(name):
             self.contract_error(
-                task_id, where, "cannot read %s: %s, and no agent left to write it" % (path, reason)
+                task_id,
+                where,
+                "cannot %s %s: %s, and no agent left to write it" % (verb, path, reason),
             )
             return False
         text = (
-            "The driver cannot read %s: %s. Write or repair that file, then report complete under this assignment."
-            % (path, reason)
+            "The driver cannot %s %s: %s. Write or repair that file, then report complete under this assignment."
+            % (verb, path, reason)
         )
         _, assignment_id = self.ensure_agent(
             name,
@@ -2768,7 +2772,10 @@ class Driver:
         task_md = review_dir / "task.md"
         if not task_md.exists():
             task_md.write_text(
-                self.review_text(packet, review["path"], task.get("delta")), encoding="utf-8"
+                self.review_text(
+                    packet, review["path"], task.get("delta"), self.open_blockers(unit)
+                ),
+                encoding="utf-8",
             )
         backend, model = self.gate_step("reviewer", "large")
         effort = self.step_effort("reviewer", "high")
@@ -2796,7 +2803,7 @@ class Driver:
             task=task_id,
         )
 
-    def review_text(self, packet, review_path, delta=None):
+    def review_text(self, packet, review_path, delta=None, open_items=None):
         checkout = Path(packet["checkout"])
         rules = [str(checkout / n) for n in ("AGENTS.md", "CLAUDE.md") if (checkout / n).exists()]
         return "\n".join(
@@ -2822,6 +2829,19 @@ class Driver:
                             % (self.run_dir / packet["unit"])
                         ),
                     ]
+                ),
+                *(
+                    [
+                        "- Open blocking findings, not closed yet: %s. Each stays open until this review closes it "
+                        "with a `resolutions` entry, whatever the delta shows; a passing review that leaves one open "
+                        "is refused. Their payloads are in %s."
+                        % (
+                            ", ".join(item["id"] for item in open_items),
+                            self.run_dir / packet["unit"] / "open-findings.json",
+                        )
+                    ]
+                    if open_items
+                    else []
                 ),
                 "- Repo rules: %s"
                 % (", ".join(rules) or "none found; follow the code's own conventions"),
@@ -2849,6 +2869,11 @@ class Driver:
                 "and the path of the full output you saved. `scenario`, `why` and `verify` are optional; any other field you "
                 "add is passed on verbatim.",
                 'The verdict is "block" exactly when an item has kind blocking. Prose for people may go in review.md beside it.',
+                'To close a blocking finding an earlier review raised, add it to `resolutions`: `{"id", "status": '
+                '"fixed|disproven", "commit" (the commit you reviewed), "note" (what changed, or why the finding was '
+                'wrong: nonempty), "evidence" {command, exit 0, excerpt, log_path}}`, and list that same command, its '
+                "exit 0 and that commit in `checks_run`. One resolution per id. A resolution for an id the unit never "
+                "had, a commit other than the one you reviewed, or evidence that did not pass leaves the finding open.",
                 "List in `checks_run` every check you ran, so the implementer does not repeat them. List in `clarifications` "
                 "each question you asked the implementer directly.",
                 "Then call the agent-runtime `report` tool with kind=complete and one line: `<n> blocking - %s`."
@@ -2895,6 +2920,7 @@ class Driver:
             review = contracts.load(task["review"]["path"], contracts.validate_review)
             report = contracts.load(task["report_path"], contracts.validate_report)
             check_commit(review["commit"], head_of(packet["checkout"]), task["review"]["path"])
+            self.check_resolutions(packet["unit"], review)
             return review, report
 
         loaded = self.read_payload(task_id, "review", task["review"]["path"], read_review)
@@ -2912,19 +2938,159 @@ class Driver:
             rest = rest + outside
         asks = [i for i in blocking + rest if i.get("answer_required") is True]
         self.defer(task_id, [i for i in rest if i not in asks], task["review"]["path"])
+        # The unit's open set after this review, written before the gate moves: a restart reads it back.
+        open_items = self.record_blockers(packet["unit"], task["review"]["path"], review, blocking)
         if blocking:
-            # a fix round holds only blocking and answer_required items, and the reviewer's checks
+            # a fix round holds only blocking and answer_required items, and the reviewer's checks; an earlier blocker
+            # the reviewer neither resolved nor re-raised goes with them, or the round would drop it
             return self.fail_gate(
                 task_id,
                 report,
                 "review",
-                blocking + [i for i in rest if i in asks],
+                open_items + [i for i in rest if i in asks],
                 checks_run=review.get("checks_run") or [],
                 answer_ids=[i["id"] for i in asks],
             )
+        if (
+            open_items
+        ):  # it passed, but a blocker is still open: only a supported resolution closes one
+            return self.hold_open_findings(task_id, task, open_items)
         if asks:  # a question costs no round: CI goes on while the implementer answers
             self.start_answers(task_id, asks, review)
         self.mark(task_id, gate="ready-for-ci")
+
+    def hold_open_findings(self, task_id, task, open_items):
+        """A review that passes while the unit still has open blocking findings does not advance it: the reviewer is
+        asked to close each with a resolution it can evidence, or to keep each blocking. Past the warnings the Lead is
+        asked; either way the gate holds before CI."""
+        record = self.open_path(self.unit_of(task_id))
+        reason = (
+            "the review leaves blocking finding(s) %s open with no supported resolution, so the unit cannot go on to "
+            "CI. Close each one with a `resolutions` entry {id, status fixed|disproven, commit (the commit reviewed), "
+            "note, evidence {command, exit 0, excerpt, log_path}} whose command and exit also appear in a `checks_run` "
+            "entry at that commit, or keep it blocking with its id. The open findings are in %s."
+            % (", ".join(item["id"] for item in open_items), record)
+        )
+        return self.warn_sender(task_id, "review", task["review"]["path"], reason, accept=True)
+
+    # ---- open blocking findings: a finding stays open until a reviewer resolves it ---------------------------
+    # `<run>/<unit>/open-findings.json` is the unit's authoritative open set: the original payloads, in the order they
+    # were raised. A review closes only the ids it resolves with current-commit evidence and adds what it raises
+    # blocking; a passing review that leaves one unaddressed is refused. An omission, a downgrade, an unrelated delta
+    # and a worker's answer therefore never clear a blocker, and the set outlives the process that wrote it.
+
+    def open_path(self, unit):
+        return self.run_dir / unit / "open-findings.json"
+
+    def open_blockers(self, unit, exclude=None):
+        """The unit's open blocking findings: the record on disk, or one replayed from its reviews when a run of the
+        previous version left none. A record that cannot be read is replayed too: a damaged file never clears one."""
+        path = self.open_path(unit)
+        if path.exists():
+            try:
+                return contracts.load(path, contracts.validate_open_findings)["items"]
+            except contracts.ContractError as error:
+                self.log(
+                    "open-findings",
+                    unit=unit,
+                    path=str(path),
+                    state="unreadable",
+                    error=str(error)[:300],
+                )
+        return self.replay_blockers(unit, exclude)
+
+    def replay_blockers(self, unit, exclude=None):
+        """The open set rebuilt from the unit's reviews, oldest first: the rule `record_findings` applies, so a restart
+        and a re-read of the same review agree."""
+        open_items = []
+        for path, review in self.reviews_of(unit):
+            if path == exclude:
+                continue
+            try:
+                contracts.validate_review(review)
+            except contracts.ContractError:
+                continue
+            open_items = self.folded_findings(
+                open_items, contracts.review_items(review)[0], review.get("resolutions")
+            )
+        return open_items
+
+    def record_blockers(self, unit, review_path, review, blocking):
+        """Apply one accepted review to the unit's open set and write the record: a resolution closes its id, a
+        blocking item keeps an id open with the payload it was first raised with. Re-reading a review that was already
+        applied leaves the set as it was."""
+        open_items = self.folded_findings(
+            self.open_blockers(unit, exclude=review_path), blocking, review.get("resolutions")
+        )
+        path = self.open_path(unit)
+        if open_items or path.exists():
+            # No record for a unit that has never had a blocker; a record emptied by closure stays as the answer.
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            write_atomic(
+                path, json.dumps(contracts.make_open_findings(unit, open_items), indent=2) + "\n"
+            )
+        return open_items
+
+    @staticmethod
+    def folded_findings(open_items, blocking, resolutions):
+        """One review applied to the open set: what it resolves closes, what it raises blocking opens (or stays open
+        with the payload it was first raised with). `blocking` comes filtered by the review's delta."""
+        closed = {r["id"] for r in resolutions or [] if isinstance(r, dict)}
+        kept = [item for item in open_items if item.get("id") not in closed]
+        known = {item.get("id") for item in kept}
+        for item in blocking:
+            if isinstance(item, dict) and item.get("id") not in known:
+                kept.append(item)
+                known.add(item.get("id"))
+        return kept
+
+    def reviews_of(self, unit):
+        """The unit's reviews, oldest first, as (path, document); a review file that no longer reads is skipped."""
+        with self.book() as data:
+            paths = [
+                (task.get("review") or {}).get("path")
+                for task in data["tasks"].values()
+                if task["packet"].get("unit") == unit
+            ]
+        found, seen = [], set()
+        for path in paths:
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            try:
+                document = json.loads(Path(path).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(document, dict):
+                found.append((path, document))
+        return found
+
+    def finding_ids(self, unit):
+        """Every blocking id the unit's reviews have raised, open or closed: the ids a resolution may name."""
+        ids = set()
+        for _path, review in self.reviews_of(unit):
+            try:
+                contracts.validate_review(review)
+            except contracts.ContractError:
+                continue
+            ids.update(item["id"] for item in contracts.review_items(review)[0])
+        return ids
+
+    def check_resolutions(self, unit, review):
+        """A resolution names a blocking finding the unit actually had: one that names no earlier finding claims a
+        closure that never applied."""
+        if review.get("contract") == 1:
+            return
+        unknown = [
+            r["id"]
+            for r in review.get("resolutions") or []
+            if r["id"] not in self.finding_ids(unit)
+        ]
+        require(
+            not unknown,
+            "review: resolution(s) %s name no blocking finding this unit has had; a resolution closes an earlier "
+            "finding" % ", ".join(unknown),
+        )
 
     def unit_trail(self, unit):
         """(last reviewed commit, newest findings.json, newest report.json) over the unit's attempts; "" when none yet."""

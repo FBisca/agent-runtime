@@ -55,7 +55,10 @@ class ReuseFixture(GateFixture):
 class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
     def test_S8_a_fix_round_resumes_the_same_reviewer_with_the_delta(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S8"""
-        self.waits(self.first_block() + [self.fix_report(), self.re_review()])
+        self.waits(
+            self.first_block()
+            + [self.fix_report(), self.re_review(self.review2(**self.closure(BLOCKING)))]
+        )
         self.run_driver()
         base = self.git(self.repo, "rev-parse", "HEAD")
         self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
@@ -124,13 +127,19 @@ class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
 
 
 class ScopeFilterTests(ReuseFixture, unittest.TestCase):
-    def blocked_again(self, *items):
-        return self.review2(verdict="block", items=list(items))
+    def blocked_again(self, *items, **over):
+        return self.review2(verdict="block", items=list(items), **over)
 
     def test_S9_a_blocking_item_outside_the_delta_with_no_earlier_finding_is_deferred(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
+        # The earlier blocker is closed with evidence, so only the new out-of-delta item is at issue.
+        closure = self.closure(BLOCKING)
         self.waits(
-            self.first_block() + [self.fix_report(), self.re_review(self.blocked_again(OFF_SCOPE))]
+            self.first_block()
+            + [
+                self.fix_report(),
+                self.re_review(self.blocked_again(OFF_SCOPE, **closure)),
+            ]
         )
         self.run_driver()
         scopes = self.run_events("scope")
@@ -151,7 +160,11 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
         inside = dict(OFF_SCOPE, id="B4", file="src/a/x.py")
         self.waits(
-            self.first_block() + [self.fix_report(), self.re_review(self.blocked_again(inside))]
+            self.first_block()
+            + [
+                self.fix_report(),
+                self.re_review(self.blocked_again(inside, **self.closure(BLOCKING))),
+            ]
         )
         self.run_driver()
         self.assertEqual(self.run_events("scope"), [])
@@ -162,7 +175,11 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
         again = dict(OFF_SCOPE, id="B5", finding="B1")
         self.waits(
-            self.first_block() + [self.fix_report(), self.re_review(self.blocked_again(again))]
+            self.first_block()
+            + [
+                self.fix_report(),
+                self.re_review(self.blocked_again(again, **self.closure(BLOCKING))),
+            ]
         )
         self.run_driver()
         self.assertEqual(self.run_events("scope"), [])
@@ -179,7 +196,10 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         inside = dict(OFF_SCOPE, id="B4", file="src/a/x.py")
         self.waits(
             self.first_block()
-            + [self.fix_report(), self.re_review(self.blocked_again(OFF_SCOPE, inside))]
+            + [
+                self.fix_report(),
+                self.re_review(self.blocked_again(OFF_SCOPE, inside, **self.closure(BLOCKING))),
+            ]
         )
         self.run_driver()
         items = json.loads((self.run_dir / "t1r2" / "findings.json").read_text())["items"]
@@ -192,6 +212,44 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.run_events("scope"), [])
         self.assertTrue((self.run_dir / "t1r1" / "findings.json").exists())
+
+
+class OpenBlockerTests(ReuseFixture, unittest.TestCase):
+    """A blocker stays open across a delta re-review, a restart and a replayed review until a reviewer resolves it."""
+
+    def record(self):
+        return json.loads((self.run_dir / "t1" / "open-findings.json").read_text(encoding="utf-8"))
+
+    def held(self):
+        self.assertEqual(self.record()["items"], [BLOCKING])
+        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
+        self.assertNotEqual(self.task("t1r1")["gate"], "done")
+
+    def test_S5_an_open_blocker_outside_the_new_delta_stays_open(self):
+        outside = dict(BLOCKING, file="src/zzz/other.py")
+        self.waits(self.first_block(outside) + [self.fix_report(), self.re_review()])
+        self.run_driver()
+        self.assertEqual(self.record()["items"], [outside])
+        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
+        self.assertNotEqual(self.task("t1r1")["gate"], "done")
+
+    def test_S7_a_restart_holds_the_unit_on_the_persisted_record(self):
+        self.waits(self.first_block())
+        self.run_driver()  # the run ends with the fix round still to come
+        self.assertEqual(self.record()["items"], [BLOCKING])
+        self.waits([self.fix_report(), self.re_review()])
+        self.run_driver()  # a new run of the same ledger: the record, not memory, decides
+        self.held()
+
+    def test_S7_a_missing_record_is_rebuilt_from_the_units_reviews(self):
+        self.waits(self.first_block())
+        self.run_driver()
+        (
+            self.run_dir / "t1" / "open-findings.json"
+        ).unlink()  # a ledger written before the record existed
+        self.waits([self.fix_report(), self.re_review()])
+        self.run_driver()
+        self.held()
 
 
 class PaneStopTests(ReuseFixture, unittest.TestCase):

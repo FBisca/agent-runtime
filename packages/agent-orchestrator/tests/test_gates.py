@@ -193,6 +193,32 @@ class GateFixture(RunFixture):
         path = self.run_dir / "t1r1" / "findings.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def closure(self, *items, status="fixed"):
+        """The `resolutions` and the `checks_run` receipt that close each item with supported current-commit
+        evidence: `@HEAD` becomes the checkout's HEAD when the fake runtime writes the file."""
+        receipt = {"command": "pytest -k last", "exit": 0, "at_commit": "@HEAD"}
+        resolutions = [
+            {
+                "id": item["id"],
+                "status": status,
+                "commit": "@HEAD",
+                "note": "the fix holds" if status == "fixed" else "the finding was wrong",
+                "evidence": {
+                    "command": "pytest -k last",
+                    "exit": 0,
+                    "excerpt": "1 passed",
+                    "log_path": "/run/fix.log",
+                },
+            }
+            for item in items
+        ]
+        return {"resolutions": resolutions, "checks_run": [receipt]}
+
+    def open_record(self, unit="t1"):
+        """The unit's open blocking findings, as the driver wrote them."""
+        path = self.run_dir / unit / "open-findings.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def review(self, **over):
         return json.dumps(
             dict(
@@ -241,6 +267,24 @@ class GateFixture(RunFixture):
 
 
 class GateTests(GateFixture, unittest.TestCase):
+    def test_S5_an_open_blocker_holds_only_the_unit_that_has_it(self):
+        """R138: the open set is the unit's own; another unit's review passes and reaches CI untouched."""
+        self.set_plan(("T1", "T3"))
+        t3_review = report_wait("demo-t3-review", "complete")
+        t3_review["write"] = [[str(self.run_dir / "t3" / "review.json"), self.review2()]]
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.worker_done("t3", name="demo-t3", report=self.report("t3", covers={})),
+                self.reviewer_done(self.review2(verdict="block", items=[BLOCKING])),
+                t3_review,
+            ]
+        )
+        self.run_driver()
+        self.assertEqual([i["id"] for i in self.open_record("t1")["items"]], ["B1"])
+        self.assertFalse((self.run_dir / "t3" / "open-findings.json").exists())
+        self.assertEqual(self.task("t3")["gate"], "done")
+
     def test_S5_failing_verify_resumes_the_worker_in_a_new_task_directory(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S5"""
         self.waits([self.worker_done()])

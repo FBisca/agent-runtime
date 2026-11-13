@@ -5,7 +5,7 @@ import unittest
 
 import pytest
 from fixtures import assignment, report_wait, resume_id, wait_result
-from test_gates import BLOCKING, CONCERN, NIT, QUESTION, GateFixture
+from test_gates import BLOCKING, CONCERN, MAJOR, NIT, QUESTION, GateFixture
 
 pytestmark = pytest.mark.integration
 
@@ -34,10 +34,12 @@ class EnvelopeFixture(GateFixture):
         step["write"] = [[str(self.run_dir / task_id / name), self.report(task_id, **over)]]
         return step
 
-    def re_review(self, index=2, nth=1):
-        """The unit's reviewer, resumed, passes the fix round."""
+    def re_review(self, review=None, index=2, nth=1):
+        """The unit's reviewer, resumed for the `nth` time, writes review.<index>.json."""
         step = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review", nth))
-        step["write"] = [[str(self.run_dir / "t1" / ("review.%d.json" % index)), self.review2()]]
+        step["write"] = [
+            [str(self.run_dir / "t1" / ("review.%d.json" % index)), review or self.review2()]
+        ]
         return step
 
     def worker_resumes(self):
@@ -270,7 +272,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
             + [
                 self.fix_round_report(),
                 self.fix_round_report(name="report.2.json", nth=2, responses=[RESPONSE]),
-                self.re_review(),
+                self.re_review(self.review2(**self.closure(BLOCKING))),
             ]
         )
         self.run_driver()
@@ -311,7 +313,11 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
     def test_S16_a_complete_set_of_responses_passes_the_first_time(self):
         """orchestrator-engine/R2: orchestrate-lean-loop/S16"""
         self.waits(
-            self.to_fix_round() + [self.fix_round_report(responses=[RESPONSE]), self.re_review()]
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.re_review(self.review2(**self.closure(BLOCKING))),
+            ]
         )
         self.run_driver()
         self.assertEqual(self.worker_resumes(), ["demo-t1"])
@@ -565,6 +571,144 @@ class RequirementViolationTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
         self.assertTrue(self.checks_log())
         self.assertFalse((self.run_dir / "t1r1" / "findings.json").exists())
+
+
+class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
+    """A blocker an earlier review raised stays open until a supported resolution closes it: omission, a downgrade, a
+    bare acknowledgment, stale evidence and an unknown id all hold the gate before CI."""
+
+    def held(self, record=None):
+        """The re-review did not advance the unit; the reviewer was told what is still open."""
+        gates = [new for _old, new in (e["gate"] for e in self.run_events("state")) if new]
+        self.assertNotIn("ready-for-ci", gates, "an unresolved blocker advanced the unit to CI")
+        self.assertNotEqual(self.task("t1r1")["gate"], "done")
+        self.assertEqual(self.read("t1", "open-findings.json")["items"], record or [BLOCKING])
+        return (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8")
+
+    def warning(self):
+        """What the driver told the reviewer it still needs: the last resume's brief."""
+        resumes = self.calls("resume")
+        self.assertTrue(resumes, "the reviewer was never told")
+        return resumes[-1]["args"]["task"]
+
+    def resolved(self, *items, status="fixed"):
+        return self.re_review(self.review2(**self.closure(*items, status=status)))
+
+    def test_S5_a_passing_rereview_that_omits_an_open_blocker_holds_the_unit(self):
+        self.waits(
+            self.to_fix_round() + [self.fix_round_report(responses=[RESPONSE]), self.re_review()]
+        )
+        self.run_driver()
+        brief = self.held()
+        record = self.run_dir / "t1" / "open-findings.json"
+        self.assertEqual(self.read("t1", "open-findings.json")["unit"], "t1")
+        self.assertIn("B1", brief)
+        self.assertIn(str(record), brief)
+        self.assertIn("B1", self.warning())
+
+    def test_S5_a_previous_blocker_cannot_be_downgraded_to_a_concern(self):
+        concern = dict(CONCERN, id="B1", summary="rare case")
+        self.waits(
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.re_review(self.review2(items=[concern])),
+            ]
+        )
+        self.run_driver()
+        self.held()
+        self.assertIn("B1", self.warning())
+
+    def test_S6_a_bare_acknowledgment_is_not_closure(self):
+        bare = {"id": "B1", "status": "fixed", "commit": "@HEAD", "note": "done"}
+        self.waits(
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.re_review(self.review2(resolutions=[bare])),
+            ]
+        )
+        self.run_driver()
+        self.held()
+        self.assertIn("evidence", self.warning())
+
+    def test_S6_failing_evidence_is_not_closure(self):
+        failing = dict(
+            {
+                "id": "B1",
+                "status": "fixed",
+                "commit": "@HEAD",
+                "note": "verified",
+                "evidence": {
+                    "command": "pytest -k last",
+                    "exit": 1,
+                    "excerpt": "1 failed",
+                    "log_path": "/run/fix.log",
+                },
+            }
+        )
+        self.waits(
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.re_review(self.review2(resolutions=[failing])),
+            ]
+        )
+        self.run_driver()
+        self.held()
+        self.assertIn("exit", self.warning())
+
+    def test_S6_a_resolution_naming_no_open_finding_is_refused(self):
+        self.waits(
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.resolved(dict(BLOCKING, id="B9")),
+            ]
+        )
+        self.run_driver()
+        self.held()
+        self.assertIn("B9", self.warning())
+
+    def closes(self, status):
+        """A supported resolution completes the unit: the blocker is closed, CI begins and no repair is needed."""
+        self.waits(
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.resolved(BLOCKING, status=status),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.task("t1r1")["gate"], "done")
+        self.assertEqual(self.read("t1", "open-findings.json")["items"], [])
+        self.assertIn(
+            "ready-for-ci", [new for _old, new in (e["gate"] for e in self.run_events("state"))]
+        )
+        self.assertEqual(self.run_events("contract-error"), [])
+
+    def test_S6_a_fixed_resolution_with_current_commit_evidence_closes_the_blocker(self):
+        self.closes("fixed")
+
+    def test_S6_a_disproven_resolution_with_current_commit_evidence_closes_the_blocker(self):
+        self.closes("disproven")
+
+    def test_S5_a_legacy_major_finding_is_open_until_it_is_resolved(self):
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
+                self.worker_done("t1r1"),
+                self.re_review(),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(self.read("t1", "open-findings.json")["items"], [MAJOR])
+        self.assertNotIn(
+            "ready-for-ci", [new for _old, new in (e["gate"] for e in self.run_events("state"))]
+        )
+        self.assertNotEqual(self.task("t1r1")["gate"], "done")
+        self.assertIn("M1", (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
