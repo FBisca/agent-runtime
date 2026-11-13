@@ -15,7 +15,9 @@ verbatim: a review item's fields outside the core survive a round trip unchanged
 `review.json`   reviewer: `verdict` pass|block, `items[]`, `checks_run[] {command, exit, at_commit}`, optional
                 `clarifications[]`, `commit` reviewed (must equal the checkout's HEAD). An item has the core `id`, `kind`
                 (blocking|concern|question|nit|deferred), `summary`, `answer_required`; a blocking item also `file`,
-                `line`, `fix` and `evidence {command, exit, excerpt, log_path}`. Any other field is kept verbatim.
+                `line`, `fix` and `evidence {command, exit, excerpt, log_path}`. An item that asserts a
+                `requirement_violation {source, id, expected, observed}` (each nonempty text) must be blocking: a
+                requirement breach never passes as an optional observation. Any other field is kept verbatim.
                 Block iff there is a blocking item.
 `findings.json` driver -> fix round: `source`, `attempt`, the blocking and answer_required `items` (converge, verify,
                 CI and conflict items carry `kind`, `source`, `check`, `command`, `exit`, `excerpt`, `log_path`) and the
@@ -33,7 +35,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 VERSION = 2  # what the driver writes
 SUPPORTED = (1, 2)  # what it reads
@@ -67,6 +69,7 @@ SUMMARIES = {
 MAJOR_FIELDS = ("id", "file", "line", "problem", "fix")  # contract 1
 KINDS = ("blocking", "concern", "question", "nit", "deferred")
 CORE_FIELDS = ("id", "kind", "summary", "answer_required")
+VIOLATION_FIELDS = ("source", "id", "expected", "observed")  # a requirement violation's metadata
 EVIDENCE_FIELDS = ("command", "exit", "excerpt", "log_path")
 GATE_ITEM_FIELDS = (
     "kind",
@@ -114,6 +117,36 @@ def versioned(value, what):
         value.get("contract") in SUPPORTED,
         "%s: contract must be one of %s" % (what, ", ".join(map(str, SUPPORTED))),
     )
+
+
+def violation_problem(item):
+    """Why an item's asserted `requirement_violation` is inconsistent, or None when none is asserted or it is well
+    formed. Presence asserts a violation of a named requirement, so the item blocks and names the source, the
+    requirement, what it promised and what it did instead: a real breach never passes as an optional observation."""
+    violation = item.get("requirement_violation")
+    if violation is None:
+        return None
+    label = "item %s" % item["id"]
+    if item.get("kind") != "blocking":
+        return "%s asserts requirement_violation, so kind must be blocking" % label
+    if not isinstance(violation, dict):
+        return "%s requirement_violation must be an object {%s}" % (
+            label,
+            ", ".join(VIOLATION_FIELDS),
+        )
+    for key in VIOLATION_FIELDS:
+        if not text(violation.get(key)):
+            return "%s requirement_violation needs nonempty %s text" % (label, key)
+    return None
+
+
+def check_violation(model):
+    """A review-item model, refused when its asserted requirement violation is inconsistent: one rule for both
+    item shapes, so the Pydantic reader refuses what `validate_item` refuses."""
+    problem = violation_problem({"id": model.id, "kind": model.kind, **(model.model_extra or {})})
+    if problem:
+        raise ValueError(problem)
+    return model
 
 
 class Strict(BaseModel):
@@ -180,12 +213,18 @@ class Evidence(Strict):
 
 
 class ReviewItem(Open):
-    """One review item (contract 2). The core fields are required; the rest is kept verbatim."""
+    """One review item (contract 2). The core fields are required; the rest is kept verbatim.
+
+    `requirement_violation` is kept verbatim too and validated here: its presence asserts a violation."""
 
     id: str = Field(min_length=1)
     kind: Kind
     summary: str = Field(min_length=1)
     answer_required: bool
+
+    @model_validator(mode="after")
+    def violation_blocks(self):
+        return check_violation(self)
 
 
 class BlockingReviewItem(Open):
@@ -199,6 +238,10 @@ class BlockingReviewItem(Open):
     line: int = Field(ge=1)
     fix: str = Field(min_length=1)
     evidence: Evidence
+
+    @model_validator(mode="after")
+    def violation_names_its_requirement(self):
+        return check_violation(self)
 
 
 class ChecksRun(Strict):
@@ -422,6 +465,8 @@ def validate_item(item, where, position=0):
         isinstance(item["answer_required"], bool),
         "%s: %s answer_required must be true or false" % (where, label),
     )
+    problem = violation_problem(item)
+    need(problem is None, "%s: %s" % (where, problem))
     if item["kind"] == "blocking":
         for key in ("file", "line", "fix", "evidence"):
             need(
