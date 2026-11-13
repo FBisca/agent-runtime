@@ -48,12 +48,15 @@ class HerdrCase(release_tests.ReleaseCase):
 
 
 class HerdrComponentTests(HerdrCase):
-    def test_s19_a_checkout_symlinks_the_mod_and_adds_the_layout_without_switching(self):
-        """installer-contract/R10: a checkout links the mod and adds the workbench layout, nothing switches."""
+    def test_s13_a_checkout_links_the_mod_and_the_layout_without_switching(self):
+        """installer-contract/R10: a checkout links the mod and the workbench layout, nothing switches."""
         result = self.install_from_checkout()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             os.readlink(self.mod()), str(self.checkout_dir / "herdr" / "agent-workbench")
+        )
+        self.assertEqual(
+            os.readlink(self.layout()), str(self.checkout_dir / "herdr" / "layouts" / "workbench.json")
         )
         self.assertEqual(
             json.loads(self.layout().read_text(encoding="utf-8")),
@@ -155,6 +158,7 @@ class HerdrComponentTests(HerdrCase):
         self.assertTrue((self.checkout_dir / "herdr" / "agent-workbench" / "mod.json").is_file())
         # A layout the person edited since is theirs.
         self.assertEqual(self.install_from_checkout().returncode, 0)
+        self.layout().unlink()
         self.layout().write_text('{"id": "edited"}', encoding="utf-8")
         result = self.run_installer(
             "uninstall", "--components", "herdr", "--yes", script=self.checkout_dir / "install.sh"
@@ -167,6 +171,7 @@ class HerdrComponentTests(HerdrCase):
     def test_s19_a_rerun_keeps_an_edited_layout_and_copy_aside(self):
         """installer-contract/R10: an upgrade never overwrites what the person edited since."""
         self.assertEqual(self.install_from_checkout().returncode, 0)
+        self.layout().unlink()
         self.layout().write_text('{"id": "edited"}', encoding="utf-8")
         result = self.run_installer(
             "--components", "herdr", "--dry-run", script=self.checkout_dir / "install.sh"
@@ -202,3 +207,68 @@ class HerdrComponentTests(HerdrCase):
         self.assertFalse(self.mod().exists())
         self.assertFalse(self.layout().exists())
         self.assertTrue(asides[0].is_dir())
+
+    def test_s13_a_pull_in_the_checkout_reaches_the_layout(self):
+        """installer-contract/R10: the layout is a link, so a change to the checkout's file is what Herdr reads."""
+        self.assertEqual(self.install_from_checkout().returncode, 0)
+        source = self.checkout_dir / "herdr" / "layouts" / "workbench.json"
+        source.write_text('{"id": "pulled"}', encoding="utf-8")
+        self.assertEqual(self.layout().read_text(encoding="utf-8"), '{"id": "pulled"}')
+
+    def test_s13_a_reinstall_keeps_the_layout_link(self):
+        """installer-contract/R10: a reinstall from the same checkout leaves the layout linked, not copied."""
+        self.assertEqual(self.install_from_checkout().returncode, 0)
+        again = self.run_installer(
+            "--components", "herdr", "--yes", script=self.checkout_dir / "install.sh"
+        )
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertTrue(self.layout().is_symlink())
+        self.assertEqual(
+            os.readlink(self.layout()), str(self.checkout_dir / "herdr" / "layouts" / "workbench.json")
+        )
+
+    def test_s13_uninstall_removes_the_layout_link_and_keeps_the_checkout(self):
+        """installer-contract/R10: uninstall removes the layout link; the checkout's file stays."""
+        self.assertEqual(self.install_from_checkout().returncode, 0)
+        result = self.run_installer(
+            "uninstall", "--components", "herdr", "--yes", script=self.checkout_dir / "install.sh"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.layout().is_symlink() or self.layout().exists())
+        self.assertTrue((self.checkout_dir / "herdr" / "layouts" / "workbench.json").is_file())
+
+    def test_s13_a_layout_symlink_it_did_not_make_is_refused_with_a_way_out(self):
+        """installer-contract/R10: a layout link to a file this install does not own is refused and named."""
+        self.checkout_dir = self.checkout()
+        foreign = self.home / "elsewhere" / "workbench.json"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_text('{"id": "theirs"}', encoding="utf-8")
+        self.layout().parent.mkdir(parents=True)
+        self.layout().symlink_to(foreign)
+        before = self.snapshot()
+        result = self.run_installer(
+            "--components", "herdr", "--yes", script=self.checkout_dir / "install.sh"
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(str(self.layout()), result.stderr)
+        self.assertIn("would link", result.stderr)
+        self.assertIn("move it away or remove it", result.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_s13_a_release_copies_the_layout(self):
+        """installer-contract/R10: a release install copies the layout; it is never a link into the staged release."""
+        self.release("0.1.0")
+        result = self.bootstrap("--components", "herdr", "--yes", "--release", "v0.1.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.layout().is_file())
+        self.assertFalse(self.layout().is_symlink())
+        self.assertEqual(
+            self.layout().read_bytes(), (REPO / "herdr" / "layouts" / "workbench.json").read_bytes()
+        )
+
+    def test_s13_the_install_prints_how_to_reload_the_mod_after_a_pull(self):
+        """installer-contract/R10: the checkout install names the touch that makes Herdr reload after a pull."""
+        result = self.install_from_checkout()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("after a pull", result.stdout)
+        self.assertIn(f"touch -h {self.mod()} {self.layout()}", result.stdout)
