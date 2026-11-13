@@ -2109,17 +2109,38 @@ class Driver:
             narrate.say("warn", None, "could not wake the Lead in %s: %s" % (terminal, error))
             self.log("notify-failed", terminal=terminal, error=error[:500])
 
-    def request(self, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None):
+    def request(
+        self,
+        task_id,
+        kind,
+        reason,
+        fix=None,
+        answerer=None,
+        menu=None,
+        intent=None,
+        from_gate=None,
+    ):
         """The unit needs the Lead. A unit that already has an open request keeps it. `answerer` is the assignment of
         a busy answerer the request names: only a decision on such a request replaces that assignment. `menu` narrows
         the actions the Lead may take, and `intent` names the intents the decision settles."""
         with self.book() as data:
-            unit = self.book_request(data, task_id, kind, reason, fix, answerer, menu, intent)
+            unit = self.book_request(
+                data, task_id, kind, reason, fix, answerer, menu, intent, from_gate
+            )
         if unit is not None:
             self.announce_request(task_id, kind, reason, unit)
 
     def book_request(
-        self, data, task_id, kind, reason, fix=None, answerer=None, menu=None, intent=None
+        self,
+        data,
+        task_id,
+        kind,
+        reason,
+        fix=None,
+        answerer=None,
+        menu=None,
+        intent=None,
+        from_gate=None,
     ):
         """The ledger half of `request`, for a caller that books it with other changes in one write: the unit's
         id, or None when the unit already has an open request."""
@@ -2128,7 +2149,7 @@ class Driver:
             return None
         unit = task["packet"]["unit"]
         path, _ = next_path(self.run_dir / unit, "request", ".json")
-        asked = {"path": str(path), "kind": kind, "from_gate": task.get("gate")}
+        asked = {"path": str(path), "kind": kind, "from_gate": from_gate or task.get("gate")}
         if answerer:
             asked["answerer"] = answerer
         if menu:
@@ -4153,11 +4174,27 @@ class Driver:
             applying = applying or self.decided_action(task)
         elif gate not in ("redo-pending", "fix-pending") or not applying:
             return False
-        worker = task["packet"]["worker"]
+        worker, from_gate, menu = task["packet"]["worker"], None, None
+        way_out = "retry it once the pane works, or fresh worker, mark blocked or skip"
+        if (
+            gate == "decided"
+            and applying == "answer"
+            and (task.get("request") or {}).get("from_gate") == "reviewing"
+            and task.get("review")
+        ):
+            # The answer was for the reviewer: the new request names it and keeps the review routing, so the Lead's next
+            # `answer` reaches the reviewer again, not the implementer.
+            worker, from_gate = task["review"]["name"], "reviewing"
+            # `retry` and `fresh worker` on this request resume the implementer, not the reviewer: name and offer only
+            # the actions that reach the reviewer.
+            way_out = "answer again once the pane works, or mark blocked or skip"
+            menu = ("answer", "mark blocked", "skip")
         # the wake cuts a reason at 200 characters: the way out comes first, the runtime's words (all in the file) after
-        reason = (
-            "the Lead's decision (%s) could not reach %s; retry it once the pane works, or fresh worker, mark blocked "
-            "or skip: %s" % (applying or "decision", worker, " ".join(str(error).split())[:600])
+        reason = "the Lead's decision (%s) could not reach %s; %s: %s" % (
+            applying or "decision",
+            worker,
+            way_out,
+            " ".join(str(error).split())[:600],
         )
         with self.book() as data:
             if "decision" in data["tasks"][task_id]:
@@ -4169,7 +4206,7 @@ class Driver:
             gate=gate,
             error=str(error)[:500],
         )
-        self.request(task_id, "handover", reason)
+        self.request(task_id, "handover", reason, menu=menu, from_gate=from_gate)
         return True
 
     def decided_action(self, task):
@@ -4594,6 +4631,9 @@ class Driver:
             self.log("held-acted", unit=unit, task=task_id, held="complete", acted="reported")
             return self.mark(task_id, gate="reported", held=[])
         if action == "answer":
+            if asked.get("from_gate") == "reviewing" and task.get("review"):
+                # The request was raised while the reviewer owed its review: the answer is for the reviewer.
+                return self.step_review_answer(task_id, decision)
             return self.step_answer(task_id, decision)
         flags = {
             "fresh": action == "fresh worker",
@@ -4662,6 +4702,74 @@ class Driver:
             self.keep_address(data, task_id, packet["worker"])
         self.replay_held(task, task_id)
         narrate.say("info", "decide", "answer sent; %s resumed" % packet["worker"], task=task_id)
+
+    def step_review_answer(self, task_id, decision):
+        """The Lead's `answer` to a request raised while the reviewer owed its review: the reviewer goes on with the
+        review it owes, under the same review file, and the implementer is left alone. A reviewer whose pane is gone is
+        replaced by a fresh one whose brief carries the answer."""
+        task = self.task(task_id)
+        packet, review = task["packet"], task["review"]
+        unit, name = packet["unit"], review["name"]
+        review_dir = Path(review["dir"])
+        review_dir.mkdir(exist_ok=True, mode=0o700)
+        # named after the decision file, so a driver that died after the resume writes nothing twice
+        suffix = Path(task["decision"]["path"]).name.removeprefix("decision").removesuffix(".json")
+        brief = review_dir / ("answer%s.md" % suffix)
+        if not brief.exists():
+            brief.write_text(
+                "\n".join(
+                    [
+                        "# The Lead's answer to your review of %s" % unit.upper(),
+                        "",
+                        "What happened: %s" % task["event"]["reason"],
+                        "The Lead's instruction: %s" % decision["reason"],
+                        "The Lead's answer: %s" % decision["answer"],
+                        "",
+                        "You still owe the review: your brief is %s. Write %s and report complete with the "
+                        "assignment id this message came with."
+                        % (review_dir / "task.md", review["path"]),
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        backend, model = self.gate_step("reviewer", "large")
+        text = (
+            "Read %s and follow it. The Lead answered what stopped your review of %s; the review you owe is still "
+            "%s (brief: %s). The Lead's answer: %s"
+            % (brief, unit.upper(), review["path"], review_dir / "task.md", decision["answer"])
+        )
+        # a pane that is gone gets a fresh reviewer with the same brief and the answer
+        alive = self.pane_alive(name)
+        _, assignment_id = self.ensure_agent(
+            name,
+            "reviewer",
+            unit,
+            {
+                "kind": "worker",
+                "name": name,
+                "task": text,
+                "cwd": packet["checkout"],
+                "cli": backend,
+                "model": model,
+                "effort": self.step_effort("reviewer", "high"),
+            },
+            fresh=not alive,
+            attempt=review_dir.name + "-answer" + suffix,
+        )
+        self.mark(
+            task_id,
+            gate="reviewing",
+            review=dict(review, assignment_id=assignment_id),
+            held=[],
+            updated_at=now(),
+        )
+        narrate.say(
+            "info",
+            "decide",
+            "answer sent; %s %s" % (name, "resumed" if alive else "replaced by a fresh reviewer"),
+            task=task_id,
+        )
 
     def answer_text(self, task, decision):
         packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
