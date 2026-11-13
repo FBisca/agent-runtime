@@ -124,3 +124,51 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(config.ConfigError) as caught:
                 config.load(self.root)
             self.assertIn(dotted, str(caught.exception))
+
+
+class TestPatternTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+
+    def write(self, text):
+        path = self.root / ".orchestrate" / "config.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_S2_default_patterns_decide_a_test_file_by_name_or_tests_directory(self):
+        from agent_orchestrator import plan
+
+        patterns = config.load(self.root).test_patterns
+        for path in (
+            "a/test_x.py",
+            "a/x_test.go",
+            "a/x.test.ts",
+            "a/x.spec.ts",
+            "pkg/tests/helper.py",
+            "tests/data/fixture.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(plan.is_test_path(path, patterns))
+        for path in ("src/feature.py", "pyproject.toml", ".orchestrate/config.yaml", "src/attests.py"):
+            with self.subTest(path=path):
+                self.assertFalse(plan.is_test_path(path, patterns))
+
+    def test_S2_config_replaces_the_patterns(self):
+        from agent_orchestrator import plan
+
+        self.write("tests:\n  patterns: ['check_*.sh']\n")
+        patterns = config.load(self.root).test_patterns
+        self.assertTrue(plan.is_test_path("ci/check_it.sh", patterns))
+        self.assertFalse(plan.is_test_path("a/test_x.py", patterns))
+        # a directory named tests still holds tests whatever the patterns say
+        self.assertTrue(plan.is_test_path("tests/x.sh", patterns))
+
+    def test_S2_a_non_list_or_empty_value_is_refused_naming_its_dotted_path(self):
+        for body in ("patterns: x", "patterns: []", "patterns: [1]", "patterns: ['']"):
+            with self.subTest(body=body):
+                self.write("tests:\n  " + body + "\n")
+                with self.assertRaises(config.ConfigError) as caught:
+                    config.load(self.root)
+                self.assertIn("tests.patterns", str(caught.exception))
