@@ -1,7 +1,8 @@
-"""Runtime-local worker metadata, profile decisions and assignment/session binding.
+"""Runtime-local worker metadata, profile decisions, assignment/session binding and usage.
 
 Metadata lives under $XDG_STATE_HOME (default $HOME/.local/state) and is written atomically
-with restrictive modes. CLI session logs are read only, with bounded head reads for binding.
+with restrictive modes. CLI session logs are read only: bounded head reads for binding, and
+`assignment_usage` for per-assignment token, call and cost figures.
 """
 
 import json
@@ -11,7 +12,9 @@ import re
 import subprocess
 import tempfile
 import time
+import zlib
 from collections import namedtuple
+from datetime import datetime
 from pathlib import Path
 
 # The Codex profile a worker runs under; AGENT_RUNTIME_CODEX_PROFILE overrides the name.
@@ -76,6 +79,31 @@ def _prepare_dir(path):
     return True
 
 
+def _write_private(env, path, data, prefix):
+    """Write data atomically to path: a 0600 file inside a 0700 directory. False when it cannot."""
+    directory = path.parent
+    if not _prepare_dir(state_root(env)) or not _prepare_dir(directory):
+        return False
+    handle, temp = tempfile.mkstemp(dir=str(directory), prefix=prefix)
+    try:
+        os.fchmod(handle, 0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            handle = None
+            stream.write(data)
+        try:
+            os.replace(temp, path)
+        except OSError:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+            raise
+    finally:
+        if handle is not None:
+            os.close(handle)
+    return True
+
+
 def write_worker_metadata(env, worker, **fields):
     """Write one worker's metadata atomically: a 0600 file inside a 0700 directory.
 
@@ -86,26 +114,8 @@ def write_worker_metadata(env, worker, **fields):
         payload = dict(fields)
         payload["worker"] = worker
         data = json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n"
-        directory = path.parent
-        if not _prepare_dir(state_root(env)) or not _prepare_dir(directory):
+        if not _write_private(env, path, data, ".%s." % worker):
             return None
-        handle, temp = tempfile.mkstemp(dir=str(directory), prefix=".%s." % worker)
-        try:
-            os.fchmod(handle, 0o600)
-            with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                handle = None
-                stream.write(data)
-            try:
-                os.replace(temp, path)
-            except OSError:
-                try:
-                    os.unlink(temp)
-                except OSError:
-                    pass
-                raise
-        finally:
-            if handle is not None:
-                os.close(handle)
     except (OSError, ValueError, TypeError):
         return None
     return path
@@ -204,6 +214,11 @@ ASSIGNMENT_MARKER_RE = re.compile(r"\bassignment_id=([A-Za-z0-9][A-Za-z0-9_-]*)"
 SESSION_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 
 
+def claude_project_slug(cwd):
+    """Claude Code names a project directory after its cwd, every non-alphanumeric character a dash."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
 def _message_text(content):
     if isinstance(content, str):
         return content
@@ -214,6 +229,14 @@ def _message_text(content):
             if isinstance(part, dict) and isinstance(part.get("text"), str)
         )
     return ""
+
+
+def _is_child_thread(meta):
+    """True for a Codex thread that is not its session's root (a guardian review, for one)."""
+    thread, session = meta.get("id"), meta.get("session_id")
+    if isinstance(thread, str) and isinstance(session, str) and thread != session:
+        return True
+    return meta.get("thread_source") == "guardian_review"
 
 
 def _session_match(path, metadata):
@@ -235,6 +258,8 @@ def _session_match(path, metadata):
                 if not isinstance(payload, dict):
                     continue
                 if record.get("type") == "session_meta":
+                    if _is_child_thread(payload):
+                        return None  # a child quotes its parent's markers; only the root binds
                     session_id = payload.get("session_id") or payload.get("id")
                     session_cwd = payload.get("cwd")
                     continue
@@ -296,9 +321,10 @@ def resolve_session_log(env, worker):
             session_id = _session_match(path, metadata)
             if session_id is None:
                 return None
-            cached = dict(metadata, session_id=session_id, session_log=str(path))
-            cached.pop("worker", None)
-            write_worker_metadata(env, worker, **cached)
+            if metadata.get("session_id") != session_id or metadata.get("session_log") != str(path):
+                cached = dict(metadata, session_id=session_id, session_log=str(path))
+                cached.pop("worker", None)
+                write_worker_metadata(env, worker, **cached)
             return path
 
         cached_path = metadata.get("session_log")
@@ -313,7 +339,7 @@ def resolve_session_log(env, worker):
             if not isinstance(cwd, str) or not cwd:
                 return None
             home = env.get("HOME") or os.path.expanduser("~")
-            directory = Path(home) / ".claude/projects" / cwd.replace("/", "-").replace(".", "-")
+            directory = Path(home) / ".claude/projects" / claude_project_slug(cwd)
             current = env.get("CLAUDE_CODE_SESSION_ID")
             if current and Path(current).name == current:
                 result = bind(directory / (current + ".jsonl"))
@@ -327,3 +353,410 @@ def resolve_session_log(env, worker):
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return None
     return None
+
+
+# --- Per-assignment usage ---------------------------------------------------------------------
+#
+# A worker's session log is one file the CLI keeps appending to; `resume` is a prompt sent into it,
+# so each assignment is a slice of the log, from the prompt whose last marker is its id to the next
+# such prompt. The measurement keeps, per log, the consumed byte offset and the running counters in a
+# sidecar, so a later call reads only what was appended. Only numbers, ids and paths are kept.
+
+SIDECAR_VERSION = 1
+FINGERPRINT_BYTES = (
+    256  # the consumed region's head and tail are checksummed to spot a replaced log
+)
+READ_BLOCK_BYTES = 4 * 1024 * 1024
+CLAUDE_TOKEN_KEYS = (
+    ("input_tokens", "input_tokens"),
+    ("cache_read_input_tokens", "cached_input_tokens"),
+    ("cache_creation_input_tokens", "cache_write_tokens"),
+    ("output_tokens", "output_tokens"),
+)
+CODEX_CALL_TYPES = ("function_call", "custom_tool_call")
+
+
+class _Reset(Exception):
+    """A tracked log shrank, changed identity or vanished: the counters no longer describe it."""
+
+
+def usage_sidecar_path(env, worker):
+    """The incremental-parse state of one worker, beside its metadata."""
+    if not WORKER_NAME_RE.fullmatch(worker):
+        raise ValueError("invalid worker name %r" % worker)
+    return worktrees_dir(env) / ("%s.usage.json" % worker)
+
+
+def _number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _parse_time(value):
+    """Seconds since the epoch of an ISO timestamp, or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None
+
+
+def _last_marker(text):
+    markers = ASSIGNMENT_MARKER_RE.findall(text)
+    return markers[-1] if markers else None
+
+
+def _new_state(cli, root):
+    return {
+        "version": SIDECAR_VERSION,
+        "cli": cli,
+        "root": str(root),
+        "current": None,
+        "marks": [],  # [timestamp, assignment] of every marked prompt, for crediting other threads
+        "cost_total": None,
+        "totals": {},
+        "files": {},
+    }
+
+
+def _slot(state, assignment):
+    return state["totals"].setdefault(assignment, {"model_calls": 0, "tool_calls": 0})
+
+
+def _add(slot, key, value):
+    """Sum a figure the record carries; a figure no record carries never appears."""
+    if _number(value):
+        slot[key] = slot.get(key, 0) + value
+
+
+def _credited(state, role, at):
+    """The assignment a record belongs to: the active slice in the root log, else by time."""
+    if role == "root":
+        return state["current"]
+    best = None
+    for mark_at, assignment in state["marks"]:
+        if at is not None and mark_at <= at and (best is None or mark_at >= best[0]):
+            best = (mark_at, assignment)
+    return best[1] if best else None
+
+
+def _start_slice(state, entry, at, assignment):
+    state["current"] = assignment
+    state["marks"].append([at if at is not None else entry.get("at", 0.0), assignment])
+    _slot(state, assignment)
+
+
+def _claude_record(state, entry, role, record):
+    at = _parse_time(record.get("timestamp"))
+    if at is not None:
+        entry["at"] = at
+    else:
+        at = entry.get("at")
+    kind = record.get("type")
+    message = record.get("message")
+    if kind == "user" and role == "root" and isinstance(message, dict):
+        content = message.get("content")
+        if (
+            record.get("isMeta")
+            or record.get("isCompactSummary")
+            or record.get("toolUseResult") is not None
+            or (
+                isinstance(content, list)
+                and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+            )
+        ):
+            return
+        assignment = _last_marker(_message_text(content))
+        if assignment:
+            _start_slice(state, entry, at, assignment)
+    elif kind == "cost-state" and role == "root":
+        total = record.get("totalCostUSD")
+        if not _number(total):
+            return
+        before = state["cost_total"]
+        # The counter only grows within a session; a smaller total is a fresh counter.
+        increase = total - before if before is not None and total >= before else total
+        state["cost_total"] = total
+        assignment = state["current"]
+        if assignment:
+            _add(_slot(state, assignment), "cost_usd", increase)
+    elif kind == "assistant" and isinstance(message, dict):
+        if message.get("model") == "<synthetic>":
+            return
+        assignment = _credited(state, role, at)
+        if not assignment:
+            return
+        slot = _slot(state, assignment)
+        message_id = message.get("id")
+        repeat = False
+        if isinstance(message_id, str) and message_id:
+            seen = entry.setdefault("seen", [])
+            if "seen_set" not in entry:  # rebuilt from the sidecar's list, once per call
+                entry["seen_set"] = set(seen)
+            repeat = message_id in entry["seen_set"]
+            if not repeat:
+                entry["seen_set"].add(message_id)
+                seen.append(message_id)
+        if not repeat:
+            slot["model_calls"] += 1
+            fields = message.get("usage")
+            if isinstance(fields, dict):
+                for source, target in CLAUDE_TOKEN_KEYS:
+                    _add(slot, target, fields.get(source))
+        content = message.get("content")
+        if isinstance(content, list):
+            slot["tool_calls"] += sum(
+                1
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "tool_use"
+            )
+
+
+def _codex_record(state, entry, role, record):
+    at = _parse_time(record.get("timestamp"))
+    if at is not None:
+        entry["at"] = at
+    else:
+        at = entry.get("at")
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return
+    kind = record.get("type")
+    if kind == "response_item":
+        if payload.get("type") == "message" and payload.get("role") == "user":
+            if role != "root":
+                return  # a child thread's prompt quotes its parent's markers and starts no slice
+            assignment = _last_marker(_message_text(payload.get("content")))
+            if assignment:
+                _start_slice(state, entry, at, assignment)
+        elif payload.get("type") in CODEX_CALL_TYPES:
+            assignment = _credited(state, role, at)
+            if assignment:
+                _slot(state, assignment)["tool_calls"] += 1
+    elif kind == "event_msg" and payload.get("type") == "token_count":
+        info = payload.get("info")
+        total = info.get("total_token_usage") if isinstance(info, dict) else None
+        if not isinstance(total, dict):
+            return
+        total = {key: value for key, value in total.items() if _number(value)}
+        before = entry.get("total") or {}
+        if total == before:
+            return  # the CLI repeats a total it already reported
+        if any(total[key] < before[key] for key in total if key in before):
+            before = {}  # the cumulative total restarted
+        entry["total"] = total
+        assignment = _credited(state, role, at)
+        if not assignment:
+            return
+        slot = _slot(state, assignment)
+        slot["model_calls"] += 1
+        change = {key: value - before.get(key, 0) for key, value in total.items()}
+        if "input_tokens" in change:
+            # Codex's input includes its cached part.
+            _add(
+                slot, "input_tokens", change["input_tokens"] - change.get("cached_input_tokens", 0)
+            )
+        for source, target in (
+            ("cached_input_tokens", "cached_input_tokens"),
+            ("cache_write_input_tokens", "cache_write_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("reasoning_output_tokens", "reasoning_tokens"),
+        ):
+            _add(slot, target, change.get(source))
+
+
+def _crc(stream, start, length):
+    stream.seek(start)
+    return zlib.crc32(stream.read(length))
+
+
+def _fingerprint(stream, offset):
+    span = min(offset, FINGERPRINT_BYTES)
+    return [_crc(stream, 0, span), _crc(stream, offset - span, span)]
+
+
+def _check_tracked(path, entry):
+    """Raise _Reset unless the log is still the file, and still holds the bytes, already consumed."""
+    try:
+        info = os.stat(path)
+        offset = entry["offset"]
+        if info.st_ino != entry["ino"] or info.st_size < offset:
+            raise _Reset()
+        with open(path, "rb") as stream:
+            if _fingerprint(stream, offset) != entry["check"]:
+                raise _Reset()
+    except FileNotFoundError:
+        raise _Reset() from None
+
+
+def _consume(path, entry, handle):
+    """Feed every complete new line to handle; the offset moves past them, never past a partial line."""
+    with open(path, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        position = entry.get("offset", 0)
+        stream.seek(position)
+        pending = b""
+        while True:
+            block = stream.read(READ_BLOCK_BYTES)
+            if not block:
+                break
+            pending += block
+            cut = pending.rfind(b"\n") + 1
+            if not cut:
+                continue
+            lines, pending = pending[:cut].split(b"\n")[:-1], pending[cut:]
+            position += cut
+            for line in lines:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict):
+                    handle(record)
+        entry.update(offset=position, ino=info.st_ino, check=_fingerprint(stream, position))
+
+
+def _first_record(path):
+    """The first line of a log as a dict, or None."""
+    try:
+        with open(path, "rb") as stream:
+            record = json.loads(stream.readline(SESSION_HEAD_BYTES))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _claude_side_logs(env, root, metadata):
+    """The Task subagents' own transcripts: <session>/subagents/*.jsonl beside the session's."""
+    return sorted((root.parent / root.stem / "subagents").glob("*.jsonl"))
+
+
+def _codex_side_logs(env, root, metadata):
+    """The session's child threads, each in its own rollout file whose totals start from zero."""
+    first = _first_record(root)
+    meta = first.get("payload") if first and first.get("type") == "session_meta" else None
+    session = (meta.get("session_id") or meta.get("id")) if isinstance(meta, dict) else None
+    if not isinstance(session, str):
+        return []
+    floor = (metadata.get("spawned_ms") or 0) / 1000 - SESSION_CREATION_SLACK_MS / 1000
+    found = []
+    for path in (codex_home(env) / "sessions").glob("*/*/*/rollout-*.jsonl"):
+        try:
+            if path == root or path.stat().st_mtime < floor:
+                continue
+        except OSError:
+            continue
+        head = _first_record(path)
+        payload = head.get("payload") if head and head.get("type") == "session_meta" else None
+        if (
+            isinstance(payload, dict)
+            and payload.get("session_id") == session
+            and payload.get("id") != session
+        ):
+            found.append(path)
+    return sorted(found)
+
+
+HARNESSES = {
+    "claude": (_claude_record, _claude_side_logs),
+    "codex": (_codex_record, _codex_side_logs),
+}
+
+
+def _advance(env, state, root, metadata):
+    """Read what each log gained since the state was written; raises _Reset when one changed."""
+    record_handler, side_logs = HARNESSES[state["cli"]]
+    for path, entry in state["files"].items():
+        _check_tracked(path, entry)
+    entry = state["files"].setdefault(str(root), {"role": "root"})
+    _consume(root, entry, lambda record: record_handler(state, entry, "root", record))
+    for path in side_logs(env, root, metadata):
+        entry = state["files"].setdefault(str(path), {"role": "side"})
+        try:
+            _consume(
+                path,
+                entry,
+                lambda record, entry=entry: record_handler(state, entry, "side", record),
+            )
+        except OSError:
+            if "offset" not in entry:
+                del state["files"][str(path)]  # never read: nothing of it is in the counters
+            continue  # an unreadable side log leaves its own figures out, not the worker's
+
+
+def _load_state(path, cli, root):
+    try:
+        with open(path, encoding="utf-8") as stream:
+            state = json.load(stream)
+    except (OSError, ValueError):
+        return None
+    if (
+        not isinstance(state, dict)
+        or state.get("version") != SIDECAR_VERSION
+        or state.get("cli") != cli
+        or state.get("root") != str(root)
+    ):
+        return None
+    return state
+
+
+def _result(state):
+    """The per-assignment dicts, with Claude's cost-state rule: a slice before a later checkpoint is 0."""
+    order = list(state["totals"])
+    result = {}
+    for index, assignment in enumerate(order):
+        slot = dict(state["totals"][assignment])
+        if state["cli"] == "claude" and "cost_usd" not in slot:
+            if any("cost_usd" in state["totals"][later] for later in order[index + 1 :]):
+                slot["cost_usd"] = 0
+        if "cost_usd" in slot:
+            slot["cost_usd"] = round(slot["cost_usd"], 9)
+        result[assignment] = slot
+    return result
+
+
+def assignment_usage(env, worker):
+    """{assignment_id: usage dict} measured from the worker's session log; {} when nothing is.
+
+    Fails open: a missing worker, log or sidecar, an unreadable or truncated log, never raises. The
+    sidecar `<worker>.usage.json` makes a later call read only the bytes appended since the last.
+    """
+    try:
+        root = resolve_session_log(env, worker)
+        metadata = read_worker_metadata(env, worker)
+        if root is None or not metadata or metadata.get("cli") not in HARNESSES:
+            return {}
+        cli = metadata["cli"]
+        sidecar = usage_sidecar_path(env, worker)
+        state = _load_state(sidecar, cli, root)
+        for attempt in (0, 1):
+            if state is None:
+                state = _new_state(cli, root)
+            try:
+                _advance(env, state, root, metadata)
+                break
+            except (_Reset, KeyError, TypeError, ValueError):
+                state = None  # a log that changed under the counters: read it again from the start
+                if attempt:
+                    return {}
+        try:
+            _write_private(
+                env,
+                sidecar,
+                json.dumps(_serializable(state), separators=(",", ":")) + "\n",
+                ".%s.usage." % worker,
+            )
+        except (OSError, ValueError, TypeError):
+            pass  # the next call re-reads from the offsets it last kept, or from the start
+        return _result(state)
+    except Exception:  # measuring usage is never a precondition for the runtime
+        return {}
+
+
+def _serializable(state):
+    """The state without in-memory helpers."""
+    files = {
+        path: {key: value for key, value in entry.items() if key != "seen_set"}
+        for path, entry in state["files"].items()
+    }
+    return dict(state, files=files)

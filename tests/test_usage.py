@@ -1,6 +1,7 @@
 """The Codex worker profile: the launch flag, the usability check, and the per-worker metadata."""
 
 import json
+import re
 import stat
 import subprocess
 import sys
@@ -545,3 +546,63 @@ class SessionBindingTests(unittest.TestCase):
             self.assertIsNone(usage.resolve_session_log(self.env, "missing"))
             path.unlink()
         self.assertIsNone(usage.resolve_session_log(self.env, "unknown-worker"))
+
+    def test_S1_claude_project_directory_replaces_every_non_alphanumeric_character(self):
+        """worker-usage/S1: a cwd with `_`, a space, `+` or `~` binds under its dashed directory."""
+        for index, cwd in enumerate(("/tmp/my_work tree", "/tmp/a+b~c@d", "/tmp/plain-dir_1")):
+            with self.subTest(cwd=cwd):
+                self.cwd = cwd
+                worker = "slug%d" % index
+                self.metadata(worker, "alpha", "claude")
+                slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+                path = self.root / ".claude/projects" / slug / ("session-%d.jsonl" % index)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps({"type": "user", "message": {"content": "assignment_id=alpha"}})
+                    + "\n"
+                )
+                self.assertEqual(usage.resolve_session_log(self.env, worker), path)
+
+    def test_S2_codex_binding_never_picks_a_child_thread_that_quotes_the_markers(self):
+        """worker-usage/S2: a guardian child's prompt quotes the parent's markers; only the root binds."""
+        root_id, child_id = "root-thread", "child-thread"
+        day = Path(self.env["CODEX_HOME"]) / "sessions/2026/11/12"
+        day.mkdir(parents=True)
+        quoted = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "<transcript>assignment_id=alpha"}],
+            },
+        }
+
+        def meta(thread, **extra):
+            payload = {"id": thread, "session_id": root_id, "cwd": self.cwd}
+            return {"type": "session_meta", "payload": dict(payload, **extra)}
+
+        # The child sorts first: whichever order the files are listed in, it must not bind.
+        child = day / ("rollout-2026-11-12T09-00-00-%s.jsonl" % child_id)
+        root = day / ("rollout-2026-11-12T10-00-00-%s.jsonl" % root_id)
+        child.write_text(
+            "".join(
+                json.dumps(row) + "\n"
+                for row in (meta(child_id, thread_source="guardian_review"), quoted)
+            )
+        )
+        root.write_text(
+            "".join(
+                json.dumps(row) + "\n"
+                for row in (
+                    meta(root_id, thread_source="user"),
+                    dict(quoted, payload=dict(quoted["payload"])),
+                )
+            )
+        )
+        self.metadata("w1", "alpha")
+        self.assertEqual(usage.resolve_session_log(self.env, "w1"), root)
+        self.assertEqual(usage.read_worker_metadata(self.env, "w1")["session_id"], root_id)
+        # A child alone is no worker's log, even with the marker in its first prompt.
+        root.unlink()
+        self.metadata("w2", "alpha")
+        self.assertIsNone(usage.resolve_session_log(self.env, "w2"))
