@@ -81,7 +81,7 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.spawned().count(ARCHIVE), 0)
         request = self.request("archive")
-        self.assertEqual(request["menu"], ["retry", "skip"])
+        self.assertEqual([o["action"] for o in request["menu"]], ["retry", "skip"])
         self.assertIn("conflicts with its base", request["reason"])
         self.assertEqual(self.task("archive")["gate"], "skipped")
 

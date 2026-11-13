@@ -360,7 +360,7 @@ class ContractTests(unittest.TestCase):
         self.rejects(contracts.validate_decision, {"contract": 1, "action": "skip"}, "reason")
         self.rejects(
             contracts.validate_decision,
-            {"contract": 3, "action": "skip", "reason": "x"},
+            {"contract": 4, "action": "skip", "reason": "x"},
             "contract",
         )
         self.rejects(contracts.validate_decision, ["skip"], "object")
@@ -371,7 +371,7 @@ class ContractTests(unittest.TestCase):
             "t1", "t1", "blocked", "cannot reach the database", ["/run/t1/task.md"]
         )
         self.assertEqual(
-            (request["status"], request["decision"], request["menu"]),
+            (request["status"], request["decision"], [o["action"] for o in request["menu"]]),
             ("open", None, list(contracts.ACTIONS)),
         )
         resolved = dict(request, status="resolved", decision="/run/t1/decision.json")
@@ -379,8 +379,82 @@ class ContractTests(unittest.TestCase):
         self.rejects(contracts.validate_request, dict(request, status="resolved"), "decision")
         self.rejects(contracts.validate_request, dict(request, decision="/x"), "decision")
         self.rejects(contracts.validate_request, dict(request, menu=["retry", "ask user"]), "menu")
+        self.rejects(
+            contracts.validate_request, dict(request, menu=[{"action": "ask user"}]), "menu"
+        )
         self.rejects(contracts.validate_request, dict(request, evidence="a"), "evidence")
         self.rejects(contracts.validate_request, dict(request, reason=""), "reason")
+
+    def test_S16_a_new_request_is_contract_3_with_typed_menu_options_and_amend(self):
+        request = contracts.make_request("t1", "t1", "blocked", "stuck", ["/run/t1/task.md"])
+        self.assertEqual(request["contract"], 3)
+        menu = {option["action"]: option for option in request["menu"]}
+        self.assertIn("amend", menu)
+        for option in menu.values():
+            self.assertEqual(sorted(option), ["action", "inputs", "summary"])
+            self.assertTrue(option["summary"].strip())
+            self.assertEqual(option["inputs"]["reason"], {"type": "string", "required": True})
+        self.assertEqual(menu["answer"]["inputs"]["answer"], {"type": "string", "required": True})
+        self.assertEqual(
+            [name for name, option in menu.items() if "answer" in option["inputs"]], ["answer"]
+        )
+        self.assertEqual(contracts.validate_request(request), request)
+
+    def test_S16_a_menu_narrowed_to_actions_is_typed_too(self):
+        request = contracts.make_request("t1", "t1", "intent", "x", [], menu=("retry", "skip"))
+        self.assertEqual([o["action"] for o in request["menu"]], ["retry", "skip"])
+        self.assertEqual(contracts.menu_actions(request), ["retry", "skip"])
+
+    def test_S16_a_request_can_still_be_written_with_a_string_menu_as_contract_2(self):
+        request = contracts.make_request(
+            "t1", "t1", "intent", "x", [], menu=("retry", "skip"), typed=False
+        )
+        self.assertEqual((request["contract"], request["menu"]), (2, ["retry", "skip"]))
+        self.assertEqual(contracts.validate_request(request), request)
+
+    def test_S16_a_contract_2_request_with_a_string_menu_is_still_read(self):
+        old = {
+            "contract": 2,
+            "unit": "t1",
+            "task": "t1",
+            "event": "blocked",
+            "reason": "stuck",
+            "evidence": [],
+            "menu": ["retry", "skip", "answer"],
+            "status": "open",
+            "decision": None,
+            "created_at": "2026-11-12T00:00:00+00:00",
+        }
+        self.assertEqual(contracts.validate_request(old), old)
+        self.assertEqual(contracts.menu_actions(old), ["retry", "skip", "answer"])
+
+    def test_S16_a_request_menu_must_match_its_contract(self):
+        request = contracts.make_request("t1", "t1", "blocked", "stuck", [])
+        self.rejects(contracts.validate_request, dict(request, menu=["retry"]), "menu")
+        self.rejects(
+            contracts.validate_request,
+            dict(request, contract=2, menu=request["menu"]),
+            "menu",
+        )
+        option = dict(request["menu"][0])
+        for broken in (
+            dict(option, summary=""),
+            {k: v for k, v in option.items() if k != "inputs"},
+            dict(option, inputs={}),
+            dict(option, inputs={"reason": {"type": "string"}}),
+            dict(option, inputs={"reason": {"type": "string", "required": False}}),
+        ):
+            self.rejects(contracts.validate_request, dict(request, menu=[broken]), "menu")
+
+    def test_S16_a_decision_may_be_contract_2_or_3_and_amend_is_an_action(self):
+        for version in (1, 2, 3):
+            decision = {"contract": version, "action": "amend", "reason": "T1 needs a test path"}
+            self.assertEqual(contracts.validate_decision(decision)["action"], "amend")
+        self.rejects(
+            contracts.validate_decision,
+            {"contract": 3, "action": "amend", "reason": "x", "answer": "y"},
+            "answer",
+        )
 
 
 def contract_report_keys(text):

@@ -15,7 +15,7 @@ from test_gates import GateFixture
 pytestmark = pytest.mark.integration
 
 PR = "https://github.com/o/r/pull/7"
-MENU = ["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]
+MENU = ["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer", "amend"]
 
 
 class WakeFixture(GateFixture):
@@ -56,7 +56,10 @@ class RequestTests(WakeFixture, unittest.TestCase):
             (line,) = self.wake_lines("decision")
             self.assertTrue(line.startswith("decision t1: " + request["reason"][:100]), line)
             self.assertTrue(line.endswith(" -> %s" % (self.run_dir / "t1" / "request.json")), line)
-        self.assertEqual((request["event"], request["unit"], request["menu"]), (event, "t1", MENU))
+        self.assertEqual(
+            (request["event"], request["unit"], [o["action"] for o in request["menu"]]),
+            (event, "t1", MENU),
+        )
         self.assertIn(needle, request["reason"])
         self.assertIn(str(self.run_dir / "t1" / "task.md"), request["evidence"])
         self.assertEqual(self.spawned(), list(spawned))  # no decider is spawned

@@ -1,6 +1,6 @@
 """The agent -> driver handoff files: versioned JSON, validated here with Pydantic v2.
 
-The driver writes contract 2 and still reads contract 1 (`major[]` and `deferred[]` in review.json, text lines in
+The driver writes contract 2 (a request and a decision are contract 3) and still reads contract 1 (`major[]` and `deferred[]` in review.json, text lines in
 findings.json), so a run dir left by the previous version keeps working.
 The driver reads these and nothing else from an agent: a missing or invalid file counts as no report.
 
@@ -21,7 +21,11 @@ verbatim: a review item's fields outside the core survive a round trip unchanged
                 CI and conflict items carry `kind`, `source`, `check`, `command`, `exit`, `excerpt`, `log_path`) and the
                 reviewer's `checks_run`.
 `request.json`  driver -> Lead: why a unit needs a decision, the evidence paths and the action menu; `status` open|resolved.
-`decision.json` Lead (through `agent-orchestrator decide`): one `action` from the menu, a `reason`, and for `answer` the `answer`.
+                Contract 3: each menu option is `{action, summary, inputs}`, `inputs` mapping an input name to
+                `{type, required}`, so an agent Lead reads what it may do and what each action takes. Contracts 1 and 2
+                list the action names as strings; they are still read.
+`decision.json` Lead (through `agent-orchestrator decide`): one `action` from the menu, a `reason`, and for `answer` the
+                `answer`. Contract 3 adds the `amend` action; contracts 1 and 2 are still read.
 """
 
 import json
@@ -44,7 +48,22 @@ ACTIONS = (
     "mark blocked",
     "skip",
     "answer",
+    "amend",
 )  # the menu of a request
+LEAD_VERSION = 3  # what the driver writes for a request and a decision
+LEAD_SUPPORTED = (1, 2, 3)  # what it reads of them
+SUMMARIES = {
+    "retry": "Hand the unit back to its worker for another attempt in the same checkout.",
+    "retry one class up": "Retry on the next model class up; at the top class, with more effort.",
+    "fresh worker": "Retry with a new worker instead of resuming the old pane.",
+    "mark blocked": "Park the unit as blocked until a person sets its Status to TO-DO.",
+    "skip": "Release the unit without building it.",
+    "answer": "Answer what the worker asked; the same worker resumes with your answer.",
+    "amend": (
+        "Change the plan to unblock the unit: the unit parks, then edit the plan and run `plan amend --reason`; the "
+        "same worker resumes once the run adopts the amendment."
+    ),
+}  # what each action does, as the typed menu says it
 MAJOR_FIELDS = ("id", "file", "line", "problem", "fix")  # contract 1
 KINDS = ("blocking", "concern", "question", "nit", "deferred")
 CORE_FIELDS = ("id", "kind", "summary", "answer_required")
@@ -61,11 +80,14 @@ GATE_ITEM_FIELDS = (
 RESPONSE_STATUSES = ("fixed", "disputed")
 
 Contract = Literal[1, 2]
+LeadContract = Literal[1, 2, 3]
 Status = Literal["PARTIAL", "BLOCKED", "COMPLETE"]
 Kind = Literal["blocking", "concern", "question", "nit", "deferred"]
 Source = Literal["converge", "verify", "review", "ci", "conflict"]
 ReportContract = Literal[1, 2, 3]
-Action = Literal["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]
+Action = Literal[
+    "retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer", "amend"
+]
 ResponseStatus = Literal["fixed", "disputed"]
 
 
@@ -245,20 +267,31 @@ class FindingsV1(Strict):
 
 
 class Decision(Strict):
-    contract: Contract
+    contract: LeadContract
     action: Action
     reason: str = Field(min_length=1)
     answer: str | None = None
 
 
+class Input(Strict):
+    type: Literal["string"]
+    required: bool
+
+
+class MenuOption(Strict):
+    action: Action
+    summary: str = Field(min_length=1)
+    inputs: dict[str, Input]
+
+
 class Request(Strict):
-    contract: Contract
+    contract: LeadContract
     unit: str = Field(min_length=1)
     task: str = Field(min_length=1)
     event: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     evidence: list[str] = Field(default_factory=list)
-    menu: list[Action] = Field(min_length=1)
+    menu: list[Action] | list[MenuOption] = Field(min_length=1)
     status: Literal["open", "resolved"]
     decision: str | None = None
 
@@ -531,7 +564,11 @@ def validate_findings(findings):
 
 
 def validate_decision(decision):
-    versioned(decision, "decision")
+    need(isinstance(decision, dict), "decision must be a JSON object")
+    need(
+        decision.get("contract") in LEAD_SUPPORTED,
+        "decision: contract must be one of %s" % ", ".join(map(str, LEAD_SUPPORTED)),
+    )
     need(decision.get("action") in ACTIONS, "decision: action must be one of " + ", ".join(ACTIONS))
     need(text(decision.get("reason")), "decision: reason is required")
     need(
@@ -543,8 +580,48 @@ def validate_decision(decision):
     return decision
 
 
+def menu_option(action):
+    """One option of a contract 3 menu: what the action does and the inputs it takes."""
+    inputs = {"reason": {"type": "string", "required": True}}
+    if action == "answer":
+        inputs["answer"] = {"type": "string", "required": True}
+    return {"action": action, "summary": SUMMARIES[action], "inputs": inputs}
+
+
+def menu_actions(request):
+    """The actions a request offers, in its order, whichever contract wrote its menu."""
+    return [o["action"] if isinstance(o, dict) else o for o in request["menu"]]
+
+
+def valid_option(option):
+    """A contract 3 menu option: a known action, its summary and inputs that include a required `reason`."""
+    if not (
+        isinstance(option, dict)
+        and set(option) == {"action", "summary", "inputs"}
+        and option["action"] in ACTIONS
+        and text(option["summary"])
+        and isinstance(option["inputs"], dict)
+    ):
+        return False
+    inputs = option["inputs"]
+    return (
+        all(
+            isinstance(spec, dict)
+            and set(spec) == {"type", "required"}
+            and spec["type"] == "string"
+            and isinstance(spec["required"], bool)
+            for spec in inputs.values()
+        )
+        and (inputs.get("reason") or {}).get("required") is True
+    )
+
+
 def validate_request(request):
-    versioned(request, "request")
+    need(isinstance(request, dict), "request must be a JSON object")
+    need(
+        request.get("contract") in LEAD_SUPPORTED,
+        "request: contract must be one of %s" % ", ".join(map(str, LEAD_SUPPORTED)),
+    )
     for key in ("unit", "task", "event", "reason", "created_at"):
         need(text(request.get(key)), "request: %s is required" % key)
     need(
@@ -552,11 +629,19 @@ def validate_request(request):
         and all(text(path) for path in request["evidence"]),
         "request: evidence must be a list of paths",
     )
+    menu = request.get("menu")
+    typed = request["contract"] >= 3  # earlier contracts list the action names
     need(
-        isinstance(request.get("menu"), list)
-        and request["menu"]
-        and set(request["menu"]) <= set(ACTIONS),
-        "request: menu must list actions from " + ", ".join(ACTIONS),
+        isinstance(menu, list)
+        and menu
+        and all(valid_option(o) if typed else o in ACTIONS for o in menu),
+        "request: menu must list %s from %s"
+        % (
+            "options {action, summary, inputs}, with a required reason input, of the actions"
+            if typed
+            else "actions",
+            ", ".join(ACTIONS),
+        ),
     )
     need(request.get("status") in ("open", "resolved"), "request: status must be open or resolved")
     need(
@@ -566,16 +651,18 @@ def validate_request(request):
     return request
 
 
-def make_request(unit, task, event, reason, evidence, created_at=None, menu=None):
+def make_request(unit, task, event, reason, evidence, created_at=None, menu=None, typed=True):
+    """A request for the Lead. `typed=False` writes contract 2, whose menu lists the action names: a request kind
+    whose readers still compare the string menu."""
     return validate_request(
         {
-            "contract": VERSION,
+            "contract": LEAD_VERSION if typed else 2,
             "unit": unit,
             "task": task,
             "event": event,
             "reason": reason,
             "evidence": list(evidence),
-            "menu": list(menu or ACTIONS),
+            "menu": [menu_option(a) if typed else a for a in (menu or ACTIONS)],
             "status": "open",
             "decision": None,
             "created_at": created_at or datetime.now(timezone.utc).isoformat(),
