@@ -28,6 +28,12 @@ import json, os, sys, time
 argv = sys.argv[1:]
 with open(%(log)r, "a") as log:
     log.write(json.dumps(argv) + "\\n")
+# Concurrent calls share the replies file: write it whole and swap it in, so a reader never sees it half written.
+def save(replies):
+    temp = "%%s.%%d" %% (%(replies)r, os.getpid())
+    with open(temp, "w") as stream:
+        json.dump(replies, stream)
+    os.replace(temp, %(replies)r)
 replies = json.load(open(%(replies)r))
 key = argv[0] + ":" + argv[1] if len(argv) > 1 and argv[0] + ":" + argv[1] in replies else argv[0]
 reply = replies.get(key, {"rc": 0, "out": ""})
@@ -66,7 +72,7 @@ if argv[0] == "run" and replies.get("execute_profile"):
             replies["profile_ready_at"] = time.monotonic() + 0.3
             replies["get:w1"] = {"out": json.dumps({"address": "t9", "parent": "t0", "state": "live"})}
         reply = {"out": json.dumps({"first_message": {"sent": replies["profile_exit"] != "unsent"}})}
-        json.dump(replies, open(%(replies)r, "w"))
+        save(replies)
 # Opt-in live-name model: replies["live"] lists terminal names; hc run refuses a live name like real hc.
 if "live" in replies and argv[0] in ("run", "rm"):
     name = argv[argv.index("--name") + 1] if argv[0] == "run" else argv[1]
@@ -77,7 +83,7 @@ if "live" in replies and argv[0] in ("run", "rm"):
         replies["live"].append(name)
     if argv[0] == "rm" and name in replies["live"]:
         replies["live"].remove(name)
-    json.dump(replies, open(%(replies)r, "w"))
+    save(replies)
 if reply.get("sleep"):
     time.sleep(reply["sleep"])
 sys.stdout.write(reply.get("out", ""))

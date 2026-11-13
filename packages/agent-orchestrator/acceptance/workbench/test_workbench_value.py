@@ -278,7 +278,7 @@ class MetricsTests(ValueFixture):
         self.assertIsNone(t1["tokens"])
         self.assertEqual(metrics["tickets"]["T2"]["fix_rounds"], 1)
         lane = metrics["timeline"]["T1"]
-        self.assertEqual([segment["phase"] for segment in lane], ["work", "review", "ci"])
+        self.assertEqual([segment["phase"] for segment in lane], ["work", "review", "ci", "merge"])
         self.assertEqual(datetime.fromisoformat(lane[0]["start"]), T0)
         self.assertEqual(datetime.fromisoformat(lane[2]["end"]), T0 + timedelta(minutes=31))
 

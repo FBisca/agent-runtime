@@ -1024,6 +1024,9 @@ class Driver:
         self.received = False
         self.sleep = time.sleep  # injectable so tests do not really sleep
         self.last_plan = None
+        self.discarded = (
+            False  # the plan folder was deleted by this drive: the plan it last read is the plan
+        )
         self.model: yaml_plan.Plan | None = None  # the approved plan/1 model of a YAML plan
         self.approval: yaml_plan.Approval | None = (
             None  # the approval block of the YAML plan the loop last read
@@ -1065,6 +1068,10 @@ class Driver:
                 )
 
     def read_plan(self):
+        if self.discarded and self.last_plan is not None:
+            return (
+                self.last_plan
+            )  # its folder is gone by design; the approved model was read before
         require_yaml(self.plan_path)
         model = load_approved(
             self.plan_path,
@@ -1085,36 +1092,54 @@ class Driver:
         plan = self.last_plan = self.read_plan()
         self.slug = plan["slug"]
         self.brain_cli = getattr(self.args, "brain_cli", None)
-        # The route config this run uses, in the plan's order: the file the run names, then the repository's own
-        # policy, then the user's default. With one, the legacy table is a fallback, not a prerequisite, so it is
-        # not read; with none, the legacy table answers and says it is deprecated.
-        self.routes_file, self.route_source = routes.find_config(
-            explicit=getattr(self.args, "routes_file", None),
-            repo=self.repo,
-            home=routes.user_config_dir(),
-        )
-        if self.routes_file:
-            self.models, self.brain_models = {}, {}
-        else:
-            self.models = class_models(self.args.models_file, self.args.cli, required=True)
-            self.brain_models = (
-                class_models(self.args.models_file, self.brain_cli, required=True)
-                if self.brain_cli
-                else self.models
-            )
-        self.routes, self.step_routes = self.load_routes()
-        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.ledger_path, self.run_dir = locate_state(
+        # The run directory is only named once the routes are settled: a run that stops here has not started.
+        self.ledger_path, run_dir = locate_state(
             self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
         )
+        pinned = self.recorded_routes()
+        self.added_steps = {}
+        if pinned:
+            self.pin_routes(pinned)
+        else:
+            self.args.cli = self.args.cli or "claude"
+            # The route config this run uses, in the plan's order: the file the run names, then the repository's own
+            # policy, then the user's default. With one, the legacy table is a fallback, not a prerequisite, so it is
+            # not read; with none, the legacy table answers and says it is deprecated.
+            self.routes_file, self.route_source = routes.find_config(
+                explicit=getattr(self.args, "routes_file", None),
+                repo=self.repo,
+                home=routes.user_config_dir(),
+            )
+            if self.routes_file:
+                self.models, self.brain_models = {}, {}
+            else:
+                self.models = class_models(self.args.models_file, self.args.cli, required=True)
+                self.brain_models = (
+                    class_models(self.args.models_file, self.brain_cli, required=True)
+                    if self.brain_cli
+                    else self.models
+                )
+            self.routes, self.step_routes = self.load_routes()
+        Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         narrate.NARRATOR.roots = [self.run_dir]  # the pane names a run file by its place in the run
         # The ledger first: it carries the kind marker before any file a worker can read exists.
         with ledger(self.ledger_path) as data:
             self.lead = data.setdefault("lead", "orchestrate:" + self.slug)
-            data["routes"] = routes.record(
-                self.routes, self.route_source or "legacy", self.routes_file, self.step_routes
-            )
+            if not pinned:  # a resumed run keeps the record it already has
+                data["routes"] = routes.record(
+                    self.routes,
+                    self.route_source or "legacy",
+                    self.routes_file,
+                    self.step_routes,
+                    cli=self.args.cli,
+                    brain_cli=self.brain_cli,
+                )
+            elif self.added_steps:  # steps the record lacked, given by the command line
+                data["routes"]["steps"].update(
+                    routes.record(self.routes, "", None, self.added_steps)["steps"]
+                )
             legacy = legacy_imports(data) if not (self.run_dir / "events.jsonl").exists() else []
             # the ledger owns the plan's state; the plan file is never written
             if not data.get("plan"):
@@ -1125,7 +1150,8 @@ class Driver:
             route_record = data["routes"]
         narrate.NARRATOR.banner(
             plan=self.slug,
-            goal=self.model.goal,
+            # a legacy markdown plan has no model, so no goal to show
+            goal=self.model.goal if self.model else "",
             statuses=[ticket["Status"] for ticket in plan["tickets"]],
             repo=str(self.repo),
             base=self.args.base,
@@ -3401,6 +3427,101 @@ class Driver:
         otherwise."""
         return getattr(self, "brain_cli", None) or self.args.cli
 
+    def recorded_routes(self):
+        """The routes an existing run's ledger recorded, or None for a run that has not started.
+
+        A run that started and has no complete record cannot be recovered from whatever policy is there now:
+        it stops here, before any worker, unless --routes-file names the config that migrates it."""
+        data = ledgers.snapshot(self.ledger_path)
+        if data is None or not ("lead" in data or "routes" in data):
+            return None
+        pinned, why = routes.read_record(data.get("routes"))
+        if pinned is None:
+            if getattr(self.args, "routes_file", None):
+                return None  # the explicit config migrates the run and records the complete routes
+            raise PlanError(
+                "cannot resume %s: %s, and the policy now in force may not be what it ran on. Pass "
+                "--routes-file with the typed route config to migrate it; the complete resolved routes "
+                "are then recorded in the ledger before the run resumes" % (self.slug, why)
+            )
+        return pinned
+
+    def pin_routes(self, pinned):
+        """The recorded routes answer the run; an explicit argument that says otherwise stops it.
+
+        An argument that matches the record is accepted and one the command line omits is not a conflict. The
+        ledger is not written until the run is clear to resume."""
+        args = self.args
+        try:
+            chosen = routes.overrides(getattr(args, "route", None))
+            chosen_steps = routes.step_overrides(getattr(args, "step", None))
+        except routes.RouteError as error:
+            raise PlanError("invalid route override: %s" % error) from None
+        classes = {route.klass: route for route in chosen}
+        steps = {route.step: route for route in chosen_steps}
+        via = {route.klass: "--route" for route in chosen}
+        via.update({route.step: "--step" for route in chosen_steps})
+        dropped = []
+        explicit = getattr(args, "routes_file", None)
+        if explicit:
+            try:
+                config = routes.load(explicit)
+                resolved = routes.resolve(config, pinned.cli, {})
+            except routes.RouteError as error:
+                raise PlanError("invalid route config %s: %s" % (explicit, error)) from None
+            # An explicit file is the whole routing of the run, so a step the ledger has and it lacks differs too.
+            via = {name: "--routes-file" for name in (*routes.CLASSES, *routes.STEPS)} | via
+            classes = routes.apply_overrides(resolved, chosen)
+            steps = routes.apply_step_overrides({s.step: s for s in config.steps}, chosen_steps)
+            dropped = sorted(set(pinned.steps) - set(steps))
+        # A record whose gates cannot be routed (its medium route is not on the brain backend and it names no step
+        # for them) takes the gate steps the command line adds: that is the way out the refusal below names.
+        brain = self.brain_cli or pinned.brain_cli
+        gates = (
+            [s for s in ("reviewer", "gaps") if s not in pinned.steps]
+            if brain and pinned.classes["medium"].backend != brain
+            else []
+        )
+        added = {name: steps.pop(name) for name in gates if name in steps}
+        found = routes.conflicts(
+            pinned, classes, steps, cli=args.cli, brain_cli=self.brain_cli, via=via
+        )
+        found += [
+            "--routes-file: step %s is recorded as %s, the file names no such step"
+            % (name, routes.describe(pinned.steps[name]))
+            for name in dropped
+        ]
+        if found:
+            raise PlanError(
+                "cannot resume %s: the arguments conflict with the routes its ledger recorded (%s). Drop "
+                "the conflicting argument to keep the recorded routes; the ledger is unchanged"
+                % (self.slug, "; ".join(found))
+            )
+        args.cli = args.cli or pinned.cli
+        self.brain_cli = self.brain_cli or pinned.brain_cli
+        self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps) | added
+        self.added_steps = added
+        self.routes_file, self.route_source = pinned.path, pinned.source
+        self.models, self.brain_models = {}, {}
+        if self.brain_cli:
+            wanted = [s for s in ("reviewer", "gaps") if s not in self.step_routes]
+            medium = self.routes["medium"]
+            if wanted and medium.backend != self.brain_cli:
+                raise PlanError(
+                    "cannot resume %s: the recorded medium route runs on %s, not on the brain backend %s the "
+                    "%s gate(s) would spawn on. Pass --step %s=%s/MODEL[@EFFORT] for them, or --routes-file "
+                    "with a medium route on %s to migrate"
+                    % (
+                        self.slug,
+                        medium.backend,
+                        self.brain_cli,
+                        "/".join(wanted),
+                        wanted[0],
+                        self.brain_cli,
+                        self.brain_cli,
+                    )
+                )
+
     def load_routes(self):
         """The class -> route map this run uses: the typed route config when one was found, the legacy
         'Model classes' table otherwise. An invalid route config stops the run here, before any worker.
@@ -3412,6 +3533,14 @@ class Driver:
         if not path:
             narrate.say("warn", "setup", routes.legacy_warning(self.args.models_file))
             resolved = routes.legacy(self.args.cli, self.models)
+            if self.brain_cli:
+                # The table answers the gates on the brain backend's own column. Recording that as step routes
+                # keeps the record complete: a restart need not read the table again to route the gates.
+                medium = self.brain_models["medium"]
+                steps = {
+                    step: routes.StepRoute(step, self.brain_cli, medium)
+                    for step in ("reviewer", "gaps")
+                }
         else:
             try:
                 config = routes.load(path)
@@ -3460,7 +3589,7 @@ class Driver:
         brain = getattr(self, "brain_cli", None)
         if not brain:
             return self.routes[klass].model
-        if self.routes_file:
+        if not self.brain_models:
             route = self.routes.get("medium")
             if route is None or route.backend != brain:
                 raise PlanError(
@@ -4335,7 +4464,10 @@ class Driver:
         """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
         changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set
         verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can
-        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round."""
+        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round.
+        A discarded plan promoted nothing and wrote no spec, so there is nothing to hold on its archive head."""
+        if self.archive_mode() == "discard":
+            return "PASS", []
         try:
             commit = verify.snapshot_commit(packet["checkout"])
             tree = self.tree_of(commit)
@@ -4539,15 +4671,62 @@ class Driver:
         narrate.say(
             "start", "verify", "verifying %s on %s (tree %s)" % (self.slug, sha[:12], tree[:12])
         )
+        full_failed = self.verify_full(sha, tree, attempt)
         passed = [
             scenario.id
             for scenario in verify.check_scenarios(self.model)
             if self.run_evidence(scenario.id, "integration", sha).receipt["result"] == "PASS"
         ]
-        # The plan settles once every mutation check has: an unkilled oracle is not an accepted outcome.
-        if not self.start_mutations(sha, passed):
+        # The plan settles once every mutation check has: an unkilled oracle is not an accepted outcome. A plan whose
+        # whole suite failed is rejected whatever its mutations show, so none is started for it.
+        if full_failed or not self.start_mutations(sha, passed):
             self.settle_acceptance()
         return 2
+
+    def verify_full(self, sha, tree, attempt):
+        """The repo's whole suite (`checks.full.run`), once for this verify pass, on the pinned commit; True when it
+        failed. `--skip-full` or `checks.full.verify: false` leave it to CI: a `skipped` event says so and why. A
+        repo that declares no `full` has nothing to run or skip."""
+        tiers = repo_config.load(self.repo).checks
+        if tiers is None or not tiers.full_run:
+            return False
+        command = tiers.full_run
+        reason = (
+            "--skip-full"
+            if getattr(self.args, "skip_full", False)
+            else None
+            if tiers.full_verify
+            else "checks.full.verify: false"
+        )
+        record = {
+            "state": "skipped" if reason else None,
+            "sha": sha,
+            "tree": tree,
+            "digest": self.contract()[1].digest,
+            "attempt": attempt,
+            "command": command,
+            "log": str(self.run_dir / "full.log"),
+            "at": now(),
+        }
+        if reason:
+            record["reason"] = reason
+        else:
+            narrate.say(
+                "start", "verify", "running the whole suite on %s: %s" % (sha[:12], command)
+            )
+            result = verify.run_full(self.repo, sha, command, self.run_dir / "full.log")
+            record.update(state=result["state"], exit=result["exit"], detail=result["detail"])
+        with self.book() as data:
+            data["full"] = record
+        self.log(
+            "full",
+            **{
+                k: v
+                for k, v in record.items()
+                if k in ("state", "sha", "command", "log", "reason", "exit", "attempt")
+            },
+        )
+        return record["state"] == "FAIL"
 
     # ---- the mutation check (S21) ----------------------------------------------------------------------------
     # An outcome oracle that was uncalibrated at baseline (it failed for a missing interface, so its assertions were
@@ -4913,6 +5092,8 @@ class Driver:
             if not interrupted:
                 return 0
         try:
+            if self.archive_mode() == "discard" and not self.folder_tracked():
+                return self.discard_plan(plan)
             self.claim_archive()
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.failed.add(ARCHIVE)
@@ -4921,6 +5102,84 @@ class Driver:
             return 0
         self.build_archive(ARCHIVE)
         return 1
+
+    def archive_mode(self):
+        """promote | discard. Only a plan in its own folder can discard: a legacy plan always promotes."""
+        path = getattr(
+            self, "plan_path", None
+        )  # a driver that holds no plan (a unit test's) promotes
+        if path is None or not yaml_plan.is_folder_plan(path):
+            return "promote"
+        return self.plan_model().archive or yaml_plan.repo_config(self.repo).archive_mode
+
+    def plan_folder_rel(self):
+        """The plan folder's path in the repository, or None for a folder plan or a legacy plan that is not in a
+        folder of it. A folder that is the repository, or holds it, is refused: deleting it would delete the work."""
+        folder = self.plan_path.parent
+        if not yaml_plan.is_folder_plan(self.plan_path):
+            return None
+        if self.repo == folder or self.repo.is_relative_to(folder):
+            raise ValueError(
+                "the plan folder %s is or holds the repository; move plan.yaml into a folder of its own"
+                % folder
+            )
+        try:
+            return folder.relative_to(self.repo).as_posix()
+        except ValueError:
+            return None
+
+    def folder_tracked(self):
+        """Whether the plan folder is tracked on the base branch, which is the tree an archive branch is built from."""
+        rel = self.plan_folder_rel()
+        if rel is None:
+            return False
+        remote, _, branch = self.args.base.partition("/")
+        run(["git", "-C", str(self.repo), "fetch", "-q", remote, branch], timeout=120)
+        listed = run(
+            [
+                "git",
+                "-C",
+                str(self.repo),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                self.args.base,
+                "--",
+                rel,
+            ],
+            timeout=TREE_TIMEOUT,
+        )
+        return bool(listed)
+
+    def discard_plan(self, plan):
+        """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No
+        worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan."""
+        folder = self.plan_path.parent
+        shutil.rmtree(folder)
+        self.discarded = True
+        with self.book() as data:
+            enter_plan_state(data, "ARCHIVED")
+        self.log("archive-discarded", folder=str(folder))
+        narrate.say("done", "archive", "plan discarded: %s deleted" % folder)
+        self.start_gaps(plan)
+        return 1
+
+    def remove_plan_folder(self, checkout):
+        """Delete the plan folder from an archive checkout (a plan kept outside the repository has none there)."""
+        rel = self.plan_folder_rel()
+        if rel is not None:
+            shutil.rmtree(Path(checkout) / rel, ignore_errors=True)
+
+    def archive_owns(self):
+        """What the archive unit writes: the spec, the files it copies or places, and the plan folder it deletes."""
+        model = self.plan_model()
+        owns = [model.spec] if model.spec and self.archive_mode() == "promote" else []
+        if self.archive_mode() == "promote":
+            owns += [rel for rel, _ in self.yaml_copies()] + [
+                rel for rel, _ in self.yaml_places(model)
+            ]
+        folder = self.plan_folder_rel()
+        return owns + ([folder + "/"] if folder else [])
 
     def claim_archive(self):
         name = self.slug[: 32 - len("-archive")].rstrip("-_") + "-archive"
@@ -4932,12 +5191,12 @@ class Driver:
             "task_id": ARCHIVE,
             "worker": name,
             "plan": str(self.plan_path),
-            "objective": "Archive the plan into the living spec",
+            "objective": "Archive the plan into the living spec"
+            if self.archive_mode() == "promote"
+            else "Delete the discarded plan folder",
             "checkout": str(checkout),
             "backend": self.args.cli,
-            "owns": [plan_model.spec]
-            + [rel for rel, _ in self.yaml_copies()]
-            + [rel for rel, _ in self.yaml_places(plan_model)],
+            "owns": self.archive_owns(),
             "acceptance": YAML_ARCHIVE_ACCEPTANCE,
             "checks": [],  # no local gate: the pull request's CI and the outcome re-run are the gates
             "depends_on": [],
@@ -4958,7 +5217,7 @@ class Driver:
     def build_archive(self, task_id):
         """Build, push and open the archive, then hand its report to the gates. Any trouble asks the Lead."""
         try:
-            missing = self.archive_missing()
+            missing = self.archive_missing() if self.archive_mode() == "promote" else []
             if missing:
                 return self.request(
                     task_id,
@@ -4980,9 +5239,16 @@ class Driver:
             "contract": contracts.VERSION,
             "task_id": task_id,
             "status": "COMPLETE",
-            "summary": "the driver archived the plan: oracles placed, plan files copied, spec section appended",
+            "summary": "the driver archived the plan: %s"
+            % (
+                "oracles placed, plan files copied, spec section appended"
+                if self.archive_mode() == "promote" and not yaml_plan.is_folder_plan(self.plan_path)
+                else "acceptance files moved into their domain, plan folder deleted, spec section appended"
+                if self.archive_mode() == "promote"
+                else "the discarded plan folder deleted"
+            ),
             "acceptance_met": True,
-            "files": [self.plan_model().spec] + [rel for rel, _ in self.yaml_copies()],
+            "files": self.archive_owns(),
             "decisions": [],
             "interfaces": [],
             "remaining": [],
@@ -5023,14 +5289,10 @@ class Driver:
     def scenario_nodes(self):
         """{scenario id: its test nodes}: the tickets' `covers`, then the scenario's own placed oracle paths."""
         covers = self.ticket_covers()
-        placed: dict[str, list[str]] = {}
-        for scenario in self.plan_model().scenarios:
-            evidence_ = scenario.evidence
-            if evidence_ and evidence_.promote and evidence_.place:
-                placed[scenario.id] = [
-                    evidence_.place.rstrip("/") + "/" + name.removesuffix(".oracle")
-                    for name in evidence_.oracle
-                ]
+        placed = {
+            scenario.id: [rel for rel, _ in self.scenario_targets(scenario)]
+            for scenario in self.plan_model().scenarios
+        }
         return {
             s.id: list(dict.fromkeys(covers.get(s.id, []) + placed.get(s.id, [])))
             for s in self.plan_model().scenarios
@@ -5104,26 +5366,36 @@ class Driver:
             ["git", "-C", str(path), "checkout", "-q", "-B", branch, self.args.base],
             timeout=TREE_TIMEOUT,
         )
-        self.place_oracles(path)
-        for rel, source in self.yaml_copies():
-            if source.is_dir():
-                for child in sorted(p for p in source.rglob("*") if p.is_file()):
-                    target = path / rel.rstrip("/") / child.relative_to(source)
+        # A plan in its own folder leaves the tree: its acceptance files go to their domain, a discarded plan's go
+        # nowhere. Deleted first, so a destination inside the folder is written after it.
+        self.remove_plan_folder(path)
+        message = "docs(%s): delete the discarded plan folder" % self.slug
+        if self.archive_mode() == "promote":
+            message = "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec)
+            self.place_oracles(path)
+            for rel, source in self.yaml_copies():
+                if source.is_dir():
+                    for child in sorted(p for p in source.rglob("*") if p.is_file()):
+                        target = path / rel.rstrip("/") / child.relative_to(source)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(child.read_bytes())
+                else:
+                    target = path / rel
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(child.read_bytes())
-            else:
-                target = path / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(source.read_bytes())
-        spec = path / self.plan_model().spec
-        try:
-            before = spec.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            before = ""
-        section = self.spec_section(before, self.held_requirements(spec))
-        body = (before if before.endswith("\n") else before + "\n") + "\n" if before.strip() else ""
-        spec.parent.mkdir(parents=True, exist_ok=True)
-        spec.write_text(body + section, encoding="utf-8")
+                    target.write_bytes(source.read_bytes())
+            spec = path / self.plan_model().spec
+            try:
+                before = spec.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                before = ""
+            section = self.spec_section(before, self.held_requirements(spec))
+            body = (
+                (before if before.endswith("\n") else before + "\n") + "\n"
+                if before.strip()
+                else ""
+            )
+            spec.parent.mkdir(parents=True, exist_ok=True)
+            spec.write_text(body + section, encoding="utf-8")
         run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
         identity = (
             []
@@ -5146,7 +5418,7 @@ class Driver:
                 "commit",
                 "-q",
                 "-m",
-                "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec),
+                message,
             ],
             timeout=TREE_TIMEOUT,
         )
@@ -5172,11 +5444,11 @@ class Driver:
                 "--head",
                 "feat/" + packet["worker"],
                 "--title",
-                "docs(%s): archive the plan" % self.slug,
+                "docs(%s): archive the plan" % self.slug
+                if self.archive_mode() == "promote"
+                else "docs(%s): delete the discarded plan folder" % self.slug,
                 "--body",
-                "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-                "with its Coverage table, written by the driver."
-                % (self.plan_rel(), self.plan_model().spec),
+                self.archive_body(),
             ],
             timeout=120,
             cwd=packet["checkout"],
@@ -5187,6 +5459,25 @@ class Driver:
                 "gh pr create failed: %s" % ((err or out).strip()[:300] or "no url printed")
             )
         return found[-1]
+
+    def archive_body(self):
+        """The archive pull request's description, by what the archive does with the plan."""
+        spec = self.plan_model().spec
+        if self.archive_mode() == "discard":
+            return "Deletes the discarded plan folder `%s`; it changes nothing else." % (
+                self.plan_folder_rel()
+            )
+        if yaml_plan.is_folder_plan(self.plan_path):
+            where = self.plan_folder_rel()
+            return (
+                "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
+                "is deleted and the spec section with its Coverage table is written by the driver."
+                % ("folder `%s`" % where if where else "`%s`" % self.plan_path.parent, spec)
+            )
+        return (
+            "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
+            "with its Coverage table, written by the driver." % (self.plan_rel(), spec)
+        )
 
     def undraft_archive(self, task_id):
         """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a failing one."""
@@ -5204,18 +5495,31 @@ class Driver:
         self.mark(task_id, status="ACTIVE", gate=None, ci_state=None, ci_rows=None, ci_head=None)
         self.build_archive(task_id)
 
+    def scenario_targets(self, scenario):
+        """(repo-relative place, the file's name in the approval snapshot) for each file a scenario's evidence
+        promotes. A legacy oracle keeps its source name without the `.oracle` suffix: only the promoted name is
+        collected as a test. A folder plan's acceptance file is placed in its domain under its own name."""
+        evidence = scenario.evidence
+        if not evidence:
+            return []
+        if getattr(
+            evidence, "acceptance", None
+        ):  # only a folder plan's evidence has acceptance files
+            placed = yaml_plan.placed_files(self.plan_path, self.plan_model(), evidence, self.repo)
+            return [(rel, "acceptance/" + name) for rel, name in zip(placed, evidence.acceptance)]
+        if evidence.promote and evidence.place:
+            return [
+                (evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle"), name)
+                for name in evidence.oracle
+            ]
+        return []
+
     def oracle_targets(self, model):
-        """(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without
-        the `.oracle` suffix: only the promoted name is collected as a test. One derivation for the placing and the
-        brief, so they cannot disagree."""
-        targets = []
-        for scenario in model.scenarios:
-            evidence = scenario.evidence
-            if evidence and evidence.promote and evidence.place:
-                for name in evidence.oracle:
-                    placed = evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle")
-                    targets.append((placed, name))
-        return targets
+        """(repo-relative place, snapshot file name) for each promoted file. One derivation for the placing, the
+        comparison and the brief, so they cannot disagree."""
+        return [
+            target for scenario in model.scenarios for target in self.scenario_targets(scenario)
+        ]
 
     def place_oracles(self, checkout):
         """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
@@ -5233,6 +5537,8 @@ class Driver:
     def yaml_copies(self):
         """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
         The narrative is copied only when the plan has one."""
+        if yaml_plan.is_folder_plan(self.plan_path):
+            return []  # a plan folder is deleted, never copied: its acceptance files are placed instead
         oracle = yaml_plan.oracle_dir(self.plan_path)
         copies = [(self.plan_rel(), self.plan_path)]
         if self.narrative_path().exists():
@@ -5242,8 +5548,10 @@ class Driver:
 
     def yaml_places(self, model):
         """(repo-relative destination, approved source) for each promote oracle file, at its place."""
-        oracle = yaml_plan.oracle_dir(self.plan_path)
-        return [(rel, oracle / name) for rel, name in self.oracle_targets(model)]
+        return [
+            (rel, yaml_plan.file_path(self.plan_path, name))
+            for rel, name in self.oracle_targets(model)
+        ]
 
     def beside_plan(self, path):
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
@@ -6890,14 +7198,15 @@ def main(argv=None):
     for verb, what in (
         ("plans", "Every plan of a repository with its state and ticket counts"),
         ("plan", "One YAML plan's ticket graph: blocked_by edges, layers, states and revision"),
+        ("totals", "The last seven days of every plan, summed for the cards and their dashboards"),
     ):
         sub = bench.add_parser(verb, help=what)
         sub.add_argument(
-            "path" if verb == "plans" else "plan",
-            nargs="?" if verb == "plans" else None,
-            help="A plan file, or the directory holding plans"
-            if verb == "plans"
-            else "The plan file",
+            "plan" if verb == "plan" else "path",
+            nargs=None if verb == "plan" else "?",
+            help="The plan file"
+            if verb == "plan"
+            else "A plan file, or the directory holding plans",
         )
         sub.add_argument("--repo", help="Repository root; default the current repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
@@ -6988,7 +7297,12 @@ def main(argv=None):
         default=40000,
         help="Tokens an implementer or reviewer must have left before a resume; below it the driver swaps in a fresh agent",
     )
-    sub.add_argument("--cli", choices=("claude", "codex", "pi"), default="claude")
+    sub.add_argument(
+        "--cli",
+        choices=("claude", "codex", "pi"),
+        help="The worker backend (default claude). A run that resumes keeps the backend its ledger recorded; "
+        "an explicit --cli that differs from it stops the run",
+    )
     sub.add_argument(
         "--brain-cli",
         choices=("claude", "codex", "pi"),
@@ -7012,6 +7326,12 @@ def main(argv=None):
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument(
         "--gate", action="append", default=[], help="CI command a worker must pass (repeatable)"
+    )
+    sub.add_argument(
+        "--skip-full",
+        action="store_true",
+        help="Verify does not run the repo's whole suite (`checks.full.run`); CI runs it. "
+        "A repo can say so for every run with `checks.full.verify: false`",
     )
     sub.add_argument(
         "--state-dir",

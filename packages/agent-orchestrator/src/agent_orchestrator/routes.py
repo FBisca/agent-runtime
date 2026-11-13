@@ -383,12 +383,14 @@ def apply_step_overrides(steps, chosen):
     return out
 
 
-def record(resolved, source, path=None, steps=None):
-    """The route fields the ledger keeps: where the routes came from, what each class runs on and
-    what each step runs on."""
+def record(resolved, source, path=None, steps=None, cli=None, brain_cli=None):
+    """The route fields the ledger keeps: where the routes came from, what each class runs on, what each
+    step runs on and the backends the gates fall back to (the run's `--cli` and `--brain-cli`)."""
     return {
         "source": source,
         "path": str(path) if path else None,
+        "cli": cli,
+        "brain_cli": brain_cli,
         "classes": {
             klass: {
                 "class": route.klass,
@@ -408,6 +410,114 @@ def record(resolved, source, path=None, steps=None):
             for step, route in sorted((steps or {}).items())
         },
     }
+
+
+@dataclass(frozen=True)
+class Recorded:
+    """The routes a ledger recorded, read back: what a resumed run keeps whatever the policy now says."""
+
+    source: str
+    path: str | None
+    classes: dict
+    steps: dict
+    cli: str
+    brain_cli: str | None
+    brain_known: bool  # the record names the brain backend (older records do not)
+
+
+def read_record(record):
+    """(Recorded, None) for a complete route record, (None, why) for a missing or incomplete one.
+
+    Complete means every model class has a backend, a model and an effort field, and the steps are
+    recorded; a record written before steps were recorded cannot say what its steps ran on."""
+    if not isinstance(record, dict):
+        return None, "the ledger has no route record"
+    classes, steps = record.get("classes"), record.get("steps")
+    if not isinstance(classes, dict):
+        return None, "the route record has no classes"
+    if not isinstance(steps, dict):
+        return None, "the route record does not say what its steps run on"
+    missing = [klass for klass in CLASSES if klass not in classes]
+    if missing:
+        return None, "the route record lacks the class(es): %s" % ", ".join(missing)
+    resolved, step_routes = {}, {}
+    try:
+        for klass in CLASSES:
+            data = classes[klass]
+            if not isinstance(data, dict) or "effort" not in data or data.get("class") != klass:
+                raise RouteError("the route record's class '%s' is incomplete" % klass)
+            resolved[klass] = validate_route(data, CLASSES.index(klass) + 1)
+        for name, data in steps.items():
+            if not isinstance(data, dict) or "effort" not in data or data.get("step") != name:
+                raise RouteError("the route record's step '%s' is incomplete" % name)
+            step_routes[name] = validate_step(data, len(step_routes) + 1)
+    except RouteError as error:
+        return None, "the route record is not valid: %s" % error
+    brain = record.get("brain_cli")
+    cli = record.get("cli")
+    if cli not in BACKENDS:
+        backends = {route.backend for route in resolved.values()}
+        cli = backends.pop() if len(backends) == 1 else resolved["medium"].backend
+    return (
+        Recorded(
+            source=str(record.get("source") or "legacy"),
+            path=record.get("path"),
+            classes=resolved,
+            steps=step_routes,
+            cli=cli,
+            brain_cli=brain if brain in BACKENDS else None,
+            brain_known="brain_cli" in record,
+        ),
+        None,
+    )
+
+
+def describe(route):
+    """A route as an operator writes it: `backend/model[@effort]`."""
+    return "%s/%s%s" % (route.backend, route.model, "@" + route.effort if route.effort else "")
+
+
+def conflicts(pinned, classes, steps, cli=None, brain_cli=None, via=None):
+    """What an explicit command line says that the recorded routes do not: one sentence per difference.
+
+    `classes` and `steps` are the explicit routes (class -> Route, step -> StepRoute); `cli` and `brain_cli` the
+    backends the command line named, None when it named none. `via` names the argument that said each class or
+    step. An argument that matches is not a conflict."""
+    via = via or {}
+    out = []
+    for klass, route in sorted(classes.items()):
+        if pinned.classes[klass] != route:
+            out.append(
+                "%s: class %s is recorded as %s, the argument says %s"
+                % (
+                    via.get(klass, "the arguments"),
+                    klass,
+                    describe(pinned.classes[klass]),
+                    describe(route),
+                )
+            )
+    for name, route in sorted(steps.items()):
+        have = pinned.steps.get(name)
+        if have != route:
+            out.append(
+                "%s: step %s is recorded as %s, the argument says %s"
+                % (
+                    via.get(name, "the arguments"),
+                    name,
+                    describe(have) if have else "no route",
+                    describe(route),
+                )
+            )
+    if cli is not None:
+        backends = {route.backend for route in pinned.classes.values()}
+        if cli != pinned.cli and backends != {cli}:
+            out.append("--cli %s: the ledger records the run on %s" % (cli, pinned.cli))
+    if brain_cli is not None and pinned.brain_known and brain_cli != pinned.brain_cli:
+        out.append(
+            "--brain-cli %s: the ledger records %s"
+            % (brain_cli, pinned.brain_cli or "no brain backend")
+        )
+    return out
 
 
 def legacy(backend, models):
