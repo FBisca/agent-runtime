@@ -121,6 +121,13 @@ class FolderArchiveFixture(GateFixture):
             )
         self.assertEqual(code, 0, out.getvalue())
 
+    def configure(self, plans_dir):
+        """The repo config names `plans_dir` as plans.dir."""
+        (self.repo / ".orchestrate").mkdir(exist_ok=True)
+        (self.repo / ".orchestrate" / "config.yaml").write_text(
+            yaml.safe_dump({"plans": {"dir": str(plans_dir)}}), encoding="utf-8"
+        )
+
     def ticket_merged(self):
         self.git(self.repo, "commit", "-q", "--allow-empty", "-m", "t1")
         self.git(self.repo, "push", "-q", "origin", "HEAD:main")
@@ -204,6 +211,7 @@ class PromoteArchiveTests(FolderArchiveFixture, unittest.TestCase):
 
 class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
     def test_S9_a_discard_plan_outside_the_repository_is_deleted_and_archived_with_no_pr(self):
+        self.configure(self.root / "plans")
         self.folder_plan(discard_plan(), root=self.root / "plans")
         self.drive()
         self.assertFalse(self.folder.exists())
@@ -237,7 +245,18 @@ class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
         )
         self.assertEqual(self.history()[-2:], ["ACCEPTED", "ARCHIVED"])
 
+    def test_S5_an_archived_discard_plan_still_starts_the_gaps_reviewer_and_gets_its_gaps_md(self):
+        self.configure(self.root / "plans")
+        self.folder_plan(discard_plan(), root=self.root / "plans")
+        self.drive()
+        self.assertEqual(self.ledger()["plan"]["state"], "ARCHIVED")
+        self.assertIn("demo-gaps", self.spawned())
+        self.assertEqual(
+            (self.run_dir / "gaps.md").read_text(encoding="utf-8"), "# Gaps\n- none\n"
+        )
+
     def test_S11_a_discard_plan_outside_the_repository_ends_archived_leaving_origin_untouched(self):
+        self.configure(self.root / "plans")
         self.folder_plan(discard_plan(), root=self.root / "plans")
         self.drive()
         self.assertEqual(self.ledger()["plan"]["state"], "ARCHIVED")
@@ -248,3 +267,123 @@ class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
             "",
         )
         self.assertEqual(self.git(self.origin, "branch", "--list", "feat/demo-archive"), "")
+
+
+class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
+    """A plan folder is deleted only when its resolved parent is the resolved plans.dir, asked again at the deletion
+    itself: the plan's load refuses first, so these call the deletion directly, then drive a config that moves."""
+
+    def driver(self):
+        import argparse
+
+        return load_script().Driver(
+            argparse.Namespace(
+                plan=str(self.plan),
+                repo=str(self.repo),
+                state_dir=str(self.state_dir),
+                base="origin/main",
+            )
+        )
+
+    def start(self, data, plans, tracked=False):
+        """The plan approved under `plans`, which is the repo's plans.dir while it is approved."""
+        self.configure(plans)
+        self.folder_plan(data, root=plans, tracked=tracked)
+
+    def drive_while_plans_dir_moves(self, moved, then=()):
+        """The run, the repo config naming `moved` as plans.dir from the reviewer's step on, after the plan loaded."""
+        steps = self.ticket_merged()
+        config = yaml.safe_dump({"plans": {"dir": str(moved)}})
+        steps[-1].setdefault("write", []).append(
+            [str(self.repo / ".orchestrate" / "config.yaml"), config]
+        )
+        self.waits(steps + [self.gaps_done()] + list(then))
+        self.alias_state(self.plan)
+        return self.in_process(
+            load_script(),
+            [
+                "run",
+                str(self.plan),
+                "--repo",
+                str(self.repo),
+                "--state-dir",
+                str(self.state_dir),
+                "--models-file",
+                str(self.models),
+                "--wait-seconds",
+                "1",
+                "--idle-interval",
+                "0",
+            ],
+        )
+
+    def said(self, result):
+        texts = [result.stdout, result.stderr]
+        if self.run_dir.exists():
+            texts += [p.read_text(encoding="utf-8") for p in self.run_dir.rglob("request*.json")]
+        return "\n".join(texts)
+
+    def test_S4_discarding_a_folder_outside_plans_dir_deletes_nothing_and_names_both(self):
+        self.start(discard_plan(), self.root / "plans")
+        self.configure(self.repo / "docs" / "plans")  # the config moved after the plan loaded
+        with self.assertRaises(ValueError) as caught:
+            self.driver().discard_plan({})
+        self.assertTrue((self.folder / "plan.yaml").is_file())
+        self.assertIn("plans.dir", str(caught.exception))
+        self.assertIn(str(self.folder), str(caught.exception))
+        self.assertIn(str(self.repo / "docs" / "plans"), str(caught.exception))
+
+    def test_S4_the_plan_folder_of_a_promote_archive_tree_is_deleted_only_directly_under_plans_dir(
+        self,
+    ):
+        self.start(promote_plan(), self.repo / "docs" / "plans", tracked=True)
+        checkout = self.root / "archive-tree"
+        kept = checkout / "docs" / "plans" / FOLDER / "plan.yaml"
+        kept.parent.mkdir(parents=True)
+        kept.write_text("x", encoding="utf-8")
+        self.configure(self.repo / "docs" / "elsewhere")
+        with self.assertRaises(ValueError) as caught:
+            self.driver().remove_plan_folder(checkout)
+        self.assertTrue(kept.is_file())
+        self.assertIn("plans.dir", str(caught.exception))
+        self.configure(self.repo / "docs" / "plans")  # control: the folder is directly under it
+        self.driver().remove_plan_folder(checkout)
+        self.assertFalse(kept.parent.exists())
+
+    def test_S4_a_symlink_into_plans_dir_is_not_deleted(self):
+        self.start(discard_plan(), self.root / "elsewhere")
+        plans = self.root / "plans"
+        plans.mkdir()
+        (plans / FOLDER).symlink_to(self.folder)
+        self.configure(plans)
+        self.plan = plans / FOLDER / "plan.yaml"
+        with self.assertRaises(ValueError):
+            self.driver().discard_plan({})
+        self.assertTrue((self.folder / "plan.yaml").is_file())
+
+    def test_S4_a_discard_run_whose_plans_dir_moved_mid_run_is_not_archived_and_keeps_its_folder(
+        self,
+    ):
+        self.start(discard_plan(), self.root / "plans")
+        result = self.drive_while_plans_dir_moves(self.repo / "docs" / "plans")
+        self.assertTrue((self.folder / "plan.yaml").is_file())
+        self.assertNotEqual(self.ledger()["plan"]["state"], "ARCHIVED")
+        said = self.said(result)
+        self.assertIn("plans.dir", said)
+        self.assertIn(str(self.folder), said)
+
+    def test_S4_a_promote_archive_whose_plans_dir_moved_mid_run_asks_the_lead_and_deletes_nothing(
+        self,
+    ):
+        self.start(promote_plan(), self.repo / "docs" / "plans", tracked=True)
+        result = self.drive_while_plans_dir_moves(
+            self.repo / "docs" / "elsewhere", then=[{}, self.decide_step("archive", "skip")]
+        )
+        self.assertNotEqual(self.ledger()["plan"]["state"], "ARCHIVED")
+        self.assertEqual(self.gh_calls("pr", "create"), [])
+        requests = sorted(self.run_dir.glob("archive/request*.json"))
+        self.assertEqual(len(requests), 1)  # the archive asked the Lead, who then skipped it
+        said = self.said(result)
+        self.assertIn("plans.dir", said)
+        self.assertIn(str(self.folder), said)
+        self.assertTrue((self.folder / "plan.yaml").is_file())
