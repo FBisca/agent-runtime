@@ -1,8 +1,8 @@
 """Every test starts as a person's Lead session, whatever host the suite itself runs in.
 
-`plan approve` asks the runtime CLI who the caller is whenever a host marker is present, and many tests approve
-under a Lead marker; a developer running the suite from an agent session would otherwise be refused by the real
-lookup. A test of the refusal replaces this."""
+`plan approve` always asks the runtime CLI who the caller is, and refuses a worker, or an unverified caller
+inside a host (a marker is present); many tests approve under a Lead marker, and a developer running the suite
+from an agent session would otherwise be refused by the real lookup. A test of the refusal replaces this."""
 
 import json
 import subprocess

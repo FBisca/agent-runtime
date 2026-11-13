@@ -223,21 +223,32 @@ class PlanTests(RunFixture, unittest.TestCase):
                 self.answer = answer
                 self.refused_approve("lookup")
 
-    def test_S21_a_plain_terminal_or_ci_with_no_host_markers_approves_without_asking(self):
-        markers = (
-            "HC_TERMINAL_ID",
-            "HERDR_PANE_ID",
-            "CLAUDECODE",
-            "CODEX_THREAD_ID",
-            "CODEX_TOOL_CALL_ID",
-            "PI_CODING_AGENT",
+    def without_host_markers(self):
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in runtime_client.HOST_MARKERS:
+            os.environ.pop(name, None)
+
+    def test_S21_a_plain_terminal_or_ci_with_no_host_markers_approves_when_the_runtime_cannot_place_it(
+        self,
+    ):
+        for answer in (
+            lambda argv: (_ for _ in ()).throw(OSError("no agent-runtime")),
+            lambda argv: Done(1, "", "boom"),
+            lambda argv: Done(0, json.dumps({"role": "unknown", "caller": {"kind": "unknown"}})),
+        ):
+            with self.subTest(answer=answer):
+                self.without_host_markers()
+                self.answer = answer
+                self.assertIn("digest", self.approve())
+
+    def test_S20_a_worker_the_runtime_verifies_by_ancestry_is_refused_with_no_host_markers(self):
+        self.without_host_markers()
+        self.answer = lambda argv: Done(
+            0, json.dumps({"role": "lead", "caller": {"kind": "worker", "verified": True}})
         )
-        with mock.patch.dict(os.environ):
-            for name in markers:
-                os.environ.pop(name, None)
-            self.answer = lambda argv: (_ for _ in ()).throw(OSError("never asked"))
-            self.assertIn("digest", self.approve())
-        self.assertEqual(self.asked, [])
+        self.refused_approve("worker")
 
     def test_S21_a_lead_the_runtime_verifies_approves(self):
         self.assertIn("digest", self.approve())
