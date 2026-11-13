@@ -242,14 +242,15 @@ class ClassWorld:
     of the world as the first test found it, approved. Both the approval and PATH (which holds the fakes' directory)
     stay put across the class."""
 
+    base: str  # set by the first test, once its world is built
+    plan: Path
+
     def __init__(self):
         self.scratch = tempfile.TemporaryDirectory()
         base = Path(self.scratch.name).resolve()
         self.root = base / "world"
         self.pristine = base / "pristine"
         self.ready = False
-        self.base = None
-        self.plan = None
 
     def enter(self, build):
         """Leave `root` as a fresh test finds it: `build` runs for the first test, a copy of its result after."""
@@ -300,8 +301,9 @@ class RunFixture(_Case):
             )
         }
         self.route_file = self.route_files["claude"]
+        first = not world.ready
         world.enter(self.build_world)
-        if world.base is None:
+        if first:
             world.base = self.git(self.repo, "rev-parse", "HEAD")
             world.plan = self.plan
         self.base = world.base
