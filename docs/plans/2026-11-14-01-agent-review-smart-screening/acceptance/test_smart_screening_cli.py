@@ -283,9 +283,7 @@ class SmartScreeningFixture(unittest.TestCase):
     @staticmethod
     def judgments_for(report, question):
         """Every judgment the report carries for one question: a question asked per chunk has one per scope."""
-        return [
-            judgment for judgment in report["judgments"] if judgment["question"] == question
-        ]
+        return [judgment for judgment in report["judgments"] if judgment["question"] == question]
 
     def questions_asked(self, report):
         """The question ids that were actually screened, whichever chunk or scope answered them."""
@@ -316,7 +314,9 @@ class AdditiveConfigurationTests(SmartScreeningFixture):
         self.assertIn(REPO_QUESTION, ids, "the repository's question is asked")
         self.assertEqual(ids[-1], REPO_QUESTION, "the addition follows the baseline")
         for baseline in (CRITICAL, ADVISORY, HIGH):
-            self.assertIn(baseline, ids, "a repository question never disables a baseline question (D05)")
+            self.assertIn(
+                baseline, ids, "a repository question never disables a baseline question (D05)"
+            )
 
     def test_S1_a_configured_question_cannot_replace_a_baseline_id(self):
         self.write_config(questions=(CRITICAL,))
@@ -349,7 +349,9 @@ class AdditiveConfigurationTests(SmartScreeningFixture):
 class ApplicabilityTests(SmartScreeningFixture):
     def test_S2_an_irrelevant_group_is_not_asked(self):
         self.write_config()
-        self.write_fixture(self.applies(contract="irrelevant", engineering="relevant"), *self.chunk_answers(8))
+        self.write_fixture(
+            self.applies(contract="irrelevant", engineering="relevant"), *self.chunk_answers(8)
+        )
         report = self.judged(self.screen())
         self.assertEqual(report["applicability"]["status"], "evaluated")
         verdicts = {group["id"]: group["verdict"] for group in report["applicability"]["groups"]}
@@ -360,7 +362,9 @@ class ApplicabilityTests(SmartScreeningFixture):
 
     def test_S2_an_uncertain_group_is_retained(self):
         self.write_config()
-        self.write_fixture(self.applies(contract="uncertain", engineering="irrelevant"), *self.chunk_answers(8))
+        self.write_fixture(
+            self.applies(contract="uncertain", engineering="irrelevant"), *self.chunk_answers(8)
+        )
         report = self.judged(self.screen())
         verdicts = {group["id"]: group["verdict"] for group in report["applicability"]["groups"]}
         self.assertEqual(verdicts["contract"], "uncertain")
@@ -372,7 +376,9 @@ class ApplicabilityTests(SmartScreeningFixture):
         self.write_config()
         self.write_fixture({"error": "applicability timed out"}, *self.chunk_answers(8))
         report = self.judged(self.screen())
-        self.assertEqual(report["applicability"]["status"], "fallback", "D10's fallback, not a failure")
+        self.assertEqual(
+            report["applicability"]["status"], "fallback", "D10's fallback, not a failure"
+        )
         self.assertEqual(
             [group["verdict"] for group in report["applicability"]["groups"]],
             ["relevant", "relevant"],
@@ -388,7 +394,9 @@ class SensitivePathTests(SmartScreeningFixture):
         self.write_config(sensitive_paths=())
         self.write_fixture(self.applies(), *self.chunk_answers(8))
         report = self.judged(self.screen())
-        self.assertTrue(report["escalation"]["recommended"], "a global sensitive path forces deep review")
+        self.assertTrue(
+            report["escalation"]["recommended"], "a global sensitive path forces deep review"
+        )
         paths = [
             reason
             for reason in self.reasons(report).get("sensitive-path", [])
@@ -433,12 +441,16 @@ class ChunkingTests(SmartScreeningFixture):
         coverage = report["coverage"]
         self.assertGreater(coverage["changed_regions"], 1)
         self.assertEqual(
-            coverage["covered"], coverage["changed_regions"], "a hunk no chunk carries is a defect (D41)"
+            coverage["covered"],
+            coverage["changed_regions"],
+            "a hunk no chunk carries is a defect (D41)",
         )
         self.assertIsNone(coverage["gap"])
         carried = {path for chunk in report["chunks"] for path in chunk["files"]}
         changed = set(git(self.workspace, "diff", "--name-only", self.base, self.head).splitlines())
-        self.assertTrue(changed <= carried, f"every changed path is in a chunk: missing {changed - carried}")
+        self.assertTrue(
+            changed <= carried, f"every changed path is in a chunk: missing {changed - carried}"
+        )
 
     def test_S4_the_port_is_called_once_per_chunk(self):
         self.write_config(max_diff_chars=700)
@@ -479,7 +491,9 @@ class CrossFileTests(SmartScreeningFixture):
         self.write_fixture(self.applies(), *self.chunk_answers(40))
         report = self.judged(self.screen())
         self.assertIsNotNone(report["coverage"]["gap"], "the coverage limitation is recorded (D43)")
-        self.assertTrue(report["escalation"]["recommended"], "a coverage gap forces full deep review")
+        self.assertTrue(
+            report["escalation"]["recommended"], "a coverage gap forces full deep review"
+        )
         self.assertTrue(self.reasons(report).get("coverage-gap"), "the reason names the gap")
 
     def test_S5_a_change_inside_the_budget_records_no_gap(self):
@@ -507,9 +521,7 @@ class EscalationTests(SmartScreeningFixture):
         uncertain = self.reasons(report).get("uncertain", [])
         self.assertTrue(uncertain, "a critical judgment below its threshold escalates (D08)")
         self.assertEqual(uncertain[0]["question"], CRITICAL)
-        confidences = [
-            judgment["confidence"] for judgment in self.judgments_for(report, CRITICAL)
-        ]
+        confidences = [judgment["confidence"] for judgment in self.judgments_for(report, CRITICAL)]
         self.assertEqual(confidences, [0.2], "the confidence is recorded (D44)")
 
     def test_S6_advisory_uncertainty_is_recorded_without_escalating(self):
@@ -523,14 +535,14 @@ class EscalationTests(SmartScreeningFixture):
             if reason.get("question") == ADVISORY
         ]
         self.assertFalse(named, "advisory uncertainty is recorded, not escalated (D08)")
-        confidences = [
-            judgment["confidence"] for judgment in self.judgments_for(report, ADVISORY)
-        ]
+        confidences = [judgment["confidence"] for judgment in self.judgments_for(report, ADVISORY)]
         self.assertEqual(confidences, [0.05])
 
     def test_S6_a_high_confidence_advisory_flag_escalates(self):
         self.write_config()
-        self.write_fixture(self.applies(), *self.chunk_answers(40, {ADVISORY_STRONG: (False, 0.95)}))
+        self.write_fixture(
+            self.applies(), *self.chunk_answers(40, {ADVISORY_STRONG: (False, 0.95)})
+        )
         report = self.judged(self.screen())
         flagged = self.reasons(report).get("flagged", [])
         self.assertTrue(
@@ -544,8 +556,12 @@ class AccountingTests(SmartScreeningFixture):
         self.write_config()
         self.write_fixture(self.applies(), *self.chunk_answers(40))
         report = self.judged(self.screen())
-        self.assertEqual(report["model"], RESOLVED, "the report names the model that answered (D26)")
-        self.assertEqual(report["model_configured"], CONFIGURED, "and the alias the configuration asked for")
+        self.assertEqual(
+            report["model"], RESOLVED, "the report names the model that answered (D26)"
+        )
+        self.assertEqual(
+            report["model_configured"], CONFIGURED, "and the alias the configuration asked for"
+        )
 
     def test_S7_an_unpriced_run_carries_no_cost(self):
         self.write_config()
@@ -559,11 +575,15 @@ class AccountingTests(SmartScreeningFixture):
         self.write_config(max_diff_chars=400)
         self.write_fixture(self.applies(), self.answers({CRITICAL: (True, 0.99)}))
         result = self.screen()
-        self.assertNotEqual(result.returncode, 0, "an unanswered chunk is not a clean verdict (D40, D47)")
+        self.assertNotEqual(
+            result.returncode, 0, "an unanswered chunk is not a clean verdict (D40, D47)"
+        )
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
         self.assertIsNone(report["verdict"])
-        self.assertEqual(report["usage"]["requests"], 2, "one applicability call and one screening call")
+        self.assertEqual(
+            report["usage"]["requests"], 2, "one applicability call and one screening call"
+        )
 
 
 class RefusalTests(SmartScreeningFixture):
@@ -607,11 +627,15 @@ class FailureReportTests(SmartScreeningFixture):
             },
         )
         result = self.screen()
-        self.assertNotEqual(result.returncode, 0, "an invalid judgment is not a clean verdict (D40)")
+        self.assertNotEqual(
+            result.returncode, 0, "an invalid judgment is not a clean verdict (D40)"
+        )
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
         self.assertIsNone(report["verdict"])
-        self.assertIn(ADVISORY, report["failure"]["reason"], "the reason names the question it refused")
+        self.assertIn(
+            ADVISORY, report["failure"]["reason"], "the reason names the question it refused"
+        )
         self.assertEqual(
             report["usage"]["input_tokens"], 1234, "the usage the execution paid for is kept (D54)"
         )
@@ -636,7 +660,9 @@ class ChoiceOptionTests(SmartScreeningFixture):
             },
         )
         result = self.screen()
-        self.assertNotEqual(result.returncode, 0, "an unbounded choice value is not a clean verdict")
+        self.assertNotEqual(
+            result.returncode, 0, "an unbounded choice value is not a clean verdict"
+        )
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
         reason = report["failure"]["reason"]
@@ -651,7 +677,9 @@ class ChoiceOptionTests(SmartScreeningFixture):
         )
         self.write_fixture(self.applies(), *self.chunk_answers(8))
         result = self.screen()
-        self.assertEqual(result.returncode, 2, "an unbounded choice question is a configuration refusal")
+        self.assertEqual(
+            result.returncode, 2, "an unbounded choice question is a configuration refusal"
+        )
         self.assertIn("options", result.stderr)
         self.assertFalse((self.output / "report.json").is_file())
 
@@ -677,10 +705,14 @@ class UsageCountTests(SmartScreeningFixture):
         result = self.screen()
         report = self.report()
         if result.returncode == 0:
-            self.assertIsInstance(report["usage"]["input_tokens"], int, "a string count is not a token count")
+            self.assertIsInstance(
+                report["usage"]["input_tokens"], int, "a string count is not a token count"
+            )
         else:
             self.assertEqual(report["status"], "incomplete")
-            self.assertIn("input_tokens", report["failure"]["reason"], "a refusal names the usage field")
+            self.assertIn(
+                "input_tokens", report["failure"]["reason"], "a refusal names the usage field"
+            )
 
 
 class PricingTests(SmartScreeningFixture):
@@ -690,8 +722,12 @@ class PricingTests(SmartScreeningFixture):
         self.write_fixture(self.applies(), *self.chunk_answers(40))
         report = self.judged(self.screen(pricing=True))
         usage = report["usage"]
-        expected = round((usage["input_tokens"] * 0.15 + usage["output_tokens"] * 0.6) / 1_000_000, 6)
-        self.assertEqual(usage["cost_usd"], expected, "the cost is the table applied to the usage (P1-D8)")
+        expected = round(
+            (usage["input_tokens"] * 0.15 + usage["output_tokens"] * 0.6) / 1_000_000, 6
+        )
+        self.assertEqual(
+            usage["cost_usd"], expected, "the cost is the table applied to the usage (P1-D8)"
+        )
         self.assertEqual(usage["cost_basis"]["version"], 1)
         self.assertTrue(usage["cost_basis"]["table"].endswith("pricing.yaml"))
 
@@ -702,7 +738,9 @@ class PricingTests(SmartScreeningFixture):
         report = self.judged(self.screen(pricing=True))
         usage = report["usage"]
         self.assertIsNone(usage["cost_usd"], "an unlisted model's cost is unknown, not zero")
-        self.assertEqual(usage["cost_unknown"], RESOLVED, "the report names the model it could not price")
+        self.assertEqual(
+            usage["cost_unknown"], RESOLVED, "the report names the model it could not price"
+        )
 
     def test_S8_the_same_frozen_input_and_table_reproduce_the_cost(self):
         self.write_config()
@@ -717,10 +755,13 @@ class PricingTests(SmartScreeningFixture):
 
     def test_S8_a_malformed_price_table_is_refused(self):
         self.write_config()
-        self.pricing.write_text("version: 1\nmodels:\n  %s:\n    input_per_million: free\n" % RESOLVED,
-                                encoding="utf-8")
+        self.pricing.write_text(
+            "version: 1\nmodels:\n  %s:\n    input_per_million: free\n" % RESOLVED, encoding="utf-8"
+        )
         self.write_fixture(self.applies(), *self.chunk_answers(40))
         result = self.screen(pricing=True)
-        self.assertEqual(result.returncode, 2, "a malformed table is a refusal that screens nothing")
+        self.assertEqual(
+            result.returncode, 2, "a malformed table is a refusal that screens nothing"
+        )
         self.assertIn("input_per_million", result.stderr, "the refusal names the field it refused")
         self.assertFalse((self.output / "report.json").is_file())
