@@ -1,0 +1,53 @@
+schema: plan/1
+slug: 02-agent-review-deep-review
+goal: "A screening escalation runs one safe, read-only agent-runtime spawned reviewer that produces structured, evidence-backed findings or an explicit incomplete outcome."
+archive: discard
+outcome: [S1, S2, S3, S4, S5, S6]
+scenarios:
+  - id: S1
+    when: "a screening signal fires — a value beyond its calibrated threshold, or a confidence below its band"
+    then: "one spawned deep reviewer investigates flagged areas using matching specialized review instructions"
+    evidence:
+      human: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
+  - id: S2
+    when: "a critical safeguard, sensitive path, or insufficient cross-file context triggers escalation"
+    then: "the spawned reviewer conducts a full review rather than a focused review"
+    evidence:
+      human: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
+  - id: S3
+    when: "the selected harness cannot enforce read/search-only capabilities or prohibit command/test execution"
+    then: "the review fails safely and never spawns an unrestricted reviewer"
+    evidence:
+      human: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
+  - id: S4
+    when: "the deep reviewer confirms or dismisses screening signals"
+    then: "each critical/high signal receives an individually evidenced disposition carrying the score, the confidence and the threshold that fired, advisory signals may be grouped, and mandatory-contract violations cannot be downgraded"
+    evidence:
+      human: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
+  - id: S5
+    when: "deep review times out, returns invalid output, or fails"
+    then: "execution is incomplete with retained valid evidence and no automatic retry or model fallback"
+    evidence:
+      human: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
+  - id: S6
+    when: "no escalation is required or a deep review completes cleanly"
+    then: "the resulting verdict distinguishes `screened` from `passed`"
+    evidence:
+      human: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
+tickets:
+  - id: T1
+    delivers: "Reuse existing agent-runtime spawning with read-only harness-capability enforcement and composed specialized instructions"
+    satisfies: [S1, S2, S3]
+    paths: [packages/agent-review/, packages/agent-runtime/]
+    size: regular
+    difficulty: complex
+    risk: [security, external]
+    evidence_waiver: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
+  - id: T2
+    delivers: "Produce structured finding/disposition contracts and failure-aware deep-review results"
+    satisfies: [S4, S5, S6]
+    paths: [packages/agent-review/]
+    size: regular
+    difficulty: complex
+    risk: [state]
+    evidence_waiver: "Run a configured read-only harness on frozen risk fixtures: verify focused vs full scope, enforce that tool permissions prohibit writes/commands, and inspect structured dispositions for every high/critical signal. Verify mandatory-contract evidence cannot become optional concern."
