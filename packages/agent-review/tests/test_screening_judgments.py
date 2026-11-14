@@ -134,7 +134,7 @@ def test_S1_a_score_between_two_rungs_is_the_providers_own_number():
         "past-the-last",
         "past-the-last-rung",
         "below-the-first",
-        "past-the-first",
+        "far-below-the-first",
         "integer-too-large-for-a-float",
         "infinite",
         "not-a-number",
@@ -151,7 +151,9 @@ def test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_ra
             head=HEAD,
         )
     assert "design.one-reason" in str(refused.value)
-    assert "0 to 3" in str(refused.value), "a refusal names the range the ladder allows"
+    assert "on its ladder of 4 declared levels" in str(refused.value), (
+        "a refusal names the range the ladder allows, in the wording this rule introduced"
+    )
 
 
 @pytest.mark.parametrize(

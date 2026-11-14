@@ -357,7 +357,7 @@ class NativeAnswerTests(ProviderContractFixture):
         self.assertEqual(report["status"], "incomplete")
         self.assertIn("contract.error-handling", report["failure"]["reason"])
 
-    def test_S3_a_score_between_the_declared_levels_is_refused(self):
+    def test_S3_a_score_between_the_declared_levels_is_carried_as_answered(self):
         self.write_config()
         self.write_fixture(
             answer(
@@ -368,13 +368,14 @@ class NativeAnswerTests(ProviderContractFixture):
             )
         )
         result = self.screen()
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         report = self.report()
-        self.assertEqual(report["status"], "incomplete")
-        self.assertIn(
-            "contract.error-handling",
-            report["failure"]["reason"],
-            "0.5 is inside 0..1 and outside the question's declared levels, so only a levels-aware rule refuses it",
+        self.assertEqual(report["status"], "completed")
+        judged = {judgment["question"]: judgment for judgment in report["judgments"]}
+        self.assertEqual(
+            judged["contract.error-handling"]["value"],
+            0.5,
+            "0.5 sits between the rungs of a five-level ladder (0..4) and is the provider's own answer",
         )
 
     def test_S3_a_confidence_outside_zero_and_one_is_refused(self):
