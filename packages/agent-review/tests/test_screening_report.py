@@ -9,6 +9,7 @@ through the fixture provider: no check here reaches a real provider.
 """
 
 import json
+import re
 import subprocess
 import textwrap
 
@@ -107,7 +108,7 @@ class Review:
         git(self.checkout, *commit, "head")
         return base, git(self.checkout, "rev-parse", "HEAD")
 
-    def screen(self, response, long_context=False):
+    def screen(self, response, long_context=False, output=None):
         """One screening of the fixture, with `response` as the provider's only answer."""
         self.fixture.write_text(json.dumps({"responses": [response]}), encoding="utf-8")
         return main(
@@ -118,7 +119,7 @@ class Review:
                 "--head",
                 self.head,
                 "--output",
-                str(self.output),
+                str(output or self.output),
                 "--config",
                 str(self.config),
                 "--screening-fixture",
@@ -280,3 +281,87 @@ def test_S5_the_report_records_the_limits_in_force_and_whether_long_context_was_
         "per_question": 262000,
         "per_request": 262000,
     }, "the long-context budget is recorded when it was asked for"
+
+
+def test_S4_the_report_names_the_provider_served_model_limits_and_bank_digest(review):
+    assert review.screen(RESPONSE) == 0
+    report = review.report()
+    assert report["provider"] == f"fixture:{review.fixture}", (
+        "the report names where the screening came from, so a canned one is never read as a provider's"
+    )
+    assert report["model"] == "test-model-v1", "the configured alias stays, as the caller named it"
+    assert report["resolved_model"] == "jev-1.14.0", (
+        "the model the provider served stands beside the alias, not in place of it"
+    )
+    assert report["limits"] == {"long_context": False, "per_question": 32000, "per_request": 64000}
+    assert re.fullmatch(r"[0-9a-f]{64}", report["bank_digest"]), (
+        "the report digests the bank it screened, so a frozen report is recognisable (D26)"
+    )
+
+
+def test_S4_the_bank_digest_follows_the_bank_and_not_the_run(review):
+    assert review.screen(RESPONSE) == 0
+    digest = review.report()["bank_digest"]
+    assert review.screen(RESPONSE) == 0
+    assert review.report()["bank_digest"] == digest, "the same bank digests the same, run after run"
+    review.config.write_text(
+        CONFIG.replace("the change keeps one reason to change", "the change keeps a reason"),
+        encoding="utf-8",
+    )
+    assert review.screen(RESPONSE) == 0
+    assert review.report()["bank_digest"] != digest, (
+        "a level reworded is a different bank, and the digest says so"
+    )
+
+
+def test_S6_an_incomplete_run_keeps_the_usage_and_the_judgments_it_learned(review):
+    assert (
+        review.screen(
+            {
+                "model": "jev-1.14.0",
+                "answers": {
+                    "contract.error-handling": {"type": "noul", "noul": 0.9},
+                    "engineering.names-meaning": {"type": "noul", "noul": 1.4},
+                },
+                "usage": {"input_tokens": 321, "output_tokens": 9},
+            }
+        )
+        != 0
+    ), "an answer the question does not allow is not a clean verdict"
+    report = review.report()
+    assert report["status"] == "incomplete"
+    assert "engineering.names-meaning" in report["failure"]["reason"], (
+        "the refusal still names the question it refused"
+    )
+    assert report["usage"]["input_tokens"] == 321, (
+        "the usage the provider charged for is the only record of a screening that was paid for"
+    )
+    assert [judgment["question"] for judgment in report["judgments"]] == [
+        "contract.error-handling"
+    ], "the judgment learned before the refusal is kept, and the refused one is not"
+
+
+def test_S6_a_refusal_names_the_report_it_leaves_standing(review, capsys):
+    assert review.screen(RESPONSE) == 0
+    capsys.readouterr()
+    standing = review.report()
+    review.config.write_text("questions: []\n", encoding="utf-8")
+    assert review.screen(RESPONSE) == 2, "a configuration with no model is a refusal"
+    err = capsys.readouterr().err
+    assert str(review.output / "report.json") in err, (
+        "the refusal names the report an earlier invocation left in --output"
+    )
+    assert standing["input"]["head"][:7] in err, "and the revision that report screened"
+    assert review.report() == standing, "a refusal writes no report of its own"
+
+
+def test_S6_an_output_that_is_not_a_directory_is_a_refusal_naming_the_path(review, capsys):
+    blocked = review.output.parent / "not-a-directory"
+    blocked.write_text("x", encoding="utf-8")
+    assert review.screen(RESPONSE, output=blocked) == 2, (
+        "an output that cannot be written is a refusal, never a traceback"
+    )
+    err = capsys.readouterr().err
+    assert str(blocked) in err, "the refusal names the path it could not write"
+    assert review.head[:7] in err, "and the change it refused to screen"
+    assert not (review.output / "report.json").exists(), "a refusal writes no report"

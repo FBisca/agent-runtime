@@ -343,3 +343,28 @@ def test_S1_a_graded_question_carries_its_levels_to_the_provider(serve):
     assert asked["design.one-reason"]["criteria"] == ["none", "minor", "severe"]
     assert asked["design.one-reason"]["type"] == "score"
     assert "criteria" not in asked["contract.error-handling"], "a noul needs none declared"
+
+
+def test_S4_the_reply_carries_the_model_the_provider_served(serve):
+    base_url, _ = serve()
+    reply = SystemOneScreenings(
+        model="jev-latest", api_key="sk-local-test", base_url=base_url, timeout=10
+    ).screen(request())
+    assert reply.model == "jev-1.14.0", (
+        "the model the provider served is read from its answer, never inferred from the alias"
+    )
+
+
+def test_S4_the_transport_names_the_endpoint_it_posts_to(serve):
+    base_url, _ = serve()
+    port = SystemOneScreenings(
+        model="jev-latest", api_key="sk-local-test", base_url=base_url, timeout=10
+    )
+    assert port.provider == base_url, "the report names the endpoint it called, not a default"
+
+
+def test_S4_the_canned_provider_names_the_fixture_it_answers_from(tmp_path):
+    path = canned(tmp_path, ANSWER)
+    assert FixtureScreenings(path).provider == f"fixture:{path}", (
+        "a canned screening names its own source, so it is never read as a provider's"
+    )

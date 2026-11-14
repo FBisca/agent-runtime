@@ -1,14 +1,15 @@
 """agent-review: screen the change between two Git revisions against a configured question bank."""
 
 import argparse
+import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from agent_review import questions, revisions
 from agent_review.errors import ReviewError, ScreeningError
-from agent_review.judgments import attributed
-from agent_review.report import Report
+from agent_review.judgments import collected
+from agent_review.report import REPORT, Report
 from agent_review.screening import (
     FixtureScreenings,
     ScreeningPort,
@@ -23,6 +24,13 @@ configuration replaces that bank in this phase, and additive repository question
 baseline and never override or disable it, are a later phase's (D05). A bank that asks nothing is refused
 rather than screened. The invocation writes `report.json` under --output either way and prints a summary
 for a person; the report, not the exit status, carries the verdict.
+
+The report names what produced it: the provider endpoint it screened through (or the fixture it answered
+from), the model the provider served beside the configured alias, the input limit in force, whether long
+context was requested, and a digest of the bank it screened. An execution that stops after the provider
+answered keeps the usage it paid for and the judgments it already learned, and a refusal writes no report
+at all: it names the report an earlier invocation left in --output, so that verdict is never read as this
+run's.
 
 A screening is made once (D40): a provider error, a timeout, a missing credential or an answer that is
 not a judgment the question's type allows is an incomplete execution: the report says so, its
@@ -94,6 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = screen(args)
     except ReviewError as error:
         print(f"agent-review: {error}", file=sys.stderr)
+        _name_standing_report(args)
         return error.code
     path = report.write(args.output)
     print(report.summary(path))
@@ -103,20 +112,48 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def _name_standing_report(args: argparse.Namespace) -> None:
+    """Name the report an earlier invocation left in --output, so its verdict cannot pass as this run's."""
+    output = getattr(args, "output", None)
+    if output is None:
+        return
+    standing = Path(output) / REPORT
+    if not standing.is_file():
+        return
+    revision = _revision(standing)
+    screened = f"; it screened {revision}" if revision else ""
+    print(
+        f"agent-review: the report at {standing} is not this invocation's: an earlier one left it "
+        f"standing{screened}",
+        file=sys.stderr,
+    )
+
+
+def _revision(standing: Path) -> str:
+    """The revision a standing report screened, or nothing when it cannot be read."""
+    try:
+        screened = json.loads(standing.read_text(encoding="utf-8")).get("input")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    if not isinstance(screened, Mapping):
+        return ""
+    base, head = screened.get("base"), screened.get("head")
+    return f"{base}..{head}" if isinstance(base, str) and isinstance(head, str) else ""
+
+
 def screen(args: argparse.Namespace) -> Report:
     """One screening of the configured bank over `args.base..args.head`, as the report it produces."""
     bank = questions.load(args.config) if args.config else questions.baseline()
     repo = Path.cwd()
     base, head = revisions.resolve(repo, args.base, args.head)
     change = revisions.diff(repo, base, head)
-    args.output.mkdir(parents=True, exist_ok=True)
+    _prepare_output(args.output, base, head)
+    port = _port(args, bank.model)
+    request = ScreeningRequest(
+        model=bank.model, questions=bank.questions, diff=change, base=base, head=head
+    )
     try:
-        reply = _port(args, bank.model).screen(
-            ScreeningRequest(
-                model=bank.model, questions=bank.questions, diff=change, base=base, head=head
-            )
-        )
-        judgments = attributed(bank.questions, reply.judgments, base=base, head=head)
+        reply = port.screen(request)
     except ScreeningError as error:
         # An incomplete run keeps what it knows and records why it stopped; no verdict is inferred (D34, D40).
         return Report(
@@ -124,19 +161,38 @@ def screen(args: argparse.Namespace) -> Report:
             base=base,
             head=head,
             questions=bank.questions,
+            provider=port.provider,
             long_context=args.long_context,
             failure=str(error),
         )
+    # A refused judgment is the run's failure, but the judgments it learned before it and the usage it
+    # paid for stay in the report: it is the only record of a screening that happened (S6, D47).
+    held = collected(bank.questions, reply.judgments, base=base, head=head)
     return Report(
         model=bank.model,
         base=base,
         head=head,
         questions=bank.questions,
-        judgments=judgments,
+        provider=port.provider,
+        resolved_model=reply.model,
+        judgments=held.judgments,
         input_tokens=reply.input_tokens,
         output_tokens=reply.output_tokens,
         long_context=args.long_context,
+        failure=None if held.error is None else str(held.error),
     )
+
+
+def _prepare_output(output: Path, base: str, head: str) -> None:
+    """Make --output writable before anything is charged for, refusing loudly when it is not."""
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ReviewError(
+            f"cannot write the report under {output}: {error.strerror or error}; point --output at a "
+            f"directory this invocation may create, so the change {base[:7]}..{head[:7]} is not "
+            "mistaken for screened"
+        ) from None
 
 
 def _port(args: argparse.Namespace, model: str) -> ScreeningPort:
