@@ -524,6 +524,161 @@ class RequirementViolationTests(unittest.TestCase):
         self.assertEqual(contracts.validate_review(legacy), legacy)
 
 
+CLOSURE = {
+    "command": "pytest -k last",
+    "exit": 0,
+    "excerpt": "1 passed",
+    "log_path": "/run/fix.log",
+}
+RECEIPT = {"command": "pytest -k last", "exit": 0, "at_commit": "abc1234"}
+
+
+def resolution(**over):
+    return dict(
+        {
+            "id": "B1",
+            "status": "fixed",
+            "commit": "abc1234",
+            "note": "the fix holds",
+            "evidence": dict(CLOSURE),
+        },
+        **over,
+    )
+
+
+class ResolutionTests(unittest.TestCase):
+    """R139: only a fixed or disproven resolution for an open id, with a nonempty note and passing current-commit
+    evidence that a checks_run entry agrees with, is a closure."""
+
+    def rejects(self, value, *needles):
+        """Both readers refuse it; `validate_review`'s message names the resolution and what it lacks."""
+        with self.assertRaises(ValueError) as caught:
+            contracts.validate_review(value)
+        for needle in needles:
+            self.assertIn(needle, str(caught.exception))
+        with self.assertRaises(ValueError):
+            contracts.ReviewV2.model_validate(value)  # the Pydantic reader refuses the same payload
+
+    def closing(self, *resolutions, checks=None):
+        return review2(
+            resolutions=list(resolutions), checks_run=[RECEIPT] if checks is None else checks
+        )
+
+    def test_S6_a_fixed_or_disproven_resolution_with_current_commit_evidence_reads(self):
+        for status in ("fixed", "disproven"):
+            review = self.closing(resolution(status=status))
+            self.assertEqual(
+                contracts.validate_review(review)["resolutions"], review["resolutions"]
+            )
+            self.assertEqual(
+                contracts.ReviewV2.model_validate(review).model_dump(exclude_unset=True), review
+            )
+        self.assertEqual(contracts.validate_review(review2()), review2())
+
+    def test_S6_an_unsupported_status_or_a_blank_note_is_refused(self):
+        self.rejects(self.closing(resolution(status="acknowledged")), "B1", "status")
+        for note in (None, "", "   "):
+            self.rejects(self.closing(resolution(note=note)), "B1", "note")
+
+    def test_S6_closure_evidence_must_pass_and_match_a_current_commit_checks_run_entry(self):
+        self.rejects(
+            self.closing(
+                resolution(evidence=dict(CLOSURE, exit=1)), checks=[dict(RECEIPT, exit=1)]
+            ),
+            "B1",
+            "exit",
+        )
+        self.rejects(self.closing(resolution(), checks=[]), "B1", "checks_run")
+        self.rejects(
+            self.closing(resolution(), checks=[dict(RECEIPT, command="pytest -k unrelated")]),
+            "B1",
+            "checks_run",
+        )
+        self.rejects(
+            self.closing(resolution(), checks=[dict(RECEIPT, at_commit="deadbee")]),
+            "B1",
+            "checks_run",
+        )
+        self.rejects(self.closing(resolution(commit="deadbee")), "B1", "commit")
+        missing = {"id": "B1", "status": "fixed", "commit": "abc1234", "note": "done"}
+        self.rejects(self.closing(missing), "B1", "evidence")
+
+    def test_S6_one_resolution_per_open_finding(self):
+        self.rejects(self.closing(resolution(), resolution()), "B1", "twice")
+        self.rejects(self.closing(resolution(), resolution(status="disproven")), "B1", "twice")
+        self.rejects(self.closing(resolution(id="")), "id")
+
+    def test_S6_a_contract_1_review_cannot_carry_resolutions(self):
+        """R139: the closure rule has no bypass through the older contract."""
+        legacy = review(verdict="pass", resolutions=[{"id": "B1"}])
+        with self.assertRaises(contracts.ContractError) as caught:
+            contracts.validate_review(legacy)
+        self.assertIn("contract 2", str(caught.exception))
+        with self.assertRaises(ValueError):
+            contracts.ReviewV1.model_validate(legacy)
+        with self.assertRaises(ValueError):
+            contracts.ReviewV2.model_validate(
+                dict({"contract": 1, "verdict": "pass", "commit": "abc1234"}, resolutions=[])
+            )
+
+    def test_S6_a_resolution_and_a_blocking_item_naming_the_same_id_are_refused(self):
+        review = review2(
+            verdict="block",
+            items=[BLOCKING],
+            resolutions=[resolution()],
+            checks_run=[RECEIPT],
+        )
+        self.rejects(review, "B1", "blocking")
+
+
+class MixedFindingsTests(unittest.TestCase):
+    """R138: an open legacy major item and a new blocking item reach one fix round, which writes and reads."""
+
+    def test_S5_a_legacy_major_and_a_blocking_item_share_one_fix_round(self):
+        findings = contracts.make_findings("review", 2, [MAJOR, BLOCKING], [])
+        self.assertEqual(findings["contract"], 2)
+        self.assertEqual(findings["items"], [MAJOR, BLOCKING])
+        self.assertEqual(contracts.validate_findings(findings), findings)
+        # a round that is legacy throughout is still written as contract 1, for an old reader
+        legacy = contracts.make_findings("review", 1, [MAJOR], [], version=1)
+        self.assertEqual(legacy["contract"], 1)
+
+
+class OpenFindingsRecordTests(unittest.TestCase):
+    """R138: the record is `{contract, unit, items}` of the original blocking payloads, one per id."""
+
+    def test_S5_a_blocking_and_a_legacy_major_payload_are_kept_as_they_were_raised(self):
+        record = contracts.make_open_findings("t1", [MAJOR, BLOCKING])
+        self.assertEqual(record, {"contract": 1, "unit": "t1", "items": [MAJOR, BLOCKING]})
+        self.assertEqual(contracts.validate_open_findings(record), record)
+        self.assertEqual(
+            contracts.make_open_findings("t1", []), {"contract": 1, "unit": "t1", "items": []}
+        )
+
+    def test_S5_a_record_names_its_unit_and_lists_each_open_id_once(self):
+        for bad in (
+            {"contract": 1, "unit": "", "items": []},
+            {"contract": 2, "unit": "t1", "items": []},
+            {"contract": 1, "unit": "t1", "items": [BLOCKING, BLOCKING]},
+            {"contract": 1, "unit": "t1", "items": [NIT]},
+            {"contract": 1, "unit": "t1", "items": "B1"},
+        ):
+            with self.assertRaises(contracts.ContractError) as caught:
+                contracts.validate_open_findings(bad)
+            self.assertIn("open-findings", str(caught.exception))
+
+    def test_S5_applying_a_review_twice_keeps_one_payload_and_a_resolution_closes(self):
+        """R138: replaying a review is idempotent; the payload it was first raised with survives a re-raise."""
+        once = driver.Driver.folded_findings([], [BLOCKING], None)
+        self.assertEqual(once, [BLOCKING])
+        self.assertEqual(driver.Driver.folded_findings(once, [BLOCKING], None), [BLOCKING])
+        self.assertEqual(
+            driver.Driver.folded_findings(once, [dict(BLOCKING, summary="later")], None),
+            [BLOCKING],
+        )
+        self.assertEqual(driver.Driver.folded_findings(once, [], [{"id": "B1"}]), [])
+
+
 def contract_report_keys(text):
     """The top-level keys of the example report in the driver's CONTRACT text."""
     line = next(row.strip() for row in text.splitlines() if row.strip().startswith('{"contract"'))

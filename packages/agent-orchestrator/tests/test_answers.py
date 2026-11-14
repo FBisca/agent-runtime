@@ -147,3 +147,25 @@ class AnswerRefusal(EnvelopeFixture, unittest.TestCase):
         self.assertIn("t1a2", result.stderr)
         self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
         self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+
+class OpenBlockerAnswers(EnvelopeFixture, unittest.TestCase):
+    """A blocker outlives a passing review that only asks a question: no answers round closes it."""
+
+    def test_S5_a_generic_worker_answer_does_not_close_an_open_blocker(self):
+        from test_gates import BLOCKING, QUESTION
+
+        ask = dict(QUESTION, id="Q2", summary="why is the last row skipped?")
+        self.waits(
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.re_review(self.review2(items=[ask])),
+            ]
+        )
+        self.run_driver()
+        self.assertFalse(
+            (self.run_dir / "t1a1").exists(), "an answers round opened while a blocker was open"
+        )
+        self.assertEqual(self.read("t1", "open-findings.json")["items"], [BLOCKING])
+        self.assertNotEqual(self.task("t1r1")["gate"], "done")

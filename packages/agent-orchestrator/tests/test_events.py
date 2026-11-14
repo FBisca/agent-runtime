@@ -96,7 +96,9 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         reviewer = self.reviewer_done(self.review(verdict="block", major=[MAJOR]))
         fix = self.worker_done("t1r1")
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
-        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
+        again["write"] = [
+            [str(self.run_dir / "t1" / "review.2.json"), self.review2(**self.closure(MAJOR))]
+        ]
         # Every assignment reports, so the ticket total is a sum and not null.
         for step in (reviewer, fix, again):
             step["assignments"][0]["usage"] = {"input_tokens": 0, "output_tokens": 0}
