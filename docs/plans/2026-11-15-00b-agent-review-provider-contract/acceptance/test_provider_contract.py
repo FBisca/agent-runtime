@@ -204,11 +204,13 @@ class ProviderContractFixture(unittest.TestCase):
             "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "HOME": str(Path(self.tmp.name, "home")),
         }
-        environment.update(env or {})
         if base_url:
             environment.update(
                 {"AGENT_REVIEW_BASE_URL": base_url, "AGENT_REVIEW_API_KEY": "test-key"}
             )
+        # The caller's env comes last so a test can withhold the fallback credential: forcing it
+        # after would leave S1's missing-credential case unscreenable and always authenticated.
+        environment.update(env or {})
         return subprocess.run(
             argv,
             cwd=self.workspace,
