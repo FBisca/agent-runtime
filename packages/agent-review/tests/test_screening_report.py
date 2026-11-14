@@ -32,6 +32,11 @@ CONFIG = textwrap.dedent(
       - id: design.one-reason
         priority: high
         type: score
+        criteria:
+          - the change keeps one reason to change
+          - the change names a second reason but keeps them apart
+          - the change mixes two reasons into one module
+          - the change has no single reason a reader could name
         ask: How much does the change keep one reason to change
     """
 )
