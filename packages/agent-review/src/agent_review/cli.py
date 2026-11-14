@@ -1,6 +1,7 @@
 """agent-review: screen the change between two Git revisions against a configured question bank."""
 
 import argparse
+import contextlib
 import json
 import sys
 from collections.abc import Mapping, Sequence
@@ -104,7 +105,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"agent-review: {error}", file=sys.stderr)
         _name_standing_report(args)
         return error.code
-    path = report.write(args.output)
+    try:
+        path = report.write(args.output)
+    except OSError as error:
+        # The screening was paid for: what it learned is printed, never lost behind a traceback (S6).
+        print(report.summary())
+        print(
+            f"agent-review: {_unwritable(args.output, report.base, report.head, error)}",
+            file=sys.stderr,
+        )
+        _name_standing_report(args)
+        return 2
     print(report.summary(path))
     if report.failure is not None:
         print(f"agent-review: screening failed: {report.failure}", file=sys.stderr)
@@ -184,15 +195,29 @@ def screen(args: argparse.Namespace) -> Report:
 
 
 def _prepare_output(output: Path, base: str, head: str) -> None:
-    """Make --output writable before anything is charged for, refusing loudly when it is not."""
+    """Make --output writable before anything is charged for, refusing loudly when it is not.
+
+    A directory that already exists can still deny writing, so the report's own temporary file is
+    written and removed here: a screening is never paid for when it could not be recorded (S6).
+    """
+    probe = output / f"{REPORT}.tmp"
     try:
         output.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
     except OSError as error:
-        raise ReviewError(
-            f"cannot write the report under {output}: {error.strerror or error}; point --output at a "
-            f"directory this invocation may create, so the change {base[:7]}..{head[:7]} is not "
-            "mistaken for screened"
-        ) from None
+        raise ReviewError(_unwritable(output, base, head, error)) from None
+    with contextlib.suppress(OSError):
+        # A probe left behind is harmless: the report's own write replaces it.
+        probe.unlink()
+
+
+def _unwritable(output: Path, base: str, head: str, error: OSError) -> str:
+    """A refusal naming the path it cannot write and the change that was not screened."""
+    return (
+        f"cannot write the report under {output}: {error.strerror or error}; point --output at a "
+        f"directory this invocation may write, so the change {base[:7]}..{head[:7]} is not mistaken "
+        "for screened"
+    )
 
 
 def _port(args: argparse.Namespace, model: str) -> ScreeningPort:

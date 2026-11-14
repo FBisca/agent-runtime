@@ -104,8 +104,12 @@ class Report:
         os.replace(temporary, path)
         return path
 
-    def summary(self, path: Path) -> str:
-        """What a person reads on the terminal: the verdict, the judgments behind it and where the report is."""
+    def summary(self, path: Path | None = None) -> str:
+        """What a person reads on the terminal: the verdict, the judgments behind it and where the report is.
+
+        Without `path` the report line is left out: a summary printed because the report could not be
+        written must not claim a file that is not there (S6).
+        """
         change = f"{self.base}..{self.head}"
         if self.failure is not None:
             lines = [f"screened nothing: {change} was not screened with {self.model}"]
@@ -125,7 +129,8 @@ class Report:
         lines.append(f"provider: {self.provider}")
         if self.resolved_model is not None:
             lines.append(f"served: {self.resolved_model}")
-        lines.append(f"report: {path}")
+        if path is not None:
+            lines.append(f"report: {path}")
         return "\n".join(lines)
 
 

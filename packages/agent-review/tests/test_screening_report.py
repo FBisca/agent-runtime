@@ -365,3 +365,38 @@ def test_S6_an_output_that_is_not_a_directory_is_a_refusal_naming_the_path(revie
     assert str(blocked) in err, "the refusal names the path it could not write"
     assert review.head[:7] in err, "and the change it refused to screen"
     assert not (review.output / "report.json").exists(), "a refusal writes no report"
+
+
+def test_S6_an_existing_output_that_denies_writing_is_refused_before_the_provider_is_asked(
+    review, capsys, request
+):
+    review.output.mkdir()
+    review.output.chmod(0o555)
+    request.addfinalizer(lambda: review.output.chmod(0o755))
+    assert review.screen(RESPONSE) == 2, (
+        "a directory that exists and denies writing is a refusal, never a paid screening lost to a "
+        "traceback"
+    )
+    err = capsys.readouterr().err
+    assert str(review.output) in err, "the refusal names the path it could not write"
+    assert review.head[:7] in err, "and the change it refused to screen"
+    assert "Traceback" not in err
+    assert not (review.output / "report.json").exists(), "a refusal writes no report"
+
+
+def test_S6_a_report_that_cannot_be_written_is_a_refusal_that_keeps_what_was_screened(
+    review, capsys, monkeypatch
+):
+    def deny(_report, _directory):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr("agent_review.report.Report.write", deny)
+    assert review.screen(RESPONSE) == 2, "a write that fails is a refusal, never a traceback"
+    captured = capsys.readouterr()
+    assert str(review.output) in captured.err, "the refusal names the path it could not write"
+    assert review.head[:7] in captured.err, "and the change that was screened"
+    assert "Traceback" not in captured.err
+    assert "contract.error-handling" in captured.out, (
+        "the screening was paid for, so the summary keeps what it learned when the report cannot be "
+        "written"
+    )
