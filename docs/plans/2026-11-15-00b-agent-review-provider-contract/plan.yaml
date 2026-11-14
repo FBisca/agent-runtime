@@ -7,11 +7,15 @@ goal: >-
 spec: docs/specs/agent-review.md
 domain: screening
 archive: promote
-outcome: [S1, S2, S3, S4, S5, S6]
+outcome: [S1, S2, S3, S4, S5, S6, S7]
 scenarios:
   - id: S1
     when: "a caller screens two revisions without a fixture"
-    then: "the tool posts one System One request to the provider it is configured with, authenticated by TYPESAFE_API_KEY, carrying the state and the questions as System One's typed request"
+    then: >-
+      the tool posts one System One request to the provider it is configured with, authenticated by
+      TYPESAFE_API_KEY - which is the credential it sends when a fallback is also present - carrying the state
+      and the questions as System One's typed request, and a missing credential stops the run incomplete
+      naming TYPESAFE_API_KEY
     evidence:
       check: >-
         uv run --frozen --all-packages pytest
@@ -59,7 +63,9 @@ scenarios:
       timeout: 600
   - id: S5
     when: "the state and its questions exceed the limit in force"
-    then: "the execution is incomplete with the provider's own reason, and the same change completes when long context is requested"
+    then: >-
+      the execution is incomplete with the provider's own reason (`max_tokens_exceeded`), the change is never
+      truncated to fit, and the same change completes when long context is requested
     evidence:
       check: >-
         uv run --frozen --all-packages pytest
@@ -81,10 +87,24 @@ scenarios:
       acceptance: [test_provider_contract.py]
       package: packages/agent-review
       timeout: 600
+  - id: S7
+    when: "a screening runs against the canned provider with no credential and every socket refused"
+    then: >-
+      the run completes and writes its report, so every offline check is carried by the fixture and no check
+      needs the network
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-review/acceptance/screening/test_provider_contract.py -q -k "S7 or control"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_provider_contract.py]
+      package: packages/agent-review
+      timeout: 600
 tickets:
   - id: T1
-    delivers: "Replace the OpenAI chat adapter with a System One transport selected by configuration: endpoint and credential, the typed state and question map, the long-context header, and a request that never leaves the tool with a truncated state"
-    satisfies: [S1, S5]
+    delivers: "Replace the OpenAI chat adapter with a System One transport selected by configuration: endpoint and the TYPESAFE_API_KEY credential with its fallback, the typed state and question map, the long-context header, a request that never leaves the tool with a truncated state, and a canned provider that needs no socket"
+    satisfies: [S1, S5, S7]
     paths: [packages/agent-review/]
     size: regular
     difficulty: complex
@@ -98,7 +118,7 @@ tickets:
     difficulty: simple
     risk: [state]
   - id: T3
-    delivers: "Record the provider's native answer — probability for a noul, score and confidence for a score, choice and probabilities for a choice — and refuse an answer the question's declared levels or range do not allow"
+    delivers: "Record the provider's native answer - a noul's probability, a score's level with its confidence - and refuse an answer the question's declared levels or range do not allow"
     satisfies: [S3]
     paths: [packages/agent-review/]
     blocked_by: [T2]
@@ -113,3 +133,8 @@ tickets:
     size: regular
     difficulty: simple
     risk: [state]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-14T19:47:57.766642+00:00'
+  base: 5f15af54f5c81dc8a9802e8c3073e9f5658e9a13
+  digest: ae3d1bce1d10d8dab5ce65080bbb2dae99d6b9c4c37ac2682c79b10ea8d2ff4b
