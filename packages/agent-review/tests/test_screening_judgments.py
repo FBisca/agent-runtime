@@ -2,10 +2,10 @@
 
 The port returns judgments as the provider answered them; the run is what attaches the question's
 priority, scope and revision, and refuses a value the question's type does not allow. That refusal is
-the reason an invocation reports an incomplete execution (D40). A score question is graded on its
-declared levels and carries the confidence that came beside the level: a level the ladder does not
-declare, a confidence outside zero and one, or a score with no confidence at all is refused naming the
-question (S3).
+the reason an invocation reports an incomplete execution (D40). A score question is answered with a
+position on its ladder and carries the confidence that came beside it: a position off the ladder, a
+confidence outside zero and one, or a score with no confidence at all is refused naming the question
+(S1, S3).
 """
 
 import pytest
@@ -104,12 +104,45 @@ def test_S3_a_score_judgment_keeps_its_confidence_beside_the_value():
     )
 
 
+def test_S1_a_score_between_two_rungs_is_the_providers_own_number():
+    (judgment,) = attributed(
+        QUESTIONS,
+        [{"question": "design.one-reason", "value": 1.22, "confidence": 0.9}],
+        base=BASE,
+        head=HEAD,
+    )
+    assert judgment["value"] == 1.22, (
+        "1.22 sits on a four-level ladder (0..3) and is carried as the provider answered it"
+    )
+    assert judgment["confidence"] == pytest.approx(0.9)
+
+
 @pytest.mark.parametrize(
     "value",
-    [0.5, 3.5, 4.0, -1.0, "2", True],
-    ids=["between", "past-the-last", "past-the-ladder", "below-the-first", "text", "boolean"],
+    [
+        4.0,
+        3.5,
+        -0.4,
+        -1.0,
+        int("1" + "0" * 400),
+        float("inf"),
+        float("nan"),
+        "2",
+        True,
+    ],
+    ids=[
+        "past-the-last",
+        "past-the-last-rung",
+        "below-the-first",
+        "past-the-first",
+        "integer-too-large-for-a-float",
+        "infinite",
+        "not-a-number",
+        "text",
+        "boolean",
+    ],
 )
-def test_S3_a_score_outside_its_declared_levels_is_refused_naming_the_question(value):
+def test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range(value):
     with pytest.raises(ScreeningError) as refused:
         attributed(
             QUESTIONS,
@@ -118,7 +151,7 @@ def test_S3_a_score_outside_its_declared_levels_is_refused_naming_the_question(v
             head=HEAD,
         )
     assert "design.one-reason" in str(refused.value)
-    assert "declared levels" in str(refused.value), "a refusal names the way out"
+    assert "0 to 3" in str(refused.value), "a refusal names the range the ladder allows"
 
 
 @pytest.mark.parametrize(

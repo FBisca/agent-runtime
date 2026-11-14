@@ -8,12 +8,15 @@ D46). A question the screening left out is simply unanswered: nothing is guessed
 
 A bounded yes/no question is a noul, and the provider answers it with the probability that the change
 satisfies it: the value is that probability as answered, never a `true` this tool invented by comparing
-it with a threshold. A graded question is a score, and the provider answers the level it graded with the
-confidence it graded it with, both kept as answered: a level its ladder does not declare - 0.5 between a
-five-level ladder's rungs is no level - and a confidence outside zero and one are refused, and so is a
-level with no confidence at all, because a score without one is a number with no meaning (S3).
+it with a threshold. A graded question is a score, and the provider answers a position on its ladder
+with the confidence it graded it with, both kept as answered: the ladder bounds the answer at 0 and at
+one less than its declared levels, and any finite number between them - 1.22 on a five-level ladder -
+is the provider's own answer, never snapped to a rung. An answer off that range and a confidence
+outside zero and one are refused, and so is a score with no confidence at all, because a score without
+one is a number with no meaning (S1, S3).
 """
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -27,7 +30,7 @@ SCOPE = "whole-diff"
 
 NOUL_VALUE = "the probability between 0 and 1 that the change satisfies it"
 NO_LEVELS_VALUE = "one of its declared levels, and it declares none: add a ladder of levels"
-CONFIDENCE_VALUE = "the confidence between 0 and 1 that comes beside its level"
+CONFIDENCE_VALUE = "the confidence between 0 and 1 that comes beside its score"
 CHOICE_VALUE = "one of its declared options"
 
 
@@ -136,7 +139,7 @@ def _learn(
 
 
 def _fields(question: Question, judgment: Mapping[str, Any]) -> dict[str, Any]:
-    """A judgment's own fields: the value, and the confidence a score answers beside its level.
+    """A judgment's own fields: the value, and the confidence that came beside a score.
 
     A score without its confidence is a number with no meaning, so it is refused rather than recorded:
     the confidence is the provider's own abstention signal (S3).
@@ -146,7 +149,7 @@ def _fields(question: Question, judgment: Mapping[str, Any]) -> dict[str, Any]:
         fields["confidence"] = _confidence(question, judgment["confidence"])
     elif question.type == "score":
         raise ScreeningError(
-            f"the screening answered question {question.id!r} with a level and no confidence: "
+            f"the screening answered question {question.id!r} with a score and no confidence: "
             f"answer {CONFIDENCE_VALUE}"
         )
     return fields
@@ -173,7 +176,7 @@ def _value(question: Question, value: Any) -> Any:
             raise _refused(question, value)
         return value
     if question.type == "score":
-        if not _is_level(question, value):
+        if not _on_ladder(question, value):
             raise _refused(question, value)
         return value
     if not isinstance(value, str) or not value.strip():
@@ -182,24 +185,27 @@ def _value(question: Question, value: Any) -> Any:
 
 
 def _levels(question: Question) -> int:
-    """How many levels a score question declares; its rungs are the numbers 0 up to one less (D44).
+    """How many levels a score question declares; its ladder spans 0 up to one less (D44).
 
-    The provider answers a score with the level it graded, so a value between two rungs names no level:
-    a five-level ladder declares 0..4, and 0.5 is no more a level than 7 is (S3).
+    A score is a position on that ladder, so a five-level ladder bounds the answer at 0 and 4: 1.22 is
+    the provider's own answer, while 4.6 is off the ladder (S1).
     """
     criteria = question.criteria
     return len(criteria) if isinstance(criteria, (list, tuple)) else 0
 
 
-def _is_level(question: Question, value: Any) -> bool:
-    """Whether `value` is one of the levels the question declares, never a number between them."""
-    levels = _levels(question)
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, (int, float))
-        and float(value).is_integer()
-        and 0 <= value <= levels - 1
-    )
+def _on_ladder(question: Question, value: Any) -> bool:
+    """Whether `value` is a finite number the ladder bounds: 0 up to one less than its levels.
+
+    The ladder bounds the answer; it does not snap it to a rung, so a fractional position is allowed. The
+    check is total over the values it admits: an `int` is compared as the integer it is, so a JSON integer
+    too large for a float is refused rather than raised on, and only a `float` is asked whether it is finite.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return 0 <= value <= _levels(question) - 1
 
 
 def _allowed(question: Question) -> str:
@@ -210,7 +216,7 @@ def _allowed(question: Question) -> str:
         levels = _levels(question)
         if not levels:
             return NO_LEVELS_VALUE
-        return f"one of its {levels} declared levels, 0 to {levels - 1}"
+        return f"a number from 0 to {levels - 1} on its ladder of {levels} declared levels"
     return CHOICE_VALUE
 
 

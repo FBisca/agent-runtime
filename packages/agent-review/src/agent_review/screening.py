@@ -68,9 +68,9 @@ class ScreeningRequest:
 class ScreeningReply:
     """What the provider answered as it answered it: native values, unnormalized (D44).
 
-    A noul answer is the probability that the change satisfies the question, a score answer is the level
-    it was given with the confidence it came with, and a choice answer is the option. The caller attaches
-    the question's provenance and refuses an answer the question's declared levels or range do not allow.
+    A noul answer is the probability that the change satisfies the question, a score answer is a position
+    on its ladder with the confidence it came with, and a choice answer is the option. The caller attaches
+    the question's provenance and refuses an answer the ladder's bounds or the type's range do not allow.
     """
 
     judgments: tuple[Mapping[str, Any], ...]
@@ -167,8 +167,9 @@ def state(request: ScreeningRequest) -> dict[str, str]:
 def question_map(asked: Sequence[Question]) -> dict[str, dict[str, Any]]:
     """The bank as System One's id -> typed question map, in configuration order.
 
-    A score question's criteria are the levels it is graded on; a noul's criteria are optional and a
-    choice's say what each option means. They are the provider's own input, so they travel as configured.
+    A score question's criteria are the ladder of levels its answer is a position on; a noul's criteria are
+    optional and a choice's say what each option means. They are the provider's own input, so they travel as
+    configured.
     """
     asked_by_id = {}
     for question in asked:
