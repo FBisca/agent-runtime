@@ -34,7 +34,8 @@ verbatim: a review item's fields outside the core survive a round trip unchanged
                 `{type, required}`, so an agent Lead reads what it may do and what each action takes. Contracts 1 and 2
                 list the action names as strings; they are still read.
 `decision.json` Lead (through `agent-orchestrator decide`): one `action` from the menu, a `reason`, and for `answer` the
-                `answer`. Contract 3 adds the `amend` action; contracts 1 and 2 are still read.
+                `answer`. It carries the contract version of the request it answers, so the driver that wrote the
+                request reads it. Contract 3 adds the `amend` action; contracts 1 and 2 are still read.
 """
 
 import json
@@ -747,6 +748,18 @@ def validate_decision(decision):
         "decision: answer is required for the answer action and for no other",
     )
     return decision
+
+
+def answer_version(request, named=None):
+    """The contract version a decision answers a request in: the request's own version, so the driver that wrote the
+    request reads the decision. A decision that names another version contradicts the request it answers, and is
+    refused naming both versions."""
+    version = request["contract"]
+    if named is None or named == version:
+        return version
+    raise ContractError(
+        "the decision names contract %s, but the request is contract %s" % (named, version)
+    )
 
 
 def menu_option(action):

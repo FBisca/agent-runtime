@@ -88,6 +88,16 @@ class DecideJson(WakeFixture, unittest.TestCase):
         self.assertEqual(self.decide_flags("skip", "--reason", "x").returncode, 0)
         self.assertEqual(self.decision()["contract"], 3)
 
+    def test_S1_a_decision_is_written_in_the_contract_version_of_the_request_it_answers(self):
+        """The decision answers the request it was asked in: a contract-2 request gets a contract-2 decision, so the
+        driver that wrote the request reads it."""
+        path = self.write_open_request()
+        old = dict(json.loads(path.read_text(encoding="utf-8")), contract=2, menu=OLD_MENU)
+        path.write_text(json.dumps(old), encoding="utf-8")
+        result = self.decide_flags("skip", "--reason", "x")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.decision()["contract"], 2)
+
     def test_S17_the_decision_names_an_action_and_answers_with_one_json_object(self):
         self.write_open_request()
         result = self.decide_json({"action": "amend", "reason": "T1 needs a test path"})
