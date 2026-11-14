@@ -31,10 +31,12 @@ CONFIG = textwrap.dedent(
 )
 
 RESPONSE = {
-    "judgments": [
-        {"question": "contract.error-handling", "value": True},
-        {"question": "engineering.names-meaning", "value": False},
-    ]
+    "model": "jev-1.14.0",
+    "answers": {
+        "contract.error-handling": {"type": "noul", "noul": 0.9},
+        "engineering.names-meaning": {"type": "noul", "noul": 0.1},
+    },
+    "usage": {"input_tokens": 900, "output_tokens": 20},
 }
 
 BASE_FILE = "def load(path):\n    return open(path).read()\n"
@@ -132,14 +134,14 @@ def test_S1_the_cli_screens_the_frozen_diff_between_two_revisions(revisions):
         "engineering.names-meaning",
     ], "the configured bank is what the run evaluates"
     assert {judgment["question"]: judgment["value"] for judgment in screened["judgments"]} == {
-        "contract.error-handling": True,
-        "engineering.names-meaning": False,
+        "contract.error-handling": 0.9,
+        "engineering.names-meaning": 0.1,
     }, "the native judgments the port returned are what the run reports"
     assert screened["usage"]["requests"] == 1, "the port is called once per screening (D40)"
 
 
 def test_S1_the_packaged_baseline_bank_is_evaluated_without_a_configuration(revisions):
-    revisions.fixture.write_text(json.dumps({"responses": [{"judgments": []}]}), encoding="utf-8")
+    revisions.fixture.write_text(json.dumps({"responses": [{"answers": {}}]}), encoding="utf-8")
     assert main(revisions.args(**{"--config": None})) == 0
     screened = report(revisions)
     assert [question["id"] for question in screened["questions"]] == [

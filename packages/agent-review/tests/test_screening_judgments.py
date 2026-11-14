@@ -31,7 +31,7 @@ def test_each_native_value_is_kept_as_answered():
     judgments = attributed(
         QUESTIONS,
         [
-            {"question": "contract.error-handling", "value": True},
+            {"question": "contract.error-handling", "value": 0.9},
             {"question": "design.one-reason", "value": 0.5},
             {"question": "contract.shape", "value": "compatible"},
         ],
@@ -39,7 +39,7 @@ def test_each_native_value_is_kept_as_answered():
         head=HEAD,
     )
     assert [(judgment["question"], judgment["value"]) for judgment in judgments] == [
-        ("contract.error-handling", True),
+        ("contract.error-handling", 0.9),
         ("design.one-reason", 0.5),
         ("contract.shape", "compatible"),
     ]
@@ -47,21 +47,21 @@ def test_each_native_value_is_kept_as_answered():
 
 def test_a_judgment_carries_its_question_priority_scope_and_revision():
     (judgment,) = attributed(
-        QUESTIONS, [{"question": "design.naming", "value": False}], base=BASE, head=HEAD
+        QUESTIONS, [{"question": "design.naming", "value": 0.2}], base=BASE, head=HEAD
     )
     assert judgment == {
         "question": "design.naming",
         "priority": "advisory",
         "scope": "whole-diff",
         "revision": f"{BASE}..{HEAD}",
-        "value": False,
+        "value": 0.2,
     }
 
 
 def test_the_report_keeps_the_configuration_order_whatever_order_it_was_answered_in():
     answered = [
         {"question": "contract.shape", "value": "compatible"},
-        {"question": "contract.error-handling", "value": True},
+        {"question": "contract.error-handling", "value": 0.9},
     ]
     assert [j["question"] for j in attributed(QUESTIONS, answered, base=BASE, head=HEAD)] == [
         "contract.error-handling",
@@ -76,8 +76,9 @@ def test_a_question_the_screening_could_not_assess_is_simply_absent():
 @pytest.mark.parametrize(
     "question, value, allowed",
     [
-        ("contract.error-handling", "true", "true or false"),
-        ("contract.error-handling", 1, "true or false"),
+        ("contract.error-handling", "true", "the probability between 0 and 1"),
+        ("contract.error-handling", True, "the probability between 0 and 1"),
+        ("contract.error-handling", 1.5, "the probability between 0 and 1"),
         ("design.one-reason", 1.5, "a number between 0 and 1"),
         ("design.one-reason", "0.5", "a number between 0 and 1"),
         ("contract.shape", "", "one of its declared options"),
@@ -98,7 +99,7 @@ def test_a_judgment_with_no_value_is_refused_naming_the_question():
 def test_a_question_the_configuration_does_not_ask_is_refused():
     with pytest.raises(ScreeningError, match="contract.not-asked"):
         attributed(
-            QUESTIONS, [{"question": "contract.not-asked", "value": True}], base=BASE, head=HEAD
+            QUESTIONS, [{"question": "contract.not-asked", "value": 0.9}], base=BASE, head=HEAD
         )
 
 
@@ -107,8 +108,8 @@ def test_a_question_answered_twice_is_refused():
         attributed(
             QUESTIONS,
             [
-                {"question": "design.naming", "value": True},
-                {"question": "design.naming", "value": False},
+                {"question": "design.naming", "value": 0.9},
+                {"question": "design.naming", "value": 0.1},
             ],
             base=BASE,
             head=HEAD,

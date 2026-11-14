@@ -38,11 +38,13 @@ CONFIG = textwrap.dedent(
 
 # Answered in the reverse of the configuration's order: the report aggregates deterministically (D46).
 RESPONSE = {
-    "judgments": [
-        {"question": "design.one-reason", "value": 0.75},
-        {"question": "engineering.names-meaning", "value": False},
-        {"question": "contract.error-handling", "value": True},
-    ]
+    "model": "jev-1.14.0",
+    "answers": {
+        "design.one-reason": {"type": "score", "score": 0.75, "confidence": 0.8},
+        "engineering.names-meaning": {"type": "noul", "noul": 0.2},
+        "contract.error-handling": {"type": "noul", "noul": 0.9},
+    },
+    "usage": {"input_tokens": 700, "output_tokens": 30},
 }
 
 BASE_FILE = "def load(path):\n    return open(path).read()\n"
@@ -145,14 +147,14 @@ def test_S2_a_completed_screening_is_screened_with_native_attributed_judgments(r
             "priority": "critical",
             "scope": "whole-diff",
             "revision": f"{review.base}..{review.head}",
-            "value": True,
+            "value": 0.9,
         },
         {
             "question": "engineering.names-meaning",
             "priority": "advisory",
             "scope": "whole-diff",
             "revision": f"{review.base}..{review.head}",
-            "value": False,
+            "value": 0.2,
         },
         {
             "question": "design.one-reason",
@@ -170,7 +172,7 @@ def test_S2_the_terminal_summary_reads_the_judgments_without_the_report(review, 
     assert review.screen(RESPONSE) == 0
     summary = capsys.readouterr().out
     assert "contract.error-handling" in summary and "critical" in summary
-    assert "true" in summary
+    assert "0.9" in summary, "the summary reads the native value as it was answered"
     with pytest.raises(json.JSONDecodeError):
         json.loads(summary)
 
@@ -189,10 +191,10 @@ def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
     assert (
         review.screen(
             {
-                "judgments": [
-                    {"question": "contract.error-handling", "value": "banana"},
-                    {"question": "engineering.names-meaning", "value": False},
-                ]
+                "answers": {
+                    "contract.error-handling": {"type": "noul", "noul": "banana"},
+                    "engineering.names-meaning": {"type": "noul", "noul": 0.2},
+                }
             }
         )
         != 0
@@ -205,7 +207,7 @@ def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
 
 
 def test_S3_a_judgment_on_a_question_the_run_did_not_ask_is_incomplete(review):
-    assert review.screen({"judgments": [{"question": "contract.not-asked", "value": True}]}) != 0, (
+    assert review.screen({"answers": {"contract.not-asked": {"type": "noul", "noul": 0.9}}}) != 0, (
         "a judgment the run cannot attribute is not a screening result"
     )
     report = review.report()

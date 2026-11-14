@@ -46,10 +46,12 @@ CONFIG = textwrap.dedent(
 )
 
 RESPONSE = {
-    "judgments": [
-        {"question": "contract.error-handling", "value": True},
-        {"question": "design.naming", "value": False},
-    ]
+    "model": "jev-1.14.0",
+    "answers": {
+        "contract.error-handling": {"type": "noul", "noul": 0.9},
+        "design.naming": {"type": "noul", "noul": 0.1},
+    },
+    "usage": {"input_tokens": 900, "output_tokens": 20},
 }
 
 ANSWERED = "contract.error-handling"
@@ -163,8 +165,10 @@ class CompletedScreeningTests(ScreeningFixture):
         self.assertIsNone(report["failure"])
         judgments = {judgment["question"]: judgment for judgment in report["judgments"]}
         self.assertEqual(set(judgments), {"contract.error-handling", "design.naming"})
-        self.assertIs(judgments[ANSWERED]["value"], True, "a boolean judgment is native (D44)")
-        self.assertIs(judgments["design.naming"]["value"], False)
+        self.assertEqual(
+            judgments[ANSWERED]["value"], 0.9, "the noul's probability is the native value (D44)"
+        )
+        self.assertEqual(judgments["design.naming"]["value"], 0.1)
         self.assertEqual(
             judgments[ANSWERED]["priority"], "critical", "priority comes from config (D07)"
         )
@@ -187,10 +191,10 @@ class IncompleteScreeningTests(ScreeningFixture):
     def test_S3_an_invalid_judgment_is_incomplete_and_never_retried(self):
         result = self.screen(
             {
-                "judgments": [
-                    {"question": ANSWERED, "value": "banana"},
-                    {"question": "design.naming", "value": False},
-                ]
+                "answers": {
+                    ANSWERED: {"type": "noul", "noul": "banana"},
+                    "design.naming": {"type": "noul", "noul": 0.1},
+                }
             }
         )
         self.assertNotEqual(result.returncode, 0, "an invalid judgment must not exit 0 (D35)")

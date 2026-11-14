@@ -1,8 +1,15 @@
 """The screening port: the one injected point where a provider is reached (D37, P0-D2).
 
-The port takes the frozen change with the bank, and returns the provider's native judgments and its token
-usage. It never retries, never falls back to another model and never escalates (D40): a provider error,
-a timeout or an answer that is not a judgment list is a `ScreeningError` whose message is the reason.
+The provider is TypeSafe System One: one POST of a typed request - the model, the state and an id ->
+question map - authenticated by `TYPESAFE_API_KEY`. The port takes the frozen change with the bank, and
+returns the provider's native judgments and its token usage. It never retries, never falls back to another
+model and never escalates (D40): a provider error, a timeout or an answer that is not an answers map is a
+`ScreeningError` whose message is the reason.
+
+The state always travels whole. The provider applies its input budget and refuses an oversized request with
+its own reason (`max_tokens_exceeded`); the tool never shortens a change to make it fit, because a truncated
+state screens a change nobody made. Long context (`TypeSafe-Danger-Zone-Long-Context`) is the caller's
+choice and is never the default.
 """
 
 import json
@@ -17,17 +24,14 @@ from typing import Any, Protocol
 from agent_review.errors import ReviewError, ScreeningError
 from agent_review.questions import Question
 
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
-API_KEY_VARIABLES = ("AGENT_REVIEW_API_KEY", "OPENAI_API_KEY")
+DEFAULT_BASE_URL = "https://api.typesafe.ai/v1"
+SYSTEM_ONE_ROUTE = "/systemone"
+CREDENTIAL_VARIABLES = ("TYPESAFE_API_KEY", "AGENT_REVIEW_API_KEY")
 DEFAULT_TIMEOUT = 120.0
+LONG_CONTEXT_HEADER = "TypeSafe-Danger-Zone-Long-Context"
 
-SYSTEM_PROMPT = (
-    "You screen one code change against a configured question bank. Answer every question that the "
-    "change lets you assess with its native bounded value: true or false for a boolean question, the "
-    "declared option for a choice question, a number between 0 and 1 for a score question. You never "
-    "invent reasons, citations or findings, and you never guess: leave out a question you cannot "
-    'assess. Answer with one JSON object, {"judgments": [{"question": "<id>", "value": <value>}]}.'
-)
+# The bank names the instrument its questions belong to; System One names the same instruments itself.
+INSTRUMENTS = {"boolean": "noul", "score": "score", "choice": "choice"}
 
 PostJson = Callable[[str, Mapping[str, Any], Mapping[str, str], float], Any]
 
@@ -47,8 +51,9 @@ class ScreeningRequest:
 class ScreeningReply:
     """What the provider answered as it answered it: native values, unnormalized (D44).
 
-    A judgment is the provider's object as returned; the caller attaches the question's provenance and
-    refuses a value the question's type does not allow.
+    A noul answer is the probability that the change satisfies the question, a score answer is the level
+    it was given, and a choice answer is the option. The caller attaches the question's provenance and
+    refuses an answer the question's declared range does not allow.
     """
 
     judgments: tuple[Mapping[str, Any], ...]
@@ -63,8 +68,8 @@ class ScreeningPort(Protocol):
     def screen(self, request: ScreeningRequest) -> ScreeningReply: ...
 
 
-class ProviderScreenings:
-    """The direct provider API: one bounded request, over an OpenAI-compatible chat completion (D37)."""
+class SystemOneScreenings:
+    """TypeSafe System One: one typed request to the provider this invocation is configured with."""
 
     def __init__(
         self,
@@ -72,42 +77,39 @@ class ProviderScreenings:
         model: str,
         api_key: str | None = None,
         base_url: str | None = None,
+        long_context: bool = False,
         timeout: float = DEFAULT_TIMEOUT,
         post: PostJson | None = None,
     ) -> None:
         self.model = model
         self.api_key = api_key
         self.base_url = _base_url(base_url)
+        self.long_context = long_context
         self.timeout = timeout
         self.post: PostJson = post if post is not None else post_json
 
     def screen(self, request: ScreeningRequest) -> ScreeningReply:
-        api_key = self.api_key or _env_api_key()
+        api_key = self.api_key or _credential()
         if not api_key:
             raise ScreeningError(
-                "no screening API key: set AGENT_REVIEW_API_KEY (or OPENAI_API_KEY) to call the "
-                "provider, or --screening-fixture to screen from canned responses"
+                "no screening credential: set TYPESAFE_API_KEY to call the screening provider "
+                "(AGENT_REVIEW_API_KEY is sent only as its fallback), or --screening-fixture to "
+                "screen from canned answers"
             )
         payload = {
             "model": request.model,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": render_prompt(request)},
-            ],
+            "state": state(request),
+            "questions": question_map(request.questions),
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        answer = self.post(f"{self.base_url}/chat/completions", payload, headers, self.timeout)
-        return ScreeningReply(
-            judgments=_judgments(answer),
-            input_tokens=_tokens(answer, "prompt_tokens"),
-            output_tokens=_tokens(answer, "completion_tokens"),
-        )
+        if self.long_context:
+            headers[LONG_CONTEXT_HEADER] = "true"
+        answer = self.post(f"{self.base_url}{SYSTEM_ONE_ROUTE}", payload, headers, self.timeout)
+        return _reply(answer, "the screening provider's answer")
 
 
 class FixtureScreenings:
-    """A canned-response provider behind the same port, so a failure is injectable (P0-D2, D40)."""
+    """A canned System One provider behind the same port, so a failure is injectable and stays offline."""
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -128,41 +130,20 @@ class FixtureScreenings:
             )
         if "error" in response:
             raise ScreeningError(str(response["error"]))
-        judgments = response.get("judgments")
-        if not isinstance(judgments, list):
-            raise ScreeningError(
-                f"the screening fixture {self.path} holds a response with no judgments list"
-            )
-        usage = response.get("usage")
-        return ScreeningReply(
-            judgments=_objects(judgments, f"the screening fixture {self.path}"),
-            input_tokens=_count(usage, "input_tokens"),
-            output_tokens=_count(usage, "output_tokens"),
-        )
+        return _reply(response, f"the screening fixture {self.path}")
 
 
-def render_prompt(request: ScreeningRequest) -> str:
-    """The request's user turn: the questions, how to answer them, and the frozen diff."""
-    lines = [
-        f"# Questions ({len(request.questions)})",
-        "Answer each question in its native value; leave out a question the change cannot answer.",
-    ]
-    for question in request.questions:
-        lines.append(f"- {question.id} ({question.type}, {question.priority}): {question.ask}")
-    lines.extend(
-        [
-            "",
-            "Answer with one JSON object: "
-            '{"judgments": [{"question": "<id>", "value": <native value>}]}',
-            "",
-            f"# The change between {request.base} and {request.head}",
-            "```diff",
-            request.diff.rstrip("\n"),
-            "```",
-            "",
-        ]
-    )
-    return "\n".join(lines)
+def state(request: ScreeningRequest) -> dict[str, str]:
+    """The provider's state: the change as one object, whole and never shortened to fit."""
+    return {"base": request.base, "head": request.head, "diff": request.diff}
+
+
+def question_map(asked: Sequence[Question]) -> dict[str, dict[str, Any]]:
+    """The bank as System One's id -> typed question map, in configuration order."""
+    return {
+        question.id: {"type": INSTRUMENTS[question.type], "instructions": question.ask}
+        for question in asked
+    }
 
 
 def post_json(
@@ -176,7 +157,7 @@ def post_json(
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         raise ScreeningError(
-            f"the screening provider answered {error.code}: {_detail(error)}"
+            f"the screening provider answered {error.code}: {_provider_reason(error)}"
         ) from None
     except urllib.error.URLError as error:
         raise ScreeningError(f"the screening provider is unreachable: {error.reason}") from None
@@ -186,13 +167,70 @@ def post_json(
         raise ScreeningError("the screening provider's answer is not JSON") from None
 
 
-def _detail(error: urllib.error.HTTPError) -> str:
-    """A bounded excerpt of the provider's error body; never the whole response."""
+def _provider_reason(error: urllib.error.HTTPError) -> str:
+    """The provider's own words for a refusal - its error type or message - never the whole response."""
     try:
         body = error.read(2000)
     except OSError:
-        return error.reason
-    return body.decode("utf-8", "replace").strip() or "no detail"
+        return str(error.reason)
+    text = body.decode("utf-8", "replace").strip()
+    if not text:
+        return "no detail"
+    try:
+        answer = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(answer, Mapping):
+        return text
+    detail = answer.get("detail")
+    for candidate in (
+        detail.get("error_type") if isinstance(detail, Mapping) else None,
+        detail if isinstance(detail, str) else None,
+        answer.get("error", {}).get("message")
+        if isinstance(answer.get("error"), Mapping)
+        else None,
+        answer.get("message"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return text
+
+
+def _reply(answer: Any, source: str) -> ScreeningReply:
+    """The provider's answer as a reply: its native judgments and its usage."""
+    if not isinstance(answer, Mapping):
+        raise ScreeningError(f"{source} is not an object")
+    return ScreeningReply(
+        judgments=_judgments(answer.get("answers"), source),
+        input_tokens=_count(answer.get("usage"), "input_tokens"),
+        output_tokens=_count(answer.get("usage"), "output_tokens"),
+    )
+
+
+def _judgments(answers: Any, source: str) -> tuple[Mapping[str, Any], ...]:
+    """One judgment per answered question, carrying the provider's native value for it."""
+    if not isinstance(answers, Mapping):
+        raise ScreeningError(
+            f"{source} has no answers map; System One answers "
+            '{"answers": {"<question id>": {"type": ..., ...}}}'
+        )
+    judgments: list[Mapping[str, Any]] = []
+    for identifier, answer in answers.items():
+        if not isinstance(identifier, str) or not isinstance(answer, Mapping):
+            raise ScreeningError(f"{source}: the answer to {identifier!r} is not an object")
+        judgments.append({"question": identifier, "value": _native(identifier, answer, source)})
+    return tuple(judgments)
+
+
+def _native(identifier: str, answer: Mapping[str, Any], source: str) -> Any:
+    """The one bounded number or option a noul, score or choice answer carries."""
+    kind = answer.get("type")
+    if kind not in ("noul", "score", "choice") or kind not in answer:
+        raise ScreeningError(
+            f"{source}: the answer to {identifier!r} is not a noul, score or choice answer, "
+            f"so it carries no value a question can be judged by"
+        )
+    return answer[kind]
 
 
 def _base_url(configured: str | None) -> str:
@@ -206,42 +244,13 @@ def _base_url(configured: str | None) -> str:
     return url.rstrip("/")
 
 
-def _env_api_key() -> str | None:
-    for variable in API_KEY_VARIABLES:
+def _credential() -> str | None:
+    """The documented credential first, its fallback only when it is absent (00b-D5)."""
+    for variable in CREDENTIAL_VARIABLES:
         value = os.environ.get(variable, "").strip()
         if value:
             return value
     return None
-
-
-def _judgments(answer: Any) -> tuple[Mapping[str, Any], ...]:
-    """The provider's judgments, from the completion's JSON message."""
-    try:
-        content = answer["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        raise ScreeningError("the screening provider's answer has no message content") from None
-    if not isinstance(content, str):
-        raise ScreeningError("the screening provider's message content is not text")
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        raise ScreeningError("the screening provider's answer is not JSON") from None
-    judgments = parsed.get("judgments") if isinstance(parsed, Mapping) else None
-    if not isinstance(judgments, list):
-        raise ScreeningError("the screening provider's answer has no judgments list")
-    return _objects(judgments, "the screening provider's answer")
-
-
-def _objects(judgments: Sequence[Any], source: str) -> tuple[Mapping[str, Any], ...]:
-    for index, judgment in enumerate(judgments):
-        if not isinstance(judgment, Mapping):
-            raise ScreeningError(f"{source}: judgment {index} is not an object")
-    return tuple(judgments)
-
-
-def _tokens(answer: Any, key: str) -> int:
-    usage = answer.get("usage") if isinstance(answer, Mapping) else None
-    return _count(usage, key)
 
 
 def _count(usage: Any, key: str) -> int:
