@@ -83,7 +83,7 @@ def gap(what, command):
     return ToolError("gap: add %s → %s; ask the user" % (what, command))
 
 
-def run(argv, env, ctx, timeout=SHORT_SECONDS):
+def run(argv, env, ctx, timeout: float = SHORT_SECONDS):
     """(returncode, stdout, stderr); ToolError on a missing binary, timeout or cancel."""
     try:
         proc = subprocess.Popen(
@@ -114,7 +114,7 @@ def run(argv, env, ctx, timeout=SHORT_SECONDS):
                 raise ToolError("%s timed out after %ss" % (" ".join(argv[:2]), timeout))
 
 
-def hc(args, env, ctx, timeout=SHORT_SECONDS):
+def hc(args, env, ctx, timeout: float = SHORT_SECONDS):
     code, out, err = run(["hc"] + args, env, ctx, timeout)
     if code != 0:
         raise ToolError((err.strip() or out.strip() or "hc %s failed" % args[0]))
@@ -394,7 +394,7 @@ def operation_fingerprint(verb, **fields):
 def replayed(store, identity, name, caller, address=None):
     """The answer to a repeated operation_id: the first call's assignment and where it stands now. Nothing is sent."""
     view = store.assignment_info(identity["assignment_id"])
-    payload = dict(
+    payload: dict = dict(
         identity,
         name=view.get("name") or name,
         address=address or store.worker_address(identity["team_id"], view.get("name") or name),
@@ -565,6 +565,7 @@ def spawn(arguments, env, ctx):
     if kind != "worker":
         raise gap("spawn kind=%s" % kind, "hc run --bg ...")
     profile = None
+    configured = {}
     if cli not in CLIS:
         profile = cli
         try:
@@ -601,6 +602,10 @@ def spawn(arguments, env, ctx):
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
     store = None
+    team = None
+    scope = None
+    identity = {}
+    earlier = None
     message = (
         "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
     )
@@ -1356,7 +1361,8 @@ def bounded(out):
 
 
 def diagnostic(name, arguments, env, ctx, error):
-    """Storage is unavailable: return HC-only state/screen with an explicit delivery error.
+    """Storage is unavailable, or the terminal belongs to another session: return HC-only state/screen
+    with an explicit delivery error.
 
     No store call happens, so nothing is acknowledged, pinned, adopted or completed.
     """
@@ -1374,9 +1380,10 @@ def diagnostic(name, arguments, env, ctx, error):
         payload = {"result": body}
     if not isinstance(payload, dict):
         payload = {"result": payload}
+    reason = "refused" if isinstance(error, dispatch.TerminalRefused) else "dispatch unavailable"
     payload["delivery_error"] = (
-        "dispatch unavailable (%s); diagnostic only, not an accepted report; "
-        "any receipt was not processed" % error
+        "%s (%s); diagnostic only, not an accepted report; "
+        "any receipt was not processed" % (reason, error)
     )
     return result(payload, structured=True)
 
@@ -1414,7 +1421,13 @@ def call(name, arguments, env, ctx):
     try:
         try:
             return call_dispatch(name, arguments, env, ctx)
-        except (sqlite3.Error, OSError, dispatch.StorageError, DiagnosticUnavailable) as error:
+        except (
+            sqlite3.Error,
+            OSError,
+            dispatch.StorageError,
+            dispatch.TerminalRefused,
+            DiagnosticUnavailable,
+        ) as error:
             if name in DIAGNOSTICS and dispatch_enabled(env):
                 return diagnostic(name, arguments, env, ctx, error)
             # A handler names a failure that came after its external effect itself; one that reaches this

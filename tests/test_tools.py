@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from test_mcp_server import SERVER, InProcessSession, Session
+from test_mcp_server import SERVER, FakeCli, InProcessSession, Session
 
 pytestmark = pytest.mark.integration
 
@@ -22,6 +22,7 @@ pytestmark = pytest.mark.integration
 RUNTIME_SRC = Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"
 sys.path.insert(0, str(RUNTIME_SRC))
 from agent_runtime import hc_tools  # noqa: E402
+from agent_runtime.dispatch_store import Store  # noqa: E402
 
 FAKE = """#!%(python)s
 import json, os, sys, time
@@ -209,7 +210,7 @@ class ToolCase(unittest.TestCase):
 
     in_process = False
 
-    def start(self, replies=None, env=None, new_cli=False, process=False):
+    def start(self, replies=None, env=None, new_cli: bool | FakeCli = False, process=False):
         replies = dict(replies or {})
         replies.setdefault("get:t0", {"out": raw("lead", None)})
         replies.setdefault("get:t1", {"out": raw("worker", "t0")})
@@ -1445,6 +1446,99 @@ class StopCleanupTests(InProcessToolCase):
         self.assertEqual(
             [c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w1"], ["rm", "w1"]]
         )
+
+
+class TerminalOwnerTests(ToolCase):
+    """One terminal, one owning session: a session that inherits a live lead's terminal is refused.
+
+    Every session runs under its own fake CLI, so every session presents a generation of its own.
+    The lead registers the team for the terminal and holds work in it; a second session that
+    inherits the same terminal id asks for the terminal and is refused, and the lead keeps it.
+    """
+
+    ENV = {"HC_SCOPE": "scope", "AGENT_RUNTIME_DISPATCH": "1"}
+
+    def setUp(self):
+        super().setUp()
+        self.replies = {
+            "get:t0": {"out": raw("lead", None)},
+            "get:w1": {"out": raw("w1", "t0")},
+            "read:w1": {"out": "the worker's screen"},
+        }
+
+    def session(self):
+        """A session of its own: its own fake CLI, so its own generation."""
+        return self.start(self.replies, dict(self.ENV), new_cli=True)
+
+    def store(self):
+        return Store({"HOME": str(self.dir / "home")})
+
+    def teams(self):
+        with self.store().transaction() as db:
+            return [
+                dict(row) for row in db.execute("SELECT id,generation FROM teams ORDER BY rowid")
+            ]
+
+    def lead(self):
+        """The lead's session: it owns the terminal, and its team holds work."""
+        session = self.session()
+        result, text = self.call(session, "wait", {"target": "all", "timeout": 0})
+        self.assertFalse(result["isError"], text)
+        team = self.teams()[0]
+        self.store().register(team["id"], "w1")
+        return session, team
+
+    def test_S1_a_session_that_inherits_a_live_leads_terminal_is_refused(self):
+        """stale-team-generation/S1: a session that inherits the terminal never owns it."""
+        lead, team = self.lead()
+        other = self.session()
+        result, text = self.call(other, "wait", {"target": "all", "timeout": 0})
+        self.assertTrue(result["isError"], text)
+        self.assertIn("t0", text, "the refusal does not name the terminal")
+        self.assertIn(team["generation"], text, "the refusal does not name the owning generation")
+        self.assertRegex(
+            text,
+            r"(?i)hc terminal|own terminal|new session",
+            "the refusal does not name the way out",
+        )
+        self.assertEqual(len(self.teams()), 1, "the other session registered a team")
+
+    def test_S2_the_live_lead_keeps_its_team_after_the_other_session_called(self):
+        """stale-team-generation/S2: the lead reaches its own workers after the other session called."""
+        lead, team = self.lead()
+        other = self.session()
+        self.call(other, "wait", {"target": "all", "timeout": 0})
+        result, text = self.call(lead, "message", {"to": "w1", "text": "still mine"})
+        self.assertFalse(result["isError"], text)
+        self.assertNotIn("stale team generation", text, "the lead was fenced")
+        self.assertEqual(len(self.teams()), 1, "the terminal carries more than one team")
+        with self.store().transaction() as db:
+            workers = {row[0] for row in db.execute("SELECT DISTINCT team FROM workers")}
+            messages = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        self.assertEqual(workers, {team["id"]}, "the worker left the lead's team")
+        self.assertEqual(messages, 1, "the lead's message never reached its worker")
+
+    def test_S9_a_refused_session_gets_the_diagnostic_view_with_a_delivery_error(self):
+        """stale-team-generation/S9: a diagnostic call never fails the session that asks."""
+        lead, team = self.lead()
+        other = self.session()
+        for verb, arguments in (
+            ("status", {"name": "w1"}),
+            ("collect", {"name": "w1"}),
+            ("list", {}),
+        ):
+            result, text = self.call(other, verb, arguments)
+            self.assertFalse(result["isError"], "the %s call failed: %s" % (verb, text))
+            payload = result.get("structuredContent") or {}
+            self.assertIn("delivery_error", payload, "the %s view has none" % verb)
+            self.assertIn("t0", payload["delivery_error"], verb)
+            self.assertIn(team["generation"], payload["delivery_error"], verb)
+        with self.store().transaction() as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+                0,
+                "the refused session reached the lead's worker",
+            )
 
 
 class RuntimeGapTests(InProcessToolCase):

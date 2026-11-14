@@ -18,10 +18,14 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import agent_runtime as lib
 from . import dispatch_events
 from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT, process_start_stamp
 
 MAX_WORKERS = MAX_MESSAGES = 32
+# How many times a registration reads the terminal's teams again when another session registers at
+# the same time: the read and the insert are separate transactions, so the picture can change.
+TEAM_ATTEMPTS = 3
 TEAM_LIMIT = "team limit is 32 active workers: stop an active worker, then retry"
 MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
 # D22: the canonical compact-JSON result (every user-visible field, before the host's text +
@@ -73,6 +77,15 @@ SNAPSHOT_SQL = (
     "AND (? NOT IN ('all','any') OR (w.active=1 AND a.state NOT IN ('complete','failed')) "
     "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) ORDER BY a.rowid"
 )
+# The liveness rule, written where it runs: the query is a literal, so the reader sees the whole rule.
+# A team holds work its lead is still serving when it has an unfinished assignment of an active worker or a
+# result that is not acknowledged yet. This is the rule the published lead-conflict requirement states
+# ("that team has unfinished assignments"), so a superseded turn of an active worker still keeps the
+# terminal. The CLI's own live-lead check reads the snapshot's "all" branch instead, which asks about the
+# current turn of every worker: it is looser, so a call it lets through is refused here, with the message
+# that names the terminal, the owner and the way out. The two readers answer different questions on
+# purpose; the store's answer is the one that decides the terminal, and the CLI's check should read this
+# rule (it lives in agent_runtime.py, outside this ticket's paths).
 READ_MEMBERS_SQL = (
     "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
     "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name,d.turn,d.mode FROM assignments a LEFT JOIN dispatch_turns d ON d.assignment=a.id "
@@ -116,6 +129,31 @@ class StorageError(StoreError):
     """The store itself is unusable (directory ownership, schema version); never an authorization verdict."""
 
 
+class TerminalRefused(StoreError):
+    """The terminal belongs to another session: this session does not own it and no team was registered."""
+
+
+# One message names a terminal's owner: the terminal, the generation that owns it and the way out.
+WAY_OUT = (
+    "run this session in its own hc terminal, "
+    "or start a new session in this terminal once the owner has exited"
+)
+
+
+# Why a session is refused: the rule that decided, in the words the rule uses.
+REFUSED_IN_TREE = "this session runs inside the owning session's own process tree"
+REFUSED_LIVE_OWNER = "the owning session is still running and its team still holds work"
+
+
+def terminal_owned(terminal, generation, reason=""):
+    """The one message a session gets when the terminal belongs to another generation.
+
+    It names the terminal, the generation that owns it, the rule that refused the call and the
+    way out, so the caller can act on it without reading the store."""
+    detail = "; %s" % reason if reason else ""
+    return "terminal %s is owned by generation %s%s; %s" % (terminal, generation, detail, WAY_OUT)
+
+
 # One rule owns a terminal: the newest team row for that scope and terminal that is neither dead nor
 # empty. A row is dead when its generation is a `pid:lstart` stamp whose process no longer carries that
 # stamp; a generation with no pid is never provably dead, so its row is judged by what it holds. A row
@@ -125,16 +163,37 @@ class StorageError(StoreError):
 GENERATION_PID = re.compile(r"^(\d+):(.+)$")
 
 
-def generation_alive(generation):
+def generation_alive(generation, stamp=None):
     """True when the generation's process is provably alive: that pid still carries that start stamp.
 
     A generation with no pid is never provably alive (nor provably dead): only what its team holds
-    can judge it."""
+    can judge it. The process evidence is injected, so the store keeps no subprocess code and a test
+    can stand for the process table."""
     match = GENERATION_PID.match(generation) if isinstance(generation, str) else None
     if not match:
         return False
-    exists, stamp = process_start_stamp(int(match.group(1)))
-    return exists and stamp == match.group(2)
+    exists, start = (stamp or process_start_stamp)(int(match.group(1)))
+    return exists and start == match.group(2)
+
+
+def alive_verdicts(generations, stamp=None):
+    """What the process table says about each generation: {generation: alive}.
+
+    The evidence is gathered once, outside the write transaction, and handed to the readers that
+    need it, so no `ps` runs while the store holds its write lock."""
+    return {generation: generation_alive(generation, stamp) for generation in set(generations)}
+
+
+def alive_verdict(liveness, generation):
+    """Whether one generation's process is alive, from the evidence gathered outside the transaction.
+
+    The map holds the verdicts for the rows the reader was given. A generation the map does not know is
+    a row that landed after the evidence was taken (another session registered in that window), so the
+    reader is asked then: the process table is read in that rare window only, never on the common path."""
+    if liveness is None:
+        return generation_alive(generation)
+    verdict = liveness.get(generation)
+    return generation_alive(generation) if verdict is None else verdict
 
 
 def team_empty(db, team):
@@ -168,12 +227,53 @@ def team_empty(db, team):
     return True
 
 
-def owning_team(db, scope, lead, own_team=None, own_generation=None):
+def owner_session_tree(owner_generation, ancestors=None):
+    """True when the owner's process is in this process's ancestor chain.
+
+    A session that descends from the owner (the owner's pid in the caller's ancestor chain) is the
+    owner's own session tree, not a new session: it may not take the owner's terminal, whatever the
+    owner's team holds. The ancestry is injected, so the store keeps no subprocess code and a test
+    can stand for the process table."""
+    owner = GENERATION_PID.match(owner_generation) if isinstance(owner_generation, str) else None
+    if not owner:
+        return False
+    return int(owner.group(1)) in ((ancestors or lib.ancestor_pids)())
+
+
+def team_holds_work(db, team, lead=None):
+    """True when the team holds work its lead is still serving.
+
+    This is the liveness rule, not the emptiness rule: unfinished assignments of active workers or
+    results not yet acknowledged, plus a message the lead has not acknowledged. The rule is the
+    query above, so one reader decides what a live owner holds: an owner that holds only a task, an
+    operation or a last-wait row is idle, and an idle terminal is free for the next session. The CLI's
+    live-lead check asks a looser question (the current turn of every worker), so it may let a call
+    through that this rule refuses: the store's answer is the one that keeps the terminal with its
+    owner."""
+    return bool(
+        db.execute(
+            "SELECT 1 FROM assignments a JOIN workers w ON w.id=a.worker WHERE a.team=? "
+            "AND ((w.active=1 AND a.state NOT IN ('complete','failed')) "
+            "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) LIMIT 1",
+            (team,),
+        ).fetchone()
+        or db.execute(
+            "SELECT 1 FROM messages WHERE team=? AND recipient=? AND acked=0 LIMIT 1", (team, lead)
+        ).fetchone()
+    )
+
+
+def owning_team(db, scope, lead, own_team=None, own_generation=None, liveness=None):
     """The team row that owns (scope, lead), or None when the terminal has no team.
 
     The owner is the newest row that is neither dead nor empty. The caller's own row (own_team, or the
     row of own_generation) is never skipped for it, so a caller always has a team; when every other row
-    would be skipped, the newest one owns the terminal."""
+    would be skipped, the newest one owns the terminal.
+
+    `liveness` carries the process evidence gathered outside the transaction, so this reader asks no
+    process table while the store holds its write lock; without it the reader asks the runtime. A
+    generation the evidence does not know is a row that landed after it was taken, and the reader is
+    asked for that one row alone."""
     rows = db.execute(
         "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC",
         (scope, lead),
@@ -183,7 +283,7 @@ def owning_team(db, scope, lead, own_team=None, own_generation=None):
             own_generation is not None and row["generation"] == own_generation
         ):
             return row
-        if team_empty(db, row["id"]) and not generation_alive(row["generation"]):
+        if team_empty(db, row["id"]) and not alive_verdict(liveness, row["generation"]):
             continue  # a session that left nothing behind never owns the terminal
         return row
     return rows[0] if rows else None
@@ -248,8 +348,15 @@ def last_wait_state(db, team):
 
 
 class Store:
-    def __init__(self, env, clock=time.time):
+    def __init__(self, env, clock=time.time, alive=None, ancestors=None):
+        """The store for this user's dispatch state.
+
+        `alive` and `ancestors` are the process evidence (a pid's start stamp, this process's
+        ancestor chain). They default to the runtime's own readers and are injected so the store keeps
+        no subprocess code and a test can stand for the process table."""
         self.clock = clock
+        self.alive = alive or process_start_stamp
+        self.ancestors = ancestors or lib.ancestor_pids
         root = Path(
             env.get("XDG_STATE_HOME") or Path(env.get("HOME") or Path.home()) / ".local/state"
         )
@@ -295,6 +402,17 @@ class Store:
             db.execute("PRAGMA user_version=2")
 
     @contextmanager
+    def reading(self):
+        """A read-only connection: the owner row and the work it holds are read outside the write
+        transaction, so no process evidence runs while the store's write lock is held."""
+        db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        try:
+            yield db
+        finally:
+            db.close()
+
+    @contextmanager
     def transaction(self):
         db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
         db.row_factory = sqlite3.Row
@@ -310,15 +428,86 @@ class Store:
         finally:
             db.close()
 
+    def terminal_liveness(self, scope, lead):
+        """The process evidence for a terminal's team rows, gathered outside the write transaction.
+
+        No `ps` runs while the store holds its write lock: the readers that need the evidence ask
+        for it here and hand the verdict to the rule that decides."""
+        with self.reading() as db:
+            rows = db.execute(
+                "SELECT generation FROM teams WHERE scope=? AND lead=?", (scope, lead)
+            ).fetchall()
+        return alive_verdicts((row["generation"] for row in rows), self.alive)
+
+    def assignment_liveness(self, assignment, scope):
+        """The process evidence for the terminal an assignment belongs to."""
+        with self.reading() as db:
+            row = db.execute(
+                "SELECT t.lead FROM assignments a JOIN teams t ON t.id=a.team WHERE a.id=?",
+                (assignment,),
+            ).fetchone()
+        return self.terminal_liveness(scope, row["lead"]) if row else {}
+
     def team(self, scope, lead, generation):
-        with self.transaction() as db:
-            db.execute(
-                "INSERT OR IGNORE INTO teams VALUES (?,?,?,?)", (uid(), scope, lead, generation)
+        """Register this session's team for (scope, lead), or refuse: one terminal, one owning session.
+
+        This is the one seam both registration sites share (Store.actor and lead_store), so a session
+        that does not own the terminal registers nothing and is refused with the reason and the way
+        out. A session that descends from the owner (the owner's process is in this session's ancestor
+        chain) is refused whatever the owner's team holds: it is the owner's own session tree, not a
+        new session. An unrelated session is refused only while the owner is alive and its team holds
+        work; an idle terminal is free for the next session.
+
+        The owner row is read, the process evidence is gathered outside any transaction, and the
+        insert re-checks the owner: the residual window is the one the CLI's own live-lead check
+        has. The process evidence is injected, so the store keeps no subprocess code and a test can
+        stand for the process table."""
+        owner = None
+        for attempt in range(TEAM_ATTEMPTS):
+            with self.reading() as db:
+                rows = db.execute(
+                    "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC",
+                    (scope, lead),
+                ).fetchall()
+            mine = next((row for row in rows if row["generation"] == generation), None)
+            if mine is not None:
+                return mine["id"]  # this session's team: the common case, one read
+            # No `ps` runs while the store holds a lock: the evidence is gathered here, between the
+            # read that found the owner and the write that registers this session.
+            liveness = alive_verdicts((row["generation"] for row in rows), self.alive)
+            with self.reading() as db:
+                owner = owning_team(db, scope, lead, liveness=liveness)
+                work = owner is not None and team_holds_work(db, owner["id"], lead)
+            if owner is not None and owner["generation"] != generation:
+                if owner_session_tree(owner["generation"], self.ancestors):
+                    raise TerminalRefused(
+                        terminal_owned(lead, owner["generation"], REFUSED_IN_TREE)
+                    )
+                if alive_verdict(liveness, owner["generation"]) and work:
+                    raise TerminalRefused(
+                        terminal_owned(lead, owner["generation"], REFUSED_LIVE_OWNER)
+                    )
+            with self.transaction() as db:
+                current = db.execute(
+                    "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC",
+                    (scope, lead),
+                ).fetchall()
+                if current != rows and attempt < TEAM_ATTEMPTS - 1:
+                    continue  # the terminal's teams changed under the read: read them again
+                db.execute(
+                    "INSERT OR IGNORE INTO teams VALUES (?,?,?,?)", (uid(), scope, lead, generation)
+                )
+                return db.execute(
+                    "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
+                    (scope, lead, generation),
+                ).fetchone()[0]
+        raise TerminalRefused(
+            terminal_owned(
+                lead,
+                owner["generation"] if owner else generation,
+                REFUSED_LIVE_OWNER,
             )
-            return db.execute(
-                "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
-                (scope, lead, generation),
-            ).fetchone()[0]
+        )
 
     def _link_task(self, db, team, worker, assignment, task_id, transfer):
         """D8/D11: link a ready task to the new assignment inside the registration transaction."""
@@ -384,6 +573,7 @@ class Store:
         the same fingerprint registers nothing and returns that assignment's identity with `_replay` set; with
         another fingerprint it is refused."""
         with self.transaction() as db:
+            owner = operation_id = fingerprint = None
             if operation:
                 owner, operation_id, fingerprint = operation
                 db.execute(self.OPERATIONS)
@@ -442,7 +632,7 @@ class Store:
                 identity["task_id"] = task_id
             return identity
 
-    def _bind(self, db, assignment, address, scope, turn=None, mode="fresh"):
+    def _bind(self, db, assignment, address, scope, turn=None, mode="fresh", liveness=None):
         row = db.execute(
             "SELECT a.worker,a.state,a.rowid AS sequence,t.id AS team,t.scope,t.lead "
             "FROM assignments a JOIN teams t ON t.id=a.team WHERE a.id=?",
@@ -465,7 +655,7 @@ class Store:
         ).fetchone()
         # The binding follows the same ownership rule as the authorization: the team that owns the
         # terminal binds its workers, and a session that left nothing behind never takes it.
-        owner = owning_team(db, scope, row["lead"], own_team=row["team"])
+        owner = owning_team(db, scope, row["lead"], own_team=row["team"], liveness=liveness)
         newer_generation = owner is not None and owner["id"] != row["team"]
         newer_address = db.execute(
             BIND_NEWER_ADDRESS_SQL, (address, scope, row["sequence"])
@@ -506,10 +696,11 @@ class Store:
         db.execute("INSERT OR REPLACE INTO dispatch_turns VALUES (?,?,?)", (assignment, turn, mode))
 
     def bind(self, assignment, address, scope, ack=None, turn=None, mode="fresh"):
+        liveness = self.assignment_liveness(assignment, scope)
         with self.transaction() as db:
             if ack:
                 self.acknowledge(db, *ack)
-            self._bind(db, assignment, address, scope, turn, mode)
+            self._bind(db, assignment, address, scope, turn, mode, liveness=liveness)
         dispatch_events.notify(self.directory)
 
     def mark_resume(self, assignment, turn, mode):
@@ -663,7 +854,7 @@ class Store:
         if wrote:
             dispatch_events.notify(self.directory)
 
-    def fail(self, assignment, inactive=False, restore=None):
+    def fail(self, assignment, inactive=False, restore: dict | None = None):
         """restore: prior link of a task a failed resume moved; it goes back to a still-live earlier assignment.
 
         inactive means the terminal is gone: the assignment then fails in any state but complete (a blocked or
@@ -687,23 +878,22 @@ class Store:
                 (assignment,),
             ).rowcount
             if changed:
-                live = (
-                    restore
-                    and restore["status"] != "pending"
-                    and restore["assignment"]
-                    and db.execute(
+                live = False
+                restored = None
+                if restore and restore.get("status") != "pending" and restore.get("assignment"):
+                    restored = restore
+                    live = db.execute(
                         "SELECT 1 FROM assignments WHERE id=? AND current=1 AND state NOT IN ('complete','failed')",
                         (restore["assignment"],),
                     ).fetchone()
-                )
-                if live:
+                if live and restored:
                     db.execute(
                         "UPDATE tasks SET status=?,owner=?,assignment=? WHERE id=? AND assignment=?",
                         (
-                            restore["status"],
-                            restore["owner"],
-                            restore["assignment"],
-                            restore["task_id"],
+                            restored["status"],
+                            restored["owner"],
+                            restored["assignment"],
+                            restored["task_id"],
                             assignment,
                         ),
                     )
@@ -897,6 +1087,7 @@ class Store:
         self, scope, address, parent, generation=None, assignment=None, name=None, defer_pin=False
     ):
         team = self.team(scope, address, generation) if parent is None else None
+        liveness = self.terminal_liveness(scope, parent or address)
         with self.transaction() as db:
             pending = False
             if parent is None:
@@ -931,7 +1122,7 @@ class Store:
                 if pinned and pinned[0] != row["team"]:
                     raise StoreError("stale caller session cannot adopt another team generation")
                 pending = row["state"] == "pending"
-            self.authorize(db, actor, pending=pending)
+            self.authorize(db, actor, pending=pending, liveness=liveness)
             if actor["worker_id"] and not pending:
                 if (
                     defer_pin
@@ -958,14 +1149,15 @@ class Store:
             "INSERT OR IGNORE INTO callers VALUES (?,?,?,?)", (scope, address, generation, team)
         )
 
-    def authorize(self, db, actor, pending=False):
+    def authorize(self, db, actor, pending=False, liveness=None):
         terminal = actor["parent"] or actor["address"]
-        owner = owning_team(db, actor["scope"], terminal, own_team=actor["team_id"])
+        owner = owning_team(
+            db, actor["scope"], terminal, own_team=actor["team_id"], liveness=liveness
+        )
         if not owner or owner["id"] != actor["team_id"]:
             raise StoreError(
-                "stale team generation: terminal %s is owned by generation %s; run this session in its own "
-                "hc terminal, or start a new session in this terminal once the owner is gone"
-                % (terminal, owner["generation"] if owner else "none")
+                "stale team generation: "
+                + terminal_owned(terminal, owner["generation"] if owner else "none")
             )
         if actor["worker_id"] and not pending:
             row = db.execute(

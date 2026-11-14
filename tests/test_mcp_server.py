@@ -59,7 +59,7 @@ class _Launched:
         reader.start()
         reader.join(timeout)
         if reader.is_alive():
-            raise subprocess.TimeoutExpired("server", timeout)
+            raise subprocess.TimeoutExpired("server", timeout or 0)
         return int(self.rc.read_text())
 
 
@@ -104,12 +104,16 @@ env -i "${v[@]}" "$PYTHON" -B -c "$WRAP" "$d/rc" "$@" <"$d/in" >"$d/out" 2>"$d/e
         (directory / "env").write_bytes(
             b"".join(("%s=%s" % kv).encode() + b"\0" for kv in env.items())
         )
-        self.proc.stdin.write(directory.as_posix() + "\n")
-        self.proc.stdin.flush()
+        stdin = self.proc.stdin
+        assert stdin is not None
+        stdin.write(directory.as_posix() + "\n")
+        stdin.flush()
         return _Launched(directory)
 
     def close(self):
-        self.proc.stdin.close()
+        stdin = self.proc.stdin
+        assert stdin is not None
+        stdin.close()
         self.proc.wait(timeout=10)
         self.dir.cleanup()
 
@@ -117,7 +121,7 @@ env -i "${v[@]}" "$PYTHON" -B -c "$WRAP" "$d/rc" "$@" <"$d/in" >"$d/out" 2>"$d/e
 class Session:
     """One server subprocess speaking newline-delimited JSON-RPC."""
 
-    def __init__(self, env, new_cli=False):
+    def __init__(self, env, new_cli: bool | FakeCli = False):
         """new_cli=True runs the server under its own fake `codex` process, so it has a generation of its own
         (pid:lstart of that ancestor) regardless of what the test runner itself runs under; a FakeCli runs it under that shared fake CLI instead."""
         if isinstance(new_cli, FakeCli):  # a further server process under an existing fake CLI
@@ -150,11 +154,13 @@ class Session:
         if not notify:
             self.next_id += 1
             message["id"] = self.next_id
-        self.proc.stdin.write(json.dumps(message) + "\n")
-        self.proc.stdin.flush()
+        stdin, stdout = self.proc.stdin, self.proc.stdout
+        assert stdin is not None and stdout is not None
+        stdin.write(json.dumps(message) + "\n")
+        stdin.flush()
         if notify:
             return None
-        reply = json.loads(self.proc.stdout.readline())
+        reply = json.loads(stdout.readline())
         assert reply["id"] == self.next_id, reply
         return reply
 
@@ -171,10 +177,12 @@ class Session:
         return reply
 
     def close(self):
-        self.proc.stdin.close()
+        stdin, stdout, stderr = self.proc.stdin, self.proc.stdout, self.proc.stderr
+        assert stdin is not None and stdout is not None and stderr is not None
+        stdin.close()
         self.proc.wait(timeout=10)
-        self.proc.stdout.close()
-        self.proc.stderr.close()
+        stdout.close()
+        stderr.close()
 
 
 class InProcessSession:

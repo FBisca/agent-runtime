@@ -114,6 +114,10 @@ class Operations(FakeHc):
             **ENV,
         )
         self.env["HC_TERMINAL_SOCKET"] = str(self.socket_path)
+        # The lead's own generation: a session id, so the fixtures do not depend on the ancestry of
+        # the process that runs the test. A second generation on this terminal is another session,
+        # and the store refuses that while the lead's team holds work.
+        self.session = {"identity": (hc_tools.hc_server(self.env), "operations-lead")}
 
     def call_tool(self, tool, arguments):
         # the resolver's `hc get` runs on the process PATH: point it at the fake hc, never a real one
@@ -228,7 +232,7 @@ class OperationReplayTests(Operations):
         old_owner = self.owner()
         self.socket_path.unlink()
         self.bind_socket()
-        self.session = {}
+        self.session = dict(self.session)
         for key in ("old-spawn", "old-resume"):
             found = self.lookup(key)
             self.assertEqual(found["state"], "unknown")
@@ -249,7 +253,7 @@ class OperationReplayTests(Operations):
         """agent-runtime/R263: owner generation excludes the orchestrator process/session."""
         first = self.spawned()
         owner = self.owner()
-        self.session = {}
+        self.session = dict(self.session)
         with mock.patch.object(hc_tools.lib, "cli_generation", return_value="new-orchestrator"):
             self.assertEqual(self.owner(), owner)
             self.assertEqual(self.lookup()["assignment_id"], first["assignment_id"])
