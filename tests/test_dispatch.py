@@ -736,6 +736,31 @@ class TerminalRefusalTests(ToolCase):
         self.addCleanup(proc.wait)
         return "%d:%s" % (proc.pid, lib.lstart(proc.pid))
 
+    def test_S1_a_session_that_descends_from_the_owner_is_refused(self):
+        """stale-team-generation/S1: the session that descends from the owner never takes the terminal."""
+        owner = self.live_generation()
+        team = self.store.claim_team(self.scope, self.terminal, owner)
+        self.store.register(team, "w1")  # the owner's team holds work
+        owner_pid = int(owner.split(":")[0])
+        with self.assertRaises(TerminalRefused) as error:
+            self.store.claim_team(
+                self.scope,
+                self.terminal,
+                "4242:descendant",
+                ancestors=lambda: [owner_pid],  # the owner is in this session's ancestor chain
+            )
+        message = str(error.exception)
+        self.assertIn(self.terminal, message, "the refusal does not name the terminal")
+        self.assertIn(owner, message, "the refusal does not name the owning generation")
+        actor = self.store.actor(self.scope, self.terminal, None, generation=owner)
+        self.assertEqual(actor["team_id"], team, "the owner lost its terminal")
+        with self.store.transaction() as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM teams").fetchone()[0],
+                1,
+                "the descendant registered a team",
+            )
+
     def test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out(self):
         """stale-team-generation/S6: a refusal names the reason and the way out."""
         owner = self.live_generation()

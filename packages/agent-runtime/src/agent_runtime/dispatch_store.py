@@ -74,6 +74,14 @@ SNAPSHOT_SQL = (
     "AND (? NOT IN ('all','any') OR (w.active=1 AND a.state NOT IN ('complete','failed')) "
     "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) ORDER BY a.rowid"
 )
+# The liveness rule the CLI's live-lead check reads: unfinished assignments or results not yet
+# acknowledged. It mirrors the snapshot's "all" branch, so one reader decides what a live owner holds.
+LIVE_WORK_SQL = (
+    "SELECT 1 FROM assignments a JOIN workers w ON w.id=a.worker WHERE a.team=? "
+    "AND ((w.active=1 AND a.state NOT IN ('complete','failed')) "
+    "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) LIMIT 1"
+)
+# The same rule, written where it runs: the query is a literal, so the reader sees the whole rule.
 READ_MEMBERS_SQL = (
     "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
     "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name,d.turn,d.mode FROM assignments a LEFT JOIN dispatch_turns d ON d.assignment=a.id "
@@ -140,23 +148,19 @@ def terminal_owned(terminal, generation):
 # operation. The caller's own row is never skipped for it, so a caller always has a team; when every
 # other row would be skipped, the newest one owns the terminal.
 GENERATION_PID = re.compile(r"^(\d+):(.+)$")
-# The ancestry walk below spends a ps per hop, and it runs only when a terminal has an owner and a
-# second session wants it.
-ANCESTRY_BUDGET_SECONDS = 2.0
-# A process table that answers late is not proof that a process is gone: the walk is tried again.
-ANCESTRY_TRIES = 3
 
 
-def generation_alive(generation):
+def generation_alive(generation, stamp=None):
     """True when the generation's process is provably alive: that pid still carries that start stamp.
 
     A generation with no pid is never provably alive (nor provably dead): only what its team holds
-    can judge it."""
+    can judge it. The process evidence is injected, so the store keeps no subprocess code and a test
+    can stand for the process table."""
     match = GENERATION_PID.match(generation) if isinstance(generation, str) else None
     if not match:
         return False
-    exists, stamp = process_start_stamp(int(match.group(1)))
-    return exists and stamp == match.group(2)
+    exists, start = (stamp or process_start_stamp)(int(match.group(1)))
+    return exists and start == match.group(2)
 
 
 def team_empty(db, team):
@@ -190,48 +194,38 @@ def team_empty(db, team):
     return True
 
 
-_ANCESTORS = None
+def owner_session_tree(owner_generation, ancestors=None):
+    """True when the owner's process is in this process's ancestor chain.
 
-
-def ancestor_pids():
-    """The pids above this process, and whether the walk read the whole chain.
-
-    The walk is computed once and kept: it spends a ps per hop, and a loaded machine can push a hop
-    past its budget. A walk that could not read a hop is tried again: a process table that answers
-    late is not proof that the process is gone."""
-    global _ANCESTORS
-    if _ANCESTORS is None:
-        for _ in range(ANCESTRY_TRIES):
-            seen = set()
-            pid = os.getppid()
-            deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
-            while pid > 1 and pid not in seen and time.monotonic() < deadline:
-                seen.add(pid)
-                entry = lib.ps_entry(pid)
-                if not entry:
-                    break
-                pid = entry[0]
-            if pid <= 1:  # the chain reached the root: it is the whole tree
-                _ANCESTORS = seen
-                break
-    return (_ANCESTORS, True) if _ANCESTORS is not None else (set(), False)
-
-
-def owner_session_tree(owner_generation):
-    """True when the owner's process is an ancestor of this process.
-
-    A session that runs inside the owner's own process tree is that session's continuation, not a
-    rival session: the owner keeps the terminal, and the continuation is not refused here. A process
-    table that could not be read proves nothing, and a session whose owner is not alive is not
-    refused either, so an unreadable table refuses nothing."""
+    A session that descends from the owner (the owner's pid in the caller's ancestor chain) is the
+    owner's own session tree, not a new session: it may not take the owner's terminal, whatever the
+    owner's team holds. The ancestry is injected, so the store keeps no subprocess code and a test
+    can stand for the process table."""
     owner = GENERATION_PID.match(owner_generation) if isinstance(owner_generation, str) else None
     if not owner:
         return False
-    owner_pid = int(owner.group(1))
-    if owner_pid == os.getpid():
-        return False
-    ancestors, complete = ancestor_pids()
-    return owner_pid in ancestors if complete else True
+    return int(owner.group(1)) in ((ancestors or lib.ancestor_pids)())
+
+
+def team_holds_work(db, team, lead=None):
+    """True when the team holds work its lead is still serving: unfinished assignments or a message
+    the lead has not acknowledged.
+
+    This is the liveness rule (the one the CLI's live-lead check reads), not the emptiness rule: an
+    owner that holds only a task, an operation or a last-wait row is idle, and an idle terminal is
+    free for the next session."""
+    if db.execute(
+        "SELECT 1 FROM assignments a JOIN workers w ON w.id=a.worker WHERE a.team=? "
+        "AND ((w.active=1 AND a.state NOT IN ('complete','failed')) "
+        "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) LIMIT 1",
+        (team,),
+    ).fetchone():
+        return True
+    return bool(
+        db.execute(
+            "SELECT 1 FROM messages WHERE team=? AND recipient=? AND acked=0 LIMIT 1", (team, lead)
+        ).fetchone()
+    )
 
 
 def owning_team(db, scope, lead, own_team=None, own_generation=None):
@@ -361,6 +355,17 @@ class Store:
             db.execute("PRAGMA user_version=2")
 
     @contextmanager
+    def reading(self):
+        """A read-only connection: the owner row and the work it holds are read outside the write
+        transaction, so no process evidence runs while the store's write lock is held."""
+        db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        try:
+            yield db
+        finally:
+            db.close()
+
+    @contextmanager
     def transaction(self):
         db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
         db.row_factory = sqlite3.Row
@@ -390,14 +395,34 @@ class Store:
                 (scope, lead, generation),
             ).fetchone()[0]
 
-    def claim_team(self, scope, lead, generation):
+    def claim_team(self, scope, lead, generation, alive=None, ancestors=None):
         """Register this session's team for (scope, lead), or refuse: one terminal, one owning session.
 
         A session that would take the terminal from the session that owns it is refused here, so no
-        team row is registered for it. The owner keeps the terminal while it is alive and its team
-        holds work; a terminal whose owner left nothing behind is free for the next session. A
-        session that runs inside the owner's own process tree is that session's continuation, not a
-        rival: the owner's terminal is not taken from it here."""
+        team row is registered for it. A session that descends from the owner (the owner's process is
+        in this session's ancestor chain) is refused whatever the owner's team holds: it is the
+        owner's own session tree, not a new session. An unrelated session is refused only while the
+        owner is alive and its team holds work; an idle terminal is free for the next session.
+
+        The owner row is read, the process evidence is gathered outside the write transaction, and the
+        insert re-checks the owner: the residual window is the one the CLI's own live-lead check has.
+        The process evidence is injected, so the store keeps no subprocess code and a test can stand
+        for the process table."""
+        with self.transaction() as db:
+            row = db.execute(
+                "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
+                (scope, lead, generation),
+            ).fetchone()
+            if row:
+                return row[0]  # this session's team: the common case, one transaction
+        with self.reading() as db:
+            owner = owning_team(db, scope, lead, own_generation=generation)
+            work = owner is not None and team_holds_work(db, owner["id"], lead)
+        if owner is not None and owner["generation"] != generation:
+            if owner_session_tree(owner["generation"], ancestors) or (
+                generation_alive(owner["generation"], alive) and work
+            ):
+                raise TerminalRefused(terminal_owned(lead, owner["generation"]))
         with self.transaction() as db:
             row = db.execute(
                 "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
@@ -405,14 +430,12 @@ class Store:
             ).fetchone()
             if row:
                 return row[0]
-            owner = owning_team(db, scope, lead, own_generation=generation)
-            if owner is not None and owner["generation"] != generation:
-                if (
-                    generation_alive(owner["generation"])
-                    and not team_empty(db, owner["id"])
-                    and not owner_session_tree(owner["generation"])
-                ):
-                    raise TerminalRefused(terminal_owned(lead, owner["generation"]))
+            current = owning_team(db, scope, lead, own_generation=generation)
+            if current is not None and current["generation"] != generation:
+                if owner is None or current["generation"] != owner["generation"]:
+                    # The owner changed under the read: the decision was about another owner, so this
+                    # session is told to try again rather than take a terminal it did not read.
+                    raise TerminalRefused(terminal_owned(lead, current["generation"]))
             db.execute(
                 "INSERT OR IGNORE INTO teams VALUES (?,?,?,?)", (uid(), scope, lead, generation)
             )
@@ -485,6 +508,7 @@ class Store:
         the same fingerprint registers nothing and returns that assignment's identity with `_replay` set; with
         another fingerprint it is refused."""
         with self.transaction() as db:
+            owner = operation_id = fingerprint = None
             if operation:
                 owner, operation_id, fingerprint = operation
                 db.execute(self.OPERATIONS)
@@ -764,7 +788,7 @@ class Store:
         if wrote:
             dispatch_events.notify(self.directory)
 
-    def fail(self, assignment, inactive=False, restore=None):
+    def fail(self, assignment, inactive=False, restore: dict | None = None):
         """restore: prior link of a task a failed resume moved; it goes back to a still-live earlier assignment.
 
         inactive means the terminal is gone: the assignment then fails in any state but complete (a blocked or
@@ -788,23 +812,22 @@ class Store:
                 (assignment,),
             ).rowcount
             if changed:
-                live = (
-                    restore
-                    and restore["status"] != "pending"
-                    and restore["assignment"]
-                    and db.execute(
+                live = False
+                restored = None
+                if restore and restore.get("status") != "pending" and restore.get("assignment"):
+                    restored = restore
+                    live = db.execute(
                         "SELECT 1 FROM assignments WHERE id=? AND current=1 AND state NOT IN ('complete','failed')",
                         (restore["assignment"],),
                     ).fetchone()
-                )
-                if live:
+                if live and restored:
                     db.execute(
                         "UPDATE tasks SET status=?,owner=?,assignment=? WHERE id=? AND assignment=?",
                         (
-                            restore["status"],
-                            restore["owner"],
-                            restore["assignment"],
-                            restore["task_id"],
+                            restored["status"],
+                            restored["owner"],
+                            restored["assignment"],
+                            restored["task_id"],
                             assignment,
                         ),
                     )

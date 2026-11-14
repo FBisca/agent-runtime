@@ -114,7 +114,7 @@ def run(argv, env, ctx, timeout=SHORT_SECONDS):
                 raise ToolError("%s timed out after %ss" % (" ".join(argv[:2]), timeout))
 
 
-def hc(args, env, ctx, timeout=SHORT_SECONDS):
+def hc(args, env, ctx, timeout: float = SHORT_SECONDS):
     code, out, err = run(["hc"] + args, env, ctx, timeout)
     if code != 0:
         raise ToolError((err.strip() or out.strip() or "hc %s failed" % args[0]))
@@ -394,7 +394,7 @@ def operation_fingerprint(verb, **fields):
 def replayed(store, identity, name, caller, address=None):
     """The answer to a repeated operation_id: the first call's assignment and where it stands now. Nothing is sent."""
     view = store.assignment_info(identity["assignment_id"])
-    payload = dict(
+    payload: dict = dict(
         identity,
         name=view.get("name") or name,
         address=address or store.worker_address(identity["team_id"], view.get("name") or name),
@@ -565,6 +565,7 @@ def spawn(arguments, env, ctx):
     if kind != "worker":
         raise gap("spawn kind=%s" % kind, "hc run --bg ...")
     profile = None
+    configured = {}
     if cli not in CLIS:
         profile = cli
         try:
@@ -601,6 +602,10 @@ def spawn(arguments, env, ctx):
     if not caller:
         raise ToolError("HC_TERMINAL_ID is not set; cannot address the report")
     store = None
+    team = None
+    scope = None
+    identity = {}
+    earlier = None
     message = (
         "%s\n\nWhen done or stuck, call the agent-runtime report tool with your result." % task
     )
