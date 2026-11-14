@@ -74,7 +74,7 @@ class DraftTests(PrFixture, unittest.TestCase):
                 self.worker_done(tests=True),
                 self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
                 self.worker_done("t1r1"),
-                self.reviewer_done_again(),
+                self.reviewer_done_again(self.review2(**self.closure(MAJOR))),
             ]
         )
         self.run_driver()

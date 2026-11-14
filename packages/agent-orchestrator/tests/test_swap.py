@@ -87,7 +87,10 @@ class SwapTests(ReuseFixture, unittest.TestCase):
             self.reviewer_done(self.review2(verdict="block", items=[self.blocking()])),
             sample(195000),
         )
-        again = with_id(self.re_review(), spawn_id("demo-t1-review", 2))
+        again = with_id(
+            self.re_review(self.review2(**self.closure(self.blocking()))),
+            spawn_id("demo-t1-review", 2),
+        )
         self.waits([self.worker_done(tests=True), first, self.fix_report(), again])
         self.run_driver()
         base = self.git(self.repo, "rev-parse", "HEAD")
