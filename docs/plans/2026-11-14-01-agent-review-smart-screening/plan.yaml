@@ -1,0 +1,183 @@
+schema: plan/1
+slug: 01-agent-review-smart-screening
+goal: "A reviewer can evaluate relevant repository and global questions against changed files and cross-file interactions, with critical safeguard coverage intact and what the screening cost legible."
+spec: docs/specs/agent-review.md
+domain: screening
+archive: promote
+outcome: [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13]
+scenarios:
+  - id: S1
+    when: "a repository provides `.agent-review.yaml` or a caller specifies `--config`"
+    then: "its questions and sensitive paths extend the mandatory global baseline without disabling or overriding it"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S1 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S2
+    when: "a whole-diff applicability judgment is uncertain or fails"
+    then: "uncertain groups are retained; total filter failure evaluates all question groups"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S2 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S3
+    when: "a changed file, directory, or rename matches a global or repository sensitive path"
+    then: "the result requires full deep review regardless of screening score"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S3 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S4
+    when: "a change exceeds one request context budget"
+    then: "every changed hunk is accounted for by deterministic file/hunk chunks with provider-aware batching and bounded concurrency"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S4 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S5
+    when: "cross-file screening cannot receive sufficient context"
+    then: "the result requests full deep review and records the coverage limitation"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S5 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S6
+    when: "critical/high questions are flagged or uncertain, or high-confidence advisory findings are flagged"
+    then: "the outcome records model-specific-threshold escalation signals and full provenance"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S6 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S7
+    when: "a screening completes"
+    then: "the report names the model the provider resolved beside the configured alias and counts the provider calls actually made"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S7 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S8
+    when: "a report carries a cost"
+    then: "the cost is computed from the declared price table for the resolved model, an unlisted model is unknown rather than zero, and the same frozen input, configuration and table reproduce it"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S8 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S9
+    when: "the output directory cannot be written"
+    then: "the invocation is a refusal: exit 2, naming the path and the way out, never a traceback and never a screening"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S9 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S10
+    when: "a screening stops because the provider answered a judgment the question does not allow"
+    then: "the report keeps the usage and the judgments the execution already learned, so what was paid for is not discarded"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S10 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S11
+    when: "an invocation is refused and its output directory already holds a report"
+    then: "the refusal names the report it left standing, so a reader cannot mistake an earlier verdict for this one"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S11 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S12
+    when: "a question declares its options and the provider answers something else"
+    then: "the judgment is refused naming the question and its declared options, and the execution is incomplete rather than screened"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S12 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S13
+    when: "the provider reports a usage count that is not a whole number of tokens"
+    then: "the report carries a whole number, or refuses it naming the usage field, and never reports a boolean or a fraction as a token count"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S13 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
+tickets:
+  - id: T1
+    delivers: "Merge repository questions and sensitive paths into the mandatory baseline as additive configuration, screen whole-diff applicability with the D10 fallback, and route a global or repository sensitive path — renames included — to full deep review"
+    satisfies: [S1, S2, S3]
+    paths: [packages/agent-review/]
+    size: regular
+    difficulty: complex
+    risk: [state]
+  - id: T2
+    delivers: "Chunk the diff deterministically by file and hunk with provider-aware batching and bounded concurrency, screen cross-file interactions with an explicit coverage gap, and emit priority-and-confidence escalation signals with full provenance"
+    satisfies: [S4, S5, S6]
+    paths: [packages/agent-review/]
+    blocked_by: [T1]
+    size: regular
+    difficulty: complex
+    risk: [concurrency, external]
+  - id: T3
+    delivers: "Record what a screening cost: the provider's resolved model beside the configured alias, a `usage.requests` that counts the calls actually made, and a cost computed from a declared price table with an unknown model reported as unknown"
+    satisfies: [S7, S8]
+    paths: [packages/agent-review/]
+    blocked_by: [T2]
+    size: regular
+    difficulty: simple
+    risk: [external, state]
+  - id: T4
+    delivers: "Make every refusal a refusal and keep what a failure learned: an unworkable output directory exits 2 naming the path and the way out, a refused invocation names the report it left standing, an incomplete report keeps its usage and its valid judgments, a usage count is a whole number of tokens or is refused, and a choice judgment is one of its question's declared options"
+    satisfies: [S9, S10, S11, S12, S13]
+    paths: [packages/agent-review/]
+    blocked_by: [T3]
+    size: regular
+    difficulty: simple
+    risk: [state]
