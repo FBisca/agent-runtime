@@ -160,3 +160,8 @@ tickets:
     size: regular
     difficulty: complex
     risk: [state, retry-idempotency]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-14T19:44:03.891836+00:00'
+  base: 5f15af54f5c81dc8a9802e8c3073e9f5658e9a13
+  digest: ac0abea8ff26e3dcc344eb80360df36f1609c76f69204a0af66cd59289b43e97
