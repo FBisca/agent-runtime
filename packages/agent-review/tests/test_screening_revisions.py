@@ -116,14 +116,16 @@ def revisions(tmp_path, monkeypatch):
     return checkout
 
 
-def answer(capsys):
-    """The screening answer the invocation printed, read as JSON."""
-    return json.loads(capsys.readouterr().out)
+def report(revisions):
+    """The `report.json` the invocation wrote, read as JSON."""
+    path = revisions.output / "report.json"
+    assert path.is_file(), f"no report at {path}: an invocation writes one either way"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_S1_the_cli_screens_the_frozen_diff_between_two_revisions(revisions, capsys):
+def test_S1_the_cli_screens_the_frozen_diff_between_two_revisions(revisions):
     assert main(revisions.args()) == 0
-    screened = answer(capsys)
+    screened = report(revisions)
     assert screened["input"] == {"base": revisions.base, "head": revisions.head}
     assert [question["id"] for question in screened["questions"]] == [
         "contract.error-handling",
@@ -136,10 +138,10 @@ def test_S1_the_cli_screens_the_frozen_diff_between_two_revisions(revisions, cap
     assert screened["usage"]["requests"] == 1, "the port is called once per screening (D40)"
 
 
-def test_S1_the_packaged_baseline_bank_is_evaluated_without_a_configuration(revisions, capsys):
+def test_S1_the_packaged_baseline_bank_is_evaluated_without_a_configuration(revisions):
     revisions.fixture.write_text(json.dumps({"responses": [{"judgments": []}]}), encoding="utf-8")
     assert main(revisions.args(**{"--config": None})) == 0
-    screened = answer(capsys)
+    screened = report(revisions)
     assert [question["id"] for question in screened["questions"]] == [
         question.id for question in questions.baseline().questions
     ], "an absent configuration evaluates the mandatory global baseline (D30)"
@@ -169,8 +171,8 @@ def test_S1_a_screening_failure_exits_nonzero_naming_the_reason(revisions, capsy
     assert "500" in capsys.readouterr().err
 
 
-def test_the_fixture_answer_is_the_only_thing_that_differs_between_runs(revisions, capsys):
+def test_the_fixture_answer_is_the_only_thing_that_differs_between_runs(revisions):
     assert main(revisions.args()) == 0
-    first = answer(capsys)
+    first = report(revisions)
     assert main(revisions.args()) == 0
-    assert answer(capsys) == first, "the same frozen input and configuration screen the same way"
+    assert report(revisions) == first, "the same frozen input and configuration screen the same way"
