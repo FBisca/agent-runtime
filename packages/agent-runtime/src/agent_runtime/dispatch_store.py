@@ -18,6 +18,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import agent_runtime as lib
 from . import dispatch_events
 from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT, process_start_stamp
 
@@ -116,6 +117,22 @@ class StorageError(StoreError):
     """The store itself is unusable (directory ownership, schema version); never an authorization verdict."""
 
 
+class TerminalRefused(StoreError):
+    """The terminal belongs to another session: this session does not own it and no team was registered."""
+
+
+# One message names a terminal's owner: the terminal, the generation that owns it and the way out.
+WAY_OUT = (
+    "run this session in its own hc terminal, "
+    "or start a new session in this terminal once the owner has exited"
+)
+
+
+def terminal_owned(terminal, generation):
+    """The one message a session gets when the terminal belongs to another generation."""
+    return "terminal %s is owned by generation %s; %s" % (terminal, generation, WAY_OUT)
+
+
 # One rule owns a terminal: the newest team row for that scope and terminal that is neither dead nor
 # empty. A row is dead when its generation is a `pid:lstart` stamp whose process no longer carries that
 # stamp; a generation with no pid is never provably dead, so its row is judged by what it holds. A row
@@ -123,6 +140,11 @@ class StorageError(StoreError):
 # operation. The caller's own row is never skipped for it, so a caller always has a team; when every
 # other row would be skipped, the newest one owns the terminal.
 GENERATION_PID = re.compile(r"^(\d+):(.+)$")
+# The ancestry walk below spends a ps per hop, and it runs only when a terminal has an owner and a
+# second session wants it.
+ANCESTRY_BUDGET_SECONDS = 2.0
+# A process table that answers late is not proof that a process is gone: the walk is tried again.
+ANCESTRY_TRIES = 3
 
 
 def generation_alive(generation):
@@ -166,6 +188,50 @@ def team_empty(db, team):
     ):
         return False
     return True
+
+
+_ANCESTORS = None
+
+
+def ancestor_pids():
+    """The pids above this process, and whether the walk read the whole chain.
+
+    The walk is computed once and kept: it spends a ps per hop, and a loaded machine can push a hop
+    past its budget. A walk that could not read a hop is tried again: a process table that answers
+    late is not proof that the process is gone."""
+    global _ANCESTORS
+    if _ANCESTORS is None:
+        for _ in range(ANCESTRY_TRIES):
+            seen = set()
+            pid = os.getppid()
+            deadline = time.monotonic() + ANCESTRY_BUDGET_SECONDS
+            while pid > 1 and pid not in seen and time.monotonic() < deadline:
+                seen.add(pid)
+                entry = lib.ps_entry(pid)
+                if not entry:
+                    break
+                pid = entry[0]
+            if pid <= 1:  # the chain reached the root: it is the whole tree
+                _ANCESTORS = seen
+                break
+    return (_ANCESTORS, True) if _ANCESTORS is not None else (set(), False)
+
+
+def owner_session_tree(owner_generation):
+    """True when the owner's process is an ancestor of this process.
+
+    A session that runs inside the owner's own process tree is that session's continuation, not a
+    rival session: the owner keeps the terminal, and the continuation is not refused here. A process
+    table that could not be read proves nothing, and a session whose owner is not alive is not
+    refused either, so an unreadable table refuses nothing."""
+    owner = GENERATION_PID.match(owner_generation) if isinstance(owner_generation, str) else None
+    if not owner:
+        return False
+    owner_pid = int(owner.group(1))
+    if owner_pid == os.getpid():
+        return False
+    ancestors, complete = ancestor_pids()
+    return owner_pid in ancestors if complete else True
 
 
 def owning_team(db, scope, lead, own_team=None, own_generation=None):
@@ -311,7 +377,42 @@ class Store:
             db.close()
 
     def team(self, scope, lead, generation):
+        """Insert a team row for (scope, lead) and this generation; it judges nobody.
+
+        A session registers through claim_team, the one seam both registration sites share. This
+        writes the row itself, for a fixture or another writer that is not a session."""
         with self.transaction() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO teams VALUES (?,?,?,?)", (uid(), scope, lead, generation)
+            )
+            return db.execute(
+                "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
+                (scope, lead, generation),
+            ).fetchone()[0]
+
+    def claim_team(self, scope, lead, generation):
+        """Register this session's team for (scope, lead), or refuse: one terminal, one owning session.
+
+        A session that would take the terminal from the session that owns it is refused here, so no
+        team row is registered for it. The owner keeps the terminal while it is alive and its team
+        holds work; a terminal whose owner left nothing behind is free for the next session. A
+        session that runs inside the owner's own process tree is that session's continuation, not a
+        rival: the owner's terminal is not taken from it here."""
+        with self.transaction() as db:
+            row = db.execute(
+                "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
+                (scope, lead, generation),
+            ).fetchone()
+            if row:
+                return row[0]
+            owner = owning_team(db, scope, lead, own_generation=generation)
+            if owner is not None and owner["generation"] != generation:
+                if (
+                    generation_alive(owner["generation"])
+                    and not team_empty(db, owner["id"])
+                    and not owner_session_tree(owner["generation"])
+                ):
+                    raise TerminalRefused(terminal_owned(lead, owner["generation"]))
             db.execute(
                 "INSERT OR IGNORE INTO teams VALUES (?,?,?,?)", (uid(), scope, lead, generation)
             )
@@ -896,7 +997,7 @@ class Store:
     def actor(
         self, scope, address, parent, generation=None, assignment=None, name=None, defer_pin=False
     ):
-        team = self.team(scope, address, generation) if parent is None else None
+        team = self.claim_team(scope, address, generation) if parent is None else None
         with self.transaction() as db:
             pending = False
             if parent is None:
@@ -963,9 +1064,8 @@ class Store:
         owner = owning_team(db, actor["scope"], terminal, own_team=actor["team_id"])
         if not owner or owner["id"] != actor["team_id"]:
             raise StoreError(
-                "stale team generation: terminal %s is owned by generation %s; run this session in its own "
-                "hc terminal, or start a new session in this terminal once the owner is gone"
-                % (terminal, owner["generation"] if owner else "none")
+                "stale team generation: "
+                + terminal_owned(terminal, owner["generation"] if owner else "none")
             )
         if actor["worker_id"] and not pending:
             row = db.execute(

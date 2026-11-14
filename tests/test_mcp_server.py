@@ -117,7 +117,7 @@ env -i "${v[@]}" "$PYTHON" -B -c "$WRAP" "$d/rc" "$@" <"$d/in" >"$d/out" 2>"$d/e
 class Session:
     """One server subprocess speaking newline-delimited JSON-RPC."""
 
-    def __init__(self, env, new_cli=False):
+    def __init__(self, env, new_cli: bool | FakeCli = False):
         """new_cli=True runs the server under its own fake `codex` process, so it has a generation of its own
         (pid:lstart of that ancestor) regardless of what the test runner itself runs under; a FakeCli runs it under that shared fake CLI instead."""
         if isinstance(new_cli, FakeCli):  # a further server process under an existing fake CLI

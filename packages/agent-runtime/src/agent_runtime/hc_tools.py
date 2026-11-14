@@ -330,7 +330,7 @@ def lead_store(env, ctx=None):
     _, caller = require_hc(env)
     scope, generation = dispatch_identity(env, ctx)
     store = getattr(ctx, "store", None) or dispatch.Store(env)
-    team = store.team(scope, caller, generation)
+    team = store.claim_team(scope, caller, generation)
     if ctx is not None:
         ctx.owned_team = team
     return store, team
@@ -1356,7 +1356,8 @@ def bounded(out):
 
 
 def diagnostic(name, arguments, env, ctx, error):
-    """Storage is unavailable: return HC-only state/screen with an explicit delivery error.
+    """Storage is unavailable, or the terminal belongs to another session: return HC-only state/screen
+    with an explicit delivery error.
 
     No store call happens, so nothing is acknowledged, pinned, adopted or completed.
     """
@@ -1374,9 +1375,10 @@ def diagnostic(name, arguments, env, ctx, error):
         payload = {"result": body}
     if not isinstance(payload, dict):
         payload = {"result": payload}
+    reason = "refused" if isinstance(error, dispatch.TerminalRefused) else "dispatch unavailable"
     payload["delivery_error"] = (
-        "dispatch unavailable (%s); diagnostic only, not an accepted report; "
-        "any receipt was not processed" % error
+        "%s (%s); diagnostic only, not an accepted report; "
+        "any receipt was not processed" % (reason, error)
     )
     return result(payload, structured=True)
 
@@ -1414,7 +1416,13 @@ def call(name, arguments, env, ctx):
     try:
         try:
             return call_dispatch(name, arguments, env, ctx)
-        except (sqlite3.Error, OSError, dispatch.StorageError, DiagnosticUnavailable) as error:
+        except (
+            sqlite3.Error,
+            OSError,
+            dispatch.StorageError,
+            dispatch.TerminalRefused,
+            DiagnosticUnavailable,
+        ) as error:
             if name in DIAGNOSTICS and dispatch_enabled(env):
                 return diagnostic(name, arguments, env, ctx, error)
             # A handler names a failure that came after its external effect itself; one that reaches this

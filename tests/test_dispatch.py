@@ -9,7 +9,7 @@ import time
 from types import SimpleNamespace
 from unittest import mock
 
-from test_mcp_server import RUNTIME_SRC
+from test_mcp_server import RUNTIME_SRC, FakeCli
 from test_operations import FakeHc
 from test_team_limit import team_of
 from test_tools import ToolCase, hc_in_process, raw
@@ -18,7 +18,7 @@ sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
 from agent_runtime import agent_runtime as lib
 from agent_runtime import dispatch_wait, hc_tools, mcp_server
-from agent_runtime.dispatch_store import MAX_BATCH_BYTES, Store, StoreError
+from agent_runtime.dispatch_store import MAX_BATCH_BYTES, Store, StoreError, TerminalRefused
 
 pytestmark = pytest.mark.integration
 
@@ -27,16 +27,28 @@ DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
 
 
 class DispatchTests(ToolCase):
-    def lead(self, generation="lead-session"):
+    def lead(self, generation="lead-session", socket="/hc/sock"):
+        """The lead's session.
+
+        A session that stands for a generation of its own gets a team row of its own, written the
+        way the store holds it: the store refuses a session that would take a terminal from the
+        session that owns it, so the fixture has to be able to hold the state that refusal is about.
+        """
+        cli = None
+        if generation != "lead-session":
+            cli = FakeCli()
+            self.addCleanup(cli.close)
+            generation = "%d:%s" % (cli.proc.pid, lib.lstart(cli.proc.pid))
+            Store({"HOME": str(self.dir / "home")}).team(os.path.realpath(socket), "t0", generation)
         return self.start(
             {"get:w1": {"out": raw("w1", "t0")}},
             {
                 "CODEX_THREAD_ID": generation,
                 "HC_SCOPE": "lead-token",
-                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "HC_TERMINAL_SOCKET": socket,
                 "AGENT_RUNTIME_DISPATCH": "1",
             },
-            new_cli=generation != "lead-session",
+            new_cli=cli if cli is not None else False,
         )
 
     def spawn(self, lead, cli="claude"):
@@ -48,12 +60,12 @@ class DispatchTests(ToolCase):
         self.assertFalse(result["isError"], text)
         return json.loads(text)
 
-    def worker(self, generation="worker-session"):
+    def worker(self, generation="worker-session", socket="/hc/sock"):
         return self.start(
             env={
                 "HC_TERMINAL_ID": "t9",
                 "HC_SCOPE": "worker-token",
-                "HC_TERMINAL_SOCKET": "/hc/sock",
+                "HC_TERMINAL_SOCKET": socket,
                 "CODEX_THREAD_ID": generation,
                 "AGENT_RUNTIME_DISPATCH": "1",
             },
@@ -703,6 +715,53 @@ class TeamOwnershipTests(ToolCase):
         message = str(error.exception)
         self.assertIn("stale team generation", message)
         self.assertIn(DEAD_GENERATION, message)
+
+
+class TerminalRefusalTests(ToolCase):
+    """The refusal and the fence name the terminal, the generation that owns it and the way out."""
+
+    def setUp(self):
+        super().setUp()
+        self.store = Store({"HOME": str(self.dir / "home")})
+        self.scope, self.terminal = "scope", "t0"
+
+    def live_generation(self):
+        """A generation whose process runs right now: this test process."""
+        return "%d:%s" % (os.getpid(), lib.lstart(os.getpid()))
+
+    def other_live_generation(self):
+        """A generation of another process that runs right now."""
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(proc.kill)
+        self.addCleanup(proc.wait)
+        return "%d:%s" % (proc.pid, lib.lstart(proc.pid))
+
+    def test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out(self):
+        """stale-team-generation/S6: a refusal names the reason and the way out."""
+        owner = self.live_generation()
+        team = self.store.claim_team(self.scope, self.terminal, owner)
+        self.store.register(team, "w1")  # the owner's team holds work
+        with self.assertRaises(TerminalRefused) as error:
+            self.store.claim_team(self.scope, self.terminal, "12345:other-session")
+        message = str(error.exception)
+        self.assertIn(self.terminal, message, "the refusal does not name the terminal")
+        self.assertIn(owner, message, "the refusal does not name the owning generation")
+        self.assertIn("hc terminal", message, "the refusal does not name the way out")
+        self.assertIn("new session", message, "the refusal does not name the way out")
+        with self.store.transaction() as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM teams").fetchone()[0],
+                1,
+                "the refused session registered a team",
+            )
+        newer = self.other_live_generation()
+        self.store.team(self.scope, self.terminal, newer)
+        with self.assertRaises(StoreError) as fenced:
+            self.store.actor(self.scope, self.terminal, None, generation=owner)
+        text = str(fenced.exception)
+        self.assertIn("stale team generation", text)
+        self.assertIn(self.terminal, text, "the fence does not name the terminal")
+        self.assertIn(newer, text, "the fence does not name the owning generation")
 
 
 class ClockedWaitTests(FakeHc):
