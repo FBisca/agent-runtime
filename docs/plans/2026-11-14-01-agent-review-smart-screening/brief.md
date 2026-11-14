@@ -13,11 +13,10 @@ Archive: **promote** into `docs/specs/agent-review.md`, as P0 did, so each scena
 - **T3** (S7, S8): `packages/agent-review/` — what a screening cost: the provider's resolved model beside the configured
   alias, a `usage.requests` that counts the calls actually made, and a `usage.cost_usd` computed from a declared price
   table, unknown when the model is unlisted.
-- **T4** (S9, S10, S11, S12): `packages/agent-review/` — the refusals and the failure report P0 left rough: an
+- **T4** (S9, S10, S11, S12, S13): `packages/agent-review/` — the refusals and the failure report P0 left rough: an
   unworkable `--output` is a refusal rather than a traceback, a refusal names the report it left standing, an
-  incomplete report keeps the usage and the judgments it already learned, a usage count is an integer or is refused,
-  the git calls are bounded and hold out the checkout's own config, and a `choice` judgment must be one of the
-  question's declared options.
+  incomplete report keeps the usage and the judgments it already learned, a usage count is a whole number of tokens
+  or is refused, and a `choice` judgment must be one of the question's declared options.
 
 ## Decisions
 
@@ -70,7 +69,9 @@ seam that proves it; they are additive to P0's contract and each names the regis
   class of defect as a malformed configuration. A refusal writes no report, and because the directory may still hold the
   report of an earlier invocation it names that report's `base..head` on stderr, so a reader cannot mistake it for this
   one. An incomplete execution keeps the usage and the judgments it already learned instead of discarding them: the
-  report is the only record of a screening that was charged for.
+  report is the only record of a screening that was charged for. A usage count is a whole number of tokens: a
+  boolean or a fraction is refused naming the field rather than reported as a token count, because the counters are
+  what a frozen report is measured with (P1-D8).
 - **P1-D10** A `choice` question declares its bounded options (`options: [<value>, ...]`) and a provider answer outside
   them is refused naming the question and the options (D44, D50). Without a declared option list a `choice` question is
   refused at configuration time rather than accepting any string: an unbounded choice is a boolean with extra steps.
@@ -84,7 +85,10 @@ One P0 finding is deliberately **not** in this plan: the repository's own wheel 
 (`tests/test_workspace_isolation.py::build_wheels` and `.github/workflows/ci.yml`) still build only the runtime and
 orchestrator members, so nothing watches the `agent-review` wheel. It cannot be a red-first scenario here — the file
 already passes its own tests, so a selection under it exits 5 (no tests ran) instead of failing on behaviour — and it
-is a repository-gate change in files this phase does not own. It wants its own chore ticket.
+is a repository-gate change in files this phase does not own. It wants its own chore ticket. One nit is out too: the
+git calls carry no timeout and hold out the global and system config but not the checkout's own `.git/config`, so a
+hanging git still hangs the CLI — proving it deterministically needs a fake `git` on `PATH` and a wait the seam does
+not provide, so it is recorded rather than pinned here.
 
 No deep-review agent is spawned in P1: the phase emits escalation signals for P2 to consume. No JSON-RPC, no benchmark,
 no plan review. Applicability never calls the provider more than once, and a screening is still made without retry, model

@@ -656,6 +656,33 @@ class ChoiceOptionTests(SmartScreeningFixture):
         self.assertFalse((self.output / "report.json").is_file())
 
 
+class UsageCountTests(SmartScreeningFixture):
+    def test_S13_a_boolean_usage_count_is_never_reported_as_tokens(self):
+        self.write_config()
+        counted = self.answers({CRITICAL: (True, 0.99)})
+        counted["usage"] = {"input_tokens": True, "output_tokens": 0.5}
+        self.write_fixture(self.applies(), counted)
+        report = self.judged(self.screen())
+        usage = report["usage"]
+        for field in ("input_tokens", "output_tokens"):
+            self.assertIsInstance(usage[field], int, f"{field} is a whole number of tokens")
+            self.assertIsNot(usage[field], True)
+            self.assertIsNot(usage[field], False)
+
+    def test_S13_a_usage_count_that_is_refused_is_named(self):
+        self.write_config()
+        counted = self.answers({CRITICAL: (True, 0.99)})
+        counted["usage"] = {"input_tokens": "many", "output_tokens": 0.5}
+        self.write_fixture(self.applies(), counted)
+        result = self.screen()
+        report = self.report()
+        if result.returncode == 0:
+            self.assertIsInstance(report["usage"]["input_tokens"], int, "a string count is not a token count")
+        else:
+            self.assertEqual(report["status"], "incomplete")
+            self.assertIn("input_tokens", report["failure"]["reason"], "a refusal names the usage field")
+
+
 class PricingTests(SmartScreeningFixture):
     def test_S8_a_listed_model_is_priced_from_the_declared_table(self):
         self.write_config()

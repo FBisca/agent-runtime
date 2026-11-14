@@ -4,7 +4,7 @@ goal: "A reviewer can evaluate relevant repository and global questions against 
 spec: docs/specs/agent-review.md
 domain: screening
 archive: promote
-outcome: [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12]
+outcome: [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13]
 scenarios:
   - id: S1
     when: "a repository provides `.agent-review.yaml` or a caller specifies `--config`"
@@ -138,6 +138,17 @@ scenarios:
       acceptance: [test_smart_screening_cli.py]
       package: packages/agent-review
       timeout: 600
+  - id: S13
+    when: "the provider reports a usage count that is not a whole number of tokens"
+    then: "the report carries a whole number, or refuses it naming the usage field, and never reports a boolean or a fraction as a token count"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest packages/agent-review/acceptance/screening/test_smart_screening_cli.py -q
+        -k "S13 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_smart_screening_cli.py]
+      package: packages/agent-review
+      timeout: 600
 tickets:
   - id: T1
     delivers: "Merge repository questions and sensitive paths into the mandatory baseline as additive configuration, screen whole-diff applicability with the D10 fallback, and route a global or repository sensitive path — renames included — to full deep review"
@@ -163,8 +174,8 @@ tickets:
     difficulty: simple
     risk: [external, state]
   - id: T4
-    delivers: "Make every refusal a refusal and keep what a failure learned: an unworkable output directory exits 2 naming the path and the way out, a refused invocation names the report it left standing, an incomplete report keeps its usage and its valid judgments, a usage count is an integer or is refused, a git call is bounded and holds out the checkout's own config, and a choice judgment is one of its question's declared options"
-    satisfies: [S9, S10, S11, S12]
+    delivers: "Make every refusal a refusal and keep what a failure learned: an unworkable output directory exits 2 naming the path and the way out, a refused invocation names the report it left standing, an incomplete report keeps its usage and its valid judgments, a usage count is a whole number of tokens or is refused, and a choice judgment is one of its question's declared options"
+    satisfies: [S9, S10, S11, S12, S13]
     paths: [packages/agent-review/]
     blocked_by: [T3]
     size: regular
