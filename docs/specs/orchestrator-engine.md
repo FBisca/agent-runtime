@@ -468,3 +468,16 @@ failure names the behaviour it broke and not a line number in a file that moved.
 - **R141** WHEN a worker's report names a required check through the RTK proxy launcher (`rtk proxy uv run pytest -q`) and the required check is `uv run pytest -q`, THEN the report is accepted: the proxy launcher is stripped before the command is compared, so the proxied spelling matches the required one whatever launcher follows the proxy. (from orchestrator-rtk-proxy-check/S1)
 - **R142** WHEN a worker's report names a command behind the proxy launcher that is not the required check (`rtk proxy echo uv run pytest -q`), THEN the report is refused and the refusal names the missing required check. (from orchestrator-rtk-proxy-check/S2)
 - **R143** WHEN a worker reads the contract the run wrote, THEN the contract names every launcher prefix the engine's strip list holds, `rtk proxy` among them. (from orchestrator-rtk-proxy-check/S4)
+
+## Requirements: orchestrator-rtk-proxy-check
+
+- **R144** WHEN a worker receives the brief that carries its required checks, THEN the brief tells the worker to run each required check through `rtk proxy` when its shell rewrites commands, and to report the command it ran, and the brief's required-check line is unchanged (from orchestrator-rtk-proxy-check/S3)
+
+## Coverage: orchestrator-rtk-proxy-check
+
+| Requirement | Scenario | Test nodes |
+|---|---|---|
+| R141 | S1 | `packages/agent-orchestrator/tests/test_checkpoint_rules.py::CheckpointRulesTests::test_S1_the_rtk_proxy_launcher_is_stripped_before_the_check_is_compared`<br>`packages/agent-orchestrator/tests/test_checkpoint_rules.py::CheckpointRulesTests::test_S1a_the_rtk_proxy_launcher_is_stripped_before_any_other_launcher`<br>`packages/agent-orchestrator/acceptance/driver/test_rtk_proxy.py` |
+| R142 | S2 | `packages/agent-orchestrator/tests/test_checkpoint_rules.py::CheckpointRulesTests::test_S2_a_command_behind_the_proxy_that_is_not_the_required_check_is_refused`<br>`packages/agent-orchestrator/acceptance/driver/test_rtk_proxy.py` |
+| R144 | S3 | `packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S3_the_brief_names_the_proxy_and_asks_for_the_command_the_worker_ran`<br>`packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S3_the_brief_names_the_proxy_and_asks_for_the_command_the_worker_ran`<br>`packages/agent-orchestrator/acceptance/driver/test_rtk_proxy_brief.py` |
+| R143 | S4 | `packages/agent-orchestrator/tests/test_checkpoint_rules.py::CheckpointRulesTests::test_S4_the_contract_names_every_launcher_prefix_the_strip_list_holds`<br>`packages/agent-orchestrator/acceptance/driver/test_rtk_proxy.py` |
