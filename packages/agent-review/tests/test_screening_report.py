@@ -231,7 +231,8 @@ def test_S1_a_score_between_two_rungs_completes_with_the_providers_own_number(re
     report = review.report()
     assert report["status"] == "completed"
     assert report["verdict"] == "screened"
-    assert report["judgments"][1]["value"] == 1.22, (
+    judged = {judgment["question"]: judgment for judgment in report["judgments"]}
+    assert judged["design.one-reason"]["value"] == 1.22, (
         "the judgment carries the number as the provider answered it, never a rung it was snapped to"
     )
 
