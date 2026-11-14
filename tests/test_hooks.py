@@ -854,17 +854,6 @@ class HookStoreCase(unittest.TestCase):
         store = dispatch_store.Store(self.env)
         return store, store.team(scope, lead, generation)
 
-    def stray_team(self, generation, lead="t0", scope="scope"):
-        """A newer team row for the terminal, written with SQL.
-
-        The store refuses a generation it does not own, so a fixture that needs the state that
-        refusal is about writes the row itself."""
-        store = dispatch_store.Store(self.env)
-        team = "stray-%s" % generation[:12]
-        with store.transaction() as db:
-            db.execute("INSERT INTO teams VALUES (?,?,?,?)", (team, scope, lead, generation))
-        return store, team
-
     def other_live_generation(self):
         """A generation of another process that runs right now: the test runner's own."""
         return "%d:%s" % (os.getpid(), lib.lstart(os.getpid()))
@@ -983,7 +972,7 @@ class LeadContextTests(HookStoreCase):
         def superseded(generation):  # the hook's team exists but a newer team for the lead does too
             store, team = self.team(generation)
             self.worker(store, team)
-            self.stray_team(self.other_live_generation())
+            self.team(self.other_live_generation())
 
         def other_lead(generation):
             store, team = self.team(generation, lead="t7")
@@ -1236,7 +1225,9 @@ class StopGuardTests(HookStoreCase):
         """The context reminder and the Stop guard read the same rule as the server: a newer row that is
         dead and empty does not hide the lead's own team, and a newer row that owns the terminal does."""
         self.unseen()  # the lead's own team holds work
-        _, dead = self.stray_team(DEAD_GENERATION)  # a newer row that left nothing behind
+        dead = self.store.team(
+            "scope", "t0", DEAD_GENERATION
+        )  # a newer row that left nothing behind
         self.assertIsNotNone(self.prompt())
         self.assertEqual(self.stop()[0], {"decision": "block", "reason": self.REASON % (1, 0)})
 
@@ -1244,7 +1235,7 @@ class StopGuardTests(HookStoreCase):
         self.assertIsNone(self.prompt())
         self.assertIsNone(self.stop()[0])
 
-        self.stray_team(self.other_live_generation())  # a running generation owns it
+        self.store.team("scope", "t0", self.other_live_generation())  # a running generation owns it
         self.assertIsNone(self.prompt())
         self.assertIsNone(self.stop()[0])
 
@@ -1252,7 +1243,7 @@ class StopGuardTests(HookStoreCase):
         """The ownership rule does not change when the lead stops: a lead whose wait result it has seen
         may end its turn, while the reminder still points at its own team."""
         self.unseen()  # the lead's own team holds work
-        self.stray_team(DEAD_GENERATION)  # a newer row that left nothing behind
+        self.store.team("scope", "t0", DEAD_GENERATION)  # a newer row that left nothing behind
         self.assertEqual(self.stop()[0], {"decision": "block", "reason": self.REASON % (1, 0)})
 
         self.last_wait(self.store, self.team_id, "attention", 2)  # the lead has seen the result
@@ -1481,7 +1472,7 @@ class StopGuardTests(HookStoreCase):
         self.worker(self.store, team)
         out, err, code = child.run(STOP, self.STOP)
         self.assertEqual((out["decision"], code), ("block", 0), err)
-        _, newer = self.stray_team("1:newer", lead="t5")  # a newer team supersedes the hook's
+        newer = self.store.team("scope", "t5", "1:newer")  # a newer team supersedes the hook's
         self.worker(self.store, newer)  # it still holds work, so it owns the terminal
         self.assertIsNone(child.run(STOP, self.STOP)[0])
         self.assertIsNone(self.stop()[0])  # t0 leads no team with needs
