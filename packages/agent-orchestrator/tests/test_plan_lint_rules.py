@@ -34,7 +34,7 @@ class LintRules(RunFixture, unittest.TestCase):
         path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         return path
 
-    def plan_cli(self, verb, path):
+    def plan_cli(self, verb, path, *extra):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = load_script().run_cli(
@@ -46,6 +46,7 @@ class LintRules(RunFixture, unittest.TestCase):
                     str(self.repo),
                     "--state-dir",
                     str(self.state_dir),
+                    *extra,
                 ]
             )
         return code, out.getvalue() + err.getvalue()
@@ -72,6 +73,30 @@ class LintRules(RunFixture, unittest.TestCase):
         config.write_text("tests:\n  patterns: ['check_*.sh']\n", encoding="utf-8")
         self.assertNotEqual(self.plan_cli("check", self.draft(["src/test_a.py"]))[0], 0)
         self.assertEqual(self.plan_cli("check", self.draft(["ci/check_a.sh"]))[0], 0)
+
+    def test_S4_amend_refuses_a_scenario_only_person_tickets_satisfy(self):
+        data = plan_data(("T1",))
+        scenario = next(s for s in data["scenarios"] if s["id"] == "S2")
+        scenario.pop("evidence")
+        ticket = data["tickets"][0]
+        ticket["satisfies"] = ["S2"]
+        ticket["paths"] = ["docs/"]
+        ticket.pop("size")
+        ticket.pop("difficulty")
+        ticket["owner"] = "Felippe"
+        data["approval"] = {
+            "by": "lead@example.invalid",
+            "at": "2026-11-14T00:00:00+00:00",
+            "base": "a" * 40,
+            "digest": "b" * 64,
+        }
+        path = self.repo / "docs" / "plans" / "amend.plan.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        code, said = self.plan_cli("amend", path, "--reason", "because")
+        self.assertNotEqual(code, 0, said)
+        for needle in ("S2", "T1", "human", "agent", "complete --cover"):
+            self.assertIn(needle, said)
 
     def test_S3_the_driver_load_never_lints_an_approved_plan(self):
         path = self.draft(["pyproject.toml"])

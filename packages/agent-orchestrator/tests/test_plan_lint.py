@@ -1,5 +1,6 @@
 """A ticket whose Paths can hold no test is refused before it is built: the covers gate would strand its worker
-(plan-amend/S1)."""
+(plan-amend/S1). A scenario that carries no evidence and that only person-owned tickets satisfy is refused too:
+nothing can prove it (lead-decision-gates/S4, S5)."""
 
 import unittest
 from unittest import mock
@@ -72,6 +73,56 @@ class PlanLint(RunFixture, unittest.TestCase):
             with self.subTest(verb=verb):
                 result = self.plan_cli(verb, path)
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    def write_person_plan(self, evidence=None, owner="Felippe", paths=None):
+        """A plan whose scenario S2 carries no evidence and is satisfied only by a person-owned ticket."""
+        data = plan_data(("T1",))
+        scenario = next(s for s in data["scenarios"] if s["id"] == "S2")
+        scenario.pop("evidence")
+        if evidence is not None:
+            scenario["evidence"] = evidence
+        ticket = data["tickets"][0]
+        ticket["satisfies"] = ["S2"]
+        ticket["paths"] = paths if paths is not None else ["docs/"]
+        ticket.pop("size")
+        ticket.pop("difficulty")
+        ticket["owner"] = owner
+        path = self.repo / "docs" / "plans" / "person.plan.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        return path
+
+    def test_S4_plan_check_refuses_a_scenario_only_person_tickets_satisfy(self):
+        path = self.write_person_plan()
+        for verb in ("check", "approve"):
+            with self.subTest(verb=verb):
+                result = self.plan_cli(verb, path)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                said = result.stdout + result.stderr
+                for needle in ("S2", "T1", "human", "agent", "complete --cover"):
+                    self.assertIn(needle, said)
+                self.assertNotIn("approval", yaml.safe_load(path.read_text(encoding="utf-8")))
+
+    def test_S5_plan_check_accepts_an_agent_ticket_or_human_evidence(self):
+        # an agent ticket satisfies the scenario: its report's `covers` names the node
+        data = plan_data(("T1",))
+        scenario = next(s for s in data["scenarios"] if s["id"] == "S2")
+        scenario.pop("evidence")
+        ticket = data["tickets"][0]
+        ticket["satisfies"] = ["S2"]
+        ticket["paths"] = ["packages/x/tests/test_a.py"]
+        path = self.repo / "docs" / "plans" / "agent.plan.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        self.assertEqual(self.plan_cli("check", path).returncode, 0)
+        # a person-only scenario that carries `human` evidence: a person checks it
+        path = self.write_person_plan(evidence={"human": "confirm"})
+        self.assertEqual(self.plan_cli("check", path).returncode, 0)
+
+    def test_control_a_person_ticket_that_holds_no_test_keeps_its_plan_approvable(self):
+        # the person's work is not a test: its proof is a node recorded by hand, wherever it lives
+        path = self.write_person_plan(paths=["docs/runbook.md"])
+        self.assertEqual(self.plan_cli("check", path).returncode, 0)
 
     def test_control_a_directory_path_can_hold_a_test(self):
         path = self.write_plan(["src/a/"])
