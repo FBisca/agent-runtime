@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_review.questions import Question
+from agent_review.screening import limits
 
 REPORT = "report.json"
 COMPLETED = "completed"
@@ -38,6 +39,8 @@ class Report:
     output_tokens: int = 0
     # One screening is one request: the run never retries, so anything else would be a defect (D40).
     requests: int = 1
+    # Long context is the caller's opt-in, so the report says whether the larger budget was asked for.
+    long_context: bool = False
     failure: str | None = field(default=None)
 
     @property
@@ -57,6 +60,11 @@ class Report:
             "verdict": self.verdict,
             "input": {"base": self.base, "head": self.head},
             "model": self.model,
+            "limits": {
+                "long_context": self.long_context,
+                "per_question": limits(self.long_context).per_question,
+                "per_request": limits(self.long_context).per_request,
+            },
             "usage": {
                 "requests": self.requests,
                 "input_tokens": self.input_tokens,
