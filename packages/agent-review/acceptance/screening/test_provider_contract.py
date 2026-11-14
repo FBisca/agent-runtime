@@ -12,7 +12,9 @@ The contract it pins (brief.md, 00b-D1..00b-D4):
   - a score question carries its levels and a noul may carry criteria; a missing or misplaced one is refused by path
     before any request is made (00b-D1, 00b-D4)
   - a judgment keeps the provider's native answer: `noul` for a boolean, `score` and `confidence` for a score, `choice`
-    and `probabilities` for a choice; a value outside the declared levels or a confidence outside 0..1 is refused
+    and `probabilities` for a choice; a value between two of a score's declared levels is carried as the
+    provider answered it, while a value below the first rung or above the last, or a confidence outside 0..1,
+    is refused
   - the report names the provider endpoint, the served model beside the configured alias, the limits in force, whether
     long context was requested, and a digest of the bank
   - a request over the limit in force is incomplete with the provider's own reason, and the same change completes with
