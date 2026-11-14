@@ -253,7 +253,11 @@ class OperationReplayTests(Operations):
         with mock.patch.object(hc_tools.lib, "cli_generation", return_value="new-orchestrator"):
             self.assertEqual(self.owner(), owner)
             self.assertEqual(self.lookup()["assignment_id"], first["assignment_id"])
-            self.assertEqual(self.spawned()["assignment_id"], first["assignment_id"])
+            # A restarted orchestrator is another session for the same terminal: the terminal belongs to
+            # the live lead, so the restart is refused instead of taking it.
+            refused, text = self.call_tool("spawn", dict(SPAWN, operation_id="op-1"))
+            self.assertTrue(refused["isError"], text)
+            self.assertIn("owned by generation", text)
         self.assertEqual(len(self.runs("run")), 1)
 
     def test_legacy_owner_keys_are_unknown_instead_of_absent_or_replayed(self):

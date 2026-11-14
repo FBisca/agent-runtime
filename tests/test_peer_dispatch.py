@@ -13,6 +13,9 @@ from test_mcp_server import FakeCli
 
 pytestmark = pytest.mark.integration
 
+# A generation whose process is gone: no process carries that pid, so the row is provably dead.
+DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
+
 
 # R45: dispatch returns before the workers finish. A blocking dispatch waits for the turn (170s by
 # default), so a bound far below that still separates the two; the old one-second bound measured
@@ -239,6 +242,7 @@ class PeerDispatchTests(event_helpers.EventRig):
             {"to": "w2", "text": "old team", "assignment_id": self.assignments[0]["assignment_id"]},
         )
         self.assertFalse(old["isError"], text)
+        self.retire_lead()
         replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"), new_cli=True)
         self.addCleanup(replacement.close)
         replacement.handshake()
@@ -276,7 +280,20 @@ class PeerDispatchTests(event_helpers.EventRig):
         self.assertEqual(sent["structuredContent"]["recipient"], child["worker_id"])
         self.assertEqual(self.runs("send"), [])
 
+    def retire_lead(self):
+        """The lead's session is gone: its team row names a generation whose process is gone.
+
+        A session that inherits a terminal takes it only from a session that left nothing behind:
+        the store refuses a session that would take a terminal from the session that owns it, so a
+        fixture that needs the state that refusal is about writes the row itself."""
+        with Store(self.env).transaction() as db:
+            db.execute(
+                "UPDATE teams SET generation=? WHERE id=?",
+                (DEAD_GENERATION, self.assignments[0]["team_id"]),
+            )
+
     def replace_team_without_contacting_old_workers(self):
+        self.retire_lead()
         replacement = Session(dict(self.env, CODEX_THREAD_ID="replacement-lead"), new_cli=True)
         self.addCleanup(replacement.close)
         replacement.handshake()

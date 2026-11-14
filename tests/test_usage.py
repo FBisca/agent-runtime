@@ -56,6 +56,18 @@ class CodexProfileTests(ToolCase):
     def metadata(self, worker="w1"):
         return json.loads(self.metadata_path(worker).read_text())
 
+    def lead_generation(self):
+        """The generation the lead's own server registered for this terminal.
+
+        The spawn that runs in this process must present the same generation as the server that
+        spawned the other workers: a second generation would be a second session asking for the
+        same terminal, and the store refuses that while the lead's team holds work."""
+        from agent_runtime.dispatch_store import Store
+
+        with Store({"XDG_STATE_HOME": str(self.state())}).transaction() as db:
+            row = db.execute("SELECT generation FROM teams ORDER BY rowid DESC LIMIT 1").fetchone()
+        return row["generation"] if row else "clock-session"
+
     def spawn(
         self,
         cli="codex",
@@ -297,7 +309,7 @@ class CodexProfileTests(ToolCase):
 
         with (
             mock.patch.object(hc_tools.lib, "resolve", return_value={"runtime": "hc"}),
-            mock.patch.object(hc_tools.lib, "cli_generation", return_value="clock-session"),
+            mock.patch.object(hc_tools.lib, "cli_generation", return_value=self.lead_generation()),
             mock.patch.object(hc_tools, "run", side_effect=worker_starts),
             mock.patch.object(usage, "now_ms", side_effect=lambda: clock[0]),
         ):
