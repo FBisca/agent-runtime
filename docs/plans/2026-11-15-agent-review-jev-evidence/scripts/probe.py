@@ -136,11 +136,17 @@ def diff(base, head):
 def post(payload, timeout=180.0, headers=None):
     key = os.environ.get("TYPESAFE_API_KEY", "").strip()
     if not key:
-        raise SystemExit("TYPESAFE_API_KEY is not in the environment; run this under zsh with the secrets sourced")
+        raise SystemExit(
+            "TYPESAFE_API_KEY is not in the environment; run this under zsh with the secrets sourced"
+        )
     request = urllib.request.Request(
         URL,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {key}", "content-type": "application/json", **(headers or {})},
+        headers={
+            "Authorization": f"Bearer {key}",
+            "content-type": "application/json",
+            **(headers or {}),
+        },
         method="POST",
     )
     started = time.monotonic()
@@ -197,7 +203,10 @@ def report(label, result, payload, ids):
     answers = body.get("answers") or {}
     if isinstance(answers, dict):
         got = set(answers)
-        lines.append(f"answered: {len(got)}/{len(ids)}" + (f"  missing: {sorted(set(ids) - got)}" if set(ids) - got else ""))
+        lines.append(
+            f"answered: {len(got)}/{len(ids)}"
+            + (f"  missing: {sorted(set(ids) - got)}" if set(ids) - got else "")
+        )
         for name, answer in answers.items():
             lines.append(f"  {name}: {json.dumps(answer)}")
     lines.append(f"usage: {json.dumps(body.get('usage'))}")
@@ -209,7 +218,9 @@ def report(label, result, payload, ids):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["tiny", "nocriteria", "full", "explicit", "limits", "nodiff", "chunks"])
+    parser.add_argument(
+        "mode", choices=["tiny", "nocriteria", "full", "explicit", "limits", "nodiff", "chunks"]
+    )
     args = parser.parse_args()
     bank_questions = bank().questions
 
@@ -255,8 +266,10 @@ def main():
             current += piece
         caps.append(current)
         ids = [q.id for q in bank_questions]
-        print(f"change {base}..{head}: {len(pieces)} files -> {len(caps)} chunks "
-              f"({[len(c) for c in caps]} bytes)")
+        print(
+            f"change {base}..{head}: {len(pieces)} files -> {len(caps)} chunks "
+            f"({[len(c) for c in caps]} bytes)"
+        )
         results = []
         for index, chunk in enumerate(caps, start=1):
             payload = {
@@ -288,9 +301,13 @@ def main():
             if result.get("status") == 200:
                 body = json.loads(result["body"])
                 usage = body.get("usage") or {}
-                print(f"cap {cap:>7} bytes -> 200  elapsed {result['elapsed']}s  input_tokens {usage.get('input_tokens')}")
+                print(
+                    f"cap {cap:>7} bytes -> 200  elapsed {result['elapsed']}s  input_tokens {usage.get('input_tokens')}"
+                )
             else:
-                print(f"cap {cap:>7} bytes -> {result.get('status')}  {str(result.get('body'))[:120]}")
+                print(
+                    f"cap {cap:>7} bytes -> {result.get('status')}  {str(result.get('body'))[:120]}"
+                )
         return
 
     else:

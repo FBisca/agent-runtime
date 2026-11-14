@@ -64,18 +64,36 @@ LEVELS = {
 }
 
 QUESTIONS = [
-    ("contract.error-handling", "critical",
-     "How severely does the change violate: every new failure at a boundary surfaces an error a caller can act on"),
-    ("contract.requirement-traceability", "critical",
-     "How severely does the change violate: every behaviour it alters traces to a stated requirement or a stated cause"),
-    ("contract.test-evidence", "high",
-     "How severely does the change violate: a test would fail without the change, for each behaviour it alters"),
-    ("engineering.abstraction-levels", "advisory",
-     "How severely does the change violate: each unit keeps to one level of abstraction"),
-    ("engineering.hidden-state", "high",
-     "How severely does the change violate: state stays explicit, and no logic branches on three or more booleans"),
-    ("engineering.survival-priority", "critical",
-     "How severely does the change violate: the running system stays available and correct through its own failure modes"),
+    (
+        "contract.error-handling",
+        "critical",
+        "How severely does the change violate: every new failure at a boundary surfaces an error a caller can act on",
+    ),
+    (
+        "contract.requirement-traceability",
+        "critical",
+        "How severely does the change violate: every behaviour it alters traces to a stated requirement or a stated cause",
+    ),
+    (
+        "contract.test-evidence",
+        "high",
+        "How severely does the change violate: a test would fail without the change, for each behaviour it alters",
+    ),
+    (
+        "engineering.abstraction-levels",
+        "advisory",
+        "How severely does the change violate: each unit keeps to one level of abstraction",
+    ),
+    (
+        "engineering.hidden-state",
+        "high",
+        "How severely does the change violate: state stays explicit, and no logic branches on three or more booleans",
+    ),
+    (
+        "engineering.survival-priority",
+        "critical",
+        "How severely does the change violate: the running system stays available and correct through its own failure modes",
+    ),
 ]
 
 WEIGHT = {"critical": 3, "high": 2, "advisory": 1}
@@ -119,19 +137,39 @@ def main():
                 usage["input_tokens"] += u.get("input_tokens") or 0
                 usage["output_tokens"] += u.get("output_tokens") or 0
                 for qid, answer in body["answers"].items():
-                    previous = answers.get(qid) or {"score": -1, "confidence": 1.0, "probabilities": []}
+                    previous = answers.get(qid) or {
+                        "score": -1,
+                        "confidence": 1.0,
+                        "probabilities": [],
+                    }
                     # a question answered in several chunks takes its worst score
                     if answer.get("score", 0) > previous["score"]:
-                        answers[qid] = {"score": answer.get("score"), "confidence": answer.get("confidence"),
-                                        "probabilities": answer.get("probabilities")}
-            (OUT / f"{name.replace(chr(47), chr(45))}.r{repeat}.json").write_text(json.dumps(
-                {"case": name, "kind": kind, "note": note, "answers": answers,
-                 "usage": usage, "elapsed": round(elapsed, 2), "errors": errors}, indent=1))
+                        answers[qid] = {
+                            "score": answer.get("score"),
+                            "confidence": answer.get("confidence"),
+                            "probabilities": answer.get("probabilities"),
+                        }
+            (OUT / f"{name.replace(chr(47), chr(45))}.r{repeat}.json").write_text(
+                json.dumps(
+                    {
+                        "case": name,
+                        "kind": kind,
+                        "note": note,
+                        "answers": answers,
+                        "usage": usage,
+                        "elapsed": round(elapsed, 2),
+                        "errors": errors,
+                    },
+                    indent=1,
+                )
+            )
             low = sorted(((a.get("score") or 0), q) for q, a in answers.items())[-3:]
             conf = st.mean([a.get("confidence") or 0 for a in answers.values()]) if answers else 0
-            print(f"{name:<20}{kind:<6}r{repeat}  {len(answers)}/6  conf {conf:.2f}  "
-                  f"top severity: {', '.join(f'{q.split(chr(46))[1]}={s:.2f}' for s, q in reversed(low))}"
-                  f"  {' '.join(errors)}")
+            print(
+                f"{name:<20}{kind:<6}r{repeat}  {len(answers)}/6  conf {conf:.2f}  "
+                f"top severity: {', '.join(f'{q.split(chr(46))[1]}={s:.2f}' for s, q in reversed(low))}"
+                f"  {' '.join(errors)}"
+            )
 
 
 if __name__ == "__main__":

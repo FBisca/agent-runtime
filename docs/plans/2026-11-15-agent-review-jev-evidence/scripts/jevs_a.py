@@ -33,9 +33,11 @@ SCORE_QUESTIONS = {
     for qid, _p, instructions in sp.QUESTIONS
 }
 NOUL_QUESTIONS = {
-    qid: {"type": "noul",
-          "instructions": "Does the change satisfy: " + instructions.split("violate: ")[-1],
-          "criteria": {"true": "the change satisfies it", "false": "the change violates it"}}
+    qid: {
+        "type": "noul",
+        "instructions": "Does the change satisfy: " + instructions.split("violate: ")[-1],
+        "criteria": {"true": "the change satisfies it", "false": "the change violates it"},
+    }
     for qid, _p, instructions in sp.QUESTIONS
 }
 
@@ -45,7 +47,11 @@ def ask(state, questions):
     if result.get("status") != 200:
         return {"error": f"{result.get('status')} {str(result.get('body'))[:160]}"}
     body = json.loads(result["body"])
-    return {"answers": body["answers"], "usage": body.get("usage"), "elapsed": result.get("elapsed")}
+    return {
+        "answers": body["answers"],
+        "usage": body.get("usage"),
+        "elapsed": result.get("elapsed"),
+    }
 
 
 def main():
@@ -68,13 +74,17 @@ def main():
             if kind == "score":
                 values = {q: a["score"] for q, a in result["answers"].items()}
                 conf = st.mean(a["confidence"] for a in result["answers"].values())
-                print(f"{name:<8}{kind:<6}mean severity {st.mean(values.values()):.2f}  "
-                      f"max {max(values.values()):.2f}  conf {conf:.2f}  "
-                      f"usage {result['usage']['input_tokens']} in")
+                print(
+                    f"{name:<8}{kind:<6}mean severity {st.mean(values.values()):.2f}  "
+                    f"max {max(values.values()):.2f}  conf {conf:.2f}  "
+                    f"usage {result['usage']['input_tokens']} in"
+                )
             else:
                 values = {q: a["noul"] for q, a in result["answers"].items()}
-                print(f"{name:<8}{kind:<6}mean P(true) {st.mean(values.values()):.2f}  "
-                      f"min {min(values.values()):.2f}  usage {result['usage']['input_tokens']} in")
+                print(
+                    f"{name:<8}{kind:<6}mean P(true) {st.mean(values.values()):.2f}  "
+                    f"min {min(values.values()):.2f}  usage {result['usage']['input_tokens']} in"
+                )
             summary[f"{name}.{kind}"] = values
     (OUT / "floor-summary.json").write_text(json.dumps(summary, indent=1))
     print("\nper question (severity):")
@@ -82,7 +92,10 @@ def main():
     print(f"{'question':<45}" + "".join(f"{n:>9}" for n in names))
     for q in SCORE_QUESTIONS:
         row = [summary.get(f"{n}.score", {}).get(q) for n in names]
-        print(f"{q:<45}" + "".join(f"{v:>9.2f}" if isinstance(v, (int, float)) else f"{'-':>9}" for v in row))
+        print(
+            f"{q:<45}"
+            + "".join(f"{v:>9.2f}" if isinstance(v, (int, float)) else f"{'-':>9}" for v in row)
+        )
 
 
 if __name__ == "__main__":
