@@ -138,3 +138,19 @@ next.
 - The observed contract escapes included post-execution persistence/save failure handling and a deep JSON `state.load`
   API exception contract. They are useful frozen historical cases; keep their labels out of model inputs.
 - Passing 20–30 stratified examples cannot prove no future false negatives or general production reliability.
+
+## Requirements: 00-agent-review-screening-cli
+
+- **R1** WHEN a caller invokes `agent-review code` on two Git revisions, THEN the tool evaluates a curated global engineering and contract question bank through a direct screening API (from 00-agent-review-screening-cli/S1)
+- **R2** WHEN the screening completes without requiring deep review, THEN the tool emits a `screened` verdict, preserves native judgments with deterministic question/revision provenance, and writes `report.json` (from 00-agent-review-screening-cli/S2)
+- **R3** WHEN the provider fails or returns an invalid judgment, THEN the execution is incomplete rather than passed, with an observable failure reason (from 00-agent-review-screening-cli/S3)
+- **R4** WHEN the same frozen input and model configuration are evaluated, THEN the report identifies the exact revision, question configuration, model and usage measurements (from 00-agent-review-screening-cli/S4)
+
+## Coverage: 00-agent-review-screening-cli
+
+| Requirement | Scenario | Test nodes |
+|---|---|---|
+| R1 | S1 | human: Run a Git revision review using a configured real screening API; confirm the expected flags and reproducible `report.json`. Then deliberately break credentials and confirm an incomplete execution, not a clean verdict. |
+| R2 | S2 | `packages/agent-review/tests/test_screening_report.py::test_S2_a_completed_screening_is_screened_with_native_attributed_judgments`<br>`packages/agent-review/tests/test_screening_report.py::test_S2_the_terminal_summary_reads_the_judgments_without_the_report`<br>`packages/agent-review/acceptance/screening/test_screening_cli.py` |
+| R3 | S3 | `packages/agent-review/tests/test_screening_report.py::test_S3_a_provider_error_is_incomplete_with_an_observable_reason`<br>`packages/agent-review/tests/test_screening_report.py::test_S3_an_invalid_judgment_is_incomplete_naming_the_question`<br>`packages/agent-review/tests/test_screening_report.py::test_S3_a_judgment_on_a_question_the_run_did_not_ask_is_incomplete`<br>`packages/agent-review/acceptance/screening/test_screening_cli.py` |
+| R4 | S4 | `packages/agent-review/tests/test_screening_report.py::test_S4_the_report_names_revisions_questions_model_and_usage`<br>`packages/agent-review/tests/test_screening_report.py::test_S4_the_same_frozen_input_and_configuration_produce_the_same_report`<br>`packages/agent-review/acceptance/screening/test_screening_cli.py` |
