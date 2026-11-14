@@ -3011,7 +3011,7 @@ class Driver:
             except contracts.ContractError:
                 continue
             open_items = self.folded_findings(
-                open_items, contracts.review_items(review)[0], review.get("resolutions")
+                open_items, contracts.review_items(review)[0], self.resolutions_of(review)
             )
         return open_items
 
@@ -3020,7 +3020,7 @@ class Driver:
         blocking item keeps an id open with the payload it was first raised with. Re-reading a review that was already
         applied leaves the set as it was."""
         open_items = self.folded_findings(
-            self.open_blockers(unit, exclude=review_path), blocking, review.get("resolutions")
+            self.open_blockers(unit, exclude=review_path), blocking, self.resolutions_of(review)
         )
         path = self.open_path(unit)
         if open_items or path.exists():
@@ -3030,6 +3030,12 @@ class Driver:
                 path, json.dumps(contracts.make_open_findings(unit, open_items), indent=2) + "\n"
             )
         return open_items
+
+    @staticmethod
+    def resolutions_of(review):
+        """Only a contract 2 review closes a finding: contract 1 has no `resolutions`, and `validate_review` refuses a
+        producer that writes one there, so a legacy review never empties the open set."""
+        return review.get("resolutions") if review.get("contract") == 2 else None
 
     @staticmethod
     def folded_findings(open_items, blocking, resolutions):
@@ -4597,7 +4603,7 @@ class Driver:
                 attempt,
                 fix["items"],
                 fix.get("checks_run"),
-                version=1 if contracts.legacy_items(fix["items"]) else contracts.VERSION,
+                version=contracts.findings_contract(fix["items"]),
             )
             if not findings_path.exists():
                 findings_path.write_text(json.dumps(findings, indent=2) + "\n", encoding="utf-8")

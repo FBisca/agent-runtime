@@ -6,7 +6,7 @@ import unittest
 
 import pytest
 from fixtures import report_wait, resume_id
-from test_gates import BLOCKING, GateFixture
+from test_gates import BLOCKING, MAJOR, GateFixture
 
 pytestmark = pytest.mark.integration
 
@@ -240,6 +240,23 @@ class OpenBlockerTests(ReuseFixture, unittest.TestCase):
         self.waits([self.fix_report(), self.re_review()])
         self.run_driver()  # a new run of the same ledger: the record, not memory, decides
         self.held()
+
+    def test_S5_a_legacy_major_and_a_new_blocker_reach_one_fix_round(self):
+        """R138: the round carries both payloads, so it is a fix round and not a Lead request."""
+        second = dict(BLOCKING, id="B2", summary="a second violation", file="src/a/x.py")
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
+                self.fix_report(),
+                self.re_review(self.review2(verdict="block", items=[second])),
+            ]
+        )
+        self.run_driver()
+        findings = json.loads((self.run_dir / "t1r2" / "findings.json").read_text())
+        self.assertEqual(findings["contract"], 2)
+        self.assertEqual([i["id"] for i in findings["items"]], ["M1", "B2"])
+        self.assertFalse((self.run_dir / "t1r2" / "request.json").exists())
 
     def test_S7_a_missing_record_is_rebuilt_from_the_units_reviews(self):
         self.waits(self.first_block())

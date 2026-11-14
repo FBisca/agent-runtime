@@ -646,6 +646,12 @@ def validate_review(review):
 
 
 def validate_review_v1(review):
+    # Closure is a contract 2 rule, validated there. A producer that writes it on the older contract would otherwise
+    # close an open finding with no evidence at all, so it is refused rather than silently ignored.
+    need(
+        review.get("resolutions") is None,
+        "review: resolutions are contract 2; a contract 1 review closes nothing",
+    )
     need(isinstance(review.get("major"), list), "review: major must be a list")
     need(isinstance(review.get("deferred"), list), "review: deferred must be a list")
     for item in review["major"]:
@@ -692,6 +698,11 @@ def validate_findings(findings):
     validate_checks_run(findings, "findings")
     for position, item in enumerate(items, 1):
         if findings["source"] == "review":
+            if isinstance(item, dict) and "kind" not in item:
+                # A contract 1 major item an open set carried into a contract 2 round: its original payload is kept,
+                # so the round reads as a major item rather than being refused and turned into a Lead request.
+                validate_major(item, "findings")
+                continue
             validate_item(item, "findings", position)
             need(
                 item["kind"] == "blocking" or item["answer_required"],
@@ -873,6 +884,13 @@ def make_findings(source, attempt, items, checks_run=None, version=VERSION):
 def legacy_items(items):
     """True for findings items written by contract 1: text lines, or review items without a `kind`."""
     return any(not isinstance(i, dict) or "kind" not in i for i in items)
+
+
+def findings_contract(items):
+    """The contract a fix round's findings.json is written as: contract 1 when every item is legacy (a retry of a round
+    the previous version left), contract 2 otherwise, which also reads a legacy major item an open set carried into the
+    round beside a review item."""
+    return 1 if items and all(legacy_items([item]) for item in items) else VERSION
 
 
 def load(path, validate):

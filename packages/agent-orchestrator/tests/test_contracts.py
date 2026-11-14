@@ -608,6 +608,19 @@ class ResolutionTests(unittest.TestCase):
         self.rejects(self.closing(resolution(), resolution(status="disproven")), "B1", "twice")
         self.rejects(self.closing(resolution(id="")), "id")
 
+    def test_S6_a_contract_1_review_cannot_carry_resolutions(self):
+        """R139: the closure rule has no bypass through the older contract."""
+        legacy = review(verdict="pass", resolutions=[{"id": "B1"}])
+        with self.assertRaises(contracts.ContractError) as caught:
+            contracts.validate_review(legacy)
+        self.assertIn("contract 2", str(caught.exception))
+        with self.assertRaises(ValueError):
+            contracts.ReviewV1.model_validate(legacy)
+        with self.assertRaises(ValueError):
+            contracts.ReviewV2.model_validate(
+                dict({"contract": 1, "verdict": "pass", "commit": "abc1234"}, resolutions=[])
+            )
+
     def test_S6_a_resolution_and_a_blocking_item_naming_the_same_id_are_refused(self):
         review = review2(
             verdict="block",
@@ -616,6 +629,19 @@ class ResolutionTests(unittest.TestCase):
             checks_run=[RECEIPT],
         )
         self.rejects(review, "B1", "blocking")
+
+
+class MixedFindingsTests(unittest.TestCase):
+    """R138: an open legacy major item and a new blocking item reach one fix round, which writes and reads."""
+
+    def test_S5_a_legacy_major_and_a_blocking_item_share_one_fix_round(self):
+        findings = contracts.make_findings("review", 2, [MAJOR, BLOCKING], [])
+        self.assertEqual(findings["contract"], 2)
+        self.assertEqual(findings["items"], [MAJOR, BLOCKING])
+        self.assertEqual(contracts.validate_findings(findings), findings)
+        # a round that is legacy throughout is still written as contract 1, for an old reader
+        legacy = contracts.make_findings("review", 1, [MAJOR], [], version=1)
+        self.assertEqual(legacy["contract"], 1)
 
 
 class OpenFindingsRecordTests(unittest.TestCase):

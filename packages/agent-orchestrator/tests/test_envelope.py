@@ -693,6 +693,27 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
     def test_S6_a_disproven_resolution_with_current_commit_evidence_closes_the_blocker(self):
         self.closes("disproven")
 
+    def test_S6_a_contract_1_review_with_resolutions_is_refused(self):
+        """R139: writing the older contract does not close an open finding."""
+        legacy = {
+            "contract": 1,
+            "verdict": "pass",
+            "major": [],
+            "deferred": [],
+            "commit": "@HEAD",
+            "resolutions": [{"id": "B1"}],
+        }
+        self.waits(
+            self.to_fix_round()
+            + [
+                self.fix_round_report(responses=[RESPONSE]),
+                self.re_review(json.dumps(legacy)),
+            ]
+        )
+        self.run_driver()
+        self.held()
+        self.assertIn("contract 2", self.warning())
+
     def test_S5_a_legacy_major_finding_is_open_until_it_is_resolved(self):
         self.waits(
             [
