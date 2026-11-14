@@ -12,7 +12,7 @@ Slug: `02-agent-review-deep-review`. Contract: `plan.yaml`. Lane: **Full** (mult
 - This phase keeps the *discard* archive until it is reviewed; when it is approved it promotes into
   `docs/specs/agent-review.md` as P0 does, so its scenarios become requirements there.
 - The signal this phase consumes is `(value, confidence, threshold)` from `01-agent-review-smart-screening` (P1-D5); a
-  raw probability is never a calibrated confidence, and the deterministic safeguards (`2026-11-15-01-agent-review-safeguards`)
+  raw probability is never a calibrated confidence, and the deterministic safeguards (`2026-11-15-00c-agent-review-safeguards`)
   run before it, so a safeguard hit escalates without a screening request.
 - Acceptance is human-observable today. S3 (a harness that cannot enforce read-only must fail safely) is a security
   surface and must become `check:` evidence before this plan is approved; that acceptance file is the first red step.

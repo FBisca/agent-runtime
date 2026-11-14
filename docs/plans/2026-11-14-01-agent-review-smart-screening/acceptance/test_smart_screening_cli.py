@@ -226,6 +226,7 @@ class SmartScreeningFixture(unittest.TestCase):
 
     def answers(self, values, served=SERVED):
         """One canned screening answer for the whole bank, `{question: (value, confidence)}`."""
+
         def typed(name, value, confidence):
             if name in (HIGH, REPO_QUESTION):
                 return noul(value)

@@ -13,16 +13,19 @@ Read `2026-11-15-agent-review-jev-evidence/JEV.md` for the measured protocol bef
 
 ## What changes
 
-- **T1** (S1, S5): `packages/agent-review/` — the OpenAI chat adapter is replaced by a System One transport: the
-  endpoint and `TYPESAFE_API_KEY`, `state` as an object, `questions` as an id → question map, the
-  `TypeSafe-Danger-Zone-Long-Context: true` header when configured, and an oversized request that is `incomplete` with
-  the provider's own reason rather than a truncated state.
+- **T1** (S1, S5, S7): `packages/agent-review/` — the OpenAI chat adapter is replaced by a System One transport: the
+  endpoint and `TYPESAFE_API_KEY` (the credential sent when a fallback is present too, and the variable a missing one
+  names), `state` as an object, `questions` as an id → question map, the `TypeSafe-Danger-Zone-Long-Context: true`
+  header when configured, and an oversized request that is `incomplete` with the provider's own reason
+  (`max_tokens_exceeded`) rather than a truncated state. The canned provider carries every offline check: a screening
+  through it completes with no credential and every socket refused (S7).
 - **T2** (S2): the bank carries what a Jev question needs — a score question's levels (required), a noul's optional
-  criteria, a choice's options — and refuses a missing or misplaced one by path before any request is made. The
-  fixture provider stays as the offline seam.
-- **T3** (S3): a judgment carries the provider's native answer: `probability` for a noul, `score` and `confidence` for
-  a score, `choice` and `probabilities` for a choice. A score outside the declared levels, or a confidence outside
-  0–1, is refused naming the question.
+  criteria (a mapping; a score's level *list* on a noul is a misplaced field and is refused), a choice's options — and
+  refuses a missing or misplaced one by path before any request is made. The fixture provider stays as the offline
+  seam.
+- **T3** (S3): a judgment carries the provider's native answer: a noul's `probability` and a score's level with its
+  `confidence`. A score outside the declared levels — 0.5 is inside 0–1 and outside a five-level ladder — or a
+  confidence outside 0–1 is refused naming the question.
 - **T4** (S4, S6): the report says what produced it — provider endpoint, the served model beside the configured alias,
   the input limit in force, the long-context flag, the bank digest — and a refusal or an incomplete run keeps what it
   learned instead of discarding it.
@@ -35,15 +38,22 @@ Read `2026-11-15-agent-review-jev-evidence/JEV.md` for the measured protocol bef
   a typed System One request is a different instrument (separate criteria, a confidence axis, no second number on a
   noul), and two transports would need two banks or a lossy rendering. `2026-11-15-agent-review-jev-evidence/JEV.md` §1.
 - **00b-D2** The limits are configuration, not constants: 32k per question and 64k per request by default, 262k with
-  the long-context header, and the report records which was in force. A request is never truncated silently.
+  the long-context header, and the report records which was in force. A request is never truncated silently: an
+  oversized change is the provider's `max_tokens_exceeded`, not a locally shortened state.
 - **00b-D3** Long context is opt-in per invocation. It is measurably more forgiving on a large state
   (`hidden-state` 1.22 against 1.72 chunked), so it is a caller's choice with a recorded flag, never a default.
 - **00b-D4** The fixture provider answers in the typed shape, so every check stays offline and no test reaches the
-  network.
+  network; S7 proves it by screening with every socket refused rather than by trusting the fixture.
+- **00b-D5** `TYPESAFE_API_KEY` is the documented credential and the one a refusal names;
+  `AGENT_REVIEW_API_KEY` stays accepted as the fallback so P0's contract keeps working, and it is sent only when
+  `TYPESAFE_API_KEY` is absent. Rejected: keeping `AGENT_REVIEW_API_KEY` as the documented name (it names this tool,
+  not the provider), and dropping the fallback (it would break every P0 caller). (`JEV.md` protocol section, P0's
+  `screening.py`).
 
 ## Out of scope
 
-Repository-added questions, chunking, escalation, cost, and deep review are P1's and P2's. This phase changes the
+A `choice` judgment: no question in the packaged bank is a choice question, so its answer shape is deferred rather than
+half-tested. Repository-added questions, chunking, escalation, cost, and deep review are P1's and P2's. This phase changes the
 transport, the bank's shape, the judgment's shape and the report's provenance; nothing about routing a change.
 
 ## Risks
@@ -61,3 +71,5 @@ transport, the bank's shape, the judgment's shape and the report's provenance; n
    judgments that name its levels (T3).
 3. The S1 live evidence replaces P0's bridge note: run the CLI against a real two-revision change and record the
    report naming `jev-1.14.0`, the provider endpoint and the limits.
+4. S7 lands with T1: the offline class drives the CLI in process with `socket.socket`, `socket.create_connection` and
+   `socket.getaddrinfo` patched to refuse, so a check that reached the network fails instead of passing quietly.
