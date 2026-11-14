@@ -191,8 +191,8 @@ def test_S1_each_answer_type_keeps_the_provider_its_native_value(serve):
     ).screen(request())
     assert reply.judgments == (
         {"question": "contract.error-handling", "value": 0.5},
-        {"question": "design.one-reason", "value": 2.0},
-    )
+        {"question": "design.one-reason", "value": 2.0, "confidence": 0.8},
+    ), "a noul keeps its probability, a score its level and the confidence beside it (D44)"
 
 
 def test_S1_the_typesafe_credential_is_sent_when_a_fallback_is_also_present(serve, monkeypatch):
