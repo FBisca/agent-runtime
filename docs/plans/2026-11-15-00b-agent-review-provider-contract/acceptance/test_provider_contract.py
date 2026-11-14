@@ -23,7 +23,7 @@ Each class carries a control that passes at base and after.
 """
 
 import json
-import re
+import os
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +31,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -72,10 +73,12 @@ class SystemOneServer:
         self.body = body
         self.status = status
         self.request: dict | None = None
+        self.count = 0
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802 - the base class's name
+                outer.count += 1
                 length = int(self.headers.get("content-length") or 0)
                 outer.request = {
                     "path": self.path,
@@ -167,7 +170,15 @@ class ProviderContractFixture(unittest.TestCase):
         return self.fixture
 
     def screen(
-        self, *, base_url=None, long_context=False, extra=(), config=True, output=None, env=None
+        self,
+        *,
+        base_url=None,
+        long_context=False,
+        extra=(),
+        config=True,
+        output=None,
+        env=None,
+        fixture=True,
     ):
         binary = shutil.which("agent-review")
         if binary is None:
@@ -187,6 +198,8 @@ class ProviderContractFixture(unittest.TestCase):
         if long_context:
             argv += ["--long-context"]
         argv += list(extra)
+        if fixture and base_url is None and self.fixture.is_file():
+            argv += ["--screening-fixture", str(self.fixture)]
         environment = {
             "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "HOME": str(Path(self.tmp.name, "home")),
@@ -253,6 +266,30 @@ class TransportTests(ProviderContractFixture):
         self.assertNotIn("messages", sent, "the request is not chat-shaped")
         self.assertNotIn("response_format", sent)
         self.assertIn("diff", json.dumps(sent["state"]))
+        self.assertEqual(server.count, 1, "one screening is one request (D40)")
+        self.assertEqual(
+            sorted(sent["questions"]),
+            ["contract.error-handling", "engineering.hidden-state"],
+            "the map is keyed by the bank's ids and carries no other question",
+        )
+
+    def test_S1_the_documented_credential_is_sent_when_a_fallback_is_present_too(self):
+        self.write_config()
+        body = answer(
+            **{
+                "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+            }
+        )
+        with SystemOneServer(body) as server:
+            result = self.screen(base_url=server.url, env={"TYPESAFE_API_KEY": "typesafe-key"})
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        sent = server.request or {}
+        self.assertEqual(
+            sent["headers"].get("authorization"),
+            "Bearer typesafe-key",
+            "the provider's own variable wins over the tool's fallback",
+        )
 
     def test_S1_a_missing_credential_is_incomplete_naming_the_variable(self):
         self.write_config()
@@ -261,7 +298,7 @@ class TransportTests(ProviderContractFixture):
         self.assertNotEqual(result.returncode, 0)
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
-        self.assertIn("AGENT_REVIEW_API_KEY", json.dumps(report) + result.stderr)
+        self.assertIn("TYPESAFE_API_KEY", json.dumps(report) + result.stderr)
 
 
 class BankShapeTests(ProviderContractFixture):
@@ -318,6 +355,26 @@ class NativeAnswerTests(ProviderContractFixture):
         self.assertEqual(report["status"], "incomplete")
         self.assertIn("contract.error-handling", report["failure"]["reason"])
 
+    def test_S3_a_score_between_the_declared_levels_is_refused(self):
+        self.write_config()
+        self.write_fixture(
+            answer(
+                **{
+                    "contract.error-handling": {"type": "score", "score": 0.5, "confidence": 0.9},
+                    "engineering.hidden-state": {"type": "noul", "noul": 0.6},
+                }
+            )
+        )
+        result = self.screen()
+        self.assertNotEqual(result.returncode, 0)
+        report = self.report()
+        self.assertEqual(report["status"], "incomplete")
+        self.assertIn(
+            "contract.error-handling",
+            report["failure"]["reason"],
+            "0.5 is inside 0..1 and outside the question's declared levels, so only a levels-aware rule refuses it",
+        )
+
     def test_S3_a_confidence_outside_zero_and_one_is_refused(self):
         self.write_config()
         self.write_fixture(
@@ -330,7 +387,9 @@ class NativeAnswerTests(ProviderContractFixture):
         )
         result = self.screen()
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.report()["status"], "incomplete")
+        report = self.report()
+        self.assertEqual(report["status"], "incomplete")
+        self.assertIn("contract.error-handling", report["failure"]["reason"])
 
     def test_S3_a_score_judgment_keeps_its_confidence_beside_the_value(self):
         self.write_config()
@@ -355,19 +414,23 @@ class ProvenanceTests(ProviderContractFixture):
 
     def test_S4_the_report_names_provider_served_model_limits_and_bank_digest(self):
         self.write_config()
-        self.write_fixture(
-            answer(
-                **{
-                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                    "engineering.hidden-state": {"type": "noul", "noul": 0.7},
-                }
-            )
+        body = answer(
+            **{
+                "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+            }
         )
-        result = self.screen()
+        with SystemOneServer(body) as server:
+            result = self.screen(base_url=server.url)
+            requested = server.url
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         report = self.report()
-        self.assertIn("provider", report)
-        self.assertEqual(report["model"], "jev-latest")
+        self.assertEqual(
+            report["provider"].rstrip("/"),
+            requested,
+            "the report names the endpoint it called, not a default",
+        )
+        self.assertEqual(report["model"], "jev-latest", "the configured alias is kept beside it")
         self.assertEqual(report["resolved_model"], "jev-1.14.0")
         self.assertEqual(report["limits"]["long_context"], False)
         self.assertGreater(report["limits"]["per_question"], 0)
@@ -383,10 +446,19 @@ class BudgetTests(ProviderContractFixture):
             {"detail": {"error_type": "max_tokens_exceeded"}}, status=400
         ) as server:
             result = self.screen(base_url=server.url)
+            request = server.request or {}
         self.assertNotEqual(result.returncode, 0)
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
         self.assertIn("max_tokens_exceeded", report["failure"]["reason"])
+        self.assertTrue(request["path"].endswith("/systemone"), request.get("path"))
+        sent = json.dumps(request["body"])
+        self.assertIn("store.py", sent, "the changed file is in the state the provider was sent")
+        self.assertIn(
+            "return None",
+            sent,
+            "the change is sent whole: what overflows the limit is the provider's to refuse, never a local cut",
+        )
 
     def test_S5_long_context_completes_and_sends_the_header(self):
         self.write_config()
@@ -433,10 +505,9 @@ class RefusalTests(ProviderContractFixture):
         blocked.write_text("x", encoding="utf-8")
         result = self.screen(output=blocked)
         self.assertEqual(result.returncode, 2)
-        self.assertTrue(
-            re.search(r"[0-9a-f]{7,}", result.stderr), "the refusal names the standing report"
+        self.assertIn(
+            standing["head"][:7], result.stderr, "the refusal names the standing report's revision"
         )
-        self.assertTrue(standing["base"])
 
     def test_S6_an_incomplete_run_keeps_the_usage_it_paid_for(self):
         self.write_config()
@@ -444,7 +515,8 @@ class RefusalTests(ProviderContractFixture):
             {
                 "model": "jev-1.14.0",
                 "answers": {
-                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8}
+                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                    "engineering.hidden-state": {"type": "noul", "noul": 1.4},
                 },
                 "usage": {"input_tokens": 321, "output_tokens": 9},
             }
@@ -454,3 +526,61 @@ class RefusalTests(ProviderContractFixture):
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
         self.assertEqual(report["usage"]["input_tokens"], 321, "what was paid for is not discarded")
+        self.assertEqual(
+            [judgment["question"] for judgment in report["judgments"]],
+            ["contract.error-handling"],
+            "the judgment learned before the refusal is kept, and the refused one is not",
+        )
+
+
+class OfflineTests(ProviderContractFixture):
+    """S7: the canned provider carries every offline check, so no run needs a socket."""
+
+    def test_S7_a_screening_through_the_canned_provider_opens_no_socket(self):
+        self.write_config()
+        self.write_fixture(
+            answer(
+                **{
+                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                    "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+                }
+            )
+        )
+        refused = AssertionError("an offline run opened a socket")
+        here = Path.cwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(self.workspace)
+        with (
+            mock.patch.dict(os.environ, {"HOME": self.tmp.name}, clear=True),
+            mock.patch("socket.socket", side_effect=refused),
+            mock.patch("socket.create_connection", side_effect=refused),
+            mock.patch("socket.getaddrinfo", side_effect=refused),
+        ):
+            from agent_review.cli import main
+
+            code = main(
+                [
+                    "code",
+                    "--base",
+                    self.base,
+                    "--head",
+                    self.head,
+                    "--output",
+                    str(self.output),
+                    "--config",
+                    str(self.config),
+                    "--screening-fixture",
+                    str(self.fixture),
+                ]
+            )
+        self.assertEqual(code, 0)
+        report = self.report()
+        self.assertEqual(report["status"], "completed")
+        self.assertEqual(report["verdict"], "screened")
+        self.assertEqual(report["usage"]["requests"], 1)
+        self.assertEqual(report["usage"]["input_tokens"], 120, "the canned usage is what was read")
+        self.assertEqual(
+            [judgment["question"] for judgment in report["judgments"]],
+            ["contract.error-handling", "engineering.hidden-state"],
+            "a report that answered nothing was not screened through the fixture",
+        )

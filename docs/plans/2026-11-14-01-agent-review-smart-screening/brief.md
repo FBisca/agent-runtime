@@ -57,7 +57,7 @@ re-grill them. Decisions here:
 ## Out of scope
 
 No deep-review agent is spawned: P1 emits signals for P2 to consume, and the deterministic safeguards are their own plan
-(`handoff-02`, `2026-11-15-01-agent-review-safeguards`) that lands beside this one. No JSON-RPC, no benchmark, no plan
+(`handoff-02`, `2026-11-15-00c-agent-review-safeguards`) that lands beside this one. No JSON-RPC, no benchmark, no plan
 review, no live orchestrator integration.
 
 ## Risks
