@@ -877,8 +877,7 @@ class TierBriefTests(unittest.TestCase):
         self.assertTrue(any("run" in line.lower() for line in proxy), text)
         self.assertTrue(
             any(
-                "report" in line.lower() and "command" in line.lower()
-                for line in text.splitlines()
+                "report" in line.lower() and "command" in line.lower() for line in text.splitlines()
             ),
             text,
         )

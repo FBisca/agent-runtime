@@ -103,10 +103,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.assertTrue(proxy, brief)
         self.assertTrue(any("run" in x.lower() for x in proxy), brief)
         self.assertTrue(
-            any(
-                "report" in x.lower() and "command" in x.lower()
-                for x in brief.splitlines()
-            ),
+            any("report" in x.lower() and "command" in x.lower() for x in brief.splitlines()),
             brief,
         )
 
