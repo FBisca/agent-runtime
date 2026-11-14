@@ -1,0 +1,120 @@
+# The curated global question bank (D04, D49): the sixteen engineering
+# principles the owner supplied, and the contract questions a review asks of
+# any change. A repository's configuration extends this bank and never
+# overrides or disables it (D05); an invocation without --config evaluates
+# exactly these questions.
+#
+# A judgment is native and bounded (D44, D50): a boolean question is true when
+# the change satisfies it. Priority is declared here and never chosen by the
+# screening model (D07); a critical question is always asked (D09). Ids are
+# stable and unique: a question whose meaning changes takes a new id, so a
+# frozen report stays comparable (D26, D51). Expand the bank only after
+# evidence of a gap (D49).
+
+model: gpt-4.1-mini
+
+questions:
+  # The contract perspective: what this repository promised its callers.
+  - id: contract.requirement-traceability
+    priority: critical
+    ask: >-
+      Does every behaviour this change alters trace to a stated requirement or
+      a stated cause
+  - id: contract.error-handling
+    priority: critical
+    ask: >-
+      Does every new failure at a boundary surface an error a caller can act
+      on, rather than a silent fallback
+  - id: contract.public-surface-compatibility
+    priority: high
+    ask: >-
+      Does the change keep the public surface its callers already rely on
+      (flags, exit codes, file formats, schemas) compatible
+  - id: contract.test-evidence
+    priority: high
+    ask: Would a test fail without this change, for each behaviour it alters
+  - id: contract.missing-context
+    priority: advisory
+    ask: >-
+      Does the change state the context it could not see, rather than treat an
+      unknown as satisfied
+
+  # The engineering perspective: the owner's sixteen principles, one question
+  # each. The ask names the principle; a judgment is still evidence-bound.
+  - id: engineering.survival-priority
+    priority: critical
+    ask: >-
+      Does the change keep the running system available and correct, including
+      through its own failure modes
+  - id: engineering.traceable-cause
+    priority: high
+    ask: >-
+      Can every behaviour the change introduces be traced to its cause without
+      guessing
+  - id: engineering.durable-intent
+    priority: high
+    ask: >-
+      Does the change record why the behaviour exists, in a form that outlives
+      the author
+  - id: engineering.external-legibility
+    priority: high
+    ask: >-
+      Can the change's internal state be read from outside it, through an
+      observable signal rather than a log line
+  - id: engineering.type-contracts
+    priority: high
+    ask: >-
+      Do the declared types constrain what the code accepts and returns, rather
+      than merely annotate it
+  - id: engineering.implicit-named
+    priority: advisory
+    ask: >-
+      Does the change name the assumption it depends on instead of leaving it
+      implicit
+  - id: engineering.understand-before-compressing
+    priority: high
+    ask: >-
+      Is the logic understood at its own level, rather than compressed into an
+      expression whose behaviour must be unpacked
+  - id: engineering.hard-decisions
+    priority: advisory
+    ask: >-
+      Does the change make the hard decision it cannot avoid, rather than defer
+      it to a caller or a later phase
+  - id: engineering.elegance
+    priority: advisory
+    ask: >-
+      Is the change shaped like the problem it solves, without incidental
+      complexity
+  - id: engineering.new-concepts
+    priority: advisory
+    ask: Does every concept the change introduces earn its keep
+  - id: engineering.hidden-state
+    priority: high
+    ask: >-
+      Does the change avoid accumulating hidden state, especially logic that
+      branches on three or more booleans
+  - id: engineering.names-meaning
+    priority: advisory
+    ask: >-
+      Do the new names say what they mean rather than how they are implemented
+  - id: engineering.abstraction-levels
+    priority: advisory
+    ask: >-
+      Does each unit of the change keep to one level of abstraction, so that it
+      reads as one thing
+  - id: engineering.composition
+    priority: advisory
+    ask: >-
+      Does the change compose what already exists rather than create another
+      mechanism for it
+  - id: engineering.consequence-not-achievement
+    priority: advisory
+    ask: >-
+      Is a one-liner present because it follows from the problem, not as an
+      achievement in itself
+  - id: engineering.threshold
+    priority: advisory
+    ask: >-
+      Does the change state the threshold it is good enough for, rather than
+      treat better as a direction

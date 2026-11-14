@@ -11,7 +11,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["packages/agent-runtime", "packages/agent-orchestrator", "packages/agent-eval"]
+members = ["packages/agent-runtime", "packages/agent-orchestrator", "packages/agent-eval", "packages/agent-review"]
 
 [dependency-groups]
 dev = [
@@ -28,7 +28,7 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests", "acceptance", "packages/agent-orchestrator/tests", "packages/*/acceptance", "packages/agent-eval/tests"]
+testpaths = ["tests", "acceptance", "packages/agent-orchestrator/tests", "packages/*/acceptance", "packages/agent-eval/tests", "packages/agent-review/tests"]
 # A promoted acceptance file imports its package's helpers (`fixtures`) as the package's own tests do; the root
 # package's acceptance/ imports the root tests/ the same way.
 pythonpath = ["packages/agent-orchestrator/tests", "tests"]
@@ -61,6 +61,7 @@ impacted_map = [
   "packages/agent-runtime/src/*/*=tests",
   "packages/agent-orchestrator/src/*/*=packages/agent-orchestrator/tests",
   "packages/agent-eval/src/*/*=packages/agent-eval/tests",
+  "packages/agent-review/src/*/*=packages/agent-review/tests",
 ]
 
 [tool.ruff]

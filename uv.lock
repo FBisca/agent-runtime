@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "agent-eval",
     "agent-orchestrator",
+    "agent-review",
     "agent-runtime",
     "agent-runtime-workspace",
 ]
@@ -39,6 +40,17 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
+
+[[package]]
+name = "agent-review"
+version = "0.1.0"
+source = { editable = "packages/agent-review" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyyaml", specifier = ">=6.0" }]
 
 [[package]]
 name = "agent-runtime"
