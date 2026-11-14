@@ -254,6 +254,14 @@ CHECK_PREFIXES = (
     ("rtk", "proxy"),
 )
 
+# What a brief tells a worker whose shell rewrites commands: the check runs through the
+# proxy, and the report names the command that ran behind it. The required-check line of
+# the brief is left as it is: the proxy is a spelling of the check, not another check.
+PROXY_INSTRUCTION = (
+    "If your shell rewrites commands, run each required check through the RTK proxy "
+    "(`rtk proxy` in front of the command) and report the command you ran."
+)
+
 
 def normalise_check(command):
     """The gate command, with launcher prefixes and a leading `./` removed, so `bash scripts/checks.sh` matches `scripts/checks.sh`."""
@@ -5002,6 +5010,7 @@ class Driver:
                 ),
                 "Commit and push to the same branch. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
+                PROXY_INSTRUCTION,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]
@@ -5114,6 +5123,7 @@ class Driver:
                 ),
                 "Commit and push to the same branch. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
+                PROXY_INSTRUCTION,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]
@@ -5176,6 +5186,7 @@ class Driver:
                 ),
                 "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
+                PROXY_INSTRUCTION,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]
@@ -5208,6 +5219,7 @@ class Driver:
                 ),
                 "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
+                PROXY_INSTRUCTION,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]
@@ -7151,6 +7163,7 @@ class Driver:
                 *scenarios,
                 "",
                 "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
+                PROXY_INSTRUCTION,
                 *(
                     [
                         "`%s` is the whole suite: do not run it; verify and CI run it."

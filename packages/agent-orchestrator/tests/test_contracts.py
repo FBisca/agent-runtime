@@ -861,6 +861,28 @@ class TierBriefTests(unittest.TestCase):
         self.assertIn("do not run", others[0])
         self.assertNotIn("full CI gate", text)
 
+    def test_S3_the_brief_names_the_proxy_and_asks_for_the_command_the_worker_ran(self):
+        packet, text = self.drive()
+        # The required-check line is the ticket's own: it stays as it is.
+        self.assertEqual(
+            [
+                line
+                for line in text.splitlines()
+                if line.startswith("Before you report COMPLETE, run:")
+            ],
+            ["Before you report COMPLETE, run: uv run ruff check; " + self.AFFECTED + "."],
+        )
+        proxy = [line for line in text.splitlines() if "rtk proxy" in line]
+        self.assertTrue(proxy, text)
+        self.assertTrue(any("run" in line.lower() for line in proxy), text)
+        self.assertTrue(
+            any(
+                "report" in line.lower() and "command" in line.lower()
+                for line in text.splitlines()
+            ),
+            text,
+        )
+
     def test_S3_a_named_gate_is_the_required_checks_alone_and_the_tiers_are_not_applied(self):
         packet, text = self.drive(gate=["scripts/checks.sh"])
         self.assertEqual(packet["checks"], ["scripts/checks.sh"])

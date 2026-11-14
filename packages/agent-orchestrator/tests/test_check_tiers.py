@@ -90,6 +90,26 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.assertIn("do not run", full)
         self.assertIn("verify", full)
 
+    def test_S3_the_brief_names_the_proxy_and_asks_for_the_command_the_worker_ran(self):
+        self.declare_tiers()
+        self.run_driver()
+        brief = self.brief()
+        # The required-check line is the ticket's own: it stays as it is.
+        self.assertEqual(
+            [x for x in brief.splitlines() if x.startswith("Before you report COMPLETE, run:")],
+            ["Before you report COMPLETE, run: uv run pytest -q; " + AFFECTED + "."],
+        )
+        proxy = [x for x in brief.splitlines() if "rtk proxy" in x]
+        self.assertTrue(proxy, brief)
+        self.assertTrue(any("run" in x.lower() for x in proxy), brief)
+        self.assertTrue(
+            any(
+                "report" in x.lower() and "command" in x.lower()
+                for x in brief.splitlines()
+            ),
+            brief,
+        )
+
     def test_S3_a_named_gate_overrides_the_declared_tiers(self):
         self.declare_tiers()
         self.run_driver("--gate", "scripts/checks.sh")
