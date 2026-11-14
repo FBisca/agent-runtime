@@ -83,7 +83,7 @@ def gap(what, command):
     return ToolError("gap: add %s → %s; ask the user" % (what, command))
 
 
-def run(argv, env, ctx, timeout=SHORT_SECONDS):
+def run(argv, env, ctx, timeout: float = SHORT_SECONDS):
     """(returncode, stdout, stderr); ToolError on a missing binary, timeout or cancel."""
     try:
         proc = subprocess.Popen(
@@ -330,7 +330,7 @@ def lead_store(env, ctx=None):
     _, caller = require_hc(env)
     scope, generation = dispatch_identity(env, ctx)
     store = getattr(ctx, "store", None) or dispatch.Store(env)
-    team = store.claim_team(scope, caller, generation)
+    team = store.team(scope, caller, generation)
     if ctx is not None:
         ctx.owned_team = team
     return store, team

@@ -30,16 +30,14 @@ class DispatchTests(ToolCase):
     def lead(self, generation="lead-session", socket="/hc/sock"):
         """The lead's session.
 
-        A session that stands for a generation of its own gets a team row of its own, written the
-        way the store holds it: the store refuses a session that would take a terminal from the
-        session that owns it, so the fixture has to be able to hold the state that refusal is about.
+        A session that stands for a generation of its own runs under its own fake CLI, so it
+        presents a generation of its own: the store registers its team when it first calls, and
+        refuses a session that would take the terminal from the session that owns it.
         """
         cli = None
         if generation != "lead-session":
             cli = FakeCli()
             self.addCleanup(cli.close)
-            generation = "%d:%s" % (cli.proc.pid, lib.lstart(cli.proc.pid))
-            Store({"HOME": str(self.dir / "home")}).team(os.path.realpath(socket), "t0", generation)
         return self.start(
             {"get:w1": {"out": raw("w1", "t0")}},
             {
@@ -50,6 +48,19 @@ class DispatchTests(ToolCase):
             },
             new_cli=cli if cli is not None else False,
         )
+
+    def stray_team(self, generation, socket="/hc/sock"):
+        """A team row for the terminal, written with SQL.
+
+        The store refuses a generation it does not own, so a fixture that needs the state that
+        refusal is about writes the row itself."""
+        store = Store({"HOME": str(self.dir / "home")})
+        with store.transaction() as db:
+            db.execute(
+                "INSERT INTO teams VALUES (?,?,?,?)",
+                ("stray-%s" % generation[:8], os.path.realpath(socket), "t0", generation),
+            )
+        return "stray-%s" % generation[:8]
 
     def spawn(self, lead, cli="claude"):
         result, text = self.call(
@@ -83,7 +94,7 @@ class DispatchTests(ToolCase):
         the worker's address). For a test about what the lead does with many reports, not about publishing one: it
         starts no worker session and makes no call. Returns the envelope the lead will read."""
         store = Store({"HOME": str(self.dir / "home")})
-        team, scope = team_of(store)
+        _, scope = team_of(store)
         return store.publish(
             scope, "t9", "t0", assignment["assignment_id"], text, kind, message_id, caller_name="w1"
         )
@@ -103,10 +114,10 @@ class DispatchTests(ToolCase):
         )  # the lead's own team row exists now
         store = Store({"HOME": str(self.dir / "home")})
         with store.transaction() as db:
-            scope, lead_id, team = db.execute(
+            _, _, team = db.execute(
                 "SELECT scope,lead,id FROM teams ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
-        store.team(scope, lead_id, DEAD_GENERATION)  # a newer row that left nothing behind
+        self.stray_team(DEAD_GENERATION)  # a newer row that left nothing behind
         assignment = self.spawn(lead)
         self.assertEqual(assignment["team_id"], team)
         self.assertIsNotNone(store.worker_address(team, "w1"))
@@ -141,9 +152,11 @@ class DispatchTests(ToolCase):
     def test_structured_reports_from_both_clis_without_hc_send(self):
         """agent-runtime/R34"""
         for cli in ("claude", "codex"):
-            lead = self.lead(cli)
+            # Each CLI's lead runs in its own terminal: a terminal belongs to one owning session.
+            socket = "/hc/sock-%s" % cli
+            lead = self.lead(cli, socket=socket)
             assignment = self.spawn(lead, cli)
-            result, text = self.publish(self.worker(generation=cli), assignment)
+            result, text = self.publish(self.worker(generation=cli, socket=socket), assignment)
             self.assertFalse(result["isError"], text)
             batch = self.read(lead)
             (message,) = batch["messages"]
@@ -319,7 +332,9 @@ class DispatchTests(ToolCase):
         for _ in range(2):
             self.assertEqual(self.read(lead, receipt=first["receipt"])["messages"], [])
         result, _ = self.call(
-            self.lead("other"), "wait", {"target": "all", "timeout": 0, "receipt": first["receipt"]}
+            self.lead("other", socket="/hc/other"),
+            "wait",
+            {"target": "all", "timeout": 0, "receipt": first["receipt"]},
         )
         self.assertTrue(result["isError"])
 
@@ -345,8 +360,9 @@ class DispatchTests(ToolCase):
         self.assertTrue(result["isError"])
         self.assertEqual(self.read(lead)["unfinished"], [current["assignment_id"]])
         self.publish(self.worker(), current)
-        self.assertEqual(self.read(self.lead("new-generation"))["messages"], [])
-        foreign = self.lead("foreign")
+        # Another team generation, on a terminal of its own, never sees this team's work: the late
+        # report of a replaced assignment cannot land in its inbox.
+        foreign = self.lead("foreign", socket="/hc/other")
         self.spawn(foreign)
         result, _ = self.publish(self.worker(), current, message_id="late")
         self.assertTrue(result["isError"])
@@ -470,7 +486,7 @@ class DispatchTests(ToolCase):
             },
         )
         assignment = self.spawn(lead)
-        result, text = self.call(lead, "wait", {"target": "all", "timeout": 2})
+        result, _ = self.call(lead, "wait", {"target": "all", "timeout": 2})
         batch = result["structuredContent"]
         self.assertEqual(batch["reason"], "attention")
         self.assertEqual(batch["unfinished"], [assignment["assignment_id"]])
@@ -680,12 +696,24 @@ class TeamOwnershipTests(ToolCase):
         self.addCleanup(proc.wait)
         return "%d:%s" % (proc.pid, lib.lstart(proc.pid))
 
+    def stray_team(self, generation):
+        """A newer team row for the terminal, written with SQL.
+
+        The store's registration refuses a session that does not own the terminal, so a fixture that
+        needs the state that refusal is about writes the row itself."""
+        with self.store.transaction() as db:
+            db.execute(
+                "INSERT INTO teams VALUES (?,?,?,?)",
+                ("stray", self.scope, self.terminal, generation),
+            )
+        return "stray"
+
     def test_S3_a_dead_and_empty_newer_row_does_not_fence_the_live_lead(self):
         """A session that left nothing behind never fences the terminal."""
         live = self.live_generation()
         team = self.store.team(self.scope, self.terminal, live)
         self.store.register(team, "w1")  # the live lead's team holds work
-        self.store.team(self.scope, self.terminal, DEAD_GENERATION)  # newer, and empty
+        self.stray_team(DEAD_GENERATION)  # newer, and empty
         actor = self.store.actor(self.scope, self.terminal, None, generation=live)
         self.assertEqual(actor["team_id"], team)
 
@@ -695,7 +723,7 @@ class TeamOwnershipTests(ToolCase):
         team = self.store.team(self.scope, self.terminal, live)
         self.store.register(team, "w1")
         owner = self.other_live_generation()
-        self.store.team(self.scope, self.terminal, owner)
+        self.stray_team(owner)
         with self.assertRaises(StoreError) as error:
             self.store.actor(self.scope, self.terminal, None, generation=live)
         message = str(error.exception)
@@ -708,7 +736,7 @@ class TeamOwnershipTests(ToolCase):
         live = self.live_generation()
         team = self.store.team(self.scope, self.terminal, live)
         self.store.register(team, "w1")
-        gone = self.store.team(self.scope, self.terminal, DEAD_GENERATION)
+        gone = self.stray_team(DEAD_GENERATION)
         self.store.register(gone, "w2")  # the gone session still holds a worker
         with self.assertRaises(StoreError) as error:
             self.store.actor(self.scope, self.terminal, None, generation=live)
@@ -718,11 +746,17 @@ class TeamOwnershipTests(ToolCase):
 
 
 class TerminalRefusalTests(ToolCase):
-    """The refusal and the fence name the terminal, the generation that owns it and the way out."""
+    """One terminal, one owning session: the refusal names the terminal, the owner and the way out.
+
+    The store's team registration is the one seam both registration sites share, so a session that
+    does not own the terminal registers nothing and is refused. The process evidence is injected,
+    so a test can stand for the process table.
+    """
 
     def setUp(self):
         super().setUp()
-        self.store = Store({"HOME": str(self.dir / "home")})
+        self.env = {"HOME": str(self.dir / "home")}
+        self.store = Store(self.env)
         self.scope, self.terminal = "scope", "t0"
 
     def live_generation(self):
@@ -736,51 +770,111 @@ class TerminalRefusalTests(ToolCase):
         self.addCleanup(proc.wait)
         return "%d:%s" % (proc.pid, lib.lstart(proc.pid))
 
+    def dead_generation(self):
+        """A generation whose process is gone: no process carries that start stamp."""
+        return "%d:%s" % (os.getpid(), "a stamp no process carries")
+
+    def hold_work(self, team):
+        """The owner's team holds live work: a worker whose assignment is running.
+
+        The state is written with SQL, the way the store holds it: the rule reads a team that is
+        serving, and a fixture writes that state down."""
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO workers VALUES (?,?,?,?,?)", ("w9", team, "w1", "t9", 1))
+            db.execute("INSERT INTO assignments VALUES (?,?,?,'working',1)", ("a9", team, "w9"))
+
+    def stray_team(self, generation):
+        """A team row for another generation, written with SQL.
+
+        The store refuses a generation it does not own, so a fixture that needs the state that
+        refusal is about writes the row itself."""
+        with self.store.transaction() as db:
+            db.execute(
+                "INSERT INTO teams VALUES (?,?,?,?)",
+                ("stray", self.scope, self.terminal, generation),
+            )
+
+    def teams(self):
+        with self.store.transaction() as db:
+            return [
+                dict(row) for row in db.execute("SELECT id,generation FROM teams ORDER BY rowid")
+            ]
+
     def test_S1_a_session_that_descends_from_the_owner_is_refused(self):
         """stale-team-generation/S1: the session that descends from the owner never takes the terminal."""
         owner = self.live_generation()
-        team = self.store.claim_team(self.scope, self.terminal, owner)
+        team = self.store.team(self.scope, self.terminal, owner)
         self.store.register(team, "w1")  # the owner's team holds work
         owner_pid = int(owner.split(":")[0])
+        descendant = Store(self.env, ancestors=lambda: [owner_pid])  # the owner is in this chain
         with self.assertRaises(TerminalRefused) as error:
-            self.store.claim_team(
-                self.scope,
-                self.terminal,
-                "4242:descendant",
-                ancestors=lambda: [owner_pid],  # the owner is in this session's ancestor chain
-            )
+            descendant.team(self.scope, self.terminal, "4242:descendant")
         message = str(error.exception)
         self.assertIn(self.terminal, message, "the refusal does not name the terminal")
         self.assertIn(owner, message, "the refusal does not name the owning generation")
         actor = self.store.actor(self.scope, self.terminal, None, generation=owner)
         self.assertEqual(actor["team_id"], team, "the owner lost its terminal")
-        with self.store.transaction() as db:
-            self.assertEqual(
-                db.execute("SELECT COUNT(*) FROM teams").fetchone()[0],
-                1,
-                "the descendant registered a team",
-            )
+        self.assertEqual(len(self.teams()), 1, "the descendant registered a team")
+
+    def test_S1_a_descendant_is_refused_even_when_the_owners_team_is_idle(self):
+        """stale-team-generation/S1: the owner's own session tree never takes the terminal, idle or not."""
+        owner = self.live_generation()
+        self.store.team(self.scope, self.terminal, owner)  # the owner's team holds nothing
+        owner_pid = int(owner.split(":")[0])
+        descendant = Store(self.env, ancestors=lambda: [owner_pid])
+        with self.assertRaises(TerminalRefused):
+            descendant.team(self.scope, self.terminal, "4242:descendant")
+        self.assertEqual(len(self.teams()), 1, "the descendant registered a team")
+
+    def test_S1_an_unrelated_session_is_refused_while_the_owner_is_alive_and_holds_work(self):
+        """stale-team-generation/S1: a session that inherits a live lead's terminal is refused."""
+        owner = self.live_generation()
+        team = self.store.team(self.scope, self.terminal, owner)
+        self.hold_work(team)  # the owner's team holds work
+        with self.assertRaises(TerminalRefused):
+            self.store.team(self.scope, self.terminal, "4242:unrelated")
+        self.assertEqual(len(self.teams()), 1, "the refused session registered a team")
+
+    def test_S1_an_unrelated_session_takes_a_terminal_whose_owner_is_idle(self):
+        """stale-team-generation/D7: an idle terminal is free for the next session."""
+        owner = self.live_generation()
+        self.store.team(self.scope, self.terminal, owner)  # the owner's team holds nothing
+        team = self.store.team(self.scope, self.terminal, "4242:unrelated")
+        self.assertNotEqual(team, None)
+        self.assertEqual(len(self.teams()), 2, "the next session did not register a team")
+
+    def test_S1_an_unrelated_session_takes_a_terminal_whose_owner_is_gone(self):
+        """stale-team-generation/S3: a session that left nothing behind never keeps the terminal."""
+        self.stray_team(self.dead_generation())  # a newer row whose process is gone
+        team = self.store.team(self.scope, self.terminal, "4242:unrelated")
+        self.assertIsNotNone(team)
+        self.assertEqual(len(self.teams()), 2, "the next session did not register a team")
+
+    def test_the_process_evidence_is_injected(self):
+        """The store reads the process table only through the readers it is given."""
+        stamp = "a stamp the fixture wrote"
+        alive = Store(self.env, alive=lambda _pid: (True, stamp))
+        team = alive.team(self.scope, self.terminal, "4242:%s" % stamp)
+        self.hold_work(team)
+        with self.assertRaises(TerminalRefused):
+            alive.team(self.scope, self.terminal, "4243:unrelated")
+        self.assertEqual(len(self.teams()), 1, "the refused session registered a team")
 
     def test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out(self):
         """stale-team-generation/S6: a refusal names the reason and the way out."""
         owner = self.live_generation()
-        team = self.store.claim_team(self.scope, self.terminal, owner)
-        self.store.register(team, "w1")  # the owner's team holds work
+        team = self.store.team(self.scope, self.terminal, owner)
+        self.hold_work(team)  # the owner's team holds work
         with self.assertRaises(TerminalRefused) as error:
-            self.store.claim_team(self.scope, self.terminal, "12345:other-session")
+            self.store.team(self.scope, self.terminal, "12345:other-session")
         message = str(error.exception)
         self.assertIn(self.terminal, message, "the refusal does not name the terminal")
         self.assertIn(owner, message, "the refusal does not name the owning generation")
         self.assertIn("hc terminal", message, "the refusal does not name the way out")
         self.assertIn("new session", message, "the refusal does not name the way out")
-        with self.store.transaction() as db:
-            self.assertEqual(
-                db.execute("SELECT COUNT(*) FROM teams").fetchone()[0],
-                1,
-                "the refused session registered a team",
-            )
+        self.assertEqual(len(self.teams()), 1, "the refused session registered a team")
         newer = self.other_live_generation()
-        self.store.team(self.scope, self.terminal, newer)
+        self.stray_team(newer)
         with self.assertRaises(StoreError) as fenced:
             self.store.actor(self.scope, self.terminal, None, generation=owner)
         text = str(fenced.exception)
@@ -828,7 +922,7 @@ class ClockedWaitTests(FakeHc):
         self.replies = dict(replies, **{"get:t0": {"out": raw("lead", None)}})
         self.install(self.replies)
         self.enterContext(hc_in_process(self.dir / "bin" / "hc"))
-        result, text = self.call(
+        result, text = self.call_tool(
             "spawn",
             {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
         )
@@ -839,14 +933,14 @@ class ClockedWaitTests(FakeHc):
         self.replies.update(replies)
         (self.dir / "replies").write_text(json.dumps(self.replies))
 
-    def call(self, tool, arguments):
+    def call_tool(self, tool, arguments):
         with mock.patch.dict(os.environ, {"PATH": self.env["PATH"]}):
             result = mcp_server.call_tool(tool, arguments, self.env, hc_tools.Context(self.session))
         return result, result["content"][0]["text"]
 
     def wait(self, timeout):
         started = self.now
-        result, text = self.call("wait", {"target": "all", "timeout": timeout})
+        result, text = self.call_tool("wait", {"target": "all", "timeout": timeout})
         self.assertFalse(result["isError"], text)
         return result["structuredContent"], self.now - started
 
@@ -896,7 +990,7 @@ class ClockedWaitTests(FakeHc):
     def test_resume_then_immediate_wait_ignores_the_old_done_turn(self):
         """agent-runtime/R63"""
         self.lead({"get:w1": self.worker(1, "idle"), "ls": self.terminals(1)})
-        result, text = self.call("resume", {"name": "w1", "task": "again"})
+        result, text = self.call_tool("resume", {"name": "w1", "task": "again"})
         self.assertFalse(result["isError"], text)
         batch, _ = self.wait(1)
         self.assertEqual(batch["reason"], "timeout")  # still the previous turn's done
@@ -909,7 +1003,7 @@ class ClockedWaitTests(FakeHc):
     def test_resume_of_a_mid_turn_worker_ignores_the_old_turn_ending(self):
         """agent-runtime/R63"""
         self.lead({"get:w1": self.worker(3, "working"), "ls": self.terminals(3)})
-        result, text = self.call(
+        result, text = self.call_tool(
             "resume", {"name": "w1", "task": "again"}
         )  # recorded: working, turn 3
         self.assertFalse(result["isError"], text)
@@ -955,8 +1049,8 @@ class ActivationTests(ToolCase):
                 self.assertNotIn("structuredContent", result)
                 self.assertNotIn("assignment_id", self.runs("run")[-1][-1])
                 self.assertIn("report(text)", self.runs("run")[-1][-1])
-                tools = lead.send("tools/list")["result"]["tools"]
-                report_schema = next(t["inputSchema"] for t in tools if t["name"] == "report")
+                tools = (lead.send("tools/list") or {})["result"]["tools"]
+                report_schema = next((t["inputSchema"] for t in tools if t["name"] == "report"), {})
                 self.assertEqual(report_schema["required"], ["text"])
                 result, text = self.call(lead, "wait", {"target": "any", "timeout": 20})
                 self.assertFalse(result["isError"], text)
