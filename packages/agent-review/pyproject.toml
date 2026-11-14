@@ -1,0 +1,17 @@
+[project]
+name = "agent-review"
+version = "0.1.0"
+description = "Screen the change between two Git revisions against a curated question bank."
+requires-python = ">=3.11"
+# The question bank is declarative YAML (D29): PyYAML is the member's one dependency.
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+agent-review = "agent_review.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_review"]
