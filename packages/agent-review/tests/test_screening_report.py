@@ -215,18 +215,38 @@ def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
     assert report["usage"]["requests"] == 1
 
 
+def test_S1_a_score_between_two_rungs_completes_with_the_providers_own_number(review):
+    assert (
+        review.screen(
+            {
+                "answers": {
+                    "design.one-reason": {"type": "score", "score": 1.22, "confidence": 0.8},
+                    "contract.error-handling": {"type": "noul", "noul": 0.9},
+                }
+            }
+        )
+        == 0
+    ), "1.22 sits on a four-level ladder (0..3) and is a screening answer, not a refusal"
+    report = review.report()
+    assert report["status"] == "completed"
+    assert report["verdict"] == "screened"
+    assert report["judgments"][1]["value"] == 1.22, (
+        "the judgment carries the number as the provider answered it, never a rung it was snapped to"
+    )
+
+
 def test_S3_a_score_outside_its_declared_levels_is_incomplete_naming_the_question(review):
     assert (
         review.screen(
             {
                 "answers": {
-                    "design.one-reason": {"type": "score", "score": 0.5, "confidence": 0.9},
+                    "design.one-reason": {"type": "score", "score": 4.0, "confidence": 0.9},
                     "contract.error-handling": {"type": "noul", "noul": 0.9},
                 }
             }
         )
         != 0
-    ), "0.5 is inside the old 0..1 check and outside this question's four declared levels"
+    ), "4.0 is above the last rung of this question's four-level ladder, so it is refused"
     report = review.report()
     assert report["status"] == "incomplete"
     assert report["verdict"] is None, "a refused answer is not a screening result (D34, D40)"
