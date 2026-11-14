@@ -2,7 +2,10 @@
 
 The port returns judgments as the provider answered them; the run is what attaches the question's
 priority, scope and revision, and refuses a value the question's type does not allow. That refusal is
-the reason an invocation reports an incomplete execution (D40).
+the reason an invocation reports an incomplete execution (D40). A score question is graded on its
+declared levels and carries the confidence that came beside the level: a level the ladder does not
+declare, a confidence outside zero and one, or a score with no confidence at all is refused naming the
+question (S3).
 """
 
 import pytest
@@ -15,28 +18,45 @@ pytestmark = pytest.mark.unit
 BASE = "a" * 40
 HEAD = "b" * 40
 
+# A four-level ladder, best first, so the levels it declares are 0..3; and two declared options.
+LEVELS = [
+    "the change keeps one reason to change",
+    "the change implies a second reason",
+    "the change mixes two reasons into one module",
+    "the change has no single reason a reader could name",
+]
+OPTIONS = {"compatible": "callers keep working", "breaking": "a caller must change"}
+
 QUESTIONS = (
     Question(id="contract.error-handling", priority="critical", ask="Errors handled", type="noul"),
     Question(id="design.naming", priority="advisory", ask="Names say what they mean", type="noul"),
-    Question(id="design.one-reason", priority="high", ask="One reason to change", type="score"),
-    Question(id="contract.shape", priority="high", ask="Shape kept", type="choice"),
+    Question(
+        id="design.one-reason",
+        priority="high",
+        ask="One reason to change",
+        type="score",
+        criteria=LEVELS,
+    ),
+    Question(
+        id="contract.shape", priority="high", ask="Shape kept", type="choice", criteria=OPTIONS
+    ),
 )
 
 
-def test_each_native_value_is_kept_as_answered():
+def test_each_native_answer_is_kept_as_answered():
     judgments = attributed(
         QUESTIONS,
         [
             {"question": "contract.error-handling", "value": 0.9},
-            {"question": "design.one-reason", "value": 0.5},
+            {"question": "design.one-reason", "value": 2.0, "confidence": 0.8},
             {"question": "contract.shape", "value": "compatible"},
         ],
         base=BASE,
         head=HEAD,
     )
-    assert [(judgment["question"], judgment["value"]) for judgment in judgments] == [
+    assert [(judgment["question"], judgment.get("value")) for judgment in judgments] == [
         ("contract.error-handling", 0.9),
-        ("design.one-reason", 0.5),
+        ("design.one-reason", 2.0),
         ("contract.shape", "compatible"),
     ]
 
@@ -69,14 +89,70 @@ def test_a_question_the_screening_could_not_assess_is_simply_absent():
     assert attributed(QUESTIONS, [], base=BASE, head=HEAD) == ()
 
 
+def test_S3_a_score_judgment_keeps_its_confidence_beside_the_value():
+    (judgment,) = attributed(
+        QUESTIONS,
+        [{"question": "design.one-reason", "value": 1.0, "confidence": 0.42}],
+        base=BASE,
+        head=HEAD,
+    )
+    assert judgment["value"] == 1.0, (
+        "the level is the value the provider answered, never a threshold"
+    )
+    assert judgment["confidence"] == pytest.approx(0.42), (
+        "a score without its confidence is a number with no meaning"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [0.5, 3.5, 4.0, -1.0, "2", True],
+    ids=["between", "past-the-last", "past-the-ladder", "below-the-first", "text", "boolean"],
+)
+def test_S3_a_score_outside_its_declared_levels_is_refused_naming_the_question(value):
+    with pytest.raises(ScreeningError) as refused:
+        attributed(
+            QUESTIONS,
+            [{"question": "design.one-reason", "value": value, "confidence": 0.9}],
+            base=BASE,
+            head=HEAD,
+        )
+    assert "design.one-reason" in str(refused.value)
+    assert "declared levels" in str(refused.value), "a refusal names the way out"
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    [1.4, -0.1, "0.8", True],
+    ids=["above-one", "below-zero", "text", "boolean"],
+)
+def test_S3_a_confidence_outside_zero_and_one_is_refused_naming_the_question(confidence):
+    with pytest.raises(ScreeningError) as refused:
+        attributed(
+            QUESTIONS,
+            [{"question": "design.one-reason", "value": 1.0, "confidence": confidence}],
+            base=BASE,
+            head=HEAD,
+        )
+    assert "design.one-reason" in str(refused.value)
+    assert "confidence" in str(refused.value).lower(), "a refusal names the way out"
+
+
+def test_S3_a_score_with_no_confidence_is_refused_naming_the_question():
+    with pytest.raises(ScreeningError) as refused:
+        attributed(
+            QUESTIONS, [{"question": "design.one-reason", "value": 1.0}], base=BASE, head=HEAD
+        )
+    assert "design.one-reason" in str(refused.value)
+    assert "confidence" in str(refused.value).lower(), "a refusal names the way out"
+
+
 @pytest.mark.parametrize(
     "question, value, allowed",
     [
         ("contract.error-handling", "true", "the probability between 0 and 1"),
         ("contract.error-handling", True, "the probability between 0 and 1"),
         ("contract.error-handling", 1.5, "the probability between 0 and 1"),
-        ("design.one-reason", 1.5, "a number between 0 and 1"),
-        ("design.one-reason", "0.5", "a number between 0 and 1"),
         ("contract.shape", "", "one of its declared options"),
     ],
 )

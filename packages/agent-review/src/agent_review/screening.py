@@ -69,8 +69,8 @@ class ScreeningReply:
     """What the provider answered as it answered it: native values, unnormalized (D44).
 
     A noul answer is the probability that the change satisfies the question, a score answer is the level
-    it was given, and a choice answer is the option. The caller attaches the question's provenance and
-    refuses an answer the question's declared range does not allow.
+    it was given with the confidence it came with, and a choice answer is the option. The caller attaches
+    the question's provenance and refuses an answer the question's declared levels or range do not allow.
     """
 
     judgments: tuple[Mapping[str, Any], ...]
@@ -242,8 +242,19 @@ def _judgments(answers: Any, source: str) -> tuple[Mapping[str, Any], ...]:
     for identifier, answer in answers.items():
         if not isinstance(identifier, str) or not isinstance(answer, Mapping):
             raise ScreeningError(f"{source}: the answer to {identifier!r} is not an object")
-        judgments.append({"question": identifier, "value": _native(identifier, answer, source)})
+        judgments.append(_native_judgment(identifier, answer, source))
     return tuple(judgments)
+
+
+def _native_judgment(identifier: str, answer: Mapping[str, Any], source: str) -> dict[str, Any]:
+    """One judgment as the provider answered it: its value, and the confidence it sent beside it (D44)."""
+    judgment: dict[str, Any] = {
+        "question": identifier,
+        "value": _native(identifier, answer, source),
+    }
+    if answer.get("confidence") is not None:
+        judgment["confidence"] = answer["confidence"]
+    return judgment
 
 
 def _native(identifier: str, answer: Mapping[str, Any], source: str) -> Any:

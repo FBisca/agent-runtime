@@ -45,7 +45,7 @@ CONFIG = textwrap.dedent(
 RESPONSE = {
     "model": "jev-1.14.0",
     "answers": {
-        "design.one-reason": {"type": "score", "score": 0.75, "confidence": 0.8},
+        "design.one-reason": {"type": "score", "score": 2.0, "confidence": 0.8},
         "engineering.names-meaning": {"type": "noul", "noul": 0.2},
         "contract.error-handling": {"type": "noul", "noul": 0.9},
     },
@@ -167,9 +167,12 @@ def test_S2_a_completed_screening_is_screened_with_native_attributed_judgments(r
             "priority": "high",
             "scope": "whole-diff",
             "revision": f"{review.base}..{review.head}",
-            "value": 0.75,
+            "value": 2.0,
+            "confidence": 0.8,
         },
-    ], "native values, configuration order, and each judgment's provenance (D07, D44, D46)"
+    ], (
+        "native values, their confidence, configuration order, and each judgment's provenance (D07, D44, D46)"
+    )
     summary = capsys.readouterr().out
     assert "screened" in summary and str(review.output / "report.json") in summary
 
@@ -210,6 +213,26 @@ def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
     assert report["verdict"] is None
     assert "contract.error-handling" in report["failure"]["reason"]
     assert report["usage"]["requests"] == 1
+
+
+def test_S3_a_score_outside_its_declared_levels_is_incomplete_naming_the_question(review):
+    assert (
+        review.screen(
+            {
+                "answers": {
+                    "design.one-reason": {"type": "score", "score": 0.5, "confidence": 0.9},
+                    "contract.error-handling": {"type": "noul", "noul": 0.9},
+                }
+            }
+        )
+        != 0
+    ), "0.5 is inside the old 0..1 check and outside this question's four declared levels"
+    report = review.report()
+    assert report["status"] == "incomplete"
+    assert report["verdict"] is None, "a refused answer is not a screening result (D34, D40)"
+    assert "design.one-reason" in report["failure"]["reason"], (
+        "the refusal names the question the answer could not be attributed to"
+    )
 
 
 def test_S3_a_judgment_on_a_question_the_run_did_not_ask_is_incomplete(review):
