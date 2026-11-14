@@ -119,12 +119,23 @@ def test_S1_a_score_between_two_rungs_is_the_providers_own_number():
 
 @pytest.mark.parametrize(
     "value",
-    [4.0, 3.5, -0.4, -1.0, float("inf"), float("nan"), "2", True],
+    [
+        4.0,
+        3.5,
+        -0.4,
+        -1.0,
+        int("1" + "0" * 400),
+        float("inf"),
+        float("nan"),
+        "2",
+        True,
+    ],
     ids=[
         "past-the-last",
         "past-the-last-rung",
         "below-the-first",
         "past-the-first",
+        "integer-too-large-for-a-float",
         "infinite",
         "not-a-number",
         "text",

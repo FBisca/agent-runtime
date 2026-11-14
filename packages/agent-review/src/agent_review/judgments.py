@@ -145,15 +145,15 @@ def _levels(question: Question) -> int:
 def _on_ladder(question: Question, value: Any) -> bool:
     """Whether `value` is a finite number the ladder bounds: 0 up to one less than its levels.
 
-    The ladder bounds the answer; it does not snap it to a rung, so a fractional position is allowed.
+    The ladder bounds the answer; it does not snap it to a rung, so a fractional position is allowed. The
+    check is total over the values it admits: an `int` is compared as the integer it is, so a JSON integer
+    too large for a float is refused rather than raised on, and only a `float` is asked whether it is finite.
     """
-    levels = _levels(question)
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, (int, float))
-        and math.isfinite(value)
-        and 0 <= value <= levels - 1
-    )
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return 0 <= value <= _levels(question) - 1
 
 
 def _allowed(question: Question) -> str:
