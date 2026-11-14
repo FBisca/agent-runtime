@@ -2825,10 +2825,14 @@ class Driver:
         rules = [str(checkout / n) for n in ("AGENTS.md", "CLAUDE.md") if (checkout / n).exists()]
         return "\n".join(
             [
-                "# Review %s: one pass, paths only" % packet["unit"].upper(),
+                "# Review %s: the pass, then one verdict" % packet["unit"].upper(),
                 "",
                 "Read these yourself; nothing is pasted here.",
-                "- Task: %s" % (self.run_dir / packet["unit"] / "task.md"),
+                "- The task the implementer was given: %s (its What it delivers, Paths, the scenarios verbatim, "
+                "the checks it owed)" % (self.run_dir / packet["unit"] / "task.md"),
+                "- What it reported: the newest report*.json in %s (status, head, files, covers, checks), beside "
+                "report.md" % (self.run_dir / packet["unit"]),
+                "- The rules every task in this run follows: %s" % (self.run_dir / "contract.md"),
                 "- Plan: %s (its Decisions, Scenarios and Seams)" % self.plan_path,
                 *(
                     ["- Commit range: run `git -C %s diff %s...HEAD`" % (checkout, self.args.base)]
@@ -2836,10 +2840,7 @@ class Driver:
                     else [
                         "- This is a re-review. Only `git -C %s diff %s..HEAD` is new; the whole change is `%s...HEAD`."
                         % (checkout, delta["from"], self.args.base),
-                        "- The earlier findings and the implementer's answers: %s. Check each one (resolved or not, with evidence) "
-                        "and raise new blocking items only inside the delta. A blocking item outside the files the delta changes "
-                        "is deferred, not gated, unless it is about an earlier finding: reuse that finding's `id`, or set "
-                        "`finding` to it."
+                        "- The earlier findings and the implementer's answers: %s."
                         % (
                             delta.get("findings")
                             or "none; the first review's file is in %s"
@@ -2860,8 +2861,41 @@ class Driver:
                     if open_items
                     else []
                 ),
+                "- Evidence already in the run: %s (the driver's own runs; do not repeat them)"
+                % (self.run_dir / "receipts"),
                 "- Repo rules: %s"
                 % (", ".join(rules) or "none found; follow the code's own conventions"),
+                "",
+                "## The pass, in this order",
+                "1. Read the whole diff (`git -C %s diff %s...HEAD`) first: every file, every test it adds or "
+                "changes, the commit messages. Nothing is skimmed, and nothing is judged before the last file is "
+                "read." % (checkout, self.args.base),
+                *(
+                    [
+                        "   This is a re-review, so read the delta `%s..HEAD` first and the whole change beside it. "
+                        "Check each earlier finding (resolved or not, with evidence) and raise new blocking items "
+                        "only inside the delta. A blocking item outside the files the delta changes is deferred, not "
+                        "gated, unless it is about an earlier finding: reuse that finding's `id`, or set `finding` "
+                        "to it." % delta["from"]
+                    ]
+                    if delta
+                    else []
+                ),
+                "2. The ticket delivers what it says: `What it delivers` in the task file is in the diff, and each "
+                "scenario the ticket satisfies is proved by a test the diff adds or changes. A promise the code does "
+                "not keep, or a scenario with no test of its own, is `blocking`.",
+                "3. Each test proves its scenario: it asserts the behaviour the scenario's THEN promises, on the real "
+                "code path rather than on a mock of it, and it names its scenario id. Reverting the change makes it "
+                "fail. A test that would pass without the change, or that asserts a call happened instead of what the "
+                "behaviour promises, is `blocking`: that is the scenario not really tested.",
+                "4. The report matches the code: every `covers` node is a test that exists at the commit you review, "
+                "every `checks` entry is a command with the outcome the log shows, `head` is the commit you are "
+                "reviewing, and `files` covers the diff. A claim the code contradicts is `blocking`.",
+                "5. The numbered requirements it touches still hold: read the spec the plan names, and raise the "
+                "`requirement_violation` `blocking` item described below when one does not.",
+                "6. The code follows the repository's rules: the ones above, its own conventions, no secret in the "
+                "diff or a log, and no behaviour nobody asked for (that last one is a `concern`, not a block).",
+                "7. Only then judge severity and write the review: everything the pass found, each item once.",
                 "",
                 "Block only on MAJOR defects: wrong behaviour, data loss, or a scenario that is not really tested. "
                 "Everything else is a `concern`, `question`, `nit` or `deferred` item; it never blocks.",
