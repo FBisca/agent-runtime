@@ -71,6 +71,52 @@ class CheckpointRulesTests(unittest.TestCase):
         )
         self.assertEqual(done["status"], "COMPLETE")
 
+    def test_S1_the_rtk_proxy_launcher_is_stripped_before_the_check_is_compared(self):
+        """orchestrator-engine/R141"""
+        self.packet["checks"] = ["uv run pytest -q"]
+        done = app.checkpoint(
+            self.data,
+            "validation",
+            self.report([self.passed("rtk proxy uv run pytest -q")]),
+        )
+        self.assertEqual(done["status"], "COMPLETE")
+
+    def test_S1a_the_rtk_proxy_launcher_is_stripped_before_any_other_launcher(self):
+        """orchestrator-engine/R141"""
+        self.packet["checks"] = ["scripts/checks.sh"]
+        for command in (
+            "rtk proxy bash scripts/checks.sh",
+            "rtk proxy sh scripts/checks.sh",
+            "rtk proxy ./scripts/checks.sh",
+        ):
+            with self.subTest(command=command):
+                done = app.checkpoint(self.data, "validation", self.report([self.passed(command)]))
+                self.assertEqual(done["status"], "COMPLETE")
+                self.data["tasks"]["validation"]["status"] = "ACTIVE"
+
+    def test_S2_a_command_behind_the_proxy_that_is_not_the_required_check_is_refused(self):
+        """orchestrator-engine/R142"""
+        self.packet["checks"] = ["uv run pytest -q"]
+        # The proxy is stripped, and what stands behind it is not the required check: nothing else is.
+        self.assertEqual(
+            app.normalise_check("rtk proxy echo uv run pytest -q"), "echo uv run pytest -q"
+        )
+        with self.assertRaises(ValueError) as caught:
+            app.checkpoint(
+                self.data,
+                "validation",
+                self.report([self.passed("rtk proxy echo uv run pytest -q")]),
+            )
+        self.assertIn("uv run pytest -q", str(caught.exception))
+        self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
+
+    def test_S4_the_contract_names_every_launcher_prefix_the_strip_list_holds(self):
+        """orchestrator-engine/R143"""
+        for prefix in app.CHECK_PREFIXES:
+            with self.subTest(prefix=prefix):
+                self.assertIn(" ".join(prefix), app.CONTRACT)
+        self.assertIn("rtk proxy", app.CONTRACT)
+
     def test_S2_prefix_off_the_strip_list_or_absent_check_is_refused(self):
         """orchestrator-engine/R24"""
         for checks in (

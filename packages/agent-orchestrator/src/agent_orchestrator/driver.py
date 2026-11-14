@@ -243,7 +243,16 @@ def bind(data, task_id, runtime_id):
 # Launcher words a worker may put in front of a gate command. Closed on purpose: an
 # `endswith` match would let `echo scripts/checks.sh` pass as the gate.
 # Whole prefix sequences, never single words: `python` alone is not a launcher of the gate.
-CHECK_PREFIXES = (("bash",), ("sh",), ("uv", "run"), ("python", "-m"), ("python3", "-m"))
+# `rtk proxy` is the launcher's own proxy: it hands the command to the shell's rewriter, so the
+# command behind it is the one that ran.
+CHECK_PREFIXES = (
+    ("bash",),
+    ("sh",),
+    ("uv", "run"),
+    ("python", "-m"),
+    ("python3", "-m"),
+    ("rtk", "proxy"),
+)
 
 
 def normalise_check(command):
@@ -551,7 +560,7 @@ CONTRACT = """# Contract for every task in this run
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
 - A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node, unless the plan's evidence for it brings its own test files (acceptance files or oracles) or is `human` (a person checks it): map such a scenario only to tests this ticket changes, never to a test written to stand in for the check.
-- COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. Each required command is required once, a launcher spelling apart, and the one `not_run` allowance (`affected` with a `reason`, when no test was selected) never waives a command another tier also requires. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
+- COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m`, `rtk proxy` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`, and `rtk proxy uv run pytest -q` matches `uv run pytest -q`; any other prefix does not. Each required command is required once, a launcher spelling apart, and the one `not_run` allowance (`affected` with a `reason`, when no test was selected) never waives a command another tier also requires. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
 - Red-first: one test per scenario, named with its S-ID, seen failing before the code exists.
