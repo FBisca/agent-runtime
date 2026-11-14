@@ -18,9 +18,10 @@ from agent_review.screening import (
 
 EPILOG = """\
 `code` resolves two revisions to their commit shas, reads the change between them, and screens it once
-against the configured question bank. Absent --config it evaluates the packaged baseline bank; the bank
-is never overridden or disabled by a configuration, only extended (D05). The screening answer is printed
-as JSON.
+against the configured question bank. Without --config it evaluates the packaged baseline bank; a
+configuration replaces that bank in this phase, and additive repository questions, which extend the
+baseline and never override or disable it, are a later phase's (D05). A bank that asks nothing is refused
+rather than screened. The screening answer is printed as JSON.
 
 A screening is made once (D40): a provider error, a timeout, a missing credential or an answer that is
 not a judgment list is an incomplete execution, named on stderr with a nonzero exit, never a retry, a
@@ -59,7 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         metavar="PATH",
         type=Path,
-        help="the question configuration; absent, the packaged baseline bank is evaluated",
+        help=(
+            "the question configuration, which replaces the packaged baseline bank; "
+            "absent, the baseline is evaluated"
+        ),
     )
     code.add_argument(
         "--screening-fixture",

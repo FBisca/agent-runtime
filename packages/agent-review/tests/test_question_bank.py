@@ -115,6 +115,16 @@ def test_S1_an_invalid_bank_is_refused_naming_the_field(tmp_path, body, named):
     assert refused.value.code == 2, "an invalid configuration is a usage error"
 
 
+def test_S1_a_bank_that_asks_nothing_is_refused_naming_the_file(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("model: test-model-v1\nquestions: []\n", encoding="utf-8")
+    with pytest.raises(ReviewError) as refused:
+        questions.load(path)
+    assert "config.yaml" in str(refused.value), "the refusal names the file it refused"
+    assert "questions" in str(refused.value)
+    assert refused.value.code == 2, "a screening that asks nothing is never exit 0"
+
+
 def test_S1_a_missing_configuration_is_refused_naming_its_path(tmp_path):
     with pytest.raises(ReviewError) as refused:
         questions.load(tmp_path / "absent.yaml")

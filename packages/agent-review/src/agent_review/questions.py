@@ -1,8 +1,11 @@
 """The configured question bank: one model and the curated, stable questions it is asked (D04, D29, D49).
 
-The packaged baseline is the mandatory global bank; a repository's configuration extends it and never
-overrides or disables it (D05). Only the surface this phase uses is validated (P0-D4): the model, and each
-question's id, priority, ask and type. A refusal names the field by its path, so a long bank is fixable.
+An invocation without a configuration evaluates the packaged baseline, the mandatory global bank. A
+configuration replaces that bank in this phase: additive repository questions, which extend the baseline
+and never override or disable it, are a later phase's (D05). Only the surface this phase uses is validated
+(P0-D4): the model, and each question's id, priority, ask and type. A bank that asks nothing is refused,
+so no screening completes having evaluated no question. A refusal names the field by its path, so a long
+bank is fixable.
 """
 
 import re
@@ -94,6 +97,10 @@ def _questions(data: dict[str, Any], path: Path) -> tuple[Question, ...]:
     entries = data["questions"]
     if not isinstance(entries, list):
         raise ReviewError(f"{path}: questions must be a list, not {type(entries).__name__}")
+    if not entries:
+        raise ReviewError(
+            f"{path}: questions is empty; a screening that asks nothing is not a screening"
+        )
     questions: list[Question] = []
     seen: dict[str, int] = {}
     for index, entry in enumerate(entries):

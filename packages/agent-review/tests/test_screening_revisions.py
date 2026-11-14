@@ -146,6 +146,14 @@ def test_S1_the_packaged_baseline_bank_is_evaluated_without_a_configuration(revi
     assert screened["model"] == questions.baseline().model
 
 
+def test_S1_a_configuration_that_asks_nothing_is_refused_before_screening(revisions, capsys):
+    revisions.config.write_text("model: test-model-v1\nquestions: []\n", encoding="utf-8")
+    assert main(revisions.args()) == 2, "a screening that asks nothing must not exit 0"
+    refused = capsys.readouterr()
+    assert "questions" in refused.err
+    assert refused.out == "", "a refusal writes no screening answer"
+
+
 def test_S1_an_unknown_revision_is_refused_naming_it(revisions, capsys):
     assert main(revisions.args(**{"--base": "deadbeef"})) == 2
     refused = capsys.readouterr()
