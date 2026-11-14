@@ -30,8 +30,25 @@ CREDENTIAL_VARIABLES = ("TYPESAFE_API_KEY", "AGENT_REVIEW_API_KEY")
 DEFAULT_TIMEOUT = 120.0
 LONG_CONTEXT_HEADER = "TypeSafe-Danger-Zone-Long-Context"
 
-# The bank names the instrument its questions belong to; System One names the same instruments itself.
-INSTRUMENTS = {"boolean": "noul", "score": "score", "choice": "choice"}
+
+@dataclass(frozen=True)
+class Limits:
+    """The provider's input budget, in tokens: what one question may add, and what a request may."""
+
+    per_question: int
+    per_request: int
+
+
+# The provider's own budgets: its default window, and the danger-zone window the header unlocks. They are not
+# enforced here - the tool never shortens a change to fit - and they are what a report records as in force.
+DEFAULT_LIMITS = Limits(per_question=32_000, per_request=64_000)
+LONG_CONTEXT_LIMITS = Limits(per_question=262_000, per_request=262_000)
+
+
+def limits(long_context: bool) -> Limits:
+    """The budget in force for one invocation: the long-context one only when the caller asked for it."""
+    return LONG_CONTEXT_LIMITS if long_context else DEFAULT_LIMITS
+
 
 PostJson = Callable[[str, Mapping[str, Any], Mapping[str, str], float], Any]
 
@@ -139,11 +156,18 @@ def state(request: ScreeningRequest) -> dict[str, str]:
 
 
 def question_map(asked: Sequence[Question]) -> dict[str, dict[str, Any]]:
-    """The bank as System One's id -> typed question map, in configuration order."""
-    return {
-        question.id: {"type": INSTRUMENTS[question.type], "instructions": question.ask}
-        for question in asked
-    }
+    """The bank as System One's id -> typed question map, in configuration order.
+
+    A score question's criteria are the levels it is graded on; a noul's criteria are optional and a
+    choice's say what each option means. They are the provider's own input, so they travel as configured.
+    """
+    asked_by_id = {}
+    for question in asked:
+        typed: dict[str, Any] = {"type": question.type, "instructions": question.ask}
+        if question.criteria is not None:
+            typed["criteria"] = question.criteria
+        asked_by_id[question.id] = typed
+    return asked_by_id
 
 
 def post_json(

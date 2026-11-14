@@ -23,11 +23,11 @@ CONFIG = textwrap.dedent(
     questions:
       - id: contract.error-handling
         priority: critical
-        type: boolean
+        type: noul
         ask: Does the change keep the documented error-handling contract
       - id: engineering.names-meaning
         priority: advisory
-        type: boolean
+        type: noul
         ask: Do the new names say what they mean
       - id: design.one-reason
         priority: high
@@ -102,7 +102,7 @@ class Review:
         git(self.checkout, *commit, "head")
         return base, git(self.checkout, "rev-parse", "HEAD")
 
-    def screen(self, response):
+    def screen(self, response, long_context=False):
         """One screening of the fixture, with `response` as the provider's only answer."""
         self.fixture.write_text(json.dumps({"responses": [response]}), encoding="utf-8")
         return main(
@@ -118,6 +118,7 @@ class Review:
                 str(self.config),
                 "--screening-fixture",
                 str(self.fixture),
+                *(["--long-context"] if long_context else []),
             ]
         )
 
@@ -221,8 +222,8 @@ def test_S4_the_report_names_revisions_questions_model_and_usage(review):
     report = review.report()
     assert report["input"] == {"base": review.base, "head": review.head}
     assert report["questions"] == [
-        {"id": "contract.error-handling", "priority": "critical", "type": "boolean"},
-        {"id": "engineering.names-meaning", "priority": "advisory", "type": "boolean"},
+        {"id": "contract.error-handling", "priority": "critical", "type": "noul"},
+        {"id": "engineering.names-meaning", "priority": "advisory", "type": "noul"},
         {"id": "design.one-reason", "priority": "high", "type": "score"},
     ], "the report names the question configuration it evaluated (D26, D51)"
     assert report["model"] == "test-model-v1"
@@ -236,3 +237,18 @@ def test_S4_the_same_frozen_input_and_configuration_produce_the_same_report(revi
     first = review.report()
     assert review.screen(RESPONSE) == 0
     assert review.report() == first
+
+
+def test_S5_the_report_records_the_limits_in_force_and_whether_long_context_was_requested(review):
+    assert review.screen(RESPONSE) == 0
+    assert review.report()["limits"] == {
+        "long_context": False,
+        "per_question": 32000,
+        "per_request": 64000,
+    }, "the default budget is what was in force"
+    assert review.screen(RESPONSE, long_context=True) == 0
+    assert review.report()["limits"] == {
+        "long_context": True,
+        "per_question": 262000,
+        "per_request": 262000,
+    }, "the long-context budget is recorded when it was asked for"

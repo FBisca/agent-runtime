@@ -16,12 +16,8 @@ BASE = "a" * 40
 HEAD = "b" * 40
 
 QUESTIONS = (
-    Question(
-        id="contract.error-handling", priority="critical", ask="Errors handled", type="boolean"
-    ),
-    Question(
-        id="design.naming", priority="advisory", ask="Names say what they mean", type="boolean"
-    ),
+    Question(id="contract.error-handling", priority="critical", ask="Errors handled", type="noul"),
+    Question(id="design.naming", priority="advisory", ask="Names say what they mean", type="noul"),
     Question(id="design.one-reason", priority="high", ask="One reason to change", type="score"),
     Question(id="contract.shape", priority="high", ask="Shape kept", type="choice"),
 )

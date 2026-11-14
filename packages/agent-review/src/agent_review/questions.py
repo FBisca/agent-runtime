@@ -3,9 +3,11 @@
 An invocation without a configuration evaluates the packaged baseline, the mandatory global bank. A
 configuration replaces that bank in this phase: additive repository questions, which extend the baseline
 and never override or disable it, are a later phase's (D05). Only the surface this phase uses is validated
-(P0-D4): the model, and each question's id, priority, ask and type. A bank that asks nothing is refused,
-so no screening completes having evaluated no question. A refusal names the field by its path, so a long
-bank is fixable.
+(P0-D4): the model, and each question's id, priority, ask, type and criteria. The type names the instrument
+the question is asked with - a bounded yes/no question is a `noul`, a graded one a `score`, a classified
+one a `choice` - and `criteria` carries the levels a score is graded on or the meaning a noul or choice
+may declare. A bank that asks nothing is refused, so no screening completes having evaluated no question.
+A refusal names the field by its path, so a long bank is fixable.
 """
 
 import re
@@ -20,24 +22,29 @@ from agent_review.errors import ReviewError
 BASELINE = Path(__file__).with_name("questions.yaml")
 
 PRIORITIES = ("critical", "high", "advisory")
-TYPES = ("boolean", "choice", "score")
-DEFAULT_TYPE = "boolean"
+TYPES = ("noul", "score", "choice")
+DEFAULT_TYPE = "noul"
 
 # D51: identity is authoring-time. A stable, dotted id lets a frozen report name the question it evaluated.
 QUESTION_ID = re.compile(r"[a-z0-9]+(\.[a-z0-9-]+)+")
 
 TOP_LEVEL = ("model", "questions")
-FIELDS = ("id", "priority", "type", "ask")
+FIELDS = ("id", "priority", "type", "ask", "criteria")
 
 
 @dataclass(frozen=True)
 class Question:
-    """One curated question: its stable id, the priority configuration declares, and what it asks."""
+    """One curated question: its stable id, the priority configuration declares, and what it asks.
+
+    `criteria` is the provider's own input for the instrument: the ladder a score is graded on, or what a
+    noul or choice may declare. It travels to the provider as configured.
+    """
 
     id: str
     priority: str
     ask: str
     type: str = DEFAULT_TYPE
+    criteria: Any = None
 
 
 @dataclass(frozen=True)
@@ -142,4 +149,10 @@ def _question(entry: dict[str, Any], field: str, path: Path) -> Question:
     ask = entry["ask"]
     if not isinstance(ask, str) or not ask.strip():
         raise ReviewError(f"{path}: {field}.ask must be a non-empty string, not {ask!r}")
-    return Question(id=identifier, priority=priority, ask=ask, type=kind)
+    return Question(
+        id=identifier,
+        priority=priority,
+        ask=ask,
+        type=kind,
+        criteria=entry.get("criteria"),
+    )

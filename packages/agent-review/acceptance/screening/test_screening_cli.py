@@ -36,11 +36,11 @@ CONFIG = textwrap.dedent(
     questions:
       - id: contract.error-handling
         priority: critical
-        type: boolean
+        type: noul
         ask: Does the change keep the documented error-handling contract
       - id: design.naming
         priority: advisory
-        type: boolean
+        type: noul
         ask: Do the new names say what they mean
     """
 )

@@ -21,7 +21,7 @@ from agent_review.questions import Question
 # (D09, D44). A later phase's file and hunk scopes replace it where they apply.
 SCOPE = "whole-diff"
 
-BOOLEAN_VALUE = "the probability between 0 and 1 that the change satisfies it"
+NOUL_VALUE = "the probability between 0 and 1 that the change satisfies it"
 SCORE_VALUE = "a number between 0 and 1"
 CHOICE_VALUE = "one of its declared options"
 
@@ -81,7 +81,7 @@ def _answered(native: Iterable[Any], asked: Mapping[str, Question]) -> dict[str,
 
 def _value(question: Question, value: Any) -> Any:
     """The value as the provider answered it, or a refusal naming what the question allows (D50)."""
-    if question.type == "boolean":
+    if question.type == "noul":
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
             raise _refused(question, value)
         return value
@@ -95,7 +95,7 @@ def _value(question: Question, value: Any) -> Any:
 
 
 def _allowed(kind: str) -> str:
-    return {"boolean": BOOLEAN_VALUE, "score": SCORE_VALUE}.get(kind, CHOICE_VALUE)
+    return {"noul": NOUL_VALUE, "score": SCORE_VALUE}.get(kind, CHOICE_VALUE)
 
 
 def _refused(question: Question, value: Any) -> ScreeningError:

@@ -19,7 +19,7 @@ CONFIG = textwrap.dedent(
     questions:
       - id: contract.error-handling
         priority: critical
-        type: boolean
+        type: noul
         ask: Does the change keep the documented error-handling contract
       - id: engineering.names-meaning
         priority: advisory
@@ -57,7 +57,7 @@ def test_S1_a_configured_bank_is_read_from_yaml_with_its_model_and_questions(tmp
         "engineering.names-meaning",
     ]
     assert bank.questions[0].priority == "critical"
-    assert bank.questions[1].type == "boolean", "a question without a type is a boolean (D50)"
+    assert bank.questions[1].type == "noul", "a question without a type is a noul (D50)"
 
 
 @pytest.mark.parametrize(
@@ -105,3 +105,28 @@ def test_S1_a_missing_configuration_is_refused_naming_its_path(tmp_path):
     with pytest.raises(ReviewError) as refused:
         questions.load(tmp_path / "absent.yaml")
     assert "absent.yaml" in str(refused.value)
+
+
+def test_S1_a_score_question_carries_the_levels_it_is_graded_on(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "model: jev-latest\nquestions:\n  - id: design.one-reason\n    priority: high\n"
+        "    type: score\n    criteria:\n      - none\n      - severe\n    ask: How severe\n",
+        encoding="utf-8",
+    )
+    (question,) = questions.load(path).questions
+    assert question.type == "score"
+    assert question.criteria == ["none", "severe"], "the levels travel with the question it grades"
+
+
+def test_S1_a_question_type_outside_the_instruments_is_refused_naming_them(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "model: jev-latest\nquestions:\n  - id: contract.a\n    priority: critical\n"
+        "    type: boolean\n    ask: Is it\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ReviewError) as refused:
+        questions.load(path)
+    assert "questions[0].type" in str(refused.value)
+    assert "noul" in str(refused.value), "a refusal names the instruments the bank may ask"

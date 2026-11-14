@@ -4,14 +4,14 @@
 # overrides or disables it (D05); an invocation without --config evaluates
 # exactly these questions.
 #
-# A judgment is native and bounded (D44, D50): a boolean question is true when
-# the change satisfies it. Priority is declared here and never chosen by the
-# screening model (D07); a critical question is always asked (D09). Ids are
-# stable and unique: a question whose meaning changes takes a new id, so a
-# frozen report stays comparable (D26, D51). Expand the bank only after
-# evidence of a gap (D49).
+# A judgment is native and bounded (D44, D50): every question here is a noul,
+# answered with the probability that the change satisfies it. Priority is
+# declared here and never chosen by the screening model (D07); a critical
+# question is always asked (D09). Ids are stable and unique: a question whose
+# meaning changes takes a new id, so a frozen report stays comparable (D26,
+# D51). Expand the bank only after evidence of a gap (D49).
 
-model: gpt-4.1-mini
+model: jev-latest
 
 questions:
   # The contract perspective: what this repository promised its callers.

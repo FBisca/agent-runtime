@@ -97,6 +97,31 @@ def serve_fixture() -> Iterator[Callable[..., tuple[str, Canned]]]:
         thread.join(timeout=10)
 
 
+def scored_request() -> ScreeningRequest:
+    """One screening asking a graded question with its levels and a bounded yes/no question beside it."""
+    return ScreeningRequest(
+        model="jev-latest",
+        questions=(
+            Question(
+                id="design.one-reason",
+                priority="high",
+                type="score",
+                ask="How severely does the change violate one reason to change",
+                criteria=["none", "minor", "severe"],
+            ),
+            Question(
+                id="contract.error-handling",
+                priority="critical",
+                type="noul",
+                ask="Does the change keep the documented error-handling contract",
+            ),
+        ),
+        diff=DIFF,
+        base="a" * 40,
+        head="b" * 40,
+    )
+
+
 def header(headers: dict[str, str], name: str) -> str | None:
     """One header by name, whatever case it travelled in."""
     for key, value in headers.items():
@@ -113,7 +138,7 @@ def request() -> ScreeningRequest:
             Question(
                 id="contract.error-handling",
                 priority="critical",
-                type="boolean",
+                type="noul",
                 ask="Does the change keep the documented error-handling contract",
             ),
         ),
@@ -297,3 +322,24 @@ def test_S7_a_malformed_fixture_is_refused_naming_the_file(tmp_path):
         FixtureScreenings(path)
     assert "responses" in str(refused.value)
     assert refused.value.code == 2
+
+
+def test_S1_a_graded_question_carries_its_levels_to_the_provider(serve):
+    base_url, canned = serve(
+        200,
+        {
+            "model": "jev-1.14.0",
+            "answers": {
+                "design.one-reason": {"type": "score", "score": 1.0, "confidence": 0.8},
+                "contract.error-handling": {"type": "noul", "noul": 0.6},
+            },
+            "usage": {"input_tokens": 1, "output_tokens": 2},
+        },
+    )
+    SystemOneScreenings(
+        model="jev-latest", api_key="sk-local-test", base_url=base_url, timeout=10
+    ).screen(scored_request())
+    asked = json.loads(canned.body)["questions"]
+    assert asked["design.one-reason"]["criteria"] == ["none", "minor", "severe"]
+    assert asked["design.one-reason"]["type"] == "score"
+    assert "criteria" not in asked["contract.error-handling"], "a noul needs none declared"

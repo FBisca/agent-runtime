@@ -120,7 +120,12 @@ def screen(args: argparse.Namespace) -> Report:
     except ScreeningError as error:
         # An incomplete run keeps what it knows and records why it stopped; no verdict is inferred (D34, D40).
         return Report(
-            model=bank.model, base=base, head=head, questions=bank.questions, failure=str(error)
+            model=bank.model,
+            base=base,
+            head=head,
+            questions=bank.questions,
+            long_context=args.long_context,
+            failure=str(error),
         )
     return Report(
         model=bank.model,
@@ -130,6 +135,7 @@ def screen(args: argparse.Namespace) -> Report:
         judgments=judgments,
         input_tokens=reply.input_tokens,
         output_tokens=reply.output_tokens,
+        long_context=args.long_context,
     )
 
 
