@@ -317,6 +317,30 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(len(self.wake_lines("decision")), 2)
         self.assertIn("decision.json", self.wake_lines("decision")[1])
 
+    def test_S3_a_decision_the_driver_cannot_read_asks_the_lead_again_with_the_way_out(self):
+        """A decision in a contract version this driver does not read: the Lead is asked again, naming the reason
+        and the way out (restart the driver on the current code), and no decision is applied."""
+        bad = self.run_dir / "t1" / "decision.json"
+        resolve = wait_result(
+            write=[[str(bad), json.dumps({"contract": 4, "action": "skip", "reason": "x"})]]
+        )
+        resolve["run"] = [
+            [
+                sys.executable,
+                "-c",
+                "import json,sys;p=sys.argv[1];r=json.load(open(p));r.update(status='resolved',decision=sys.argv[2]);"
+                "json.dump(r,open(p,'w'))",
+                str(self.run_dir / "t1" / "request.json"),
+                str(bad),
+            ]
+        ]
+        self.waits([self.blocked(), resolve, self.decided("skip")])
+        self.run_driver()
+        asked = json.loads((self.run_dir / "t1" / "request.2.json").read_text(encoding="utf-8"))
+        self.assertIn("contract", asked["reason"])
+        self.assertIn("restart", asked["reason"])
+        self.assertEqual(len(self.wake_lines("decision")), 2)
+
     def test_S12_a_contract_error_raises_a_request_too(self):
         """orchestrator-engine/R2: code-driven-orchestrator/S12
 

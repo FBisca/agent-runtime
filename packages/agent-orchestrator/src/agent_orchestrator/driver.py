@@ -764,6 +764,28 @@ def readable_request(path):
         return None
 
 
+def decision_version(path):
+    """The contract version a decision file names, or None when it names none or cannot be read."""
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value.get("contract") if isinstance(value, dict) else None
+
+
+def unreadable_decision(path, error):
+    """Why the driver cannot read a decision. A decision in a contract version this driver does not read names the
+    reason and the way out: the Lead is asked again, and the restart on the current code is the way out. Any other
+    break keeps the raw error."""
+    version = decision_version(path)
+    if version is not None and version not in contracts.LEAD_SUPPORTED:
+        return (
+            "the decision is contract %s, which this driver does not read; restart the driver on the current code"
+            % version
+        )
+    return str(error)
+
+
 def next_path(directory, stem, suffix):
     """The first write-once file name free in `directory`: <stem><suffix>, <stem>.2<suffix>, ..."""
     for index in range(1, 1000):
@@ -2251,7 +2273,7 @@ class Driver:
             return
         decision_path = next_path(path.parent, "decision", ".json")[0]
         decision = contracts.validate_decision(
-            {"contract": contracts.LEAD_VERSION, "action": "skip", "reason": reason}
+            {"contract": document["contract"], "action": "skip", "reason": reason}
         )
         write_atomic(decision_path, json.dumps(decision, indent=2) + "\n")
         write_atomic(
@@ -4823,7 +4845,9 @@ class Driver:
         try:
             decision = contracts.load(task["decision"]["path"], contracts.validate_decision)
         except contracts.ContractError as error:
-            return self.request(task_id, "decision", str(error))
+            return self.request(
+                task_id, "decision", unreadable_decision(task["decision"]["path"], error)
+            )
         action, reason, unit = decision["action"], decision["reason"], task["packet"]["unit"]
         narrate.say("info", "decide", "Lead decided %s: %s" % (action, reason), task=task_id)
         self.log("decision", unit=unit, task=task_id, action=action, reason=reason[:500])
@@ -8012,8 +8036,9 @@ DECISION_KEYS = {"action", "reason", "answer", "contract"}
 
 
 def read_decision(source):
-    """The decision object `decide --json <file|->` was handed, as (action, reason, answer): refused, naming what is
-    wrong with it, when it cannot be read or is not the object a decision is."""
+    """The decision object `decide --json <file|->` was handed: refused, naming what is wrong with it, when it cannot
+    be read or is not the object a decision is. The `contract` it names is read with the rest: the request it answers
+    decides which version is the right one."""
     try:
         raw = (
             sys.stdin.read(contracts.LIMIT + 1)
@@ -8035,15 +8060,16 @@ def read_decision(source):
     unknown = sorted(set(value) - DECISION_KEYS)
     if unknown:
         raise Refused("the decision has unknown fields: %s" % ", ".join(unknown), "write " + shape)
-    if value.get("contract", contracts.LEAD_VERSION) != contracts.LEAD_VERSION:
+    named = value.get("contract")
+    if named is not None and (not isinstance(named, int) or isinstance(named, bool)):
         raise Refused(
-            "the decision's contract is %r" % (value["contract"],),
-            "leave `contract` out, or write %d" % contracts.LEAD_VERSION,
+            "the decision's contract is not a version",
+            "write `contract` as the number of the request's contract version, or leave it out",
         )
     for key in ("action", "reason", "answer"):
         if value.get(key) is not None and not isinstance(value[key], str):
             raise Refused("the decision's %s is not a string" % key, "write " + shape)
-    return value.get("action"), value.get("reason"), value.get("answer")
+    return value
 
 
 def decide(args):
@@ -8067,9 +8093,12 @@ def decided(args, source):
                 "--json carries the whole decision, and the command line named more",
                 "put the action, reason and answer in the JSON, or drop --json and use the flags",
             )
-        action, reason, answer = read_decision(source)
+        value = read_decision(source)
+        action, reason, answer = value.get("action"), value.get("reason"), value.get("answer")
+        named = value.get("contract")
     else:
         action, reason, answer = args.action, args.reason, args.answer
+        named = None
         if not action or not reason:
             raise Refused(
                 "the decision needs an action and a --reason",
@@ -8094,6 +8123,14 @@ def decided(args, source):
                 "a unit has a request only while the driver waits for the Lead: `await %s` names the next one"
                 % args.plan,
             )
+        try:
+            version = contracts.answer_version(request, named)
+        except contracts.ContractError as error:
+            raise Refused(
+                str(error),
+                "write the decision in the request's contract version (%s), or leave `contract` out"
+                % request["contract"],
+            ) from None
         menu = contracts.menu_actions(request)
         if action not in menu:
             raise Refused(
@@ -8111,7 +8148,7 @@ def decided(args, source):
         try:
             decision = contracts.validate_decision(
                 dict(
-                    {"contract": contracts.LEAD_VERSION, "action": action, "reason": reason},
+                    {"contract": version, "action": action, "reason": reason},
                     **({"answer": answer} if answer else {}),
                 )
             )
