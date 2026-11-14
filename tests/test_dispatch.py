@@ -860,6 +860,40 @@ class TerminalRefusalTests(ToolCase):
             alive.team(self.scope, self.terminal, "4243:unrelated")
         self.assertEqual(len(self.teams()), 1, "the refused session registered a team")
 
+    def test_S6_a_session_that_registers_in_the_evidence_window_is_refused_not_a_crash(self):
+        """stale-team-generation/S6: a row that lands between the two reads is a refusal, not a crash.
+
+        The evidence for the terminal's teams is gathered outside the transaction, so another session can
+        register a row in that window: the owner the second read meets is a generation the evidence does
+        not know yet, and the caller is refused with the message that names the terminal and the owner.
+        """
+        owner = self.live_generation()
+        team = self.store.team(self.scope, self.terminal, owner)
+        self.hold_work(team)
+        rogue = "4242:rogue"
+        landed = []
+
+        def stamp(pid):
+            """The process table: the rogue row lands while the evidence is gathered."""
+            if pid == 4242:
+                return (True, "rogue")
+            if not landed:
+                landed.append(True)
+                with self.store.transaction() as db:
+                    db.execute(
+                        "INSERT INTO teams VALUES (?,?,?,?)",
+                        ("rogue", self.scope, self.terminal, rogue),
+                    )
+            return (True, owner.split(":")[1])
+
+        store = Store(self.env, alive=stamp, ancestors=lambda: [4242])
+        with self.assertRaises(TerminalRefused) as error:
+            store.team(self.scope, self.terminal, "4343:second")
+        message = str(error.exception)
+        self.assertIn(self.terminal, message, "the refusal does not name the terminal")
+        self.assertIn(rogue, message, "the refusal does not name the generation that owns it")
+        self.assertEqual(len(self.teams()), 2, "the refused session registered a team")
+
     def test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out(self):
         """stale-team-generation/S6: a refusal names the reason and the way out."""
         owner = self.live_generation()

@@ -79,8 +79,13 @@ SNAPSHOT_SQL = (
 )
 # The liveness rule, written where it runs: the query is a literal, so the reader sees the whole rule.
 # A team holds work its lead is still serving when it has an unfinished assignment of an active worker or a
-# result that is not acknowledged yet. The snapshot's "all" branch asks a different question (the current
-# turn of every worker), so the rule keeps its own query and the two readers cannot drift apart.
+# result that is not acknowledged yet. This is the rule the published lead-conflict requirement states
+# ("that team has unfinished assignments"), so a superseded turn of an active worker still keeps the
+# terminal. The CLI's own live-lead check reads the snapshot's "all" branch instead, which asks about the
+# current turn of every worker: it is looser, so a call it lets through is refused here, with the message
+# that names the terminal, the owner and the way out. The two readers answer different questions on
+# purpose; the store's answer is the one that decides the terminal, and the CLI's check should read this
+# rule (it lives in agent_runtime.py, outside this ticket's paths).
 READ_MEMBERS_SQL = (
     "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
     "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name,d.turn,d.mode FROM assignments a LEFT JOIN dispatch_turns d ON d.assignment=a.id "
@@ -179,6 +184,18 @@ def alive_verdicts(generations, stamp=None):
     return {generation: generation_alive(generation, stamp) for generation in set(generations)}
 
 
+def alive_verdict(liveness, generation):
+    """Whether one generation's process is alive, from the evidence gathered outside the transaction.
+
+    The map holds the verdicts for the rows the reader was given. A generation the map does not know is
+    a row that landed after the evidence was taken (another session registered in that window), so the
+    reader is asked then: the process table is read in that rare window only, never on the common path."""
+    if liveness is None:
+        return generation_alive(generation)
+    verdict = liveness.get(generation)
+    return generation_alive(generation) if verdict is None else verdict
+
+
 def team_empty(db, team):
     """True when the team holds no worker, assignment, message, receipt, caller, task, last_wait row or
     operation: the session that owned it left nothing behind."""
@@ -229,7 +246,10 @@ def team_holds_work(db, team, lead=None):
     This is the liveness rule, not the emptiness rule: unfinished assignments of active workers or
     results not yet acknowledged, plus a message the lead has not acknowledged. The rule is the
     query above, so one reader decides what a live owner holds: an owner that holds only a task, an
-    operation or a last-wait row is idle, and an idle terminal is free for the next session."""
+    operation or a last-wait row is idle, and an idle terminal is free for the next session. The CLI's
+    live-lead check asks a looser question (the current turn of every worker), so it may let a call
+    through that this rule refuses: the store's answer is the one that keeps the terminal with its
+    owner."""
     return bool(
         db.execute(
             "SELECT 1 FROM assignments a JOIN workers w ON w.id=a.worker WHERE a.team=? "
@@ -251,7 +271,9 @@ def owning_team(db, scope, lead, own_team=None, own_generation=None, liveness=No
     would be skipped, the newest one owns the terminal.
 
     `liveness` carries the process evidence gathered outside the transaction, so this reader asks no
-    process table while the store holds its write lock; without it the reader asks the runtime."""
+    process table while the store holds its write lock; without it the reader asks the runtime. A
+    generation the evidence does not know is a row that landed after it was taken, and the reader is
+    asked for that one row alone."""
     rows = db.execute(
         "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC",
         (scope, lead),
@@ -261,11 +283,7 @@ def owning_team(db, scope, lead, own_team=None, own_generation=None, liveness=No
             own_generation is not None and row["generation"] == own_generation
         ):
             return row
-        if team_empty(db, row["id"]) and not (
-            liveness[row["generation"]]
-            if liveness is not None
-            else generation_alive(row["generation"])
-        ):
+        if team_empty(db, row["id"]) and not alive_verdict(liveness, row["generation"]):
             continue  # a session that left nothing behind never owns the terminal
         return row
     return rows[0] if rows else None
@@ -465,7 +483,7 @@ class Store:
                     raise TerminalRefused(
                         terminal_owned(lead, owner["generation"], REFUSED_IN_TREE)
                     )
-                if liveness.get(owner["generation"]) and work:
+                if alive_verdict(liveness, owner["generation"]) and work:
                     raise TerminalRefused(
                         terminal_owned(lead, owner["generation"], REFUSED_LIVE_OWNER)
                     )
