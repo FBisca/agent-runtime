@@ -5,6 +5,10 @@ does not allow is refused, naming the question and the way out, so the invocatio
 execution instead of a verdict (D40). A judgment is emitted in configuration order whatever order it was
 answered in, and carries its question's priority, its scope and the revision it was made on (D07, D44,
 D46). A question the screening left out is simply unanswered: nothing is guessed at or invented.
+
+A bounded yes/no question is a noul, and the provider answers it with the probability that the change
+satisfies it: the value is that probability as answered, never a `true` this tool invented by comparing
+it with a threshold.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -17,7 +21,7 @@ from agent_review.questions import Question
 # (D09, D44). A later phase's file and hunk scopes replace it where they apply.
 SCOPE = "whole-diff"
 
-BOOLEAN_VALUE = "true or false"
+NOUL_VALUE = "the probability between 0 and 1 that the change satisfies it"
 SCORE_VALUE = "a number between 0 and 1"
 CHOICE_VALUE = "one of its declared options"
 
@@ -77,8 +81,8 @@ def _answered(native: Iterable[Any], asked: Mapping[str, Question]) -> dict[str,
 
 def _value(question: Question, value: Any) -> Any:
     """The value as the provider answered it, or a refusal naming what the question allows (D50)."""
-    if question.type == "boolean":
-        if not isinstance(value, bool):
+    if question.type == "noul":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
             raise _refused(question, value)
         return value
     if question.type == "score":
@@ -91,7 +95,7 @@ def _value(question: Question, value: Any) -> Any:
 
 
 def _allowed(kind: str) -> str:
-    return {"boolean": BOOLEAN_VALUE, "score": SCORE_VALUE}.get(kind, CHOICE_VALUE)
+    return {"noul": NOUL_VALUE, "score": SCORE_VALUE}.get(kind, CHOICE_VALUE)
 
 
 def _refused(question: Question, value: Any) -> ScreeningError:

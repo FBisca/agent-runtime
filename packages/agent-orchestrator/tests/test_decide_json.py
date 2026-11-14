@@ -116,6 +116,22 @@ class DecideJson(WakeFixture, unittest.TestCase):
             json.loads((self.run_dir / "t1" / "request.json").read_text())["status"], "open"
         )
 
+    def test_S2_a_json_decision_naming_another_contract_is_refused_with_both_versions(self):
+        """The decision may not contradict the request: a version the request does not carry is refused, naming both."""
+        path = self.write_open_request()
+        old = dict(json.loads(path.read_text(encoding="utf-8")), contract=2, menu=["retry", "skip"])
+        path.write_text(json.dumps(old), encoding="utf-8")
+        result = self.decide_json({"contract": 3, "action": "skip", "reason": "x"})
+        self.assertEqual(result.returncode, 2)
+        lines = [line for line in result.stderr.splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1, result.stderr)
+        refusal = json.loads(lines[0])
+        self.assertRegex(refusal["reason"], r"\b2\b")
+        self.assertRegex(refusal["reason"], r"\b3\b")
+        self.assertTrue(refusal["way_out"])
+        self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["status"], "open")
+
     def test_control_a_flag_decision_still_resolves_the_request(self):
         self.write_open_request()
         result = self.decide_flags("skip", "not needed")
