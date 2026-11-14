@@ -135,6 +135,15 @@ tickets:
     risk: [state]
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-14T19:47:57.766642+00:00'
+  at: '2026-11-14T20:43:11.606973+00:00'
   base: 5f15af54f5c81dc8a9802e8c3073e9f5658e9a13
-  digest: ae3d1bce1d10d8dab5ce65080bbb2dae99d6b9c4c37ac2682c79b10ea8d2ff4b
+  digest: c6639e89ed06aaff27b4c0bdad939aa4b783a8d2c9c7747b48550cc57d3c776f
+amendments:
+- prev_digest: ae3d1bce1d10d8dab5ce65080bbb2dae99d6b9c4c37ac2682c79b10ea8d2ff4b
+  digest: c6639e89ed06aaff27b4c0bdad939aa4b783a8d2c9c7747b48550cc57d3c776f
+  at: '2026-11-14T20:43:11.606973+00:00'
+  by: felippe.bisca@gmail.com (t2pc)
+  reason: 'acceptance fixture: the caller''s env must win over the forced base_url
+    credential, so S1''s missing-credential case can withhold the fallback and the
+    scenario is satisfiable'
+  tickets: []
