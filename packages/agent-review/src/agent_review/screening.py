@@ -76,10 +76,17 @@ class ScreeningReply:
     judgments: tuple[Mapping[str, Any], ...]
     input_tokens: int = 0
     output_tokens: int = 0
+    # The model the provider served, as its own answer named it: an alias is what was asked for, and a
+    # frozen report has to name what answered, not what was requested (S4).
+    model: str | None = None
 
 
 class ScreeningPort(Protocol):
     """The one seam a screening reaches: the direct API, or a canned provider replacing it."""
+
+    # The endpoint or source this port screens through, recorded in the report so a reader can tell a
+    # provider's screening from a canned one (S4).
+    provider: str
 
     # `...` is a protocol member's body: it carries the signature and no caller runs it.
     def screen(self, request: ScreeningRequest) -> ScreeningReply: ...
@@ -104,6 +111,7 @@ class SystemOneScreenings:
         self.long_context = long_context
         self.timeout = timeout
         self.post: PostJson = post if post is not None else post_json
+        self.provider = self.base_url
 
     def screen(self, request: ScreeningRequest) -> ScreeningReply:
         api_key = self.api_key or _credential()
@@ -130,6 +138,7 @@ class FixtureScreenings:
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
+        self.provider = f"fixture:{self.path}"
         self.responses = _responses(self.path)
         self.asked: list[ScreeningRequest] = []
 
@@ -228,7 +237,13 @@ def _reply(answer: Any, source: str) -> ScreeningReply:
         judgments=_judgments(answer.get("answers"), source),
         input_tokens=_count(answer.get("usage"), "input_tokens"),
         output_tokens=_count(answer.get("usage"), "output_tokens"),
+        model=_served_model(answer.get("model")),
     )
+
+
+def _served_model(model: Any) -> str | None:
+    """The model the provider's answer names, or nothing when it names none: never the alias inferred."""
+    return model.strip() if isinstance(model, str) and model.strip() else None
 
 
 def _judgments(answers: Any, source: str) -> tuple[Mapping[str, Any], ...]:

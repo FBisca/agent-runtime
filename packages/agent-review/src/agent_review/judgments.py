@@ -15,6 +15,7 @@ level with no confidence at all, because a score without one is a number with no
 """
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from agent_review.errors import ScreeningError
@@ -30,6 +31,14 @@ CONFIDENCE_VALUE = "the confidence between 0 and 1 that comes beside its level"
 CHOICE_VALUE = "one of its declared options"
 
 
+@dataclass(frozen=True)
+class Judged:
+    """What a reply yielded: the judgments it made, and why it stopped when one was refused (S6)."""
+
+    judgments: tuple[dict[str, Any], ...] = ()
+    error: ScreeningError | None = None
+
+
 def attributed(
     questions: Sequence[Question],
     native: Iterable[Any],
@@ -37,9 +46,50 @@ def attributed(
     base: str,
     head: str,
 ) -> tuple[dict[str, Any], ...]:
-    """Each answered question as a judgment with its provenance, in configuration order."""
+    """Each answered question as a judgment with its provenance, in configuration order.
+
+    The strict form: one answer the run cannot attribute raises, so a caller that wants no partial
+    verdict uses this, while a caller that keeps what a stopped run learned uses `collected` (S6).
+    """
+    held = collected(questions, native, base=base, head=head)
+    if held.error is not None:
+        raise held.error
+    return held.judgments
+
+
+def collected(
+    questions: Sequence[Question],
+    native: Iterable[Any],
+    *,
+    base: str,
+    head: str,
+) -> Judged:
+    """The judgments a reply earned and the reason it stopped, keeping what it learned before a refusal.
+
+    A run that stops part-way keeps the judgments it already made and the usage it paid for: the report is
+    the only record of a screening that happened, and discarding it hides both the cost and the judgement
+    (S6, D47). The refused answer and everything after it are not learned, and nothing is guessed.
+    """
     asked = {question.id: question for question in questions}
-    answered = _answered(native, asked)
+    answered: dict[str, dict[str, Any]] = {}
+    for index, judgment in enumerate(native):
+        try:
+            _learn(index, judgment, asked, answered)
+        except ScreeningError as error:
+            return Judged(
+                judgments=_emitted(questions, answered, base=base, head=head), error=error
+            )
+    return Judged(judgments=_emitted(questions, answered, base=base, head=head))
+
+
+def _emitted(
+    questions: Sequence[Question],
+    answered: Mapping[str, dict[str, Any]],
+    *,
+    base: str,
+    head: str,
+) -> tuple[dict[str, Any], ...]:
+    """The learned answers as judgments, in configuration order whatever order they were answered in."""
     revision = f"{base}..{head}"
     return tuple(
         {
@@ -54,33 +104,35 @@ def attributed(
     )
 
 
-def _answered(native: Iterable[Any], asked: Mapping[str, Question]) -> dict[str, dict[str, Any]]:
-    """The provider's native answers by question id, refusing what the run cannot attribute."""
-    values: dict[str, dict[str, Any]] = {}
-    for index, judgment in enumerate(native):
-        if not isinstance(judgment, Mapping):
-            raise ScreeningError(
-                f"the screening answered judgment {index} with {judgment!r}, which is not an object; "
-                'a judgment is {"question": "<id>", "value": <native value>}'
-            )
-        identifier = judgment.get("question")
-        if not isinstance(identifier, str) or identifier not in asked:
-            raise ScreeningError(
-                f"the screening answered {identifier!r}, which the question configuration does not "
-                "ask; a judgment names a configured question id"
-            )
-        if identifier in values:
-            raise ScreeningError(
-                f"the screening answered question {identifier!r} more than once; "
-                "answer each question once"
-            )
-        if "value" not in judgment:
-            raise ScreeningError(
-                f"the screening answered question {identifier!r} with no value: "
-                f"answer it {_allowed(asked[identifier])}"
-            )
-        values[identifier] = _fields(asked[identifier], judgment)
-    return values
+def _learn(
+    index: int,
+    judgment: Any,
+    asked: Mapping[str, Question],
+    values: dict[str, dict[str, Any]],
+) -> None:
+    """Take one native answer into `values`, or refuse it naming what it should have been (D50)."""
+    if not isinstance(judgment, Mapping):
+        raise ScreeningError(
+            f"the screening answered judgment {index} with {judgment!r}, which is not an object; "
+            'a judgment is {"question": "<id>", "value": <native value>}'
+        )
+    identifier = judgment.get("question")
+    if not isinstance(identifier, str) or identifier not in asked:
+        raise ScreeningError(
+            f"the screening answered {identifier!r}, which the question configuration does not "
+            "ask; a judgment names a configured question id"
+        )
+    if identifier in values:
+        raise ScreeningError(
+            f"the screening answered question {identifier!r} more than once; "
+            "answer each question once"
+        )
+    if "value" not in judgment:
+        raise ScreeningError(
+            f"the screening answered question {identifier!r} with no value: "
+            f"answer it {_allowed(asked[identifier])}"
+        )
+    values[identifier] = _fields(asked[identifier], judgment)
 
 
 def _fields(question: Question, judgment: Mapping[str, Any]) -> dict[str, Any]:
