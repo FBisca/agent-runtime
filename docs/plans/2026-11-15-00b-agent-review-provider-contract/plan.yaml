@@ -1,0 +1,115 @@
+schema: plan/1
+slug: 00b-agent-review-provider-contract
+goal: >-
+  The screening CLI speaks TypeSafe System One natively: the bank carries the criteria and levels a Jev question
+  needs, a judgment carries the provider's native answer including its confidence, the report names the provider, the
+  model served and the limits in force, and an oversized request fails loudly instead of being truncated.
+spec: docs/specs/agent-review.md
+domain: screening
+archive: promote
+outcome: [S1, S2, S3, S4, S5, S6]
+scenarios:
+  - id: S1
+    when: "a caller screens two revisions without a fixture"
+    then: "the tool posts one System One request to the provider it is configured with, authenticated by TYPESAFE_API_KEY, carrying the state and the questions as System One's typed request"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-review/acceptance/screening/test_provider_contract.py -q -k "S1 or control"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_provider_contract.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S2
+    when: "a configured score question has no levels, or a noul question carries a level list"
+    then: "the configuration is refused before any request is made, naming the question and the field by path"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-review/acceptance/screening/test_provider_contract.py -q -k "S2 or control"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_provider_contract.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S3
+    when: "the provider answers a score outside the question's declared levels, or a confidence outside zero and one"
+    then: "the judgment is refused naming the question, and the execution is incomplete rather than screened"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-review/acceptance/screening/test_provider_contract.py -q -k "S3 or control"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_provider_contract.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S4
+    when: "a screening completes"
+    then: "the report names the provider endpoint, the model the provider served, the input limit in force, whether long context was requested, and a digest of the bank it screened"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-review/acceptance/screening/test_provider_contract.py -q -k "S4 or control"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_provider_contract.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S5
+    when: "the state and its questions exceed the limit in force"
+    then: "the execution is incomplete with the provider's own reason, and the same change completes when long context is requested"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-review/acceptance/screening/test_provider_contract.py -q -k "S5 or control"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_provider_contract.py]
+      package: packages/agent-review
+      timeout: 600
+  - id: S6
+    when: "an execution is refused, or stops after the provider answered"
+    then: "a refusal writes no report and names any report already standing in the output directory, while an incomplete run keeps the usage and the judgments it already learned"
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-review/acceptance/screening/test_provider_contract.py -q -k "S6 or control"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_provider_contract.py]
+      package: packages/agent-review
+      timeout: 600
+tickets:
+  - id: T1
+    delivers: "Replace the OpenAI chat adapter with a System One transport selected by configuration: endpoint and credential, the typed state and question map, the long-context header, and a request that never leaves the tool with a truncated state"
+    satisfies: [S1, S5]
+    paths: [packages/agent-review/]
+    size: regular
+    difficulty: complex
+    risk: [external]
+  - id: T2
+    delivers: "Carry the criteria and levels a Jev question needs in the bank, refuse a missing or misplaced one by path before any request, and keep the fixture provider as the offline seam"
+    satisfies: [S2]
+    paths: [packages/agent-review/]
+    blocked_by: [T1]
+    size: regular
+    difficulty: simple
+    risk: [state]
+  - id: T3
+    delivers: "Record the provider's native answer — probability for a noul, score and confidence for a score, choice and probabilities for a choice — and refuse an answer the question's declared levels or range do not allow"
+    satisfies: [S3]
+    paths: [packages/agent-review/]
+    blocked_by: [T2]
+    size: regular
+    difficulty: simple
+    risk: [state]
+  - id: T4
+    delivers: "Make the report say what produced it: the provider endpoint, the served model beside the configured alias, the input limit in force, the long-context flag, the bank digest, and a refusal or incomplete report that keeps what it learned"
+    satisfies: [S4, S6]
+    paths: [packages/agent-review/]
+    blocked_by: [T3]
+    size: regular
+    difficulty: simple
+    risk: [state]

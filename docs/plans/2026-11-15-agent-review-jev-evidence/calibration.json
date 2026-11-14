@@ -1,0 +1,445 @@
+{
+ "provisional": true,
+ "note": "Rules: noul keep needs gap <= -0.10 and sd <= 0.18; score keep needs gap >= 1.0 on the 0-4 scale and sd_clean <= 0.72. Dead means it never moves (a constant). Provisional until the reference set has ~15 verified-clean changes per instrument.",
+ "reference_set": {
+  "noul": {
+   "clean": [
+    "74addfe-rtk",
+    "c239004-brief",
+    "check-tiers/t2",
+    "named-capture/t1",
+    "review-cli/t2"
+   ]
+  },
+  "score": {
+   "clean": [
+    "74addfe-rtk",
+    "archive/t2",
+    "c239004-brief",
+    "check-tiers/t1o1",
+    "check-tiers/t2",
+    "check-tiers/t3",
+    "gaps/t1",
+    "gaps/t2",
+    "gaps/t3",
+    "gaps/t4",
+    "label-evidence/t1",
+    "named-capture/t1",
+    "review-cli/t1",
+    "review-cli/t2",
+    "workbench/t1"
+   ]
+  }
+ },
+ "noul": {
+  "contract.requirement-traceability": {
+   "clean": {
+    "n": 5,
+    "mean": 0.818,
+    "sd": 0.065
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.689
+   },
+   "gap": -0.129,
+   "verdict": "keep"
+  },
+  "contract.error-handling": {
+   "clean": {
+    "n": 5,
+    "mean": 0.77,
+    "sd": 0.109
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.579
+   },
+   "gap": -0.191,
+   "verdict": "keep"
+  },
+  "contract.public-surface-compatibility": {
+   "clean": {
+    "n": 5,
+    "mean": 0.523,
+    "sd": 0.227
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.604
+   },
+   "gap": 0.081,
+   "verdict": "unstable"
+  },
+  "contract.test-evidence": {
+   "clean": {
+    "n": 5,
+    "mean": 0.767,
+    "sd": 0.05
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.662
+   },
+   "gap": -0.105,
+   "verdict": "keep"
+  },
+  "contract.missing-context": {
+   "clean": {
+    "n": 5,
+    "mean": 0.657,
+    "sd": 0.129
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.663
+   },
+   "gap": 0.006,
+   "verdict": "no signal"
+  },
+  "engineering.survival-priority": {
+   "clean": {
+    "n": 5,
+    "mean": 0.79,
+    "sd": 0.043
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.679
+   },
+   "gap": -0.111,
+   "verdict": "keep"
+  },
+  "engineering.traceable-cause": {
+   "clean": {
+    "n": 5,
+    "mean": 0.826,
+    "sd": 0.029
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.749
+   },
+   "gap": -0.077,
+   "verdict": "weak"
+  },
+  "engineering.durable-intent": {
+   "clean": {
+    "n": 5,
+    "mean": 0.775,
+    "sd": 0.094
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.822
+   },
+   "gap": 0.047,
+   "verdict": "no signal"
+  },
+  "engineering.external-legibility": {
+   "clean": {
+    "n": 5,
+    "mean": 0.718,
+    "sd": 0.071
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.746
+   },
+   "gap": 0.028,
+   "verdict": "no signal"
+  },
+  "engineering.type-contracts": {
+   "clean": {
+    "n": 5,
+    "mean": 0.2,
+    "sd": 0.107
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.129
+   },
+   "gap": -0.071,
+   "verdict": "dead"
+  },
+  "engineering.implicit-named": {
+   "clean": {
+    "n": 5,
+    "mean": 0.569,
+    "sd": 0.081
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.591
+   },
+   "gap": 0.022,
+   "verdict": "no signal"
+  },
+  "engineering.understand-before-compressing": {
+   "clean": {
+    "n": 5,
+    "mean": 0.756,
+    "sd": 0.08
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.726
+   },
+   "gap": -0.03,
+   "verdict": "no signal"
+  },
+  "engineering.hard-decisions": {
+   "clean": {
+    "n": 5,
+    "mean": 0.769,
+    "sd": 0.043
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.714
+   },
+   "gap": -0.055,
+   "verdict": "weak"
+  },
+  "engineering.elegance": {
+   "clean": {
+    "n": 5,
+    "mean": 0.817,
+    "sd": 0.031
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.731
+   },
+   "gap": -0.086,
+   "verdict": "weak"
+  },
+  "engineering.new-concepts": {
+   "clean": {
+    "n": 5,
+    "mean": 0.78,
+    "sd": 0.036
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.701
+   },
+   "gap": -0.079,
+   "verdict": "weak"
+  },
+  "engineering.hidden-state": {
+   "clean": {
+    "n": 5,
+    "mean": 0.69,
+    "sd": 0.116
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.515
+   },
+   "gap": -0.175,
+   "verdict": "keep"
+  },
+  "engineering.names-meaning": {
+   "clean": {
+    "n": 5,
+    "mean": 0.737,
+    "sd": 0.039
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.735
+   },
+   "gap": -0.002,
+   "verdict": "no signal"
+  },
+  "engineering.abstraction-levels": {
+   "clean": {
+    "n": 5,
+    "mean": 0.606,
+    "sd": 0.076
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.456
+   },
+   "gap": -0.15,
+   "verdict": "keep"
+  },
+  "engineering.composition": {
+   "clean": {
+    "n": 5,
+    "mean": 0.71,
+    "sd": 0.112
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.637
+   },
+   "gap": -0.073,
+   "verdict": "weak"
+  },
+  "engineering.consequence-not-achievement": {
+   "clean": {
+    "n": 5,
+    "mean": 0.569,
+    "sd": 0.046
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.568
+   },
+   "gap": -0.001,
+   "verdict": "no signal"
+  },
+  "engineering.threshold": {
+   "clean": {
+    "n": 5,
+    "mean": 0.479,
+    "sd": 0.246
+   },
+   "bad": {
+    "n": 7,
+    "mean": 0.419
+   },
+   "gap": -0.06,
+   "verdict": "unstable"
+  }
+ },
+ "score": {
+  "contract.error-handling": {
+   "clean": {
+    "n": 15,
+    "mean": 0.226,
+    "sd": 0.171
+   },
+   "bad": {
+    "n": 10,
+    "mean": 0.67
+   },
+   "gap": 0.444,
+   "verdict": "keep"
+  },
+  "contract.requirement-traceability": {
+   "clean": {
+    "n": 15,
+    "mean": 0.55,
+    "sd": 0.394
+   },
+   "bad": {
+    "n": 10,
+    "mean": 0.541
+   },
+   "gap": -0.009,
+   "verdict": "no signal"
+  },
+  "contract.test-evidence": {
+   "clean": {
+    "n": 15,
+    "mean": 0.495,
+    "sd": 0.215
+   },
+   "bad": {
+    "n": 10,
+    "mean": 0.684
+   },
+   "gap": 0.19,
+   "verdict": "no signal"
+  },
+  "engineering.abstraction-levels": {
+   "clean": {
+    "n": 15,
+    "mean": 0.726,
+    "sd": 0.387
+   },
+   "bad": {
+    "n": 10,
+    "mean": 1.163
+   },
+   "gap": 0.437,
+   "verdict": "keep"
+  },
+  "engineering.hidden-state": {
+   "clean": {
+    "n": 15,
+    "mean": 0.92,
+    "sd": 0.707
+   },
+   "bad": {
+    "n": 10,
+    "mean": 1.645
+   },
+   "gap": 0.725,
+   "verdict": "keep"
+  },
+  "engineering.survival-priority": {
+   "clean": {
+    "n": 15,
+    "mean": 0.184,
+    "sd": 0.108
+   },
+   "bad": {
+    "n": 10,
+    "mean": 0.779
+   },
+   "gap": 0.595,
+   "verdict": "keep"
+  }
+ },
+ "confidence": {
+  "contract.error-handling": {
+   "clean": {
+    "mean": 0.814,
+    "sd": 0.143
+   },
+   "bad": {
+    "mean": 0.495
+   }
+  },
+  "contract.requirement-traceability": {
+   "clean": {
+    "mean": 0.567,
+    "sd": 0.264
+   },
+   "bad": {
+    "mean": 0.551
+   }
+  },
+  "contract.test-evidence": {
+   "clean": {
+    "mean": 0.592,
+    "sd": 0.18
+   },
+   "bad": {
+    "mean": 0.471
+   }
+  },
+  "engineering.abstraction-levels": {
+   "clean": {
+    "mean": 0.627,
+    "sd": 0.114
+   },
+   "bad": {
+    "mean": 0.525
+   }
+  },
+  "engineering.hidden-state": {
+   "clean": {
+    "mean": 0.464,
+    "sd": 0.291
+   },
+   "bad": {
+    "mean": 0.237
+   }
+  },
+  "engineering.survival-priority": {
+   "clean": {
+    "mean": 0.855,
+    "sd": 0.095
+   },
+   "bad": {
+    "mean": 0.579
+   }
+  }
+ }
+}
