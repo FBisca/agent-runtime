@@ -1,0 +1,104 @@
+schema: plan/1
+slug: parked-drive-release
+goal: >-
+  A drive that is parked says so and can be released: a unit parked for an amendment is released by the amendment the
+  drive adopted after its request was raised, and a drive parked on a plan it cannot read records the park, asks the
+  Lead with a way out that works and never strands the run.
+spec: docs/specs/orchestrator-engine.md
+domain: park
+archive: promote
+outcome: [S1, S2, S4]
+scenarios:
+  - id: S1
+    when: "the Lead decides `amend` for a unit whose request was raised under an approval, and the drive has since adopted a different one"
+    then: "the park names the approval the request was raised under, so the adopted amendment releases the unit: the drive resumes the worker on its next packet, the parked attempt is superseded and the unit's next attempt is dispatched; a run that starts again releases the parked unit the same way"
+    evidence:
+      check: >-
+        uv run pytest packages/agent-orchestrator/acceptance/park/test_parked_release.py -k "S1 or control" -q
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_parked_release.py]
+      package: packages/agent-orchestrator
+      timeout: 600
+  - id: S2
+    when: "a live drive reads a plan it cannot use (its bytes changed, it does not load, or it lost its `approval` span) and nothing is in flight"
+    then: "the drive records the park in its ledger under `park` (its `cause`, its `error`, the `digest` of the approval it holds and the `since` of the park), shows it in `attention.md`, and wakes the Lead naming a way out that works (`plan approve --base` at the approval's own base, or the snapshot to restore from); it starts no new work while it is parked"
+    evidence:
+      check: >-
+        uv run pytest packages/agent-orchestrator/acceptance/park/test_parked_release.py -k "S2 or control" -q
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_parked_release.py]
+      package: packages/agent-orchestrator
+      timeout: 600
+  - id: S3
+    when: "a drive has been parked for 15 minutes with nothing in flight"
+    then: "it wakes the Lead again naming the way out, and does so every 30 minutes until the park ends; the drive never gives up the plan and never starts a worker while it is parked"
+  - id: S4
+    when: "a live drive reads a plan that carries no `approval` span but is the plan the drive holds"
+    then: "the drive recovers the approval from the snapshot it holds and keeps running (it does not drain), and the plan it reads is the approved one"
+    evidence:
+      check: >-
+        uv run pytest packages/agent-orchestrator/acceptance/park/test_parked_release.py -k "S4 or control" -q
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_parked_release.py]
+      package: packages/agent-orchestrator
+      timeout: 600
+  - id: S5
+    when: "the Lead runs `plan amend` on a plan whose `approval` span was lost while a drive held it"
+    then: "the amendment succeeds at the approval's own base, and the plan file carries its `approval` and `amendments` spans again"
+  - id: S6
+    when: "a run ends while units are parked"
+    then: "the ledger and `attention.md` name the park, its cause and the way out; the run's exit says the units are parked rather than reporting that it had nothing to do"
+tickets:
+  - id: T1
+    delivers: >-
+      A park names the approval its request was raised under, so an amendment the drive adopted after the request
+      releases the unit: the request records the digest it was raised under, the park reads it from there, and a run
+      that starts again releases the parked unit instead of exiting with it parked forever.
+    satisfies: [S1]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/tests/test_decide_contract.py
+      - packages/agent-orchestrator/tests/test_live_amend.py
+    size: small
+    difficulty: simple
+    risk: [state]
+  - id: T2
+    delivers: >-
+      A parked drive says so and asks: the ledger records the park (the cause, the error, the approval the drive holds
+      and since when) and the approval the drive holds (its base and its digest), `attention.md` shows the park, the
+      Lead is woken with a way out that works, a drive parked for 15 minutes asks again every 30 minutes without
+      giving up the plan, and a run that ends with parked units says why it ended.
+    satisfies: [S2, S3, S6]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/ledger.py
+      - packages/agent-orchestrator/src/agent_orchestrator/narrate.py
+      - packages/agent-orchestrator/tests/test_drain.py
+      - packages/agent-orchestrator/tests/test_decide_contract.py
+    blocked_by: [T1]
+    size: regular
+    difficulty: complex
+    risk: [state]
+  - id: T3
+    delivers: >-
+      A plan that lost its `approval` span no longer strands a drive: the drive recovers the approval from the snapshot
+      it holds and keeps running, `plan amend` accepts a plan whose span was lost and republishes the spans, and the
+      recovery works after a restart because the ledger holds the approval the drive held.
+    satisfies: [S4, S5]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver.py
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/tests/test_plan_amend.py
+      - packages/agent-orchestrator/tests/test_drain.py
+    blocked_by: [T2]
+    size: regular
+    difficulty: complex
+    risk: [state]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-15T10:13:52.070780+00:00'
+  base: 929b1c331f0699dd3acd26760bf72ca2ef02f6c7
+  digest: 5b7efe8552ad3732c3b3abdbd08fad7954d83a8b9bd5a306575b89849f8d767c
