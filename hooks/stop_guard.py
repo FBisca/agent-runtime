@@ -3,9 +3,10 @@
 unseen working assignments, at most three times per user work period.
 
 The runtime decides (`agent_runtime.rhythm`); this entry only formats the answer for the host's
-dialect: `{"decision": "block"}` for Claude and Codex, or the neutral `{"block", "reason"}` for Pi,
-which answers on every Stop so the extension can read a decision without guessing. Fails open on
-every error."""
+dialect: `{"decision": "block"}` for Claude and Codex, or — when the host asks for it with
+`--dialect json` — the neutral `{"block": <bool>, "reason": <text>}` on every Stop, so the Pi
+extension can read a decision instead of inferring one from silence. Without an explicit dialect a
+host keeps its block-or-silence shape. Fails open on every error."""
 
 import json
 import os
@@ -15,13 +16,21 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-def emit(dialect, block, reason=""):
-    """Print one answer. Pi's dialect answers on every Stop; the Claude/Codex dialect only blocks, and
-    spells a spent budget as one stderr note instead."""
-    if dialect == "json":
-        print(json.dumps({"block": block, "reason": reason}))
-    elif block:
-        print(json.dumps({"decision": "block", "reason": reason}))
+def emit(dialect, block, reason="", answered=False):
+    """Print one answer. A block is always spelled: `decision` for Claude and Codex, `block`/`reason`
+    for `json`. An allowed Stop is answered only when the host asked for the neutral dialect, so a
+    host that reads stdout keeps the block-or-silence shape its own hook expects; otherwise a spent
+    budget is the one line on stderr. Each dialect carries that note in one channel: the answer's
+    `reason` for json, stderr for decision."""
+    if block:
+        shape = (
+            {"block": True, "reason": reason}
+            if dialect == "json"
+            else {"decision": "block", "reason": reason}
+        )
+        print(json.dumps(shape))
+    elif dialect == "json" and answered:
+        print(json.dumps({"block": False, "reason": reason}))
     elif reason:
         print(reason, file=sys.stderr)
 
@@ -35,21 +44,22 @@ def main(argv=None):
     if not payload or payload.get("hook_event_name") not in (None, "Stop"):
         return
     caps = rhythm.capabilities(hook_lib.harness_cli(argv))
-    dialect = hook_lib.option(argv, "--dialect") or caps.stop_dialect
+    explicit = hook_lib.option(argv, "--dialect")
+    dialect = explicit or caps.stop_dialect
     who, found = hook_lib.lead_check()
     reason = rhythm.stop_refusal(found) if who else None
     if not reason:
         if who:
             hook_lib.reset_budget(os.environ, who)  # nothing to block on: a new period
-        return emit(dialect, False)
+        return emit(dialect, False, answered=bool(explicit))
     if caps.can_park_wait and hook_lib.running_wait_task(payload):
         return emit(
-            dialect, False
+            dialect, False, answered=bool(explicit)
         )  # a backgrounded wait(all) will deliver; no budget spent, none reset
     allowed, first_time = hook_lib.spend_budget(os.environ, who)
     if allowed:
         return emit(dialect, True, reason)
-    emit(dialect, False, rhythm.BUDGET_SPENT if first_time else "")
+    emit(dialect, False, rhythm.BUDGET_SPENT if first_time else "", answered=bool(explicit))
 
 
 if __name__ == "__main__":

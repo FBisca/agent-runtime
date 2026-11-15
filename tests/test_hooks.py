@@ -1648,7 +1648,7 @@ class StopGuardTests(HookStoreCase):
             shim, self.STOP, args=("stop", "--cli", "pi", "--dialect", "json")
         )
         self.assertEqual((code, out), (0, {"block": True, "reason": reason}), err)
-        self.prompt()  # the row names the dialect: `--cli pi` alone already answers `{block, reason}`
+        self.prompt()  # the row names the blocking dialect: `--cli pi` alone blocks in the neutral shape
         out, err, code = self.cli.run(shim, self.STOP, args=("stop", "--cli", "pi"))
         self.assertEqual((code, out), (0, {"block": True, "reason": reason}), err)
         self.prompt()
@@ -1657,6 +1657,10 @@ class StopGuardTests(HookStoreCase):
         self.sql(
             self.store, "UPDATE assignments SET state='complete' WHERE id=?", ident["assignment_id"]
         )
+        # an allowed Stop is answered only when the host asked for the neutral dialect; the implicit
+        # row keeps block-or-silence, so a Claude or Codex host is never handed a new object here
+        out, err, code = self.cli.run(shim, self.STOP, args=("stop", "--cli", "pi"))
+        self.assertEqual((code, out), (0, None), err)
         out, err, code = self.cli.run(
             shim, self.STOP, args=("stop", "--cli", "pi", "--dialect", "json")
         )
