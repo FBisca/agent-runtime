@@ -36,7 +36,9 @@ Run the fast suite while you work, and the whole suite before you report a chang
 a node id (`uv run pytest tests/test_pi_worker.py`) to run that one; it keeps its own marker. The tests
 are `unittest.TestCase` classes, so `python3 -B -m unittest discover -s tests` still runs them, but uv
 and pytest are how they are run. A live acceptance run needs a real terminal and is opt-in
-(`AGENT_RUNTIME_LIVE=1`).
+(`AGENT_RUNTIME_LIVE=1`). Never wait on a suite by grepping the process table for its own command line:
+`pgrep -f "pytest -m integration"` matches the polling shell and hangs. Read the log's summary line, or
+bracket the pattern (`[p]ytest`).
 
 Each test file carries `pytestmark = pytest.mark.unit` or `pytest.mark.integration`. Classify by what
 the test does: a test that starts a process, opens a socket or writes to the filesystem is an
