@@ -515,3 +515,16 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | R151 | S5 | `packages/agent-orchestrator/tests/test_plan_lint.py::PlanLint::test_S5_plan_check_accepts_an_agent_ticket_or_human_evidence`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
 | R152 | S6 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_lead_s_retry_for_the_archive_is_refused_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_json_form_refuses_the_archive_retry_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
 | R153 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
+||||||| parent of 313d1f7 (feat(orchestrator): read the review the reviewer named)
+
+## Requirements: review-payload-path
+
+- **R154** WHEN the driver starts the reviewer of a unit, THEN the reviewer's assignment names the absolute path of the review file it must write, beside the brief it must read, so the reviewer never has to infer where the file goes. (from review-payload-path/S1)
+- **R155** WHEN a reviewer writes its review under another name inside the run directory and names that file in its report, THEN the gate reads that file: it is copied into the driver's own path, the reviewer is not warned, and the unit advances as it would have; a name outside the run directory is nobody's, and a named file that breaks the contract is refused as any other unreadable review. (from review-payload-path/S2)
+
+## Coverage: review-payload-path
+
+| Requirement | Scenario | Test nodes |
+|---|---|---|
+| R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only |
+| R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path |
