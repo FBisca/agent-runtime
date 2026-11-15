@@ -70,9 +70,33 @@ class GateFixture(RunFixture):
 
     def setUp(self):
         super().setUp()
+        self.expose_package_to_children()
         self.set_plan(("T1",))
         self.run_dir = self.state_dir / load_script().repo_key(self.repo) / "demo"
         self.worktree = self.root / "repo.worktrees" / "demo-t1"
+
+    def expose_package_to_children(self):
+        """Name the package's source on `PYTHONPATH` for the test's length, so a child that starts the CLI can import
+        it.
+
+        A test that reaches the process boundary starts `DRIVER` (`python -m agent_orchestrator`), and the evidence
+        runner builds its tree with a plain `uv sync`, whose venv holds no workspace member: this process finds the
+        package only because the suite's test path put it on `sys.path`, which a child does not inherit. The
+        environment it does inherit is named here and taken back when the test ends."""
+        source = str(Path(__file__).resolve().parents[1] / "src")
+        before = os.environ.get("PYTHONPATH")
+        entries = [entry for entry in (before or "").split(os.pathsep) if entry]
+        if source in entries:
+            return
+        os.environ["PYTHONPATH"] = os.pathsep.join([source, *entries])
+
+        def restore():
+            if before is None:
+                os.environ.pop("PYTHONPATH", None)
+            else:
+                os.environ["PYTHONPATH"] = before
+
+        self.addCleanup(restore)
 
     extra_files = None  # worktree path -> text the worker also writes
     COVERS = {"S1": ["src/a/test_a.py::test_a"]}
