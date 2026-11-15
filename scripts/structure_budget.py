@@ -1,4 +1,4 @@
-"""The tree's structure budget: five ceilings, one committed baseline, a ratchet on growth.
+"""The tree's structure budget: five ceilings, a base revision, a ratchet on growth.
 
 The tree's other gates count ruff and ty diagnostics and the suite's seconds. None of them sees a
 module grow, a class collect methods or a function collect parameters, and a file nobody reads whole
@@ -6,21 +6,29 @@ is where the repository's own "fix the class, not the instance" rule stops worki
 every Python file under `--root` — source and test alike — against five ceilings and prints the
 growth as one line per offender:
 
-    <path>: <metric> <measured> > recorded <row> (ceiling <ceiling>)
-    <path>: <metric> <measured> > ceiling <ceiling>
-    <path>: <metric> paid (recorded <row>)
+    <path>: <metric> <value> > ceiling <ceiling>
+    <path>: <metric> <value> > recorded <base value> (ceiling <ceiling>)
 
-Exit 0 is a tree at its baseline, 1 an offender, 2 a refusal: a baseline that cannot be read, a
-`--paid` path that measures no file, or `--paid` without `--metric`. A deliberate change is recorded
-with `--write`, which re-measures every recorded row and adds one for any file over a ceiling.
+One sentence decides every line: a file may exceed a ceiling only if it already did at `--since`, and
+only by getting no worse. Nothing per file is stored — `git` holds the base, so a split, a rename or
+a move costs the gate nothing.
+
+Exit 0 is a clean tree, 1 an offender, 2 a refusal: a budget that cannot be read, a `--since` that is
+not a revision, or a `--paid` path that measures no file. A paid path takes no grandfather from the
+base for the metrics it names, so a deliberate debt has to be paid down rather than inherited. The
+only thing `--write` can record is the day the ceilings were reviewed: because the base is git, no
+run can accept a growth, and an offender has to shrink.
 """
 
 import argparse
 import ast
+import io
 import json
 import os
+import subprocess
 import sys
-from collections.abc import Iterable
+import tarfile
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,8 +36,10 @@ BASELINE = (
     Path(__file__).resolve().parents[1] / "acceptance" / "structure" / "structure_budget.json"
 )
 
-# One ceiling per metric, the number a file needs no row to stay under. An area may record a tighter
-# number than the ceiling on purpose; `--paid` is how such a row becomes a debt to pay.
+# The revision a change lands on: the base a branch is held to when `--since` names none.
+DEFAULT_SINCE = "origin/main"
+
+# One ceiling per metric, the number no file may grow past, grandfathered or not.
 CEILINGS = {
     "module-lines": 1000,
     "class-methods": 25,
@@ -120,184 +130,290 @@ def walk(root):
     return sorted(found)
 
 
-def measure_tree(root):
-    """{path: {metric: number}} for every Python file under `root`.
+def measured_sources(sources: Iterable[tuple[str, str]]):
+    """{path: {metric: number}} for (path, source) pairs, a source no parser can read skipped.
 
-    A file that cannot be decoded or parsed is skipped: the syntax gates own that failure, and a
-    budget that refused the whole tree over one file would hide every other number.
+    The syntax gates own a file that will not parse, and a budget that refused the whole tree over
+    one file would hide every other number.
     """
     measured = {}
-    for name in walk(root):
+    for name, source in sources:
         try:
-            source = (Path(root) / name).read_text(encoding="utf-8")
             measured[name] = metrics_of(source)
-        except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        except (SyntaxError, ValueError):
             continue
     return measured
 
 
-def ceilings_of(baseline):
-    """The ceilings the baseline declares, a metric it left out falling back to the module's own."""
-    declared = baseline.get("ceilings") or {}
-    return {metric: int(declared.get(metric, CEILINGS[metric])) for metric in METRICS}
+def tree_sources(root):
+    """(path, source) for every Python file under `root`, a file it cannot read skipped."""
+    for name in walk(root):
+        try:
+            yield name, (Path(root) / name).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
 
 
-def growth_lines(measured, baseline, skip: Iterable[tuple[str, str]] = ()):
-    """One line per growth: past the number recorded for the file, or past the ceiling with no row.
+def measure_tree(root):
+    """{path: {metric: number}} for every Python file under `root`, as the working tree holds it."""
+    return measured_sources(tree_sources(root))
 
-    `skip` holds the (path, metric) pairs another check already reports, so a paid row is named once.
+
+def git(root, *args):
+    """One git command run in `root`, its output captured; the caller reads the exit code."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=300
+        )
+    except OSError as error:
+        raise Refused("structure budget: git is not available, so --since has no base: %s" % error)
+
+
+def archive_prefix(root):
+    """Where `root` sits inside its checkout, as the archive member prefix its files carry."""
+    done = git(root, "rev-parse", "--show-prefix")
+    if done.returncode != 0:
+        raise Refused(
+            "structure budget: --root %s is not inside a git checkout, so --since has no base to "
+            "read: run it from the checkout, or point --root at one" % root
+        )
+    prefix = done.stdout.strip()
+    return prefix + "/" if prefix else ""
+
+
+def archive_sources(data: bytes, prefix: str) -> Iterator[tuple[str, str]]:
+    """(path relative to the root, source) for every Python file of one git archive."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+        for member in archive.getmembers():
+            if not member.isfile() or not member.name.startswith(prefix):
+                continue
+            name = member.name[len(prefix) :]
+            if not name.endswith(".py") or SKIP.intersection(name.split("/")):
+                continue
+            handle = archive.extractfile(member)
+            if handle is None:
+                continue
+            try:
+                yield name, handle.read().decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+
+
+def measure_at(root, rev):
+    """{path: {metric: number}} for the tree under `root` as it stood at `rev`.
+
+    The base is read from git's own archive of that revision, so nothing per file is committed and a
+    shallow checkout's history is not walked file by file.
     """
-    skip = set(skip)
-    ceilings = ceilings_of(baseline)
-    rows = baseline.get("files") or {}
+    prefix = archive_prefix(root)
+    verify = git(root, "rev-parse", "--verify", "--quiet", rev + "^{commit}")
+    if verify.returncode != 0:
+        raise Refused(
+            "structure budget: --since %s is not a revision of %s: name one the checkout holds, "
+            "such as origin/main or a pull request's base commit" % (rev, root)
+        )
+    done = subprocess.run(
+        ["git", "-C", str(root), "archive", "--format=tar", rev],
+        capture_output=True,
+        timeout=300,
+    )
+    if done.returncode != 0:
+        raise Refused(
+            "structure budget: cannot read %s at %s: %s"
+            % (root, rev, done.stderr.decode("utf-8", "replace").strip())
+        )
+    return measured_sources(archive_sources(done.stdout, prefix))
+
+
+def ceilings_of(budget):
+    """The ceilings the committed budget declares, a metric it left out falling back to ours.
+
+    A ceiling that is not a whole number is refused where it is read: a gate that compared a file
+    with a typo would fail every run with a traceback instead of naming the budget's own fault.
+    """
+    declared = budget.get("ceilings") or {}
+    ceilings = {}
+    for metric in METRICS:
+        value = declared.get(metric, CEILINGS[metric])
+        try:
+            ceilings[metric] = int(value)
+        except (TypeError, ValueError) as error:
+            raise Refused(
+                "structure budget: the budget's %s ceiling is not a whole number: %r: record one "
+                "with --write" % (metric, value)
+            ) from error
+    return ceilings
+
+
+def paid_paths(measured, paths):
+    """The `--paid` paths as the prefixes a file is matched against.
+
+    A path is checked against the tree it names: one that measures no file is refused rather than
+    passed, so a misspelt path cannot report a paid debt.
+    """
+    prefixes = []
+    for path in paths:
+        prefix = Path(path).as_posix().strip("/")
+        if not any(under(name, prefix) for name in measured):
+            raise Refused(
+                "structure budget: --paid %s matches no Python file under the root: nothing was "
+                "paid; name a path the walk measures, such as a package directory" % path
+            )
+        prefixes.append(prefix)
+    return prefixes
+
+
+def under(name, prefix):
+    """Whether one measured file sits under a path, the root itself naming every file."""
+    return prefix in ("", ".") or name == prefix or name.startswith(prefix + "/")
+
+
+def growth_lines(measured, base, ceilings=None, paid_paths=(), paid_metrics=()):
+    """One line per ceiling a file may not hold: it crossed one, worsened past its base, or is paid.
+
+    `base` is what the tree measured at `--since`; a file absent from it measured nothing there, so
+    every ceiling is one it may not pass. `paid_paths` and `paid_metrics` name the files that take no
+    grandfather from the base at all.
+    """
+    ceilings = ceilings_of({"ceilings": ceilings or {}})
+    paid = [Path(path).as_posix().strip("/") for path in paid_paths]
+    paid_metrics = set(paid_metrics)
     lines = []
     for name in sorted(measured):
-        row = rows.get(name) or {}
+        numbers = measured[name]
+        previous = base.get(name) or {}
         for metric in METRICS:
-            value = measured[name].get(metric)
-            if value is None or (name, metric) in skip:
+            value = numbers.get(metric)
+            ceiling = ceilings[metric]
+            if value is None or value <= ceiling:
                 continue
-            if metric in row:
-                if value > row[metric]:
+            if metric in paid_metrics and any(under(name, prefix) for prefix in paid):
+                lines.append("%s: %s %s > paid (ceiling %s)" % (name, metric, value, ceiling))
+            elif previous.get(metric, 0) > ceiling:
+                if value > previous[metric]:
                     lines.append(
                         "%s: %s %s > recorded %s (ceiling %s)"
-                        % (name, metric, value, row[metric], ceilings[metric])
+                        % (name, metric, value, previous[metric], ceiling)
                     )
-            elif value > ceilings[metric]:
-                lines.append("%s: %s %s > ceiling %s" % (name, metric, value, ceilings[metric]))
+            else:
+                lines.append("%s: %s %s > ceiling %s" % (name, metric, value, ceiling))
     return lines
 
 
-def paid_rows(measured, baseline, path, metrics):
-    """[(file, metric, recorded)] for a tracked row a `--paid` path declares as debt to pay.
+def baseline_document(ceilings=None, measured_at=None):
+    """The committed budget: the five ceilings and the day they were measured, and nothing per file.
 
-    The path is checked against the tree it names: a path that measures no file is refused rather
-    than passed, so a misspelt one cannot report a paid debt.
+    A file may exceed a ceiling only if it already did at the base revision and by getting no worse,
+    so git holds the base and no row is ever rewritten by a split, a rename or a move.
     """
-    prefix = Path(path).as_posix().strip("/")
-    if prefix in ("", "."):
-        selected = sorted(measured)
-    else:
-        selected = [name for name in sorted(measured) if name.startswith(prefix + "/")]
-    if not selected:
-        raise Refused(
-            "structure budget: --paid %s matches no Python file under the root: nothing was paid; "
-            "name a path the walk measures, such as a package directory" % path
-        )
-    rows = baseline.get("files") or {}
-    found = []
-    for name in selected:
-        row = rows.get(name) or {}
-        for metric in metrics:
-            if metric in row:
-                found.append((name, metric, row[metric]))
-    return found
-
-
-def paid_line(row):
-    """One paid row as the offender line a reader sees."""
-    name, metric, recorded = row
-    return "%s: %s paid (recorded %s)" % (name, metric, recorded)
-
-
-def paid_lines(measured, baseline, path, metrics):
-    """The paid offender lines one `--paid` path declares: every tracked row it names is a debt."""
-    return [paid_line(row) for row in paid_rows(measured, baseline, path, metrics)]
-
-
-def baseline_document(measured, rows=None, measured_at=None):
-    """The baseline document: the five ceilings, and a row only where a file needs one.
-
-    A file under every ceiling needs no row, so a new file under the ceiling is free. A recorded row
-    is re-measured and kept even under its ceiling: a row is how an area declares a tighter limit
-    than the tree's own, and what `--paid` measures the debt against.
-    """
-    rows = rows or {}
-    files = {}
-    for name in sorted(measured):
-        numbers = measured[name]
-        keep: set[str] = set(rows.get(name) or ())
-        keep.update(metric for metric in METRICS if numbers.get(metric, 0) > CEILINGS[metric])
-        if keep:
-            files[name] = {metric: numbers[metric] for metric in METRICS if metric in keep}
     return {
         "measured_at": measured_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "ceilings": dict(CEILINGS),
-        "files": files,
+        "ceilings": ceilings_of({"ceilings": ceilings or {}}),
     }
 
 
-def summary(measured, baseline):
-    """The clean run's line: the five ceilings read, then how much of the tree carries a row."""
-    ceilings = ceilings_of(baseline)
-    rows = baseline.get("files") or {}
-    return "structure budget: ceilings %s, %d files measured, %d carry a recorded row" % (
-        ", ".join("%s %s" % (metric, ceilings[metric]) for metric in METRICS),
-        len(measured),
-        len(rows),
+def ceilings_phrase(ceilings):
+    """The five ceilings as one reader-facing phrase, a ceiling named beside its metric."""
+    return ", ".join("%s %s" % (metric, ceilings[metric]) for metric in METRICS)
+
+
+def over_ceiling(measured, ceilings):
+    """Whether the tree still holds a file over a ceiling, on a grandfather only `--paid` ends."""
+    return any(
+        numbers.get(metric, 0) > ceilings[metric]
+        for numbers in measured.values()
+        for metric in METRICS
+    )
+
+
+def summary(measured, budget, since):
+    """The clean run's line: the five ceilings read, how many files were measured, and the base."""
+    return (
+        "structure budget: ceilings %s, %d files measured, base %s (no per-file row is stored)"
+        % (ceilings_phrase(ceilings_of(budget)), len(measured), since)
     )
 
 
 def read_baseline(path):
-    """The committed baseline, or a refusal naming it."""
+    """The committed budget, or a refusal naming it."""
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise Refused("structure budget: cannot read %s: %s" % (path, error)) from error
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="measure a tree's five structure ceilings against its committed baseline"
+def write_budget(args):
+    """Re-stamp the committed budget with today, keeping the ceilings it declares.
+
+    It records nothing about a file and accepts no growth: the base is the `--since` revision, so a
+    file over a ceiling it crossed still fails the next run. The day is the only thing it writes.
+    """
+    existing = read_baseline(args.baseline) if Path(args.baseline).exists() else {}
+    document = baseline_document(ceilings_of(existing))
+    Path(args.baseline).write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
+    print(
+        "structure budget: wrote %s (ceilings %s, measured %s; it never accepts growth: the base "
+        "is the --since revision, so an offender has to shrink)"
+        % (args.baseline, ceilings_phrase(document["ceilings"]), document["measured_at"])
     )
-    parser.add_argument("--root", default=".", help="the tree to measure")
-    parser.add_argument("--baseline", default=str(BASELINE), help="the committed budget JSON")
-    parser.add_argument(
-        "--write", action="store_true", help="record today's numbers as the baseline and exit 0"
+    return 0
+
+
+def check(args):
+    """The measured tree, the budget it is held to, and the offender lines of one run."""
+    budget = read_baseline(args.baseline)
+    if args.paid and not args.metric:
+        raise Refused(
+            "structure budget: --paid needs at least one --metric: name the metrics whose "
+            "grandfather the paid paths must give up, such as --metric module-lines"
+        )
+    measured = measure_tree(args.root)
+    paths = paid_paths(measured, args.paid)
+    base = measure_at(args.root, args.since)
+    return measured, budget, growth_lines(measured, base, ceilings_of(budget), paths, args.metric)
+
+
+def parser():
+    """The command line: what to measure, what to hold it to, and how."""
+    made = argparse.ArgumentParser(
+        description="measure a tree's five structure ceilings against the base revision it grew from"
     )
-    parser.add_argument(
+    made.add_argument("--root", default=".", help="the tree to measure")
+    made.add_argument("--baseline", default=str(BASELINE), help="the committed budget JSON")
+    made.add_argument(
+        "--since",
+        default=DEFAULT_SINCE,
+        help="the revision a file may already have been over a ceiling at (default %(default)s)",
+    )
+    made.add_argument(
+        "--write",
+        action="store_true",
+        help="stamp the day the ceilings were reviewed and exit 0; it never accepts growth, "
+        "which only shrinking below the base or the ceiling clears",
+    )
+    made.add_argument(
         "--paid",
         action="append",
         default=[],
         metavar="PATH",
-        help="a path whose recorded rows are a debt to pay; repeatable",
+        help="a path that takes no grandfather from the base; repeatable",
     )
-    parser.add_argument(
+    made.add_argument(
         "--metric",
         action="append",
         default=[],
         choices=METRICS,
-        help="a metric the paid paths must clear; repeatable, and required with --paid",
+        help="a metric the paid paths must hold, grandfathered or not; repeatable, and needed with --paid",
     )
-    args = parser.parse_args(argv)
-    measured = measure_tree(args.root)
+    return made
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
     try:
         if args.write:
-            rows = (
-                (read_baseline(args.baseline).get("files") or {})
-                if Path(args.baseline).exists()
-                else {}
-            )
-            document = baseline_document(measured, rows)
-            Path(args.baseline).write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
-            print(
-                "structure budget: wrote %s (%d files measured, %d carry a recorded row)"
-                % (args.baseline, len(measured), len(document["files"]))
-            )
-            return 0
-        baseline = read_baseline(args.baseline)
-        if args.paid and not args.metric:
-            raise Refused(
-                "structure budget: --paid needs at least one --metric: name the metrics whose "
-                "recorded rows are the debt, such as --metric module-lines"
-            )
-        skip: set[tuple[str, str]] = set()
-        lines = []
-        for path in args.paid:
-            for row in paid_rows(measured, baseline, path, args.metric):
-                lines.append(paid_line(row))
-                skip.add((row[0], row[1]))
-        lines.extend(growth_lines(measured, baseline, skip))
+            return write_budget(args)
+        measured, budget, lines = check(args)
     except Refused as error:
         print(error, file=sys.stderr)
         return 2
@@ -305,12 +421,16 @@ def main(argv=None):
         for line in lines:
             print(line)
         print(
-            "structure budget: %d file(s) grew; record a deliberate change with --write"
-            % len({line.split(":", 1)[0] for line in lines}),
+            "structure budget: %d file(s) are over a ceiling they may not hold: bring each under "
+            "the ceiling, or back to the number it had at %s"
+            % (len({line.split(":", 1)[0] for line in lines}), args.since),
             file=sys.stderr,
         )
         return 1
-    print(summary(measured, baseline))
+    # stdout is the list of what the gate refused. A tree still holding a grandfather is clean but
+    # not at its ceilings, and saying so belongs on stderr, where it cannot read as a refusal.
+    at_ceilings = not over_ceiling(measured, ceilings_of(budget))
+    print(summary(measured, budget, args.since), file=sys.stdout if at_ceilings else sys.stderr)
     return 0
 
 
