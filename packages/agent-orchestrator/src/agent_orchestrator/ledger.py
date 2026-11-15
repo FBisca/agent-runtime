@@ -19,6 +19,7 @@ VERSION = 1
 KIND = "agent-orchestrator/ledger"
 
 DEADLINE = 60.0  # seconds a writer waits for a held ledger, sleeps included
+DEADLINE_ENV = "AGENT_ORCHESTRATOR_LEDGER_DEADLINE"  # a test seam; an unusable value keeps DEADLINE
 BACKOFF_FIRST = 0.2  # the first sleep; each sleep doubles, up to BACKOFF_CAP
 BACKOFF_CAP = 5.0
 
@@ -40,6 +41,22 @@ class LedgerBusy(Exception):
 
 def describe(seconds):
     return "%gs" % seconds
+
+
+def deadline(env=None):
+    """The writer's deadline: `DEADLINE`, or the seconds the environment names for a test.
+
+    A test that asserts the deadline reaches it injects a short one instead of paying the real 60
+    seconds. An unreadable or non-positive value keeps `DEADLINE`: a silent zero wait would turn a
+    busy ledger into an immediate crash."""
+    value = (os.environ if env is None else env).get(DEADLINE_ENV)
+    if value is None:
+        return DEADLINE
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return DEADLINE
+    return seconds if seconds > 0 else DEADLINE
 
 
 def acquire(lock, wait, clock=time.monotonic, sleep=time.sleep, jitter=random.uniform):
@@ -171,7 +188,7 @@ def locked(
         path.with_name(path.name + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
     )
     with os.fdopen(lock_fd, "w") as lock:
-        acquire(lock, DEADLINE if wait is None else wait, clock, sleep, jitter)
+        acquire(lock, deadline() if wait is None else wait, clock, sleep, jitter)
         current = load(path)
         fresh = current is None
         data = new() if fresh else validate(current, path)

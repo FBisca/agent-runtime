@@ -47,6 +47,7 @@ filterwarnings = ["default::pytest.PytestUnhandledThreadExceptionWarning"]
 # every tracked source file is covered.
 impacted_module = "server"
 impacted_map = [
+  "scripts/suite_budget.py=tests/test_suite_budget.py",
   "server/*=tests",
   "hooks/*=tests",
   "bin/*=tests",

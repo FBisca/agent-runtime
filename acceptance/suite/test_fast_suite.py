@@ -1,6 +1,7 @@
 """The fast suite selects by marker alone (test-cost/S5) and its tests stay in process (S3)."""
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,46 @@ def selected(*args):
 
 
 class FastSuiteTests(unittest.TestCase):
+    FAST_SUITE_SECONDS = 3.0  # R208: the fast suite's tests cost under three seconds
+    UNIT_TEST_SECONDS = 0.5
+
+    def test_S1_the_fast_suite_reports_under_three_seconds(self):
+        # R208 measures an idle machine and a wall clock, which a loaded CI runner cannot promise.
+        # The gate measures what a test costs: the sum of the cases' call time, after a warm-up run
+        # so imports and the OS cache are not the measurement.
+        pytest_run("-o", "addopts=", "-q", "-p", "no:impacted", "-m", "not integration")
+        result = pytest_run(
+            "-o", "addopts=", "-q", "-p", "no:impacted", "-m", "not integration", "--durations=0"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout[-4000:])
+        calls = [
+            float(found.group(1))
+            for line in result.stdout.splitlines()
+            if (found := re.match(r"\s*([0-9.]+)s call\s+", line))
+        ]
+        self.assertTrue(calls, result.stdout[-4000:])
+        self.assertLess(
+            sum(calls),
+            self.FAST_SUITE_SECONDS,
+            "the fast suite's tests cost more than R208's three seconds; make one cheaper or move it",
+        )
+
+    def test_S1_no_unit_test_costs_more_than_half_a_second(self):
+        result = pytest_run(
+            "-o", "addopts=", "-q", "-p", "no:impacted", "-m", "not integration", "--durations=0"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout[-4000:])
+        slow = []
+        for line in result.stdout.splitlines():
+            found = re.match(r"\s*([0-9.]+)s call\s+(\S+)", line)
+            if found and float(found.group(1)) >= self.UNIT_TEST_SECONDS:
+                slow.append((found.group(2), float(found.group(1))))
+        self.assertEqual(
+            slow,
+            [],
+            "a unit test over half a second slows every run; make it cheaper or move it to the boundary",
+        )
+
     def test_control_the_fast_suite_selects_fewer_tests_than_the_whole_suite(self):
         self.assertLess(selected(), selected("-m", "unit or integration or not unit"))
 

@@ -1,11 +1,13 @@
 """The agent -> driver handoff files: versioned JSON, validated in code."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 import pytest
 from agent_orchestrator import contracts, driver
@@ -903,6 +905,17 @@ class TierBriefTests(unittest.TestCase):
             ["Before you report COMPLETE, run: uv run pytest -q."],
         )
         self.assertNotIn("do not run", text)
+
+    def test_S4_the_brief_names_the_tdd_skill_and_the_test_cost_report(self):
+        packet, text = self.drive()
+        self.assertIn("Read the `tdd` skill first", text)
+        self.assertIn("TDD:", driver.CONTRACT)
+        self.assertIn("--durations", driver.CONTRACT)
+        self.assertIn("test_cost", driver.CONTRACT)
+
+    def test_S4_the_tdd_path_is_the_environment_then_the_hosts_place(self):
+        with mock.patch.dict(os.environ, {driver.TDD_SKILL_ENV: "/tmp/tdd/SKILL.md"}):
+            self.assertEqual(driver.tdd_skill_path(), "/tmp/tdd/SKILL.md")
 
     def test_S1_launcher_spellings_of_one_command_are_required_once(self):
         config = (

@@ -47,6 +47,7 @@ class ReviewBriefTests(unittest.TestCase):
             "Read the whole diff",
             "The ticket delivers what it says",
             "Each test proves its scenario",
+            "Test cost",
             "The report matches the code",
             "The numbered requirements it touches still hold",
             "The code follows the repository's rules",
@@ -63,6 +64,14 @@ class ReviewBriefTests(unittest.TestCase):
         text = self.brief()
         self.assertIn("## The pass, in this order", text)
         self.pass_steps(text)
+
+    def test_S4_the_brief_measures_a_tests_cost_and_blocks_a_material_slowdown(self):
+        """orchestrator-engine/R145: a test that slows every later run is a MAJOR defect."""
+        text = self.brief()
+        self.assertIn("test_cost", text)
+        self.assertIn("--durations", text)
+        self.assertIn("over 2 s", text)
+        self.assertIn("materially slows the suite", text)
 
     def test_S1_the_brief_names_the_report_whose_claims_the_pass_checks(self):
         """orchestrator-engine/R145"""

@@ -20,15 +20,19 @@ class FakeGhTests(unittest.TestCase):
             home = Path(directory)
             plan = home / "plan.md"
             plan.write_text("plan", encoding="utf-8")
-            env = {"FAKE_RUNTIME_HOME": directory, "FAKE_PLAN": str(plan)}
+            env = {
+                "FAKE_RUNTIME_HOME": directory,
+                "FAKE_PLAN": str(plan),
+                "FAKE_GH_DRAFT_POLL_LIMIT": "10",
+            }
             first = "https://github.com/o/r/pull/7"
             second = "https://github.com/o/r/pull/9"
             with mock.patch.dict(os.environ, env, clear=True):
-                for _ in range(100):
+                for _ in range(10):
                     self.assertEqual(
                         json.loads(fake_gh.process(["pr", "view", first]).stdout)["state"], "OPEN"
                     )
-                with self.assertRaisesRegex(RuntimeError, "PR 7 stayed draft for 100 polls"):
+                with self.assertRaisesRegex(RuntimeError, "PR 7 stayed draft for 10 polls"):
                     fake_gh.process(["pr", "view", first])
                 self.assertEqual(
                     json.loads(fake_gh.process(["pr", "view", second]).stdout)["state"], "OPEN"

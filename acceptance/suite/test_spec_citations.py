@@ -1,6 +1,5 @@
 """Every test a living spec cites still exists (test-cost/S2), and every test module carries its marker (S4)."""
 
-import ast
 import functools
 import re
 import unittest
@@ -15,6 +14,7 @@ CODE = re.compile(r"`([^`]+)`")
 NAME = re.compile(r"test_\w+")
 DOTTED = re.compile(r"([A-Z]\w*)\.(test_\w+)")
 MARK = re.compile(r"pytest\.mark\.(unit|integration)\b")
+PYTESTMARK = re.compile(r"^\s*pytestmark\s*=\s*.*pytest\.mark\.(unit|integration)", re.M)
 
 
 def suite_files():
@@ -22,23 +22,52 @@ def suite_files():
         yield from (path for path in (ROOT / top).rglob("test_*.py") if ".venv" not in path.parts)
 
 
+CLASS = re.compile(r"^(\s*)class (\w+)\b")
+DEF = re.compile(r"^(\s*)(?:async\s+)?def (\w+)\b")
+
+
 @functools.cache
-def index():
-    """Per test file: its test functions, its classes and each `Class::method`, read from the syntax tree."""
-    found = {}
+def scan():
+    """(index, unmarked): one read of every test file answers both fast-suite checks.
+
+    A line scan, not an AST: the index covers every test file in the repository and parsing them
+    whole cost most of the fast suite. The names a spec cites are on `def`/`class` lines, and the
+    level is the module's one `pytestmark` line."""
+    found, unmarked = {}, []
     for path in suite_files():
+        text = path.read_text(encoding="utf-8")
         names = set()
-        for node in ast.parse(path.read_text(encoding="utf-8")).body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                names.add(node.name)
-            elif isinstance(node, ast.ClassDef):
-                names.add(node.name)
-                for member in node.body:
-                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        names.add(member.name)
-                        names.add(f"{node.name}::{member.name}")
-        found[path.relative_to(ROOT).as_posix()] = names
-    return found
+        classes = []  # (indent, name), innermost last: a nested class does not hide its outer methods
+        for line in text.splitlines():
+            declared = CLASS.match(line)
+            if declared:
+                indent, name = len(declared.group(1)), declared.group(2)
+                classes = [entry for entry in classes if entry[0] < indent] + [(indent, name)]
+                names.add(name)
+                continue
+            defined = DEF.match(line)
+            if defined:
+                indent, name = len(defined.group(1)), defined.group(2)
+                names.add(name)
+                owner = next((entry for entry in reversed(classes) if entry[0] < indent), None)
+                if owner is not None:
+                    names.add(f"{owner[1]}::{name}")
+                continue
+            if line.strip() and not line.startswith((" ", "\t")):
+                classes = []  # a new top-level statement ends every class body
+        key = path.relative_to(ROOT).as_posix()
+        found[key] = names
+        if not PYTESTMARK.search(text):
+            unmarked.append(key)
+    return found, unmarked
+
+
+def index():
+    return scan()[0]
+
+
+def unmarked_modules():
+    return scan()[1]
 
 
 def defined_anywhere(name):
@@ -121,18 +150,8 @@ class SpecCitationTests(unittest.TestCase):
         )
 
     def test_S4_every_test_module_carries_a_marker(self):
-        unmarked = []
-        for path in suite_files():
-            values = [
-                ast.unparse(node.value)
-                for node in ast.parse(path.read_text(encoding="utf-8")).body
-                if isinstance(node, ast.Assign)
-                and any(getattr(t, "id", None) == "pytestmark" for t in node.targets)
-            ]
-            if not any(MARK.search(value) for value in values):
-                unmarked.append(path.relative_to(ROOT).as_posix())
         self.assertEqual(
-            unmarked,
+            unmarked_modules(),
             [],
             "each test module sets pytestmark to pytest.mark.unit or pytest.mark.integration",
         )

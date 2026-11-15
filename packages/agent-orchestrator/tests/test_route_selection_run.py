@@ -129,6 +129,11 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             {
                 "contract": 3,
                 "covers": {"S1": ["src/a/test_a.py::test_a"]},
+                "test_cost": {
+                    "command": "uv run pytest src/a --durations=0 -q",
+                    "modules": {"src/a/test_a.py": 0.2},
+                    "tests": {"src/a/test_a.py::test_a": 0.2},
+                },
                 "task_id": "t1",
                 "status": "COMPLETE",
                 "summary": "done",

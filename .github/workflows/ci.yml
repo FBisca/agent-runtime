@@ -36,7 +36,10 @@ jobs:
       # Both members: the runtime's console scripts and the orchestrator's contracts are installed.
       - run: uv sync --frozen --all-packages
       # The whole suite, in parallel: the fast suite (`uv run pytest`) is the unit tests alone.
-      - run: uv run pytest -n 4
+      - run: uv run pytest -n 4 --junitxml="$RUNNER_TEMP/suite.xml"
+      # R208's per-module half is a check: a module that grew past its baseline fails the build.
+      - name: suite budget
+        run: python3 scripts/suite_budget.py --junit "$RUNNER_TEMP/suite.xml"
       # The legacy tree is not lint-clean yet. The gate tracks the debt instead of hiding it:
       # a diagnostic above the budget fails the build, a diagnostic below it does not.
       - name: ruff check (legacy budget)

@@ -16,14 +16,18 @@ pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[3]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
-SKIPPED = {".git", ".venv", "__pycache__", "node_modules", ".ruff_cache", ".pytest_cache"}
+# The directories that can ship the engine. Tooling trees (`.pi`, `.claude`, `docs`) cannot hold a
+# second copy a suite would import, and walking them cost seconds for nothing.
+SOURCE_ROOTS = ("packages", "server", "hooks", "tests", "acceptance", "bin", "scripts", "herdr")
 
 
 def sources():
-    """Every Python file of the repository, except the ones a tool generated."""
-    for path in sorted(REPO.rglob("*.py")):
-        if not any(part in SKIPPED for part in path.parts):
-            yield path
+    """Every Python file of the engine's own tree, except the ones a tool generated."""
+    for top in SOURCE_ROOTS:
+        root = REPO / top
+        if root.is_dir():
+            yield from sorted(root.rglob("*.py"))
+    yield from sorted(REPO.glob("*.py"))
 
 
 class EngineHomeTests(unittest.TestCase):
@@ -40,8 +44,15 @@ class EngineHomeTests(unittest.TestCase):
         copies = []
         for path in sources():
             try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except (OSError, SyntaxError, UnicodeDecodeError):
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            # A second copy must define one of these names: skip the parse for every other file.
+            if "parse_plan" not in source and "check_plan" not in source:
+                continue
+            try:
+                tree = ast.parse(source)
+            except SyntaxError:
                 continue
             names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
             if "parse_plan" in names and "check_plan" in names:
@@ -52,6 +63,7 @@ class EngineHomeTests(unittest.TestCase):
         """orchestrator-engine/R3"""
         workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("uv run pytest -n 4", workflow)
+        self.assertIn("suite_budget.py", workflow)
         for budget in ("RUFF_CHECK_BUDGET", "RUFF_FORMAT_BUDGET", "TY_BUDGET"):
             self.assertIn(budget, workflow)
         self.assertIn("ty check packages/", workflow)
