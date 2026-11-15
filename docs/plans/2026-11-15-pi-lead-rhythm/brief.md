@@ -59,6 +59,14 @@ two tickets, and it carries `state`, `external` and `retry-idempotency`.
   assertion, because the refusal is right and a test that has to weaken to pass
   is the defect. The same pattern is fixed wherever it appears, not in the three
   instances the impacted check happened to report (t2 request, decision `amend`)
+- D9 Land S5 with its requirement instead of after it: `docs/specs/agent-runtime.md`
+  R124 says a caller that leads no team "allows", which S5 turns into a block
+  while its assignment is pending or working, so T4 owns that page and amends
+  R124 to both halves, scopes R121's parked-wait exemption to the lead (a
+  worker's obligation is a report, not a wait result), moves the worker's
+  predicate into `agent_runtime/rhythm.py` beside the lead's (D1), and keeps the
+  `(from lead-liveness-hooks/S18)` provenance with no new coverage row, the same
+  way R116-R128 carry none (t4 review, decision `amend`)
 
 ## Out of scope
 
