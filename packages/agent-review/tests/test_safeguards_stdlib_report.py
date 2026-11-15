@@ -142,6 +142,16 @@ class CommentedImportReview(Review):
         )
 
 
+class TwoPackagesReview(Review):
+    """The head adds two packages to a declared member, one as a from-import and one inside a function."""
+
+    def head_file(self) -> str:
+        return (
+            "import json\n\nfrom yaml import safe_load\n\n\ndef load(path):\n"
+            "    import dotenv\n\n    return safe_load(path)\n"
+        )
+
+
 @pytest.fixture
 def review(tmp_path, monkeypatch):
     """The scratch screening, with no credential and no base URL in the environment."""
@@ -194,6 +204,23 @@ def test_S6_a_commented_import_line_escalates_without_a_request(tmp_path, monkey
     assert report["usage"]["requests"] == 0, "no request is spent on a hit"
     assert [reason["module"] for reason in report["escalation"]["reasons"]] == ["requests"]
     assert report["escalation"]["reasons"][0]["path"] == "hooks/pre_tool_use.py"
+
+
+def test_S6_each_package_the_member_adds_is_its_own_reason_in_the_report(tmp_path, monkeypatch):
+    for variable in ("TYPESAFE_API_KEY", "AGENT_REVIEW_API_KEY", "AGENT_REVIEW_BASE_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    where = TwoPackagesReview(tmp_path)
+    monkeypatch.chdir(where.checkout)
+    assert where.screen() == 0
+    report = where.report()
+    assert report["verdict"] == "escalated"
+    assert report["usage"]["requests"] == 0
+    reasons = report["escalation"]["reasons"]
+    assert [reason["module"] for reason in reasons] == ["yaml", "dotenv"], (
+        "a from-import and a function-local import are imports too, and each names its module"
+    )
+    assert {reason["path"] for reason in reasons} == {"hooks/pre_tool_use.py"}
+    assert {reason["rule"] for reason in reasons} == {"stdlib-only"}
 
 
 def test_S7_a_declared_member_that_adds_a_standard_library_import_is_screened(

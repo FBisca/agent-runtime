@@ -71,6 +71,30 @@ def test_S6_one_line_naming_several_modules_names_the_first_outside_the_standard
     assert reason.module == "requests", "a module the standard library ships is not the reason"
 
 
+def test_S6_every_outside_module_the_member_adds_is_its_own_reason():
+    text = diff(
+        "hooks/pre_tool_use.py",
+        "import json\n\nfrom yaml import safe_load\n\n\ndef load(path):\n"
+        "    import dotenv\n\n    return safe_load(path)\n",
+    )
+    reasons = decided(text)
+    assert [reason.module for reason in reasons] == ["yaml", "dotenv"], (
+        "a from-import and a function-local import are imports too, and each names its own module"
+    )
+    assert {reason.path for reason in reasons} == {"hooks/pre_tool_use.py"}
+    assert [reason.pattern for reason in reasons] == [
+        "from yaml import safe_load",
+        "import dotenv",
+    ], "each reason carries the statement that named its module"
+
+
+def test_S6_one_module_the_member_imports_twice_is_one_reason():
+    assert [
+        reason.module
+        for reason in decided(diff("hooks/pre_tool_use.py", "import yaml\n\nimport yaml.parser\n"))
+    ] == ["yaml"], "a reason names a module the member must not have, once"
+
+
 def test_S6_a_member_declared_as_a_file_covers_that_file_and_no_sibling():
     declaration = {"stdlib_only": ["hooks/pre_tool_use.py"]}
     assert decided(diff("hooks/pre_tool_use.py", "import requests\n"), declaration)[0].module == (

@@ -32,7 +32,10 @@ the root: the value a computed target holds is not in a diff (SG-D5). So:
   would fire on every test that writes its own fixture.
 
 One reason per rule and path names the first call the change adds on it: a report says which file a person
-must read, and the file is the unit a review is opened on.
+must read, and the file is the unit a review is opened on. A capability is per module rather than per file,
+so `stdlib-only` carries one reason per module a member adds: a change that imports two packages leaves two
+things for a person to act on, however the statements spell them.
+
 `protected-path` fires on a changed path a pattern declares sensitive, on either side of a rename and for
 an added, modified or deleted file alike. The patterns are configuration (SG-D4, SG-D6): the packaged
 baseline ships the mandatory ones and a repository's `.agent-review.yaml` adds to them, so a reason names
@@ -367,7 +370,7 @@ def _open_string(text: str) -> str:
             index = at + len(open_triple)
             open_triple = ""
             continue
-        if text.startswith('\"\"\"', index) or text.startswith("'''", index):
+        if text.startswith('"""', index) or text.startswith("\'\'\'", index):
             open_triple = text[index : index + 3]
             index += 3
             continue
