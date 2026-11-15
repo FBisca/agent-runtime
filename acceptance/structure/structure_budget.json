@@ -1,5 +1,5 @@
 {
- "measured_at": "2026-11-15T13:14:01+00:00",
+ "measured_at": "2026-11-15T16:15:43+00:00",
  "ceilings": {
   "module-lines": 1000,
   "class-methods": 25,
@@ -75,7 +75,7 @@
    "parameters": 8
   },
   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": {
-   "module-lines": 9143,
+   "module-lines": 9139,
    "class-methods": 254,
    "function-lines": 408,
    "function-branches": 53,
@@ -249,12 +249,12 @@
    "class-methods": 33
   },
   "tests/test_event_wait.py": {
-   "module-lines": 1775,
+   "module-lines": 1779,
    "class-methods": 61,
    "function-lines": 139
   },
   "tests/test_hooks.py": {
-   "module-lines": 1953,
+   "module-lines": 2030,
    "class-methods": 29,
    "parameters": 8
   },
