@@ -72,10 +72,16 @@ reports.
   stay the runtime's, keyed by terminal and scope: switching host, or restarting Pi, in one terminal does not hand
   the session a fresh set of blocks.
 - **A wake is pushed, not slept for.** The driver books one wake per escalation in the run's `wakes.jsonl`; the
-  extension reads the newest line every two seconds and sends it into the session with a triggered turn, so an
-  idle lead starts on it. A wake it already pushed — after a restart too — is pushed once, and an empty line
-  pushes nothing. Its cursor is `$XDG_STATE_HOME/agent-runtime/pi-wakes.json` (`~/.local/state` by default), one
-  entry per run, so two runs are two wakes.
+  extension reads the file every two seconds and sends every line it has not pushed yet, in the order the driver
+  booked them (one `advance()` round can book several), with a triggered turn, so an idle lead starts on it. The
+  cursor is a position in the file, not its newest text, so a burst of wakes is not collapsed to one; a wake it
+  already pushed — after a restart too — is pushed once, and an empty line pushes nothing.
+- **Only the run's own lead receives them.** The driver runs in an hc terminal named after its plan, whose parent
+  is the terminal that launched it; a run started in the lead's own terminal is that terminal. The extension
+  pushes only the runs this session is the lead of, and it keeps one cursor per session in
+  `$XDG_STATE_HOME/agent-runtime/pi-wakes.json` (`~/.local/state` by default), so a Pi worker — another session on
+  the same machine — neither receives the lead's wakes nor spends its cursor. A run whose pane no longer shows the
+  session as its lead is left to `await` and to the driver's own `hc send`.
 - **A long sleep is refused.** A `bash` call that sleeps 60 seconds or more is refused, the reason naming
   `wait(all)`, because a sleep parks a turn only a wake can end; a sleep under a minute, and every other tool, is
   left alone. This is defence in depth: the server is the authority.
@@ -96,12 +102,17 @@ ln -s "$PWD/extensions/agent-runtime" ~/.pi/agent/extensions/agent-runtime
 ```
 
 Two variables change where it looks. `AGENT_RUNTIME_HOOK` names the hook entry; without it the extension uses
-this checkout's `bin/agent-runtime-hook`, then `agent-runtime-hook` on the `PATH`. `AGENT_RUNTIME_WAKES` names the
-wake files to watch as a `:`-separated list; without it every run under
-`$XDG_STATE_HOME/orchestrate/<repo>/<slug>/wakes.jsonl` is watched.
+this checkout's `bin/agent-runtime-hook`, then `agent-runtime-hook` on the `PATH`. `AGENT_RUNTIME_WAKES` narrows
+the wake files it considers to a `:`-separated list; without it, every run under
+`$XDG_STATE_HOME/orchestrate/<repo>/<slug>/wakes.jsonl` is considered. Naming a file does not make it the
+reader's: a run's wakes go to the run's lead, and a file outside a run tree goes to a session whose own `hc`
+terminal is a lead, so a worker that inherits the variable still receives nothing.
 
-A Pi worker gets the same extension, and there the turn end is the worker's stop: the hook answers it with the
-assignment it still owes a report for, naming `report complete` and `report blocked` as the two ways out.
+A Pi worker gets the same extension, and there the turn end is the worker's stop. The naming half of that answer
+is the hook's, not the extension's: `hooks/stop_guard.py` is what tells a worker which assignment it still owes,
+aiming `report complete` and `report blocked` as the two ways out, and `tests/test_hooks.py` is where that
+wording is proved. A hook that refuses nothing — a lead without a team, or a worker before that guard exists —
+is an allowed stop, and the extension adds nothing to it.
 
 ## Pi as a worker
 

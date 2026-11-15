@@ -11,7 +11,7 @@
 const SLEEP_LIMIT = 60; // seconds; a sleep this long parks a turn that a wake has to end
 
 const SLEEP_REASON =
-  "agent-runtime: %d s of sleep parks the turn while a wake has to arrive on its own; call wait(all) " +
+  "agent-runtime: %s parks the turn while a wake has to arrive on its own; call wait(all) " +
   "instead, which returns the moment a worker reports or the driver books a wake";
 
 // A word that introduces a command without being the command: `time sleep 90` still sleeps.
@@ -63,7 +63,8 @@ export function toToolCall({ toolName, input } = {}) {
   const command = input && typeof input.command === "string" ? input.command : "";
   const seconds = longestSleep(command);
   if (seconds < SLEEP_LIMIT) return null;
-  return { block: true, reason: SLEEP_REASON.replace("%d", String(seconds)) };
+  const waited = Number.isFinite(seconds) ? seconds + " s of sleep" : "an endless sleep";
+  return { block: true, reason: SLEEP_REASON.replace("%s", waited) };
 }
 
 /** The longest sleep in a shell command, in seconds, read segment by segment (`;`, `&&`, `|`, …). */
@@ -91,9 +92,15 @@ function basename(word) {
   return word.slice(word.lastIndexOf("/") + 1);
 }
 
-/** `sleep`'s own argument grammar: a number with an optional s/m/h/d suffix; anything else is not a
- * literal duration (a variable, a pipe), so it is not counted. */
+/** `sleep`'s own argument grammar: one or more numbers with an optional s/m/h/d suffix, as in
+ * `1h30m`; `infinity` never ends. Anything else is not a literal duration (a variable, a pipe), so it
+ * is not counted. */
 function secondsOf(word) {
-  const match = /^([0-9]+(?:\.[0-9]+)?)([smhd]?)$/.exec(word);
-  return match ? Number(match[1]) * UNITS[match[2]] : 0;
+  if (/^(?:inf(?:inity)?)$/i.test(word)) return Infinity;
+  if (!/^(?:[0-9]+(?:\.[0-9]+)?[smhd]?)+$/.test(word)) return 0;
+  let total = 0;
+  for (const part of word.matchAll(/([0-9]+(?:\.[0-9]+)?)([smhd]?)/g)) {
+    total += Number(part[1]) * UNITS[part[2]];
+  }
+  return total;
 }

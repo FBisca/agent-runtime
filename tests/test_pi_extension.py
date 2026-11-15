@@ -33,6 +33,11 @@ TURN_END = (
     '  result = (await fn({outcome: "completed", toolResults: []}, {})) ?? null;'
     "}"
 )
+SESSION_START = (
+    "for (const fn of handlers.session_start || []) { await fn({}, {}); }"
+    "for (const fn of handlers.session_shutdown || []) { await fn({}, {}); }"
+    "result = sent.map((entry) => entry.message.content);"
+)
 
 
 def node(script, env=None, timeout=120):
@@ -162,7 +167,15 @@ class StopDecisionTests(ExtensionCase):
 
 
 class WorkerStopTests(ExtensionCase):
-    """S4: a worker's unreported assignment is carried into the next request, both ways out intact."""
+    """S4: a worker's unreported assignment reaches the next request with both ways out intact.
+
+    The naming half is the hook's, not this adapter's: `hooks/stop_guard.py` is what decides that a
+    worker's turn may not end while its own assignment is unreported, and `tests/test_hooks.py` is
+    where that answer is proved to name `report complete` and `report blocked`. This node pins the
+    other half — the extension asks once, and carries that answer into exactly one more request
+    without paraphrasing or dropping it — so it can fail when the reason is mangled, and it cannot
+    stand in for a hook that refuses nothing (an allowed stop adds nothing, as S3 shows).
+    """
 
     def test_S4_an_unreported_assignment_asks_for_one_more_request_naming_both_ways_out(self):
         self.with_hook({"block": True, "reason": WORKER_REASON})
@@ -178,11 +191,29 @@ class WorkerStopTests(ExtensionCase):
 
 
 class WakePushTests(ExtensionCase):
-    """S7: an unseen wake is pushed with its text, and a seen or empty wake pushes nothing."""
+    """S7: an unseen wake is pushed with its text, in order, into the session that leads the run."""
+
+    LEAD = "lead-pane"
 
     def setUp(self):
         super().setUp()
         self.wakes = self.state / "orchestrate" / "repo" / "plan" / "wakes.jsonl"
+        # The driver runs in an hc pane named after its plan, and its parent is the lead's terminal;
+        # `hc ls` lists that lead terminal too, with no parent of its own.
+        self.terminals([{"name": "orchestrate-plan", "address": "pane", "parent": self.LEAD}])
+        self.env["HC_TERMINAL_ID"] = self.LEAD
+
+    def terminals(self, rows):
+        """A stand-in for `hc ls --all --json`, which lists every terminal, this session's included."""
+        binary = self.root / "bin" / "hc"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        own = {"name": "pi-lead", "address": self.LEAD, "parent": None}
+        binary.write_text(
+            "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps({"terminals": [own] + rows}),
+            encoding="utf-8",
+        )
+        binary.chmod(0o755)
+        self.env["PATH"] = "%s:%s" % (binary.parent, os.environ["PATH"])
 
     def append(self, *lines):
         self.wakes.parent.mkdir(parents=True, exist_ok=True)
@@ -193,8 +224,15 @@ class WakePushTests(ExtensionCase):
     def wake(self, text, kind="wake"):
         return json.dumps({"kind": kind, "unit": "t1", "text": text})
 
-    def poll(self):
+    def poll(self, session_terminal=None):
+        """One Pi session's poll; a fresh node process is a restart, the cursor is on disk."""
+        if session_terminal is not None:
+            self.env["HC_TERMINAL_ID"] = session_terminal
         return session("result = mod.pollWakes(pi, {env: process.env});", self.env)
+
+    def cursors(self):
+        path = self.state / "agent-runtime" / "pi-wakes.json"
+        return json.loads(path.read_text(encoding="utf-8"))["sessions"]
 
     def test_S7_an_unseen_wake_is_pushed_with_its_text(self):
         self.append(self.wake("t2 reported complete"))
@@ -217,10 +255,62 @@ class WakePushTests(ExtensionCase):
     def test_S7_a_wake_already_seen_is_pushed_once_even_after_a_restart(self):
         self.append(self.wake("t3 needs attention"))
         self.assertEqual(self.poll()["result"], ["t3 needs attention"])
-        # A fresh node process is a restart: the cursor is on disk, so the same wake is not pushed twice.
         again = self.poll()
         self.assertEqual(again["result"], [])
         self.assertEqual(again["sent"], [])
+
+    def test_S7_wakes_appended_before_one_poll_are_pushed_in_the_order_the_driver_booked_them(self):
+        # One advance() round books a wake per asking unit, milliseconds apart: two lines, one poll.
+        self.append(self.wake("t1 asked for a decision"), self.wake("t2 needs attention"))
+        answer = self.poll()
+        self.assertEqual(answer["result"], ["t1 asked for a decision", "t2 needs attention"])
+        self.assertEqual(len(answer["sent"]), 2)
+        self.assertEqual(self.poll()["result"], [], "and a third poll pushes nothing")
+        # A later wake resumes where the cursor stands: the lines already pushed are not replayed.
+        self.append(self.wake("t3 reported blocked"))
+        self.assertEqual(self.poll()["result"], ["t3 reported blocked"])
+        self.assertEqual(self.poll()["result"], [])
+
+    def test_S7_a_worker_session_pushes_nothing_and_does_not_spend_the_leads_wake(self):
+        self.append(self.wake("t3 needs attention"))
+        # A Pi worker is another session on the same machine and the same state file.
+        worker = self.poll("worker-pane")
+        self.assertEqual(worker["result"], [])
+        self.assertEqual(worker["sent"], [])
+        self.assertNotIn("worker-pane", self.cursors(), "a worker does not spend the lead's cursor")
+        lead = self.poll(self.LEAD)
+        self.assertEqual(lead["result"], ["t3 needs attention"])
+        self.assertEqual(self.poll("worker-pane")["result"], [])
+
+    def test_S7_a_session_does_not_push_another_runs_wake(self):
+        self.append(self.wake("t3 needs attention"))
+        other = self.state / "orchestrate" / "repo" / "other-plan" / "wakes.jsonl"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text(self.wake("someone else's plan") + "\n", encoding="utf-8")
+        self.terminals(
+            [
+                {"name": "orchestrate-plan", "address": "pane", "parent": self.LEAD},
+                {"name": "orchestrate-other-plan", "address": "pane2", "parent": "another"},
+            ]
+        )
+        answer = self.poll()
+        self.assertEqual(answer["result"], ["t3 needs attention"])
+
+    def test_S7_an_explicitly_named_wake_file_still_belongs_to_a_lead(self):
+        # Naming a file is not a claim to it: a worker inherits the lead's environment and must not
+        # take the wakes, while the lead session that named it still receives them.
+        self.append(self.wake("t2 reported complete"))
+        self.env["AGENT_RUNTIME_WAKES"] = str(self.wakes)
+        worker = self.poll("worker-pane")
+        self.assertEqual(worker["result"], [])
+        self.assertEqual(self.poll(self.LEAD)["result"], ["t2 reported complete"])
+
+    def test_S7_a_session_start_pushes_what_the_run_already_wrote(self):
+        self.append(self.wake("t2 reported complete"))
+        answer = session(SESSION_START, self.env)
+        self.assertIn("session_start", answer["registered"])
+        self.assertIn("session_shutdown", answer["registered"])
+        self.assertEqual(answer["result"], ["t2 reported complete"])
 
     def test_S7_an_empty_line_pushes_nothing(self):
         self.append(self.wake(""))
@@ -272,6 +362,8 @@ class LongSleepTests(unittest.TestCase):
             "FOO=1 sudo sleep 90",
             "echo hi; sleep 120",
             "sleep 2h",
+            "sleep 1h30m",
+            "sleep infinity",
         ):
             self.assertTrue(
                 handler("toToolCall", {"toolName": "bash", "input": {"command": command}}), command
