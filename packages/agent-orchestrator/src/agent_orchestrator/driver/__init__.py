@@ -585,6 +585,112 @@ ATTENTION = {
 }
 ARCHIVE = "archive"  # the unit (and task id) of the driver's own archive
 ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or replace
+# An archive whose pull request conflicts is a base that moved, not a defect: rebuilding re-reads the spec on the new
+# base. Twice, so a genuinely conflicting plan still reaches the Lead instead of looping.
+ARCHIVE_REBUILDS = 2
+
+# A spec section's grammar, as the archive writes it: the heading a plan owns, its requirement bullet, its row. The
+# checks below read what the file holds, so a hand-resolved conflict or a second append is named, not merged in.
+SPEC_HEADING = re.compile(r"^## (Requirements|Coverage): (.+?)\s*$")
+SPEC_REQUIREMENT = re.compile(r"^- \*\*(R\d+)\*\*")
+SPEC_ROW = re.compile(r"^\| (R\d+) \| (\S+) \|")
+SPEC_MARKER = re.compile(r"^(<{7}|={7}|>{7}|\|{7})")
+
+
+def spec_defects(text):
+    """The spec's structural defects, one message each with its line: a conflict marker left in the file, a
+    requirement numbered twice, a second section for a slug the file already has, a Coverage row naming a requirement
+    no bullet in the file holds. Empty for a spec the archive wrote and nobody resolved by hand."""
+    defects, numbered, sections, rows = [], {}, {}, []
+    covering = False
+    for number, line in enumerate(text.splitlines(), 1):
+        marker = SPEC_MARKER.match(line)
+        if marker:
+            defects.append("line %d: a conflict marker %s" % (number, marker.group(1)))
+        heading = SPEC_HEADING.match(line)
+        if heading:
+            kind, slug = heading.group(1), heading.group(2)
+            if (kind, slug) in sections:
+                defects.append(
+                    "line %d: a second %s section for %s (the first is at line %d)"
+                    % (number, kind, slug, sections[(kind, slug)])
+                )
+            else:
+                sections[(kind, slug)] = number
+            covering = kind == "Coverage"
+        elif line.startswith("## "):
+            covering = False
+        bullet = SPEC_REQUIREMENT.match(line)
+        if bullet:
+            rid = bullet.group(1)
+            if rid in numbered:  # one requirement, one number: a second bullet reuses it
+                defects.append(
+                    "line %d: %s is already numbered at line %d" % (number, rid, numbered[rid])
+                )
+            else:
+                numbered[rid] = number
+        row = SPEC_ROW.match(line) if covering else None
+        if row:
+            rows.append((number, row.group(1)))
+    for number, rid in rows:
+        if rid not in numbered:
+            defects.append(
+                "line %d: a Coverage row for %s, which no requirement in this file holds"
+                % (number, rid)
+            )
+    return defects
+
+
+def without_coverage(text, slug):
+    """`text` without this plan's own `Coverage` section: the table is the one thing an archive appends again, so a
+    rebuild replaces it instead of leaving a second copy (the incident `docs(spec): keep one Coverage table`). The
+    plan's `Requirements` section stays: a held scenario keeps the number it already has, and `spec_section` adds only
+    the requirements the file lacks."""
+    kept, dropping = [], False
+    for line in text.splitlines(keepends=True):
+        heading = SPEC_HEADING.match(line.rstrip("\n"))
+        if heading:
+            dropping = heading.group(1) == "Coverage" and heading.group(2) == slug
+        if not dropping:
+            kept.append(line)
+    return "".join(kept)
+
+
+def merge_requirements(text, slug):
+    """`text` with this plan's `Requirements` sections folded into the first one: one section per plan, however many
+    times it archives, so a plan whose section the file already holds does not open a second one for a new scenario.
+    A later block contributes its bullets and nothing else, and one blank line is kept after the last one."""
+    lines = text.splitlines(keepends=True)
+    heads = [index for index, line in enumerate(lines) if line.startswith("## ")]
+    bounds = [
+        (start, heads[at + 1] if at + 1 < len(heads) else len(lines))
+        for at, start in enumerate(heads)
+    ]
+    ours = [
+        (start, end)
+        for start, end in bounds
+        if (heading := SPEC_HEADING.match(lines[start].rstrip("\n")))
+        and (heading.group(1), heading.group(2)) == ("Requirements", slug)
+    ]
+    if len(ours) < 2:
+        return text
+    first_start, first_end = ours[0]
+    bullets = [
+        line for start, end in ours[1:] for line in lines[start + 1 : end] if line.startswith("- ")
+    ]
+    last = max(
+        (index for index in range(first_start, first_end) if lines[index].startswith("- ")),
+        default=first_start + 1,
+    )
+    dropped = {index for start, end in ours[1:] for index in range(start, end)}
+    kept = [line for index, line in enumerate(lines) if index not in dropped]
+    at = last + 1 - sum(1 for index in dropped if index <= last)
+    if at < len(kept) and kept[at].startswith("## ") and kept[at - 1].strip():
+        kept[at:at] = ["\n"]  # the blank line the folded block took with it
+        at += 1
+    return "".join(kept[:at] + bullets + kept[at:])
+
+
 # A covers gate that can never pass because the ticket's Paths hold no test: the way out is the plan, so `amend` leads.
 NO_TEST_MENU = ("amend",) + tuple(action for action in contracts.ACTIONS if action != "amend")
 DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
@@ -2705,6 +2811,9 @@ class Driver:
             "draft": owed,
         }
         asked = kind = reason = None
+        rebuild = (
+            False  # an archive conflict is a base that moved: rebuilt before a person is asked
+        )
         with self.book() as data:  # the driver's count: the report's review_rounds is never read
             rounds = data.setdefault("rounds", {})
             if (
@@ -2716,20 +2825,25 @@ class Driver:
             fix["attempt"] = failures
             self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
             if unit == ARCHIVE:
-                # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
                 self.book_report(data, task_id, report, path, remaining=remaining)
-                reason = (
-                    "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
-                    "leaves the archive to you"
-                    % (
-                        "the archive pull request conflicts with its base"
-                        if source == "conflict"
-                        else "the archive failed its %s gate" % source,
-                        "; ".join(remaining),
+                rebuilds = data.setdefault("rebuilds", {})
+                if source == "conflict" and rebuilds.get(unit, 0) < ARCHIVE_REBUILDS:
+                    rebuilds[unit] = rebuilds.get(unit, 0) + 1
+                    rebuild = True
+                else:
+                    # No worker could fix it, and a rebuild was already tried: the Lead decides.
+                    reason = (
+                        "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
+                        "leaves the archive to you"
+                        % (
+                            "the archive pull request conflicts with its base"
+                            if source == "conflict"
+                            else "the archive failed its %s gate" % source,
+                            "; ".join(remaining),
+                        )
                     )
-                )
-                kind = source
-                asked = self.book_request(data, task_id, kind, reason)
+                    kind = source
+                    asked = self.book_request(data, task_id, kind, reason)
             else:
                 self.book_report(data, task_id, report, path, review_rounds=1, remaining=remaining)
                 for item in items:
@@ -2760,6 +2874,11 @@ class Driver:
                     data["tasks"][task_id].update(gate="fix-pending", fix=fix, updated_at=now())
         # Nothing below is the round's to book twice. The draft is attempted now and, when gh refuses, left in `fix`
         # for `step_fix` to try again before it dispatches anyone.
+        if rebuild:
+            # The lead's `retry`, verbatim: the branch is rebuilt from the current base, so the spec section and its
+            # number are derived from what actually merged.
+            self.retry_archive(task_id)
+            return
         if unit == ARCHIVE:
             self.undraft_archive(task_id)
         elif owed and self.undraft(task_id, owed):
@@ -6365,6 +6484,24 @@ class Driver:
     def flat(text):
         return " ".join(str(text).split())
 
+    def spec_text(self, before, held):
+        """The spec as this archive writes it: its section re-derived from `before`, so a rebuild replaces its own
+        `Coverage` table and folds new requirements into its own `Requirements` section. Text the write would leave
+        badly formed is refused here, before the commit and the push: a spec section a hand-resolved conflict mangled
+        is a person's to fix, not something to push again."""
+        body = without_coverage(before, self.slug)
+        section = self.spec_section(body, held)
+        body = body.rstrip("\n") + "\n\n" if body.strip() else ""
+        text = merge_requirements(body + section, self.slug)
+        already = spec_defects(before)
+        defects = [defect for defect in spec_defects(text) if defect not in already]
+        if defects:
+            raise ValueError(
+                "the section would leave %s badly formed: %s. Fix the spec by hand and `retry`, or `skip` and "
+                "archive it yourself" % (self.plan_model().spec, "; ".join(defects[:3]))
+            )
+        return text
+
     def spec_section(self, spec_text, held):
         """The text appended to the spec: the requirements it lacks, then the Coverage table of every scenario."""
         slug, nodes = self.slug, self.scenario_nodes()
@@ -6442,14 +6579,14 @@ class Driver:
                 before = spec.read_text(encoding="utf-8")
             except FileNotFoundError:
                 before = ""
-            section = self.spec_section(before, self.held_requirements(spec))
-            body = (
-                (before if before.endswith("\n") else before + "\n") + "\n"
-                if before.strip()
-                else ""
-            )
+            text = self.spec_text(before, self.held_requirements(spec))
+            already = spec_defects(before)
+            if (
+                already
+            ):  # the base was already broken: not this archive's to fix, and not silently passed on
+                self.log("spec-defects", spec=self.plan_model().spec, defects=len(already))
             spec.parent.mkdir(parents=True, exist_ok=True)
-            spec.write_text(body + section, encoding="utf-8")
+            spec.write_text(text, encoding="utf-8")
         run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
         identity = (
             []

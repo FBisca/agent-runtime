@@ -5,6 +5,7 @@ import unittest
 
 import fake_gh
 import pytest
+from agent_orchestrator.driver import ARCHIVE_REBUILDS
 from fixtures import load_script, report_wait
 from test_acceptance import SnapshotFixture
 from test_gates import GateFixture
@@ -65,7 +66,36 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
 
 
 class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
-    def test_S5_a_conflicting_archive_pr_asks_the_lead_and_spawns_no_worker(self):
+    def conflict_once(self):
+        """The archive's PR conflicts on the first read and answers as the fake always does after that."""
+        real = self.gh_process
+        first = [True]
+
+        def conflicting(argv, timeout=None, cwd=None):
+            if argv[:3] == ["pr", "view", "https://github.com/o/r/pull/9"] and first:
+                first.clear()
+                row = {"state": "OPEN", "isDraft": True, "mergeStateStatus": "DIRTY"}
+                row.update(mergeable="CONFLICTING", mergeCommit=None)
+                return fake_gh.Completed(argv, 0, json.dumps(row))
+            return real(argv, timeout=timeout, cwd=cwd)
+
+        self.gh_process = conflicting
+
+    def test_S12_a_conflicting_archive_pr_is_rebuilt_from_the_current_base_first(self):
+        """orchestrator-engine/R49: a conflict is a base that moved. The branch is built again from it, the spec
+        section re-derived there, and nobody is asked; past the rebuilds the Lead is, as before."""
+        self.conflict_once()
+        self.waits(self.ticket_merged() + [{}])
+        self.run_driver()
+        self.assertEqual(len(self.run_events("archive-built")), 2)
+        self.assertFalse((self.run_dir / "archive" / "request.json").exists())
+        # The rebuild replaced the section instead of appending a second copy of it.
+        spec = self.git(self.origin, "show", "feat/demo-archive:docs/specs/demo.md")
+        self.assertEqual(spec.count("## Coverage: demo"), 1)
+        self.assertEqual(spec.count("## Requirements: demo"), 1)
+        self.assertEqual(self.task("archive")["status"], "COMPLETE")
+
+    def test_S5_a_conflicting_archive_pr_past_the_rebuilds_asks_the_lead_and_spawns_no_worker(self):
         """orchestrator-engine/R34: the archive has no worker to rebase it."""
         real = self.gh_process
 
@@ -78,9 +108,10 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
             return real(argv, timeout=timeout, cwd=cwd)
 
         self.gh_process = conflicting
-        self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
+        self.waits(self.ticket_merged() + [{}, {}, {}, self.decide_step("archive", "skip")])
         self.run_driver()
         self.assertEqual(self.spawned().count(ARCHIVE), 0)
+        self.assertEqual(len(self.run_events("archive-built")), 1 + ARCHIVE_REBUILDS)
         request = self.request("archive")
         self.assertEqual([o["action"] for o in request["menu"]], ["retry", "skip"])
         self.assertIn("conflicts with its base", request["reason"])
