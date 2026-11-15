@@ -149,6 +149,41 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertIn("FAILED STEP LOG TAIL for run 77", item["excerpt"])
         self.assertEqual(self.gh_calls("run", "view")[0], ["run", "view", "77", "--log-failed"])
 
+    def test_S4_a_failing_check_whose_run_is_in_progress_stays_pending_until_its_log_is_readable(
+        self,
+    ):
+        """driver-invariants/S4"""
+        placeholder = "run 77 is still in progress; logs will be available when it is complete"
+        real = "unit tests\tRun pytest\t2026-11-10T10:00:00Z assert 1 == 2"
+        self.checks([("fail", "unit tests"), ("fail", "unit tests"), "green"])
+        (self.home / "run.json").write_text(
+            json.dumps([[1, "", placeholder], [0, real, ""]]), encoding="utf-8"
+        )
+        again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
+        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.working(),
+                self.worker_done("t1r1"),
+                again,
+            ]
+        )
+        self.run_driver()
+        self.assertEqual(
+            [e["state"] for e in self.run_events("ci")][:2],
+            ["pending", "failed"],
+            "a failing check whose log is still a placeholder is not a verdict",
+        )
+        self.assertIn("demo-t1", [c["args"]["name"] for c in self.calls("resume")])
+        self.assertEqual(len(self.gh_calls("run", "view")), 2)
+        findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
+        excerpt = findings["items"][0]["excerpt"]
+        self.assertIn("assert 1 == 2", excerpt)
+        self.assertNotIn("still in progress", excerpt)
+        self.assertNotIn("still in progress", json.dumps(findings))
+
     def test_S10_several_failing_checks_with_long_logs_carry_only_their_own_capped_excerpt(self):
         """orchestrator-engine/R37"""
 

@@ -907,6 +907,32 @@ def next_path(directory, stem, suffix):
 # The tail of a failing job's log that a fix round shows; the full log is at log_path.
 CI_EXCERPT_CHARS = 2048
 
+# The buckets `gh pr checks` uses for a check that failed or was abandoned, and for one still running.
+CI_FAILED_BUCKETS = {"fail", "failing", "cancel", "cancelled", "timed_out", "action_required"}
+CI_PENDING_BUCKETS = {"pending", "queued", "in_progress", "waiting", "requested"}
+
+# What `gh run view --log-failed` answers before the run's logs are written: not evidence of anything yet.
+RUN_LOG_PENDING = re.compile(
+    r"^run \d+ is still in progress; logs will be available when it is complete\.?$"
+)
+
+
+def run_log_pending(text):
+    """True when a `gh run view --log-failed` answer is the placeholder of a run whose logs are not readable yet."""
+    return bool(RUN_LOG_PENDING.match(" ".join(str(text).split())))
+
+
+def failing_runs(rows):
+    """The workflow run ids behind the failing checks, in order, once each: they hold the failed steps' logs."""
+    runs = []
+    for row in rows:
+        if str(row.get("bucket") or "").lower() not in CI_FAILED_BUCKETS:
+            continue
+        match = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
+        if match and match.group(1) not in runs:
+            runs.append(match.group(1))
+    return runs
+
 
 def job_log(run_log, job):
     """The lines of a `gh run view --log-failed` log that belong to one job: each opens with the job's name and a tab.
@@ -3775,7 +3801,8 @@ class Driver:
 
     def pr_checks(self, url):
         """The pull request's checks as (state, rows): green, pending, none or failed. `gh` prints one JSON row per
-        check; a bucket says how it went. An exit code `gh` does not use for checks is an error, not a state."""
+        check; a bucket says how it went. A check that failed while its run's logs are still a placeholder is pending,
+        not a verdict: there is no evidence to quote yet. An exit code `gh` does not use for checks is an error."""
         code, out, _err = self.gh(["pr", "checks", url, "--json", "name,bucket,link,description"])
         try:
             rows = json.loads(out or "[]")
@@ -3783,9 +3810,9 @@ class Driver:
             rows = []
         rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
         buckets = {str(r.get("bucket") or "").lower() for r in rows}
-        if buckets & {"fail", "failing", "cancel", "cancelled", "timed_out", "action_required"}:
-            return "failed", rows
-        if buckets & {"pending", "queued", "in_progress", "waiting", "requested"}:
+        if buckets & CI_FAILED_BUCKETS:
+            return ("failed" if self.failed_logs_readable(rows) else "pending"), rows
+        if buckets & CI_PENDING_BUCKETS:
             return "pending", rows
         if code == 0 and rows:
             return "green", rows
@@ -3794,6 +3821,22 @@ class Driver:
         if code in (0, 1, 8):
             return "pending", rows
         return "error", rows
+
+    def failed_logs_readable(self, rows):
+        """False while every failing job's run still answers `--log-failed` with its placeholder: the check has failed
+        but its evidence is not written yet, so the unit is polled again instead of asked."""
+        runs = failing_runs(rows)
+        return not runs or any(not run_log_pending(self.run_log(run)) for run in runs)
+
+    def run_log(self, run):
+        """One workflow run's failed-step log, fetched once a round: the readiness check and the findings share it."""
+        cache = getattr(self, "run_logs", None)
+        if cache is None:
+            cache = self.run_logs = {}
+        if run not in cache:
+            _code, out, err = self.gh(["run", "view", run, "--log-failed"])
+            cache[run] = (out or err).strip()
+        return cache[run]
 
     def units(self):
         """Every unit of the run with the task that is still open for it."""
@@ -3818,6 +3861,7 @@ class Driver:
         its checks. A unit with no checks yet, or with checks still running, is looked at again on a later round: no
         fix round is raised and no other unit waits. The view taken here is the one `step_ci` acts on this round."""
         self.views = {}
+        self.run_logs = {}
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
             gate = task.get("gate")
@@ -4073,22 +4117,16 @@ class Driver:
     def ci_items(self, task_id, url, rows):
         """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
         --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
-        failing = [
-            row
-            for row in rows
-            if str(row.get("bucket") or "").lower() in ("fail", "failing", "cancel", "cancelled")
-        ]
-        runs = {}  # run id -> its failed-step log: every failing job of a run shares one fetch
+        failing = [row for row in rows if str(row.get("bucket") or "").lower() in CI_FAILED_BUCKETS]
         items = []
         for number, row in enumerate(failing, 1):
             name = row.get("name") or "ci"
             text = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                if run.group(1) not in runs:
-                    _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
-                    runs[run.group(1)] = (out or err).strip()
-                text = job_log(runs[run.group(1)], name) or text
+                logged = job_log(self.run_log(run.group(1)), name)
+                if not run_log_pending(logged):
+                    text = logged or text
             items.append(self.ci_item(task_id, url, "CI%d" % number, name, text))
         if not items:
             items.append(self.ci_item(task_id, url, "CI1", "ci", "the checks failed"))
