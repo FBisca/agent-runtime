@@ -70,68 +70,14 @@ PAYLOAD_GRACE = 5.0
 PAYLOAD_WARNINGS = 2
 
 
-def payload_waits(paths, grace=None):
-    """Wait, bounded, for the file a report names; True when it is there.
-
-    `paths` is one path, or the paths the agent named: the first one that is there ends the wait.
-    """
-    candidates = [paths] if isinstance(paths, (str, Path)) else list(paths)
+def payload_waits(path, grace=None):
+    """Wait, bounded, for the file a report names; True when it is there."""
     deadline = time.monotonic() + (PAYLOAD_GRACE if grace is None else grace)
-    while not any(Path(p).exists() for p in candidates):
+    while not Path(path).exists():
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.05)
     return True
-
-
-# The name a report gives a file: anything that ends in `.json`, the way a reviewer writes the path of its review.
-ANNOUNCED_FILE_NAME = re.compile(r"[^\s\"'`]+\.json\b")
-
-
-def adopt_review(review):
-    """The review file the gate reads: the path the driver named, or the one the reviewer named.
-
-    A review the reviewer wrote under another name inside the run directory has been delivered all the same: the
-    file is copied into the driver's path, so the open set, the deferred findings and a re-review's delta all read
-    one file, and the gate does not spend a turn asking for it again. The driver's own path wins whenever it holds
-    a file, and a named file that breaks the contract is left where it is: the gate refuses it as it refuses any
-    other unreadable review.
-    """
-    canonical = Path(review["path"])
-    announced = review.get("announced")
-    if not announced or canonical.exists():
-        return canonical
-    source = Path(announced)
-    if not source.is_file():
-        return canonical
-    try:
-        contracts.load(source, contracts.validate_review)
-    except (contracts.ContractError, ValueError, OSError):
-        return canonical
-    canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    write_atomic(canonical, source.read_text(encoding="utf-8"))
-    return canonical
-
-
-def announced_path(text, root):
-    """The file a report names, when it names one inside `root`.
-
-    The reviewer's brief orders a report of `<n> blocking - <path>`, and that line is the first place to look; a
-    report that names the file in another shape still counts when the name is a `.json` file inside `root`. A name
-    outside `root` is nobody's: the driver reads its own run directory and nothing else.
-    """
-    inside = Path(root).resolve()
-    for name in reversed(ANNOUNCED_FILE_NAME.findall(text or "")):
-        candidate = Path(name.strip(".,;:)]}\"'"))
-        if not candidate.is_absolute():
-            candidate = inside / candidate
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            continue
-        if inside == resolved or inside in resolved.parents:
-            return resolved
-    return None
 
 
 # A call that walks or writes the whole tree (`worktree add`, `status`) scales with the repository: a large one
@@ -807,36 +753,6 @@ ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or 
 # A covers gate that can never pass because the ticket's Paths hold no test: the way out is the plan, so `amend` leads.
 NO_TEST_MENU = ("amend",) + tuple(action for action in contracts.ACTIONS if action != "amend")
 DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
-
-
-def archive_retry_refusal(state):
-    """(reason, way out): the Lead's `retry` for the archive is refused while the plan is not accepted.
-
-    The archive waits for an accepted plan: a retry over a plan that is not accepted would build a branch and open a
-    pull request nobody may merge. The reason names the plan's state; the way out names how the plan gets accepted."""
-    reason = (
-        "the plan's state is %s, not ACCEPTED or ACCEPTED_WITH_HUMAN: the archive's retry is refused"
-        % (state or "unknown")
-    )
-    way_out = (
-        "the archive waits for an accepted plan: `run` again to verify the plan, or `accept <plan> <S-id> --note ...` "
-        "for an item a person has checked (the plan is then ACCEPTED_WITH_HUMAN)"
-    )
-    return reason, way_out
-
-
-def archive_retry_allowed(state):
-    """Whether the archive may be rebuilt: only over a plan the outcome accepted."""
-    return state in ACCEPTED_STATES
-
-
-def plan_state_of(ledger_path):
-    """The plan's state in its ledger, or None when the ledger holds none."""
-    try:
-        data = ledgers.snapshot(ledger_path) or {}
-    except (OSError, ValueError):
-        return None
-    return (data.get("plan") or {}).get("state")
 
 
 def readable_request(path):
@@ -1920,14 +1836,12 @@ class Driver:
                         break
                     if gate == "reviewing" and task["review"].get("assignment_id") == assignment_id:
                         task["gate"] = "reviewed"
-                        self.note_announced(task, message.get("text") or "")
                         break
                     if not gate and task.get("assignment_id") == assignment_id:
                         task["gate"] = "reported"
                         break
                     if gate == "requested" and self.escalated_reviewer(task, assignment_id):
                         task["gate"] = "reviewed"
-                        self.note_announced(task, message.get("text") or "")
                         closing = task["packet"]["task_id"]
                         break
                     if gate == "requested" and task.get("assignment_id") == assignment_id:
@@ -2473,36 +2387,22 @@ class Driver:
         worker asked again writes report.2.json; the newest file on disk is one it already wrote."""
         return next_path(self.run_dir / task_id, "report", ".json")[0]
 
-    def read_payload(self, task_id, where, path, load, alternates=()):
+    def read_payload(self, task_id, where, path, load):
         """The payload a report named, read and validated; None when the agent that sent it still owes it.
 
         A worker's report can reach the driver before the file it announces, and a file can be half written when
         it does. The report is the news and the file is the payload, so a payload that is missing or unusable is
         not a verdict: the sending agent is told once or twice, and only then the Lead is asked. A file that never
         arrives while nobody is left to write it goes straight to the Lead: warning a dead agent buys nothing.
-
-        `alternates` are the files the agent named in its report: the driver's own path first, then those, so a
-        payload written under another name is the agent's news and not the Lead's.
         """
-        candidates = [path, *[a for a in alternates if a]]
-        if not payload_waits(candidates):
+        if not payload_waits(path):
             self.warn_sender(task_id, where, path, "the file is not on disk")
             return None
-        found = next((p for p in candidates if Path(p).exists()), path)
         try:
-            return load(found)
+            return load()
         except (contracts.ContractError, ValueError) as error:
-            self.warn_sender(task_id, where, found, str(error))
+            self.warn_sender(task_id, where, path, str(error))
             return None
-
-    def note_announced(self, task, text):
-        """The file a report names, kept with the task's review: the gate reads it when the driver's own path holds
-        nothing. A reviewer that wrote its review under another name inside the run directory has still delivered
-        it, and the gate does not spend a turn asking for it again.
-        """
-        path = announced_path(text, self.run_dir)
-        if path:
-            task["review"] = dict(task["review"], announced=str(path))
 
     def warn_sender(self, task_id, where, path, reason, accept=False):
         """Tell the agent that sent the report what the driver still needs from it. False when the Lead must ask.
@@ -2643,8 +2543,8 @@ class Driver:
         task = self.task(task_id)
         path = self.report_file(task_id)
 
-        def read_report(where):
-            report = contracts.load(where, contracts.validate_report)
+        def read_report():
+            report = contracts.load(path, contracts.validate_report)
             contracts.need(
                 report["task_id"] == task_id,
                 "report task_id %r is not %s" % (report["task_id"], task_id),
@@ -2925,8 +2825,7 @@ class Driver:
             {
                 "kind": "worker",
                 "name": name,
-                "task": "Read %s and follow it. Write the review to %s (JSON, contract 2)."
-                % (task_md, review["path"]),
+                "task": "Read %s and follow it." % task_md,
                 "cwd": packet["checkout"],
                 "cli": backend,
                 "model": model,
@@ -3050,9 +2949,8 @@ class Driver:
                 "had, a commit other than the one you reviewed, or evidence that did not pass leaves the finding open.",
                 "List in `checks_run` every check you ran, so the implementer does not repeat them. List in `clarifications` "
                 "each question you asked the implementer directly.",
-                "Then call the agent-runtime `report` tool with kind=complete and one line: `<n> blocking - <the "
-                "review file you wrote>`. The file to write is %s; a file written under another name inside the "
-                "run directory is read too." % review_path,
+                "Then call the agent-runtime `report` tool with kind=complete and one line: `<n> blocking - %s`."
+                % review_path,
                 "",
             ]
         )
@@ -3090,24 +2988,20 @@ class Driver:
     def step_reviewed(self, task_id):
         task = self.task(task_id)
         packet = task["packet"]
-        review_path = adopt_review(task["review"])
 
-        def read_review(where):
-            review = contracts.load(where, contracts.validate_review)
+        def read_review():
+            review = contracts.load(task["review"]["path"], contracts.validate_review)
             report = contracts.load(task["report_path"], contracts.validate_report)
-            check_commit(review["commit"], head_of(packet["checkout"]), where)
+            check_commit(review["commit"], head_of(packet["checkout"]), task["review"]["path"])
             self.check_resolutions(packet["unit"], review)
             return review, report
 
-        alternates = [task["review"]["announced"]] if task["review"].get("announced") else []
-        loaded = self.read_payload(
-            task_id, "review", review_path, read_review, alternates=alternates
-        )
+        loaded = self.read_payload(task_id, "review", task["review"]["path"], read_review)
         if loaded is None:
             return  # the gate keeps waiting: the reviewer was warned, or the Lead is asked
         review, report = loaded
         head = head_of(packet["checkout"])
-        self.log_clarifications(task_id, "review", review, review_path)
+        self.log_clarifications(task_id, "review", review, task["review"]["path"])
         self.mark(
             task_id, reviewed_commit=head
         )  # what a later re-review's delta starts from, whatever the verdict
@@ -3116,9 +3010,9 @@ class Driver:
             blocking, outside = self.scope_filter(task_id, packet, task["delta"], blocking)
             rest = rest + outside
         asks = [i for i in blocking + rest if i.get("answer_required") is True]
-        self.defer(task_id, [i for i in rest if i not in asks], review_path)
+        self.defer(task_id, [i for i in rest if i not in asks], task["review"]["path"])
         # The unit's open set after this review, written before the gate moves: a restart reads it back.
-        open_items = self.record_blockers(packet["unit"], review_path, review, blocking)
+        open_items = self.record_blockers(packet["unit"], task["review"]["path"], review, blocking)
         if blocking:
             # a fix round holds only blocking and answer_required items, and the reviewer's checks; an earlier blocker
             # the reviewer neither resolved nor re-raised goes with them, or the round would drop it
@@ -6593,15 +6487,7 @@ class Driver:
 
     def retry_archive(self, task_id):
         """The Lead's `retry`: the archive branch is rebuilt from the current base and pushed again. A pull request
-        that was readied goes back to draft first, so nobody merges a branch that is changing.
-
-        The archive waits for an accepted plan: over a plan that is not accepted the retry builds nothing and opens no
-        pull request, and the Lead is asked again, naming the plan's state and the way out."""
-        state = self.plan_state()
-        if not archive_retry_allowed(state):
-            reason, way_out = archive_retry_refusal(state)
-            self.request(task_id, "archive", "%s. %s" % (reason, way_out))
-            return
+        that was readied goes back to draft first, so nobody merges a branch that is changing."""
         url = self.pr_of(task_id)
         if url and self.unit_flag(ARCHIVE, "pr_ready") and not self.undraft(task_id, url):
             return False
@@ -8218,8 +8104,7 @@ def decided(args, source):
                 "the decision needs an action and a --reason",
                 "run `decide <plan> <unit> <action> --reason <why>`, or `decide <plan> <unit> --json <file|->`",
             )
-    _, ledger_path, run_dir = plan_home(args)
-    unit = args.unit.lower()
+    run_dir, unit = run_dir_of(args), args.unit.lower()
     unit_dir = run_dir / unit
     unit_dir.mkdir(parents=True, exist_ok=True)
     fd = os.open(unit_dir / ".decide.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -8252,13 +8137,6 @@ def decided(args, source):
                 "action %r is not on the menu" % (action,),
                 "choose one of: %s" % ", ".join(menu),
             )
-        if unit == ARCHIVE and action == "retry":
-            # The archive waits for an accepted plan: a retry over a plan that is not accepted is refused here, and
-            # the request stays open for a decision the plan allows.
-            state = plan_state_of(ledger_path)
-            if not archive_retry_allowed(state):
-                reason, way_out = archive_retry_refusal(state)
-                raise Refused(reason, way_out)
         if action == "answer" and answer:
             wrong = foreign_attempt(answer, unit, request["task"])
             if wrong:
