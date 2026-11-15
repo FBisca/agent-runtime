@@ -80,3 +80,17 @@ def stop_refusal(needs):
     if needs["undelivered"] > 0 or (needs["working"] > 0 and not needs["seen"]):
         return REASON % (needs["unfinished"], needs["undelivered"])
     return None
+
+
+WORKER_REASON = (
+    "agent-runtime: assignment %s is unreported — call report complete or report blocked "
+    "before ending the turn"
+)
+
+
+def worker_refusal(assignment):
+    """The worker's stop verdict: the reason its own assignment keeps its turn open, or None when it
+    may end. `assignment` is the id of the caller's current assignment while it is still pending or
+    working (hook_lib.worker_check reads it); a report is the way out, because a report is also how a
+    worker ends an assignment."""
+    return WORKER_REASON % assignment if assignment else None

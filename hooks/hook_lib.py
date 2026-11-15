@@ -187,12 +187,6 @@ def lead_needs(env=None):
     return lead_check(env)[1]
 
 
-WORKER_REASON = (
-    "agent-runtime: assignment %s is unreported — call report complete or report blocked "
-    "before ending the turn"
-)
-
-
 def worker_assignment(db, who):
     """The id of the caller's own current assignment while it is unreported, else None.
 
@@ -217,19 +211,18 @@ def worker_assignment(db, who):
     return row["id"] if owner is not None and owner["id"] == row["team"] else None
 
 
-def worker_refusal(who, env=None):
-    """The Stop reason for a worker whose own assignment is unreported, or None: the way out is a
-    report, which is also how a worker ends its assignment."""
+def worker_check(who, env=None):
+    """The id of the caller's own current assignment while it is still unreported, or None. The
+    runtime decides what that means (`rhythm.worker_refusal`); this reads the store."""
     db = open_readonly(env)
     try:
         db.execute("BEGIN")  # one read snapshot, like the lead's check
         try:
-            assignment = worker_assignment(db, who)
+            return worker_assignment(db, who)
         finally:
             db.rollback()
     finally:
         db.close()
-    return WORKER_REASON % assignment if assignment else None
 
 
 # --- Stop-guard block budget (the only file hooks write; never the dispatch store) ---------------------

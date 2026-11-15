@@ -1661,6 +1661,20 @@ class StopGuardTests(HookStoreCase):
         self.assertIsNone(worker.run(STOP, self.STOP)[0])  # reporting blocked is the way out
         self.assertEqual(self.budget(), 3)  # and the work period starts over
 
+    def test_S5_a_workers_parked_wait_does_not_exempt_its_own_assignment(self):
+        """pi-lead-rhythm/S5: parking a wait is the lead's way out; a worker's own unreported
+        assignment still keeps its turn open, and only a report ends it."""
+        (self.root / "wp").mkdir()
+        worker = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="wt1"), self.root / "wp")
+        self.addCleanup(worker.close)
+        ident = self.store.register(self.team_id, "w-park")
+        self.store.bind(ident["assignment_id"], "wt1", "scope")
+        payload = dict(self.STOP, background_tasks=[self.MCP_WAIT])
+        self.assertEqual(
+            worker.run(STOP, payload)[0],
+            {"decision": "block", "reason": self.WORKER_REASON % ident["assignment_id"]},
+        )
+
     def test_S1_the_claude_codex_and_pi_stops_refuse_one_state_with_one_reason(self):
         """pi-lead-rhythm/S1: one predicate, three dialects, one reason."""
         ident = self.unseen()
