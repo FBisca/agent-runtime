@@ -28,6 +28,7 @@ const STOP_PAYLOAD = { hook_event_name: "Stop", stop_hook_active: false };
 const NUDGE_TYPE = "agent-runtime-stop"; // the guard's reason, as a custom message
 const WAKE_TYPE = "agent-runtime-wake"; // one driver wake, as a custom message
 const PANE_PREFIX = "orchestrate-"; // the driver's pane, named after the plan it runs
+const PANE_NAME_LIMIT = 32; // hc names allow a-z 0-9 - _ in 1-32 characters
 
 /** The hook entry the runtime ships: an explicit override, this checkout's own, or the installed one. */
 export function hookPath(env = process.env) {
@@ -63,7 +64,7 @@ export function stopDecision(options = {}) {
 }
 
 /** A Pi turn-end proposal from the hook's answer: the reason stays the hook's, word for word. */
-export function turnProposal(answer) {
+export function turnProposal(event, answer) {
   const proposal = toTurnEnd(answer);
   if (!proposal) return undefined;
   // Pi's session entry needs an owner and a display flag; the custom message itself is the reason.
@@ -72,7 +73,10 @@ export function turnProposal(answer) {
     customType: NUDGE_TYPE,
     display: false,
   }));
-  return { continue: proposal.continue, entries };
+  // Returning `entries` replaces the field, so a draft another turn_end handler proposed would be
+  // dropped; this one appends after those drafts instead of taking their place.
+  const earlier = event && Array.isArray(event.entries) ? event.entries : [];
+  return { continue: proposal.continue, entries: [...earlier, ...entries] };
 }
 
 /** Where this extension remembers which wake lines it has pushed: one cursor per session and run. */
@@ -108,8 +112,9 @@ export function sessionId(env = process.env) {
 /**
  * Whether this session may take the wakes in `wakes.jsonl` (its run is `slug`). Two ways, and no
  * more: the run's driver pane names this terminal as its lead — the driver runs in an hc terminal
- * named `orchestrate-<slug>` whose parent is the terminal that launched it, and a run started inside
- * the lead's own terminal is that terminal — or the file was named explicitly by `AGENT_RUNTIME_WAKES`
+ * whose name is built from the plan's slug, `('orchestrate-' + slug).slice(0, 32).replace(/-+$/, '')`,
+ * and whose parent is the terminal that launched it, or whose address is that terminal when the run
+ * started inside the lead's own terminal — or the file was named explicitly by `AGENT_RUNTIME_WAKES`
  * and this terminal is itself a lead (it has no parent), because an explicitly named file has no run
  * pane to ask. A Pi worker, another session on the same machine, can show neither: it neither
  * receives the lead's wakes nor spends its cursor, so the wake stays for the lead and `await` and the
@@ -117,17 +122,19 @@ export function sessionId(env = process.env) {
  */
 export function ownsRun(slug, rows, terminal, explicit = false) {
   if (!terminal) return explicit;
+  const pane = paneName(slug);
   const named = rows.some(
-    (row) =>
-      row.name.startsWith(PANE_PREFIX) &&
-      row.name.length > PANE_PREFIX.length &&
-      String(slug).startsWith(row.name.slice(PANE_PREFIX.length)) &&
-      (row.parent === terminal || row.address === terminal),
+    (row) => row.name === pane && (row.parent === terminal || row.address === terminal),
   );
   if (named) return true;
   if (!explicit) return false;
   const mine = rows.find((row) => row.address === terminal);
   return Boolean(mine) && !mine.parent;
+}
+
+/** The driver's own name for a plan's pane: hc allows a-z 0-9 - _ in 1-32 characters. */
+export function paneName(slug) {
+  return (PANE_PREFIX + slug).slice(0, PANE_NAME_LIMIT).replace(/-+$/, "");
 }
 
 /**
@@ -188,7 +195,7 @@ export function install(pi, options = {}) {
   pi.on("turn_end", async (event) => {
     // An errored or aborted response is a hard exit; only a completed turn can be kept open.
     if (event && event.outcome && event.outcome !== "completed") return undefined;
-    return turnProposal(stopDecision({ env }));
+    return turnProposal(event, stopDecision({ env }));
   });
 
   pi.on("tool_call", async (event) => toToolCall(event) || undefined);

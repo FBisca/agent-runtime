@@ -28,11 +28,18 @@ WORKER_REASON = (
     "agent-runtime: assignment a1 is still open — end this turn with `report complete`, or "
     "`report blocked` if you cannot finish"
 )
-TURN_END = (
-    "for (const fn of handlers.turn_end || []) {"
-    '  result = (await fn({outcome: "completed", toolResults: []}, {})) ?? null;'
-    "}"
-)
+
+
+def turn_end(entries=()):
+    """A completed turn whose earlier handlers already proposed these drafts."""
+    return (
+        "for (const fn of handlers.turn_end || []) {"
+        '  result = (await fn({outcome: "completed", toolResults: [], entries: %s}, {})) ?? null;'
+        "}" % json.dumps(list(entries))
+    )
+
+
+TURN_END = turn_end()
 SESSION_START = (
     "for (const fn of handlers.session_start || []) { await fn({}, {}); }"
     "for (const fn of handlers.session_shutdown || []) { await fn({}, {}); }"
@@ -159,6 +166,16 @@ class StopDecisionTests(ExtensionCase):
         self.assertIsNone(answer["result"])
         self.assertEqual(answer["sent"], [])
 
+    def test_S3_a_draft_another_turn_end_handler_proposed_survives_the_block(self):
+        """Returning `entries` replaces the field, so the guard appends after the other handlers."""
+        self.with_hook({"block": True, "reason": REASON})
+        earlier = {"type": "custom", "customType": "someone-else", "data": {"note": "kept"}}
+        answer = session(turn_end([earlier]), self.env)
+        entries = answer["result"]["entries"]
+        self.assertEqual(entries[0], earlier, "another handler's draft is not dropped")
+        self.assertEqual(entries[1]["content"], REASON)
+        self.assertEqual(len(entries), 2)
+
     def test_S3_without_an_override_the_entry_is_this_checkouts_own(self):
         self.env.pop("AGENT_RUNTIME_HOOK", None)
         resolved = session("result = mod.hookPath({});", self.env)
@@ -194,22 +211,31 @@ class WakePushTests(ExtensionCase):
     """S7: an unseen wake is pushed with its text, in order, into the session that leads the run."""
 
     LEAD = "lead-pane"
+    WORKER = "worker-pane"
+    PANE = "pane"
 
     def setUp(self):
         super().setUp()
         self.wakes = self.state / "orchestrate" / "repo" / "plan" / "wakes.jsonl"
-        # The driver runs in an hc pane named after its plan, and its parent is the lead's terminal;
-        # `hc ls` lists that lead terminal too, with no parent of its own.
-        self.terminals([{"name": "orchestrate-plan", "address": "pane", "parent": self.LEAD}])
+        self.terminals()
         self.env["HC_TERMINAL_ID"] = self.LEAD
 
-    def terminals(self, rows):
-        """A stand-in for `hc ls --all --json`, which lists every terminal, this session's included."""
+    def terminals(self, rows=None):
+        """A stand-in for `hc ls --all --json`, which lists every terminal, the polling one included.
+
+        The machine this test runs on: the lead's own terminal (no parent), the driver's pane
+        `orchestrate-plan` under it, and a Pi worker's terminal under the lead as well.
+        """
+        if rows is None:
+            rows = [
+                {"name": "pi-lead", "address": self.LEAD, "parent": None},
+                {"name": "orchestrate-plan", "address": self.PANE, "parent": self.LEAD},
+                {"name": "pi-worker", "address": self.WORKER, "parent": self.LEAD},
+            ]
         binary = self.root / "bin" / "hc"
         binary.parent.mkdir(parents=True, exist_ok=True)
-        own = {"name": "pi-lead", "address": self.LEAD, "parent": None}
         binary.write_text(
-            "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps({"terminals": [own] + rows}),
+            "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps({"terminals": rows}),
             encoding="utf-8",
         )
         binary.chmod(0o755)
@@ -273,14 +299,22 @@ class WakePushTests(ExtensionCase):
 
     def test_S7_a_worker_session_pushes_nothing_and_does_not_spend_the_leads_wake(self):
         self.append(self.wake("t3 needs attention"))
-        # A Pi worker is another session on the same machine and the same state file.
-        worker = self.poll("worker-pane")
+        # A Pi worker is another session on the same machine, with its own terminal and one state file.
+        worker = self.poll(self.WORKER)
         self.assertEqual(worker["result"], [])
         self.assertEqual(worker["sent"], [])
-        self.assertNotIn("worker-pane", self.cursors(), "a worker does not spend the lead's cursor")
+        self.assertNotIn(self.WORKER, self.cursors(), "a worker does not spend the lead's cursor")
         lead = self.poll(self.LEAD)
         self.assertEqual(lead["result"], ["t3 needs attention"])
-        self.assertEqual(self.poll("worker-pane")["result"], [])
+        self.assertEqual(self.poll(self.WORKER)["result"], [])
+
+    def test_S7_a_pane_whose_address_is_this_terminal_of_its_own_is_this_runs(self):
+        # A driver started inside the lead's own terminal is that terminal: its address is the claim.
+        self.append(self.wake("t2 needs attention"))
+        self.terminals(
+            [{"name": "orchestrate-plan", "address": self.LEAD, "parent": "somewhere-else"}]
+        )
+        self.assertEqual(self.poll()["result"], ["t2 needs attention"])
 
     def test_S7_a_session_does_not_push_another_runs_wake(self):
         self.append(self.wake("t3 needs attention"))
@@ -289,19 +323,35 @@ class WakePushTests(ExtensionCase):
         other.write_text(self.wake("someone else's plan") + "\n", encoding="utf-8")
         self.terminals(
             [
-                {"name": "orchestrate-plan", "address": "pane", "parent": self.LEAD},
+                {"name": "pi-lead", "address": self.LEAD, "parent": None},
+                {"name": "orchestrate-plan", "address": self.PANE, "parent": self.LEAD},
                 {"name": "orchestrate-other-plan", "address": "pane2", "parent": "another"},
             ]
         )
         answer = self.poll()
         self.assertEqual(answer["result"], ["t3 needs attention"])
 
+    def test_S7_a_sibling_run_whose_pane_shares_a_prefix_stays_with_its_own_lead(self):
+        # `plan` and `plan-long` are two runs: a pane name is the whole name, never a prefix of it.
+        self.append(self.wake("t1 asked for a decision"))
+        sibling = self.state / "orchestrate" / "repo" / "plan-long" / "wakes.jsonl"
+        sibling.parent.mkdir(parents=True, exist_ok=True)
+        sibling.write_text(self.wake("the sibling plan") + "\n", encoding="utf-8")
+        self.terminals(
+            [
+                {"name": "pi-lead", "address": self.LEAD, "parent": None},
+                {"name": "orchestrate-plan", "address": self.PANE, "parent": self.LEAD},
+                {"name": "orchestrate-plan-long", "address": "pane2", "parent": "another"},
+            ]
+        )
+        self.assertEqual(self.poll()["result"], ["t1 asked for a decision"])
+
     def test_S7_an_explicitly_named_wake_file_still_belongs_to_a_lead(self):
         # Naming a file is not a claim to it: a worker inherits the lead's environment and must not
-        # take the wakes, while the lead session that named it still receives them.
+        # take the wakes — its own terminal has a parent — while the lead that named it receives them.
         self.append(self.wake("t2 reported complete"))
         self.env["AGENT_RUNTIME_WAKES"] = str(self.wakes)
-        worker = self.poll("worker-pane")
+        worker = self.poll(self.WORKER)
         self.assertEqual(worker["result"], [])
         self.assertEqual(self.poll(self.LEAD)["result"], ["t2 reported complete"])
 
