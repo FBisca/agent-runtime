@@ -10,14 +10,19 @@ that target. It proves that nothing in the change confines the target, never tha
 the root: the value a computed target holds is not in a diff (SG-D5). So:
 
 - a literal target that stays inside the root needs no confinement, and one that climbs out of it fires;
-- a computed target is confined when its function carries a containment test on it - the target the test names
-  or the one its comparison is computed over (`<target>.is_relative_to(...)`,
-  `<target>.resolve().is_relative_to(...)`, `<target>.relative_to(...)`,
-  `<target>.resolve().parent == ...`) - or when it is handed to a guard the same change adds whose body
-  confines that same target; any other computed target fires;
-- confinement is per target, never per function: one test confines the target it names and nothing else, and
-  a guard confines only the target it is handed. A second delete in the same function is its own target and
-  is answered on its own, however many guards the function calls;
+- a computed target is confined when its function carries a containment test on it - the side of the comparison
+  the test is made on (`<target>.is_relative_to(...)`, `<target>.resolve().is_relative_to(...)`,
+  `<target>.relative_to(...)`, `<target>.resolve().parent == ...`, `samefile(<target>, ...)`,
+  `commonpath([<target>, ...])`). The side a test compares against is the boundary it confines the target to,
+  never a target of its own: `folder.is_relative_to(self.root)` confines `folder`, and deleting `self.root`
+  is still a delete of a target no test in the change is over. A computed target is confined too when it is
+  handed to a guard the same change adds whose body confines that parameter - bound by the call's own order, so
+  the caller may spell the argument anything - and when the guard's body confines the attribute of `self` the
+  delete names, which is the same target in both functions; any other computed target fires;
+- confinement is per target, never per function, and never by a name that does not cross a call: a guard answers
+  for the argument bound to a parameter it confines and for the attributes its body confines, never for a
+  caller's local that happens to be spelled like one of its own. A second delete in the same function is its own
+  target and is answered on its own, however many guards the function calls;
 - a computed target the change itself writes or creates in that function is its own artifact: deleting what
   the change makes is not a delete of anything outside the change, and the historical defect's own test helper
   (`429625b`) recreates the plan file it unlinks;
@@ -32,6 +37,7 @@ must read, and the file is the unit a review is opened on.
 
 import posixpath
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from agent_review.change import ADDED, Change, DiffLine, FileChange, Hunk, indent_columns
@@ -51,21 +57,23 @@ _OS_MODULE = "os"
 _QUOTED = re.compile(r"""^[rRbBuUfF]{0,2}("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$""")
 _PATH_WRAPPER = re.compile(r"^(?:pathlib\.)?Path\((.*)\)$")
 _DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
-_DEF = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>\w+)")
-# What one containment test confines, as the pair it relates: the target it names, and what it compares over.
+# What a containment test confines: the side of the comparison it is made on. The side it compares against is the
+# boundary, and it is no target of its own.
 _CONFINEMENTS = (
     re.compile(
         r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*(?:resolve\s*\(\s*\)\s*\.\s*)?"
-        r"(?:is_relative_to|relative_to)\s*\((?P<other>[^()]*)\)"
+        r"(?:is_relative_to|relative_to)\s*\("
     ),
-    re.compile(
-        r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*(?:resolve\s*\(\s*\)\s*\.\s*)?"
-        r"parent\s*==\s*(?P<other>[^:,)]+)"
-    ),
-    re.compile(r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*resolve\s*\(\s*\)\s*==\s*(?P<other>[^:,)]+)"),
-    re.compile(r"samefile\s*\((?P<target>[^,]+),\s*(?P<other>[^)]+)\)"),
-    re.compile(r"commonpath\s*\((?P<target>[^)]+)\)"),
+    re.compile(r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*(?:resolve\s*\(\s*\)\s*\.\s*)?parent\s*=="),
+    re.compile(r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*resolve\s*\(\s*\)\s*=="),
 )
+# A call whose own arguments are the targets it relates: `samefile(a, b)` is a test over both, and
+# `commonpath([a, b])` over every path it joins. Neither compares against a boundary, so both sides are confined.
+_RELATED = ("samefile(", "commonpath(")
+# A `def` line, with the parameters a caller's arguments bind to.
+_DEF = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>\w+)\s*\((?P<parameters>[^)]*)")
+# An argument a call names, so it binds its parameter by name rather than by position.
+_KEYWORD = re.compile(r"^(?P<name>[A-Za-z_]\w*)\s*=(?!=)\s*(?P<value>.+)$")
 
 
 @dataclass(frozen=True)
@@ -98,15 +106,37 @@ class DestructiveCall:
 
 
 @dataclass
+class _Guard:
+    """A function the change adds, read as a guard: the parameters it takes and the spellings its body confines."""
+
+    name: str
+    parameters: tuple[str, ...]
+    confines: set[str] = field(default_factory=set)
+
+    @property
+    def attributes(self) -> frozenset[str]:
+        """What the guard confines that means the same target in a caller: an attribute of `self`."""
+        return frozenset(spelling for spelling in self.confines if spelling.startswith("self."))
+
+
+@dataclass
+class _Added:
+    """One function the change adds: the parameters its `def` line declares, and the lines it adds as its body."""
+
+    parameters: tuple[str, ...] = ()
+    body: list[str] = field(default_factory=list)
+
+
+@dataclass
 class _Scope:
     """What a rule must know about the whole change: each guard it adds, and the targets that guard confines."""
 
-    confining: dict[str, frozenset[str]] = field(default_factory=dict)
+    guards: tuple[_Guard, ...] = ()
 
 
 def decide(change: Change) -> tuple[EscalationReason, ...]:
     """The reasons this change is escalated before the model is asked, empty when none fires."""
-    scope = _Scope(confining=_confining_helpers(change))
+    scope = _Scope(guards=_confining_helpers(change))
     reasons: list[EscalationReason] = []
     for file in change.files:
         found = _target_outside_root(file, scope)
@@ -181,22 +211,21 @@ def _confined(call: DestructiveCall, hunk: Hunk, index: int, scope: _Scope) -> b
     """Whether anything in the change confines `call`'s target to where it may reach (SG-D5).
 
     Confinement is per target: each line of the region is asked about this target's own spelling, and a guard
-    answers only for a target it is handed.
+    answers only for the argument it is handed and for the attributes its own body confines.
     """
     if call.literal is not None:
         return not _escapes(call.literal)
-    names = _names(call.target)
-    if not names:
+    held = set(_names(call.target))
+    if not held:
         return False  # a target the diff cannot name is not one a test or a guard in it can be shown to confine
-    held = set(names)
     for line in hunk.region(index):
         if _DEF.match(line.text) is not None:
             continue  # a definition is not a call, and a def line is no test on any target
-        if any(_confines(name, line) for name in held):
+        if held & _expanded(_confined_spellings((line.text,))):
             return True
         if any(_creates(name, line) for name in held):
             return True
-        if _hands_to_a_guard(line.text, held, scope):
+        if any(held & _confined_by_call(line.text, guard) for guard in scope.guards):
             return True
     return False
 
@@ -212,92 +241,126 @@ def _creates(name: str, line: DiffLine) -> bool:
     )
 
 
-def _confines(name: str, line: DiffLine) -> bool:
-    """Whether `line` confines `name`: a containment test it names, or one whose comparison is computed over it."""
-    subject = re.escape(name)
-    receiver = rf"(?<![\w.]){subject}\s*\.\s*"
-    return (
-        re.search(
-            receiver + r"(?:resolve\s*\(\s*\)\s*\.\s*)?(?:is_relative_to|relative_to)\s*\("
-            rf"|{receiver}resolve\s*\(\s*\)\s*\.\s*parent\s*=="
-            rf"|{receiver}parent\s*==\s*.*\bresolve\s*\("
-            rf"|samefile\s*\(\s*{subject}\b",
-            line.text,
-        )
-        is not None
-        or re.search(
-            rf"\.\s*(?:is_relative_to|relative_to)\s*\(\s*{subject}\s*[,)]"
-            rf"|\.\s*parent\s*==\s*{subject}\b"
-            rf"|resolve\s*\(\s*\)\s*==\s*{subject}\b"
-            rf"|samefile\s*\([^,]+,\s*{subject}\b",
-            line.text,
-        )
-        is not None
-    )
+def _confined_by_call(text: str, guard: _Guard) -> set[str]:
+    """The target spellings a call of `guard` in `text` confines: the attributes the guard confines, and each
+    argument it hands to a parameter the guard confines.
 
-
-def _hands_to_a_guard(text: str, held: set[str], scope: _Scope) -> bool:
-    """Whether `text` hands one of the delete's target spellings to a guard that confines that spelling."""
-    return any(
-        held & set(_names(argument)) & confines
-        for guard, confines in scope.confining.items()
-        for argument in _handed_arguments(text, guard)
-    )
-
-
-def _handed_arguments(text: str, guard: str) -> tuple[str, ...]:
-    """The arguments `text` hands to a call of `guard`, as written; nothing when `text` does not call it."""
-    handed: list[str] = []
-    for match in re.finditer(rf"(?<![\w]){re.escape(guard)}\s*\(", text):
-        invocation = _invocation(text, match.end() - 1)
-        if invocation is None:
-            continue
-        handed.extend(argument.strip() for argument in invocation.arguments if argument.strip())
-    return tuple(handed)
-
-
-def _confining_helpers(change: Change) -> dict[str, frozenset[str]]:
-    """Each guard the change adds, with the target spellings that guard confines.
-
-    A guard confines the target its own body tests, and it confines nothing else: a second delete in a caller
-    is answered on its own target. One hop of calls is followed - a guard handed a target it confines confines
-    that spelling in its caller too - which is what a diff shows without a data-flow analysis. A confinement
-    that reaches deeper is not read, and the rule then fires.
+    The argument binds to the parameter by the call's own order, never by the two sharing a spelling: a caller
+    may hand `self.layout.folder` where the guard's parameter is `folder`. What a guard confines by its own local
+    name crosses no call - two functions' locals are not the same target - so only arguments and attributes do.
     """
-    bodies = _added_defs(change)
-    confined: dict[str, set[str]] = {
-        name: _confined_spellings(body) for name, body in bodies.items()
-    }
-    growing = True
-    while growing:
-        growing = False
-        for name, body in bodies.items():
-            for line in body:
-                for guard, targets in confined.items():
-                    handed = set().union(
-                        *(_names(argument) for argument in _handed_arguments(line, guard))
-                    )
-                    adds = handed & targets - confined[name]
-                    if adds:
-                        confined[name] |= adds
-                        growing = True
-    return {name: frozenset(targets) for name, targets in confined.items() if targets}
-
-
-def _confined_spellings(body: tuple[str, ...]) -> set[str]:
-    """The target spellings one function's added body confines: what each containment test in it relates."""
     found: set[str] = set()
-    for line in body:
-        for pattern in _CONFINEMENTS:
-            for match in pattern.finditer(line):
-                for group in ("target", "other"):
-                    found.update(_names(match.group(group)))
+    for invocation in _calls(text, guard.name):
+        found |= guard.attributes
+        for parameter, argument in _bound(invocation.arguments, guard.parameters):
+            if parameter not in guard.confines:
+                continue
+            spelled = _spelled(argument)
+            if spelled is not None:
+                found.add(spelled)
     return found
 
 
-def _added_defs(change: Change) -> dict[str, tuple[str, ...]]:
-    """Every function the change adds, with the lines it adds as the body."""
-    bodies: dict[str, list[str]] = {}
+def _calls(text: str, guard: str) -> tuple["_Invocation", ...]:
+    """Each call `text` makes to `guard`, as the line spells it; nothing when `text` does not call it."""
+    found: list[_Invocation] = []
+    for match in re.finditer(rf"(?<![\w]){re.escape(guard)}\s*\(", text):
+        invocation = _invocation(text, match.end() - 1)
+        if invocation is not None:
+            found.append(invocation)
+    return tuple(found)
+
+
+def _bound(arguments: tuple[str, ...], parameters: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """Each parameter of a call with the argument handed to it: named when the call names it, else by position."""
+    bound: list[tuple[str, str]] = []
+    position = 0
+    for argument in arguments:
+        text = argument.strip()
+        if not text:
+            continue
+        keyword = _KEYWORD.match(text)
+        if keyword is not None:
+            bound.append((keyword.group("name"), keyword.group("value").strip()))
+            continue
+        if position < len(parameters):
+            bound.append((parameters[position], text))
+        position += 1
+    return tuple(bound)
+
+
+def _confining_helpers(change: Change) -> tuple[_Guard, ...]:
+    """Each guard the change adds, with the target spellings its body confines.
+
+    A guard confines the targets its own body tests, and it confines nothing else: a second delete in a caller is
+    answered on its own target. One hop of calls is followed - a guard that hands a target to a deeper guard
+    confines that target in its caller too - which is what a diff shows without a data-flow analysis. A
+    confinement that reaches deeper is not read, and the rule then fires.
+    """
+    bodies = _added_defs(change)
+    guards = [
+        _Guard(
+            name=name, parameters=added.parameters, confines=set(_confined_spellings(added.body))
+        )
+        for name, added in bodies.items()
+    ]
+    growing = True
+    while growing:
+        growing = False
+        for guard in guards:
+            for line in bodies[guard.name].body:
+                if _DEF.match(line) is not None:
+                    continue  # a definition is not a call to the guard it declares
+                for callee in guards:
+                    adds = _confined_by_call(line, callee) - guard.confines
+                    if adds:
+                        guard.confines |= adds
+                        growing = True
+    return tuple(guard for guard in guards if guard.confines)
+
+
+def _confined_spellings(lines: Iterable[str]) -> set[str]:
+    """The target spellings these lines are tests over: the side of each comparison the test is made on.
+
+    A relationship test confines the target it tests, never the boundary it compares against, and a call that
+    relates its own arguments confines each of them. Reading one group too many is how a delete of the root a
+    target is confined into once stayed quiet.
+    """
+    found: set[str] = set()
+    for line in lines:
+        for pattern in _CONFINEMENTS:
+            for match in pattern.finditer(line):
+                for group in pattern.groupindex:
+                    value = match.group(group)
+                    spelled = None if value is None else _spelled(value)
+                    if spelled is not None:
+                        found.add(spelled)
+        found |= _related_targets(line)
+    return found
+
+
+def _related_targets(line: str) -> set[str]:
+    """The targets a call like `samefile(a, b)` or `commonpath([a, b])` tests: each of its own arguments."""
+    found: set[str] = set()
+    for primitive in _RELATED:
+        for at in _occurrences(line, primitive):
+            invocation = _invocation(line, at + len(primitive) - 1)
+            if invocation is None:
+                continue
+            for argument in invocation.arguments:
+                inside = argument.strip()
+                if inside.startswith("[") and inside.endswith("]"):
+                    inside = inside[1:-1]
+                for part in inside.split(","):
+                    spelled = _spelled(part)
+                    if spelled is not None:
+                        found.add(spelled)
+    return found
+
+
+def _added_defs(change: Change) -> dict[str, _Added]:
+    """Every function the change adds, with the parameters it declares and the lines it adds as its body."""
+    bodies: dict[str, _Added] = {}
     for file in change.files:
         for hunk in file.hunks:
             for index, line in enumerate(hunk.lines):
@@ -306,8 +369,10 @@ def _added_defs(change: Change) -> dict[str, tuple[str, ...]]:
                 match = _DEF.match(line.text)
                 if match is None:
                     continue
+                added = bodies.setdefault(
+                    match.group("name"), _Added(_parameters(match.group("parameters")))
+                )
                 indent = indent_columns(line.text)
-                body: list[str] = []
                 for following in hunk.lines[index + 1 :]:
                     if following.kind != ADDED:
                         if following.text.strip():
@@ -315,24 +380,47 @@ def _added_defs(change: Change) -> dict[str, tuple[str, ...]]:
                         continue
                     if following.text.strip() and indent_columns(following.text) <= indent:
                         break
-                    body.append(following.text)
-                bodies.setdefault(match.group("name"), []).extend(body)
-    return {name: tuple(lines) for name, lines in bodies.items()}
+                    added.body.append(following.text)
+    return bodies
+
+
+def _parameters(text: str) -> tuple[str, ...]:
+    """The parameter names a `def` line declares after `self`: what a caller's arguments bind to, by position."""
+    names: list[str] = []
+    for part in text.split(","):
+        name = part.split(":")[0].split("=")[0].strip().lstrip("*")
+        if name and name not in ("self", "cls"):
+            names.append(name)
+    return tuple(names)
 
 
 def _names(target: str) -> tuple[str, ...]:
     """The spellings a containment test may use for this target, or none when it is not a name."""
+    text = _spelled(target)
+    if text is None:
+        return ()
+    if text.startswith("self."):
+        return (text, text[len("self.") :])
+    return (text,)
+
+
+def _spelled(target: str) -> str | None:
+    """The name `target` is written as, without `str(...)` or a trailing `.resolve()`; nothing when it is no name."""
     text = target.strip()
     if text.endswith(".resolve()"):
         text = text[: -len(".resolve()")]
     wrapped = re.match(r"^str\(\s*(.*?)\s*\)$", text)
     if wrapped:
         text = wrapped.group(1)
-    if not _DOTTED.match(text):
-        return ()
-    if text.startswith("self."):
-        return (text, text[len("self.") :])
-    return (text,)
+    return text if _DOTTED.match(text) else None
+
+
+def _expanded(spellings: Iterable[str]) -> set[str]:
+    """Each spelling with every way a delete of that target may be written: `self.folder` is also `folder`."""
+    found: set[str] = set()
+    for spelling in spellings:
+        found.update(_names(spelling))
+    return found
 
 
 def _literal(target: str) -> str | None:

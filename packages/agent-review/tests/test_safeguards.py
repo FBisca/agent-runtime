@@ -65,6 +65,96 @@ GUARD_ADDED_BESIDE_THE_CALL = textwrap.dedent(
     """
 )
 
+# The caller hands the attribute it deletes to a guard whose parameter is named `folder`: the argument binds to
+# the parameter by position, not by the two spellings agreeing.
+GUARD_HANDED_AN_ATTRIBUTE = textwrap.dedent(
+    """\
+        def directly_under(self, folder, plans_dir):
+            return folder.resolve().parent == Path(plans_dir).resolve()
+
+        def guard_plan_folder(self, folder):
+            if not self.directly_under(folder, self.plans_dir):
+                raise ValueError("a plan folder outside plans.dir is not deleted")
+
+        def discard_plan(self, plan):
+            self.guard_plan_folder(self.layout.folder)
+            shutil.rmtree(self.layout.folder)
+    """
+)
+
+# The guard's parameter is named `target` and the caller hands it a local: the name is the guard's own.
+GUARD_WITH_A_LOCAL_HANDED = textwrap.dedent(
+    """\
+        def directly_under(self, folder, plans_dir):
+            return folder.resolve().parent == Path(plans_dir).resolve()
+
+        def guard_plan_folder(self, target):
+            if not self.directly_under(target, self.plans_dir):
+                raise ValueError("a plan folder outside plans.dir is not deleted")
+
+        def discard_plan(self, plan):
+            folder = self.layout.folder
+            self.guard_plan_folder(folder)
+            shutil.rmtree(folder)
+    """
+)
+
+# A guard whose body confines with `commonpath`: the call tests every path it joins, its own arguments.
+GUARD_THAT_CONFINES_WITH_COMMONPATH = textwrap.dedent(
+    """\
+        def join_under(self, folder, root):
+            return os.path.commonpath([str(folder), str(root)]) == str(root)
+
+        def guard_plan_folder(self, folder):
+            if not self.join_under(folder, self.root):
+                raise ValueError("a plan folder outside plans.dir is not deleted")
+
+        def discard_plan(self, plan):
+            self.guard_plan_folder(self.layout.folder)
+            shutil.rmtree(self.layout.folder)
+    """
+)
+
+# A parameterless guard confines the attribute its own body tests, so a caller deleting that same attribute
+# deletes a target the change confines - `self.layout.folder` is the same target in both functions.
+GUARD_THAT_TESTS_AN_ATTRIBUTE = textwrap.dedent(
+    """\
+        def guard_plan_folder(self):
+            if not self.layout.folder.is_relative_to(self.root):
+                raise ValueError("a plan folder outside plans.dir is not deleted")
+
+        def discard_plan(self, plan):
+            self.guard_plan_folder()
+            shutil.rmtree(self.layout.folder)
+    """
+)
+
+# The same guard, and the caller deletes a local of its own: a guard's confinement of an attribute is not a
+# confinement of whatever local a caller happens to name the same way.
+GUARD_THAT_TESTS_AN_ATTRIBUTE_BESIDE_A_LOCAL = textwrap.dedent(
+    """\
+        def guard_plan_folder(self):
+            if not self.layout.folder.is_relative_to(self.root):
+                raise ValueError("a plan folder outside plans.dir is not deleted")
+
+        def discard_plan(self, plan):
+            self.guard_plan_folder()
+            folder = self.plan_path.parent
+            shutil.rmtree(folder)
+    """
+)
+
+# The root a target is confined into is the boundary the test compares against, not a target it confines.
+DELETE_OF_THE_ROOT = textwrap.dedent(
+    """\
+        def discard_plan(self, plan):
+            folder = self.plan_path.parent
+            if not folder.is_relative_to(self.root):
+                raise ValueError("refusing to delete %s outside %s" % (folder, self.root))
+            shutil.rmtree(self.root)
+    """
+)
+
 # The guard the change adds confines `self.folder`, and the delete is of a target nothing confines: the guard
 # is called with nothing, so it confines no target the delete reads.
 GUARD_THAT_CONFINES_ANOTHER_TARGET = textwrap.dedent(
@@ -261,6 +351,61 @@ def test_S2_a_confinement_factored_into_a_guard_the_change_adds_is_not_escalated
     assert reasons_for(GUARD_ADDED_BESIDE_THE_CALL) == [], (
         "the target is handed to a guard the change adds, which confines it"
     )
+
+
+def test_S2_a_target_handed_to_a_guard_binds_to_its_parameter_by_position():
+    assert reasons_for(GUARD_HANDED_AN_ATTRIBUTE) == [], (
+        "the caller hands `self.layout.folder` where the guard's parameter is named `folder`: the argument binds "
+        "to the parameter the guard confines, whatever the two are spelled"
+    )
+
+
+def test_S2_a_local_handed_to_a_guard_binds_to_its_parameter_by_position():
+    assert reasons_for(GUARD_WITH_A_LOCAL_HANDED) == [], (
+        "the guard's parameter is named `target` and the caller hands it `folder`: the binding is positional"
+    )
+
+
+def test_S2_a_guard_that_confines_with_commonpath_confines_the_target_it_is_handed():
+    assert reasons_for(GUARD_THAT_CONFINES_WITH_COMMONPATH) == [], (
+        "`commonpath([folder, root])` tests each path it joins, so the guard confines the target handed to it"
+    )
+
+
+def test_S2_a_guard_that_tests_an_attribute_confines_that_attribute_in_its_caller():
+    assert reasons_for(GUARD_THAT_TESTS_AN_ATTRIBUTE) == [], (
+        "`self.layout.folder` is the same target in the guard and in the caller that calls it"
+    )
+
+
+def test_a_guards_confinement_of_an_attribute_does_not_answer_for_a_callers_local():
+    reasons = reasons_for(GUARD_THAT_TESTS_AN_ATTRIBUTE_BESIDE_A_LOCAL)
+    assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
+        "the guard confines `self.layout.folder`; the caller's local `folder` is another target, and two "
+        "functions' locals are not the same target"
+    )
+
+
+def test_S1_a_delete_of_the_root_a_target_is_confined_into_is_not_confined_by_it():
+    reasons = reasons_for(DELETE_OF_THE_ROOT)
+    assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
+        "`self.root` is the boundary the test compares against, not a target the test confines"
+    )
+    assert "self.root" in reasons[0][2], "the reason names the delete of the root"
+
+
+def test_a_commonpath_test_in_an_added_function_is_decided_rather_than_raising():
+    assert (
+        reasons_for(
+            textwrap.dedent(
+                """\
+                def join(self, a, b):
+                    return os.path.commonpath([str(a), str(b)])
+            """
+            )
+        )
+        == []
+    ), "a path join is not a delete: the rule decides the change instead of dying on it"
 
 
 def test_S2_a_containment_test_on_the_resolved_target_is_not_escalated():
