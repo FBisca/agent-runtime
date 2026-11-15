@@ -5,7 +5,7 @@ script as a subprocess over a real repository, a question bank it writes, and a 
 check needs no credential and no socket; it imports nothing from the package, so it collects cleanly before the
 phase exists and fails at base.
 
-The contract it pins (brief.md, 01b-D1..01b-D4):
+The contract it pins (docs/specs/agent-review.md R12):
 
   - a score answer is a position on the question's ladder, so any finite number from 0 up to one less than
     the declared levels is the provider's own answer and travels into the judgment unchanged
@@ -188,6 +188,13 @@ class ScoreBetweenRungsTests(ScoreLadderFixture):
             "1.22 sits on a five-level ladder (0..4) and is the provider's own answer, not a rung",
         )
 
+    def test_S1_the_first_rung_is_inside_the_ladder(self):
+        self.write_config()
+        self.write_fixture(answer(score=0))
+        result = self.screen()
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        self.assertEqual(self.judged()[SCORE]["value"], 0, "0 is the first rung, and it is inside")
+
     def test_S1_a_score_on_a_rung_is_still_carried_as_answered(self):
         self.write_config()
         self.write_fixture(answer(score=3.0))
@@ -202,7 +209,9 @@ class ScoreBetweenRungsTests(ScoreLadderFixture):
         self.assertNotEqual(result.returncode, 0)
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
-        self.assertIn(SCORE, report["failure"]["reason"])
+        reason = report["failure"]["reason"]
+        self.assertIn(SCORE, reason)
+        self.assertIn("0 to 4", reason, "a refusal names the range the ladder allows")
 
     def test_S1_a_score_below_the_first_rung_is_refused_naming_the_question(self):
         self.write_config()
@@ -211,7 +220,9 @@ class ScoreBetweenRungsTests(ScoreLadderFixture):
         self.assertNotEqual(result.returncode, 0)
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
-        self.assertIn(SCORE, report["failure"]["reason"])
+        reason = report["failure"]["reason"]
+        self.assertIn(SCORE, reason)
+        self.assertIn("0 to 4", reason, "a refusal names the range the ladder allows")
 
 
 if __name__ == "__main__":
