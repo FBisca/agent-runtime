@@ -34,6 +34,7 @@ from pydantic import (
     model_validator,
 )
 
+from . import approval_recovery as recovery
 from . import config, runner, runtime_client
 from . import ledger as ledgers
 
@@ -1234,39 +1235,6 @@ def digest(repo_identity, base, plan_bytes, files):
     return h.hexdigest()
 
 
-def snapshot_path(approval, state_dir):
-    # Filenames are not digest inputs: renaming a contract must reuse its snapshot.
-    return Path(state_dir).expanduser() / "approvals" / approval.digest / "plan.yaml"
-
-
-def verify_snapshot(path, model, repo, state_dir):
-    way_out = f"run agent-orchestrator plan approve {path}"
-    snap = snapshot_path(model.approval, state_dir)
-    if not snap.is_file():
-        raise PlanError(f"approval: snapshot missing at {snap} — {way_out}")
-    snap_data, errors = read_yaml(snap)
-    if errors or not isinstance(snap_data, dict):
-        raise PlanError(f"approval: invalid snapshot {snap} — {way_out}")
-    old_plan = snap.read_bytes()
-    old_files = snapshot_files(snap.parent, path)
-    live_data, _ = read_yaml(path)
-    live_files = approved_files(path, live_data)
-    changed = []
-    if canonical(live_data) != old_plan:
-        changed.append(str(path))
-    changed += [
-        str(file_path(path, n))
-        for n in sorted(old_files.keys() | live_files.keys())
-        if old_files.get(n) != live_files.get(n)
-    ]
-    if digest(identity(repo), model.approval.base, old_plan, old_files) != model.approval.digest:
-        changed.append(f"repo identity/base or snapshot {snap.parent}")
-    if changed:
-        raise PlanError("approval: changed " + ", ".join(changed) + " — " + way_out)
-    # The driver consumes the snapshot, after checking the authored file against it.
-    return Plan.model_validate(snap_data).model_copy(update={"approval": model.approval})
-
-
 def load(
     path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, verify=True, lint=None
 ):
@@ -1300,7 +1268,7 @@ def load(
     if lint and (found := lint_problems(model, repo, path)):
         raise PlanError("; ".join(found))
     if model.approval and verify:
-        return verify_snapshot(path, model, repo, state_dir)
+        return recovery.verify_snapshot(path, model, repo, state_dir)
     if require_approval and model.approval is None:
         raise PlanError(
             f"approval: {path} is unapproved — run agent-orchestrator plan approve {path}"
@@ -1640,6 +1608,9 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=False)
     if model.approval is None:
+        # A hand edit that dropped the `approval` span leaves a plan the ledger still holds the approval of.
+        model = recovery.ledger_approved(model, repo, state_dir)
+    if model is None:
         raise PlanError(
             f"approval: {path} is unapproved, so there is nothing to amend — run agent-orchestrator plan approve {path}"
         )
@@ -1692,7 +1663,7 @@ def frozen_problems(old, new, done):
 def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     previous = model.approval
     way_out = f"run agent-orchestrator plan approve {path}"
-    snap = snapshot_path(previous, state_dir)
+    snap = recovery.snapshot_path(previous, state_dir)
     if not snap.is_file():
         raise PlanError(f"approval: snapshot of the approved plan missing at {snap} — {way_out}")
     old, errors = read_yaml(snap)
@@ -1717,7 +1688,7 @@ def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     files = approved_files(path, data)
     base_sha = git(repo, "rev-parse", "--verify", previous.base + "^{commit}")
     sha = digest(identity(repo), base_sha, plan_bytes, files)
-    if sha == previous.digest:
+    if sha == previous.digest and "approval" in (data or {}):
         raise PlanError(
             f"amend: {path} holds the approved contract, nothing to amend — edit the plan, then run plan amend again"
         )

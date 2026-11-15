@@ -396,6 +396,78 @@ class AmendTests(DrainFixture, unittest.TestCase):
         return yaml.safe_dump(current, sort_keys=False)
 
 
+class RecoveredSpan(DrainFixture, unittest.TestCase):
+    """A plan that lost its `approval` span but is the plan the drive holds: the drive recovers the approval it holds,
+    from its own block or from the ledger, and keeps running instead of draining (parked-drive-release/S4)."""
+
+    rows = ("T1",)
+
+    def without_approval(self):
+        """The plan as a hand edit that dropped the `approval` span leaves it: the contract untouched."""
+        data = yaml.safe_load(self.approved)
+        data.pop("approval", None)
+        return yaml.safe_dump(data, sort_keys=False)
+
+    def test_S4_a_plan_that_lost_its_approval_span_is_recovered_and_the_drive_keeps_running(self):
+        approval = yaml.safe_load(self.approved)["approval"]
+        self.waits(
+            [
+                wait_result(self.working("demo-t1"), write=self.writes(self.without_approval())),
+                self.timeout("demo-t1"),
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.timeout("demo-t1"),
+            ]
+        )
+        self.run_driver("--max-workers", "1")
+        self.assertEqual(
+            self.run_events("drain"),
+            [],
+            "the drive drained on a plan that lost only its approval span",
+        )
+        self.assertEqual(self.wake_lines("drain"), [])
+        (recovered,) = self.run_events("approval-recovered")
+        self.assertEqual(
+            (recovered["base"], recovered["digest"]), (approval["base"], approval["digest"])
+        )
+        self.assertEqual(
+            self.task("t1")["status"],
+            "COMPLETE",
+            "the plan the drive read was not the approved one",
+        )
+        self.assertEqual(
+            self.ledger()["approval"],
+            {"base": approval["base"], "digest": approval["digest"]},
+        )
+
+    def test_S4_a_restarted_drive_recovers_the_approval_its_ledger_holds(self):
+        approval = yaml.safe_load(self.approved)["approval"]
+        # the drive held the plan, so its ledger keeps the approval the file is about to lose
+        self.waits([self.worker_done(tests=True), self.reviewer_done(), self.timeout("demo-t1")])
+        self.run_driver("--max-workers", "1")
+        self.assertEqual(self.task("t1")["status"], "COMPLETE")
+        self.assertEqual(
+            self.ledger()["approval"],
+            {"base": approval["base"], "digest": approval["digest"]},
+            "the ledger does not hold the approval the drive held",
+        )
+        self.plan.write_text(self.without_approval(), encoding="utf-8")
+        # a new drive reads the same plan: the ledger restores the approval and the run finishes, it does not refuse
+        self.waits([wait_result()])
+        self.run_driver("--max-workers", "1")
+        self.assertEqual(self.run_events("drain"), [])
+        self.assertEqual(self.run_events("crash"), [])
+        self.assertEqual(
+            [e["kind"] for e in self.run_events("finish")],
+            ["finish", "finish"],
+            "the run that started on the span-less plan never finished",
+        )
+        self.assertTrue(
+            self.run_events("approval-recovered"),
+            "the restarted drive never said it restored the span",
+        )
+
+
 class ParkedDrive(DrainFixture, unittest.TestCase):
     """A drive that cannot use its plan: it records the park, shows it, wakes the Lead with a way out that works, and
     asks again while nothing is in flight without giving up the plan (parked-drive-release/S2, S3)."""
