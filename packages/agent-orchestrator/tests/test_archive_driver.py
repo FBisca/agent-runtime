@@ -2,12 +2,13 @@
 
 import json
 import re
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from fixtures import load_script
+from fixtures import load_script, wait_result
 from test_acceptance import SnapshotFixture
 from test_archive import ARCHIVE, ArchiveFixture
 from test_complete import NODE, PersonFixture
@@ -65,6 +66,30 @@ class SpecSectionUnit(unittest.TestCase):
         self.assertEqual(driver.archive_missing(), ["S3"])
 
 
+def failing_once():
+    """The archive's outcome evidence fails once, so the archive asks the Lead with `retry` and `skip`."""
+    real, calls = load_script().Driver.archive_evidence, []
+
+    def evidence(driver, task_id, packet):
+        calls.append(task_id)
+        if len(calls) == 1:
+            return "FAIL", [
+                {
+                    "id": "E1",
+                    "kind": "blocking",
+                    "source": "verify",
+                    "check": "evidence S1",
+                    "command": "x",
+                    "exit": 1,
+                    "excerpt": "S1 boom",
+                    "log_path": "/nowhere",
+                }
+            ]
+        return real(driver, task_id, packet)
+
+    return mock.patch.object(load_script().Driver, "archive_evidence", evidence)
+
+
 class DriverArchive(ArchiveFixture, unittest.TestCase):
     def test_S1_the_archive_is_committed_pushed_and_opened_by_the_driver_with_no_trailer(self):
         self.waits(self.ticket_merged())
@@ -87,31 +112,9 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
         self.assertEqual((task, kind), ("archive", "archive"))
         self.assertRegex(reason, r"S1.*`retry`.*`skip`")
 
-    def failing_once(self):
-        real, calls = load_script().Driver.archive_evidence, []
-
-        def evidence(driver, task_id, packet):
-            calls.append(task_id)
-            if len(calls) == 1:
-                return "FAIL", [
-                    {
-                        "id": "E1",
-                        "kind": "blocking",
-                        "source": "verify",
-                        "check": "evidence S1",
-                        "command": "x",
-                        "exit": 1,
-                        "excerpt": "S1 boom",
-                        "log_path": "/nowhere",
-                    }
-                ]
-            return real(driver, task_id, packet)
-
-        return mock.patch.object(load_script().Driver, "archive_evidence", evidence)
-
     def test_S5_a_failing_outcome_asks_the_lead_with_retry_and_skip_and_spawns_no_worker(self):
         self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
-        with self.failing_once():
+        with failing_once():
             self.run_driver()
         self.assertNotIn(ARCHIVE, self.spawned())
         request = self.request("archive")
@@ -122,12 +125,163 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
 
     def test_S5_retry_rebuilds_the_branch_from_the_base_and_the_plan_is_archived(self):
         self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "retry")])
-        with self.failing_once():
+        with failing_once():
             self.run_driver()
         self.assertEqual(len(self.gh_calls("pr", "create")), 1)  # the open pull request is reused
         self.assertEqual([h["state"] for h in self.ledger()["plan"]["history"]][-1], "ARCHIVED")
         self.assertEqual(
             self.git(self.origin, "rev-list", "--count", "main..feat/demo-archive"), "1"
+        )
+
+
+class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
+    """The archive waits for an accepted plan: a retry over a plan that is not accepted is refused."""
+
+    def seed_request(self, state):
+        """A ledger whose plan is in `state`, and an open request for the archive unit, as the driver leaves them."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        (self.state_dir / "demo.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "kind": "agent-orchestrator/ledger",
+                    "tasks": {},
+                    "plan": {"state": state, "history": [{"state": state, "at": "now"}]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        path = self.run_dir / "archive" / "request.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                load_script().contracts.make_request(
+                    "archive",
+                    "archive",
+                    "outcome",
+                    "the archive failed its outcome gate",
+                    [str(self.run_dir / "archive" / "task.md")],
+                    menu=("retry", "skip"),
+                )
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_S6_the_lead_s_retry_for_the_archive_is_refused_while_the_plan_is_not_accepted(self):
+        request = self.seed_request("REJECTED")
+        result = self.cli(
+            "decide",
+            str(self.plan),
+            "archive",
+            "retry",
+            "--reason",
+            "build it again",
+            "--state-dir",
+            str(self.state_dir),
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("REJECTED", result.stderr)
+        self.assertIn("run` again", result.stderr)  # the way out
+        self.assertFalse((self.run_dir / "archive" / "decision.json").exists())
+        self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
+
+    def test_S6_a_retry_for_the_archive_over_an_accepted_plan_is_decided(self):
+        request = self.seed_request("ACCEPTED")
+        result = self.cli(
+            "decide",
+            str(self.plan),
+            "archive",
+            "retry",
+            "--reason",
+            "build it again",
+            "--state-dir",
+            str(self.state_dir),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        decision = json.loads(
+            (self.run_dir / "archive" / "decision.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(decision["action"], "retry")
+        self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "resolved")
+
+    def test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted(self):
+        """A retry the Lead's own CLI would have refused, written as an older CLI wrote it: the driver asks again."""
+        self.waits(
+            self.ticket_merged() + [{}, self.reject_the_plan(), self.write_the_retry(), self.skip()]
+        )
+        with failing_once():
+            self.run_driver()
+        states = [row["state"] for row in self.ledger()["plan"]["history"]]
+        self.assertNotEqual(states[-1], "ARCHIVED", states)
+        self.assertFalse(
+            (self.run_dir / "archive" / "report.2.json").exists(),
+            "the driver built the archive again while the plan was rejected",
+        )
+        self.assertEqual(len(self.gh_calls("pr", "create")), 1, self.gh_calls("pr", "create"))
+        asked = json.loads(
+            (self.run_dir / "archive" / "request.2.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("REJECTED", asked["reason"])
+        self.assertRegex(asked["reason"], r"(?i)\bverify\b|\baccept\b")
+        self.assertIn("archive", self.wake_lines("decision")[-1])
+
+    def reject_the_plan(self):
+        """A wait step in which the plan's state becomes REJECTED, as a rejected verification leaves it."""
+        return wait_result(
+            run=[
+                [
+                    sys.executable,
+                    "-c",
+                    "import json,sys;p=sys.argv[1];d=json.load(open(p));"
+                    "d['plan']={'state':'REJECTED','history':[{'state':'REJECTED','at':'now'}]};"
+                    "json.dump(d,open(p,'w'))",
+                    str(self.state_dir / "demo.json"),
+                ]
+            ]
+        )
+
+    def write_the_retry(self):
+        """A wait step in which a `retry` decision is written and the request resolved, as `decide` does."""
+        decision = self.run_dir / "archive" / "decision.json"
+        step = wait_result(
+            write=[
+                [str(decision), json.dumps({"contract": 3, "action": "retry", "reason": "again"})]
+            ]
+        )
+        step["run"] = [
+            [
+                sys.executable,
+                "-c",
+                "import json,sys;p=sys.argv[1];r=json.load(open(p));"
+                "r.update(status='resolved',decision=sys.argv[2]);json.dump(r,open(p,'w'))",
+                str(self.run_dir / "archive" / "request.json"),
+                str(decision),
+            ]
+        ]
+        return step
+
+    def skip(self):
+        """A wait step in which the Lead answers the newest request with `skip`, so the run ends."""
+        return wait_result(
+            run=[
+                [
+                    sys.executable,
+                    "-c",
+                    "import glob,json,os,re,sys;directory=os.path.dirname(sys.argv[1]);"
+                    "found=glob.glob(os.path.join(directory,'request*.json'));"
+                    "index=lambda p:int(re.search(r'request\\.(\\d+)\\.json$',p).group(1))"
+                    "if re.search(r'request\\.(\\d+)\\.json$',p) else 1;"
+                    "newest=max(found,key=index);number=index(newest);"
+                    "decision=os.path.join(directory,'decision.json' if number==1 "
+                    "else 'decision.%d.json'%number);"
+                    "json.dump({'contract':3,'action':'skip','reason':'this run ends here'},"
+                    "open(decision,'w'));"
+                    "document=json.load(open(newest));document.update(status='resolved',decision=decision);"
+                    "json.dump(document,open(newest,'w'))",
+                    str(self.run_dir / "archive" / "request.json"),
+                ]
+            ]
         )
 
 
