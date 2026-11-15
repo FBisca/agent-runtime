@@ -1,0 +1,189 @@
+schema: plan/1
+slug: pi-lead-rhythm
+goal: >-
+  A Pi session — lead, worker or reviewer — is scheduled by its host: it
+  cannot end a turn with open work, its wakes are pushed into an idle session
+  instead of slept for, and one rhythm policy serves Claude, Codex and Pi.
+spec: docs/specs/harness-adapters.md
+domain: rhythm
+archive: promote
+outcome: [S1, S3, S7]
+scenarios:
+  - id: S1
+    when: >-
+      a lead has undelivered messages or unseen working assignments
+    then: >-
+      the Claude and Codex Stop hooks and the Pi stop dialect refuse the same
+      state with the same reason, and the Pi answer is the neutral
+      `{"block", "reason"}` rather than the Claude shape
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        acceptance/rhythm/test_lead_rhythm.py -q -k "test_S1_ or test_control_"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_lead_rhythm.py]
+      package: .
+      timeout: 600
+  - id: S2
+    when: >-
+      `agent-runtime-hook stop --cli pi --dialect json` runs
+    then: >-
+      it prints `{"block": <bool>, "reason": <text>}` on stdout, and without the
+      dialect the Claude/Codex `{"decision": "block"}` is unchanged
+  - id: S3
+    when: >-
+      a Pi lead's turn ends with open work and its stop-guard budget is unspent
+    then: >-
+      the extension turns the block into one more provider request carrying the
+      reason, and an allowed stop adds nothing
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        acceptance/rhythm/test_pi_extension_guard.py -q
+        -k "test_S3_ or test_control_"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_pi_extension_guard.py]
+      package: .
+      timeout: 600
+  - id: S4
+    when: >-
+      a Pi worker's turn ends with its assignment unreported
+    then: >-
+      the extension requests one more provider request naming both ways out,
+      `report complete` and `report blocked`
+  - id: S5
+    when: >-
+      a Claude or Codex worker's turn ends with its assignment unreported
+    then: >-
+      its Stop hook blocks with the same reason shape the lead's guard uses, and
+      the worker can still leave by reporting blocked
+  - id: S6
+    when: >-
+      a lead with undelivered reports calls `spawn`, `message`, `resume` or
+      `stop`
+    then: >-
+      the runtime refuses, naming the count and `wait(all)` as the way out, and
+      no worker starts
+  - id: S7
+    when: >-
+      the driver appends a wake the lead has not seen
+    then: >-
+      the Pi extension pushes it with its text, and a wake already seen or an
+      empty line pushes nothing
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        acceptance/rhythm/test_pi_extension_guard.py -q
+        -k "test_S7_ or test_control_"
+        --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_pi_extension_guard.py]
+      package: .
+      timeout: 600
+  - id: S8
+    when: >-
+      a Pi session runs a shell command that sleeps 60 seconds or longer
+    then: >-
+      the call is refused with a reason naming `wait(all)`, and a sleep shorter
+      than 60 seconds is untouched
+  - id: S9
+    when: "the runtime resolves a harness"
+    then: >-
+      it reports that harness's rhythm capabilities — can refuse a stop, can
+      park a wait, can push a wake, request cap — from one table, and every
+      harness it can resolve has a row
+  - id: S10
+    when: >-
+      a lead's stop-guard budget is spent under one host
+    then: >-
+      another host sees the same spent budget, so switching host grants no fresh
+      blocks
+tickets:
+  - id: T1
+    delivers: >-
+      Move the lead's rhythm predicate into the runtime package and expose it
+      through one hook entry: the Pi JSON dialect, a capability row per harness,
+      and the hook that formats instead of deciding
+    satisfies: [S1, S2, S9, S10]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/
+      - hooks/
+      - bin/
+      - docs/architecture.md
+      - tests/test_rhythm.py
+      - tests/test_hooks.py
+    size: regular
+    difficulty: complex
+    risk: [state]
+  - id: T2
+    delivers: >-
+      Refuse a mutating verb while the lead has undelivered reports, naming the
+      count and `wait(all)`, so the stop-guard nudge has an authority behind it,
+      and teach the dispatch tests that publish a report and then mutate to
+      acknowledge the receipt first, keeping every assertion
+    satisfies: [S6]
+    paths:
+      - packages/agent-runtime/src/agent_runtime/hc_tools.py
+      - packages/agent-runtime/src/agent_runtime/mcp_server.py
+      - tests/test_rhythm_authority.py
+      - tests/test_peer_dispatch.py
+      - tests/test_event_wait.py
+      - tests/test_operations.py
+    size: small
+    difficulty: simple
+    risk: [state]
+    evidence_waiver: >-
+      tests/test_rhythm_authority.py drives each refused verb in process against
+      a seeded store; no acceptance file repeats it
+  - id: T3
+    delivers: >-
+      Ship the Pi extension: it asks the hook entry for the stop decision, turns
+      it into one more provider request, pushes a wake into an idle session, and
+      refuses a long sleep
+    satisfies: [S3, S4, S7, S8]
+    paths:
+      - extensions/agent-runtime/
+      - install.sh
+      - docs/pi.md
+      - tests/test_pi_extension.py
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+    risk: [external, retry-idempotency]
+  - id: T4
+    delivers: >-
+      Refuse a worker's stop while its own assignment is unreported, on the
+      Claude and Codex hooks as well as Pi, naming `report complete` and
+      `report blocked`
+    satisfies: [S5]
+    paths:
+      - hooks/stop_guard.py
+      - hooks/hook_lib.py
+      - tests/test_hooks.py
+    size: small
+    difficulty: simple
+    blocked_by: [T1]
+    risk: [state]
+    evidence_waiver: >-
+      tests/test_hooks.py gains the worker case beside the recorded lead
+      payloads and asserts the same dialect; the reviewer reads the refusal text
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-15T09:27:06.746278+00:00'
+  base: 58b35a33e6a74730e9a72976d0892f30dde34134
+  digest: 9f2639849381e3ef86de9b49377fe88fa7bfc2052eba9b6c0dab8f2f528cbc3d
+amendments:
+- prev_digest: c342439de85feaf2903a096faf9c51f95742fcbef6087f1bdb4fa3ffb74fe2c0
+  digest: 9f2639849381e3ef86de9b49377fe88fa7bfc2052eba9b6c0dab8f2f528cbc3d
+  at: '2026-11-15T09:27:06.746278+00:00'
+  by: felippe.bisca@gmail.com (t2qm)
+  reason: 'T2''s authority (S6, D3) invalidates five pre-existing dispatch tests in
+    tests/test_peer_dispatch.py, tests/test_event_wait.py and tests/test_operations.py:
+    they publish a report and then mutate without acknowledging it. T2''s Paths gain
+    those three files and its deliverable says to acknowledge the receipt first, keeping
+    every assertion. Fix the class, not the instance: the same pattern anywhere else
+    is fixed too.'
+  tickets:
+  - T2
