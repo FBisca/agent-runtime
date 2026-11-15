@@ -190,6 +190,26 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertNotIn("still in progress", excerpt)
         self.assertNotIn("still in progress", json.dumps(findings))
 
+    def test_S4_a_readable_failed_log_that_quotes_the_placeholder_is_not_a_placeholder(self):
+        """driver-invariants/S4"""
+        # A readable log that merely mentions the sentence must escalate: only the answer itself is the placeholder.
+        real = (
+            "unit tests\tRun pytest\t2026-11-10T10:00:00Z assert 1 == 2\n"
+            "unit tests\tRun pytest\t2026-11-10T10:00:00Z run 77 is still in progress; logs will be available when it is complete"
+        )
+        self.checks([("fail", "unit tests"), "green"])
+        (self.home / "run-view.json").write_text(json.dumps([[0, real, ""]]), encoding="utf-8")
+        again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
+        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
+        self.waits(
+            [self.worker_done(tests=True), self.reviewer_done(), self.worker_done("t1r1"), again]
+        )
+        self.run_driver()
+        self.assertEqual([e["state"] for e in self.run_events("ci")][:1], ["failed"])
+        self.assertIn("demo-t1", [c["args"]["name"] for c in self.calls("resume")])
+        findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
+        self.assertIn("assert 1 == 2", findings["items"][0]["excerpt"])
+
     def test_S10_several_failing_checks_with_long_logs_carry_only_their_own_capped_excerpt(self):
         """orchestrator-engine/R37"""
 

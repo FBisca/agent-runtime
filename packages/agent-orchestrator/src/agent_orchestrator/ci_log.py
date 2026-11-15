@@ -16,15 +16,17 @@ import re
 FAILED_BUCKETS = {"fail", "failing", "cancel", "cancelled", "timed_out", "action_required"}
 PENDING_BUCKETS = {"pending", "queued", "in_progress", "waiting", "requested"}
 
-# What `gh run view --log-failed` answers before a run's logs are written. It is read ATTEMPTS times in one poll round
-# because the run may finish between the `pr checks` answer and the `run view` that asks it for the logs.
-PLACEHOLDER = "is still in progress; logs will be available"
+# What `gh run view --log-failed` answers before a run's logs are written: the whole answer, anchored, so a readable log
+# that merely quotes the sentence is not mistaken for it. It is read ATTEMPTS times in one poll round because the run may
+# finish between the `pr checks` answer and the `run view` that asks it for the logs.
+PLACEHOLDER = re.compile(r"^run \d+ is still in progress; logs will be available[^\n]*$")
 ATTEMPTS = 3
 
 
 def placeholder(text):
     """True when a `gh run view --log-failed` answer is the placeholder of a run whose logs are not readable yet."""
-    return PLACEHOLDER in str(text)
+    answer = str(text).strip()
+    return "\n" not in answer and bool(PLACEHOLDER.match(answer))
 
 
 def read_log(driver, run, fresh=False):
