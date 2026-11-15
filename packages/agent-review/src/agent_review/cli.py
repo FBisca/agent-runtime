@@ -19,11 +19,17 @@ from agent_review.screening import (
     SystemOneScreenings,
 )
 
+# The configuration a repository ships at its root, discovered without a flag (D30).
+DISCOVERED = ".agent-review.yaml"
+
 EPILOG = """\
 `code` resolves two revisions to their commit shas, reads the change between them, and screens it once
-against the configured question bank. Without --config it evaluates the packaged baseline bank; a
-configuration replaces that bank in this phase, and additive repository questions, which extend the
-baseline and never override or disable it, are a later phase's (D05). A bank that asks nothing is refused
+against the configured question bank. Without --config it discovers the checkout's root `.agent-review.yaml`
+and, absent one, evaluates the packaged baseline bank; a configuration replaces that bank in this phase, and
+additive repository questions, which extend the baseline and never override or disable it, are a later
+phase's (D05). Its sensitive paths are different: the packaged baseline ships the mandatory ones, and a
+configuration's own list adds to them and never replaces them (D13), so a protected path escalates however
+the repository is configured. A bank that asks nothing, or a declaration no rule can read, is refused
 rather than screened. The invocation writes `report.json` under --output either way and prints a summary
 for a person; the report, not the exit status, carries the verdict.
 
@@ -77,8 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         type=Path,
         help=(
-            "the question configuration, which replaces the packaged baseline bank; "
-            "absent, the baseline is evaluated"
+            "the question configuration; absent, a root .agent-review.yaml is discovered and, without "
+            "one, the packaged baseline bank is evaluated. A configuration's sensitive paths extend the "
+            "mandatory baseline and never replace it"
         ),
     )
     code.add_argument(
@@ -155,14 +162,19 @@ def _revision(standing: Path) -> str:
 
 def screen(args: argparse.Namespace) -> Report:
     """One screening of the configured bank over `args.base..args.head`, as the report it produces."""
-    bank = questions.load(args.config) if args.config else questions.baseline()
     repo = Path.cwd()
+    bank = _configuration(args, repo)
     base, head = revisions.resolve(repo, args.base, args.head)
     change = revisions.diff(repo, base, head)
     _prepare_output(args.output, base, head)
     # The safeguards read the frozen diff beside the provider's state: a hit decides the change, so no port
-    # is built, no credential is read and no request is spent (SG-D2, SG-D10).
-    escalation = safeguards.decide(read_change(change))
+    # is built, no credential is read and no request is spent (SG-D2, SG-D10). The mandatory baseline's
+    # paths apply whatever was configured, and the configuration's own paths add to them (D13).
+    rules = safeguards.rule_set(
+        baseline_paths=questions.baseline().sensitive_paths,
+        repository_paths=bank.sensitive_paths,
+    )
+    escalation = safeguards.decide(read_change(change), rules)
     if escalation:
         return Report(
             model=bank.model,
@@ -206,6 +218,20 @@ def screen(args: argparse.Namespace) -> Report:
         long_context=args.long_context,
         failure=None if held.error is None else str(held.error),
     )
+
+
+def _configuration(args: argparse.Namespace, repo: Path) -> questions.QuestionBank:
+    """The bank this run evaluates: the named configuration, the discovered one, or the packaged baseline.
+
+    A root `.agent-review.yaml` is discovered without a flag (D30); an explicit --config overrides it, and
+    it is read before any revision is resolved, so a refusal names the field and no change is read for it.
+    """
+    if args.config is not None:
+        return questions.load(args.config)
+    discovered = repo / DISCOVERED
+    if discovered.is_file():
+        return questions.load(discovered)
+    return questions.baseline()
 
 
 def _prepare_output(output: Path, base: str, head: str) -> None:

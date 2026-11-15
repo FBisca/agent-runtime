@@ -10,6 +10,12 @@ on (required), the optional criteria mapping a noul may declare, or the options 
 (required). A criteria field of the wrong shape for its type is a misplaced field, not a preference, so it
 is refused rather than sent. A bank that asks nothing is refused, so no screening completes having
 evaluated no question. A refusal names the question and the field by its path, so a long bank is fixable.
+
+The bank also carries the paths this run protects and the safeguards it declares. The packaged baseline
+ships the mandatory sensitive paths (D13); a repository's configuration extends that list and never
+replaces it, so the two lists are carried apart and joined where the rule reads them (SG-D4). A declaration
+a rule will read is refused here, by its field path, when its shape is not the one that rule can use: a
+screening never starts from a configuration the engine cannot honour.
 """
 
 import re
@@ -31,8 +37,10 @@ DEFAULT_TYPE = "noul"
 # D51: identity is authoring-time. A stable, dotted id lets a frozen report name the question it evaluated.
 QUESTION_ID = re.compile(r"[a-z0-9]+(\.[a-z0-9-]+)+")
 
-TOP_LEVEL = ("model", "questions", "safeguards")
+TOP_LEVEL = ("model", "questions", "sensitive_paths", "safeguards")
 FIELDS = ("id", "priority", "type", "ask", "criteria")
+# The safeguard declarations whose shape a rule reads; a declaration no rule reads is carried as configured.
+DECLARATIONS = ("stdlib_only",)
 
 # A score's ladder needs two ends to grade between; a choice needs two options to choose between.
 MIN_LEVELS = 2
@@ -61,11 +69,15 @@ class QuestionBank:
     `safeguards` is the run's own declaration - which members may carry only the standard library, and
     whatever else a rule needs to read - carried whole beside the questions. It is configuration, not a
     question (SG-D6), and the shape of what it holds is refused where a rule reads it.
+
+    `sensitive_paths` are the paths this configuration protects: the packaged baseline's mandatory ones,
+    or a repository's own, which the rule adds to the baseline rather than substituting for it (D13).
     """
 
     model: str
     questions: tuple[Question, ...]
     safeguards: Mapping[str, Any] = field(default_factory=dict)
+    sensitive_paths: tuple[str, ...] = ()
 
 
 def baseline() -> QuestionBank:
@@ -101,6 +113,7 @@ def load(path: Path | str) -> QuestionBank:
         model=_model(data, path),
         questions=_questions(data, path),
         safeguards=_safeguards(data, path),
+        sensitive_paths=_sensitive_paths(data, path),
     )
 
 
@@ -122,7 +135,33 @@ def _safeguards(data: dict[str, Any], path: Path) -> Mapping[str, Any]:
         raise ReviewError(
             f"{path}: safeguards must be a mapping of declarations, not {type(block).__name__}"
         )
+    for name in DECLARATIONS:
+        if name in block:
+            _paths(block[name], f"safeguards.{name}", path, noun="paths")
     return block
+
+
+def _sensitive_paths(data: dict[str, Any], path: Path) -> tuple[str, ...]:
+    """The paths this configuration protects, or nothing when it declares none (D13)."""
+    if "sensitive_paths" not in data:
+        return ()
+    return _paths(data["sensitive_paths"], "sensitive_paths", path, noun="patterns")
+
+
+def _paths(value: Any, field: str, path: Path, *, noun: str) -> tuple[str, ...]:
+    """`value` as a list of non-empty paths, or a refusal naming the field by its path.
+
+    A rule reads this list directly, so a scalar where a list belongs, a number where a path belongs or an
+    empty spelling is refused here: the run never starts from a configuration no rule can honour (S9).
+    """
+    if not isinstance(value, list):
+        raise ReviewError(f"{path}: {field} must be a list of {noun}, not {type(value).__name__}")
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            raise ReviewError(
+                f"{path}: {field}[{index}] must be a non-empty {noun[:-1]}, not {entry!r}"
+            )
+    return tuple(entry.strip() for entry in value)
 
 
 def _questions(data: dict[str, Any], path: Path) -> tuple[Question, ...]:
