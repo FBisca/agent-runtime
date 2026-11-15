@@ -18,7 +18,8 @@ from fixtures import load_script
 
 pytestmark = pytest.mark.unit
 
-REPO = Path(__file__).resolve().parents[3]
+# <repo>/packages/agent-orchestrator/tests/test_driver/<this file>
+REPO = Path(__file__).resolve().parents[4]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
 DRIVER = MEMBER / "driver"
 BOOK = DRIVER / "book.py"
