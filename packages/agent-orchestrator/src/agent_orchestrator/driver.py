@@ -28,6 +28,7 @@ from . import config as repo_config
 from . import contracts, events, evidence, narrate, routes, runner, timeutil, verify, workbench
 from . import ledger as ledgers
 from . import plan as yaml_plan
+from .ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from .plan import PlanError
 from .runtime_client import (
     OPERATION_ADOPTED,
@@ -903,36 +904,6 @@ def next_path(directory, stem, suffix):
 
 # The tail of a failing job's log that a fix round shows; the full log is at log_path.
 CI_EXCERPT_CHARS = 2048
-
-# The buckets `gh pr checks` uses for a check that failed or was abandoned, and for one still running.
-CI_FAILED_BUCKETS = {"fail", "failing", "cancel", "cancelled", "timed_out", "action_required"}
-CI_PENDING_BUCKETS = {"pending", "queued", "in_progress", "waiting", "requested"}
-
-# What `gh run view --log-failed` answers before the run's logs are written: not evidence of anything yet.
-RUN_LOG_PENDING = re.compile(
-    r"^run \d+ is still in progress; logs will be available when it is complete\.?$"
-)
-
-# How often a failed-step log is read in one poll round before its placeholder is taken as pending: the run may have
-# finished between the `pr checks` answer and the `run view` that reads its log.
-RUN_LOG_ATTEMPTS = 3
-
-
-def run_log_pending(text):
-    """True when a `gh run view --log-failed` answer is the placeholder of a run whose logs are not readable yet."""
-    return bool(RUN_LOG_PENDING.match(" ".join(str(text).split())))
-
-
-def failing_runs(rows):
-    """The workflow run ids behind the failing checks, in order, once each: they hold the failed steps' logs."""
-    runs = []
-    for row in rows:
-        if str(row.get("bucket") or "").lower() not in CI_FAILED_BUCKETS:
-            continue
-        match = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
-        if match and match.group(1) not in runs:
-            runs.append(match.group(1))
-    return runs
 
 
 def job_log(run_log, job):
@@ -3812,9 +3783,9 @@ class Driver:
             rows = []
         rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
         buckets = {str(r.get("bucket") or "").lower() for r in rows}
-        if buckets & CI_FAILED_BUCKETS:
-            return ("failed" if self.failed_logs_readable(rows) else "pending"), rows
-        if buckets & CI_PENDING_BUCKETS:
+        if buckets & FAILED_BUCKETS:
+            return ("failed" if logs_readable(self, rows) else "pending"), rows
+        if buckets & PENDING_BUCKETS:
             return "pending", rows
         if code == 0 and rows:
             return "green", rows
@@ -3823,26 +3794,6 @@ class Driver:
         if code in (0, 1, 8):
             return "pending", rows
         return "error", rows
-
-    def failed_logs_readable(self, rows):
-        """True once a failing job's log is readable. The placeholder of a run still in progress is read again a few
-        times before the check is taken as pending: the run may finish while its log is being asked for."""
-        runs = failing_runs(rows)
-        if not runs:
-            return True
-        for _attempt in range(RUN_LOG_ATTEMPTS):
-            for run in runs:
-                if not run_log_pending(self.run_log(run, fresh=True)):
-                    return True  # the log is already in the cache for the findings
-        return False
-
-    def run_log(self, run, fresh=False):
-        """One workflow run's failed-step log, fetched once a round: the readiness check and the findings share it.
-        `fresh` reads it again, so a placeholder is not cached for the rest of the round."""
-        if fresh or run not in self.run_logs:
-            _code, out, err = self.gh(["run", "view", run, "--log-failed"])
-            self.run_logs[run] = (out or err).strip()
-        return self.run_logs[run]
 
     def units(self):
         """Every unit of the run with the task that is still open for it."""
@@ -3866,8 +3817,7 @@ class Driver:
         """One non-blocking look at every unit's pull request: was it merged by hand, is it still a draft, how are
         its checks. A unit with no checks yet, or with checks still running, is looked at again on a later round: no
         fix round is raised and no other unit waits. The view taken here is the one `step_ci` acts on this round."""
-        self.views = {}
-        self.run_logs = {}
+        self.views, self.run_logs = {}, {}
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
             gate = task.get("gate")
@@ -4123,16 +4073,15 @@ class Driver:
     def ci_items(self, task_id, url, rows):
         """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
         --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
-        failing = [row for row in rows if str(row.get("bucket") or "").lower() in CI_FAILED_BUCKETS]
+        failing = [row for row in rows if str(row.get("bucket") or "").lower() in FAILED_BUCKETS]
         items = []
         for number, row in enumerate(failing, 1):
             name = row.get("name") or "ci"
             text = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                logged = job_log(self.run_log(run.group(1)), name)
-                if not run_log_pending(logged):
-                    text = logged or text
+                logged = job_log(read_log(self, run.group(1)), name)
+                text = text if placeholder(logged) else logged or text
             items.append(self.ci_item(task_id, url, "CI%d" % number, name, text))
         if not items:
             items.append(self.ci_item(task_id, url, "CI1", "ci", "the checks failed"))

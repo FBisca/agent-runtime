@@ -9,7 +9,7 @@ from unittest import mock
 
 import fake_gh
 import pytest
-from agent_orchestrator import driver
+from agent_orchestrator import ci_log
 from fixtures import (
     assignment,
     load_script,
@@ -158,7 +158,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         real = "unit tests\tRun pytest\t2026-11-10T10:00:00Z assert 1 == 2"
         self.checks([("fail", "unit tests"), ("fail", "unit tests"), "green"])
         (self.home / "run-view.json").write_text(
-            json.dumps([[0, placeholder, ""]] * driver.RUN_LOG_ATTEMPTS + [[0, real, ""]]),
+            json.dumps([[0, placeholder, ""]] * ci_log.ATTEMPTS + [[0, real, ""]]),
             encoding="utf-8",
         )
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
@@ -181,7 +181,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertIn("demo-t1", [c["args"]["name"] for c in self.calls("resume")])
         self.assertEqual(
             self.gh_calls("run", "view"),
-            [["run", "view", "77", "--log-failed"]] * (driver.RUN_LOG_ATTEMPTS + 1),
+            [["run", "view", "77", "--log-failed"]] * (ci_log.ATTEMPTS + 1),
             "the placeholder is re-read within the poll round, then the findings reuse that read",
         )
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
