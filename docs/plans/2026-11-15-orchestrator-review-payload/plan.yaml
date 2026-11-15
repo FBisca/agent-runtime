@@ -20,8 +20,10 @@ scenarios:
         uv run --frozen --all-packages pytest
         packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py
         -q -k "S1 or S2 or control" --junitxml="$EEC_JUNIT"
-      baseline: fail
-      acceptance: [test_review_payload_path.py]
+      # The change is merged: the check passes at the base it is approved
+      # against, and the acceptance file is placed in the package now, so the
+      # driver places nothing.
+      baseline: pass
       package: packages/agent-orchestrator
       timeout: 900
   - id: S2
@@ -36,8 +38,7 @@ scenarios:
         uv run --frozen --all-packages pytest
         packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py
         -q -k "S1 or S2 or control" --junitxml="$EEC_JUNIT"
-      baseline: fail
-      acceptance: [test_review_payload_path.py]
+      baseline: pass
       package: packages/agent-orchestrator
       timeout: 900
 tickets:

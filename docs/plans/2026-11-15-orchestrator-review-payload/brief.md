@@ -21,6 +21,10 @@ The run of 2026-11-15 lost exactly that turn: the review landed in `t1-review/re
   the brief it must read; and a review the reviewer wrote under another name inside the run directory is the review
   the gate reads: the file is copied into the driver's own path, the reviewer is not warned, and the unit advances.
 
+The acceptance file is placed in the package at
+`packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py`: the change is merged, so the evidence
+runs the placed file and the driver places nothing.
+
 ## Decisions
 
 - **RP-D1** The assignment names the path; it does not restate the brief. The reviewer is told "Read
