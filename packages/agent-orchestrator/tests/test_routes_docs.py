@@ -62,11 +62,8 @@ class RoutingDocsTests(unittest.TestCase):
 
     def test_S8_the_spec_routing_requirements_name_typed_config_and_restart(self):
         spec = (ROOT / "docs" / "specs" / "orchestrator-engine.md").read_text(encoding="utf-8")
-        # The check-tiers section numbers its own requirements from R93 again: read the first section only.
-        section = spec.split("\n## Coverage", 1)[0]
-        rows = {
-            line.split("**")[1]: line for line in section.splitlines() if line.startswith("- **R")
-        }
+        # One number, one requirement: a spec where R93 named two was the defect the archive guard now refuses.
+        rows = {line.split("**")[1]: line for line in spec.splitlines() if line.startswith("- **R")}
         self.assertIn("reads no model table", rows["R19"])
         self.assertIn("`--models-file` is refused", rows["R19"])
         self.assertIn("routes-codex.json", rows["R20"])

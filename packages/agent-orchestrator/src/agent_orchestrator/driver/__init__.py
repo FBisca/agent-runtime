@@ -84,6 +84,21 @@ from .records import (
     scenario_number as scenario_number,
 )
 
+# The spec-section grammar keeps the same home for the same budget reason; the archive's guard and
+# `tests/test_spec_sections.py` keep asking `driver.<name>` for the reader.
+from .spec import (
+    SpecSections,
+)
+from .spec import (
+    merge_requirements as merge_requirements,
+)
+from .spec import (
+    spec_defects as spec_defects,
+)
+from .spec import (
+    without_coverage as without_coverage,
+)
+
 ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
 now = timeutil.iso
 
@@ -585,6 +600,11 @@ ATTENTION = {
 }
 ARCHIVE = "archive"  # the unit (and task id) of the driver's own archive
 ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or replace
+# An archive whose pull request conflicts is a base that moved, not a defect: rebuilding re-reads the spec on the new
+# base. Twice, so a genuinely conflicting plan still reaches the Lead instead of looping.
+ARCHIVE_REBUILDS = 2
+
+
 # A covers gate that can never pass because the ticket's Paths hold no test: the way out is the plan, so `amend` leads.
 NO_TEST_MENU = ("amend",) + tuple(action for action in contracts.ACTIONS if action != "amend")
 DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
@@ -858,7 +878,7 @@ def step_failed(drive, task_id, gate, error):
     narrate.say("fail", narrate.step_of(gate), "step %s failed: %s" % (gate, error), task=task_id)
 
 
-class Driver:
+class Driver(SpecSections):
     """The dispatch loop. It keeps no state of its own: the plan, the ledger and the runtime hold it."""
 
     def __init__(self, args):
@@ -2705,6 +2725,9 @@ class Driver:
             "draft": owed,
         }
         asked = kind = reason = None
+        rebuild = (
+            False  # an archive conflict is a base that moved: rebuilt before a person is asked
+        )
         with self.book() as data:  # the driver's count: the report's review_rounds is never read
             rounds = data.setdefault("rounds", {})
             if (
@@ -2716,20 +2739,25 @@ class Driver:
             fix["attempt"] = failures
             self.log("round", unit=unit, task=task_id, source=source, attempt=failures)
             if unit == ARCHIVE:
-                # No worker could fix it: the Lead decides, and `retry` rebuilds the branch from the current base.
                 self.book_report(data, task_id, report, path, remaining=remaining)
-                reason = (
-                    "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
-                    "leaves the archive to you"
-                    % (
-                        "the archive pull request conflicts with its base"
-                        if source == "conflict"
-                        else "the archive failed its %s gate" % source,
-                        "; ".join(remaining),
+                rebuilds = data.setdefault("rebuilds", {})
+                if source == "conflict" and rebuilds.get(unit, 0) < ARCHIVE_REBUILDS:
+                    rebuilds[unit] = rebuilds.get(unit, 0) + 1
+                    rebuild = True
+                else:
+                    # No worker could fix it, and a rebuild was already tried: the Lead decides.
+                    reason = (
+                        "%s: %s. `retry` rebuilds the archive branch from the current base and pushes it again, `skip` "
+                        "leaves the archive to you"
+                        % (
+                            "the archive pull request conflicts with its base"
+                            if source == "conflict"
+                            else "the archive failed its %s gate" % source,
+                            "; ".join(remaining),
+                        )
                     )
-                )
-                kind = source
-                asked = self.book_request(data, task_id, kind, reason)
+                    kind = source
+                    asked = self.book_request(data, task_id, kind, reason)
             else:
                 self.book_report(data, task_id, report, path, review_rounds=1, remaining=remaining)
                 for item in items:
@@ -2760,6 +2788,11 @@ class Driver:
                     data["tasks"][task_id].update(gate="fix-pending", fix=fix, updated_at=now())
         # Nothing below is the round's to book twice. The draft is attempted now and, when gh refuses, left in `fix`
         # for `step_fix` to try again before it dispatches anyone.
+        if rebuild:
+            # The lead's `retry`, verbatim: the branch is rebuilt from the current base, so the spec section and its
+            # number are derived from what actually merged.
+            self.retry_archive(task_id)
+            return
         if unit == ARCHIVE:
             self.undraft_archive(task_id)
         elif owed and self.undraft(task_id, owed):
@@ -6365,45 +6398,6 @@ class Driver:
     def flat(text):
         return " ".join(str(text).split())
 
-    def spec_section(self, spec_text, held):
-        """The text appended to the spec: the requirements it lacks, then the Coverage table of every scenario."""
-        slug, nodes = self.slug, self.scenario_nodes()
-        number = max((int(n) for n in re.findall(r"\bR(\d+)\b", spec_text)), default=0)
-        numbered = dict(held)
-        parts = []
-        new = [s for s in self.plan_model().scenarios if s.id not in held]
-        if new:
-            parts += ["## Requirements: %s" % slug, ""]
-            for scenario in new:
-                number += 1
-                numbered[scenario.id] = "R%d" % number
-                parts.append(
-                    "- **R%d** WHEN %s, THEN %s (from %s/%s)"
-                    % (
-                        number,
-                        self.flat(scenario.when),
-                        self.flat(scenario.then),
-                        slug,
-                        scenario.id,
-                    )
-                )
-            parts.append("")
-        parts += [
-            "## Coverage: %s" % slug,
-            "",
-            "| Requirement | Scenario | Test nodes |",
-            "|---|---|---|",
-        ]
-        for scenario in self.plan_model().scenarios:
-            human = scenario.evidence.human if scenario.evidence else None
-            cellular = (
-                "human: " + self.flat(human).replace("|", "\\|")
-                if human
-                else "<br>".join("`%s`" % node for node in nodes[scenario.id])
-            )
-            parts.append("| %s | %s | %s |" % (numbered[scenario.id], scenario.id, cellular))
-        return "\n".join(parts) + "\n"
-
     def archive_branch(self, task_id):
         """The archive branch, rebuilt from the current base: oracles placed, plan files copied, the spec section
         appended, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
@@ -6442,14 +6436,14 @@ class Driver:
                 before = spec.read_text(encoding="utf-8")
             except FileNotFoundError:
                 before = ""
-            section = self.spec_section(before, self.held_requirements(spec))
-            body = (
-                (before if before.endswith("\n") else before + "\n") + "\n"
-                if before.strip()
-                else ""
-            )
+            text = self.spec_text(before, self.held_requirements(spec))
+            already = spec_defects(before)
+            if (
+                already
+            ):  # the base was already broken: not this archive's to fix, and not silently passed on
+                self.log("spec-defects", spec=self.plan_model().spec, defects=len(already))
             spec.parent.mkdir(parents=True, exist_ok=True)
-            spec.write_text(body + section, encoding="utf-8")
+            spec.write_text(text, encoding="utf-8")
         run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
         identity = (
             []
@@ -6615,20 +6609,6 @@ class Driver:
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
         the plan itself sits outside the repository."""
         return (PurePosixPath(self.layout.plan_place).parent / Path(path).name).as_posix()
-
-    def held_requirements(self, spec):
-        """This plan's scenarios the spec already holds, each with its requirement: {"S3": "R220"}.
-        One requirement may name several scenarios — `(from <slug>/S1, S2, S3)` — and it holds every one of them."""
-        try:
-            text = Path(spec).read_text(encoding="utf-8")
-        except OSError:
-            return {}
-        found = re.findall(
-            r"^- \*\*(R\d+)\*\*.*\(from %s/((?:S\w+(?:,\s*)?)+)\)" % re.escape(self.slug),
-            text,
-            re.MULTILINE,
-        )
-        return {sid: rid for rid, ids in found for sid in (part.strip() for part in ids.split(","))}
 
     def start_gaps(self, _plan):
         """Spawn the advisory gaps reviewer once, after the archive PR has merged (S6). Its failure never blocks
