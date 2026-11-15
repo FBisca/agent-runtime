@@ -156,12 +156,17 @@ tickets:
     delivers: >-
       Refuse a worker's stop while its own assignment is unreported, on the
       Claude and Codex hooks as well as Pi, naming `report complete` and
-      `report blocked`
+      `report blocked`, and land it with its requirement: R124 states both
+      halves of the guard, the worker's predicate sits in the runtime package
+      beside the lead's so `hooks/` only formats, and the lead's parked-wait
+      exemption no longer lets a worker out unreported
     satisfies: [S5]
     paths:
       - hooks/stop_guard.py
       - hooks/hook_lib.py
       - tests/test_hooks.py
+      - packages/agent-runtime/src/agent_runtime/rhythm.py
+      - docs/specs/agent-runtime.md
     size: small
     difficulty: simple
     blocked_by: [T1]
@@ -171,9 +176,9 @@ tickets:
       payloads and asserts the same dialect; the reviewer reads the refusal text
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-15T09:27:06.746278+00:00'
+  at: '2026-11-15T09:48:34.827549+00:00'
   base: 58b35a33e6a74730e9a72976d0892f30dde34134
-  digest: 9f2639849381e3ef86de9b49377fe88fa7bfc2052eba9b6c0dab8f2f528cbc3d
+  digest: 7326585780524eff340982e309c451270e821dfaed6a4a573f45ce2aea798a46
 amendments:
 - prev_digest: c342439de85feaf2903a096faf9c51f95742fcbef6087f1bdb4fa3ffb74fe2c0
   digest: 9f2639849381e3ef86de9b49377fe88fa7bfc2052eba9b6c0dab8f2f528cbc3d
@@ -187,3 +192,14 @@ amendments:
     is fixed too.'
   tickets:
   - T2
+- prev_digest: 9f2639849381e3ef86de9b49377fe88fa7bfc2052eba9b6c0dab8f2f528cbc3d
+  digest: 7326585780524eff340982e309c451270e821dfaed6a4a573f45ce2aea798a46
+  at: '2026-11-15T09:48:34.827549+00:00'
+  by: felippe.bisca@gmail.com (t2qm)
+  reason: T4 lands S5 with its requirement. T4 owns docs/specs/agent-runtime.md (amend
+    R124 to both halves of the guard, scope R121's parked-wait exemption to the lead,
+    keep the provenance, no new coverage row) and packages/agent-runtime/src/agent_runtime/rhythm.py
+    (the worker's unreported-assignment predicate is policy, D1), and fixes the parked-wait
+    hole that let a worker end unreported plus the two stale docstrings.
+  tickets:
+  - T4
