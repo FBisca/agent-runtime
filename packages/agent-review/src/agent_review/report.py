@@ -25,8 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent_review.questions import Question
-from agent_review.safeguards import EscalationReason, way_out
+from agent_review.questions import Question, QuestionBank, Threshold
+from agent_review.safeguards import EscalationReason, recommends_full_review, way_out
 from agent_review.screening import limits
 
 REPORT = "report.json"
@@ -38,12 +38,15 @@ ESCALATED = "escalated"
 
 @dataclass(frozen=True)
 class Report:
-    """One invocation's report: the execution's status, the review's verdict, and what both rest on."""
+    """One invocation's report: the execution's status, the review's verdict, and what both rest on.
 
-    model: str
+    `bank` is the configuration the run screened - its questions, the model it asked for and the numbers it
+    was decided with - so a frozen report names its calibration as well as its questions (D26).
+    """
+
+    bank: QuestionBank
     base: str
     head: str
-    questions: Sequence[Question]
     # Where the screening came from: the provider's endpoint, or the fixture a canned one answered from.
     provider: str = ""
     # The model the provider's answer named; the configured alias stays in `model` beside it.
@@ -58,6 +61,16 @@ class Report:
     # Long context is the caller's opt-in, so the report says whether the larger budget was asked for.
     long_context: bool = False
     failure: str | None = field(default=None)
+
+    @property
+    def model(self) -> str:
+        """The model the bank asked for, which the provider may answer with a resolved name beside it."""
+        return self.bank.model
+
+    @property
+    def questions(self) -> Sequence[Question]:
+        """The questions this run asked, in configuration order."""
+        return self.bank.questions
 
     @property
     def status(self) -> str:
@@ -77,7 +90,14 @@ class Report:
     @property
     def bank_digest(self) -> str:
         """A digest of the bank exactly as configured, so a frozen report names what it screened (D26)."""
-        return bank_digest(self.model, self.questions)
+        return bank_digest(
+            self.bank.model, self.bank.questions, self.bank.weights, self.bank.thresholds
+        )
+
+    @property
+    def recommended(self) -> bool:
+        """Whether the outcome sends this change to a full deep review rather than a screen (D12, D43)."""
+        return recommends_full_review(self.escalation)
 
     def as_dict(self) -> dict[str, Any]:
         """The report as `report.json` holds it, in the contract's field order (P0-D3)."""
@@ -105,7 +125,10 @@ class Report:
             "bank_digest": self.bank_digest,
             "judgments": [dict(judgment) for judgment in self.judgments],
             # Additive in a frozen report: a report written before the safeguards read it as no reasons (D26).
-            "escalation": {"reasons": [reason.as_dict() for reason in self.escalation]},
+            "escalation": {
+                "reasons": [reason.as_dict() for reason in self.escalation],
+                "recommended": self.recommended,
+            },
             "failure": None if self.failure is None else {"reason": self.failure},
         }
 
@@ -159,11 +182,17 @@ class Report:
         return "\n".join(lines)
 
 
-def bank_digest(model: str, questions: Sequence[Question]) -> str:
-    """The sha256 of the bank as configured: its model and every question, criteria and ask included.
+def bank_digest(
+    model: str,
+    questions: Sequence[Question],
+    weights: Mapping[str, float] | None = None,
+    thresholds: Mapping[str, Threshold] | None = None,
+) -> str:
+    """The sha256 of the bank as configured: its model, its questions and the numbers it is decided with.
 
-    The digest covers what the provider was handed and never the file's path, so the same bank screened
-    from another checkout digests the same, and a reworded level is a different bank (S4, D26).
+    The digest covers what the run was made of and never the file's path, so the same bank screened from
+    another checkout digests the same, a reworded level is a different bank, and a recalibrated threshold
+    is a different screening of it (S4, D26).
     """
     canonical = json.dumps(
         {
@@ -178,6 +207,11 @@ def bank_digest(model: str, questions: Sequence[Question]) -> str:
                 }
                 for question in questions
             ],
+            "weights": dict(weights or {}),
+            "thresholds": {
+                identifier: threshold.as_dict()
+                for identifier, threshold in sorted((thresholds or {}).items())
+            },
         },
         sort_keys=True,
         separators=(",", ":"),

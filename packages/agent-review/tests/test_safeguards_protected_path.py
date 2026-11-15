@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 CONFIG = """\
 model: test-model-v1
 questions:
-  - id: contract.error-handling
+  - id: repo.error-handling
     priority: critical
     type: noul
     ask: Does the change keep the documented error-handling contract
@@ -53,9 +53,9 @@ def renamed(old, new):
     )
 
 
-def decided(change: Change, baseline=(), repository=()):
+def decided(change: Change, baseline_paths=(), repository=()):
     """The change's reasons as (rule, path, pattern, source) tuples, over the configured paths."""
-    rules = safeguards.rule_set(baseline_paths=baseline, repository_paths=repository)
+    rules = safeguards.rule_set(baseline_paths=baseline_paths, repository_paths=repository)
     return [
         (reason.rule, reason.path, reason.pattern, reason.source)
         for reason in safeguards.decide(change, rules)
@@ -81,8 +81,8 @@ def test_S3_a_baseline_path_matched_as_added_modified_deleted_or_renamed_carries
         + renamed("hooks/pre_tool_use.py", "pkg/pre_tool_use.py")
         + renamed("pkg/helper.py", "server/helper.py")
     )
-    baseline = questions.baseline().sensitive_paths
-    assert sorted(decided(change, baseline)) == [
+    baseline_paths = questions.baseline().sensitive_paths
+    assert sorted(decided(change, baseline_paths)) == [
         (safeguards.PROTECTED_PATH, ".github/workflows/ci.yml", ".github/workflows/**", "baseline"),
         (safeguards.PROTECTED_PATH, "hooks/hook_lib.py", "hooks/**", "baseline"),
         (safeguards.PROTECTED_PATH, "hooks/pre_tool_use.py", "hooks/**", "baseline"),
@@ -98,8 +98,8 @@ def test_S4_a_near_miss_under_a_matching_directory_matches_no_pattern():
         + unified("hooks_old/hook.py", "", "value = 1\n", status="new")
         + unified("server/agent.py", "value = 1\n", "value = 2\n")
     )
-    baseline = questions.baseline().sensitive_paths
-    assert decided(change, baseline, ("pkg/**",)) == [
+    baseline_paths = questions.baseline().sensitive_paths
+    assert decided(change, baseline_paths, ("pkg/**",)) == [
         (safeguards.PROTECTED_PATH, "server/agent.py", "server/**", "baseline")
     ], "a path under a matching directory is not a path the pattern names"
 
@@ -114,8 +114,8 @@ def test_S5_a_repository_pattern_extends_the_baseline_instead_of_replacing_it():
         + unified("pyproject.toml", '[project]\nname = "scratch"\n', '[project]\nname = "x"\n')
         + unified(".agent-review.yaml", "", "model: test-model-v1\n", status="new")
     )
-    baseline = questions.baseline().sensitive_paths
-    assert sorted(decided(change, baseline, ("pkg/**",))) == [
+    baseline_paths = questions.baseline().sensitive_paths
+    assert sorted(decided(change, baseline_paths, ("pkg/**",))) == [
         (safeguards.PROTECTED_PATH, "pkg/service.py", "pkg/**", "repository"),
         (safeguards.PROTECTED_PATH, "pyproject.toml", "pyproject.toml", "baseline"),
     ], "the repository's own list adds to the mandatory baseline"

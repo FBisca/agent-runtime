@@ -22,11 +22,22 @@ CONFIG = textwrap.dedent(
     """\
     model: test-model-v1
     questions:
-      - id: contract.error-handling
+      - id: repo.error-handling
         priority: critical
         type: noul
         ask: Does the change keep the documented error-handling contract
     """
+)
+
+COMMIT = (
+    "-c",
+    "user.name=agent-review",
+    "-c",
+    "user.email=agent-review@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
 )
 
 BASE_FILE = "def discard(folder):\n    return folder\n"
@@ -57,26 +68,26 @@ class Review:
 
     def two_revisions(self):
         """A repository whose head deletes a folder it computes, as the archive driver did."""
-        commit = (
-            "-c",
-            "user.name=agent-review",
-            "-c",
-            "user.email=agent-review@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-m",
-        )
         git(self.checkout, "init", "-b", "main")
         driver = self.checkout / "driver.py"
         driver.write_text(BASE_FILE, encoding="utf-8")
         git(self.checkout, "add", "--all")
-        git(self.checkout, *commit, "base")
+        git(self.checkout, *COMMIT, "base")
         base = git(self.checkout, "rev-parse", "HEAD")
         driver.write_text(HEAD_FILE, encoding="utf-8")
         git(self.checkout, "add", "--all")
-        git(self.checkout, *commit, "head")
+        git(self.checkout, *COMMIT, "head")
         return base, git(self.checkout, "rev-parse", "HEAD")
+
+    def add(self, name, text):
+        """A head commit off the base that adds one path, so the change under test is that path alone."""
+        git(self.checkout, "reset", "--hard", self.base)
+        target = self.checkout / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        git(self.checkout, "add", "--all")
+        git(self.checkout, *COMMIT, f"add {name}")
+        self.head = git(self.checkout, "rev-parse", "HEAD")
 
     def screen(self):
         """One invocation naming no fixture: a run that reached for a provider would stop incomplete."""
@@ -139,3 +150,28 @@ def test_the_summary_names_the_rule_the_path_and_the_way_out(review, capsys):
     assert "driver.py" in summary, "the summary names the path it matched"
     assert "is_relative_to" in summary, "the summary says what a person should do about it"
     assert str(review.output / "report.json") in summary, "the summary names the report it wrote"
+
+
+def test_S2_a_rule_that_only_records_a_signal_does_not_recommend_a_deep_review(review):
+    """A sensitive path sends the change to a person; a diff-read rule records its reason and nothing more."""
+    assert review.screen() == 0
+    escalation = review.report()["escalation"]
+    assert escalation["recommended"] is False, (
+        "target-outside-root is a fact a person reads beside the screen, not a route to a full review (D12)"
+    )
+
+
+def test_S2_a_sensitive_path_recommends_a_full_deep_review(review):
+    """A path the mandatory baseline protects sends the change to a person, whatever it would score."""
+    review.add("server/agent.py", "value = 1\n")
+    assert review.screen() == 0
+    escalation = review.report()["escalation"]
+    assert escalation["recommended"] is True, (
+        "a sensitive path routes the change to a full deep review (D12)"
+    )
+    matched = [reason for reason in escalation["reasons"] if reason["rule"] == "protected-path"]
+    assert matched, "the added path under server/ is a sensitive path"
+    assert matched[0]["pattern"] == "server/**", "the reason names the pattern it matched"
+    assert matched[0]["source"] == "baseline", (
+        "the mandatory baseline is where that pattern came from"
+    )

@@ -4,16 +4,66 @@
 # overrides or disables it (D05); an invocation without --config evaluates
 # exactly these questions.
 #
-# A judgment is native and bounded (D44, D50): every question here is a noul,
-# answered with the probability that the change satisfies it. Priority is
-# declared here and never chosen by the screening model (D07); a critical
-# question is always asked (D09). Ids are stable and unique: a question whose
-# meaning changes takes a new id, so a frozen report stays comparable (D26,
-# D51). Expand the bank only after evidence of a gap (D49).
+# A judgment is native and bounded (D44, D50): a question is answered with the
+# probability that the change satisfies it (a `noul`) or with a position on a
+# ladder of levels (a `score`). Priority is declared here and never chosen by
+# the screening model (D07); a critical question is always asked (D09). Ids are
+# stable and unique: a question whose meaning changes takes a new id, so a
+# frozen report stays comparable (D26, D51). Expand the bank only after
+# evidence of a gap (D49).
+#
+# VERSION BREAK (D26): `contract.error-handling` keeps its id but changes
+# instrument from this version on. It was a noul - the probability that the
+# change satisfies the question, higher is better - and is now a score on a
+# five-level severity ladder, lower is better, whose levels are listed on the
+# question. A frozen judgment recorded under the old instrument is therefore
+# not comparable with one from this bank: read a benchmark across this change as
+# two versions, never as one series. A noul probability for the same question
+# can be asked again only under a new id.
 
 model: jev-latest
 
-# The mandatory sensitive-path baseline (D13): a change that reaches one
+# The numbers this bank is screened and decided with, declared here and never
+# chosen by the model (D07, D48). A repository's configuration lays its own
+# weights and thresholds over these per question, so naming one question
+# recalibrates that question and leaves the rest calibrated.
+#
+# `weights`: what a question weighs when the signals are aggregated. A question
+# no configuration weighs carries the default, 1, so this block names only the
+# questions that weigh more.
+weights: {}
+
+# `thresholds`: the value a question's answer must clear and the confidence
+# band it must keep, calibrated on the reference set the Jev evidence froze
+# (2026-11-15-agent-review-jev-evidence/CALIBRATION.md, SCORES.md). A noul is
+# escalated when its probability falls below `value`; a score, whose ladder
+# runs from no violation to the worst, when its position rises above it. A
+# question no calibration moved carries no threshold: a number nothing
+# separates would escalate on noise, so it is recorded and never escalated
+# alone.
+thresholds:
+  # score 0-4, clean 0.23 / bad 0.67 on the 0-4 scale; router B's operating
+  # point on the same 12 cases (escalate at severity >= 1.5 or confidence 0.7).
+  contract.error-handling:
+    value: 1.5
+    confidence: 0.7
+  # noul, clean 0.82 / bad 0.69; the midpoint of the two means.
+  contract.requirement-traceability:
+    value: 0.75
+  # noul, clean 0.77 / bad 0.66.
+  contract.test-evidence:
+    value: 0.71
+  # noul, clean 0.79 / bad 0.68.
+  engineering.survival-priority:
+    value: 0.73
+  # noul, clean 0.69 / bad 0.52.
+  engineering.hidden-state:
+    value: 0.6
+  # noul, clean 0.61 / bad 0.46.
+  engineering.abstraction-levels:
+    value: 0.53
+
+# The mandatory protected-path baseline (D13): a change that reaches one
 # of these paths escalates to a person whatever the repository configures. A
 # repository's own `.agent-review.yaml` adds to this list and never replaces
 # it. Patterns are matched from the repository root: `**` crosses directories,
@@ -34,9 +84,17 @@ questions:
       a stated cause
   - id: contract.error-handling
     priority: critical
+    type: score
+    criteria:
+      - no new failure path, or every one raises an actionable error
+      - a new failure's error is vague but actionable
+      - a new failure is handled by a caller-visible fallback with no signal
+      - a new failure is swallowed or replaced by a silent default
+      - a new failure crashes, or reports success while the operation failed
     ask: >-
-      Does every new failure at a boundary surface an error a caller can act
-      on, rather than a silent fallback
+      How severely does the change violate error handling: does every new
+      failure at a boundary surface an error a caller can act on, rather than
+      a silent fallback
   - id: contract.public-surface-compatibility
     priority: high
     ask: >-

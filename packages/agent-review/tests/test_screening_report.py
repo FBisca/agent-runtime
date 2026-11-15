@@ -22,11 +22,11 @@ CONFIG = textwrap.dedent(
     """\
     model: test-model-v1
     questions:
-      - id: contract.error-handling
+      - id: repo.error-handling
         priority: critical
         type: noul
         ask: Does the change keep the documented error-handling contract
-      - id: engineering.names-meaning
+      - id: repo.names-meaning
         priority: advisory
         type: noul
         ask: Do the new names say what they mean
@@ -47,8 +47,8 @@ RESPONSE = {
     "model": "jev-1.14.0",
     "answers": {
         "design.one-reason": {"type": "score", "score": 2.0, "confidence": 0.8},
-        "engineering.names-meaning": {"type": "noul", "noul": 0.2},
-        "contract.error-handling": {"type": "noul", "noul": 0.9},
+        "repo.names-meaning": {"type": "noul", "noul": 0.2},
+        "repo.error-handling": {"type": "noul", "noul": 0.9},
     },
     "usage": {"input_tokens": 700, "output_tokens": 30},
 }
@@ -150,14 +150,14 @@ def test_S2_a_completed_screening_is_screened_with_native_attributed_judgments(r
     assert report["failure"] is None
     assert report["judgments"] == [
         {
-            "question": "contract.error-handling",
+            "question": "repo.error-handling",
             "priority": "critical",
             "scope": "whole-diff",
             "revision": f"{review.base}..{review.head}",
             "value": 0.9,
         },
         {
-            "question": "engineering.names-meaning",
+            "question": "repo.names-meaning",
             "priority": "advisory",
             "scope": "whole-diff",
             "revision": f"{review.base}..{review.head}",
@@ -181,7 +181,7 @@ def test_S2_a_completed_screening_is_screened_with_native_attributed_judgments(r
 def test_S2_the_terminal_summary_reads_the_judgments_without_the_report(review, capsys):
     assert review.screen(RESPONSE) == 0
     summary = capsys.readouterr().out
-    assert "contract.error-handling" in summary and "critical" in summary
+    assert "repo.error-handling" in summary and "critical" in summary
     assert "0.9" in summary, "the summary reads the native value as it was answered"
     with pytest.raises(json.JSONDecodeError):
         json.loads(summary)
@@ -202,8 +202,8 @@ def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
         review.screen(
             {
                 "answers": {
-                    "contract.error-handling": {"type": "noul", "noul": "banana"},
-                    "engineering.names-meaning": {"type": "noul", "noul": 0.2},
+                    "repo.error-handling": {"type": "noul", "noul": "banana"},
+                    "repo.names-meaning": {"type": "noul", "noul": 0.2},
                 }
             }
         )
@@ -212,7 +212,7 @@ def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
     report = review.report()
     assert report["status"] == "incomplete"
     assert report["verdict"] is None
-    assert "contract.error-handling" in report["failure"]["reason"]
+    assert "repo.error-handling" in report["failure"]["reason"]
     assert report["usage"]["requests"] == 1
 
 
@@ -222,7 +222,7 @@ def test_S1_a_score_between_two_rungs_completes_with_the_providers_own_number(re
             {
                 "answers": {
                     "design.one-reason": {"type": "score", "score": 1.22, "confidence": 0.8},
-                    "contract.error-handling": {"type": "noul", "noul": 0.9},
+                    "repo.error-handling": {"type": "noul", "noul": 0.9},
                 }
             }
         )
@@ -243,7 +243,7 @@ def test_S3_a_score_outside_its_declared_levels_is_incomplete_naming_the_questio
             {
                 "answers": {
                     "design.one-reason": {"type": "score", "score": 4.0, "confidence": 0.9},
-                    "contract.error-handling": {"type": "noul", "noul": 0.9},
+                    "repo.error-handling": {"type": "noul", "noul": 0.9},
                 }
             }
         )
@@ -271,11 +271,11 @@ def test_S4_the_report_names_revisions_questions_model_and_usage(review):
     assert review.screen(RESPONSE) == 0
     report = review.report()
     assert report["input"] == {"base": review.base, "head": review.head}
-    assert report["questions"] == [
-        {"id": "contract.error-handling", "priority": "critical", "type": "noul"},
-        {"id": "engineering.names-meaning", "priority": "advisory", "type": "noul"},
+    assert report["questions"][-3:] == [
+        {"id": "repo.error-handling", "priority": "critical", "type": "noul"},
+        {"id": "repo.names-meaning", "priority": "advisory", "type": "noul"},
         {"id": "design.one-reason", "priority": "high", "type": "score"},
-    ], "the report names the question configuration it evaluated (D26, D51)"
+    ], "the report names the configuration's additions after the baseline it extends (D26, D51)"
     assert report["model"] == "test-model-v1"
     assert report["usage"]["requests"] == 1
     assert isinstance(report["usage"]["input_tokens"], int)
@@ -341,8 +341,8 @@ def test_S6_an_incomplete_run_keeps_the_usage_and_the_judgments_it_learned(revie
             {
                 "model": "jev-1.14.0",
                 "answers": {
-                    "contract.error-handling": {"type": "noul", "noul": 0.9},
-                    "engineering.names-meaning": {"type": "noul", "noul": 1.4},
+                    "repo.error-handling": {"type": "noul", "noul": 0.9},
+                    "repo.names-meaning": {"type": "noul", "noul": 1.4},
                 },
                 "usage": {"input_tokens": 321, "output_tokens": 9},
             }
@@ -351,15 +351,15 @@ def test_S6_an_incomplete_run_keeps_the_usage_and_the_judgments_it_learned(revie
     ), "an answer the question does not allow is not a clean verdict"
     report = review.report()
     assert report["status"] == "incomplete"
-    assert "engineering.names-meaning" in report["failure"]["reason"], (
+    assert "repo.names-meaning" in report["failure"]["reason"], (
         "the refusal still names the question it refused"
     )
     assert report["usage"]["input_tokens"] == 321, (
         "the usage the provider charged for is the only record of a screening that was paid for"
     )
-    assert [judgment["question"] for judgment in report["judgments"]] == [
-        "contract.error-handling"
-    ], "the judgment learned before the refusal is kept, and the refused one is not"
+    assert [judgment["question"] for judgment in report["judgments"]] == ["repo.error-handling"], (
+        "the judgment learned before the refusal is kept, and the refused one is not"
+    )
 
 
 def test_S6_a_refusal_names_the_report_it_leaves_standing(review, capsys):
@@ -417,7 +417,7 @@ def test_S6_a_report_that_cannot_be_written_is_a_refusal_that_keeps_what_was_scr
     assert str(review.output) in captured.err, "the refusal names the path it could not write"
     assert review.head[:7] in captured.err, "and the change that was screened"
     assert "Traceback" not in captured.err
-    assert "contract.error-handling" in captured.out, (
+    assert "repo.error-handling" in captured.out, (
         "the screening was paid for, so the summary keeps what it learned when the report cannot be "
         "written"
     )

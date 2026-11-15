@@ -19,11 +19,11 @@ CONFIG = textwrap.dedent(
     """\
     model: test-model-v1
     questions:
-      - id: contract.error-handling
+      - id: repo.error-handling
         priority: critical
         type: noul
         ask: Does the change keep the documented error-handling contract
-      - id: engineering.names-meaning
+      - id: repo.names-meaning
         priority: advisory
         type: noul
         ask: Do the new names say what they mean
@@ -33,8 +33,8 @@ CONFIG = textwrap.dedent(
 RESPONSE = {
     "model": "jev-1.14.0",
     "answers": {
-        "contract.error-handling": {"type": "noul", "noul": 0.9},
-        "engineering.names-meaning": {"type": "noul", "noul": 0.1},
+        "repo.error-handling": {"type": "noul", "noul": 0.9},
+        "repo.names-meaning": {"type": "noul", "noul": 0.1},
     },
     "usage": {"input_tokens": 900, "output_tokens": 20},
 }
@@ -129,13 +129,17 @@ def test_S1_the_cli_screens_the_frozen_diff_between_two_revisions(revisions):
     assert main(revisions.args()) == 0
     screened = report(revisions)
     assert screened["input"] == {"base": revisions.base, "head": revisions.head}
-    assert [question["id"] for question in screened["questions"]] == [
-        "contract.error-handling",
-        "engineering.names-meaning",
-    ], "the configured bank is what the run evaluates"
+    asked = [question["id"] for question in screened["questions"]]
+    assert asked[: len(questions.baseline().questions)] == [
+        question.id for question in questions.baseline().questions
+    ], "the mandatory baseline is asked whatever the repository declares"
+    assert asked[len(questions.baseline().questions) :] == [
+        "repo.error-handling",
+        "repo.names-meaning",
+    ], "the repository's own questions extend the baseline the run evaluates"
     assert {judgment["question"]: judgment["value"] for judgment in screened["judgments"]} == {
-        "contract.error-handling": 0.9,
-        "engineering.names-meaning": 0.1,
+        "repo.error-handling": 0.9,
+        "repo.names-meaning": 0.1,
     }, "the native judgments the port returned are what the run reports"
     assert screened["usage"]["requests"] == 1, "the port is called once per screening (D40)"
 
@@ -150,12 +154,15 @@ def test_S1_the_packaged_baseline_bank_is_evaluated_without_a_configuration(revi
     assert screened["model"] == questions.baseline().model
 
 
-def test_S1_a_configuration_that_asks_nothing_is_refused_before_screening(revisions, capsys):
+def test_S1_a_configuration_that_adds_no_question_screens_the_baseline_alone(revisions):
     revisions.config.write_text("model: test-model-v1\nquestions: []\n", encoding="utf-8")
-    assert main(revisions.args()) == 2, "a screening that asks nothing must not exit 0"
-    refused = capsys.readouterr()
-    assert "questions" in refused.err
-    assert refused.out == "", "a refusal writes no screening answer"
+    revisions.fixture.write_text(json.dumps({"responses": [{"answers": {}}]}), encoding="utf-8")
+    assert main(revisions.args()) == 0, (
+        "an empty additions list is legal and asks the baseline (D05)"
+    )
+    assert [question["id"] for question in report(revisions)["questions"]] == [
+        question.id for question in questions.baseline().questions
+    ]
 
 
 def test_S1_an_unknown_revision_is_refused_naming_it(revisions, capsys):

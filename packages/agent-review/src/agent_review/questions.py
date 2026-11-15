@@ -1,17 +1,29 @@
 """The configured question bank: one model and the curated, stable questions it is asked (D04, D29, D49).
 
 An invocation without a configuration evaluates the packaged baseline, the mandatory global bank. A
-configuration replaces that bank in this phase: additive repository questions, which extend the baseline
-and never override or disable it, are a later phase's (D05). Only the surface this phase uses is validated
+configuration is additive (D05): its questions extend the baseline, which is asked whatever the repository
+declares, and a repository question that repeats a baseline id is refused by name, because extending the
+baseline is not replacing it - no repository can override or disable a mandatory question. An empty
+additions list is legal and asks the baseline alone, so a configuration that only protects paths or
+recalibrates a threshold needs no question of its own. Only the surface this phase uses is validated
 (P0-D4): the model, and each question's id, priority, ask, type and criteria. The type names the instrument
 the question is asked with - a bounded yes/no question is a `noul`, a graded one a `score`, a classified
 one a `choice` - and `criteria` carries what that instrument needs: the ladder of levels a score is graded
 on (required), the optional criteria mapping a noul may declare, or the options a choice is answered with
 (required). A criteria field of the wrong shape for its type is a misplaced field, not a preference, so it
-is refused rather than sent. A bank that asks nothing is refused, so no screening completes having
-evaluated no question. A refusal names the question and the field by its path, so a long bank is fixable.
+is refused rather than sent. A refusal names the question and the field by its path, so a long bank is
+fixable.
 
-The bank also carries the paths this run protects and the safeguards it declares. The packaged baseline
+The numbers a screening is decided with are configuration too, never the model's choice (D07, D48): the
+bank carries the per-question `weights` and the calibrated `thresholds` - the value a question's answer
+must clear and the confidence band it must keep - beside its questions, and a repository's declaration
+adds to the packaged baseline's per question rather than dropping it, so no configuration silently
+un-calibrates a question the baseline calibrated. A threshold may name a question this run does not ask:
+a repository carries the calibration of its whole catalogue and asks part of it per run.
+
+The bank also carries the paths this run protects, the safeguards it declares and the budgets a change is
+split under (`chunk`, `cross_file`): the first two are read by rules, the last two by the chunking stage,
+and all four are refused here by path when their shape is not one a stage can read. The packaged baseline
 ships the mandatory sensitive paths (D13); a repository's configuration extends that list and never
 replaces it, so the two lists are carried apart and joined where the rule reads them (SG-D4). A declaration
 a rule will read is refused here, by its field path, when its shape is not the one that rule can use: a
@@ -37,10 +49,26 @@ DEFAULT_TYPE = "noul"
 # D51: identity is authoring-time. A stable, dotted id lets a frozen report name the question it evaluated.
 QUESTION_ID = re.compile(r"[a-z0-9]+(\.[a-z0-9-]+)+")
 
-TOP_LEVEL = ("model", "questions", "sensitive_paths", "safeguards")
+TOP_LEVEL = (
+    "model",
+    "questions",
+    "sensitive_paths",
+    "safeguards",
+    "weights",
+    "thresholds",
+    "chunk",
+    "cross_file",
+)
 FIELDS = ("id", "priority", "type", "ask", "criteria")
-# The safeguard declarations whose shape a rule reads; a declaration no rule reads is carried as configured.
+# The declarations whose shape a rule reads; a declaration no rule reads is carried as configured.
 DECLARATIONS = ("stdlib_only",)
+# The run's own declarations the question bank carries whole, so the stage that reads one finds it here. Each is
+# a block of budgets and limits: a positive whole number per setting, refused here rather than honoured nowhere.
+CARRIED = ("chunk", "cross_file")
+# What a question weighs in a screening when no configuration declares a weight for it.
+DEFAULT_WEIGHT = 1.0
+# A threshold's own fields: the value an answer must clear, and the confidence band it must keep.
+THRESHOLD_FIELDS = ("value", "confidence")
 
 # A score's ladder needs two ends to grade between; a choice needs two options to choose between.
 MIN_LEVELS = 2
@@ -63,6 +91,28 @@ class Question:
 
 
 @dataclass(frozen=True)
+class Threshold:
+    """One question's calibrated numbers: the value its answer must clear, and the confidence band.
+
+    Both are the tool's own decision inputs and never travel to the provider (D07, D48). A noul is
+    escalated when its probability falls below `value`; a score, whose ladder runs from best to worst, when
+    its position rises above it. `confidence` is the band below which an answer abstains whatever its value.
+    """
+
+    value: float | None = None
+    confidence: float | None = None
+
+    def as_dict(self) -> dict[str, float]:
+        """The threshold as configured, without the half it does not declare."""
+        declared: dict[str, float] = {}
+        if self.value is not None:
+            declared["value"] = self.value
+        if self.confidence is not None:
+            declared["confidence"] = self.confidence
+        return declared
+
+
+@dataclass(frozen=True)
 class QuestionBank:
     """The bank one run evaluates: the screening model and the questions, in configuration order.
 
@@ -72,21 +122,79 @@ class QuestionBank:
 
     `sensitive_paths` are the paths this configuration protects: the packaged baseline's mandatory ones,
     or a repository's own, which the rule adds to the baseline rather than substituting for it (D13).
+
+    `weights` and `thresholds` are what the screening is decided with, declared beside the questions and
+    never chosen by the model: a question's weight, and the calibrated value and confidence band its
+    answer is read against. `chunk` and `cross_file` are the budgets the chunking stage reads: accepted and
+    shape-checked here, honoured there.
     """
 
     model: str
     questions: tuple[Question, ...]
     safeguards: Mapping[str, Any] = field(default_factory=dict)
     sensitive_paths: tuple[str, ...] = ()
+    weights: Mapping[str, float] = field(default_factory=dict)
+    thresholds: Mapping[str, Threshold] = field(default_factory=dict)
+    chunk: Mapping[str, Any] = field(default_factory=dict)
+    cross_file: Mapping[str, Any] = field(default_factory=dict)
+
+    def weight(self, question: Question | str) -> float:
+        """What this question weighs, and `DEFAULT_WEIGHT` when no configuration declares one."""
+        identifier = question if isinstance(question, str) else question.id
+        return self.weights.get(identifier, DEFAULT_WEIGHT)
+
+    def threshold(self, question: Question | str) -> Threshold | None:
+        """This question's calibrated numbers, or nothing when no configuration declares them."""
+        identifier = question if isinstance(question, str) else question.id
+        return self.thresholds.get(identifier)
 
 
 def baseline() -> QuestionBank:
     """The packaged global bank: an invocation without a configuration evaluates exactly these (D30)."""
-    return load(BASELINE)
+    return _bank(_data(BASELINE), BASELINE)
 
 
 def load(path: Path | str) -> QuestionBank:
-    """Read one YAML configuration, refusing what the schema does not name."""
+    """One repository configuration, read as the additions that extend the packaged baseline (D05).
+
+    The baseline is asked whatever this configuration declares, so the merged bank is its questions first
+    and the repository's own after them; a repository question that repeats a baseline id is refused by
+    name. The configuration's weights and thresholds are laid over the baseline's per question, so a
+    repository recalibrates what it names and leaves the rest calibrated.
+    """
+    path = Path(path)
+    data = _data(path)
+    packaged = baseline()
+    additions = _questions(data, path)
+    _extending(additions, packaged, path)
+    return QuestionBank(
+        model=_model(data, path),
+        questions=packaged.questions + additions,
+        safeguards=_safeguards(data, path),
+        sensitive_paths=_sensitive_paths(data, path),
+        weights=_weights(data, path, packaged.weights),
+        thresholds=_thresholds(data, path, packaged.thresholds),
+        chunk=_carried(data, "chunk", path),
+        cross_file=_carried(data, "cross_file", path),
+    )
+
+
+def _bank(data: dict[str, Any], path: Path) -> QuestionBank:
+    """The packaged baseline as a bank of its own: its questions, the paths it protects and its numbers."""
+    return QuestionBank(
+        model=_model(data, path),
+        questions=_questions(data, path),
+        safeguards=_safeguards(data, path),
+        sensitive_paths=_sensitive_paths(data, path),
+        weights=_weights(data, path, {}),
+        thresholds=_thresholds(data, path, {}),
+        chunk=_carried(data, "chunk", path),
+        cross_file=_carried(data, "cross_file", path),
+    )
+
+
+def _data(path: Path) -> dict[str, Any]:
+    """One configuration file as the mapping it holds, refusing what the schema does not name."""
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8")
@@ -109,12 +217,144 @@ def load(path: Path | str) -> QuestionBank:
             f"the question configuration {path} has an unknown field {unknown[0]!r}; "
             f"it takes {', '.join(TOP_LEVEL)}"
         )
-    return QuestionBank(
-        model=_model(data, path),
-        questions=_questions(data, path),
-        safeguards=_safeguards(data, path),
-        sensitive_paths=_sensitive_paths(data, path),
+    return data
+
+
+def _extending(additions: tuple[Question, ...], packaged: QuestionBank, path: Path) -> None:
+    """Refuse an addition that repeats a baseline id, naming the id and the way out (D05).
+
+    Extending the baseline is not replacing it: a repository that wants a question of its own declares a
+    new id, and a repository that wants a calibrated question keeps the baseline's and calibrates it
+    through `thresholds`.
+    """
+    baseline_ids = {question.id for question in packaged.questions}
+    for index, question in enumerate(additions):
+        if question.id not in baseline_ids:
+            continue
+        raise ReviewError(
+            f"{path}: questions[{index}].id is {question.id!r}, which the mandatory baseline already "
+            "asks; a repository question extends the baseline and never replaces or disables one - "
+            "declare a new id, or calibrate the baseline's question through `thresholds`"
+        )
+
+
+def _weights(
+    data: dict[str, Any], path: Path, inherited: Mapping[str, float]
+) -> Mapping[str, float]:
+    """The weight each question carries, the configuration's laid over the bank it extends (D07, D48)."""
+    if "weights" not in data:
+        return dict(inherited)
+    declared = data["weights"]
+    if not isinstance(declared, dict):
+        raise ReviewError(
+            f"{path}: weights must be a mapping of question id to weight, not "
+            f"{type(declared).__name__}"
+        )
+    weights = dict(inherited)
+    for identifier, weight in declared.items():
+        if not isinstance(identifier, str) or not QUESTION_ID.fullmatch(identifier):
+            raise ReviewError(
+                f"{path}: weights names {identifier!r}, which is not a dotted lowercase question id"
+            )
+        weights[identifier] = _number(weight, f"weights[{identifier!r}]", path)
+    return weights
+
+
+def _thresholds(
+    data: dict[str, Any], path: Path, inherited: Mapping[str, Threshold]
+) -> Mapping[str, Threshold]:
+    """The calibrated numbers per question, the configuration's laid over the bank it extends."""
+    if "thresholds" not in data:
+        return dict(inherited)
+    declared = data["thresholds"]
+    if not isinstance(declared, dict):
+        raise ReviewError(
+            f"{path}: thresholds must be a mapping of question id to its calibrated numbers, not "
+            f"{type(declared).__name__}"
+        )
+    thresholds = dict(inherited)
+    for identifier, entry in declared.items():
+        if not isinstance(identifier, str) or not QUESTION_ID.fullmatch(identifier):
+            raise ReviewError(
+                f"{path}: thresholds names {identifier!r}, which is not a dotted lowercase question id"
+            )
+        thresholds[identifier] = _threshold(entry, f"thresholds[{identifier!r}]", path)
+    return thresholds
+
+
+def _threshold(entry: Any, field_name: str, path: Path) -> Threshold:
+    """One question's calibrated numbers, or a refusal naming the field by its path (D48)."""
+    if not isinstance(entry, dict):
+        raise ReviewError(
+            f"{path}: {field_name} must be a mapping with {', '.join(THRESHOLD_FIELDS)}, not "
+            f"{type(entry).__name__}"
+        )
+    unknown = sorted(set(entry) - set(THRESHOLD_FIELDS))
+    if unknown:
+        raise ReviewError(
+            f"{path}: {field_name} has an unknown field {unknown[0]!r}; it takes "
+            f"{', '.join(THRESHOLD_FIELDS)}"
+        )
+    if not entry:
+        raise ReviewError(
+            f"{path}: {field_name} declares nothing; give the question the value its answer must clear "
+            "or the confidence band it must keep"
+        )
+    value = entry.get("value")
+    confidence = entry.get("confidence")
+    return Threshold(
+        value=None if value is None else _number(value, f"{field_name}.value", path),
+        confidence=None
+        if confidence is None
+        else _band(confidence, f"{field_name}.confidence", path),
     )
+
+
+def _number(value: Any, field_name: str, path: Path) -> float:
+    """A declared number, refused when it is not one a rule can read: a boolean, a text or a negative."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ReviewError(
+            f"{path}: {field_name} must be a number of zero or more, not {value!r}; a number a rule "
+            "cannot read would decide nothing"
+        )
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ReviewError(f"{path}: {field_name} must be a finite number, not {value!r}")
+    return number
+
+
+def _band(value: Any, field_name: str, path: Path) -> float:
+    """A confidence band: a probability, so a number between zero and one (D48)."""
+    band = _number(value, field_name, path)
+    if band > 1:
+        raise ReviewError(
+            f"{path}: {field_name} must be a confidence between 0 and 1, not {value!r}; a band above "
+            "one would abstain on every answer"
+        )
+    return band
+
+
+def _carried(data: dict[str, Any], name: str, path: Path) -> Mapping[str, Any]:
+    """A block of budgets the chunking stage reads, carried beside the questions and checked for its shape.
+
+    `chunk` and `cross_file` are honoured where a change is split and a cross-file question is bounded, not
+    here, but their shape is refused here: a budget no stage can read (`chunk: {max_diff_tokens: banana}`)
+    would otherwise be accepted silently and leave the request unbounded.
+    """
+    if name not in data:
+        return {}
+    block = data[name]
+    if not isinstance(block, dict):
+        raise ReviewError(
+            f"{path}: {name} must be a mapping of settings, not {type(block).__name__}"
+        )
+    for setting, value in block.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ReviewError(
+                f"{path}: {name}[{setting!r}] must be a positive whole number, not {value!r}; it is a "
+                "budget the chunking stage reads"
+            )
+    return dict(block)
 
 
 def _model(data: dict[str, Any], path: Path) -> str:
@@ -165,17 +405,14 @@ def _paths(value: Any, field: str, path: Path, *, noun: str) -> tuple[str, ...]:
 
 
 def _questions(data: dict[str, Any], path: Path) -> tuple[Question, ...]:
-    if "questions" not in data:
-        raise ReviewError(
-            f"the question configuration {path} has no questions: add `questions: [...]`"
-        )
-    entries = data["questions"]
+    """The questions this configuration declares, in its own order: its additions to the bank it extends.
+
+    An empty (or absent) list is legal: the baseline is asked alone, which is what a configuration that
+    only protects a path or recalibrates a threshold declares (D05).
+    """
+    entries = data.get("questions", [])
     if not isinstance(entries, list):
         raise ReviewError(f"{path}: questions must be a list, not {type(entries).__name__}")
-    if not entries:
-        raise ReviewError(
-            f"{path}: questions is empty; a screening that asks nothing is not a screening"
-        )
     questions: list[Question] = []
     seen: dict[str, int] = {}
     for index, entry in enumerate(entries):

@@ -36,11 +36,11 @@ FIXED = "109c98b"
 CONFIG = """\
 model: jev-latest
 questions:
-  - id: contract.error-handling
+  - id: repo.error-handling
     priority: critical
     type: noul
     ask: Does the change keep every new failure actionable
-  - id: engineering.hidden-state
+  - id: repo.hidden-state
     priority: high
     type: noul
     ask: Does the change keep its state explicit
@@ -53,8 +53,8 @@ safeguards:
 CANNED = {
     "model": "jev-1.14.0",
     "answers": {
-        "contract.error-handling": {"type": "noul", "noul": 0.8},
-        "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+        "repo.error-handling": {"type": "noul", "noul": 0.8},
+        "repo.hidden-state": {"type": "noul", "noul": 0.7},
     },
     "usage": {"input_tokens": 120, "output_tokens": 12},
 }

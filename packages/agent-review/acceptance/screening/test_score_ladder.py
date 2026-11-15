@@ -40,14 +40,14 @@ questions:
       - the change swallows unrelated concerns
       - the change has no single reason a reader could name
     ask: How severely does the change violate one reason to change
-  - id: engineering.hidden-state
+  - id: repo.hidden-state
     priority: high
     type: noul
     ask: Does the change keep its state explicit
 """
 
 SCORE = "design.one-reason"
-NOUL = "engineering.hidden-state"
+NOUL = "repo.hidden-state"
 
 
 def git(where, *args):
