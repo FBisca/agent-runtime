@@ -64,6 +64,12 @@ class EngineHomeTests(unittest.TestCase):
         workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("uv run pytest -n 4", workflow)
         self.assertIn("suite_budget.py", workflow)
+        # The structure budget is the same kind of check: the tree, measured against its baseline.
+        self.assertIn(
+            "python3 scripts/structure_budget.py --root . "
+            "--baseline acceptance/structure/structure_budget.json",
+            " ".join(workflow.split()),
+        )
         for budget in ("RUFF_CHECK_BUDGET", "RUFF_FORMAT_BUDGET", "TY_BUDGET"):
             self.assertIn(budget, workflow)
         self.assertIn("ty check packages/", workflow)
