@@ -114,6 +114,24 @@ class BoundedLockTests(LedgerCase):
             sum(clock.slept), 60.0, places=6, msg="the sleeps are in the deadline"
         )
 
+    def test_S2_the_deadline_reads_the_test_seam_and_an_unusable_value_keeps_sixty(self):
+        """orchestrator-engine/R72: a test that asserts the deadline pays the injected one, not 60 s."""
+        self.assertEqual(ledgers.deadline({}), ledgers.DEADLINE)
+        self.assertEqual(ledgers.deadline({ledgers.DEADLINE_ENV: "0.25"}), 0.25)
+        for bad in ("", "soon", "0", "-1"):
+            self.assertEqual(ledgers.deadline({ledgers.DEADLINE_ENV: bad}), ledgers.DEADLINE)
+
+    def test_S2_the_injected_deadline_reaches_the_lock_so_the_test_need_not_wait_a_minute(self):
+        """orchestrator-engine/R72"""
+        self.hold()
+        started = time.monotonic()
+        with mock.patch.dict(os.environ, {ledgers.DEADLINE_ENV: "0.2"}):
+            with self.assertRaises(ledgers.LedgerBusy) as caught:
+                with ledgers.locked(self.path):
+                    pass
+        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertEqual(str(caught.exception), "ledger busy >0.2s")
+
     def test_S2_a_busy_ledger_is_not_a_value_error_the_loop_could_swallow(self):
         """orchestrator-engine/R72: the loop's step handlers catch `ValueError` and go on; a busy ledger must reach the
         crash guard instead."""

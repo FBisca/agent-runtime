@@ -537,3 +537,16 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | Requirement | Scenario | Test nodes |
 |---|---|---|
 | R156 | S1 | `packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_does_not_name_the_scenario_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_selects_none_of_the_scenarios_tests_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_also_selects_another_scenarios_test_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_an_anchored_selector_keeps_the_plan_valid`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_a_check_without_k_is_not_linted`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_a_legacy_plan_is_not_linted` |
+
+## Requirements: suite-cost
+
+- **R157** WHEN a YAML plan's worker changes a test it covers in `covers`, THEN its packet names the `tdd` skill and inlines that skill's admission and cost rules for a backend with no skill loader, its report carries test_cost with the `--durations` command, each touched test file's seconds and each covered node's seconds, and verify refuses the report without those rows. (from suite-cost/S2)
+- **R158** WHEN a reviewer reviews a diff that adds or changes tests, THEN its brief runs the test_cost command or its own `--durations` profile and treats a new or changed test over two seconds, or a module that grew materially without a new boundary, as a blocking defect naming the node, its seconds and the cheaper level that keeps the guarantee. (from suite-cost/S3)
+
+## Coverage: suite-cost
+
+| Requirement | Scenario | Test nodes |
+|---|---|---|
+| R157 | S2 | `packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S4_the_brief_names_the_tdd_skill_and_the_test_cost_report`<br>`packages/agent-orchestrator/tests/test_verify.py::TestCostTests::test_S1_a_changed_test_without_test_cost_is_refused_naming_the_file_and_the_fix`<br>`packages/agent-orchestrator/tests/test_verify.py::TestCostTests::test_S1_a_test_cost_without_a_durations_command_is_refused` |
+| R158 | S3 | `packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S4_the_brief_measures_a_tests_cost_and_blocks_a_material_slowdown` |
+

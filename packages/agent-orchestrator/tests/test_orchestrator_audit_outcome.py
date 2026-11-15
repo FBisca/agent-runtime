@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 import pytest
 import yaml
@@ -239,22 +240,26 @@ class LedgerContentionOutcome(Drives, GateFixture, unittest.TestCase):
         self.assertEqual((self.task()["status"], self.task()["gate"]), ("COMPLETE", "done"))
 
     def test_a_ledger_busy_past_the_deadline_logs_a_crash_and_writes_a_wake(self):
-        """orchestrator-audit-fixes/S2: past 60 s the driver logs `crashed ledger busy >60s`, wakes the Lead without the
-        lock and exits non-zero."""
-        held, flag = self.hold(150)
+        """orchestrator-audit-fixes/S2: past the deadline the driver logs `crashed ledger busy ><deadline>`,
+        wakes the Lead without the lock and exits non-zero.
+
+        The deadline is injected, so the test observes the same refusal in 1.5 s instead of paying the real 60
+        seconds: it asserts the deadline reached the lock, not that a minute passed."""
+        held, flag = self.hold(5)
         worker = self.worker_done(tests=True)
         worker["run"] = held["run"]
         started = time.monotonic()
-        code, out, err = self.drive_process([worker, self.reviewer_done()], 110)
+        with mock.patch.dict(os.environ, {"AGENT_ORCHESTRATOR_LEDGER_DEADLINE": "1.5"}):
+            code, out, err = self.drive_process([worker, self.reviewer_done()], 10)
         self.assertTrue(flag.exists(), "the Lead command never held the ledger lock")
-        self.assertIsNotNone(code, "the driver neither booked nor gave up within 110 s")
+        self.assertIsNotNone(code, "the driver neither booked nor gave up within 10 s")
         self.assertNotEqual(code, 0)
         logged = out + err + self.run_files_text()
         self.assertTrue(
-            "crashed ledger busy >60s" in logged, "no crash was logged: %s" % err[-600:]
+            "crashed ledger busy >1.5s" in logged, "no crash was logged: %s" % err[-600:]
         )
         self.assertGreaterEqual(
-            time.monotonic() - started, 55, "the driver gave up before the deadline"
+            time.monotonic() - started, 1.2, "the driver gave up before the deadline"
         )
         self.assertTrue(
             [w for w in self.wakes() if "crashed" in w.get("text", "")],

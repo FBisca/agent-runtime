@@ -77,31 +77,41 @@ class GateFixture(RunFixture):
     extra_files = None  # worktree path -> text the worker also writes
     COVERS = {"S1": ["src/a/test_a.py::test_a"]}
 
+    def measured(self, covers):
+        """The `test_cost` a YAML ticket reports: its command, its modules and its covered nodes."""
+        nodes = [node for nodes in covers.values() for node in nodes]
+        return {
+            "command": "uv run pytest src/a --durations=0 -q",
+            "modules": {node.split("::")[0]: 0.2 for node in nodes},
+            "tests": {node: 0.2 for node in nodes},
+        }
+
     def report(self, task_id, **over):
         yaml_plan = self.plan.name.endswith(".plan.yaml")
-        return json.dumps(
-            dict(
-                {
-                    # A YAML plan's ticket reports contract 3 and maps its scenarios to test nodes.
-                    "contract": 3 if yaml_plan else 1,
-                    **({"covers": self.COVERS} if yaml_plan else {}),
-                    "task_id": task_id,
-                    "status": "COMPLETE",
-                    "summary": "done",
-                    "acceptance_met": True,
-                    "files": [],
-                    "decisions": [],
-                    "interfaces": [],
-                    "remaining": [],
-                    "checks": [],
-                    "review_rounds": 0,
-                    "usage": "unknown",
-                    "head": "abc1234",
-                    "pr": "https://github.com/o/r/pull/7",
-                },
-                **over,
-            )
+        data = dict(
+            {
+                # A YAML plan's ticket reports contract 3 and maps its scenarios to test nodes.
+                "contract": 3 if yaml_plan else 1,
+                **({"covers": self.COVERS} if yaml_plan else {}),
+                "task_id": task_id,
+                "status": "COMPLETE",
+                "summary": "done",
+                "acceptance_met": True,
+                "files": [],
+                "decisions": [],
+                "interfaces": [],
+                "remaining": [],
+                "checks": [],
+                "review_rounds": 0,
+                "usage": "unknown",
+                "head": "abc1234",
+                "pr": "https://github.com/o/r/pull/7",
+            },
+            **over,
         )
+        if yaml_plan and "test_cost" not in over:
+            data["test_cost"] = self.measured(data["covers"])
+        return json.dumps(data)
 
     def worker_done(self, task_id="t1", tests=False, report=None, name="demo-t1"):
         """A wait step: the worker wrote its report (and, with tests, a tagged test) and says complete."""

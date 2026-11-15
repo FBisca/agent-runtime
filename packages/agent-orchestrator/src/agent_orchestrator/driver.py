@@ -70,17 +70,18 @@ PAYLOAD_GRACE = 5.0
 PAYLOAD_WARNINGS = 2
 
 
-def payload_waits(paths, grace=None):
+def payload_waits(paths, grace=None, clock=time.monotonic, sleep=time.sleep):
     """Wait, bounded, for the file a report names; True when it is there.
 
-    `paths` is one path, or the paths the agent named: the first one that is there ends the wait.
-    """
+    `paths` is one path, or the paths the agent named: the first one that is there ends the wait. The
+    clock and the sleep are seams: a test that asserts the bound moves the injected clock instead of
+    paying the grace on every run (R214)."""
     candidates = [paths] if isinstance(paths, (str, Path)) else list(paths)
-    deadline = time.monotonic() + (PAYLOAD_GRACE if grace is None else grace)
+    deadline = clock() + (PAYLOAD_GRACE if grace is None else grace)
     while not any(Path(p).exists() for p in candidates):
-        if time.monotonic() >= deadline:
+        if clock() >= deadline:
             return False
-        time.sleep(0.05)
+        sleep(0.05)
     return True
 
 
@@ -619,17 +620,39 @@ MATRIX = {
 CONTRACT = """# Contract for every task in this run
 
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
-  {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
+  {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"},"test_cost":null}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
 - A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node, unless the plan's evidence for it brings its own test files (acceptance files or oracles) or is `human` (a person checks it): map such a scenario only to tests this ticket changes, never to a test written to stand in for the check.
 - COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m`, `rtk proxy` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`, and `rtk proxy uv run pytest -q` matches `uv run pytest -q`; any other prefix does not. Each required command is required once, a launcher spelling apart, and the one `not_run` allowance (`affected` with a `reason`, when no test was selected) never waives a command another tier also requires. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
 - Red-first: one test per scenario, named with its S-ID, seen failing before the code exists.
+- TDD: before your first edit read the `tdd` skill's `SKILL.md` and its `rules.md`; your task names the path. Codex has no skill loader, so these rules are the whole skill here: one behaviour per test at the cheapest level that shows it; build expensive setup once per class and let readers share it; wait on an event or an injected clock, never a sleep; admit a test only when it protects a requirement or a credible failure, is not already covered at the same boundary, and would fail on a regression someone could ship. Name the seams and the admission answers in report.md.
+- Test cost: a YAML ticket whose diff adds or changes a test reports `"test_cost": {"command": "uv run pytest <paths> --durations=0 -q", "modules": {"<test file>": <seconds>}, "tests": {"<path::test>": <seconds>}}`. verify refuses the report without a row for every touched test file and every covered node.
 - Fix the class, not the instance: when you fix a defect, search for every other place with the same pattern.
 - Edit only the Paths your task owns. Never touch other worktrees or the main checkout.
 - Commit with Conventional Commits and push the branch. Describe behaviour, not plan ticket numbers.
 """
+
+
+TDD_SKILL_ENV = "AGENT_RUNTIME_TDD_SKILL"
+TDD_SKILL_PLACES = ("~/.agents/skills/tdd/SKILL.md", "~/.claude/skills/tdd/SKILL.md")
+
+
+def tdd_skill_path(env=None):
+    """The `tdd` skill's SKILL.md: the environment's path, else the places a host installs it.
+
+    A backend with no skill loader still gets the admission and cost rules in the contract; this
+    path is what a Claude or Pi worker reads before its first edit."""
+    env = os.environ if env is None else env
+    named = env.get(TDD_SKILL_ENV)
+    if named:
+        return named
+    for place in TDD_SKILL_PLACES:
+        path = Path(os.path.expanduser(place))
+        if path.is_file():
+            return str(path)
+    return None
 
 
 def worker_name(slug, number, tail=""):
@@ -3019,17 +3042,24 @@ class Driver:
                 "code path rather than on a mock of it, and it names its scenario id. Reverting the change makes it "
                 "fail. A test that would pass without the change, or that asserts a call happened instead of what the "
                 "behaviour promises, is `blocking`: that is the scenario not really tested.",
-                "4. The report matches the code: every `covers` node is a test that exists at the commit you review, "
+                "4. Test cost: the report's `test_cost` is the measurement, not the claim. Run its command (or "
+                "`uv run pytest <the diff's test files> --durations=0 -q`) and compare each new or changed test's "
+                "seconds and each touched module's seconds with the run before this change. A new or changed test "
+                "over 2 s, a module whose seconds grew materially without a new boundary, or a test that re-proves a "
+                "guarantee at a costlier level is `blocking`: it slows every later run. Name the node, its seconds "
+                "and the cheaper level that keeps the guarantee.",
+                "5. The report matches the code: every `covers` node is a test that exists at the commit you review, "
                 "every `checks` entry is a command with the outcome the log shows, `head` is the commit you are "
                 "reviewing, and `files` covers the diff. A claim the code contradicts is `blocking`.",
-                "5. The numbered requirements it touches still hold: read the spec the plan names, and raise the "
+                "6. The numbered requirements it touches still hold: read the spec the plan names, and raise the "
                 "`requirement_violation` `blocking` item described below when one does not.",
-                "6. The code follows the repository's rules: the ones above, its own conventions, no secret in the "
+                "7. The code follows the repository's rules: the ones above, its own conventions, no secret in the "
                 "diff or a log, and no behaviour nobody asked for (that last one is a `concern`, not a block).",
-                "7. Only then judge severity and write the review: everything the pass found, each item once.",
+                "8. Only then judge severity and write the review: everything the pass found, each item once.",
                 "",
-                "Block only on MAJOR defects: wrong behaviour, data loss, or a scenario that is not really tested. "
-                "Everything else is a `concern`, `question`, `nit` or `deferred` item; it never blocks.",
+                "Block only on MAJOR defects: wrong behaviour, data loss, a scenario that is not really tested, or a "
+                "test that materially slows the suite. Everything else is a `concern`, `question`, `nit` or "
+                "`deferred` item; it never blocks.",
                 "A defect that breaks a numbered requirement is a `blocking` item that also asserts "
                 "`requirement_violation` {`source`, `id`, `expected`, `observed`}: the spec or plan file, the requirement "
                 "id, what it promises and what the code does instead, each nonempty, beside the item's own file, line, "
@@ -7341,6 +7371,8 @@ class Driver:
                 "Shared databases are read-only; schema changes go through migrations in your own branch.",
                 "",
                 "Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists.",
+                "Read the `tdd` skill first: %s (and its rules.md)."
+                % (tdd_skill_path() or "the TDD rules in the contract"),
                 "",
                 *scenarios,
                 "",

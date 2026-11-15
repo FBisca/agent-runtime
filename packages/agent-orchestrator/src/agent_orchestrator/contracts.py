@@ -200,6 +200,19 @@ class Check(Open):
     outcome: str = ""
 
 
+class TestCost(Strict):
+    """What the tests a ticket added or changed cost, measured with `--durations`.
+
+    `command` is the command that measured it (it must name `--durations`); `modules` maps each
+    touched test file to its seconds, `tests` maps each covered `path::name` node to its seconds.
+    Verify requires a `test_cost` only when the ticket's diff adds or changes a test, so a report
+    from before the field existed is still read."""
+
+    command: str = Field(min_length=1)
+    modules: dict[str, float] = Field(default_factory=dict)
+    tests: dict[str, float] = Field(default_factory=dict)
+
+
 class Report(Strict):
     """The worker's report: the ledger checkpoint shape plus the commit and the pull request."""
 
@@ -223,6 +236,8 @@ class Report(Strict):
     context: dict[str, Any] | None = None
     # Contract 3: each scenario the ticket satisfies, mapped to the test nodes (`path::name`) that prove it.
     covers: dict[str, list[str]] | None = None
+    # The seconds the tests this ticket added or changed cost: verify refuses a test change without it.
+    test_cost: TestCost | None = None
 
 
 class Evidence(Strict):

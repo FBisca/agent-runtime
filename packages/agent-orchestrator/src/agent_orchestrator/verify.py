@@ -216,6 +216,83 @@ def covers(model, ticket, report, repo, base, files, added):
     return findings
 
 
+def seconds(value):
+    """A measured cost: a non-negative number, not a bool."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+
+
+def test_cost(report, repo, base, files, added):
+    """Why the report's `test_cost` does not account for the tests this ticket added or changed.
+
+    A diff that adds or changes a test pays the suite; the report names the `--durations` command, the
+    seconds of each touched test file and the seconds of each covered node. A ticket that changes no
+    test needs no `test_cost`, and a report from before the field existed still reads."""
+    mapped = {node for nodes in (report.get("covers") or {}).values() for node in nodes}
+    changed = sorted(
+        node for node in mapped if node_problem(repo, node, base, files, added) is None
+    )
+    touched = sorted({node.split("::", 1)[0] for node in changed})
+    if not touched:
+        return []
+    cost = report.get("test_cost")
+    if not isinstance(cost, dict):
+        return [
+            {
+                "check": "test_cost",
+                "excerpt": "a test changed but the report carries no test_cost; add "
+                '{"command": "uv run pytest <paths> --durations=0 -q", "modules": {<file>: <seconds>}, '
+                '"tests": {<path::test>: <seconds>}}',
+            }
+        ]
+    findings = []
+    command = cost.get("command")
+    if not isinstance(command, str) or "--durations" not in command:
+        findings.append(
+            {
+                "check": "test_cost",
+                "excerpt": "test_cost.command names no --durations: run `uv run pytest <paths> "
+                "--durations=0 -q` and name it",
+            }
+        )
+    modules = cost.get("modules")
+    if not isinstance(modules, dict):
+        findings.append(
+            {
+                "check": "test_cost",
+                "excerpt": "test_cost.modules must map each touched test file to seconds",
+            }
+        )
+    else:
+        for name in touched:
+            if not seconds(modules.get(name)):
+                findings.append(
+                    {
+                        "check": "test_cost",
+                        "excerpt": "test_cost.modules has no seconds for %s; add it, measured with "
+                        "--durations" % name,
+                    }
+                )
+    tests = cost.get("tests")
+    if not isinstance(tests, dict):
+        findings.append(
+            {
+                "check": "test_cost",
+                "excerpt": "test_cost.tests must map each covered test node to seconds",
+            }
+        )
+    else:
+        for node in changed:
+            if not seconds(tests.get(node)):
+                findings.append(
+                    {
+                        "check": "test_cost",
+                        "excerpt": "test_cost.tests has no seconds for %s; add it, measured with "
+                        "--durations" % node,
+                    }
+                )
+    return findings
+
+
 def invariants(model, ticket_id, report, *, repo, base, layout, layout_repo=None):
     """The findings of a YAML plan ticket's gate: scope, integrity and covers. Empty means the gate passes."""
     ticket = next((t for t in model.tickets if t.id == ticket_id), None)
@@ -237,7 +314,11 @@ def invariants(model, ticket_id, report, *, repo, base, layout, layout_repo=None
                     % (name, ", ".join(ticket.paths)),
                 }
             )
-    return findings + covers(model, ticket, report, repo, base, files, added)
+    return (
+        findings
+        + covers(model, ticket, report, repo, base, files, added)
+        + test_cost(report, repo, base, files, added)
+    )
 
 
 def items(findings, command, log_path):

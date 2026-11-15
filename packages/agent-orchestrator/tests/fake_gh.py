@@ -28,6 +28,19 @@ class Completed:
         self.stderr = stderr
 
 
+DRAFT_POLL_LIMIT_ENV = "FAKE_GH_DRAFT_POLL_LIMIT"
+DEFAULT_DRAFT_POLL_LIMIT = 100
+
+
+def draft_poll_limit():
+    """How many draft views the fake answers before it refuses; a test injects a smaller limit so the
+    refusal costs a few disk writes, not a hundred."""
+    try:
+        return max(1, int(os.environ.get(DRAFT_POLL_LIMIT_ENV, DEFAULT_DRAFT_POLL_LIMIT)))
+    except (TypeError, ValueError):
+        return DEFAULT_DRAFT_POLL_LIMIT
+
+
 def pop(home, name, default=None):
     """The next item of a scripted queue (the last one repeats); the default when there is none."""
     path = os.path.join(home, name)
@@ -99,12 +112,13 @@ def process(argv, timeout=None, cwd=None):
         if os.path.exists(ready):
             state = pop(home, "prs.json", "MERGED")
         else:
+            limit = draft_poll_limit()
             count_path = os.path.join(home, "draft-polls-%s" % number)
             with open(count_path, "a+", encoding="utf-8") as count:
                 count.seek(0)
                 polls = len(count.read())
-                if polls >= 100:
-                    raise RuntimeError("fake gh: PR %s stayed draft for 100 polls" % number)
+                if polls >= limit:
+                    raise RuntimeError("fake gh: PR %s stayed draft for %d polls" % (number, limit))
                 count.write(".")
             state = pop(home, "view-draft.json", "OPEN")
     row = {"state": state} if isinstance(state, str) else dict(state)

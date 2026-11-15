@@ -108,6 +108,7 @@ class YamlPlanFixture(GateFixture):
         worktree = self.root / "repo.worktrees" / "demo-t1"
         report = json.loads(self.report("t1"))
         report.update(contract=3, covers={"S1": ["src/a/test_feature.py::test_feature"]})
+        report["test_cost"] = self.measured(report["covers"])
         worker = report_wait("demo-t1", "complete", id=spawn_id("demo-t1"))
         worker["write"] = [
             [str(run_dir / "t1" / "report.json"), json.dumps(report)],

@@ -206,6 +206,8 @@ class AcceptanceFixture(SnapshotFixture, GateFixture):
     def worker(self, content="done", covers=None):
         report = json.loads(self.report("t1"))
         report["covers"] = covers or self.COVERS
+        if report.get("contract") == 3:
+            report["test_cost"] = self.measured(report["covers"])
         step = report_wait("demo-t1", "complete", id=spawn_id("demo-t1"))
         step["write"] = [
             [str(self.run_dir / "t1" / "report.json"), json.dumps(report)],

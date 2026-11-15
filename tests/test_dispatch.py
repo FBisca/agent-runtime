@@ -26,6 +26,16 @@ pytestmark = pytest.mark.integration
 DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
 
 
+def stop(process):
+    """Kill a child and reap it in one cleanup.
+
+    `addCleanup` runs last-in-first-out: a `wait` registered after a `kill` runs first and sits out the
+    child's whole sleep, so both belong in one cleanup."""
+    if process.poll() is None:
+        process.kill()
+    process.wait()
+
+
 class DispatchTests(ToolCase):
     def lead(self, generation="lead-session", socket="/hc/sock"):
         """The lead's session.
@@ -692,8 +702,9 @@ class TeamOwnershipTests(ToolCase):
     def other_live_generation(self):
         """A generation of another process that runs right now."""
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        self.addCleanup(proc.kill)
-        self.addCleanup(proc.wait)
+        # Cleanups run last-in-first-out: a `wait` registered after `kill` would run first and sit out the
+        # whole sleep. One cleanup kills, then reaps, so a live process costs no test time.
+        self.addCleanup(stop, proc)
         return "%d:%s" % (proc.pid, lib.lstart(proc.pid))
 
     def stray_team(self, generation):
@@ -766,8 +777,9 @@ class TerminalRefusalTests(ToolCase):
     def other_live_generation(self):
         """A generation of another process that runs right now."""
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        self.addCleanup(proc.kill)
-        self.addCleanup(proc.wait)
+        # Cleanups run last-in-first-out: a `wait` registered after `kill` would run first and sit out the
+        # whole sleep. One cleanup kills, then reaps, so a live process costs no test time.
+        self.addCleanup(stop, proc)
         return "%d:%s" % (proc.pid, lib.lstart(proc.pid))
 
     def dead_generation(self):
