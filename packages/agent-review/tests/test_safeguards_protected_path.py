@@ -121,7 +121,7 @@ def test_S5_a_repository_pattern_extends_the_baseline_instead_of_replacing_it():
     ], "the repository's own list adds to the mandatory baseline"
 
 
-def test_a_repository_pattern_that_repeats_a_baseline_pattern_keeps_the_global_source():
+def test_a_repository_pattern_that_repeats_a_baseline_pattern_keeps_the_baseline_source():
     rules = safeguards.rule_set(global_paths=("server/**",), repository_paths=("server/**",))
     change = read(unified("server/agent.py", "value = 1\n", "value = 2\n"))
     reasons = safeguards.decide(change, rules)

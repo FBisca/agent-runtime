@@ -300,7 +300,7 @@ class OutsideRootTests(SafeguardFixture):
         self.assertEqual(self.report()["verdict"], "screened", self.report())
 
 
-class SensitivePathTests(SafeguardFixture):
+class ProtectedPathTests(SafeguardFixture):
     """S3-S5: a changed path the baseline or the repository declares protected."""
 
     def protect(self):
