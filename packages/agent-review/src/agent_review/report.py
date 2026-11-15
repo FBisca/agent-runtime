@@ -7,7 +7,9 @@ D35, D39, D40). The report also freezes what the run was made of - both revision
 configuration, the model and the usage - so the same frozen input can be recognised again (D26, D44).
 
 `usage.requests` is how many times the provider was asked. One screening is one request (D40): a retry
-or a model fallback would show as a second one.
+or a model fallback would show as a second one. A safeguard's hit is `usage.requests: 0`: the change was
+decided from the diff, so nothing was asked and `escalation.reasons[]` is the verdict's whole basis
+(SG-D2, SG-D10).
 
 A report says what produced it, so a frozen one can be recognised and trusted later: the provider endpoint
 it was screened through, the model the provider served beside the alias the bank asked for, the input
@@ -24,12 +26,14 @@ from pathlib import Path
 from typing import Any
 
 from agent_review.questions import Question
+from agent_review.safeguards import EscalationReason, way_out
 from agent_review.screening import limits
 
 REPORT = "report.json"
 COMPLETED = "completed"
 INCOMPLETE = "incomplete"
 SCREENED = "screened"
+ESCALATED = "escalated"
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,8 @@ class Report:
     output_tokens: int = 0
     # One screening is one request: the run never retries, so anything else would be a defect (D40).
     requests: int = 1
+    # Why a person must read this change: a safeguard decided it before the model was asked (SG-D2, SG-D3).
+    escalation: tuple[EscalationReason, ...] = ()
     # Long context is the caller's opt-in, so the report says whether the larger budget was asked for.
     long_context: bool = False
     failure: str | None = field(default=None)
@@ -60,8 +66,13 @@ class Report:
 
     @property
     def verdict(self) -> str | None:
-        """What the review concluded: `screened` once screened, nothing when it did not complete."""
-        return SCREENED if self.failure is None else None
+        """What the review concluded: `escalated` when a safeguard fired, `screened` once screened, and
+
+        nothing when the execution did not complete.
+        """
+        if self.failure is not None:
+            return None
+        return ESCALATED if self.escalation else SCREENED
 
     @property
     def bank_digest(self) -> str:
@@ -93,6 +104,8 @@ class Report:
             ],
             "bank_digest": self.bank_digest,
             "judgments": [dict(judgment) for judgment in self.judgments],
+            # Additive in a frozen report: a report written before the safeguards read it as no reasons (D26).
+            "escalation": {"reasons": [reason.as_dict() for reason in self.escalation]},
             "failure": None if self.failure is None else {"reason": self.failure},
         }
 
@@ -115,6 +128,15 @@ class Report:
             lines = [f"screened nothing: {change} was not screened with {self.model}"]
             lines.append(f"execution: {self.status}")
             lines.append(f"reason: {self.failure}")
+        elif self.escalation:
+            # A safeguard decided the change: the rule, the path it matched and the way out are what a
+            # person can act on, and no judgment exists to read (S8).
+            lines = [f"escalated {change}: no model was asked"]
+            for reason in self.escalation:
+                lines.append(f"  {reason.rule} at {reason.path}")
+                lines.append(f"    {reason.pattern}")
+                lines.append(f"    {way_out(reason)}")
+            lines.append(f"verdict: {self.verdict}")
         else:
             lines = [f"screened {change} with {self.model}"]
             lines.extend(
@@ -123,10 +145,13 @@ class Report:
             )
             lines.append(f"verdict: {self.verdict}")
         lines.append(
-            f"usage: {self.requests} request, {self.input_tokens} input tokens, "
-            f"{self.output_tokens} output tokens"
+            f"usage: {self.requests} request{'s' if self.requests != 1 else ''}, "
+            f"{self.input_tokens} input tokens, {self.output_tokens} output tokens"
         )
-        lines.append(f"provider: {self.provider}")
+        if self.provider:
+            lines.append(f"provider: {self.provider}")
+        elif self.escalation:
+            lines.append("screened by: no provider was asked; a safeguard decided the change")
         if self.resolved_model is not None:
             lines.append(f"served: {self.resolved_model}")
         if path is not None:

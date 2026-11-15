@@ -91,6 +91,37 @@ def test_S1_an_invalid_bank_is_refused_naming_the_field(tmp_path, body, named):
     assert refused.value.code == 2, "an invalid configuration is a usage error"
 
 
+def test_a_safeguards_block_is_carried_as_configured(tmp_path):
+    """A run's safeguards declaration belongs to the run, so the bank carries it beside the questions."""
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG + "safeguards:\n  stdlib_only:\n    - hooks/\n", encoding="utf-8")
+    bank = questions.load(path)
+    assert bank.safeguards == {"stdlib_only": ["hooks/"]}, (
+        "the declaration is carried whole, so a rule reads it from one place"
+    )
+    assert [question.id for question in bank.questions] == [
+        "contract.error-handling",
+        "engineering.names-meaning",
+    ], "the safeguards block is not read as a question"
+
+
+def test_a_bank_without_a_safeguards_block_carries_none(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+    assert questions.load(path).safeguards == {}
+    assert questions.baseline().safeguards == {}, "the packaged bank declares no safeguards"
+
+
+def test_a_safeguards_block_that_is_not_a_mapping_is_refused_naming_it(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG + 'safeguards: "hooks/**"\n', encoding="utf-8")
+    with pytest.raises(ReviewError) as refused:
+        questions.load(path)
+    assert "safeguards" in str(refused.value), "a refusal names the field it refuses"
+    assert "mapping" in str(refused.value)
+    assert refused.value.code == 2, "an invalid configuration is a usage error"
+
+
 def test_S1_a_bank_that_asks_nothing_is_refused_naming_the_file(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("model: test-model-v1\nquestions: []\n", encoding="utf-8")
