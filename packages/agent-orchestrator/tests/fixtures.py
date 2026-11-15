@@ -545,6 +545,10 @@ class RunFixture(_Case):
         The run happens in a thread so a driver that never ends fails the test instead of hanging the suite."""
         out, err = io.StringIO(), io.StringIO()
         codes, errors = [], []
+        # The fake answers the seam where the process is started, which is `driver.runtime`: the
+        # package re-exports `runtime_process` for callers, but a patch on the facade would leave
+        # `runtime_call` starting a real `agent-runtime`.
+        from agent_orchestrator.driver import runtime as driver_runtime
 
         def work():
             try:
@@ -552,7 +556,7 @@ class RunFixture(_Case):
                     mock.patch.dict(os.environ, self.env()),
                     redirect_stdout(out),
                     redirect_stderr(err),
-                    mock.patch.object(spec, "runtime_process", self.runtime_process),
+                    mock.patch.object(driver_runtime, "runtime_process", self.runtime_process),
                     mock.patch.object(spec, "PAYLOAD_GRACE", self.payload_grace),
                     mock.patch.object(spec, "gh_process", self.gh_process),
                 ):
