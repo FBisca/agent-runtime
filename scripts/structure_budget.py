@@ -15,7 +15,9 @@ a move costs the gate nothing.
 
 Exit 0 is a clean tree, 1 an offender, 2 a refusal: a budget that cannot be read, a `--since` that is
 not a revision, or a `--paid` path that measures no file. A paid path takes no grandfather from the
-base for the metrics it names, so a deliberate debt has to be paid down rather than inherited.
+base for the metrics it names, so a deliberate debt has to be paid down rather than inherited. The
+only thing `--write` can record is the day the ceilings were reviewed: because the base is git, no
+run can accept a growth, and an offender has to shrink.
 """
 
 import argparse
@@ -341,12 +343,17 @@ def read_baseline(path):
 
 
 def write_budget(args):
-    """Re-stamp the committed budget with today's day, keeping the ceilings it declares."""
+    """Re-stamp the committed budget with today, keeping the ceilings it declares.
+
+    It records nothing about a file and accepts no growth: the base is the `--since` revision, so a
+    file over a ceiling it crossed still fails the next run. The day is the only thing it writes.
+    """
     existing = read_baseline(args.baseline) if Path(args.baseline).exists() else {}
     document = baseline_document(ceilings_of(existing))
     Path(args.baseline).write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
     print(
-        "structure budget: wrote %s (ceilings %s, measured %s)"
+        "structure budget: wrote %s (ceilings %s, measured %s; it never accepts growth: the base "
+        "is the --since revision, so an offender has to shrink)"
         % (args.baseline, ceilings_phrase(document["ceilings"]), document["measured_at"])
     )
     return 0
@@ -379,7 +386,10 @@ def parser():
         help="the revision a file may already have been over a ceiling at (default %(default)s)",
     )
     made.add_argument(
-        "--write", action="store_true", help="re-stamp the budget with today and exit 0"
+        "--write",
+        action="store_true",
+        help="stamp the day the ceilings were reviewed and exit 0; it never accepts growth, "
+        "which only shrinking below the base or the ceiling clears",
     )
     made.add_argument(
         "--paid",

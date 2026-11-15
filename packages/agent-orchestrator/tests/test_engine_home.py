@@ -64,6 +64,10 @@ class EngineHomeTests(unittest.TestCase):
         workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("uv run pytest -n 4", workflow)
         self.assertIn("suite_budget.py", workflow)
+        # The budget's base is a revision of the change, so the checkout must hold the history: a
+        # depth-1 checkout resolves neither a pull request's base nor the tip a push replaces.
+        after_checkout = workflow.split("uses: actions/checkout@v4", 1)[1]
+        self.assertIn("fetch-depth: 0", after_checkout.split("\n      - ", 1)[0])
         # The structure budget is the same kind of check: the tree, measured against the
         # revision the change grew from.
         workflow = " ".join(workflow.split())

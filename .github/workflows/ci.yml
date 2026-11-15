@@ -29,6 +29,10 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The base the gate needs: a PR's head, or the tip a push replaces.
+          # A depth-1 checkout holds neither.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}

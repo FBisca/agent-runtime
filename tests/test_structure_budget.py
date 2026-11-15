@@ -240,13 +240,13 @@ class MeasureTests(unittest.TestCase):
 class SinceTests(unittest.TestCase):
     """S15 and S16 across the boundary: the base is the tree at the `--since` revision in git."""
 
-    def checkout(self, head_lines=None):
-        """A checkout whose one module is committed at 1150 lines and optionally grown after."""
+    def checkout(self, base_lines=1150, head_lines=None):
+        """A checkout whose one module is committed at `base_lines` and optionally changed after."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name) / "repo"
         (root / "pkg").mkdir(parents=True)
-        self.write(root, long_module(1150))
+        self.write(root, long_module(base_lines))
         for command in (("init", "-q", "-b", "main"), ("add", "-A")):
             self.git(root, *command)
         self.git(root, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "base")
@@ -264,6 +264,32 @@ class SinceTests(unittest.TestCase):
             ["git", "-C", str(root), *args], check=True, capture_output=True, timeout=120
         )
 
+    def stamp(self, root):
+        """The budget committed beside a checkout, written once so a `--write` run is seen."""
+        path = root / "budget.json"
+        if not path.exists():
+            path.write_text(json.dumps(budget["baseline_document"]()), encoding="utf-8")
+        return path
+
+    def drive(self, root, *args):
+        """The script driven as a program over `root`, held to every ceiling at `HEAD`."""
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--root",
+                str(root),
+                "--baseline",
+                str(self.stamp(root)),
+                "--since",
+                "HEAD",
+                *args,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
     @pytest.mark.integration
     def test_S16_the_base_is_the_tree_at_the_since_revision_in_git(self):
         """structure-budget/S16: the number an offender may not pass comes from git, not a file."""
@@ -279,37 +305,30 @@ class SinceTests(unittest.TestCase):
     def test_S16_a_clean_run_that_keeps_a_grandfather_reports_on_stderr(self):
         """structure-budget/S16: stdout is what the gate refused, so a clean run keeps it empty."""
         root = self.checkout(head_lines=900)
-        stamp = root / "budget.json"
-        stamp.write_text(json.dumps(budget["baseline_document"]()), encoding="utf-8")
-
-        def run():
-            return subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--root",
-                    str(root),
-                    "--baseline",
-                    str(stamp),
-                    "--since",
-                    "HEAD",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-
-        at_ceilings = run()
+        at_ceilings = self.drive(root)
         self.assertEqual(at_ceilings.returncode, 0, at_ceilings.stdout + at_ceilings.stderr)
         self.assertIn("module-lines 1000", at_ceilings.stdout, "a tree at its ceilings names them")
         # The same file, over the ceiling at the base and shrunk back: clean, but holding debt.
         self.write(root, long_module(1100))
-        kept = run()
+        kept = self.drive(root)
         self.assertEqual(kept.returncode, 0, kept.stdout + kept.stderr)
         self.assertEqual(
             kept.stdout.strip(), "", "a kept grandfather is a diagnostic, not a refusal"
         )
         self.assertIn("module-lines 1000", kept.stderr)
+
+    @pytest.mark.integration
+    def test_S4_write_stamps_the_day_and_never_accepts_growth(self):
+        """structure-budget/S4: the base is git, so writing the budget cannot bless a crossing."""
+        root = self.checkout(base_lines=900, head_lines=1100)
+        wrote = self.drive(root, "--write")
+        self.assertEqual(wrote.returncode, 0, wrote.stdout + wrote.stderr)
+        self.assertIn("never accepts growth", wrote.stdout)
+        document = json.loads(self.stamp(root).read_text(encoding="utf-8"))
+        self.assertEqual(sorted(document), ["ceilings", "measured_at"])
+        gate = self.drive(root)
+        self.assertEqual(gate.returncode, 1, gate.stdout + gate.stderr)
+        self.assertIn("pkg/big.py: module-lines 1100 > ceiling 1000", gate.stdout)
 
     @pytest.mark.integration
     def test_S15_a_since_that_is_not_a_revision_is_refused_naming_it(self):
