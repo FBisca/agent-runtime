@@ -642,17 +642,30 @@ def gh_process(argv, timeout=None, cwd=None):
     return subprocess.run(["gh", *argv], capture_output=True, text=True, timeout=timeout, cwd=cwd)
 
 
+UNREAD_REPORTS = re.compile(r"refusing (?:spawn|resume|stop): \d+ undelivered report")
+
+
 def runtime_call(lead, tool, arguments, timeout=120):
     """One dispatch tool call, through the runtime's public CLI.
 
     The seam is the `RuntimeClient` protocol: the driver never imports the runtime's modules and
     never reads its store. The process the client speaks through is the seam the tests answer, so a
     driver run starts no process per call. A refusal is a `ValueError`, the driver's word for it.
+
+    A mutating verb the runtime refuses because a report landed since the last wait page is the
+    scheduler's routine race, not a Lead decision: read one wait(all) page and retry the call once. The
+    page is left unacknowledged on purpose: its receipt delivers the reports to the refusal, so the next
+    loop wait returns them again and `receive` processes them.
     """
+    client = CliRuntimeClient(lead, process=runtime_process)
     try:
-        return CliRuntimeClient(lead, process=runtime_process).call(
-            tool, arguments, timeout=timeout
-        )
+        return client.call(tool, arguments, timeout=timeout)
+    except RuntimeCallError as error:
+        if tool not in ("spawn", "resume", "stop") or not UNREAD_REPORTS.search(str(error)):
+            raise ValueError(str(error)) from None
+    try:
+        client.call("wait", {"target": "all", "timeout": 0}, timeout=timeout)
+        return client.call(tool, arguments, timeout=timeout)
     except RuntimeCallError as error:
         raise ValueError(str(error)) from None
 
