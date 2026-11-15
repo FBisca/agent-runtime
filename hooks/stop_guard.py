@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Claude, Codex and Pi Stop hook: refuse to end a lead's turn while it has undelivered messages or
-unseen working assignments, at most three times per user work period.
+unseen working assignments, and a worker's turn while its own assignment is unreported, at most three
+times per user work period.
 
 The runtime decides (`agent_runtime.rhythm`); this entry only formats the answer for the host's
 dialect: `{"decision": "block"}` for Claude and Codex, or — when the host asks for it with

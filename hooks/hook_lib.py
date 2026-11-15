@@ -1,9 +1,11 @@
-"""Shared helpers for read-only, fail-open lead hooks (Stop guard, context reminders).
+"""Shared helpers for read-only, fail-open hooks (Stop guard, context reminders).
 
 Hooks never write the store: it is opened through a `mode=ro` URI with a short busy timeout, and every
 error (bad stdin, missing or locked store, no identity) means "allow, print nothing". Identity is
-computed exactly like the MCP server's: scope from the hc socket/scope, lead from HC_TERMINAL_ID, and
-the generation from the nearest Claude/Codex ancestor (agent_runtime.cli_generation).
+computed exactly like the MCP server's: scope from the hc socket/scope, the caller from
+HC_TERMINAL_ID, and the generation from the nearest Claude/Codex ancestor
+(agent_runtime.cli_generation). A caller that leads no team is asked about the assignment bound to its
+own terminal, so the guard covers a lead's team and a worker's assignment alike.
 """
 
 import fcntl
@@ -187,38 +189,14 @@ def lead_needs(env=None):
     return lead_check(env)[1]
 
 
-def worker_assignment(db, who):
-    """The id of the caller's own current assignment while it is unreported, else None.
-
-    A session is a worker, not a lead, when no team row owns its terminal; the assignment then belongs
-    to the team its terminal is bound to. A report ends the obligation: complete, blocked and decision
-    all leave the working state, so only a pending or working assignment keeps the turn open. A team
-    whose session is dead, or whose terminal a newer team now owns, owes nothing: the caller is a new
-    session at a reused terminal, not the worker that took the assignment."""
-    scope, terminal, _generation = who
-    row = db.execute(
-        "SELECT a.id, a.state, a.team, t.lead, t.generation FROM assignments a "
-        "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
-        "WHERE w.address=? AND w.active=1 AND a.current=1 AND t.scope=? "
-        "ORDER BY a.id LIMIT 1",
-        (terminal, scope),
-    ).fetchone()
-    if not row or row["state"] not in ("pending", "working"):
-        return None
-    if not dispatch.generation_alive(row["generation"]):
-        return None
-    owner = dispatch.owning_team(db, scope, row["lead"], own_team=row["team"])
-    return row["id"] if owner is not None and owner["id"] == row["team"] else None
-
-
 def worker_check(who, env=None):
-    """The id of the caller's own current assignment while it is still unreported, or None. The
-    runtime decides what that means (`rhythm.worker_refusal`); this reads the store."""
+    """The id of the caller's own current assignment while it is still unreported, or None. The runtime
+    decides it (`rhythm.worker_assignment`); this holds the read-only snapshot."""
     db = open_readonly(env)
     try:
         db.execute("BEGIN")  # one read snapshot, like the lead's check
         try:
-            return worker_assignment(db, who)
+            return rhythm.worker_assignment(db, who)
         finally:
             db.rollback()
     finally:

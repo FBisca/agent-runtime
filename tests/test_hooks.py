@@ -1503,6 +1503,17 @@ class StopGuardTests(HookStoreCase):
             self.store, "UPDATE assignments SET state='blocked' WHERE id=?", ident["assignment_id"]
         )
         self.assertIsNone(bound.run(STOP, self.STOP)[0])  # no such assignment: allowed
+        (self.root / "s").mkdir()
+        superseded = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t7"), self.root / "s")
+        self.addCleanup(superseded.close)
+        old = self.store.register(self.team_id, "w-old")
+        self.store.bind(old["assignment_id"], "t7", "scope")
+        self.assertEqual(  # its team still owns the terminal: refused
+            superseded.run(STOP, self.STOP)[0],
+            {"decision": "block", "reason": self.WORKER_REASON % old["assignment_id"]},
+        )
+        self.stray_team(self.other_live_generation())  # a newer live team now owns t0
+        self.assertIsNone(superseded.run(STOP, self.STOP)[0])  # superseded team: allowed
         other = dispatch_store.Store(self.env)
         dead = other.team("scope", "t9", "999:dead")  # a dead generation
         gone = other.register(dead, "w-gone")
@@ -1510,7 +1521,7 @@ class StopGuardTests(HookStoreCase):
         (self.root / "n").mkdir()
         nobody = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t9"), self.root / "n")
         self.addCleanup(nobody.close)
-        self.assertIsNone(nobody.run(STOP, self.STOP)[0])  # only a dead team's: allowed
+        self.assertIsNone(nobody.run(STOP, self.STOP)[0])  # dead team generation: allowed
 
     def test_reported_unchanged_stall_counts_as_seen_until_progress(self):
         """agent-runtime/R128"""
