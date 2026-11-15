@@ -101,7 +101,7 @@ class FileChange:
 
     @property
     def paths(self) -> tuple[str, ...]:
-        """Both names the change names for this path, the old one first when they differ (D13)."""
+        """Both names the change names for this path, the changed one first when they differ (D13)."""
         return (self.old_path,) if self.old_path == self.path else (self.path, self.old_path)
 
 

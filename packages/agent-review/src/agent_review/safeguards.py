@@ -10,16 +10,21 @@ that target. It proves that nothing in the change confines the target, never tha
 the root: the value a computed target holds is not in a diff (SG-D5). So:
 
 - a literal target that stays inside the root needs no confinement, and one that climbs out of it fires;
-- a computed target is confined when its function carries a containment test on it
-  (`<target>.is_relative_to(...)`, `<target>.relative_to(...)`, `<target>.resolve().parent == ...`) or calls
-  a guard the same change adds whose body confines; any other computed target fires;
+- a computed target is confined when its function carries a containment test on it - the target the test names
+  or the one its comparison is computed over (`<target>.is_relative_to(...)`,
+  `<target>.resolve().is_relative_to(...)`, `<target>.relative_to(...)`,
+  `<target>.resolve().parent == ...`) - or when it is handed to a guard the same change adds whose body
+  confines that same target; any other computed target fires;
+- confinement is per target, never per function: one test confines the target it names and nothing else, and
+  a guard confines only the target it is handed. A second delete in the same function is its own target and
+  is answered on its own, however many guards the function calls;
 - a computed target the change itself writes or creates in that function is its own artifact: deleting what
   the change makes is not a delete of anything outside the change, and the historical defect's own test helper
   (`429625b`) recreates the plan file it unlinks;
 - the deletes are named here rather than inferred from names, and a write is not one of them: whether a write
-destroys anything depends on what the target already held, which a diff does not show, and the change that
-fixed the case this rule was learned from writes a computed path itself (`109c98b`). A rule that guessed
-would fire on every test that writes its own fixture.
+  destroys anything depends on what the target already held, which a diff does not show, and the change that
+  fixed the case this rule was learned from writes a computed path itself (`109c98b`). A rule that guessed
+  would fire on every test that writes its own fixture.
 
 One reason per rule and path names the first call the change adds on it: a report says which file a person
 must read, and the file is the unit a review is opened on.
@@ -29,7 +34,7 @@ import posixpath
 import re
 from dataclasses import dataclass, field
 
-from agent_review.change import ADDED, Change, DiffLine, Hunk, indent_columns
+from agent_review.change import ADDED, Change, DiffLine, FileChange, Hunk, indent_columns
 
 TARGET_OUTSIDE_ROOT = "target-outside-root"
 
@@ -41,16 +46,25 @@ DIFF = "diff"
 _DELETIONS = ("shutil.rmtree(", "os.remove(", "os.unlink(", "os.rmdir(")
 # A call that deletes the expression it is made on.
 _METHODS = (".unlink(", ".rmdir(")
+# The module whose deletions the primitives above already read whole, so its method spelling is not a second call.
+_OS_MODULE = "os"
 _QUOTED = re.compile(r"""^[rRbBuUfF]{0,2}("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$""")
 _PATH_WRAPPER = re.compile(r"^(?:pathlib\.)?Path\((.*)\)$")
 _DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 _DEF = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>\w+)")
-# A containment test as the diff shows it, read in a guard body rather than on a named target.
-_CONTAINMENT = re.compile(
-    r"\.\s*(?:is_relative_to|relative_to)\s*\("
-    r"|\.\s*parent\s*=="
-    r"|samefile\s*\("
-    r"|commonpath\s*\("
+# What one containment test confines, as the pair it relates: the target it names, and what it compares over.
+_CONFINEMENTS = (
+    re.compile(
+        r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*(?:resolve\s*\(\s*\)\s*\.\s*)?"
+        r"(?:is_relative_to|relative_to)\s*\((?P<other>[^()]*)\)"
+    ),
+    re.compile(
+        r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*(?:resolve\s*\(\s*\)\s*\.\s*)?"
+        r"parent\s*==\s*(?P<other>[^:,)]+)"
+    ),
+    re.compile(r"(?P<target>[A-Za-z_][\w.]*)\s*\.\s*resolve\s*\(\s*\)\s*==\s*(?P<other>[^:,)]+)"),
+    re.compile(r"samefile\s*\((?P<target>[^,]+),\s*(?P<other>[^)]+)\)"),
+    re.compile(r"commonpath\s*\((?P<target>[^)]+)\)"),
 )
 
 
@@ -85,9 +99,9 @@ class DestructiveCall:
 
 @dataclass
 class _Scope:
-    """What a rule must know about the whole change: the guards it adds, so a call to one confines."""
+    """What a rule must know about the whole change: each guard it adds, and the targets that guard confines."""
 
-    confining: set[str] = field(default_factory=set)
+    confining: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 def decide(change: Change) -> tuple[EscalationReason, ...]:
@@ -137,6 +151,8 @@ def destructive_calls(text: str) -> tuple[DestructiveCall, ...]:
             receiver = _receiver(text, at)
             start = at if receiver is None else receiver.start
             target = "" if receiver is None else receiver.text
+            if target == _OS_MODULE:
+                continue  # `os.unlink(x)` is the deletion the primitive already read: one deletion is one call
             calls.append(_destructive(text[start : invocation.close + 1], target))
     return tuple(calls)
 
@@ -148,7 +164,7 @@ def _destructive(call: str, target: str) -> DestructiveCall:
     )
 
 
-def _target_outside_root(file, scope: _Scope) -> EscalationReason | None:
+def _target_outside_root(file: FileChange, scope: _Scope) -> EscalationReason | None:
     """The first delete on an unconfined target this path adds, as one reason."""
     for hunk in file.hunks:
         for index, line in enumerate(hunk.lines):
@@ -162,16 +178,25 @@ def _target_outside_root(file, scope: _Scope) -> EscalationReason | None:
 
 
 def _confined(call: DestructiveCall, hunk: Hunk, index: int, scope: _Scope) -> bool:
-    """Whether anything in the change confines `call`'s target to where it may reach (SG-D5)."""
+    """Whether anything in the change confines `call`'s target to where it may reach (SG-D5).
+
+    Confinement is per target: each line of the region is asked about this target's own spelling, and a guard
+    answers only for a target it is handed.
+    """
     if call.literal is not None:
         return not _escapes(call.literal)
     names = _names(call.target)
+    if not names:
+        return False  # a target the diff cannot name is not one a test or a guard in it can be shown to confine
+    held = set(names)
     for line in hunk.region(index):
-        if any(_confines(name, line) for name in names):
+        if _DEF.match(line.text) is not None:
+            continue  # a definition is not a call, and a def line is no test on any target
+        if any(_confines(name, line) for name in held):
             return True
-        if any(_creates(name, line) for name in names):
+        if any(_creates(name, line) for name in held):
             return True
-        if any(_calls(line.text, guard) for guard in scope.confining):
+        if _hands_to_a_guard(line.text, held, scope):
             return True
     return False
 
@@ -188,41 +213,86 @@ def _creates(name: str, line: DiffLine) -> bool:
 
 
 def _confines(name: str, line: DiffLine) -> bool:
-    """Whether `line` is a containment test on `name`, the target being what is confined."""
+    """Whether `line` confines `name`: a containment test it names, or one whose comparison is computed over it."""
     subject = re.escape(name)
+    receiver = rf"(?<![\w.]){subject}\s*\.\s*"
     return (
         re.search(
-            rf"(?<![\w.]){subject}\s*\.\s*(?:is_relative_to|relative_to)\s*\("
-            rf"|(?<![\w.]){subject}\s*\.\s*resolve\s*\(\s*\)\s*\.\s*parent\s*=="
-            rf"|(?<![\w.]){subject}\s*\.\s*parent\s*==\s*.*\bresolve\s*\("
+            receiver + r"(?:resolve\s*\(\s*\)\s*\.\s*)?(?:is_relative_to|relative_to)\s*\("
+            rf"|{receiver}resolve\s*\(\s*\)\s*\.\s*parent\s*=="
+            rf"|{receiver}parent\s*==\s*.*\bresolve\s*\("
             rf"|samefile\s*\(\s*{subject}\b",
+            line.text,
+        )
+        is not None
+        or re.search(
+            rf"\.\s*(?:is_relative_to|relative_to)\s*\(\s*{subject}\s*[,)]"
+            rf"|\.\s*parent\s*==\s*{subject}\b"
+            rf"|resolve\s*\(\s*\)\s*==\s*{subject}\b"
+            rf"|samefile\s*\([^,]+,\s*{subject}\b",
             line.text,
         )
         is not None
     )
 
 
-def _confining_helpers(change: Change) -> set[str]:
-    """The guards the change adds: functions whose added body confines, and those that call one.
+def _hands_to_a_guard(text: str, held: set[str], scope: _Scope) -> bool:
+    """Whether `text` hands one of the delete's target spellings to a guard that confines that spelling."""
+    return any(
+        held & set(_names(argument)) & confines
+        for guard, confines in scope.confining.items()
+        for argument in _handed_arguments(text, guard)
+    )
 
-    A change that factors its confinement into a guard is still confined, so a call from the region to such
-    a guard answers for the target it is handed. One hop of calls is followed, which is what a diff shows
-    without a data-flow analysis; a confinement that reaches deeper is not read, and the rule then fires.
+
+def _handed_arguments(text: str, guard: str) -> tuple[str, ...]:
+    """The arguments `text` hands to a call of `guard`, as written; nothing when `text` does not call it."""
+    handed: list[str] = []
+    for match in re.finditer(rf"(?<![\w]){re.escape(guard)}\s*\(", text):
+        invocation = _invocation(text, match.end() - 1)
+        if invocation is None:
+            continue
+        handed.extend(argument.strip() for argument in invocation.arguments if argument.strip())
+    return tuple(handed)
+
+
+def _confining_helpers(change: Change) -> dict[str, frozenset[str]]:
+    """Each guard the change adds, with the target spellings that guard confines.
+
+    A guard confines the target its own body tests, and it confines nothing else: a second delete in a caller
+    is answered on its own target. One hop of calls is followed - a guard handed a target it confines confines
+    that spelling in its caller too - which is what a diff shows without a data-flow analysis. A confinement
+    that reaches deeper is not read, and the rule then fires.
     """
     bodies = _added_defs(change)
-    confining = {
-        name for name, body in bodies.items() if any(_CONTAINMENT.search(line) for line in body)
+    confined: dict[str, set[str]] = {
+        name: _confined_spellings(body) for name, body in bodies.items()
     }
     growing = True
     while growing:
         growing = False
         for name, body in bodies.items():
-            if name in confining:
-                continue
-            if any(_calls(line, guard) for guard in confining for line in body):
-                confining.add(name)
-                growing = True
-    return confining
+            for line in body:
+                for guard, targets in confined.items():
+                    handed = set().union(
+                        *(_names(argument) for argument in _handed_arguments(line, guard))
+                    )
+                    adds = handed & targets - confined[name]
+                    if adds:
+                        confined[name] |= adds
+                        growing = True
+    return {name: frozenset(targets) for name, targets in confined.items() if targets}
+
+
+def _confined_spellings(body: tuple[str, ...]) -> set[str]:
+    """The target spellings one function's added body confines: what each containment test in it relates."""
+    found: set[str] = set()
+    for line in body:
+        for pattern in _CONFINEMENTS:
+            for match in pattern.finditer(line):
+                for group in ("target", "other"):
+                    found.update(_names(match.group(group)))
+    return found
 
 
 def _added_defs(change: Change) -> dict[str, tuple[str, ...]]:
@@ -248,11 +318,6 @@ def _added_defs(change: Change) -> dict[str, tuple[str, ...]]:
                     body.append(following.text)
                 bodies.setdefault(match.group("name"), []).extend(body)
     return {name: tuple(lines) for name, lines in bodies.items()}
-
-
-def _calls(text: str, name: str) -> bool:
-    """Whether `text` calls `name`."""
-    return re.search(rf"(?<![\w]){re.escape(name)}\s*\(", text) is not None
 
 
 def _names(target: str) -> tuple[str, ...]:

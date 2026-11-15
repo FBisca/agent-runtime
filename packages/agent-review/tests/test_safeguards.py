@@ -51,6 +51,24 @@ GUARDED = textwrap.dedent(
 
 GUARD_ADDED_BESIDE_THE_CALL = textwrap.dedent(
     """\
+        def directly_under(self, folder, plans_dir):
+            return folder.resolve().parent == Path(plans_dir).resolve()
+
+        def guard_plan_folder(self, folder):
+            if not self.directly_under(folder, self.plans_dir):
+                raise ValueError("a plan folder outside plans.dir is not deleted")
+
+        def discard_plan(self, plan):
+            folder = self.layout.folder
+            self.guard_plan_folder(folder)
+            shutil.rmtree(folder)
+    """
+)
+
+# The guard the change adds confines `self.folder`, and the delete is of a target nothing confines: the guard
+# is called with nothing, so it confines no target the delete reads.
+GUARD_THAT_CONFINES_ANOTHER_TARGET = textwrap.dedent(
+    """\
         def directly_under(self, plans_dir):
             folder = self.folder
             return folder.resolve().parent == Path(plans_dir).resolve()
@@ -61,8 +79,40 @@ GUARD_ADDED_BESIDE_THE_CALL = textwrap.dedent(
 
         def discard_plan(self, plan):
             self.guard_plan_folder()
-            folder = self.layout.folder
+            folder = self.plan_path.parent
             shutil.rmtree(folder)
+    """
+)
+
+# The change's only containment test is over another relationship, in the delete's own function.
+CONFINEMENT_OVER_ANOTHER_RELATIONSHIP = textwrap.dedent(
+    """\
+        def discard_plan(self, plan):
+            kept = self.other.relative_to(self.repo)
+            folder = self.plan_path.parent
+            shutil.rmtree(folder)
+    """
+)
+
+# One containment test over `self.keep`, and a delete of each of two computed targets.
+ONE_CONFINEMENT_TWO_TARGETS = textwrap.dedent(
+    """\
+        def clean(self):
+            if not self.keep.is_relative_to(self.root):
+                raise ValueError("refusing to delete %s outside %s" % (self.keep, self.root))
+            shutil.rmtree(self.keep)
+            shutil.rmtree(self.other)
+    """
+)
+
+# The resolved spelling SG-D5 names: the test is on the target's resolved self.
+RESOLVED_CONTAINMENT = textwrap.dedent(
+    """\
+        def discard_plan(self, plan, root):
+            target = self.plan_path.parent
+            if not target.resolve().is_relative_to(root):
+                raise ValueError("refusing to delete %s outside %s" % (target, root))
+            shutil.rmtree(target)
     """
 )
 
@@ -209,7 +259,36 @@ def test_S2_a_computed_delete_confined_in_the_same_change_is_not_escalated():
 
 def test_S2_a_confinement_factored_into_a_guard_the_change_adds_is_not_escalated():
     assert reasons_for(GUARD_ADDED_BESIDE_THE_CALL) == [], (
-        "the delete is confined by a guard the change adds and calls, however it is factored"
+        "the target is handed to a guard the change adds, which confines it"
+    )
+
+
+def test_S2_a_containment_test_on_the_resolved_target_is_not_escalated():
+    assert reasons_for(RESOLVED_CONTAINMENT) == [], (
+        "`target.resolve().is_relative_to(root)` is the containment test SG-D5 names"
+    )
+
+
+def test_S1_confinement_over_another_relationship_leaves_the_delete_unconfined():
+    reasons = reasons_for(CONFINEMENT_OVER_ANOTHER_RELATIONSHIP)
+    assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
+        "a test over another relationship in the delete's own function confines nothing about the target"
+    )
+
+
+def test_S1_one_confinement_test_confines_only_the_target_it_names():
+    reasons = reasons_for(ONE_CONFINEMENT_TWO_TARGETS)
+    assert len(reasons) == 1, "one of the two deletes is confined and the other is not"
+    assert reasons[0][0] == safeguards.TARGET_OUTSIDE_ROOT
+    assert "self.other" in reasons[0][2], (
+        "confinement is per target: the test over self.keep does not answer for self.other"
+    )
+
+
+def test_S1_a_guard_confines_only_the_target_it_is_handed():
+    reasons = reasons_for(GUARD_THAT_CONFINES_ANOTHER_TARGET)
+    assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
+        "the guard is called with nothing, so no delete of a computed target is confined by it"
     )
 
 
@@ -217,6 +296,38 @@ def test_a_delete_of_a_target_the_change_writes_itself_is_the_changes_own_artifa
     assert reasons_for(FIXTURE_THAT_RECREATES_ITS_TARGET) == [], (
         "the helper unlinks the plan file it writes in the same function: what it deletes is its own"
     )
+
+
+def test_a_delete_of_what_the_change_writes_itself_is_not_decided_on_the_os_module():
+    assert (
+        reasons_for(
+            textwrap.dedent(
+                """\
+                def reset(self):
+                    self.plan.write_text("x", encoding="utf-8")
+                    os.unlink(self.plan)
+            """
+            )
+        )
+        == []
+    ), "os.unlink is one delete of a file the same function writes: the change's own artifact"
+    assert (
+        reasons_for(
+            textwrap.dedent(
+                """\
+                def reset(self):
+                    self.directory.mkdir(parents=True)
+                    os.rmdir(self.directory)
+            """
+            )
+        )
+        == []
+    ), "os.rmdir is one delete of a directory the same function creates"
+
+
+def test_one_deletion_is_one_call_however_the_os_module_spells_it():
+    assert len(safeguards.destructive_calls("os.unlink(self.plan)")) == 1
+    assert len(safeguards.destructive_calls("os.rmdir(self.directory)")) == 1
 
 
 def test_S2_a_change_with_no_destructive_call_is_not_escalated():
