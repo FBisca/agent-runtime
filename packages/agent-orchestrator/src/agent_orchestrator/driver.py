@@ -916,6 +916,10 @@ RUN_LOG_PENDING = re.compile(
     r"^run \d+ is still in progress; logs will be available when it is complete\.?$"
 )
 
+# How often a failed-step log is re-read before its placeholder is accepted: a run may have finished between the
+# `pr checks` answer and the `run view` that reads its log.
+RUN_LOG_ATTEMPTS = 3
+
 
 def run_log_pending(text):
     """True when a `gh run view --log-failed` answer is the placeholder of a run whose logs are not readable yet."""
@@ -3823,17 +3827,24 @@ class Driver:
         return "error", rows
 
     def failed_logs_readable(self, rows):
-        """False while every failing job's run still answers `--log-failed` with its placeholder: the check has failed
-        but its evidence is not written yet, so the unit is polled again instead of asked."""
+        """True once a failing job's log is readable. A placeholder is re-read `RUN_LOG_ATTEMPTS` times before the
+        check is taken as pending: the run may finish while the logs are being asked for."""
         runs = failing_runs(rows)
-        return not runs or any(not run_log_pending(self.run_log(run)) for run in runs)
+        if not runs:
+            return True
+        for _attempt in range(RUN_LOG_ATTEMPTS):
+            for run in runs:
+                if not run_log_pending(self.run_log(run, fresh=True)):
+                    return True  # the log is already in the cache for the findings
+        return False
 
-    def run_log(self, run):
-        """One workflow run's failed-step log, fetched once a round: the readiness check and the findings share it."""
+    def run_log(self, run, fresh=False):
+        """One workflow run's failed-step log, fetched once a round: the readiness check and the findings share it.
+        `fresh` reads it again, so a placeholder is not cached for the rest of the round."""
         cache = getattr(self, "run_logs", None)
         if cache is None:
             cache = self.run_logs = {}
-        if run not in cache:
+        if fresh or run not in cache:
             _code, out, err = self.gh(["run", "view", run, "--log-failed"])
             cache[run] = (out or err).strip()
         return cache[run]

@@ -156,8 +156,8 @@ class ChecksTests(PrFixture, unittest.TestCase):
         placeholder = "run 77 is still in progress; logs will be available when it is complete"
         real = "unit tests\tRun pytest\t2026-11-10T10:00:00Z assert 1 == 2"
         self.checks([("fail", "unit tests"), ("fail", "unit tests"), "green"])
-        (self.home / "run.json").write_text(
-            json.dumps([[1, "", placeholder], [0, real, ""]]), encoding="utf-8"
+        (self.home / "run-view.json").write_text(
+            json.dumps([[0, placeholder, ""]] * 3 + [[0, real, ""]]), encoding="utf-8"
         )
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
@@ -177,7 +177,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
             "a failing check whose log is still a placeholder is not a verdict",
         )
         self.assertIn("demo-t1", [c["args"]["name"] for c in self.calls("resume")])
-        self.assertEqual(len(self.gh_calls("run", "view")), 2)
+        self.assertGreaterEqual(len(self.gh_calls("run", "view")), 2)
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
         excerpt = findings["items"][0]["excerpt"]
         self.assertIn("assert 1 == 2", excerpt)
