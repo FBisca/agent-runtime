@@ -44,12 +44,17 @@ class DiffLine:
 
 @dataclass(frozen=True)
 class Hunk:
-    """One `@@` hunk: where it starts on each side, what git says it sits in, and its lines."""
+    """One `@@` hunk: where it starts on each side, what git says it sits in, and its lines.
+
+    `raw` is the hunk as the diff spells it - its `@@` line and the lines it shows - so a chunk built
+    from hunks carries the exact text the whole diff carried, and a reader sees what git showed (D41).
+    """
 
     old_start: int
     new_start: int
     section: str
     lines: tuple[DiffLine, ...]
+    raw: tuple[str, ...] = ()
 
     @property
     def added(self) -> tuple[DiffLine, ...]:
@@ -87,12 +92,18 @@ class Hunk:
 
 @dataclass(frozen=True)
 class FileChange:
-    """One changed path: where it came from, what happened to it, and its hunks."""
+    """One changed path: where it came from, what happened to it, and its hunks.
+
+    `header` is the path's own header as the diff spells it - `diff --git`, the index, a mode, a rename's
+    two names, `---`/`+++` - so a chunk that carries one of this file's hunks still names the file and
+    says what happened to it, and a file whose change holds no hunk (a pure rename) is carried too.
+    """
 
     path: str
     old_path: str
     status: str
     hunks: tuple[Hunk, ...]
+    header: tuple[str, ...] = ()
 
     @property
     def added(self) -> tuple[DiffLine, ...]:
@@ -129,6 +140,8 @@ class _File:
     status: str = MODIFIED_STATUS
     hunks: list[Hunk] = field(default_factory=list)
     lines: list[DiffLine] = field(default_factory=list)
+    header: list[str] = field(default_factory=list)
+    raw: list[str] = field(default_factory=list)
     old_start: int = 0
     new_start: int = 0
     section: str = ""
@@ -137,16 +150,17 @@ class _File:
 
     def flush(self) -> None:
         """Close the hunk being read, if one is open."""
-        if self.lines or self.section or self.old_start or self.new_start:
+        if self.lines or self.raw or self.section or self.old_start or self.new_start:
             self.hunks.append(
                 Hunk(
                     old_start=self.old_start,
                     new_start=self.new_start,
                     section=self.section,
                     lines=tuple(self.lines),
+                    raw=tuple(self.raw),
                 )
             )
-        self.lines, self.section, self.old_start, self.new_start = [], "", 0, 0
+        self.lines, self.raw, self.section, self.old_start, self.new_start = [], [], "", 0, 0
 
     def freeze(self) -> FileChange:
         self.flush()
@@ -155,45 +169,61 @@ class _File:
             old_path=self.old_path or self.path,
             status=self.status,
             hunks=tuple(self.hunks),
+            header=tuple(self.header),
         )
 
 
 def read(diff: str) -> Change:
-    """`diff` - the output of `git diff base..head` - read as the change it describes."""
+    """`diff` - the output of `git diff base..head` - read as the change it describes.
+
+    A hunk's own lines are its `@@` line and the lines it shows, kept whole, so a chunk built from hunks
+    is the text git showed. The `---`/`+++` pair opens a path and is a header until that file's first
+    hunk starts; a hunk line whose text happens to start like one is still a hunk line.
+    """
     files: list[_File] = []
     current: _File | None = None
     for raw in diff.splitlines():
         if raw.startswith("diff --git "):
             if current is not None:
                 files.append(current)
-            current = _File()
+            current = _File(header=[raw])
             continue
         if current is None:
             continue  # a preamble before the first path belongs to no change
-        if raw.startswith(_OLD_PREFIX):
-            current.old_path = _path(raw[len(_OLD_PREFIX) :])
-        elif raw.startswith(_NEW_PREFIX):
-            current.path = _path(raw[len(_NEW_PREFIX) :])
-        elif raw.startswith("new file mode"):
-            current.status = ADDED_STATUS
-        elif raw.startswith("deleted file mode"):
-            current.status = DELETED_STATUS
-        elif raw.startswith("rename from "):
-            current.old_path, current.status = raw[len("rename from ") :], RENAMED_STATUS
-        elif raw.startswith("rename to "):
-            current.path, current.status = raw[len("rename to ") :], RENAMED_STATUS
-        elif match := _HUNK.match(raw):
+        if match := _HUNK.match(raw):
             current.flush()
             current.old_start, current.old_no = int(match.group(1)), int(match.group(1))
             current.new_start, current.new_no = int(match.group(3)), int(match.group(3))
             current.section = match.group(5)
-        elif raw.startswith("\\"):
-            continue  # "\ No newline at end of file": a note about a line, not a line
-        elif raw[:1] in ("+", "-", " "):
+            current.raw.append(raw)
+        elif current.raw and raw[:1] in ("+", "-", " "):
+            current.raw.append(raw)
             current.lines.append(_line(raw, current))
+        elif current.raw and raw.startswith("\\"):
+            # "\ No newline at end of file": a note about a line, not a line, kept in the hunk's text.
+            current.raw.append(raw)
+        else:
+            _header_line(raw, current)
     if current is not None:
         files.append(current)
     return Change(files=tuple(file.freeze() for file in files))
+
+
+def _header_line(raw: str, current: _File) -> None:
+    """Keep one line before a file's first hunk, and the path, status or rename side it names."""
+    current.header.append(raw)
+    if raw.startswith(_OLD_PREFIX):
+        current.old_path = _path(raw[len(_OLD_PREFIX) :])
+    elif raw.startswith(_NEW_PREFIX):
+        current.path = _path(raw[len(_NEW_PREFIX) :])
+    elif raw.startswith("new file mode"):
+        current.status = ADDED_STATUS
+    elif raw.startswith("deleted file mode"):
+        current.status = DELETED_STATUS
+    elif raw.startswith("rename from "):
+        current.old_path, current.status = raw[len("rename from ") :], RENAMED_STATUS
+    elif raw.startswith("rename to "):
+        current.path, current.status = raw[len("rename to ") :], RENAMED_STATUS
 
 
 def _line(raw: str, current: _File) -> DiffLine:

@@ -6,6 +6,11 @@ execution instead of a verdict (D40). A judgment is emitted in configuration ord
 answered in, and carries its question's priority, its scope and the revision it was made on (D07, D44,
 D46). A question the screening left out is simply unanswered: nothing is guessed at or invented.
 
+A screening of a change larger than one request's budget asks the whole bank of each chunk, so the same
+question is answered once per chunk. That is why a judgment's scope names what it was made over - the
+whole diff when the change fitted one request, the chunk and its paths otherwise - and never a constant
+that would make two different answers to one question indistinguishable in a frozen report (D41, D44).
+
 A bounded yes/no question is a noul, and the provider answers it with the probability that the change
 satisfies it: the value is that probability as answered, never a `true` this tool invented by comparing
 it with a threshold. A graded question is a score, and the provider answers a position on its ladder
@@ -24,8 +29,8 @@ from typing import Any
 from agent_review.errors import ScreeningError
 from agent_review.questions import Question
 
-# P0 screens the change between two revisions as one unit, so every judgment's scope is that whole diff
-# (D09, D44). A later phase's file and hunk scopes replace it where they apply.
+# What a judgment was made over when the change is one screening: the whole diff (D09, D44). A later stage
+# splits a change into chunks, and each chunk's judgments name the chunk instead.
 SCOPE = "whole-diff"
 
 NOUL_VALUE = "the probability between 0 and 1 that the change satisfies it"
@@ -42,19 +47,31 @@ class Judged:
     error: ScreeningError | None = None
 
 
+def chunk_scope(index: int, total: int, files: Sequence[str]) -> str:
+    """What one chunk's judgments were made over, so a report can tell two answers to one question apart.
+
+    A change that fits one chunk is screened as the whole diff it is, and says so; a chunked change names
+    its place in the order and the paths it carries, so a reader can find the region an answer is about.
+    """
+    if total == 1:
+        return SCOPE
+    return f"chunk {index}/{total}: {', '.join(files)}"
+
+
 def attributed(
     questions: Sequence[Question],
     native: Iterable[Any],
     *,
     base: str,
     head: str,
+    scope: str = SCOPE,
 ) -> tuple[dict[str, Any], ...]:
     """Each answered question as a judgment with its provenance, in configuration order.
 
     The strict form: one answer the run cannot attribute raises, so a caller that wants no partial
     verdict uses this, while a caller that keeps what a stopped run learned uses `collected` (S6).
     """
-    held = collected(questions, native, base=base, head=head)
+    held = collected(questions, native, base=base, head=head, scope=scope)
     if held.error is not None:
         raise held.error
     return held.judgments
@@ -66,6 +83,7 @@ def collected(
     *,
     base: str,
     head: str,
+    scope: str = SCOPE,
 ) -> Judged:
     """The judgments a reply earned and the reason it stopped, keeping what it learned before a refusal.
 
@@ -80,9 +98,10 @@ def collected(
             _learn(index, judgment, asked, answered)
         except ScreeningError as error:
             return Judged(
-                judgments=_emitted(questions, answered, base=base, head=head), error=error
+                judgments=_emitted(questions, answered, base=base, head=head, scope=scope),
+                error=error,
             )
-    return Judged(judgments=_emitted(questions, answered, base=base, head=head))
+    return Judged(judgments=_emitted(questions, answered, base=base, head=head, scope=scope))
 
 
 def _emitted(
@@ -91,6 +110,7 @@ def _emitted(
     *,
     base: str,
     head: str,
+    scope: str,
 ) -> tuple[dict[str, Any], ...]:
     """The learned answers as judgments, in configuration order whatever order they were answered in."""
     revision = f"{base}..{head}"
@@ -98,7 +118,7 @@ def _emitted(
         {
             "question": question.id,
             "priority": question.priority,
-            "scope": SCOPE,
+            "scope": scope,
             "revision": revision,
             **answered[question.id],
         }
