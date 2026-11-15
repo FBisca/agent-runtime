@@ -528,3 +528,13 @@ failure names the behaviour it broke and not a line number in a file that moved.
 |---|---|---|
 | R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only |
 | R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path |
+
+## Requirements: plan-check-evidence-selectors
+
+- **R156** WHEN `plan check`, `plan approve` or `plan amend` reads a folder plan whose scenario carries `check` evidence that runs pytest with a `-k` selector of `or`-joined terms over the files named in its `evidence.acceptance`, THEN it refuses, naming the scenario and the way out (the anchored selector `-k "test_<id>_ or test_control_"`), when (a) the selector names no scenario id, or not the scenario's own; (b) it selects no test in those files other than a `test_control_*` one; or (c) it selects a test whose name carries a scenario id it did not name (`S1` selecting `test_S10_…`). The files are read statically (`ast`, no import, no pytest run); each term is a case-insensitive substring of a test's function, class or module name, and an expression with `and`, `not` or parentheses is not linted. A legacy single-file plan (oracle files, no `acceptance/` folder) is not linted, nor is a check with no `-k`; the driver's load never runs the rule, so an approved plan keeps running (R116) (from plan-check-evidence-selectors/S1)
+
+## Coverage: plan-check-evidence-selectors
+
+| Requirement | Scenario | Test nodes |
+|---|---|---|
+| R156 | S1 | `packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_does_not_name_the_scenario_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_selects_none_of_the_scenarios_tests_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_also_selects_another_scenarios_test_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_an_anchored_selector_keeps_the_plan_valid`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_a_check_without_k_is_not_linted`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_a_legacy_plan_is_not_linted` |
