@@ -35,7 +35,7 @@ class Refused(Exception):
 
 
 class Run(NamedTuple):
-    """What one run decided: the exit code, the lines it reports, and its refusals."""
+    """What one run decided: the exit code, the lines it reports, and what it says on stderr."""
 
     code: int
     lines: list[str]
@@ -161,7 +161,22 @@ def run(junit, baseline):
         return Run(2, [], [str(error)])
     lines = offender_lines(measured, *ceilings)
     if lines:
-        return Run(1, lines, [])
+        # The closing line carries the run's own measurement, so a red build reads the number it was
+        # held to as well as the lines it refused.
+        return Run(
+            1,
+            lines,
+            [
+                "suite budget: %d test%s in %.1fs against ceilings %s: make the test cheaper, or "
+                "lower the suite's cost, rather than raise the ceiling"
+                % (
+                    len(measured),
+                    "s" if len(measured) != 1 else "",
+                    summed(measured),
+                    ceilings_phrase(*ceilings),
+                )
+            ],
+        )
     return Run(0, [summary(measured, ceilings)], [])
 
 
@@ -228,12 +243,6 @@ def main(argv=None):
         print(error, file=sys.stderr)
     for line in decision.lines:
         print(line)
-    if decision.code == 1:
-        print(
-            "suite budget: the run is over a ceiling it may not pass: make a test cheaper, or lower "
-            "the suite's cost, rather than raise the ceiling",
-            file=sys.stderr,
-        )
     return decision.code
 
 

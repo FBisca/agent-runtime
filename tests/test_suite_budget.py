@@ -148,6 +148,14 @@ class RunTests(unittest.TestCase):
                 "the whole suite: 6.6s > ceiling 6.0s",
             ],
         )
+        self.assertEqual(
+            result.errors,
+            [
+                "suite budget: 2 tests in 6.6s against ceilings 5.0s per test and 6.0s for the "
+                "suite: make the test cheaper, or lower the suite's cost, rather than raise the "
+                "ceiling"
+            ],
+        )
 
     @pytest.mark.integration
     def test_S18_a_run_under_both_ceilings_exits_zero_and_prints_the_ceilings_it_read(self):
