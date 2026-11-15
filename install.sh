@@ -508,6 +508,7 @@ toml_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 # config reaches the output: a config can hold a key, and a key must never be printed.
 codex_config=$HOME/.codex/config.toml
 pi_config=$HOME/.pi/agent/mcp.json
+pi_settings=$HOME/.pi/agent/settings.json
 pi_hosts=$HOME/.config/agent-runtime/hosts.json
 claude_settings=$HOME/.claude/settings.json
 
@@ -711,6 +712,24 @@ print_pi_wiring() {
       "exposure": "direct"
     }
   }
+}
+EOT
+
+  # The rhythm extension ships in this checkout, so a local install points at it by path. Pi reads the
+  # entry from its own settings file, which this installer never writes.
+  ext=$(toml_escape "$root/extensions/agent-runtime")
+  wire=
+  [ -z "$root" ] || wire=$root/extensions/agent-runtime
+  state=$(config_state "$pi_settings" agent-runtime "$wire")
+  case $state in
+    wired) printf '\nA Pi lead keeps its turn in rhythm through the agent-runtime extension: ~/.pi/agent/settings.json already names this install and is left as it is.\nThe full entry for this release is below; check it against yours, a line may be missing:\n\n' ;;
+    elsewhere) printf '\nA Pi lead keeps its turn in rhythm through the agent-runtime extension: ~/.pi/agent/settings.json names agent-runtime elsewhere and is left as it is.\nThe entry for this install is below; keep the other keys in that file and change this one to match:\n\n' ;;
+    kept) printf '\nA Pi lead keeps its turn in rhythm through the agent-runtime extension: ~/.pi/agent/settings.json exists and is left as it is, keep its other keys and add this entry by hand:\n\n' ;;
+    *) printf '\nA Pi lead keeps its turn in rhythm through the agent-runtime extension, in ~/.pi/agent/settings.json:\n\n' ;;
+  esac
+  cat <<EOT
+{
+  "extensions": ["$ext"]
 }
 EOT
 
@@ -1215,6 +1234,9 @@ print_plan() {
         wire=
         [ -z "$root" ] || wire=$root/server/mcp_server.py
         plan_adapter pi '.pi/agent/mcp.json' "$pi_config" '"agent-runtime"' "$wire" 'print the config for ~/.pi/agent/mcp.json, no Pi config is written'
+        wire=
+        [ -z "$root" ] || wire=$root/extensions/agent-runtime
+        plan_adapter pi '.pi/agent/settings.json' "$pi_settings" agent-runtime "$wire" 'print the rhythm extension entry for ~/.pi/agent/settings.json, no Pi config is written'
         wire=
         [ -z "$root" ] || wire=$root
         plan_adapter pi '.config/agent-runtime/hosts.json' "$pi_hosts" '"pi"' "$wire" 'print the Pi host policy for ~/.config/agent-runtime/hosts.json, no config is written'
