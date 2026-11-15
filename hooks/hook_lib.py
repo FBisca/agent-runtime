@@ -198,15 +198,23 @@ def worker_assignment(db, who):
 
     A session is a worker, not a lead, when no team row owns its terminal; the assignment then belongs
     to the team its terminal is bound to. A report ends the obligation: complete, blocked and decision
-    all leave the working state, so only a pending or working assignment keeps the turn open."""
+    all leave the working state, so only a pending or working assignment keeps the turn open. A team
+    whose session is dead, or whose terminal a newer team now owns, owes nothing: the caller is a new
+    session at a reused terminal, not the worker that took the assignment."""
     scope, terminal, _generation = who
     row = db.execute(
-        "SELECT a.id FROM assignments a JOIN workers w ON w.id=a.worker "
-        "JOIN teams t ON t.id=a.team WHERE w.address=? AND w.active=1 AND a.current=1 "
-        "AND a.state IN ('pending','working') AND t.scope=? ORDER BY a.id LIMIT 1",
+        "SELECT a.id, a.state, a.team, t.lead, t.generation FROM assignments a "
+        "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
+        "WHERE w.address=? AND w.active=1 AND a.current=1 AND t.scope=? "
+        "ORDER BY a.id LIMIT 1",
         (terminal, scope),
     ).fetchone()
-    return row[0] if row else None
+    if not row or row["state"] not in ("pending", "working"):
+        return None
+    if not dispatch.generation_alive(row["generation"]):
+        return None
+    owner = dispatch.owning_team(db, scope, row["lead"], own_team=row["team"])
+    return row["id"] if owner is not None and owner["id"] == row["team"] else None
 
 
 def worker_refusal(who, env=None):

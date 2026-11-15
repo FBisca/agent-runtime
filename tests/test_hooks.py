@@ -1489,16 +1489,28 @@ class StopGuardTests(HookStoreCase):
         self.worker(self.store, newer)  # it still holds work, so it owns the terminal
         self.assertIsNone(child.run(STOP, self.STOP)[0])
         self.assertIsNone(self.stop()[0])  # t0 leads no team with needs
+        bound_env = dict(self.env, HC_TERMINAL_ID="t6")
+        (self.root / "b").mkdir()
+        bound = FakeCliProcess(bound_env, self.root / "b")
+        self.addCleanup(bound.close)
+        ident = self.store.register(self.team_id, "w-bound")
+        self.store.bind(ident["assignment_id"], "t6", "scope")
+        self.assertEqual(
+            bound.run(STOP, self.STOP)[0],
+            {"decision": "block", "reason": self.WORKER_REASON % ident["assignment_id"]},
+        )
+        self.sql(
+            self.store, "UPDATE assignments SET state='blocked' WHERE id=?", ident["assignment_id"]
+        )
+        self.assertIsNone(bound.run(STOP, self.STOP)[0])  # no such assignment: allowed
         other = dispatch_store.Store(self.env)
         dead = other.team("scope", "t9", "999:dead")  # a dead generation
-        self.worker(other, dead)
-        nobody = (
-            FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t9"), self.root / "n")
-            if (self.root / "n").mkdir() is None
-            else None
-        )
+        gone = other.register(dead, "w-gone")
+        other.bind(gone["assignment_id"], "t9", "scope")
+        (self.root / "n").mkdir()
+        nobody = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t9"), self.root / "n")
         self.addCleanup(nobody.close)
-        self.assertIsNone(nobody.run(STOP, self.STOP)[0])
+        self.assertIsNone(nobody.run(STOP, self.STOP)[0])  # only a dead team's: allowed
 
     def test_reported_unchanged_stall_counts_as_seen_until_progress(self):
         """agent-runtime/R128"""
