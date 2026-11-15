@@ -28,6 +28,7 @@ from . import config as repo_config
 from . import contracts, events, evidence, narrate, routes, runner, timeutil, verify, workbench
 from . import ledger as ledgers
 from . import plan as yaml_plan
+from .ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from .plan import PlanError
 from .report_rules import require, require_report
 from .runtime_client import (
@@ -1154,6 +1155,7 @@ class Driver:
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
+        self.run_logs = {}  # run id -> its failed-step log, once a round: the findings reuse the readiness read
 
     # ---- the event log: every state change is on disk before the next step -----------------------------------
 
@@ -3763,7 +3765,8 @@ class Driver:
 
     def pr_checks(self, url):
         """The pull request's checks as (state, rows): green, pending, none or failed. `gh` prints one JSON row per
-        check; a bucket says how it went. An exit code `gh` does not use for checks is an error, not a state."""
+        check; a bucket says how it went. A check that failed while its run's logs are still a placeholder is pending,
+        not a verdict: there is no evidence to quote yet. An exit code `gh` does not use for checks is an error."""
         code, out, _err = self.gh(["pr", "checks", url, "--json", "name,bucket,link,description"])
         try:
             rows = json.loads(out or "[]")
@@ -3771,9 +3774,9 @@ class Driver:
             rows = []
         rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
         buckets = {str(r.get("bucket") or "").lower() for r in rows}
-        if buckets & {"fail", "failing", "cancel", "cancelled", "timed_out", "action_required"}:
-            return "failed", rows
-        if buckets & {"pending", "queued", "in_progress", "waiting", "requested"}:
+        if buckets & FAILED_BUCKETS:
+            return ("failed" if logs_readable(self, rows) else "pending"), rows
+        if buckets & PENDING_BUCKETS:
             return "pending", rows
         if code == 0 and rows:
             return "green", rows
@@ -3805,7 +3808,7 @@ class Driver:
         """One non-blocking look at every unit's pull request: was it merged by hand, is it still a draft, how are
         its checks. A unit with no checks yet, or with checks still running, is looked at again on a later round: no
         fix round is raised and no other unit waits. The view taken here is the one `step_ci` acts on this round."""
-        self.views = {}
+        self.views, self.run_logs = {}, {}
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
             gate = task.get("gate")
@@ -4061,22 +4064,15 @@ class Driver:
     def ci_items(self, task_id, url, rows):
         """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
         --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
-        failing = [
-            row
-            for row in rows
-            if str(row.get("bucket") or "").lower() in ("fail", "failing", "cancel", "cancelled")
-        ]
-        runs = {}  # run id -> its failed-step log: every failing job of a run shares one fetch
+        failing = [row for row in rows if str(row.get("bucket") or "").lower() in FAILED_BUCKETS]
         items = []
         for number, row in enumerate(failing, 1):
             name = row.get("name") or "ci"
             text = str(row.get("description") or "").strip()
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                if run.group(1) not in runs:
-                    _code, out, err = self.gh(["run", "view", run.group(1), "--log-failed"])
-                    runs[run.group(1)] = (out or err).strip()
-                text = job_log(runs[run.group(1)], name) or text
+                logged = job_log(read_log(self, run.group(1)), name)
+                text = text if placeholder(logged) else logged or text
             items.append(self.ci_item(task_id, url, "CI%d" % number, name, text))
         if not items:
             items.append(self.ci_item(task_id, url, "CI1", "ci", "the checks failed"))

@@ -7,7 +7,7 @@ Every call is logged with the plan and events as they stand. `pr view` answers `
 otherwise a draft answers the next `view-draft.json` state (OPEN when there is none) and the next `prs.json` state is
 used after that PR is made ready. Each queue's last answer repeats. `pr checks` uses `checks-ready.json` while the PR
 is ready, when scripted, then `checks-<number>.json`, falling back to `checks.json`. Draft flags are per PR.
-`pr ready --undo` uses `undo.json`, `pr update-branch` uses `update.json`, `pr create` prints the url in `create.json` (default pull/9); `run view` returns a canned failed log. A draft that is never made ready
+`pr ready --undo` uses `undo.json`, `pr update-branch` uses `update.json`, `pr create` prints the url in `create.json` (default pull/9); `run view --log-failed` answers `run-view.json` when scripted (a log string, or [exit, stdout, stderr], the last repeating), else a canned failed log. A draft that is never made ready
 raises after 100 polls, exposing a missing transition without hanging the suite.
 """
 
@@ -54,6 +54,14 @@ def pop(home, name, default=None):
     with open(path, "w", encoding="utf-8") as stream:
         json.dump(queue, stream)
     return item
+
+
+def run_view(argv, home):
+    """`run view --log-failed`: `run-view.json` scripts a log string or [exit, stdout, stderr] (the last repeating)."""
+    answer = pop(home, "run-view.json")
+    if answer is None or isinstance(answer, str):
+        return Completed(argv, 0, answer or "FAILED STEP LOG TAIL for run " + argv[2])
+    return Completed(argv, *(answer + ["", ""])[:3])
 
 
 def process(argv, timeout=None, cwd=None):
@@ -104,7 +112,7 @@ def process(argv, timeout=None, cwd=None):
         code, err = (pop(home, "update.json", [0, ""]) + [""])[:2]
         return Completed(argv, code, "", err)
     if argv[:2] == ["run", "view"]:
-        return Completed(argv, 0, "FAILED STEP LOG TAIL for run " + argv[2])
+        return run_view(argv, home)
     if argv[:2] != ["pr", "view"]:
         return Completed(argv, 2, "", "fake gh: unsupported " + " ".join(argv))
     state = pop(home, "view-early.json")
