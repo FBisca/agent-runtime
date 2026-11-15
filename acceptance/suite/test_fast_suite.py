@@ -93,7 +93,14 @@ class FastSuiteTests(unittest.TestCase):
         if cls._profile is None:
             pytest_run("-o", "addopts=", "-q", "-p", "no:impacted", "-m", "not integration")
             cls._profile = pytest_run(
-                "-o", "addopts=", "-q", "-p", "no:impacted", "-m", "not integration", "--durations=0"
+                "-o",
+                "addopts=",
+                "-q",
+                "-p",
+                "no:impacted",
+                "-m",
+                "not integration",
+                "--durations=0",
             )
         return cls._profile
 

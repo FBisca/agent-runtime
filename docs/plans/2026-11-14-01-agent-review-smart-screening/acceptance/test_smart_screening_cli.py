@@ -133,6 +133,8 @@ class SmartScreeningFixture(unittest.TestCase):
             "create index items_id on items (id);\n", encoding="utf-8"
         )
         (self.workspace / "pipeline.py").write_text(PIPELINE, encoding="utf-8")
+        # `git mv` will not create the destination directory, and `server/` is new in this head edit.
+        (self.workspace / "server").mkdir(parents=True, exist_ok=True)
         git(self.workspace, "mv", "docs/guide.md", "server/guide.md")
         self.commit("head")
         return base, git(self.workspace, "rev-parse", "HEAD")
