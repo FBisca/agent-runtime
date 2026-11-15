@@ -1,6 +1,6 @@
 """The hook tests' harness: the plugin's paths, its entries loaded in process, and a fake CLI process.
 
-`test_hooks.py` drives each entry two ways — in process, where the verdict is what is under test, and
+The hook modules drive each entry two ways — in process, where the verdict is what is under test, and
 under a fake `codex` process, where the stdin/stdout/exit boundary and the generation ancestry are. The
 paths, the loaders and that fake process belong to more than one class, and a module that carries them
 grows until nobody reads it whole. Nothing here is collected: the file is named without `test_`.

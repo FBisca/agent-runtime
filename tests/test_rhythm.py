@@ -1,7 +1,7 @@
 """The rhythm policy in process: one capability row per harness and the stop predicate hooks format.
 
 Pure logic: no subprocess, no server, no store. The boundary tests that drive the hook entry live in
-`tests/test_hooks.py`.
+`tests/test_hooks_stop_guard.py`.
 """
 
 import sys

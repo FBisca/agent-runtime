@@ -110,7 +110,7 @@ terminal is a lead, so a worker that inherits the variable still receives nothin
 
 A Pi worker gets the same extension, and there the turn end is the worker's stop. The naming half of that answer
 is the hook's, not the extension's: `hooks/stop_guard.py` is what tells a worker which assignment it still owes,
-aiming `report complete` and `report blocked` as the two ways out, and `tests/test_hooks.py` is where that
+aiming `report complete` and `report blocked` as the two ways out, and `tests/test_hooks_stop_guard.py` is where that
 wording is proved. A hook that refuses nothing — a lead without a team, or a worker before that guard exists —
 is an allowed stop, and the extension adds nothing to it.
 

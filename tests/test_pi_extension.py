@@ -187,7 +187,7 @@ class WorkerStopTests(ExtensionCase):
     """S4: a worker's unreported assignment reaches the next request with both ways out intact.
 
     The naming half is the hook's, not this adapter's: `hooks/stop_guard.py` is what decides that a
-    worker's turn may not end while its own assignment is unreported, and `tests/test_hooks.py` is
+    worker's turn may not end while its own assignment is unreported, and `tests/test_hooks_stop_guard.py` is
     where that answer is proved to name `report complete` and `report blocked`. This node pins the
     other half — the extension asks once, and carries that answer into exactly one more request
     without paraphrasing or dropping it — so it can fail when the reason is mangled, and it cannot

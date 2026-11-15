@@ -2,7 +2,7 @@
 
 The rhythm predicate is one policy in the runtime package: the Claude and Codex Stop payloads and the
 Pi dialect answer one store state with one reason. It drives the documented entry point,
-`bin/agent-runtime-hook stop`, through `test_hooks.FakeCliProcess`, so successive runs share one
+`bin/agent-runtime-hook stop`, through `hook_harness.FakeCliProcess`, so successive runs share one
 generation and the stop-guard budget behaves as it does in a session.
 
 The control tests hold today and must keep holding: they prove the seeded state is really blocking and
@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 from agent_runtime import dispatch_store
-from test_hooks import CodexHookTests, FakeCliProcess, HookStoreCase
+from hook_harness import FakeCliProcess
+from hook_helpers import HookStoreCase
+from test_hooks_stop_guard import CodexHookTests
 
 pytestmark = pytest.mark.integration
 
