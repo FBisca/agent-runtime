@@ -167,12 +167,14 @@ def screen(args: argparse.Namespace) -> Report:
     base, head = revisions.resolve(repo, args.base, args.head)
     change = revisions.diff(repo, base, head)
     _prepare_output(args.output, base, head)
-    # The safeguards read the frozen diff beside the provider's state: a hit decides the change, so no port
-    # is built, no credential is read and no request is spent (SG-D2, SG-D10). The mandatory baseline's
-    # paths apply whatever was configured, and the configuration's own paths add to them (D13).
+    # The safeguards read the frozen diff beside the rules configuration declares: a hit decides the change,
+    # so no port is built, no credential is read and no request is spent (SG-D2, SG-D6, SG-D10). The
+    # mandatory baseline's paths apply whatever was configured, and the configuration's own paths add to
+    # them (D13); the members it declares standard-library-only are read beside them.
     rules = safeguards.rule_set(
         baseline_paths=questions.baseline().sensitive_paths,
         repository_paths=bank.sensitive_paths,
+        stdlib_only_paths=bank.safeguards.get(safeguards.STDLIB_ONLY_SETTING, ()),
     )
     escalation = safeguards.decide(read_change(change), rules)
     if escalation:

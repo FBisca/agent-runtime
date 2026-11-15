@@ -33,22 +33,37 @@ the root: the value a computed target holds is not in a diff (SG-D5). So:
 
 One reason per rule and path names the first call the change adds on it: a report says which file a person
 must read, and the file is the unit a review is opened on.
-
 `protected-path` fires on a changed path a pattern declares sensitive, on either side of a rename and for
 an added, modified or deleted file alike. The patterns are configuration (SG-D4, SG-D6): the packaged
 baseline ships the mandatory ones and a repository's `.agent-review.yaml` adds to them, so a reason names
 where the pattern came from as well as the path it matched.
+
+`stdlib-only` fires when a path the rules declare (`safeguards.stdlib_only`, read as path prefixes) adds an
+import of a module the standard library does not ship. The members are configuration and the rule is code
+(SG-D6), and a module outside the standard library is the dependency a member that ships without them must
+not carry. The reason names the member's path, the statement it matched, and the module, which is the one
+field `stdlib-only` adds to a reason (SG-D3). The module is read from the leading dotted name of each
+statement the added line makes, so a trailing comment (`# noqa`, `# type: ignore`, a note) cannot hide it and
+a second statement after a `;` is read too. A relative import names the member's own modules, so it is not a
+dependency; an absolute import of another module in this repository is read as outside the standard library,
+which is the conservative direction for a rule whose risk is missing rather than over-reporting.
 """
 
 import posixpath
 import re
-from collections.abc import Iterable
+import sys
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from agent_review.change import ADDED, Change, DiffLine, FileChange, Hunk, indent_columns
 
 TARGET_OUTSIDE_ROOT = "target-outside-root"
 PROTECTED_PATH = "protected-path"
+STDLIB_ONLY = "stdlib-only"
+
+# The configuration key a run declares its standard-library-only members under (SG-D6).
+STDLIB_ONLY_SETTING = "stdlib_only"
 
 # Where a reason's evidence came from: this rule reads the change, a sensitive-path rule reads the mandatory
 # baseline or a repository's own list (T2), and a member rule reads a declaration. The field is what P2
@@ -83,6 +98,11 @@ _RELATED = ("samefile(", "commonpath(")
 _DEF = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>\w+)\s*\((?P<parameters>[^)]*)")
 # An argument a call names, so it binds its parameter by name rather than by position.
 _KEYWORD = re.compile(r"^(?P<name>[A-Za-z_]\w*)\s*=(?!=)\s*(?P<value>.+)$")
+# An import the change adds: the statement, and the module it names. A relative import names the member's own.
+_IMPORT = re.compile(r"^[ \t]*import[ \t]+(?P<modules>.*)$")
+_FROM = re.compile(r"^[ \t]*from[ \t]+(?P<module>[.\w]+)[ \t]+import[ \t]")
+# A module name as a statement spells it: the leading dotted identifier, so a trailing comment cannot hide it.
+_MODULE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
 
 
 @dataclass(frozen=True)
@@ -95,16 +115,23 @@ class ProtectedPath:
 
 @dataclass(frozen=True)
 class RuleSet:
-    """What configuration contributes to the rules: the protected paths, the baseline's first (SG-D4, SG-D6)."""
+    """What configuration contributes to the rules: the protected paths and the stdlib-only members."""
 
     protected_paths: tuple[ProtectedPath, ...] = ()
+    # The members that may carry only the standard library, as path prefixes (SG-D6).
+    stdlib_only: tuple[str, ...] = ()
 
 
-def rule_set(baseline_paths: Iterable[str] = (), repository_paths: Iterable[str] = ()) -> RuleSet:
+def rule_set(
+    baseline_paths: Iterable[str] = (),
+    repository_paths: Iterable[str] = (),
+    stdlib_only_paths: Iterable[str] = (),
+) -> RuleSet:
     """The rules one run decides with: the mandatory baseline, and a repository's own list added to it.
 
     A repository's list extends the baseline and never replaces it, and a pattern the baseline already names
     keeps the baseline as its source: the mandatory list is what proves that path, whatever else repeats it.
+    The declared members are parsed here once, so a rule reads them as the paths they are.
     """
     protected = [ProtectedPath(pattern=pattern, source=BASELINE) for pattern in baseline_paths]
     named = {path.pattern for path in protected}
@@ -113,7 +140,29 @@ def rule_set(baseline_paths: Iterable[str] = (), repository_paths: Iterable[str]
         for pattern in repository_paths
         if pattern not in named
     )
-    return RuleSet(protected_paths=tuple(protected))
+    return RuleSet(
+        protected_paths=tuple(protected), stdlib_only=stdlib_only_members(stdlib_only_paths)
+    )
+
+
+def stdlib_only_members(paths: Iterable[str] | None = None) -> tuple[str, ...]:
+    """The declared members as path prefixes: no trailing separator, and each member named once.
+
+    A member is a path or a directory, spelled with or without its trailing separator; `hooks/`, `hooks` and
+    `hooks/**` declare the same member. The shape of the declaration is refused where the configuration is
+    read, so this parses what it is handed and never a config file.
+    """
+    members: list[str] = []
+    for entry in paths or ():
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        member = entry.strip().replace("\\", "/")
+        if member.endswith("/**"):
+            member = member[: -len("/**")]
+        member = member.rstrip("/")
+        if member and member not in members:
+            members.append(member)
+    return tuple(members)
 
 
 def matches(pattern: str, path: str) -> bool:
@@ -159,15 +208,20 @@ class EscalationReason:
     path: str
     pattern: str
     source: str = DIFF
+    # The module a `stdlib-only` reason is about; nothing for a rule that is not about a module (SG-D3).
+    module: str = ""
 
     def as_dict(self) -> dict[str, str]:
         """The reason as `report.json` holds it, in the contract's field order (SG-D3)."""
-        return {
+        reason = {
             "rule": self.rule,
             "path": self.path,
             "pattern": self.pattern,
             "source": self.source,
         }
+        if self.module:
+            reason["module"] = self.module
+        return reason
 
 
 @dataclass(frozen=True)
@@ -209,17 +263,35 @@ class _Scope:
     guards: tuple[_Guard, ...] = ()
 
 
-def decide(change: Change, rules: RuleSet | None = None) -> tuple[EscalationReason, ...]:
-    """The reasons this change is escalated before the model is asked, empty when none fires."""
-    rules = RuleSet() if rules is None else rules
+def decide(
+    change: Change, rules: RuleSet | Mapping[str, Any] | None = None
+) -> tuple[EscalationReason, ...]:
+    """The reasons this change is escalated before the model is asked, empty when none fires.
+
+    `rules` is the run's rule set; a caller may hand the run's own safeguards block instead, which names the
+    same members without a rule set built around them.
+    """
+    rules = _as_rules(rules)
     scope = _Scope(guards=_confining_helpers(change))
+    members = rules.stdlib_only
     reasons: list[EscalationReason] = []
     for file in change.files:
         reasons.extend(_protected_path(file, rules))
         found = _target_outside_root(file, scope)
         if found is not None:
             reasons.append(found)
+        reasons.extend(_stdlib_only(file, members))
     return tuple(reasons)
+
+
+def _as_rules(rules: RuleSet | Mapping[str, Any] | None) -> RuleSet:
+    """`rules` as a rule set: a run's own declaration read the same way when it is handed as configured."""
+    if rules is None:
+        return RuleSet()
+    if isinstance(rules, RuleSet):
+        return rules
+    declared = rules.get(STDLIB_ONLY_SETTING, ())
+    return RuleSet(stdlib_only=stdlib_only_members(declared if isinstance(declared, list) else ()))
 
 
 def _protected_path(file: FileChange, rules: RuleSet) -> list[EscalationReason]:
@@ -238,6 +310,130 @@ def _protected_path(file: FileChange, rules: RuleSet) -> list[EscalationReason]:
             )
         )
     return reasons
+
+
+def imported_modules(text: str) -> tuple[tuple[str, str], ...]:
+    """Each import `text` makes, as the module it names and the statement as written.
+
+    A line is read as the statements it makes (`import a; import b`), and each `import` statement's modules
+    are the leading dotted names of its comma-separated parts - so a trailing comment (`# noqa`,
+    `# type: ignore`, a note) cannot hide the module a change adds. A relative import names the member's own
+    modules, so it is not read; a line that only mentions an import in a comment or a string is not one.
+    """
+    found: list[tuple[str, str]] = []
+    for statement in _statements(text):
+        found.extend(_statement_modules(statement))
+    return tuple(found)
+
+
+def _statements(text: str) -> tuple[str, ...]:
+    """The statements one added line makes, split on `;` as Python splits a simple-statement line."""
+    return tuple(part.strip() for part in text.split(";") if part.strip())
+
+
+def _statement_modules(statement: str) -> tuple[tuple[str, str], ...]:
+    """The modules one statement imports, or nothing when it is not an import."""
+    match = _FROM.match(statement)
+    if match is not None:
+        module = match.group("module")
+        return () if module.startswith(".") else ((module.split(".")[0], statement),)
+    match = _IMPORT.match(statement)
+    if match is None:
+        return ()
+    inside = match.group("modules").strip()
+    if inside.startswith("("):
+        inside = inside[1:]
+    found: list[tuple[str, str]] = []
+    for part in inside.split(","):
+        named = _MODULE.match(part.strip())
+        if named is not None:
+            found.append((named.group(0).split(".")[0], statement))
+    return tuple(found)
+
+
+def _open_string(text: str) -> str:
+    """The triple-quote delimiter `text` leaves open, or nothing when every string it opens it closes.
+
+    An `import` line inside a multi-line string is text a docstring quotes, never a dependency the member
+    added, so the lines a string spans are not read as code.
+    """
+    open_triple = ""
+    index = 0
+    while index < len(text):
+        if open_triple:
+            at = text.find(open_triple, index)
+            if at == -1:
+                return open_triple
+            index = at + len(open_triple)
+            open_triple = ""
+            continue
+        if text.startswith('\"\"\"', index) or text.startswith("'''", index):
+            open_triple = text[index : index + 3]
+            index += 3
+            continue
+        character = text[index]
+        if character == "#":
+            return ""  # a comment runs to the end of the line, so nothing is left open
+        if character in "\"'":
+            quote = character
+            index += 1
+            while index < len(text):
+                if text[index] == "\\":
+                    index += 2
+                    continue
+                index += 1
+                if text[index - 1] == quote:
+                    break
+            continue
+        index += 1
+    return open_triple
+
+
+def _stdlib_only(file: FileChange, members: tuple[str, ...]) -> tuple[EscalationReason, ...]:
+    """One reason per module this declared member adds outside the standard library, in the diff's order.
+
+    A deleted path adds nothing, so dropping a dependency is never a hit; an added path is read like a
+    modified one, since its whole body is added lines. A module is named once however many statements reach
+    it, and the lines a multi-line string spans are text rather than code.
+    """
+    if not members or not any(
+        _member_covers(member, path) for member in members for path in file.paths
+    ):
+        return ()
+    reasons: list[EscalationReason] = []
+    seen: set[str] = set()
+    open_string = ""
+    for line in file.added:
+        if open_string:
+            if open_string in line.text:
+                open_string = ""
+            continue
+        open_string = _open_string(line.text)
+        for module, statement in imported_modules(line.text):
+            if module in seen or _standard(module):
+                continue
+            seen.add(module)
+            reasons.append(
+                EscalationReason(
+                    rule=STDLIB_ONLY,
+                    path=file.path,
+                    pattern=statement,
+                    source=DIFF,
+                    module=module,
+                )
+            )
+    return tuple(reasons)
+
+
+def _member_covers(member: str, path: str) -> bool:
+    """Whether a declared member is this path or the directory it lies under, never a name that starts alike."""
+    spelled = path.replace("\\", "/")
+    return spelled == member or spelled.startswith(f"{member}/")
+
+
+def _standard(module: str) -> bool:
+    """Whether this module is one the standard library ships, so a member may carry it."""
+    return module in sys.stdlib_module_names or module in sys.builtin_module_names
 
 
 def way_out(reason: EscalationReason) -> str:
@@ -259,6 +455,13 @@ def way_out(reason: EscalationReason) -> str:
             f"read {reason.path}: it matches `{reason.pattern}`, which {holder} protects, so the change "
             "goes to a full deep review - a person reads the path and says why the change reaches it "
             "before it merges."
+        )
+    if reason.rule == STDLIB_ONLY:
+        return (
+            f"read {reason.path}: the configuration declares this member standard-library-only, and the "
+            f"change adds an import of `{reason.module}`, which the standard library does not ship. Replace "
+            "it with a standard-library module, or declare the member's dependency in the configuration if "
+            "it may carry one - the member is shipped without dependencies, so a person decides."
         )
     return f"read {reason.path}: the {reason.rule} rule matched it, and a person decides before this merges."
 
