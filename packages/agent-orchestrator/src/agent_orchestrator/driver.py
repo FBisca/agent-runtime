@@ -916,8 +916,8 @@ RUN_LOG_PENDING = re.compile(
     r"^run \d+ is still in progress; logs will be available when it is complete\.?$"
 )
 
-# How often a failed-step log is re-read before its placeholder is accepted: a run may have finished between the
-# `pr checks` answer and the `run view` that reads its log.
+# How often a failed-step log is read in one poll round before its placeholder is taken as pending: the run may have
+# finished between the `pr checks` answer and the `run view` that reads its log.
 RUN_LOG_ATTEMPTS = 3
 
 
@@ -1203,6 +1203,7 @@ class Driver:
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
+        self.run_logs = {}  # run id -> its failed-step log, once a round: the findings reuse the readiness read
 
     # ---- the event log: every state change is on disk before the next step -----------------------------------
 
@@ -3827,8 +3828,8 @@ class Driver:
         return "error", rows
 
     def failed_logs_readable(self, rows):
-        """True once a failing job's log is readable. A placeholder is re-read `RUN_LOG_ATTEMPTS` times before the
-        check is taken as pending: the run may finish while the logs are being asked for."""
+        """True once a failing job's log is readable. The placeholder of a run still in progress is read again a few
+        times before the check is taken as pending: the run may finish while its log is being asked for."""
         runs = failing_runs(rows)
         if not runs:
             return True
@@ -3841,13 +3842,10 @@ class Driver:
     def run_log(self, run, fresh=False):
         """One workflow run's failed-step log, fetched once a round: the readiness check and the findings share it.
         `fresh` reads it again, so a placeholder is not cached for the rest of the round."""
-        cache = getattr(self, "run_logs", None)
-        if cache is None:
-            cache = self.run_logs = {}
-        if fresh or run not in cache:
+        if fresh or run not in self.run_logs:
             _code, out, err = self.gh(["run", "view", run, "--log-failed"])
-            cache[run] = (out or err).strip()
-        return cache[run]
+            self.run_logs[run] = (out or err).strip()
+        return self.run_logs[run]
 
     def units(self):
         """Every unit of the run with the task that is still open for it."""
