@@ -47,6 +47,7 @@ questions:
 safeguards:
   stdlib_only:
     - hooks/
+    - pkg/plugin/
 """
 
 CANNED = {
@@ -320,11 +321,24 @@ class ProtectedPathTests(SafeguardFixture):
         matched = {reason["path"]: reason for reason in self.reasons("protected-path")}
         self.assertEqual(
             sorted(matched),
-            ["hooks/hook_lib.py", "hooks/pre_tool_use.py", "pyproject.toml", "server/extra.py"],
+            [
+                ".github/workflows/ci.yml",
+                "hooks/hook_lib.py",
+                "hooks/pre_tool_use.py",
+                "pyproject.toml",
+                "server/extra.py",
+                "server/helper.py",
+            ],
             self.report(),
         )
         self.assertEqual(matched["pyproject.toml"]["pattern"], "pyproject.toml")
+        self.assertEqual(matched[".github/workflows/ci.yml"]["pattern"], ".github/workflows/**")
         self.assertEqual(matched["server/extra.py"]["pattern"], "server/**")
+        self.assertEqual(
+            matched["server/helper.py"]["pattern"],
+            "server/**",
+            "the side a rename arrives at is a changed path too",
+        )
         self.assertEqual(
             matched["hooks/pre_tool_use.py"]["pattern"],
             "hooks/**",
@@ -395,9 +409,13 @@ class CapabilityTests(SafeguardFixture):
         )
 
     def test_S7_the_standard_library_and_an_undeclared_member_stay_quiet(self):
-        self.write_text("hooks/pre_tool_use.py", "import json\nimport os\n")
+        # A declared member outside `hooks/`: the mandatory baseline protects that directory, so a change there
+        # escalates as `protected-path` and can never show that the screening proceeded.
+        self.write_text("pkg/plugin/loader.py", "import json\nimport os\n")
         self.write_text("pkg/yaml_helpers.py", "import yaml\n")
-        head = self.commit("a stdlib import in a hook and a package import in a free member")
+        head = self.commit(
+            "a stdlib import in a declared member and a package import in a free member"
+        )
         result = self.invoke(base=self.base, head=head, canned=True)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         self.assertEqual(self.reasons("stdlib-only"), [], self.report())
