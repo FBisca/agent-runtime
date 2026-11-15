@@ -493,3 +493,25 @@ failure names the behaviour it broke and not a line number in a file that moved.
 |---|---|---|
 | R145 | S1 | `packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S1_the_brief_gives_a_numbered_pass_from_the_diff_to_the_verdict`<br>`packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S1_the_brief_names_the_report_whose_claims_the_pass_checks`<br>`packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S1_the_brief_says_what_makes_a_test_prove_its_scenario` |
 | R146 | S2 | `packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S2_a_re_review_reads_the_delta_first_and_keeps_the_same_pass` |
+
+## Requirements: lead-decision-gates
+
+- **R147** WHEN the Lead answers an open request, THEN the decision is written in the contract version of the request it answers, so the driver that wrote the request reads it (from lead-decision-gates/S1)
+- **R148** WHEN the Lead answers with `decide --json` and the decision names a contract version the request does not carry, THEN the decision is refused naming both versions and the way out, and nothing is written (from lead-decision-gates/S2)
+- **R149** WHEN the driver reads a decision whose contract version it does not read, THEN it asks the Lead again naming the reason and the way out (restart the driver on the current code), and applies no decision (from lead-decision-gates/S3)
+- **R150** WHEN `plan check` reads a plan in which a scenario carries no evidence and every ticket that satisfies it is person-owned, THEN it refuses naming the scenario, the tickets that satisfy it and every way out (attach `human` evidence, let an agent ticket satisfy it, or record a node with `complete --cover`), and writes no approval (from lead-decision-gates/S4)
+- **R151** WHEN `plan check` reads a plan in which an agent ticket satisfies the scenario, or the person-only scenario carries `human` evidence, THEN it accepts the plan (from lead-decision-gates/S5)
+- **R152** WHEN the Lead answers the archive unit with `retry` while the plan's state is neither ACCEPTED nor ACCEPTED_WITH_HUMAN, THEN the decision is refused naming the state and the way out, the request stays open and no decision is written (from lead-decision-gates/S6)
+- **R153** WHEN the driver applies a `retry` for the archive unit while the plan's state is neither ACCEPTED nor ACCEPTED_WITH_HUMAN, THEN it builds no archive for that retry, opens no pull request for it, and books a request for the Lead naming the state and the way out (from lead-decision-gates/S7)
+
+## Coverage: lead-decision-gates
+
+| Requirement | Scenario | Test nodes |
+|---|---|---|
+| R147 | S1 | `packages/agent-orchestrator/tests/test_decide_contract.py::DecideJson::test_S1_a_decision_is_written_in_the_contract_version_of_the_request_it_answers`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
+| R148 | S2 | `packages/agent-orchestrator/tests/test_decide_json.py::DecideJson::test_S2_a_json_decision_naming_another_contract_is_refused_with_both_versions`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
+| R149 | S3 | `packages/agent-orchestrator/tests/test_decider.py::RequestPauseTests::test_S3_a_decision_the_driver_cannot_read_asks_the_lead_again_with_the_way_out`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
+| R150 | S4 | `packages/agent-orchestrator/tests/test_plan_lint.py::PlanLint::test_S4_plan_check_refuses_a_scenario_only_person_tickets_satisfy`<br>`packages/agent-orchestrator/tests/test_plan_lint_rules.py::LintRules::test_S4_amend_refuses_a_scenario_only_person_tickets_satisfy`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
+| R151 | S5 | `packages/agent-orchestrator/tests/test_plan_lint.py::PlanLint::test_S5_plan_check_accepts_an_agent_ticket_or_human_evidence`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
+| R152 | S6 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_lead_s_retry_for_the_archive_is_refused_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_json_form_refuses_the_archive_retry_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
+| R153 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
