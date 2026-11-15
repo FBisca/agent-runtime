@@ -6,10 +6,11 @@ and is null when nothing was concluded, and `failure.reason` names why an incomp
 D35, D39, D40). The report also freezes what the run was made of - both revisions, the question
 configuration, the model and the usage - so the same frozen input can be recognised again (D26, D44).
 
-`usage.requests` is how many times the provider was asked. One screening is one request (D40): a retry
-or a model fallback would show as a second one. A safeguard's hit is `usage.requests: 0`: the change was
-decided from the diff, so nothing was asked and `escalation.reasons[]` is the verdict's whole basis
-(SG-D2, SG-D10).
+`usage.requests` is how many times the provider was asked. One screening of one chunk is one request (D40):
+a retry or a model fallback would show as a second one, and a change larger than one request's budget is
+asked chunk by chunk, so the count is the number of chunks (D41). A safeguard's hit is `usage.requests: 0`:
+the change was decided from the diff, so nothing was asked and `escalation.reasons[]` is the verdict's whole
+basis (SG-D2, SG-D10), and no coverage is claimed for a change nothing screened.
 
 A report says what produced it, so a frozen one can be recognised and trusted later: the provider endpoint
 it was screened through, the model the provider served beside the alias the bank asked for, the input
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_review.chunks import Chunk, Coverage
 from agent_review.questions import Question, QuestionBank, Threshold
 from agent_review.safeguards import EscalationReason, recommends_full_review, way_out
 from agent_review.screening import limits
@@ -54,9 +56,16 @@ class Report:
     judgments: tuple[Mapping[str, Any], ...] = ()
     input_tokens: int = 0
     output_tokens: int = 0
-    # One screening is one request: the run never retries, so anything else would be a defect (D40).
+    # One screening is one request: the run never retries, so anything else would be a defect (D40). A
+    # chunked change asks once per chunk, so this is the number of requests the run actually made.
     requests: int = 1
-    # Why a person must read this change: a safeguard decided it before the model was asked (SG-D2, SG-D3).
+    # The chunks the change was split into, in the order they were asked, and what they covered (D41).
+    chunks: tuple[Chunk, ...] = ()
+    # Nothing for a change a safeguard decided before the model was asked: nothing was screened, so the
+    # report claims no coverage of it.
+    coverage: Coverage | None = None
+    # Why a person must read this change: a safeguard decided it before the model was asked (SG-D2, SG-D3),
+    # or the screening could not cover it (D43).
     escalation: tuple[EscalationReason, ...] = ()
     # Long context is the caller's opt-in, so the report says whether the larger budget was asked for.
     long_context: bool = False
@@ -122,6 +131,8 @@ class Report:
                 {"id": question.id, "priority": question.priority, "type": question.type}
                 for question in self.questions
             ],
+            "chunks": [chunk.as_dict() for chunk in self.chunks],
+            "coverage": None if self.coverage is None else self.coverage.as_dict(),
             "bank_digest": self.bank_digest,
             "judgments": [dict(judgment) for judgment in self.judgments],
             # Additive in a frozen report: a report written before the safeguards read it as no reasons (D26).
@@ -152,11 +163,15 @@ class Report:
             lines.append(f"execution: {self.status}")
             lines.append(f"reason: {self.failure}")
         elif self.escalation:
-            # A safeguard decided the change: the rule, the path it matched and the way out are what a
-            # person can act on, and no judgment exists to read (S8).
-            lines = [f"escalated {change}: no model was asked"]
+            # A person reads the change instead of trusting the screen: the rule, the path it matched and the
+            # way out are what they can act on (S8). A coverage gap is decided after the screen, so the
+            # report says the screening happened rather than claiming no model was asked (D43).
+            asked = f"screened with {self.model}" if self.provider else "no model was asked"
+            lines = [f"escalated {change}: {asked}"]
             for reason in self.escalation:
-                lines.append(f"  {reason.rule} at {reason.path}")
+                lines.append(
+                    f"  {reason.rule} at {reason.path}" if reason.path else f"  {reason.rule}"
+                )
                 lines.append(f"    {reason.pattern}")
                 lines.append(f"    {way_out(reason)}")
             lines.append(f"verdict: {self.verdict}")
@@ -175,6 +190,8 @@ class Report:
             lines.append(f"provider: {self.provider}")
         elif self.escalation:
             lines.append("screened by: no provider was asked; a safeguard decided the change")
+        if self.coverage is not None and self.coverage.gap is not None:
+            lines.append(f"coverage: {self.coverage.gap.reason}")
         if self.resolved_model is not None:
             lines.append(f"served: {self.resolved_model}")
         if path is not None:

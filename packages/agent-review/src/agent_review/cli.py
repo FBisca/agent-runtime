@@ -6,11 +6,14 @@ import json
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
-from agent_review import questions, revisions, safeguards
+from agent_review import chunks, questions, revisions, safeguards
 from agent_review.change import read as read_change
+from agent_review.chunks import Chunk
 from agent_review.errors import ReviewError, ScreeningError
-from agent_review.judgments import collected
+from agent_review.judgments import chunk_scope, collected
+from agent_review.questions import QuestionBank
 from agent_review.report import REPORT, Report
 from agent_review.screening import (
     FixtureScreenings,
@@ -23,16 +26,23 @@ from agent_review.screening import (
 DISCOVERED = ".agent-review.yaml"
 
 EPILOG = """\
-`code` resolves two revisions to their commit shas, reads the change between them, and screens it once
-against the configured question bank. Without --config it discovers the checkout's root `.agent-review.yaml`
+`code` resolves two revisions to their commit shas, reads the change between them, and screens it against
+the configured question bank. Without --config it discovers the checkout's root `.agent-review.yaml`
 and, absent one, evaluates the packaged baseline bank. A configuration is additive: the packaged baseline is
 always asked, a repository's own questions extend it and never override or disable one, and its sensitive
 paths add to the mandatory ones (D05, D13) - so a protected path escalates however the repository is
 configured. The numbers the screening is decided with are configuration too: a configuration's weights and
 thresholds are laid over the baseline's per question, and the model never chooses or sees them (D07, D48).
-A declaration no rule or stage can read is refused rather than screened, `chunk` and `cross_file` included:
-those two are the budgets a change is split under, accepted and shape-checked now and honoured by the
-chunking stage. The invocation writes `report.json` under
+A declaration no stage can read is refused rather than screened.
+
+The change is screened inside the budget in force (D41): a change larger than `chunk.max_diff_tokens` (32k
+tokens by default, 262k with --long-context) is split into deterministic file and hunk chunks in path
+order, and each chunk is asked the whole bank exactly once - so `usage.requests` is the number of chunks,
+never one more. Every changed region is carried by exactly one chunk, and the report's `coverage` counts
+the regions the chunks carried against the regions the diff holds. A change wider than
+`cross_file.max_files` cannot be read by a cross-file question at once: the report records that coverage
+gap, recommends a full deep review and never reads the screen as complete (D42, D43).
+The invocation writes `report.json` under
 --output either way and prints a summary for a person; the report, not the exit status, carries the verdict.
 
 The report names what produced it: the provider endpoint it screened through (or the fixture it answered
@@ -178,7 +188,8 @@ def screen(args: argparse.Namespace) -> Report:
         repository_paths=bank.sensitive_paths,
         stdlib_only_paths=bank.safeguards.get(safeguards.STDLIB_ONLY_SETTING, ()),
     )
-    escalation = safeguards.decide(read_change(change), rules)
+    parsed = read_change(change)
+    escalation = safeguards.decide(parsed, rules)
     if escalation:
         return Report(
             bank=bank,
@@ -188,37 +199,90 @@ def screen(args: argparse.Namespace) -> Report:
             requests=0,
             escalation=escalation,
         )
-    port = _port(args, bank.model)
-    request = ScreeningRequest(
-        model=bank.model, questions=bank.questions, diff=change, base=base, head=head
+    # The change is split inside the budget in force, and each chunk is asked the whole bank once (D41).
+    planned = chunks.split(
+        parsed, change, budget=chunks.budget(bank, long_context=args.long_context)
     )
-    try:
-        reply = port.screen(request)
-    except ScreeningError as error:
-        # An incomplete run keeps what it knows and records why it stopped; no verdict is inferred (D34, D40).
-        return Report(
-            bank=bank,
-            base=base,
-            head=head,
-            provider=port.provider,
-            long_context=args.long_context,
-            failure=str(error),
-        )
-    # A refused judgment is the run's failure, but the judgments it learned before it and the usage it
-    # paid for stay in the report: it is the only record of a screening that happened (S6, D47).
-    held = collected(bank.questions, reply.judgments, base=base, head=head)
+    covered = chunks.coverage(parsed, planned, bank)
+    # A cross-file question cannot read a change wider than the limit together, so the screen is partial:
+    # the report records the gap and recommends a full deep review (D42, D43).
+    gap = () if covered.gap is None else (covered.gap.as_escalation(),)
+    port = _port(args, bank.model)
+    screened = _Screened()
+    for chunk in planned:
+        if not screened.ask(port, bank, chunk, len(planned), base=base, head=head):
+            break
     return Report(
         bank=bank,
         base=base,
         head=head,
         provider=port.provider,
-        resolved_model=reply.model,
-        judgments=held.judgments,
-        input_tokens=reply.input_tokens,
-        output_tokens=reply.output_tokens,
+        resolved_model=screened.resolved_model,
+        judgments=tuple(screened.judgments),
+        input_tokens=screened.input_tokens,
+        output_tokens=screened.output_tokens,
+        requests=screened.requests,
+        chunks=planned,
+        coverage=covered,
+        escalation=gap,
         long_context=args.long_context,
-        failure=None if held.error is None else str(held.error),
+        failure=screened.failure,
     )
+
+
+class _Screened:
+    """What a chunked screening learned, what it paid for, and why it stopped (D34, D40, D47).
+
+    Each chunk is asked the whole bank exactly once. A run that stops keeps every judgment it learned and
+    every token it paid for, including the chunk that stopped it, because the report is the only record of
+    a screening that happened; it never retries, never falls back to another model and never guesses.
+    """
+
+    def __init__(self) -> None:
+        self.judgments: list[dict[str, Any]] = []
+        self.requests = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.resolved_model: str | None = None
+        self.failure: str | None = None
+
+    def ask(
+        self,
+        port: ScreeningPort,
+        bank: QuestionBank,
+        chunk: Chunk,
+        total: int,
+        *,
+        base: str,
+        head: str,
+    ) -> bool:
+        """Screen one chunk with the whole bank; False when this chunk stopped the run."""
+        self.requests += 1
+        request = ScreeningRequest(
+            model=bank.model, questions=bank.questions, diff=chunk.text, base=base, head=head
+        )
+        try:
+            reply = port.screen(request)
+        except ScreeningError as error:
+            # The request was made and was not answered: the run stops here and says why (D34, D40).
+            self.failure = str(error)
+            return False
+        self.resolved_model = self.resolved_model or reply.model
+        self.input_tokens += reply.input_tokens
+        self.output_tokens += reply.output_tokens
+        held = collected(
+            bank.questions,
+            reply.judgments,
+            base=base,
+            head=head,
+            scope=chunk_scope(chunk.index, total, chunk.files),
+        )
+        self.judgments.extend(held.judgments)
+        if held.error is not None:
+            # A refused judgment is this chunk's answer: the run stops, keeping what it learned (D47, S6).
+            self.failure = str(held.error)
+            return False
+        return True
 
 
 def _configuration(args: argparse.Namespace, repo: Path) -> questions.QuestionBank:

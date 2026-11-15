@@ -52,6 +52,12 @@ statement the added line makes, so a trailing comment (`# noqa`, `# type: ignore
 a second statement after a `;` is read too. A relative import names the member's own modules, so it is not a
 dependency; an absolute import of another module in this repository is read as outside the standard library,
 which is the conservative direction for a rule whose risk is missing rather than over-reporting.
+
+`coverage-gap` is not decided from the diff: it is the reason the screening stage records when the change is
+wider than the cross-file limit, so a cross-file question could not read the files together. It carries no
+path because it is about the whole change, names the limit it read in `pattern`, and says the gap in
+`detail` (D42, D43). It is listed with the reasons that recommend a full deep review, so a partial screen
+is never read as a clean one.
 """
 
 import posixpath
@@ -66,10 +72,14 @@ from agent_review.change import ADDED, Change, DiffLine, FileChange, Hunk, inden
 TARGET_OUTSIDE_ROOT = "target-outside-root"
 PROTECTED_PATH = "protected-path"
 STDLIB_ONLY = "stdlib-only"
+# A cross-file question could not read the files it needs: the change is wider than the cross-file limit
+# (D42, D43). It is not a fact about the diff the model is asked about; it is the screening's own coverage
+# failing, recorded so a clean-looking screen is never read as a complete one.
+COVERAGE_GAP = "coverage-gap"
 
 # The rules whose hit means a person reads the change in a full deep review rather than a signal recorded
 # beside the screen (D12, D43). A rule that only records a signal is not named here.
-FULL_REVIEW = (PROTECTED_PATH,)
+FULL_REVIEW = (PROTECTED_PATH, COVERAGE_GAP)
 
 # The configuration key a run declares its standard-library-only members under (SG-D6).
 STDLIB_ONLY_SETTING = "stdlib_only"
@@ -80,6 +90,8 @@ STDLIB_ONLY_SETTING = "stdlib_only"
 DIFF = "diff"
 BASELINE = "baseline"
 REPOSITORY = "repository"
+# A reason whose evidence is a declaration of the run's own configuration: the cross-file limit it reads.
+CONFIGURATION = "configuration"
 
 # A call that deletes its target: the whole function is spelled out so a `remove` in a sentence is not one.
 _DELETIONS = ("shutil.rmtree(", "os.remove(", "os.unlink(", "os.rmdir(")
@@ -220,7 +232,11 @@ def _pattern(pattern: str) -> str:
 
 @dataclass(frozen=True)
 class EscalationReason:
-    """Why a change was escalated: the rule, the changed path, the text it matched, and where that came from."""
+    """Why a change was escalated: the rule, the changed path, the text it matched, and where that came from.
+
+    `detail` is the reason in the rule's own words when the reason is not about one path - a coverage gap
+    is about the whole change - and is absent for a rule a path and a pattern already explain.
+    """
 
     rule: str
     path: str
@@ -228,6 +244,8 @@ class EscalationReason:
     source: str = DIFF
     # The module a `stdlib-only` reason is about; nothing for a rule that is not about a module (SG-D3).
     module: str = ""
+    # The reason in the rule's own words, when no single path carries it (D42, D43).
+    detail: str = ""
 
     def as_dict(self) -> dict[str, str]:
         """The reason as `report.json` holds it, in the contract's field order (SG-D3)."""
@@ -239,6 +257,8 @@ class EscalationReason:
         }
         if self.module:
             reason["module"] = self.module
+        if self.detail:
+            reason["detail"] = self.detail
         return reason
 
 
@@ -502,6 +522,11 @@ def way_out(reason: EscalationReason) -> str:
             f"change adds an import of `{reason.module}`, which the standard library does not ship. Replace "
             "it with a standard-library module, or declare the member's dependency in the configuration if "
             "it may carry one - the member is shipped without dependencies, so a person decides."
+        )
+    if reason.rule == COVERAGE_GAP:
+        return (
+            f"read the whole change: {reason.detail}. Screen it again with a wider `cross_file.max_files` "
+            "or as a full deep review - a screen that could not read the files together is not a clean one."
         )
     return f"read {reason.path}: the {reason.rule} rule matched it, and a person decides before this merges."
 
