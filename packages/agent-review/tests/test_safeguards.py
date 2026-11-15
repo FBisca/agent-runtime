@@ -69,6 +69,18 @@ GUARD_ADDED_BESIDE_THE_CALL = textwrap.dedent(
 # The defect `429625b` shipped, in its own words: the target is computed from the plan path in one method,
 # and the change's only containment test (`folder.relative_to(self.repo)`) is in a different method, over a
 # different relationship (the folder is inside the repository, not the target inside a root).
+# The test helper the defect shipped beside (`429625b`): it unlinks the plan file and then writes it again,
+# so the delete reaches nothing the change did not put there.
+FIXTURE_THAT_RECREATES_ITS_TARGET = textwrap.dedent(
+    """\
+        def folder_plan(self, data):
+            self.plan.unlink()
+            self.folder = self.plans / "demo"
+            self.plan = self.folder / "plan.yaml"
+            self.plan.write_text(yaml.safe_dump(data), encoding="utf-8")
+    """
+)
+
 THE_DEFECT_AS_IT_SHIPPED = textwrap.dedent(
     """\
         def plan_folder_rel(self):
@@ -174,6 +186,23 @@ def test_S1_the_defect_as_it_shipped_escalates_once_for_its_path():
     assert reasons[0].path == SOURCE
 
 
+def test_S1_the_defect_escalates_once_for_its_path_in_a_change_that_also_has_a_test_helper():
+    """The defect as it shipped, beside the test helper that recreates the file it unlinks."""
+    change = read(
+        unified(BEFORE, grown(THE_DEFECT_AS_IT_SHIPPED))
+        + unified(
+            BEFORE,
+            grown(FIXTURE_THAT_RECREATES_ITS_TARGET),
+            path="packages/agent-orchestrator/tests/test_archive_modes.py",
+        )
+    )
+    reasons = safeguards.decide(change)
+    assert [reason.path for reason in reasons] == [SOURCE], (
+        "the defect fires once; a helper that unlinks a plan file it writes itself deletes nothing the "
+        "change did not put there"
+    )
+
+
 def test_S2_a_computed_delete_confined_in_the_same_change_is_not_escalated():
     assert reasons_for(GUARDED) == [], "the target is confined before it is deleted"
 
@@ -181,6 +210,12 @@ def test_S2_a_computed_delete_confined_in_the_same_change_is_not_escalated():
 def test_S2_a_confinement_factored_into_a_guard_the_change_adds_is_not_escalated():
     assert reasons_for(GUARD_ADDED_BESIDE_THE_CALL) == [], (
         "the delete is confined by a guard the change adds and calls, however it is factored"
+    )
+
+
+def test_a_delete_of_a_target_the_change_writes_itself_is_the_changes_own_artifact():
+    assert reasons_for(FIXTURE_THAT_RECREATES_ITS_TARGET) == [], (
+        "the helper unlinks the plan file it writes in the same function: what it deletes is its own"
     )
 
 
