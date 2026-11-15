@@ -1344,8 +1344,10 @@ class Driver:
 
     def park_due(self):
         """Whether the park owes the Lead another ask: fifteen minutes in, then every thirty, while nothing is in
-        flight. The plan is never given up for it (R126 keeps the drain's promise) and no worker starts."""
-        if not self.drain or self.unfinished:
+        flight. A parked unit's assignment is open in the runtime but is no work (`parked_assignments`), so it never
+        silences the park: the unit the Lead parked to amend the plan is the one watching for the answer. The plan is
+        never given up for it (R126 keeps the drain's promise) and no worker starts."""
+        if not self.drain or self.unfinished - self.parked_assignments():
             return False
         interval = PARK_ASK_EVERY if self.park_asks else PARK_ASK_FIRST
         return self.clock() - (self.asked_at or 0) >= interval

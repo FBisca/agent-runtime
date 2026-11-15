@@ -409,9 +409,10 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
     def clock(self):
         return int((self.root / "clock").read_text(encoding="utf-8") or 0)
 
-    def tick(self, seconds):
-        """A wait step that moves the drive's clock: the park's next ask falls due."""
-        return wait_result(write=[[str(self.root / "clock"), str(seconds)]])
+    def tick(self, seconds, *agents):
+        """A wait step that moves the drive's clock, listing the agents the runtime still holds open: the park's next
+        ask falls due, and what the runtime lists is what the drive takes for in-flight work."""
+        return wait_result(list(agents), write=[[str(self.root / "clock"), str(seconds)]])
 
     def widened_t1(self):
         """An edit that leaves every ticket and path alone but changes the plan's bytes."""
@@ -539,6 +540,35 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), [], "a worker started while the drive was parked")
         self.assertTrue(self.plan.exists(), "the drive gave up the plan")
         self.assertEqual([e["kind"] for e in self.run_events("finish", "crash")], ["finish"])
+
+    def test_S3_a_park_asks_again_while_its_own_parked_unit_lists_open(self):
+        """A parked unit's assignment stays open in the runtime but is not work: it must not silence the park."""
+        self.set_plan(("T1",))
+        self.approved = self.plan.read_text(encoding="utf-8")
+        self.waits(
+            [
+                report_wait("demo-t1", "blocked", "cannot reach the database"),
+                self.decide_step("t1", "amend", "T1 needs its test file"),
+                # the Lead's edit drains the drive while the parked unit's assignment stays open
+                wait_result(self.working("demo-t1"), write=self.writes(self.widened_t1())),
+                self.tick(16 * 60, *self.working("demo-t1")),
+                wait_result(self.working("demo-t1"), write=self.writes(self.approved)),
+                wait_result(),
+            ]
+        )
+        spec = load_script()
+        with mock.patch.object(spec.Driver, "clock", staticmethod(self.clock)):
+            self.run_driver()
+        self.assertEqual(self.task("t1")["gate"], "awaiting-amendment")
+        wakes = self.wake_lines("drain")
+        self.assertEqual(
+            len(wakes),
+            2,
+            "the park did not ask again while its own parked unit listed open: %s" % wakes,
+        )
+        self.assertIn("still parked", wakes[1])
+        self.assertIn("plan approve --base", wakes[1])
+        self.assertEqual(self.spawned(), ["demo-t1"], "a worker started while the drive was parked")
         self.assertEqual(
             [e.get("state") for e in self.run_events("drain")],
             ["draining", "ended"],
