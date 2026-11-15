@@ -208,6 +208,11 @@ class EventRig(HcCase):
         self.assertEqual(result["structuredContent"], json.loads(result["content"][0]["text"]))
         return result["structuredContent"]
 
+    def wait_all(self, timeout: float = EARLY_DEADLINE):
+        """Wait for everything at once. A row that reads an answer carries a deadline far away, so the
+        probe it waits for answers; a row that asserts the timeout passes its own short one."""
+        return self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": timeout}))
+
     def pending(self, rpc, request_id):
         self.assertEqual(rpc.get(rpc.send("ping"))["result"], {})
         with self.assertRaises(queue.Empty):
@@ -1135,8 +1140,7 @@ class EventWaitTests(EventRig):
                 tmp = self.dir / "next-replies"
                 tmp.write_text(json.dumps(self.replies))
                 tmp.replace(self.dir / "replies")
-                request_id = self.rpc.tool("wait", {"target": "all", "timeout": EARLY_DEADLINE})
-                batch = self.batch(self.rpc, request_id)
+                batch = self.wait_all()
                 self.assertEqual(
                     batch["reason"],
                     "attention" if state in ("idle", "done", "blocked") else "failed",
@@ -1165,15 +1169,12 @@ class EventWaitTests(EventRig):
         (self.dir / "replies").write_text(json.dumps(self.replies))
         for kind in ("blocked", "decision"):
             self.publish(0, "progress")
-            request_id = self.rpc.tool("wait", {"target": "all", "timeout": EARLY_DEADLINE})
-            first = self.batch(self.rpc, request_id)
+            first = self.wait_all()
             self.assertEqual(
                 first["reason"], "messages"
             )  # the progress report is delivered at once
             event = self.publish(0, kind)
-            batch = self.batch(
-                self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": EARLY_DEADLINE})
-            )
+            batch = self.wait_all()
             self.assertEqual(batch["reason"], "attention")
             self.assertIn(event, batch["messages"])
             self.assertEqual(len(batch["unfinished"]), 2)
@@ -1559,11 +1560,6 @@ os._exit(0)
             exit_code=None,
             **extra,
         )
-
-    def wait_all(self, timeout: float = EARLY_DEADLINE):
-        """Wait for everything at once. A row that reads an answer carries a deadline far away, so the
-        probe it waits for answers; a row that asserts the timeout passes its own short one."""
-        return self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": timeout}))
 
     def test_never_reported_worker_past_grace_needs_attention(self):
         """agent-runtime/R100"""
