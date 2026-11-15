@@ -1308,6 +1308,45 @@ def load(
     return model
 
 
+def approval_block(record):
+    """The `Approval` a record names, or None: the drive's own block, or the ledger's record of it (its `base` and its
+    `digest`). The ledger keeps neither who approved the plan nor when, so a record that does not name them is
+    recovered as `unknown`, at the moment it is recovered."""
+    if isinstance(record, Approval):
+        return record
+    if not isinstance(record, dict) or not record.get("base") or not record.get("digest"):
+        return None
+    return Approval(
+        by=record.get("by") or "unknown",
+        at=record.get("at") or datetime.now(timezone.utc).isoformat(),
+        base=record["base"],
+        digest=record["digest"],
+    )
+
+
+def recover_approval(path, record, *, repo=None, state_dir=DEFAULT_STATE):
+    """The plan at `path` read with the approval `record` names restored onto it, or None when the file is not that
+    approval's plan.
+
+    A hand edit can drop the `approval` span and leave the contract alone. The snapshot the digest names proves
+    whether it did — the plan's bytes and its files, exactly — so a caller repairs the span instead of treating the
+    plan as edited. A plan whose contract moved, or that does not load, is the edit it looks like and stays one."""
+    restored = approval_block(record)
+    if restored is None:
+        return None
+    path = Path(path).resolve()
+    repo = repository(path, repo)
+    try:
+        model = load(path, repo=repo, state_dir=state_dir, verify=False, lint=False)
+        if model.approval is not None:
+            return None  # the file carries the block it was last given: nothing was lost
+        return verify_snapshot(
+            path, model.model_copy(update={"approval": restored}), repo, state_dir
+        )
+    except PlanError:
+        return None
+
+
 def replaced_text(text, name, new):
     """`text` with its top-level `name` set to `new` (appended when absent), every other byte kept: the
     author's comments survive."""
@@ -1640,9 +1679,14 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=False)
     if model.approval is None:
-        raise PlanError(
-            f"approval: {path} is unapproved, so there is nothing to amend — run agent-orchestrator plan approve {path}"
-        )
+        # A hand edit that dropped the `approval` span leaves a plan the ledger still holds the approval of: the
+        # amendment takes it from there and publishes the spans back, instead of refusing the plan as unapproved.
+        approval = approval_block(recorded_approval(repo, model.slug, state_dir))
+        if approval is None:
+            raise PlanError(
+                f"approval: {path} is unapproved, so there is nothing to amend — run agent-orchestrator plan approve {path}"
+            )
+        model = model.model_copy(update={"approval": approval})
     if not reason.strip():
         raise PlanError("amend: --reason is empty — say why the plan changes")
     if found := lint_problems(model, repo, path):
@@ -1664,6 +1708,20 @@ def completed(repo, slug, state_dir):
     return {
         t for t, status in statuses.items() if str(status).strip().upper().startswith("COMPLETE")
     }
+
+
+def recorded_approval(repo, slug, state_dir):
+    """The approval a plan's ledger keeps (its `base` and `digest`), or None: the record that outlives the plan file,
+    which is what loses the span. A read: a command that writes nothing creates nothing, so no ledger is made here."""
+    # The state key is the driver's, and the driver imports this module.
+    from . import driver
+
+    state = Path(state_dir).expanduser()
+    for path in (state / driver.repo_key(repo) / (slug + ".json"), state / (slug + ".json")):
+        approval = (ledgers.snapshot(path) or {}).get("approval")
+        if isinstance(approval, dict) and approval:
+            return approval
+    return None
 
 
 def frozen_problems(old, new, done):
@@ -1717,7 +1775,7 @@ def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     files = approved_files(path, data)
     base_sha = git(repo, "rev-parse", "--verify", previous.base + "^{commit}")
     sha = digest(identity(repo), base_sha, plan_bytes, files)
-    if sha == previous.digest:
+    if sha == previous.digest and "approval" in (data or {}):
         raise PlanError(
             f"amend: {path} holds the approved contract, nothing to amend — edit the plan, then run plan amend again"
         )

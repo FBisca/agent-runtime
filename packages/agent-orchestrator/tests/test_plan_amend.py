@@ -334,5 +334,84 @@ class AmendTests(AmendFixture):
         self.assertIn(first["digest"], listing)  # and the old one: a reader in between loads either
 
 
+class LostSpanTests(AmendFixture):
+    """`plan amend` on a plan whose `approval` span was lost while a drive held it: the ledger keeps the approval, so
+    the amendment runs at the approval's own base and publishes the spans back (parked-drive-release/S5)."""
+
+    def drive_held(self, approval):
+        """The ledger of a drive that held the plan: the approval it gated on, as the driver records it."""
+        keyed = self.state_dir / load_script().repo_key(self.repo)
+        keyed.mkdir(parents=True, exist_ok=True)
+        (keyed / "demo.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "kind": "agent-orchestrator/ledger",
+                    "tasks": {},
+                    "approval": {"base": approval["base"], "digest": approval["digest"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def lost(self, change=None):
+        """`change(data)` applied and the `approval` span dropped, as a hand edit that lost the block leaves it."""
+        data = self.read()
+        data.pop("approval", None)
+        if change:
+            change(data)
+        self.write(data)
+
+    def test_S5_an_amendment_succeeds_on_a_plan_whose_approval_span_was_lost(self):
+        first = self.approve()
+        self.drive_held(first)
+
+        def widen_t2(data):
+            data["tickets"][1]["delivers"] = "second, changed"
+
+        self.lost(widen_t2)
+        code, message = self.amend()
+        self.assertEqual(code, 0, message)
+        after = self.read()
+        self.assertEqual(
+            after["approval"]["base"], first["base"], "the amendment ran at another base"
+        )
+        self.assertNotEqual(after["approval"]["digest"], first["digest"])
+        (entry,) = after["amendments"]
+        self.assertEqual(entry["prev_digest"], first["digest"])
+        self.assertEqual(entry["digest"], after["approval"]["digest"])
+        self.assertEqual(entry["tickets"], ["T2"])
+        self.assertEqual(self.command("check")[0], 0)
+
+    def test_S5_the_amendment_publishes_the_spans_back_when_the_span_is_all_that_was_lost(self):
+        first = self.approve()
+        self.drive_held(first)
+        self.lost()
+        code, message = self.amend("the approval span was lost")
+        self.assertEqual(code, 0, message)
+        after = self.read()
+        self.assertEqual(after["approval"]["base"], first["base"])
+        self.assertEqual(
+            after["approval"]["digest"], first["digest"], "the contract did not change"
+        )
+        (entry,) = after["amendments"]
+        self.assertEqual(entry["prev_digest"], first["digest"])
+        self.assertEqual(entry["tickets"], [])
+        self.assertEqual(self.command("check")[0], 0)
+
+    def test_S5_control_a_lost_span_no_ledger_holds_is_refused_naming_plan_approve(self):
+        self.approve()
+
+        def widen_t2(data):
+            data["tickets"][1]["delivers"] = "second, changed"
+
+        self.lost(widen_t2)
+        before = self.plan.read_bytes()
+        code, message = self.amend()
+        self.assertEqual(code, 2, message)
+        self.assertIn("plan approve", message)
+        self.assertEqual(self.plan.read_bytes(), before)
+
+
 if __name__ == "__main__":
     unittest.main()

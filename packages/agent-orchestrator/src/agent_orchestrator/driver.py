@@ -1134,6 +1134,12 @@ class Driver:
         )
         self.park_asks = 0  # how many times the park has asked the Lead again
         self.parked = []  # the units the run ended with parked: the exit names them
+        self.restored = (
+            None  # the approval a plan file lost and the drive restored, so the run can say so
+        )
+        self.restored_said = (
+            False  # whether the run has said it: the log opens after the drive's first read
+        )
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1197,22 +1203,24 @@ class Driver:
                     "change it" % (self.model.slug, model.slug)
                 )
         except PlanError as error:
-            if self.model is None or not started:
-                raise
-            self.begin_drain(error)
-            model = self.model
-        else:
-            settled = self.model is not None and started
-            if settled and model.approval.digest != self.approved_digest():
-                held = self.model
-                self.model, self.approval = model, model.approval
-                self.adopt_amendment(held, self.legacy_of(model))
-            elif settled and self.drain:
-                self.end_drain()
-            elif not settled:
-                if found := yaml_plan.discard_problems(model, self.plan_path, self.repo):
-                    raise PlanError("; ".join(found))  # a run starts only on a plan it may delete
-                self.model, self.approval = model, model.approval
+            model = self.recover_plan()
+            if model is None:
+                if self.model is None or not started:
+                    raise
+                self.begin_drain(error)
+                return self.legacy_of(self.model)
+        settled = self.model is not None and started
+        found = model.approval.digest if model.approval else None
+        if settled and found != self.approved_digest():
+            held = self.model
+            self.model, self.approval = model, model.approval
+            self.adopt_amendment(held, self.legacy_of(model))
+        elif settled and self.drain:
+            self.end_drain()
+        elif not settled:
+            if found := yaml_plan.discard_problems(model, self.plan_path, self.repo):
+                raise PlanError("; ".join(found))  # a run starts only on a plan it may delete
+            self.model, self.approval = model, model.approval
         return self.legacy_of(model)
 
     def legacy_of(self, model):
@@ -1282,6 +1290,47 @@ class Driver:
         if self.approval is None:
             return {}
         return {"base": self.approval.base, "digest": self.approval.digest}
+
+    def ledger_approval(self):
+        """The approval the ledger keeps for the plan: its base and its digest, the record that outlives a restart.
+        The plan file is what loses the span, so a drive that starts again reads the block from here."""
+        path = getattr(self, "ledger_path", None)
+        if path is None:  # the first read, before the run has located its ledger
+            path = state_layout(
+                self.args.state_dir, self.plan_path, self.repo, yaml_plan.slug_of(self.plan_path)
+            )[0]
+        return (ledgers.snapshot(path) or {}).get("approval") or {}
+
+    def recover_plan(self):
+        """The plan the drive holds, read with the approval its file lost: None when the file is anything else (an
+        edit, or a plan that does not load), which is the drain it already is.
+
+        The approval is the drive's own block, or the ledger's record when the drive starts again, and the snapshot
+        of its digest proves the file is still the approved plan: the drive repairs the span and keeps running on a
+        plan it can read, instead of draining on one it cannot."""
+        model = yaml_plan.recover_approval(
+            self.plan_path,
+            self.approval or self.ledger_approval(),
+            repo=self.repo,
+            state_dir=self.args.state_dir,
+        )
+        if model is None or model.approval is None:
+            return None
+        self.restored = model.approval  # the run says so once: its log opens after the first read
+        self.say_restored()
+        return model
+
+    def say_restored(self):
+        """Tell the Lead the plan's lost approval span is back: one line per run, in the log and in the pane."""
+        if self.restored is None or self.restored_said or getattr(self, "run_dir", None) is None:
+            return
+        self.restored_said = True
+        self.log("approval-recovered", base=self.restored.base, digest=self.restored.digest)
+        narrate.say(
+            "info",
+            None,
+            "the plan lost its approval span: the drive restored the approval it holds",
+        )
 
     def park_snapshot(self, park):
         """The approved bytes a plan park names to restore from: the snapshot of the approval the park holds."""
@@ -1671,6 +1720,7 @@ class Driver:
         Path(self.args.state_dir).expanduser().mkdir(parents=True, exist_ok=True, mode=0o700)
         self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.say_restored()  # a drive that starts on a plan that lost its span read it before the log existed
         narrate.NARRATOR.roots = [self.run_dir]  # the pane names a run file by its place in the run
         # The ledger first: it carries the kind marker before any file a worker can read exists.
         with ledger(self.ledger_path) as data:
@@ -7570,15 +7620,29 @@ def snapshot_dir(approval, state_dir):
     return yaml_plan.snapshot_path(approval, yaml_plan.DEFAULT_STATE).parent
 
 
-def load_approved(path, *, repo, state_dir, **kwargs):
-    """yaml_plan.load that finds a snapshot approved under the default state dir when the run uses another."""
+def load_approved(path, *, repo, state_dir, recover=False, **kwargs):
+    """yaml_plan.load that finds a snapshot approved under the default state dir when the run uses another. With
+    `recover`, a plan whose `approval` span was lost is read with the approval the ledger keeps, when its bytes and
+    its files are the ones that approval's snapshot holds."""
     try:
         return yaml_plan.load(path, repo=repo, state_dir=state_dir, **kwargs)
     except PlanError as error:
         default = Path(yaml_plan.DEFAULT_STATE).expanduser()
-        if "snapshot missing" not in str(error) or Path(state_dir).expanduser() == default:
+        if "snapshot missing" in str(error) and Path(state_dir).expanduser() != default:
+            return load_approved(path, repo=repo, state_dir=default, recover=recover, **kwargs)
+        found = (
+            yaml_plan.recover_approval(
+                path,
+                yaml_plan.recorded_approval(repo, yaml_plan.slug_of(path), state_dir),
+                repo=repo,
+                state_dir=state_dir,
+            )
+            if recover
+            else None
+        )
+        if found is None:
             raise
-        return yaml_plan.load(path, repo=repo, state_dir=default, **kwargs)
+        return found
 
 
 def is_yaml(plan_path):
@@ -7867,7 +7931,9 @@ def acceptance_context(args):
     plan_path = Path(args.plan).resolve(strict=True)
     require_yaml(plan_path)
     repo = repo_root(plan_path, args.repo)
-    model = load_approved(plan_path, repo=repo, state_dir=args.state_dir, require_approval=True)
+    model = load_approved(
+        plan_path, repo=repo, state_dir=args.state_dir, require_approval=True, recover=True
+    )
     ledger_path, run_dir = locate_state(args.state_dir, plan_path, repo, model.slug)
     data = read_ledger_file(ledger_path) if ledger_path.is_file() else {}
     return model, repo, ledger_path, run_dir, data
@@ -8158,12 +8224,14 @@ def launch(args, run_args):
         ).resolve()
     )
     require_yaml(plan_path)
-    # The same check `run` makes first, so an unapproved or drifted contract starts no pane.
+    # The same check `run` makes first, so an unapproved or drifted contract starts no pane. A plan whose `approval`
+    # span was lost is the plan the ledger holds the approval of: the check recovers it, as the drive does.
     slug = load_approved(
         plan_path,
         repo=repo,
         state_dir=forwarded(run_args, "--state-dir") or yaml_plan.DEFAULT_STATE,
         require_approval=True,
+        recover=True,
     ).slug
     name = pane_name(slug)
     if name in live_terminals():
