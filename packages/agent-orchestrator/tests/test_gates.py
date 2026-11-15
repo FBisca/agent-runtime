@@ -431,7 +431,9 @@ class GateTests(GateFixture, unittest.TestCase):
             ("worker", "opus", "high", str(self.worktree)),
         )
         self.assertEqual(
-            args["task"], "Read %s and follow it." % (self.run_dir / "t1-review" / "task.md")
+            args["task"],
+            "Read %s and follow it. Write the review to %s (JSON, contract 2)."
+            % (self.run_dir / "t1-review" / "task.md", self.run_dir / "t1" / "review.json"),
         )
         text = (self.run_dir / "t1-review" / "task.md").read_text(encoding="utf-8")
         for needle in (

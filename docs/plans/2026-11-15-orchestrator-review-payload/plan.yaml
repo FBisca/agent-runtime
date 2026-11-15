@@ -1,0 +1,52 @@
+schema: plan/1
+slug: review-payload-path
+goal: >-
+  The reviewer writes the file the driver reads: its assignment names the
+  path, and a review it wrote under another name inside the run directory is
+  the review the gate reads.
+spec: docs/specs/orchestrator-engine.md
+domain: driver
+archive: promote
+outcome: [S1, S2]
+scenarios:
+  - id: S1
+    when: "the driver starts the reviewer of a unit"
+    then: >-
+      the reviewer's assignment names the absolute path of the review file it
+      must write, beside the brief it must read, so the reviewer never has to
+      infer where the file goes
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py
+        -q -k "S1 or S2 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_review_payload_path.py]
+      package: packages/agent-orchestrator
+      timeout: 900
+  - id: S2
+    when: >-
+      a reviewer writes its review under another name inside the run directory
+      and names that file in its report
+    then: >-
+      the gate reads that file: it is copied into the driver's own path, the
+      reviewer is not warned, and the unit advances as it would have
+    evidence:
+      check: >-
+        uv run --frozen --all-packages pytest
+        packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py
+        -q -k "S1 or S2 or control" --junitxml="$EEC_JUNIT"
+      baseline: fail
+      acceptance: [test_review_payload_path.py]
+      package: packages/agent-orchestrator
+      timeout: 900
+tickets:
+  - id: T1
+    delivers: >-
+      The reviewer's assignment names the review file it must write, and a
+      review the reviewer wrote under another name inside the run directory is
+      copied into the driver's own path and read as the review
+    satisfies: [S1, S2]
+    paths: [packages/agent-orchestrator/]
+    size: small
+    difficulty: simple
