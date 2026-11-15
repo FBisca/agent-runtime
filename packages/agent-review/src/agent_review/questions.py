@@ -13,7 +13,8 @@ evaluated no question. A refusal names the question and the field by its path, s
 """
 
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,7 @@ DEFAULT_TYPE = "noul"
 # D51: identity is authoring-time. A stable, dotted id lets a frozen report name the question it evaluated.
 QUESTION_ID = re.compile(r"[a-z0-9]+(\.[a-z0-9-]+)+")
 
-TOP_LEVEL = ("model", "questions")
+TOP_LEVEL = ("model", "questions", "safeguards")
 FIELDS = ("id", "priority", "type", "ask", "criteria")
 
 # A score's ladder needs two ends to grade between; a choice needs two options to choose between.
@@ -55,10 +56,16 @@ class Question:
 
 @dataclass(frozen=True)
 class QuestionBank:
-    """The bank one run evaluates: the screening model and the questions, in configuration order."""
+    """The bank one run evaluates: the screening model and the questions, in configuration order.
+
+    `safeguards` is the run's own declaration - which members may carry only the standard library, and
+    whatever else a rule needs to read - carried whole beside the questions. It is configuration, not a
+    question (SG-D6), and the shape of what it holds is refused where a rule reads it.
+    """
 
     model: str
     questions: tuple[Question, ...]
+    safeguards: Mapping[str, Any] = field(default_factory=dict)
 
 
 def baseline() -> QuestionBank:
@@ -90,7 +97,11 @@ def load(path: Path | str) -> QuestionBank:
             f"the question configuration {path} has an unknown field {unknown[0]!r}; "
             f"it takes {', '.join(TOP_LEVEL)}"
         )
-    return QuestionBank(model=_model(data, path), questions=_questions(data, path))
+    return QuestionBank(
+        model=_model(data, path),
+        questions=_questions(data, path),
+        safeguards=_safeguards(data, path),
+    )
 
 
 def _model(data: dict[str, Any], path: Path) -> str:
@@ -100,6 +111,18 @@ def _model(data: dict[str, Any], path: Path) -> str:
     if not isinstance(model, str) or not model.strip():
         raise ReviewError(f"{path}: model must be a non-empty string, not {model!r}")
     return model
+
+
+def _safeguards(data: dict[str, Any], path: Path) -> Mapping[str, Any]:
+    """The run's safeguards declaration as configured, or nothing when it declares none."""
+    if "safeguards" not in data:
+        return {}
+    block = data["safeguards"]
+    if not isinstance(block, dict):
+        raise ReviewError(
+            f"{path}: safeguards must be a mapping of declarations, not {type(block).__name__}"
+        )
+    return block
 
 
 def _questions(data: dict[str, Any], path: Path) -> tuple[Question, ...]:
