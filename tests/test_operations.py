@@ -320,6 +320,9 @@ class OperationReplayTests(Operations):
         store.publish(
             hc_tools.hc_server(self.env), "t100", "t0", first["assignment_id"], "done", "complete"
         )
+        # The report is delivered by a wait page; the server refuses a mutating verb until then.
+        delivered, text = self.call_tool("wait", {"target": "all", "timeout": 0})
+        self.assertFalse(delivered["isError"], text)
         self.assertEqual(self.spawned()["state"], "complete")
 
     def test_S13_a_replay_takes_no_team_slot_and_is_not_refused_by_the_limit(self):

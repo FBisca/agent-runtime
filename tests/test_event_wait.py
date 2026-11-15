@@ -1185,8 +1185,9 @@ class EventWaitTests(EventRig):
         """agent-runtime/R41"""
         self.prepare()
         old = self.publish(0)
-        # Reuse the name; the prior completion stays out of the named wait but, being unacknowledged (D26),
-        # is still delivered to wait(any).
+        # The wait page delivers the report, so the server lets the lead reuse the name; the report stays
+        # unacknowledged (D26) and is still delivered to wait(any).
+        self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
         replacement = self.rpc.tool(
             "spawn", {"kind": "worker", "name": "w1", "task": "again", "cwd": "/tmp"}
         )
@@ -1669,7 +1670,10 @@ os._exit(0)
     def test_all_statuses_non_null_runs_no_hc_get(self):
         """agent-runtime/R106"""
         self.prepare()
-        workers = lambda: [c for c in self.runs("get") if c[1] in ("w1", "w2", "t1", "t2")]
+
+        def workers():
+            return [c for c in self.runs("get") if c[1] in ("w1", "w2", "t1", "t2")]
+
         before = len(workers())
         self.wait_all()
         self.assertEqual(len(workers()), before)

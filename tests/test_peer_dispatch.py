@@ -39,6 +39,10 @@ class PeerDispatchTests(event_helpers.EventRig):
 
     NUDGE = "call wait(target=all) to receive their reports"
 
+    def read_reports(self):
+        """One wait(all) page hands the lead its reports; until then the server refuses a mutating verb."""
+        return self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
+
     def test_S2_lead_spawn_resume_message_results_carry_unfinished_count_and_wait_nudge(self):
         """agent-runtime/R97"""
         self.prepare()
@@ -53,6 +57,7 @@ class PeerDispatchTests(event_helpers.EventRig):
         self.assertEqual((third["unfinished"], third["next"]), (3, self.NUDGE))
         self.publish(0)
         self.publish(1)
+        self.read_reports()
         resumed = self.tool("resume", name="w1", task="again")["structuredContent"]
         self.assertEqual((resumed["unfinished"], resumed["next"]), (2, self.NUDGE))
         sent = self.tool("message", to="w1", text="hi")["structuredContent"]
@@ -74,6 +79,7 @@ class PeerDispatchTests(event_helpers.EventRig):
             self.assertNotIn("next", sent["structuredContent"])
         self.publish(0)
         self.publish(1)
+        self.read_reports()
         sent = self.tool("message", to="w1", text="done?")["structuredContent"]
         self.assertNotIn("unfinished", sent)
         self.assertNotIn("next", sent)
@@ -480,6 +486,7 @@ class PeerDispatchTests(event_helpers.EventRig):
         replay = self.batch(self.rpc, self.rpc.tool("wait", {"target": "w1", "timeout": 0}))
         self.assertEqual(replay["messages"], [progress])
         complete = self.publish(1)
+        self.read_reports()  # a report read but not acknowledged no longer refuses the stop
         self.tool("stop", name="w2")
         completed = self.batch(self.rpc, self.rpc.tool("wait", {"target": "w2", "timeout": 0}))
         self.assertEqual(completed["reason"], "completed")

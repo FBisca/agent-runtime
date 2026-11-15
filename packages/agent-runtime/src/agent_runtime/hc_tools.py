@@ -1389,6 +1389,49 @@ def diagnostic(name, arguments, env, ctx, error):
 
 
 WAIT_NUDGE = "call wait(target=all) to receive their reports"
+# The verbs that change the team: a lead that has not read its reports must not use them.
+MUTATING = ("spawn", "message", "resume", "stop")
+
+
+def undelivered_reports(store, team, lead):
+    """Lead-addressed messages no receipt has delivered yet: the count the lead hooks block on.
+
+    A report handed over in a page carries a receipt naming it, so it is delivered even before the
+    next call acknowledges that receipt.
+    """
+    with store.transaction() as db:
+        return db.execute(
+            "SELECT COUNT(*) FROM messages m WHERE m.team=? AND m.recipient=? AND m.acked=0 AND NOT EXISTS "
+            "(SELECT 1 FROM receipts r, json_each(r.ids) j WHERE r.team=m.team AND r.recipient=m.recipient "
+            "AND j.value=m.id)",
+            (team, lead),
+        ).fetchone()[0]
+
+
+def refuse_unread(ctx, scope, generation, caller, name):
+    """Refuse a mutating verb while the caller's own team has reports it has not read; a failed count never refuses.
+
+    The orchestrator's dispatch loop calls through `agent-runtime call --lead` and reads its reports at the
+    end of every loop, so a report landing between that page and its next spawn is its routine race, not a
+    nudge it should answer. A nudge-reachable session (the MCP tool surface) has no such path: the CLI's
+    ancestry gate refuses an LLM-run `agent-runtime call`, and its live-lead gate refuses another generation
+    of a terminal whose lead still holds reports.
+    """
+    if lib.FORCED_LEAD:
+        return
+    try:
+        if ctx.actor["worker_id"]:
+            team, lead = ctx.store.owned_team(scope, caller, generation), caller
+        else:
+            team, lead = ctx.actor["team_id"], ctx.actor["recipient"]
+        pending = undelivered_reports(ctx.store, team, lead) if team else 0
+    except (dispatch.StoreError, sqlite3.Error):
+        return
+    if pending:
+        raise ToolError(
+            "refusing %s: %d undelivered report%s; call wait(all) to receive %s, then retry"
+            % (name, pending, "" if pending == 1 else "s", "it" if pending == 1 else "them")
+        )
 
 
 def lead_unfinished(name, arguments, ctx, scope, generation, caller):
@@ -1485,6 +1528,8 @@ def call_dispatch(name, arguments, env, ctx):
         host_policy.authorize(env, host_policy.host_of(env), info["role"], name, arguments, ctx)
     except host_policy.Refused as error:
         raise ToolError(str(error))
+    if name in MUTATING:
+        refuse_unread(ctx, scope, generation, caller, name)
     ctx.ack = None
     if arguments.get("receipt") is not None:
         ctx.ack = ctx.store.receipt_owner(arguments["receipt"])
