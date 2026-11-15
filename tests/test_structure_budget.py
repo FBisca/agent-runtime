@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from pytest_impacted.file_map import map_changed_files, parse_file_map
+from pytest_impacted.file_map import map_changed_files, matches_any_glob, parse_file_map
 
 pytestmark = pytest.mark.unit
 
@@ -198,12 +198,27 @@ class MeasureTests(unittest.TestCase):
 class AffectedMapTests(unittest.TestCase):
     """S9: the affected tier runs the test that proves a change to the script."""
 
-    def test_S9_the_affected_map_routes_the_script_to_its_own_test_module(self):
-        """structure-budget/S9"""
+    @staticmethod
+    def pairs():
+        """The committed map as `(glob, path)` pairs, read the way the plugin reads it."""
         with open(REPO / "pyproject.toml", "rb") as handle:
             ini = tomllib.load(handle)["tool"]["pytest"]["ini_options"]
-        pairs = parse_file_map(ini["impacted_map"])
-        selected = map_changed_files(["scripts/structure_budget.py"], pairs, str(REPO))
+        return parse_file_map(ini["impacted_map"])
+
+    def test_S9_the_map_text_routes_the_script_to_its_own_test_module(self):
+        """structure-budget/S9"""
+        pairs = self.pairs()
+        self.assertIn(("scripts/structure_budget.py", "tests/test_structure_budget.py"), pairs)
+        routed = [
+            path for glob, path in pairs if matches_any_glob("scripts/structure_budget.py", [glob])
+        ]
+        installer = [path for path in routed if path.startswith("tests/installer")]
+        self.assertEqual(installer, [], "the installer suite does not prove this change")
+
+    @pytest.mark.integration
+    def test_S9_a_change_to_the_script_selects_its_own_test_module(self):
+        """structure-budget/S9: the plugin's own selection, over the real repository."""
+        selected = map_changed_files(["scripts/structure_budget.py"], self.pairs(), str(REPO))
         self.assertIn("tests/test_structure_budget.py", selected)
         installer = [path for path in selected if path.startswith("tests/installer")]
         self.assertEqual(installer, [], "the installer suite does not prove this change")
