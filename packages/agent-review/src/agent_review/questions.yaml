@@ -13,6 +13,18 @@
 
 model: jev-latest
 
+# The mandatory sensitive-path baseline (D13): a change that reaches one
+# of these paths escalates to a person whatever the repository configures. A
+# repository's own `.agent-review.yaml` adds to this list and never replaces
+# it. Patterns are matched from the repository root: `**` crosses directories,
+# `*` and `?` stay within one, and a pattern with no glob names that one path.
+sensitive_paths:
+  - .github/workflows/**
+  - server/**
+  - hooks/**
+  - pyproject.toml
+  - uv.lock
+
 questions:
   # The contract perspective: what this repository promised its callers.
   - id: contract.requirement-traceability

@@ -33,6 +33,11 @@ the root: the value a computed target holds is not in a diff (SG-D5). So:
 
 One reason per rule and path names the first call the change adds on it: a report says which file a person
 must read, and the file is the unit a review is opened on.
+
+`protected-path` fires on a changed path a pattern declares sensitive, on either side of a rename and for
+an added, modified or deleted file alike. The patterns are configuration (SG-D4, SG-D6): the packaged
+baseline ships the mandatory ones and a repository's `.agent-review.yaml` adds to them, so a reason names
+where the pattern came from as well as the path it matched.
 """
 
 import posixpath
@@ -43,10 +48,14 @@ from dataclasses import dataclass, field
 from agent_review.change import ADDED, Change, DiffLine, FileChange, Hunk, indent_columns
 
 TARGET_OUTSIDE_ROOT = "target-outside-root"
+PROTECTED_PATH = "protected-path"
 
-# Where a reason's evidence came from: this rule reads the change, while a rule about sensitive paths reads a
-# baseline or a repository's own list (T2). The field is what P2 routes on, so it is never free text.
+# Where a reason's evidence came from: this rule reads the change, a sensitive-path rule reads the mandatory
+# baseline or a repository's own list (T2), and a member rule reads a declaration. The field is what P2
+# routes on, so it is never free text.
 DIFF = "diff"
+BASELINE = "baseline"
+REPOSITORY = "repository"
 
 # A call that deletes its target: the whole function is spelled out so a `remove` in a sentence is not one.
 _DELETIONS = ("shutil.rmtree(", "os.remove(", "os.unlink(", "os.rmdir(")
@@ -74,6 +83,72 @@ _RELATED = ("samefile(", "commonpath(")
 _DEF = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>\w+)\s*\((?P<parameters>[^)]*)")
 # An argument a call names, so it binds its parameter by name rather than by position.
 _KEYWORD = re.compile(r"^(?P<name>[A-Za-z_]\w*)\s*=(?!=)\s*(?P<value>.+)$")
+
+
+@dataclass(frozen=True)
+class ProtectedPath:
+    """One pattern that declares a path sensitive, and whether the baseline or the repository declared it."""
+
+    pattern: str
+    source: str = BASELINE
+
+
+@dataclass(frozen=True)
+class RuleSet:
+    """What configuration contributes to the rules: the protected paths, the baseline's first (SG-D4, SG-D6)."""
+
+    protected_paths: tuple[ProtectedPath, ...] = ()
+
+
+def rule_set(baseline_paths: Iterable[str] = (), repository_paths: Iterable[str] = ()) -> RuleSet:
+    """The rules one run decides with: the mandatory baseline, and a repository's own list added to it.
+
+    A repository's list extends the baseline and never replaces it, and a pattern the baseline already names
+    keeps the baseline as its source: the mandatory list is what proves that path, whatever else repeats it.
+    """
+    protected = [ProtectedPath(pattern=pattern, source=BASELINE) for pattern in baseline_paths]
+    named = {path.pattern for path in protected}
+    protected.extend(
+        ProtectedPath(pattern=pattern, source=REPOSITORY)
+        for pattern in repository_paths
+        if pattern not in named
+    )
+    return RuleSet(protected_paths=tuple(protected))
+
+
+def matches(pattern: str, path: str) -> bool:
+    """Whether `path`, from the repository root, is one the pattern declares sensitive.
+
+    `**` crosses directories, `*` and `?` stay within one segment, and a trailing slash names a directory
+    and everything under it. A pattern with no glob names exactly that path, so `pyproject.toml` is the
+    root's own file and never a member's.
+    """
+    return re.fullmatch(_pattern(pattern), path) is not None
+
+
+def _pattern(pattern: str) -> str:
+    """`pattern` as the regular expression a repository path is matched whole against."""
+    translated: list[str] = []
+    index = 0
+    while index < len(pattern):
+        if pattern.startswith("**/", index):
+            translated.append("(?:.*/)?")
+            index += 3
+        elif pattern.startswith("**", index):
+            translated.append(".*")
+            index += 2
+        elif pattern[index] == "*":
+            translated.append("[^/]*")
+            index += 1
+        elif pattern[index] == "?":
+            translated.append("[^/]")
+            index += 1
+        else:
+            translated.append(re.escape(pattern[index]))
+            index += 1
+    if pattern.endswith("/"):
+        return "".join(translated) + ".*"
+    return "".join(translated)
 
 
 @dataclass(frozen=True)
@@ -134,15 +209,35 @@ class _Scope:
     guards: tuple[_Guard, ...] = ()
 
 
-def decide(change: Change) -> tuple[EscalationReason, ...]:
+def decide(change: Change, rules: RuleSet | None = None) -> tuple[EscalationReason, ...]:
     """The reasons this change is escalated before the model is asked, empty when none fires."""
+    rules = RuleSet() if rules is None else rules
     scope = _Scope(guards=_confining_helpers(change))
     reasons: list[EscalationReason] = []
     for file in change.files:
+        reasons.extend(_protected_path(file, rules))
         found = _target_outside_root(file, scope)
         if found is not None:
             reasons.append(found)
     return tuple(reasons)
+
+
+def _protected_path(file: FileChange, rules: RuleSet) -> list[EscalationReason]:
+    """One reason per changed path a pattern declares sensitive, both sides of a rename included (D13)."""
+    reasons: list[EscalationReason] = []
+    for path in file.paths:
+        matched = next(
+            (candidate for candidate in rules.protected_paths if matches(candidate.pattern, path)),
+            None,
+        )
+        if matched is None:
+            continue
+        reasons.append(
+            EscalationReason(
+                rule=PROTECTED_PATH, path=path, pattern=matched.pattern, source=matched.source
+            )
+        )
+    return reasons
 
 
 def way_out(reason: EscalationReason) -> str:
@@ -153,6 +248,17 @@ def way_out(reason: EscalationReason) -> str:
             "nothing in the change confines that target to the root it is written under. Confine it before "
             "the call - `target.is_relative_to(root)` against the root this run reviews - or drop the call; "
             "the review cannot tell how far the target reaches, so a person decides."
+        )
+    if reason.rule == PROTECTED_PATH:
+        holder = (
+            "the mandatory sensitive-path baseline"
+            if reason.source == BASELINE
+            else "this repository's own sensitive-path list"
+        )
+        return (
+            f"read {reason.path}: it matches `{reason.pattern}`, which {holder} protects, so the change "
+            "goes to a full deep review - a person reads the path and says why the change reaches it "
+            "before it merges."
         )
     return f"read {reason.path}: the {reason.rule} rule matched it, and a person decides before this merges."
 
