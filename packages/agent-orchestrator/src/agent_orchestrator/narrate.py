@@ -224,3 +224,56 @@ NARRATOR = Narrator()
 
 def say(kind, step, text, task=None):
     return NARRATOR.say(kind, step, text, task=task)
+
+
+# ---- a park: the drive says why it is not going on, and the way out that works ----------------------------------
+# The same words reach the pane, the wake, attention.md and the run's exit: one record (the ledger's `park`) and one
+# rendering, so a Lead that comes back later reads what the pane said.
+
+
+def park_head(park):
+    """What is parked, in the words attention.md and the pane use."""
+    if park.get("kind") == "units":
+        units = park.get("units") or []
+        return "the run ended with %d unit%s parked, waiting for the plan to be amended" % (
+            len(units),
+            "" if len(units) == 1 else "s",
+        )
+    return "the drive cannot use its plan (%s)" % park.get("cause")
+
+
+def park_way_out(park, plan, snapshot):
+    """The way out a park names, in words a person can run: the amendment for parked units, and for a plan it cannot
+    use, the approved bytes put back or the plan approved at the base its approval was taken from (`plan approve` at
+    the branch tip is vacuous once that work is in the tree). Finishing the edit and amending it stays the way out for
+    an edit that was intended."""
+    if park.get("kind") == "units":
+        return (
+            "run `agent-orchestrator plan amend %s --reason <why>`: the amendment releases the parked units on the "
+            "drive's next read" % plan
+        )
+    return (
+        "put the approved bytes back from `%s`, or run `agent-orchestrator plan approve --base %s %s` at the "
+        "approval's own base; an intended edit is finished and adopted with `agent-orchestrator plan amend %s "
+        "--reason <why>`" % (snapshot, park.get("base"), plan, plan)
+    )
+
+
+def park_ask(park, again=False):
+    """The park in one line for the Lead: what is parked, why, and the way out that works."""
+    return "%sparked (%s): %s -> %s" % (
+        "still " if again else "",
+        park.get("cause"),
+        park.get("error") or "",
+        park.get("way_out") or "",
+    )
+
+
+def park_section(park):
+    """attention.md's park block: what is parked, why, since when, and the way out that works."""
+    return "\n## Parked: %s\n\n%s\n\nsince %s\n\nWay out: %s\n" % (
+        park_head(park),
+        park.get("error") or "",
+        park.get("since") or "unknown",
+        park.get("way_out") or "",
+    )

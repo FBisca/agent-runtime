@@ -782,6 +782,8 @@ def merge_state(view):
 
 
 AMENDING = "awaiting-amendment"  # the Lead decided `amend`: the unit waits for the driver to adopt the new plan
+PARK_ASK_FIRST = 15 * 60.0  # seconds a parked drive waits for the Lead before it asks again
+PARK_ASK_EVERY = 30 * 60.0  # seconds between the asks after the first, until the park ends
 PARKED = (
     "attention",
     "blocked",
@@ -1139,6 +1141,12 @@ class Driver:
             None  # the approval block of the YAML plan the loop last read
         )
         self.drain = None  # {"cause", "error"} while the plan is edited or unloadable and no new worker starts
+        self.parked_since = None  # when the park began (wall clock): the ledger's `since`
+        self.asked_at = (
+            None  # the drive's clock at the last ask: a park with nothing in flight asks again
+        )
+        self.park_asks = 0  # how many times the park has asked the Lead again
+        self.parked = []  # the units the run ended with parked: the exit names them
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
@@ -1255,15 +1263,13 @@ class Driver:
             :500
         ]
         self.drain = {"cause": cause, "error": text}
+        self.parked_since = now()
+        self.asked_at = self.clock()
+        self.park_asks = 0
+        park = self.park_here()
         self.log("drain", state="draining", cause=cause, error=text, digest=self.approved_digest())
         narrate.say("warn", None, "draining: the plan is %s: %s" % (cause, text))
-        self.wake(
-            "drain",
-            None,
-            "drain: %s is %s (%s) -> the run goes on with what is running and starts no new worker; restore the "
-            "file to the approved plan, or finish the edit and run `agent-orchestrator plan amend %s --reason "
-            "<why>` to adopt it" % (self.plan_path, cause, text, self.plan_path),
-        )
+        self.wake("drain", None, narrate.park_ask(park), key="drain")
 
     def end_drain(self):
         """The file is back to the approved bytes."""
@@ -1275,6 +1281,121 @@ class Driver:
         )
         narrate.say("info", None, "the plan is back to its approved bytes: the drain ended")
         self.drain = None
+        self.end_park()
+
+    # ---- the park: what the ledger keeps, attention.md shows and the Lead is woken for ----------------------------
+    # A park outlives the pane: the ledger keeps the one record a Lead reads when they come back, attention.md shows
+    # it beside the tickets that need them, and the wake names the way out. A drive parked with nothing in flight
+    # asks again, and a run that ends with units parked says why instead of reading as a run with nothing left.
+
+    def held_approval(self):
+        """The approval the drive gates on, as the ledger and the park keep it: the plan file is what loses the span
+        (a hand edit drops it), so the base is read from the record when a run starts again."""
+        if self.approval is None:
+            return {}
+        return {"base": self.approval.base, "digest": self.approval.digest}
+
+    def park_snapshot(self, park):
+        """The approved bytes a plan park names to restore from: the snapshot of the approval the park holds."""
+        digest = (park or {}).get("digest")
+        if not digest:
+            return ""
+        # The snapshot's layout is the plan's rule, not the driver's: ask it, with the digest the park holds.
+        return str(yaml_plan.snapshot_path(SimpleNamespace(digest=digest), self.args.state_dir))
+
+    def park_record(self):
+        """The park of the plan the drive cannot use: what it holds, why it is parked and since when."""
+        drain = self.drain or {}
+        held = self.held_approval()
+        return {
+            "kind": "plan",
+            "cause": drain.get("cause"),
+            "error": drain.get("error"),
+            "digest": held.get("digest"),
+            "base": held.get("base"),
+            "since": self.parked_since,
+            "units": [],
+        }
+
+    def park_here(self):
+        """Book the park the drive is in, and hand back the record it wrote: the wake, attention.md and the exit all
+        read the same record."""
+        record = self.park_record()
+        return self.book_park(record)
+
+    def book_park(self, record):
+        """The park in the ledger (with the approval the drive holds) and in attention.md, which is rebuilt from it."""
+        record["way_out"] = narrate.park_way_out(record, self.plan_path, self.park_snapshot(record))
+        with self.book() as data:
+            ledgers.record_approval(data, self.held_approval())
+            ledgers.record_park(data, record)
+        self.refresh_attention()
+        return record
+
+    def end_park(self, kind="plan"):
+        """The park is over: the ledger and attention.md stop naming it. With `kind`, only a park of that kind ends,
+        so a plan the drive could not use and units that wait for an amendment are not taken for each other."""
+        with self.book() as data:
+            ended = ledgers.end_park(data, kind)
+        if ended is None:
+            return None
+        self.refresh_attention()
+        return ended
+
+    def park_due(self):
+        """Whether the park owes the Lead another ask: fifteen minutes in, then every thirty, while nothing is in
+        flight. A parked unit's assignment is open in the runtime but is no work (`parked_assignments`), so it never
+        silences the park: the unit the Lead parked to amend the plan is the one watching for the answer. The plan is
+        never given up for it (R126 keeps the drain's promise) and no worker starts."""
+        if not self.drain or self.unfinished - self.parked_assignments():
+            return False
+        interval = PARK_ASK_EVERY if self.park_asks else PARK_ASK_FIRST
+        return self.clock() - (self.asked_at or 0) >= interval
+
+    def ask_parked(self):
+        """Ask the Lead again about the park it has not answered, in the same words: silence is not progress."""
+        self.park_asks += 1
+        self.asked_at = self.clock()
+        park = self.park_record()
+        park["way_out"] = narrate.park_way_out(park, self.plan_path, self.park_snapshot(park))
+        narrate.say("ask", None, narrate.park_ask(park, again=True))
+        self.wake("drain", None, narrate.park_ask(park, again=True))
+
+    def parked_units(self):
+        """(unit, why it waits, since when) for every unit parked `awaiting-amendment`: nothing runs for it and only
+        an amendment releases it."""
+        with self.book() as data:
+            return [
+                (
+                    task["packet"]["unit"],
+                    (task.get("amend") or {}).get("reason") or "waiting for the plan to be amended",
+                    (task.get("amend") or {}).get("since"),
+                )
+                for task in data["tasks"].values()
+                if task.get("gate") == AMENDING and task["status"] not in ("COMPLETE", "RELEASED")
+            ]
+
+    def park_at_exit(self):
+        """A run that ends with units parked says why it ends: the ledger and attention.md name the park, its cause
+        and the way out, and the exit lists the units rather than reading as a run with nothing left to do."""
+        parked = self.parked_units()
+        if not parked:
+            # a run can end on a plan whose earlier run parked units that this one released: the record is stale
+            self.end_park("units")
+            return []
+        held = self.held_approval()
+        record = {
+            "kind": "units",
+            "cause": AMENDING,
+            "error": "; ".join("%s: %s" % (unit, reason) for unit, reason, _ in parked),
+            "digest": held.get("digest"),
+            "base": held.get("base"),
+            "since": min((since for _, _, since in parked if since), default=None),
+            "units": [unit for unit, _, _ in parked],
+        }
+        self.book_park(record)
+        narrate.say("ask", None, narrate.park_ask(record))
+        return record["units"]
 
     def adopt_amendment(self, held, plan):
         """The plan carries a valid approval other than the one this run holds: gate and dispatch against it from
@@ -1294,7 +1415,9 @@ class Driver:
         narrate.say("info", None, "adopted the amended plan %s" % digest[:12])
         self.drain = None
         self.last_plan = plan
+        self.end_park()  # the plan the drive could not use came back as an amendment, so the park is over
         with self.book() as data:
+            ledgers.record_approval(data, self.held_approval())
             self.resume_plan_state(
                 data
             )  # a ticket the amendment added reopens a plan that had delivered
@@ -1584,6 +1707,9 @@ class Driver:
             if data["plan"]["state"] == "APPROVED":
                 enter_plan_state(data, "RUNNING")
             self.resume_plan_state(data)
+            # The approval the drive gates on, so a run that starts again reads its base from here and not from the
+            # plan file, which is what loses the span.
+            ledgers.record_approval(data, self.held_approval())
             route_record = data["routes"]
         narrate.NARRATOR.banner(
             plan=self.slug,
@@ -1610,6 +1736,8 @@ class Driver:
         )
         # A unit parked for an amendment by a run that ended: the plan may have been amended since.
         self.release_amendment({}, plan)
+        # A park a dead drive left behind is not this run's: the plan it could not use is one this run holds.
+        self.end_park()
 
     def loop(self):
         idle = False
@@ -1640,6 +1768,8 @@ class Driver:
                 # An open task whose agent the runtime no longer lists is work the run would otherwise drop.
                 dispatched = self.reconcile(finishing=True)
                 if not dispatched:
+                    # A run that ends with units parked says why it ends; it did not run out of work.
+                    self.parked = self.park_at_exit()
                     return
             wait = {"target": "all", "timeout": self.args.wait_seconds}
             if self.receipt:
@@ -1647,6 +1777,8 @@ class Driver:
             result = runtime_call(self.lead, "wait", wait, timeout=self.args.wait_seconds + 60)
             self.receipt = result.get("receipt")
             self.read_plan()  # an edit made while the run waited is seen before anything acts on the answer
+            if self.park_due():
+                self.ask_parked()
             self.receive(result)
             self.idle_ticks(result.get("assignments") or [])
             self.unfinished = {i for i in result.get("unfinished") or [] if isinstance(i, str)}
@@ -2437,19 +2569,21 @@ class Driver:
             data.setdefault("ticket_status", {})[ticket_id] = status
 
     def refresh_attention(self):
-        """Rewrite attention.md from the ledger's `needs you` tickets. Appending left a completed ticket's line
-        behind, so the file is rebuilt on every tick and never edited."""
+        """Rewrite attention.md from the ledger's `needs you` tickets and its park. Appending left a completed
+        ticket's line behind, so the file is rebuilt on every tick and never edited."""
         with self.book() as data:
             statuses = dict(data.get("ticket_status") or {})
+            park = copy.deepcopy(data.get("park"))
         lines = [
             "- %s (person): %s" % (ticket_id, " ".join(text.split(":", 1)[1].split()))
             for ticket_id, text in statuses.items()
             if str(text).lower().startswith("needs you:")
         ]
         body = "# Needs you: %s\n\n`status <plan> --json` carries the same reason.\n\n" % self.slug
-        (self.run_dir / "attention.md").write_text(
-            body + "".join(line + "\n" for line in lines), encoding="utf-8"
-        )
+        text = body + "".join(line + "\n" for line in lines)
+        if park:
+            text += narrate.park_section(park)
+        (self.run_dir / "attention.md").write_text(text, encoding="utf-8")
 
     def record_report(self, task_id, report, **changes):
         """Checkpoint the worker's report as PARTIAL: the unit is not COMPLETE until CI and the merge."""
@@ -5039,6 +5173,8 @@ class Driver:
                 gate=AMENDING,
                 updated_at=now(),
                 held=[],
+                # what the park waits for and since when: a run that ends with it parked names both
+                amend={"reason": reason, "since": now()},
                 amend_from=asked.get("digest") or (self.approval.digest if self.approval else None),
             )
         for message in task.get("held") or []:
@@ -8473,6 +8609,8 @@ def drive_locked(driver):
         "slug": driver.slug,
         "lead": driver.lead,
         "spawned": driver.spawned,
+        # The units that ended the run parked: the exit says they are parked rather than reporting nothing left.
+        "parked": driver.parked,
         "errors": driver.errors,
     }
 
