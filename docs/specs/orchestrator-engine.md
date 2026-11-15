@@ -526,5 +526,5 @@ failure names the behaviour it broke and not a line number in a file that moved.
 
 | Requirement | Scenario | Test nodes |
 |---|---|---|
-| R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only`<br>`docs/plans/2026-11-15-orchestrator-review-payload/acceptance/test_review_payload_path.py` |
-| R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path`<br>`docs/plans/2026-11-15-orchestrator-review-payload/acceptance/test_review_payload_path.py` |
+| R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only |
+| R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path |

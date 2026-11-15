@@ -69,7 +69,11 @@ class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
         resumes = [(c["args"]["name"], c["args"]["task"]) for c in self.calls("resume")]
         self.assertEqual([n for n, _ in resumes], ["demo-t1", "demo-t1-review"])
         task_md = self.run_dir / "t1-review2" / "task.md"
-        self.assertEqual(resumes[1][1], "Read %s and follow it." % task_md)
+        self.assertEqual(
+            resumes[1][1],
+            "Read %s and follow it. Write the review to %s (JSON, contract 2)."
+            % (task_md, self.run_dir / "t1" / "review.2.json"),
+        )
         text = task_md.read_text(encoding="utf-8")
         self.assertIn("%s..HEAD" % base, text)  # the commit the first review covered, up to HEAD
         self.assertIn(str(self.run_dir / "t1r1" / "findings.json"), text)
