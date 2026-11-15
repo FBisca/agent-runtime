@@ -55,6 +55,45 @@ RESPONSE = {
 
 BASE_FILE = "def load(path):\n    return open(path).read()\n"
 
+# A repository question calibrated in the configuration, so the tool decides the escalation, not the model.
+CALIBRATED_CONFIG = textwrap.dedent(
+    """\
+    model: test-model-v1
+    thresholds:
+      repo.error-handling:
+        value: 0.6
+        confidence: 0.7
+    questions:
+      - id: repo.error-handling
+        priority: critical
+        type: noul
+        ask: Does the change keep the documented error-handling contract
+    """
+)
+
+BELOW_THRESHOLD = {
+    "model": "jev-1.14.0",
+    "answers": {"repo.error-handling": {"type": "noul", "noul": 0.2}},
+    "usage": {"input_tokens": 700, "output_tokens": 30},
+}
+
+# A price table naming the model the provider served, never the alias the configuration asked for.
+PRICING = textwrap.dedent(
+    """\
+    version: 1
+    models:
+      jev-1.14.0:
+        input_per_million: 0.042
+        output_per_million: 2.0
+    """
+)
+
+PRICED_RESPONSE = {
+    "model": "jev-1.14.0",
+    "answers": {"repo.error-handling": {"type": "noul", "noul": 0.9}},
+    "usage": {"input_tokens": 1000, "output_tokens": 20},
+}
+
 HEAD_FILE = (
     "def load(path):\n"
     "    try:\n"
@@ -84,6 +123,7 @@ class Review:
         self.config = tmp_path / "config.yaml"
         self.config.write_text(CONFIG, encoding="utf-8")
         self.fixture = tmp_path / "screening.json"
+        self.pricing = tmp_path / "pricing.yaml"
         self.base, self.head = self.two_revisions()
 
     def two_revisions(self):
@@ -108,7 +148,7 @@ class Review:
         git(self.checkout, *commit, "head")
         return base, git(self.checkout, "rev-parse", "HEAD")
 
-    def screen(self, response, long_context=False, output=None):
+    def screen(self, response, long_context=False, output=None, pricing=False):
         """One screening of the fixture, with `response` as the provider's only answer."""
         self.fixture.write_text(json.dumps({"responses": [response]}), encoding="utf-8")
         return main(
@@ -125,6 +165,7 @@ class Review:
                 "--screening-fixture",
                 str(self.fixture),
                 *(["--long-context"] if long_context else []),
+                *(["--pricing", str(self.pricing)] if pricing else []),
             ]
         )
 
@@ -333,6 +374,50 @@ def test_S4_the_bank_digest_follows_the_bank_and_not_the_run(review):
     assert review.report()["bank_digest"] != digest, (
         "a level reworded is a different bank, and the digest says so"
     )
+
+
+def test_S5_a_critical_judgment_below_its_calibrated_threshold_escalates_in_the_report(
+    review, capsys
+):
+    review.config.write_text(CALIBRATED_CONFIG, encoding="utf-8")
+    assert review.screen(BELOW_THRESHOLD) == 0, (
+        "the screening completed; the verdict says what it found"
+    )
+    report = review.report()
+    assert report["status"] == "completed"
+    assert report["verdict"] == "escalated", (
+        "the tool escalated it from the calibration, not the model"
+    )
+    assert report["escalation"]["recommended"], (
+        "a threshold signal sends the change to a full deep review"
+    )
+    reasons = report["escalation"]["reasons"]
+    assert [reason["rule"] for reason in reasons] == ["value-below-threshold"]
+    reason = reasons[0]
+    assert reason["question"] == "repo.error-handling"
+    assert reason["scope"] == "whole-diff"
+    assert reason["value"] == 0.2 and reason["confidence"] is None
+    summary = capsys.readouterr().out
+    assert "value-below-threshold" in summary, "the summary names the rule that fired"
+    assert "deep review" in summary, "and the way out, as a refusal owes the reader"
+
+
+def test_S6_the_report_prices_the_screening_from_the_declared_table(review):
+    review.config.write_text(CALIBRATED_CONFIG, encoding="utf-8")
+    review.pricing.write_text(PRICING, encoding="utf-8")
+    assert review.screen(PRICED_RESPONSE, pricing=True) == 0
+    usage = review.report()["usage"]
+    assert usage["cost_usd"] == pytest.approx(0.000082), (
+        "1000 input tokens at 0.042 and 20 output tokens at 2.00 per million"
+    )
+    assert usage["cost_basis"] == {
+        "pricing": str(review.pricing),
+        "version": 1,
+        "model": "jev-1.14.0",
+        "input_per_million": 0.042,
+        "output_per_million": 2.0,
+    }, "the cost is priced for the model the provider served, not the alias the bank asked for"
+    assert usage["cost_unknown"] is None
 
 
 def test_S6_an_incomplete_run_keeps_the_usage_and_the_judgments_it_learned(review):

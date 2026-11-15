@@ -16,6 +16,10 @@ A report says what produced it, so a frozen one can be recognised and trusted la
 it was screened through, the model the provider served beside the alias the bank asked for, the input
 limit in force, whether long context was requested, and a digest of the bank it screened (S4). The model
 the provider served is read from its own answer, never inferred from the alias.
+
+The usage carries the cost too, when the caller declared a price table: the cost of the model the provider
+served with its basis - the table, its version, the model and both rates - and unknown, never zero, when no
+table prices that model (D24, D26).
 """
 
 import hashlib
@@ -27,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_review.chunks import Chunk, Coverage
+from agent_review.pricing import Cost, PriceTable, no_table
 from agent_review.questions import Question, QuestionBank, Threshold
 from agent_review.safeguards import EscalationReason, recommends_full_review, way_out
 from agent_review.screening import limits
@@ -67,6 +72,8 @@ class Report:
     # Why a person must read this change: a safeguard decided it before the model was asked (SG-D2, SG-D3),
     # or the screening could not cover it (D43).
     escalation: tuple[EscalationReason, ...] = ()
+    # The price table the caller declared, so the report can price what the provider was paid for (D24).
+    price_table: PriceTable | None = None
     # Long context is the caller's opt-in, so the report says whether the larger budget was asked for.
     long_context: bool = False
     failure: str | None = field(default=None)
@@ -108,6 +115,19 @@ class Report:
         """Whether the outcome sends this change to a full deep review rather than a screen (D12, D43)."""
         return recommends_full_review(self.escalation)
 
+    @property
+    def cost(self) -> Cost:
+        """What the screening cost, from the declared table against the served model (D24, D26).
+
+        A run that declared no table is unknown, never zero, and so is a served model the table does not
+        name: a zero would read as free and hide a paid screening from a benchmark.
+        """
+        if self.price_table is None:
+            return no_table()
+        return self.price_table.cost(
+            self.resolved_model, input_tokens=self.input_tokens, output_tokens=self.output_tokens
+        )
+
     def as_dict(self) -> dict[str, Any]:
         """The report as `report.json` holds it, in the contract's field order (P0-D3)."""
         return {
@@ -126,6 +146,7 @@ class Report:
                 "requests": self.requests,
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
+                **self.cost.as_usage(),
             },
             "questions": [
                 {"id": question.id, "priority": question.priority, "type": question.type}

@@ -39,6 +39,8 @@ from typing import Any
 import yaml
 
 from agent_review.errors import ReviewError
+from agent_review.numbers import band as _band
+from agent_review.numbers import number as _number
 
 BASELINE = Path(__file__).with_name("questions.yaml")
 
@@ -308,30 +310,6 @@ def _threshold(entry: Any, field_name: str, path: Path) -> Threshold:
         if confidence is None
         else _band(confidence, f"{field_name}.confidence", path),
     )
-
-
-def _number(value: Any, field_name: str, path: Path) -> float:
-    """A declared number, refused when it is not one a rule can read: a boolean, a text or a negative."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-        raise ReviewError(
-            f"{path}: {field_name} must be a number of zero or more, not {value!r}; a number a rule "
-            "cannot read would decide nothing"
-        )
-    number = float(value)
-    if number != number or number in (float("inf"), float("-inf")):
-        raise ReviewError(f"{path}: {field_name} must be a finite number, not {value!r}")
-    return number
-
-
-def _band(value: Any, field_name: str, path: Path) -> float:
-    """A confidence band: a probability, so a number between zero and one (D48)."""
-    band = _number(value, field_name, path)
-    if band > 1:
-        raise ReviewError(
-            f"{path}: {field_name} must be a confidence between 0 and 1, not {value!r}; a band above "
-            "one would abstain on every answer"
-        )
-    return band
 
 
 def _carried(data: dict[str, Any], name: str, path: Path) -> Mapping[str, Any]:

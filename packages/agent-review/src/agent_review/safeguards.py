@@ -58,6 +58,13 @@ wider than the cross-file limit, so a cross-file question could not read the fil
 path because it is about the whole change, names the limit it read in `pattern`, and says the gap in
 `detail` (D42, D43). It is listed with the reasons that recommend a full deep review, so a partial screen
 is never read as a clean one.
+
+`value-below-threshold`, `value-above-threshold` and `confidence-below-band` are not decided from the diff
+either: the tool reads them after the screening from the calibrated numbers the bank declares beside its
+questions, and `calibration` is what decides them (D06, D48). A reason names the question, the scope the
+judgment was made over, the value and the confidence beside the declaration that fired, so a person reads
+what the model answered against the number that was frozen. They are listed with the reasons that recommend
+a full deep review, and advisory uncertainty is never one of them (D08).
 """
 
 import posixpath
@@ -76,10 +83,23 @@ STDLIB_ONLY = "stdlib-only"
 # (D42, D43). It is not a fact about the diff the model is asked about; it is the screening's own coverage
 # failing, recorded so a clean-looking screen is never read as a complete one.
 COVERAGE_GAP = "coverage-gap"
+# The calibrated numbers decided a critical or high judgment (D06, D48): a noul's probability fell below the
+# question's value, a score's position rose above it, or the confidence fell below the question's band. They
+# are not facts about the diff either; the screening answered them, and the tool - never the model - reads
+# the declaration that fired.
+VALUE_BELOW_THRESHOLD = "value-below-threshold"
+VALUE_ABOVE_THRESHOLD = "value-above-threshold"
+CONFIDENCE_BELOW_BAND = "confidence-below-band"
 
 # The rules whose hit means a person reads the change in a full deep review rather than a signal recorded
 # beside the screen (D12, D43). A rule that only records a signal is not named here.
-FULL_REVIEW = (PROTECTED_PATH, COVERAGE_GAP)
+FULL_REVIEW = (
+    PROTECTED_PATH,
+    COVERAGE_GAP,
+    VALUE_BELOW_THRESHOLD,
+    VALUE_ABOVE_THRESHOLD,
+    CONFIDENCE_BELOW_BAND,
+)
 
 # The configuration key a run declares its standard-library-only members under (SG-D6).
 STDLIB_ONLY_SETTING = "stdlib_only"
@@ -246,10 +266,16 @@ class EscalationReason:
     module: str = ""
     # The reason in the rule's own words, when no single path carries it (D42, D43).
     detail: str = ""
+    # What a calibrated threshold or band judged: the question, the scope the judgment was made over, and the
+    # value and confidence it answered. Empty for a rule that is about a path or a module (D06, D48).
+    question: str = ""
+    scope: str = ""
+    value: Any = None
+    confidence: Any = None
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict[str, Any]:
         """The reason as `report.json` holds it, in the contract's field order (SG-D3)."""
-        reason = {
+        reason: dict[str, Any] = {
             "rule": self.rule,
             "path": self.path,
             "pattern": self.pattern,
@@ -257,6 +283,11 @@ class EscalationReason:
         }
         if self.module:
             reason["module"] = self.module
+        if self.question:
+            reason["question"] = self.question
+            reason["scope"] = self.scope
+            reason["value"] = self.value
+            reason["confidence"] = self.confidence
         if self.detail:
             reason["detail"] = self.detail
         return reason
@@ -527,6 +558,13 @@ def way_out(reason: EscalationReason) -> str:
         return (
             f"read the whole change: {reason.detail}. Screen it again with a wider `cross_file.max_files` "
             "or as a full deep review - a screen that could not read the files together is not a clean one."
+        )
+    if reason.rule in (VALUE_BELOW_THRESHOLD, VALUE_ABOVE_THRESHOLD, CONFIDENCE_BELOW_BAND):
+        return (
+            f"read the change where `{reason.question}` was judged ({reason.scope}): {reason.detail}. "
+            "The change goes to a full deep review - a person reads that region and records what they "
+            "found; recalibrate the question in `thresholds` only when the number is wrong for this "
+            "model, never to clear this change."
         )
     return f"read {reason.path}: the {reason.rule} rule matched it, and a person decides before this merges."
 
