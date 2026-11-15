@@ -20,9 +20,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent
 
 from agent_runtime import agent_runtime as lib  # noqa: E402  (no side effects on import)
 from agent_runtime import dispatch_store as dispatch  # noqa: E402
-from agent_runtime import hc_tools  # noqa: E402
+from agent_runtime import (
+    hc_tools,  # noqa: E402
+    rhythm,  # noqa: E402
+)
 
 BUSY_MS = 200
+
+
+def option(argv, name):
+    """The value of `--name value` or `--name=value` in argv, else None. The shim passes the host's flags
+    through untouched, so each hook reads only the ones it names."""
+    for index, arg in enumerate(argv):
+        if arg == name and index + 1 < len(argv):
+            return argv[index + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def harness_cli(argv):
+    """The harness a hook entry runs as: `--cli`, else Claude, which is what the runtime resolves to and
+    what the Claude hooks pass without a flag. An unknown value falls back rather than failing the host."""
+    explicit = option(argv, "--cli")
+    return explicit if explicit in rhythm.CAPABILITIES else "claude"
 
 
 def fail_open(main):
@@ -168,7 +189,7 @@ def lead_needs(env=None):
 
 # --- Stop-guard block budget (the only file hooks write; never the dispatch store) ---------------------
 
-BUDGET = 3  # blocks per user work period; -1 marks "spent and already noted"
+BUDGET = rhythm.REQUEST_CAP  # blocks per user work period; -1 marks "spent and already noted"
 
 
 def state_root(env=None):
@@ -176,7 +197,10 @@ def state_root(env=None):
 
 
 def budget_file(env, who):
-    key = "\0".join([str(state_root(env)), *who])
+    """One budget per terminal and user work period, not per host process: switching harness (or
+    restarting it) must not grant a fresh set of blocks. The generation is deliberately not part of
+    the key, so a new host process for the same terminal sees the budget the old one spent."""
+    key = "\0".join([str(state_root(env)), who[0], who[1]])
     return (
         state_root(env)
         / "agent-runtime"

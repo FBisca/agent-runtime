@@ -1211,8 +1211,8 @@ class StopGuardTests(HookStoreCase):
         self.store = dispatch_store.Store(self.env)
         self.team_id = self.store.team("scope", "t0", self.cli.generation)
 
-    def stop(self, payload=None):
-        out, err, code = self.cli.run(STOP, payload or self.STOP)
+    def stop(self, payload=None, args=()):
+        out, err, code = self.cli.run(STOP, payload or self.STOP, args=args)
         self.assertEqual(code, 0, err)
         return out, err
 
@@ -1623,6 +1623,74 @@ class StopGuardTests(HookStoreCase):
         self.assertEqual(absent[0], absent[1])
         self.assertEqual(absent[0], recovered[0])  # absent behaves as "not reported"
 
+    def test_S1_the_claude_codex_and_pi_stops_refuse_one_state_with_one_reason(self):
+        """pi-lead-rhythm/S1: one predicate, three dialects, one reason."""
+        ident = self.unseen()
+        self.message(self.store, self.team_id, assignment=ident["assignment_id"])
+        reason = self.REASON % (1, 1)
+        self.assertEqual(self.stop()[0], {"decision": "block", "reason": reason})
+        self.prompt()  # a fresh budget for each host; the budget itself belongs to the terminal
+        self.assertEqual(
+            self.stop(args=("--cli", "codex"))[0], {"decision": "block", "reason": reason}
+        )
+        self.prompt()
+        self.assertEqual(
+            self.stop(args=("--cli", "pi", "--dialect", "json"))[0],
+            {"block": True, "reason": reason},
+        )
+
+    def test_S2_the_pi_dialect_prints_a_neutral_answer_and_the_claude_shape_is_unchanged(self):
+        """pi-lead-rhythm/S2: `agent-runtime-hook stop --cli pi --dialect json` answers `{block, reason}`."""
+        shim = ["/bin/sh", str(SHIM)]
+        ident = self.unseen()
+        reason = self.REASON % (1, 0)
+        out, err, code = self.cli.run(
+            shim, self.STOP, args=("stop", "--cli", "pi", "--dialect", "json")
+        )
+        self.assertEqual((code, out), (0, {"block": True, "reason": reason}), err)
+        self.prompt()  # the row names the blocking dialect: `--cli pi` alone blocks in the neutral shape
+        out, err, code = self.cli.run(shim, self.STOP, args=("stop", "--cli", "pi"))
+        self.assertEqual((code, out), (0, {"block": True, "reason": reason}), err)
+        self.prompt()
+        out, err, code = self.cli.run(shim, self.STOP, args=("stop", "--cli", "codex"))
+        self.assertEqual((code, out), (0, {"decision": "block", "reason": reason}), err)
+        self.sql(
+            self.store, "UPDATE assignments SET state='complete' WHERE id=?", ident["assignment_id"]
+        )
+        # an allowed Stop is answered only when the host asked for the neutral dialect; the implicit
+        # row keeps block-or-silence, so a Claude or Codex host is never handed a new object here
+        out, err, code = self.cli.run(shim, self.STOP, args=("stop", "--cli", "pi"))
+        self.assertEqual((code, out), (0, None), err)
+        out, err, code = self.cli.run(
+            shim, self.STOP, args=("stop", "--cli", "pi", "--dialect", "json")
+        )
+        self.assertEqual((code, out), (0, {"block": False, "reason": ""}), err)
+
+    def test_S10_a_spent_budget_is_spent_for_every_host_of_one_terminal(self):
+        """pi-lead-rhythm/S10: switching host grants no fresh blocks; one budget per work period."""
+        spent = (
+            "agent-runtime: stop guard budget spent; allowing the stop (resets on your next prompt)"
+        )
+        self.unseen()
+        for _ in range(3):
+            self.assertIsNotNone(self.stop()[0])
+        self.assertEqual(self.budget(), 0)
+        self.cli.close()  # the first host exits; the second one takes the same terminal
+        folder = self.root / "second"
+        folder.mkdir()
+        other = FakeCliProcess(self.env, folder)
+        self.addCleanup(other.close)
+        self.worker(self.store, self.store.team("scope", "t0", other.generation))
+        out, err, code = other.run(STOP, self.STOP, args=("--cli", "pi", "--dialect", "json"))
+        self.assertEqual((code, out), (0, {"block": False, "reason": spent}), err)
+        self.assertEqual(self.budget(), -1)
+        files = list((self.state / "agent-runtime" / "stop-guard").glob("*"))
+        self.assertEqual(len(files), 1)  # one budget for the terminal, not one per host
+        _, err, code = other.run(CONTEXT, self.PROMPT)  # a new user work period
+        self.assertEqual(code, 0, err)
+        out, err, code = other.run(STOP, self.STOP, args=("--cli", "pi", "--dialect", "json"))
+        self.assertEqual((code, out), (0, {"block": True, "reason": self.REASON % (1, 0)}), err)
+
 
 class CodexHookTests(HookStoreCase):
     """The Codex adapter: the shim routes `stop` / `context` subcommands to the same hooks, fed with Codex-shaped
@@ -1810,7 +1878,7 @@ class CodexHookTests(HookStoreCase):
         self.assertEqual(
             self.line(self.context(self.PROMPT)), "agent-runtime: 1 workers need you — check status"
         )
-        out, err, code = self.cli.run(
+        out, err, _ = self.cli.run(
             self.SHIM_CMD,
             {"tool_name": "Bash", "tool_input": {"command": "hc send w hi"}},
             args=("--cli", "codex"),
