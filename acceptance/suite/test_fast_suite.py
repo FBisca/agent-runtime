@@ -83,24 +83,26 @@ class FastSuiteTests(unittest.TestCase):
 
     @classmethod
     def profile(cls):
-        """The one timed fast-suite run both R222 rows read.
+        """The one timed, guarded fast-suite run every R222 row reads.
 
         R222 measures an idle machine and a wall clock, which a loaded CI runner cannot promise, so the
-        gate measures what a test costs: the sum of the cases' call time. Collection and module import are
-        not in that sum, so a warm-up run bought nothing R222 reads and cost a contended runner a second
-        full run of the suite; the two rows share the one measurement.
+        gate measures what a test costs: the sum of the cases' call time — collection and module import
+        are not in it, so no warm-up buys anything it reads. The run carries the unit guard too, because
+        a second run of the suite to prove the same tests start no process is another full suite on a
+        contended runner; the two rows share this one.
         """
         if cls._profile is None:
-            cls._profile = pytest_run(
-                "-o",
-                "addopts=",
-                "-q",
-                "-p",
-                "no:impacted",
-                "-m",
-                "not integration",
-                "--durations=0",
-            )
+            with tempfile.TemporaryDirectory() as directory:
+                Path(directory, "unit_guard.py").write_text(GUARD, encoding="utf-8")
+                env = dict(
+                    os.environ,
+                    PYTHONPATH=os.pathsep.join(
+                        filter(None, [directory, os.environ.get("PYTHONPATH")])
+                    ),
+                )
+                # The fast suite as `uv run pytest` selects it: an `integration` mark overrides a module's
+                # `unit`, so the guard covers exactly the tests the fast suite runs.
+                cls._profile = pytest_run("-p", "unit_guard", "-q", "--durations=0", env=env)
         return cls._profile
 
     def test_S1_the_fast_suite_reports_under_three_seconds(self):
@@ -142,12 +144,5 @@ class FastSuiteTests(unittest.TestCase):
         self.assertEqual(selected(path, "-p", "no:cacheprovider"), selected(path))
 
     def test_S3_no_unit_test_starts_a_process_or_opens_a_socket(self):
-        with tempfile.TemporaryDirectory() as directory:
-            Path(directory, "unit_guard.py").write_text(GUARD, encoding="utf-8")
-            env = dict(
-                os.environ,
-                PYTHONPATH=os.pathsep.join(filter(None, [directory, os.environ.get("PYTHONPATH")])),
-            )
-            # The fast suite as `uv run pytest` selects it: an `integration` mark overrides a module's `unit`.
-            result = pytest_run("-p", "unit_guard", "-q", env=env)
+        result = self.profile()
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
