@@ -1135,7 +1135,7 @@ class EventWaitTests(EventRig):
                 tmp = self.dir / "next-replies"
                 tmp.write_text(json.dumps(self.replies))
                 tmp.replace(self.dir / "replies")
-                request_id = self.rpc.tool("wait", {"target": "all", "timeout": 0.3})
+                request_id = self.rpc.tool("wait", {"target": "all", "timeout": EARLY_DEADLINE})
                 batch = self.batch(self.rpc, request_id)
                 self.assertEqual(
                     batch["reason"],
@@ -1165,13 +1165,15 @@ class EventWaitTests(EventRig):
         (self.dir / "replies").write_text(json.dumps(self.replies))
         for kind in ("blocked", "decision"):
             self.publish(0, "progress")
-            request_id = self.rpc.tool("wait", {"target": "all", "timeout": 0.3})
+            request_id = self.rpc.tool("wait", {"target": "all", "timeout": EARLY_DEADLINE})
             first = self.batch(self.rpc, request_id)
             self.assertEqual(
                 first["reason"], "messages"
             )  # the progress report is delivered at once
             event = self.publish(0, kind)
-            batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0.3}))
+            batch = self.batch(
+                self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": EARLY_DEADLINE})
+            )
             self.assertEqual(batch["reason"], "attention")
             self.assertIn(event, batch["messages"])
             self.assertEqual(len(batch["unfinished"]), 2)
@@ -1558,8 +1560,10 @@ os._exit(0)
             **extra,
         )
 
-    def wait_all(self):
-        return self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0.3}))
+    def wait_all(self, timeout: float = EARLY_DEADLINE):
+        """Wait for everything at once. A row that reads an answer carries a deadline far away, so the
+        probe it waits for answers; a row that asserts the timeout passes its own short one."""
+        return self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": timeout}))
 
     def test_never_reported_worker_past_grace_needs_attention(self):
         """agent-runtime/R100"""
@@ -1579,7 +1583,7 @@ os._exit(0)
         """agent-runtime/R101"""
         self.prepare()
         self.silent(0, age=5)
-        batch = self.wait_all()
+        batch = self.wait_all(timeout=0.3)
         self.assertEqual(batch["reason"], "timeout")
         self.assertNotIn("unreported", json.dumps(batch["assignments"]))
 
@@ -1596,7 +1600,7 @@ os._exit(0)
             created_ms=int((time.time() - 60) * 1000),
             exit_code=None,
         )
-        batch = self.wait_all()
+        batch = self.wait_all(timeout=0.3)
         self.assertEqual(batch["reason"], "timeout")
         self.assertNotIn("unreported", json.dumps(batch["assignments"]))
 
@@ -1623,7 +1627,7 @@ os._exit(0)
                 self.replies["get:t1"] = reply
                 self.replies["get:w1"] = reply
                 (self.dir / "replies").write_text(json.dumps(self.replies))
-                batch = self.wait_all()
+                batch = self.wait_all(timeout=0.3)
                 self.assertEqual(batch["reason"], "timeout")
                 self.assertNotIn("unreported", json.dumps(batch["assignments"]))
 
@@ -1637,7 +1641,7 @@ os._exit(0)
                 del row[missing]
                 self.replies["get:t1"] = self.replies["get:w1"] = {"out": json.dumps(row)}
                 (self.dir / "replies").write_text(json.dumps(self.replies))
-                batch = self.wait_all()
+                batch = self.wait_all(timeout=0.3)
                 self.assertEqual(batch["reason"], "timeout")
 
     def test_member_that_reported_once_costs_no_repeated_get(self):
@@ -1675,7 +1679,7 @@ os._exit(0)
             return [c for c in self.runs("get") if c[1] in ("w1", "w2", "t1", "t2")]
 
         before = len(workers())
-        self.wait_all()
+        self.wait_all(timeout=0.3)  # nothing to report: the wait takes its deadline, so keep it short
         self.assertEqual(len(workers()), before)
 
 

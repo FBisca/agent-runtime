@@ -38,14 +38,46 @@ pytestmark = pytest.mark.integration
 DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
 
 
+_MODULES: dict[Path, object] = {}
+
+
 def _load(script):
-    spec = importlib.util.spec_from_file_location("hook_" + script.stem, script)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    if script not in _MODULES:
+        spec = importlib.util.spec_from_file_location("hook_" + script.stem, script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _MODULES[script] = module
+    return _MODULES[script]
 
 
 PRE_MODULE = _load(PRE)
+CONTEXT_MODULE = _load(CONTEXT)
+HOOK_LIB = _load(HOOKS / "hook_lib.py")
+
+
+def run_context_raw(payload, env, generation, raw=None):
+    """The context hook's `main` in process: its answer as printed, with the generation pinned.
+
+    The entry reads stdin, resolves its identity and prints; only that stdin/stdout/exit boundary needs a
+    process, and the tests below that prove it still start one. A table of payload shapes otherwise pays a
+    fake CLI process, a python start and a process-table read per row.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    with (
+        mock.patch.object(
+            sys, "stdin", io.StringIO(raw if raw is not None else json.dumps(payload))
+        ),
+        mock.patch.object(sys, "stdout", out),
+        mock.patch.object(sys, "stderr", err),
+        mock.patch.dict(os.environ, env, clear=True),
+        mock.patch.object(lib, "FORCED_GENERATION", generation),
+    ):
+        try:  # the entry's own fail-open: a broken import prints nothing either
+            HOOK_LIB.fail_open(CONTEXT_MODULE.main)
+        except Exception:  # noqa: BLE001 - an import error also prints nothing
+            pass
+    printed = out.getvalue()
+    return (json.loads(printed) if printed.strip() else None), err.getvalue()
 
 
 def run_pre_raw(raw, args=(), env=None):
@@ -850,6 +882,20 @@ class HookStoreCase(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, err)
         return json.loads(out) if out.strip() else None
 
+    def in_process(self, payload, seed=None, env=None, raw=None):
+        """The context hook's `main` in process under its own pinned generation: what it printed, or None.
+
+        A table of payload shapes would otherwise pay a fake CLI process, a python start and a
+        process-table read per row; the tests that prove that stdin/stdout/exit boundary still start one.
+        Each call takes a fresh generation, as a fresh fake CLI process would, so a row's seeding lands in
+        a team of its own."""
+        self.hook_runs = getattr(self, "hook_runs", 0) + 1
+        generation = "in-process:%d" % self.hook_runs
+        if seed:
+            seed(generation)
+        out, _ = run_context_raw(payload, env or self.env, generation, raw=raw)
+        return out
+
     def team(self, generation, lead="t0", scope="scope"):
         store = dispatch_store.Store(self.env)
         return store, store.team(scope, lead, generation)
@@ -925,9 +971,9 @@ class LeadContextTests(HookStoreCase):
             {"hook_event_name": "SessionStart", "source": "compact"},
             {"hook_event_name": "SessionStart", "source": "clear"},
         ):
-            out = self.hook(
+            out = self.in_process(
                 payload, seed
-            )  # each hook run is a new fake CLI process, so seed per run
+            )  # each run pins a generation of its own, so seed per run
             self.assertEqual(out["hookSpecificOutput"]["hookEventName"], payload["hook_event_name"])
             self.assertEqual(
                 self.line(out), "agent-runtime: 2 unfinished, 1 undelivered — call wait(all)"
@@ -942,7 +988,7 @@ class LeadContextTests(HookStoreCase):
             self.last_wait(store, team, "timeout", 0)  # a timeout never counts as seen
 
         self.assertEqual(
-            self.line(self.hook(self.PROMPT, seed)),
+            self.line(self.in_process(self.PROMPT, seed)),
             "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)",
         )
 
@@ -956,7 +1002,7 @@ class LeadContextTests(HookStoreCase):
             self.last_wait(store, team, "attention", 2)
 
         self.assertEqual(
-            self.line(self.hook(self.PROMPT, seed)),
+            self.line(self.in_process(self.PROMPT, seed)),
             "agent-runtime: 2 workers need you — check status",
         )
 
@@ -990,7 +1036,9 @@ class LeadContextTests(HookStoreCase):
             self.worker(store, team)
 
         for seed in (None, delivered, seen, other_generation, superseded, other_lead):
-            self.assertIsNone(self.hook(self.PROMPT, seed), getattr(seed, "__name__", "no store"))
+            self.assertIsNone(
+                self.in_process(self.PROMPT, seed), getattr(seed, "__name__", "no store")
+            )
 
     def test_session_start_sources_other_than_compact_and_clear_print_nothing(self):
         """agent-runtime/R118"""
@@ -1001,7 +1049,7 @@ class LeadContextTests(HookStoreCase):
 
         for source in ("startup", "resume", "fork"):
             self.assertIsNone(
-                self.hook({"hook_event_name": "SessionStart", "source": source}, seed), source
+                self.in_process({"hook_event_name": "SessionStart", "source": source}, seed), source
             )
 
     def test_every_failure_allows_silently(self):
@@ -1011,10 +1059,10 @@ class LeadContextTests(HookStoreCase):
             store, team = self.team(generation)
             self.worker(store, team)
 
-        self.assertIsNone(self.hook(None, seed, raw="not json"))
-        self.assertIsNone(self.hook(None, seed, raw="[1]"))
+        self.assertIsNone(self.in_process(None, seed, raw="not json"))
+        self.assertIsNone(self.in_process(None, seed, raw="[1]"))
         no_identity = {k: v for k, v in self.env.items() if k != "HC_TERMINAL_ID"}
-        self.assertIsNone(self.hook(self.PROMPT, seed, env=no_identity))
+        self.assertIsNone(self.in_process(self.PROMPT, seed, env=no_identity))
         locked = {}
 
         def seed_locked(generation):
@@ -1025,7 +1073,7 @@ class LeadContextTests(HookStoreCase):
             locked["db"].execute("BEGIN EXCLUSIVE")
 
         try:
-            self.assertIsNone(self.hook(self.PROMPT, seed_locked))
+            self.assertIsNone(self.in_process(self.PROMPT, seed_locked))
         finally:
             locked["db"].close()
         for args in (
@@ -1089,7 +1137,7 @@ class LeadContextTests(HookStoreCase):
             self.assertEqual(snapshot(), before, flag)
         self.assertFalse((self.root / "home").exists())
         missing = dict(self.env, XDG_STATE_HOME=str(self.root / "absent"))
-        self.hook(self.PROMPT, env=missing)
+        self.in_process(self.PROMPT, env=missing)
         self.assertFalse((self.root / "absent").exists())
 
     def test_broken_import_exits_zero_silently(self):
@@ -1151,6 +1199,7 @@ class FakeCliProcess:
 
     def __init__(self, env, root):
         self.root, self.count = Path(root), 0
+        self.env = dict(env)
         self.proc = subprocess.Popen(
             ["codex", "-c", 'while read -r n; do . "$DIR/s$n.sh"; echo ok; done', "codex"],
             executable="/bin/bash",
@@ -1162,8 +1211,14 @@ class FakeCliProcess:
         )
         self.generation = "%d:%s" % (self.proc.pid, lib.lstart(self.proc.pid))
 
-    def run(self, script, payload=None, raw=None, args=()):
-        """script is a Python hook path, or a list for a command run as-is (the shim); args follow it."""
+    def run(self, script, payload=None, raw=None, args=(), process=False):
+        """script is a Python hook path, or a list for a command run as-is (the shim); args follow it.
+
+        A hook path runs in process under this CLI's own generation, unless `process=True`: the tests that
+        prove the stdin/stdout/exit boundary, and a broken import that must reach the interpreter, still
+        start one. A list always starts a process, because the command it names is the boundary."""
+        if not process and not isinstance(script, list):
+            return self.in_process(script, payload, raw, args)
         self.count += 1
         n = self.count
         (self.root / ("p%d.json" % n)).write_text(raw if raw is not None else json.dumps(payload))
@@ -1183,6 +1238,26 @@ class FakeCliProcess:
             (self.root / ("e%d" % n)).read_text(),
             int((self.root / ("r%d" % n)).read_text()),
         )
+
+    def in_process(self, script, payload=None, raw=None, args=()):
+        """The same hook entry in this test's process, its generation pinned to this fake CLI's."""
+        module = _load(Path(script))
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(
+                sys, "stdin", io.StringIO(raw if raw is not None else json.dumps(payload))
+            ),
+            mock.patch.object(sys, "stdout", out),
+            mock.patch.object(sys, "stderr", err),
+            mock.patch.dict(os.environ, self.env, clear=True),
+            mock.patch.object(lib, "FORCED_GENERATION", self.generation),
+        ):
+            if Path(script) == CONTEXT:
+                HOOK_LIB.fail_open(module.main)
+            else:
+                HOOK_LIB.fail_open(lambda: module.main(list(args)))
+        printed = out.getvalue()
+        return (json.loads(printed) if printed.strip() else None), err.getvalue(), 0
 
     def close(self):
         self.proc.stdin.close()
@@ -1391,7 +1466,9 @@ class StopGuardTests(HookStoreCase):
         broken.mkdir()
         (broken / "stop_guard.py").write_text(STOP.read_text())
         (broken / "hook_lib.py").write_text("raise ImportError('boom')\n")
-        self.assertEqual(self.cli.run(broken / "stop_guard.py", self.STOP), (None, "", 0))
+        self.assertEqual(
+            self.cli.run(broken / "stop_guard.py", self.STOP, process=True), (None, "", 0)
+        )
         self.assertIsNone(self.budget())  # none of those touched the budget
 
     def test_stop_never_writes_the_dispatch_store(self):
