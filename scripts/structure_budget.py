@@ -159,11 +159,11 @@ def measure_tree(root):
     return measured_sources(tree_sources(root))
 
 
-def git(root, *args):
+def git(root, *args, text=True):
     """One git command run in `root`, its output captured; the caller reads the exit code."""
     try:
         return subprocess.run(
-            ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=300
+            ["git", "-C", str(root), *args], capture_output=True, text=text, timeout=300
         )
     except OSError as error:
         raise Refused("structure budget: git is not available, so --since has no base: %s" % error)
@@ -223,6 +223,60 @@ def measure_at(root, rev):
             % (root, rev, done.stderr.decode("utf-8", "replace").strip())
         )
     return measured_sources(archive_sources(done.stdout, prefix))
+
+
+def moved_paths(root, rev):
+    """{path now: path at `rev`} for every move git's own rename detection reports.
+
+    `git diff` reads the revision against the working tree, so a staged, uncommitted or committed
+    `git mv` is seen once. A file that was copied rather than moved is no move: its original is
+    still there, holding its number. Paths come out relative to `root`, as the base's do.
+
+    `-z` keeps each path as the bytes it is: git else C-quotes any name holding a non-ASCII
+    character or a quote, a backslash or a tab, and the quoted spelling matches no base row. One
+    field per NUL, a rename carrying both its paths and every other status one, is the stride that
+    stays aligned beside a modified file in the same diff.
+    """
+    done = git(
+        root,
+        "diff",
+        "--name-status",
+        "--find-renames",
+        "--relative",
+        "-z",
+        rev,
+        "--",
+        text=False,
+    )
+    if done.returncode != 0:
+        raise Refused(
+            "structure budget: cannot read the moves since %s in %s: %s"
+            % (rev, root, done.stderr.decode("utf-8", "replace").strip())
+        )
+    fields = done.stdout.decode("utf-8", "surrogateescape").split("\0")
+    moved = {}
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        paths = 2 if status.startswith("R") else 1
+        if paths == 2:
+            moved[fields[index + 2]] = fields[index + 1]
+        index += paths + 1
+    return moved
+
+
+def inherited(base, moved):
+    """The base with every moved file's numbers carried to the path that now holds it.
+
+    A move is not a crossing: the content under the new path was measured at `rev` under the old
+    one. A path that measured a file of its own at `rev` keeps that number, so a move onto it
+    cannot launder growth.
+    """
+    carried = dict(base)
+    for now, before in moved.items():
+        if now not in carried and before in carried:
+            carried[now] = carried[before]
+    return carried
 
 
 def ceilings_of(budget):
@@ -370,6 +424,7 @@ def check(args):
     measured = measure_tree(args.root)
     paths = paid_paths(measured, args.paid)
     base = measure_at(args.root, args.since)
+    base = inherited(base, moved_paths(args.root, args.since))
     return measured, budget, growth_lines(measured, base, ceilings_of(budget), paths, args.metric)
 
 
