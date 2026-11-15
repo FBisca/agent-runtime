@@ -47,11 +47,14 @@ filterwarnings = ["default::pytest.PytestUnhandledThreadExceptionWarning"]
 # every tracked source file is covered.
 impacted_module = "server"
 impacted_map = [
+  # The scripts are named one by one: a `scripts/*` wildcard also routed a new script to the
+  # installer suite, so the cheap tier ran the tests of its neighbour's change.
+  "scripts/build-release.sh=tests/installer",
+  "scripts/structure_budget.py=tests/test_structure_budget.py",
   "scripts/suite_budget.py=tests/test_suite_budget.py",
   "server/*=tests",
   "hooks/*=tests",
   "bin/*=tests",
-  "scripts/*=tests/installer",
   "install.sh=tests/installer",
   "herdr/*/*=tests/test_workbench_mod.py",
   "herdr/*/*/*=tests/test_workbench_mod.py",

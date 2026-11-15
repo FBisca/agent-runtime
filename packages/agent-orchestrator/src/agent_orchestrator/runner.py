@@ -17,11 +17,11 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
 from . import ledger as ledgers
+from .timeutil import iso as now
 
 SCHEMA_VERSION = 1
 LOG_LIMIT = 1_000_000
@@ -62,10 +62,6 @@ class Run:
         self.log = log
         self.path = None
         self.sha256 = None
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
 
 
 def git(*args, cwd=None, check=True):

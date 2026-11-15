@@ -58,3 +58,14 @@ paying for something it is not measuring:
 
 SC-D4: a shared runner is not the gate. R222 and R223 keep their idle-machine numbers as the thing to
 fix and fail the build only at half again, so a slow runner reports instead of refusing.
+
+- **A hook process per verdict.** `tests/test_hooks.py` started a fake CLI process, a python and a
+  process-table read for every payload row (485 process starts, 11.8 s here): the context hook's rows
+  and the Stop guard's run their entry in process with the generation pinned to the fake CLI's, and
+  only the stdin/stdout/exit boundary, the shim and a broken import start one (10.3 s -> 5.3 s, and
+  the macOS reading 37.2 s -> about 17 s).
+- **A wait that gave its probe 0.3 s.** `tests/test_event_wait.py` bounded eight waits at a third of a
+  second, and one ubuntu 3.13 job read `'timeout' != 'attention'` on a loaded runner. A row that reads
+  an answer now carries the file's own far deadline; a row that asserts the timeout keeps the short
+  one, and the row that only proves no `hc get` happens keeps it too.
+- The baseline was re-measured after the cut, so a share records the cost that is there.

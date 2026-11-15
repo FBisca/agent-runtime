@@ -25,7 +25,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import config as repo_config
-from . import contracts, events, evidence, narrate, routes, runner, verify, workbench
+from . import contracts, events, evidence, narrate, routes, runner, timeutil, verify, workbench
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .plan import PlanError
@@ -39,10 +39,7 @@ from .runtime_client import (
 from .runtime_client import RuntimeError as RuntimeCallError
 
 ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
+now = timeutil.iso
 
 
 def require(condition, message):
@@ -516,7 +513,7 @@ def context_verdict(sample, reserve, max_age=300):
         return unknown
     try:
         observed = datetime.fromisoformat(sample["observed_at"])
-        age = (datetime.now(timezone.utc) - observed).total_seconds()
+        age = (timeutil.now() - observed).total_seconds()
     except (KeyError, TypeError, ValueError):
         return unknown
     used, window = sample.get("context_tokens"), sample.get("effective_window")
@@ -8080,7 +8077,7 @@ def complete_person_ticket(args):
                 % (scenario_id, ticket.id, ", ".join(ticket.satisfies))
             )
     require(ledger_path.is_file(), "complete: %s has no run yet; run it first" % model.slug)
-    status = "COMPLETE %s · %s" % (datetime.now(timezone.utc).date().isoformat(), note)
+    status = "COMPLETE %s · %s" % (timeutil.now().date().isoformat(), note)
     try:
         with ledger(ledger_path, snapshot=seen, keys=("plan",)) as data:
             data.setdefault("ticket_status", {})[ticket.id] = status
@@ -8674,8 +8671,7 @@ def run_lock(repo, slug, plan_path):
         lock.seek(0)
         lock.truncate()
         lock.write(
-            "pid %d since %s\n"
-            % (os.getpid(), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            "pid %d since %s\n" % (os.getpid(), timeutil.now().strftime("%Y-%m-%dT%H:%M:%SZ"))
         )
         lock.flush()
         yield

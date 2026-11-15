@@ -1,0 +1,10 @@
+{
+ "measured_at": "2026-11-15T16:23:10+00:00",
+ "ceilings": {
+  "module-lines": 1000,
+  "class-methods": 25,
+  "function-lines": 50,
+  "function-branches": 12,
+  "parameters": 7
+ }
+}

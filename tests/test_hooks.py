@@ -1,7 +1,5 @@
 """Plugin hooks driven as subprocesses with real payloads, plus settings.json and hooks.json wiring."""
 
-import importlib.util
-import io
 import json
 import os
 import shutil
@@ -13,57 +11,37 @@ import time
 import tomllib
 import unittest
 from pathlib import Path
-from unittest import mock
 
-PLUGIN = Path(__file__).resolve().parents[1]
-HOOKS = PLUGIN / "hooks"
-PRE = HOOKS / "pre_tool_use.py"
-START = HOOKS / "subagent_start.py"
 TOOL = "mcp__plugin_agent-runtime_agent-runtime__"
 DENY_TEXT = "use the agent-runtime tools"
-CONTEXT = HOOKS / "lead_context.py"
-SHIM = PLUGIN / "bin" / "agent-runtime-hook"
-sys.path.insert(0, str(PLUGIN / "packages" / "agent-runtime" / "src"))
-import pytest
-from agent_runtime import agent_runtime as lib  # noqa: E402
-from agent_runtime import (
-    dispatch_store,  # noqa: E402
-    dispatch_wait,  # noqa: E402
-    hc_tools,  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"))
+import pytest  # noqa: E402
+from agent_runtime import (  # noqa: E402
+    agent_runtime as lib,
+)
+from agent_runtime import (  # noqa: E402
+    dispatch_store,
+    dispatch_wait,
+    hc_tools,
+)
+from hook_harness import (  # noqa: E402
+    CONTEXT,
+    HOOKS,
+    PLUGIN,
+    PRE,
+    SHIM,
+    START,
+    STOP,
+    FakeCliProcess,
+    run_context_raw,
+    run_pre,
+    run_pre_raw,
 )
 
 pytestmark = pytest.mark.integration
 
 # A generation whose process is gone: no process carries that pid, so the row is provably dead.
 DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
-
-
-def _load(script):
-    spec = importlib.util.spec_from_file_location("hook_" + script.stem, script)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-PRE_MODULE = _load(PRE)
-
-
-def run_pre_raw(raw, args=(), env=None):
-    """The PreToolUse hook's `main` in process on raw stdin: its decision as printed, and its exit code."""
-    out = io.StringIO()
-    with (
-        mock.patch.object(sys, "stdin", io.StringIO(raw)),
-        mock.patch.object(sys, "stdout", out),
-        mock.patch.dict(os.environ, env if env is not None else os.environ, clear=env is not None),
-    ):
-        code = PRE_MODULE.main(list(args))
-    return code, out.getvalue()
-
-
-def run_pre(payload, args=(), env=None):
-    """Pure verdict logic runs in process; the boundary tests below still start the hook as a process."""
-    _, out = run_pre_raw(json.dumps(payload), args, env)
-    return json.loads(out) if out.strip() else None
 
 
 def run(script, payload, *args):
@@ -850,6 +828,20 @@ class HookStoreCase(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, err)
         return json.loads(out) if out.strip() else None
 
+    def in_process(self, payload, seed=None, env=None, raw=None):
+        """The context hook's `main` in process under its own pinned generation: what it printed, or None.
+
+        A table of payload shapes would otherwise pay a fake CLI process, a python start and a
+        process-table read per row; the tests that prove that stdin/stdout/exit boundary still start one.
+        Each call takes a fresh generation, as a fresh fake CLI process would, so a row's seeding lands in
+        a team of its own."""
+        self.hook_runs = getattr(self, "hook_runs", 0) + 1
+        generation = "in-process:%d" % self.hook_runs
+        if seed:
+            seed(generation)
+        out, _ = run_context_raw(payload, env or self.env, generation, raw=raw)
+        return out
+
     def team(self, generation, lead="t0", scope="scope"):
         store = dispatch_store.Store(self.env)
         return store, store.team(scope, lead, generation)
@@ -925,9 +917,9 @@ class LeadContextTests(HookStoreCase):
             {"hook_event_name": "SessionStart", "source": "compact"},
             {"hook_event_name": "SessionStart", "source": "clear"},
         ):
-            out = self.hook(
+            out = self.in_process(
                 payload, seed
-            )  # each hook run is a new fake CLI process, so seed per run
+            )  # each run pins a generation of its own, so seed per run
             self.assertEqual(out["hookSpecificOutput"]["hookEventName"], payload["hook_event_name"])
             self.assertEqual(
                 self.line(out), "agent-runtime: 2 unfinished, 1 undelivered — call wait(all)"
@@ -942,7 +934,7 @@ class LeadContextTests(HookStoreCase):
             self.last_wait(store, team, "timeout", 0)  # a timeout never counts as seen
 
         self.assertEqual(
-            self.line(self.hook(self.PROMPT, seed)),
+            self.line(self.in_process(self.PROMPT, seed)),
             "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)",
         )
 
@@ -956,7 +948,7 @@ class LeadContextTests(HookStoreCase):
             self.last_wait(store, team, "attention", 2)
 
         self.assertEqual(
-            self.line(self.hook(self.PROMPT, seed)),
+            self.line(self.in_process(self.PROMPT, seed)),
             "agent-runtime: 2 workers need you — check status",
         )
 
@@ -990,7 +982,9 @@ class LeadContextTests(HookStoreCase):
             self.worker(store, team)
 
         for seed in (None, delivered, seen, other_generation, superseded, other_lead):
-            self.assertIsNone(self.hook(self.PROMPT, seed), getattr(seed, "__name__", "no store"))
+            self.assertIsNone(
+                self.in_process(self.PROMPT, seed), getattr(seed, "__name__", "no store")
+            )
 
     def test_session_start_sources_other_than_compact_and_clear_print_nothing(self):
         """agent-runtime/R118"""
@@ -1001,7 +995,7 @@ class LeadContextTests(HookStoreCase):
 
         for source in ("startup", "resume", "fork"):
             self.assertIsNone(
-                self.hook({"hook_event_name": "SessionStart", "source": source}, seed), source
+                self.in_process({"hook_event_name": "SessionStart", "source": source}, seed), source
             )
 
     def test_every_failure_allows_silently(self):
@@ -1011,10 +1005,10 @@ class LeadContextTests(HookStoreCase):
             store, team = self.team(generation)
             self.worker(store, team)
 
-        self.assertIsNone(self.hook(None, seed, raw="not json"))
-        self.assertIsNone(self.hook(None, seed, raw="[1]"))
+        self.assertIsNone(self.in_process(None, seed, raw="not json"))
+        self.assertIsNone(self.in_process(None, seed, raw="[1]"))
         no_identity = {k: v for k, v in self.env.items() if k != "HC_TERMINAL_ID"}
-        self.assertIsNone(self.hook(self.PROMPT, seed, env=no_identity))
+        self.assertIsNone(self.in_process(self.PROMPT, seed, env=no_identity))
         locked = {}
 
         def seed_locked(generation):
@@ -1025,7 +1019,7 @@ class LeadContextTests(HookStoreCase):
             locked["db"].execute("BEGIN EXCLUSIVE")
 
         try:
-            self.assertIsNone(self.hook(self.PROMPT, seed_locked))
+            self.assertIsNone(self.in_process(self.PROMPT, seed_locked))
         finally:
             locked["db"].close()
         for args in (
@@ -1089,7 +1083,7 @@ class LeadContextTests(HookStoreCase):
             self.assertEqual(snapshot(), before, flag)
         self.assertFalse((self.root / "home").exists())
         missing = dict(self.env, XDG_STATE_HOME=str(self.root / "absent"))
-        self.hook(self.PROMPT, env=missing)
+        self.in_process(self.PROMPT, env=missing)
         self.assertFalse((self.root / "absent").exists())
 
     def test_broken_import_exits_zero_silently(self):
@@ -1143,55 +1137,6 @@ class LeadContextTests(HookStoreCase):
         expected = "%d:%s" % (proc.pid, lib.lstart(proc.pid))
         out, err = proc.communicate(timeout=30)
         self.assertEqual(out.split("\n")[:2], [expected, expected], err)
-
-
-class FakeCliProcess:
-    """One fake `codex` process that runs hook commands on request, so successive hooks (and seeding between
-    them) share one generation. Each run returns (parsed stdout or None, stderr, returncode)."""
-
-    def __init__(self, env, root):
-        self.root, self.count = Path(root), 0
-        self.proc = subprocess.Popen(
-            ["codex", "-c", 'while read -r n; do . "$DIR/s$n.sh"; echo ok; done', "codex"],
-            executable="/bin/bash",
-            env=dict(env, DIR=str(root)),
-            text=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self.generation = "%d:%s" % (self.proc.pid, lib.lstart(self.proc.pid))
-
-    def run(self, script, payload=None, raw=None, args=()):
-        """script is a Python hook path, or a list for a command run as-is (the shim); args follow it."""
-        self.count += 1
-        n = self.count
-        (self.root / ("p%d.json" % n)).write_text(raw if raw is not None else json.dumps(payload))
-        command = (
-            " ".join(script) if isinstance(script, list) else "%s -B %s" % (sys.executable, script)
-        )
-        (self.root / ("s%d.sh" % n)).write_text(
-            '%s %s <"$DIR/p%d.json" >"$DIR/o%d" 2>"$DIR/e%d"; echo $? >"$DIR/r%d"\n'
-            % (command, " ".join(args), n, n, n, n)
-        )
-        self.proc.stdin.write("%d\n" % n)
-        self.proc.stdin.flush()
-        assert self.proc.stdout.readline().strip() == "ok"
-        out = (self.root / ("o%d" % n)).read_text()
-        return (
-            json.loads(out) if out.strip() else None,
-            (self.root / ("e%d" % n)).read_text(),
-            int((self.root / ("r%d" % n)).read_text()),
-        )
-
-    def close(self):
-        self.proc.stdin.close()
-        self.proc.wait(timeout=10)
-        self.proc.stdout.close()
-        self.proc.stderr.close()
-
-
-STOP = HOOKS / "stop_guard.py"
 
 
 class StopGuardTests(HookStoreCase):
@@ -1391,7 +1336,9 @@ class StopGuardTests(HookStoreCase):
         broken.mkdir()
         (broken / "stop_guard.py").write_text(STOP.read_text())
         (broken / "hook_lib.py").write_text("raise ImportError('boom')\n")
-        self.assertEqual(self.cli.run(broken / "stop_guard.py", self.STOP), (None, "", 0))
+        self.assertEqual(
+            self.cli.run(broken / "stop_guard.py", self.STOP, process=True), (None, "", 0)
+        )
         self.assertIsNone(self.budget())  # none of those touched the budget
 
     def test_stop_never_writes_the_dispatch_store(self):
