@@ -34,10 +34,13 @@ class EngineHomeTests(unittest.TestCase):
     """R1: the suite drives the member, and the engine has one home."""
 
     def test_S1_the_suite_drives_the_member_driver(self):
-        """orchestrator-engine/R1"""
+        """orchestrator-engine/R1, structure-budget/S10"""
         from agent_orchestrator import driver
 
-        self.assertEqual(Path(driver.__file__).resolve().parent, MEMBER.resolve())
+        # The engine is a package inside the member's source directory, so its home is named by
+        # that directory rather than by the parent of a flat module, and the flat module is gone.
+        self.assertEqual(Path(driver.__file__).resolve().parent.parent, MEMBER.resolve())
+        self.assertFalse((MEMBER / "driver.py").exists())
 
     def test_S1_the_repository_holds_one_copy_of_the_engine(self):
         """orchestrator-engine/R1"""

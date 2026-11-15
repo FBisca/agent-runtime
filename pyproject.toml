@@ -64,6 +64,8 @@ impacted_map = [
   "herdr/*/*/*/*=tests/installer/test_herdr.py",
   "packages/agent-runtime/src/*/*=tests",
   "packages/agent-orchestrator/src/*/*=packages/agent-orchestrator/tests",
+  # The driver is a package: its modules sit a directory deeper than the flat modules beside them.
+  "packages/agent-orchestrator/src/*/*/*=packages/agent-orchestrator/tests",
   "packages/agent-eval/src/*/*=packages/agent-eval/tests",
   "packages/agent-review/src/*/*=packages/agent-review/tests",
 ]

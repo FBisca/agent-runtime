@@ -15,7 +15,7 @@ from agent_orchestrator import driver, routes
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[3]
-PACKAGE = Path(driver.__file__).parent
+PACKAGE = Path(routes.__file__).parent
 
 
 def help_text():

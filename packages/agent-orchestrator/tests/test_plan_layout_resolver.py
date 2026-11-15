@@ -134,9 +134,14 @@ class AskedByTests(ResolverFixture):
 
     def test_S1_no_module_asks_a_file_name_for_the_layout(self):
         source = Path(yaml_plan.__file__).parent
-        for name in ("plan.py", "verify.py", "driver.py", "workbench.py"):
-            text = (source / name).read_text(encoding="utf-8")
+        files = [source / name for name in ("plan.py", "verify.py", "workbench.py")]
+        # The driver is a package: read every module of it, so a split cannot hide the layout.
+        files += sorted((source / "driver").glob("*.py"))
+        for path in files:
+            text = path.read_text(encoding="utf-8")
             for banned in ("is_folder_plan", 'removesuffix(".plan.yaml")', '.plan.yaml")'):
-                if name == "plan.py" and banned != "is_folder_plan":
+                if path.name == "plan.py" and banned != "is_folder_plan":
                     continue  # the resolver itself reads the suffix
-                self.assertNotIn(banned, text, "%s still derives the layout: %s" % (name, banned))
+                self.assertNotIn(
+                    banned, text, "%s still derives the layout: %s" % (path.name, banned)
+                )
