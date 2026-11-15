@@ -935,7 +935,7 @@ class ClockedWaitTests(FakeHc):
     The server's call path runs in this process with the fake hc answered in process, and the wait's monotonic clock
     and listener are replaced: the seconds a wait would sit in its listener pass on the injected clock at once, so a
     `timeout` the test asks for costs no real time. What the wait answers is the signal the code produced; the real
-    server over stdio is held by the wait tests of test_event_wait and by DispatchTests."""
+    server over stdio is held by the wait tests of test_event_wait_batches and by DispatchTests."""
 
     def setUp(self):
         super().setUp()
