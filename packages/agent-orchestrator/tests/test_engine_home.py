@@ -64,6 +64,10 @@ class EngineHomeTests(unittest.TestCase):
         workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("uv run pytest -n 4", workflow)
         self.assertIn("suite_budget.py", workflow)
+        # The suite's cost is held to two absolute ceilings, so the step reads the junit the run
+        # already wrote and takes no base measurement of its own.
+        one_line = " ".join(workflow.split())
+        self.assertIn('python3 scripts/suite_budget.py --junit "$RUNNER_TEMP/suite.xml"', one_line)
         # The budget's base is a revision of the change, so the checkout must hold the history: a
         # depth-1 checkout resolves neither a pull request's base nor the tip a push replaces.
         after_checkout = workflow.split("uses: actions/checkout@v4", 1)[1]
