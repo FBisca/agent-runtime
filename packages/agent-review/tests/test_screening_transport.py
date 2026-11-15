@@ -10,13 +10,14 @@ verified without spending anything.
 import json
 import threading
 from collections.abc import Callable, Iterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Any
 
 import pytest
 from agent_review.errors import ReviewError, ScreeningError
 from agent_review.questions import Question
 from agent_review.screening import FixtureScreenings, ScreeningRequest, SystemOneScreenings
+from local_http import LocalServer
 
 pytestmark = pytest.mark.integration
 
@@ -76,7 +77,7 @@ def _no_ambient_credential(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(name="serve")
 def serve_fixture() -> Iterator[Callable[..., tuple[str, Canned]]]:
     """Start local provider endpoints; `serve(status, payload)` returns a URL and the request's record."""
-    servers: list[tuple[ThreadingHTTPServer, threading.Thread]] = []
+    servers: list[tuple[LocalServer, threading.Thread]] = []
 
     def start(status: int = 200, payload: Any = None) -> tuple[str, Canned]:
         canned = Canned(status, ANSWER if payload is None else payload)
@@ -84,17 +85,14 @@ def serve_fixture() -> Iterator[Callable[..., tuple[str, Canned]]]:
         class Handler(ProviderHandler):
             answer = canned
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        server = LocalServer(("127.0.0.1", 0), Handler)
+        thread = server.serve_in_background()
         servers.append((server, thread))
         return f"http://127.0.0.1:{server.server_address[1]}/v1", canned
 
     yield start
     for server, thread in servers:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=10)
+        server.stop(thread)
 
 
 def scored_request() -> ScreeningRequest:

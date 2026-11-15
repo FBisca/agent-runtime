@@ -75,6 +75,15 @@ class BudgetTests(unittest.TestCase):
         rows = [("tests/test_small.py", 12.0, 5.0), ("tests/test_big.py", 30.0, 10.0)]
         self.assertEqual(budget["failing"](rows), [("tests/test_big.py", 30.0, 10.0)])
 
+    def test_S1_a_module_a_few_percent_over_its_budget_is_the_runner_and_not_a_test(self):
+        # ubuntu 3.11 measured 27.5 s against a 27.0 s budget while its whole job ran 1.7x slower than
+        # the 3.12 sibling: a shared runner moves every module, so only a really grown module fails.
+        self.assertEqual(budget["failing"]([("tests/test_dispatch.py", 27.5, 27.0)]), [])
+        self.assertEqual(
+            budget["failing"]([("tests/test_dispatch.py", 41.0, 27.0)]),
+            [("tests/test_dispatch.py", 41.0, 27.0)],
+        )
+
     def test_S1_the_regressions_are_named_slowest_first(self):
         baseline = {
             "tolerance": 2.0,

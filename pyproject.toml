@@ -29,9 +29,9 @@ dev = [
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests", "acceptance", "packages/agent-orchestrator/tests", "packages/*/acceptance", "packages/agent-eval/tests", "packages/agent-review/tests"]
-# A promoted acceptance file imports its package's helpers (`fixtures`) as the package's own tests do; the root
-# package's acceptance/ imports the root tests/ the same way.
-pythonpath = ["packages/agent-orchestrator/tests", "tests"]
+# A promoted acceptance file imports its package's helpers (`fixtures`, `local_http`) as the package's own
+# tests do; the root package's acceptance/ imports the root tests/ the same way.
+pythonpath = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
 markers = [

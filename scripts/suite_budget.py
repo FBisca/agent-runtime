@@ -19,6 +19,7 @@ TOLERANCE = 2.0  # a module may take twice its share of the suite before it is a
 FLOOR = 5.0  # new or tiny modules are not compared; the noise is larger than the signal
 NEW_SHARE = 0.01  # a new module over the floor is free up to one percent of the suite
 HARD_SECONDS = 25.0  # a grown module fails only at this size; below it the runner is the noise
+HARD_FACTOR = 1.5  # and only past this multiple of its budget: a slow runner is not a regression
 
 
 def module_of(case):
@@ -70,8 +71,13 @@ def over_budget(actual, baseline):
 
 
 def failing(rows):
-    """The grown modules big enough to fail the build; the rest are advisory."""
-    return [row for row in rows if row[1] >= HARD_SECONDS]
+    """The grown modules big enough to fail the build; the rest are advisory.
+
+    A shared runner inflates every module at once, so a module a few percent past its budget is the
+    runner and not a test: a build fails only on a module that is half again its budget at a size
+    where it can cost the suite a minute.
+    """
+    return [row for row in rows if row[1] >= HARD_SECONDS and row[1] >= row[2] * HARD_FACTOR]
 
 
 def write(path, modules, total, measured_at=None):
@@ -120,7 +126,10 @@ def main(argv=None):
     for module, seconds, budget in rows:
         print("  %-70s %8.1fs  budget %8.1fs" % (module, seconds, budget))
     if not failing(rows):
-        print("all below %.0fs: advisory only on a shared runner" % HARD_SECONDS)
+        print(
+            "all below %.0fs at %.1f times their budget: advisory only on a shared runner"
+            % (HARD_SECONDS, HARD_FACTOR)
+        )
         return 0
     print(
         "re-measure on an idle machine and record it with --write, or make the %s cheaper" % "tests"

@@ -29,13 +29,13 @@ import os
 import shutil
 import subprocess
 import tempfile
-import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from unittest import mock
 
 import pytest
+from local_http import LocalServer
 
 pytestmark = pytest.mark.integration
 
@@ -97,16 +97,14 @@ class SystemOneServer:
             def log_message(self, format, *args):
                 pass
 
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.httpd = LocalServer(("127.0.0.1", 0), Handler)
+        self.thread = self.httpd.serve_in_background()
 
     def __enter__(self):
-        self.thread.start()
         return self
 
     def __exit__(self, *exc):
-        self.httpd.shutdown()
-        self.httpd.server_close()
+        self.httpd.stop(self.thread)
 
     @property
     def url(self):

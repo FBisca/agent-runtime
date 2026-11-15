@@ -32,3 +32,29 @@ bug and 62 s for a real 60 s deadline. The worker never read the `tdd` skill (it
 - **SC-D3** The per-module budget is a committed junit-derived baseline with a 1.5 tolerance and a
   2 s floor; a new module under the floor is free, and a real regression must be re-measured with
   `--write` on purpose.
+
+## After the merge: the gate met the runners
+
+CI on the merge commit was red on five of seven jobs, and every reading was the machine or a test
+paying for something it is not measuring:
+
+- **The margin.** ubuntu 3.11 ran the whole job 1.7x slower than its 3.12 sibling and put
+  `tests/test_dispatch.py` at 27.5 s against a 27.0 s budget: a 2% share deviation cost the build.
+  R223 now also needs half again the budget, so the 25 s floor and the margin decide together
+  (SC-D4).
+- **The named lookup.** `HTTPServer.server_bind` reverse-resolves the address it bound, so each of
+  the screening transport's servers waited on the macOS runner's resolver: 111 s for a module that
+  costs 6 s here, and 67 s more with a five-second stub in place. `packages/agent-review/tests/local_http.py`
+  binds without the lookup and polls its shutdown a hundredth of a second, not half a second
+  (6.6 s -> 0.9 s here).
+- **A node start per scenario.** `tests/test_workbench_mod.py` ran `node --test` 34 times to read
+  104 tests: one run and a name match per scenario instead (28.3 s -> 0.7 s on the macOS job's
+  reading).
+- **A suite run measured twice.** `acceptance/suite/test_fast_suite.py` ran the fast suite twice for
+  the same `--durations=0` output, and collected it four times: one warm-up, one measured run shared
+  by both rows, and one guarded run (12.1 s -> 8.5 s here).
+- **The three seconds on a runner.** macOS 3.11 measured the fast suite's call time at 3.22 s and one
+  unit test at 0.62 s: R222 gains the same half-again margin as R223 (SC-D4).
+
+SC-D4: a shared runner is not the gate. R222 and R223 keep their idle-machine numbers as the thing to
+fix and fail the build only at half again, so a slow runner reports instead of refusing.

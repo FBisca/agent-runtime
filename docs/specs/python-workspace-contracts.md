@@ -91,8 +91,8 @@ the suite before a reviewer notices it in a diff.
 
 ## Requirements: suite-cost
 
-- **R222** WHEN the fast suite runs, THEN the sum of its tests' call time is under three seconds and no unit test costs half a second or more. (from suite-cost/S4)
-- **R223** WHEN CI runs the whole suite, THEN it writes the junit and prints each module whose share of the suite grew past its baseline share times the tolerance (a new module over the floor is free up to one percent), and fails the build only when such a module costs twenty-five seconds or more, so a shared runner is not the gate; the repository holds that baseline. (from suite-cost/S5)
+- **R222** WHEN the fast suite runs, THEN the sum of its tests' call time is under three seconds and no unit test costs half a second or more, measured once per run and failing the build only at half again those numbers, so a shared runner is not the gate. (from suite-cost/S4)
+- **R223** WHEN CI runs the whole suite, THEN it writes the junit and prints each module whose share of the suite grew past its baseline share times the tolerance (a new module over the floor is free up to one percent), and fails the build only when such a module costs twenty-five seconds or more and half again its budget, so a shared runner is not the gate; the repository holds that baseline. (from suite-cost/S5)
 - **R224** WHEN a test starts a child process and another test asserts the ledger's busy deadline, THEN the child is killed and reaped in one cleanup so the test pays no sleep, and the deadline is injected through the environment while the default stays sixty seconds. (from suite-cost/S1)
 
 ## Coverage: suite-cost
@@ -100,5 +100,5 @@ the suite before a reviewer notices it in a diff.
 | Requirement | Scenario | Test nodes |
 |---|---|---|
 | R222 | S4 | `acceptance/suite/test_fast_suite.py::FastSuiteTests::test_S1_the_fast_suite_reports_under_three_seconds`<br>`acceptance/suite/test_fast_suite.py::FastSuiteTests::test_S1_no_unit_test_costs_more_than_half_a_second` |
-| R223 | S5 | `tests/test_suite_budget.py::MeasureTests::test_S1_a_modules_seconds_are_the_sum_of_its_cases`<br>`tests/test_suite_budget.py::BudgetTests::test_S1_a_module_may_take_twice_its_share_of_the_suite`<br>`tests/test_suite_budget.py::BudgetTests::test_S1_a_new_module_is_free_under_the_floor_and_up_to_one_percent`<br>`packages/agent-orchestrator/tests/test_engine_home.py::EngineHomeTests::test_S3_ci_runs_the_member_suite_and_the_tracked_budgets` |
+| R223 | S5 | `tests/test_suite_budget.py::MeasureTests::test_S1_a_modules_seconds_are_the_sum_of_its_cases`<br>`tests/test_suite_budget.py::BudgetTests::test_S1_a_module_may_take_twice_its_share_of_the_suite`<br>`tests/test_suite_budget.py::BudgetTests::test_S1_a_new_module_is_free_under_the_floor_and_up_to_one_percent`<br>`tests/test_suite_budget.py::BudgetTests::test_S1_a_module_a_few_percent_over_its_budget_is_the_runner_and_not_a_test`<br>`packages/agent-orchestrator/tests/test_engine_home.py::EngineHomeTests::test_S3_ci_runs_the_member_suite_and_the_tracked_budgets` |
 | R224 | S1 | `packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S2_the_deadline_reads_the_test_seam_and_an_unusable_value_keeps_sixty`<br>`packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S2_the_injected_deadline_reaches_the_lock_so_the_test_need_not_wait_a_minute`<br>`tests/test_dispatch.py::TeamOwnershipTests::test_S4_a_live_newer_row_owns_the_terminal_and_fences_the_live_lead` |

@@ -1,8 +1,8 @@
 """The agent-workbench Herdr mod's pure modules (model.js, data.js) under `node --test`.
 
-Each scenario's test runs the JS tests named with its S-ID and requires that some ran and none failed, so a
-renamed or deleted JS test turns its scenario red instead of passing silently. A missing `node` fails the test
-naming node: the mod's logic is only proven when its tests run.
+One `node --test` run answers every scenario: each test counts the JS tests named with its S-ID and requires
+that some ran and none failed, so a renamed or deleted JS test turns its scenario red instead of passing
+silently. A missing `node` fails the test naming node: the mod's logic is only proven when its tests run.
 """
 
 import json
@@ -20,28 +20,48 @@ pytestmark = pytest.mark.integration
 MOD = Path(__file__).resolve().parent.parent / "herdr" / "agent-workbench"
 
 
-def node_tests(pattern=None, path=None):
-    """Run `node --test` over the mod's test directory and return (passed, failed, output). A missing node is a
-    failure that names node, never a skip."""
+# The run answers every scenario: `node` costs most of a second to start on a shared runner, and this file
+# asked it to start once per scenario (34 runs, 28 s of a macOS job for one second of tests).
+_RUNS: dict[tuple[str, str | None], tuple[list[str], list[str], str]] = {}
+
+
+def node_run(path=None):
+    """(the JS tests that passed, those that failed, the output) of the one run over the mod's test directory."""
+    key = (str(MOD), path)
+    if key not in _RUNS:
+        _RUNS[key] = run_node(path)
+    return _RUNS[key]
+
+
+def run_node(path=None):
+    """Run `node --test` over the mod's test directory, with its names read from the tap report."""
     node = shutil.which("node", path=path)
     if node is None:
         pytest.fail(
             "node is not installed: the agent-workbench mod's tests need `node` on PATH (node --test)"
         )
     command = [node, "--test", "--test-reporter=tap"]
-    if pattern:
-        command.append("--test-name-pattern=%s" % pattern)
     command.extend(sorted(str(p) for p in (MOD / "test").glob("*.test.js")))
     # The promoted acceptance tests stay in CI after the plan that wrote them is archived.
     command.extend(sorted(str(p) for p in (MOD / "acceptance").rglob("*.test.js")))
     done = subprocess.run(command, capture_output=True, text=True, timeout=120, cwd=MOD)
-    passed = re.search(r"^# pass (\d+)$", done.stdout, re.M)
-    failed = re.search(r"^# fail (\d+)$", done.stdout, re.M)
-    return (
-        int(passed.group(1)) if passed else 0,
-        int(failed.group(1)) if failed else -1,
-        done.stdout + done.stderr,
-    )
+    passed = re.findall(r"^ok \d+ - (.*)$", done.stdout, re.M)
+    failed = re.findall(r"^not ok \d+ - (.*)$", done.stdout, re.M)
+    return passed, failed, done.stdout + done.stderr
+
+
+def node_tests(pattern=None, path=None):
+    """(passed, failed, output) of the JS tests whose name matches `pattern`: a run that reported nothing is -1.
+
+    A missing node is a failure that names node, never a skip."""
+    passed, failed, output = node_run(path=path)
+    if not re.search(r"^# pass \d+$", output, re.M):
+        return 0, -1, output
+
+    def named(names):
+        return [name for name in names if pattern is None or re.search(pattern, name)]
+
+    return len(named(passed)), len(named(failed)), output
 
 
 def scenario(sid, at_least):
