@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 import pytest
+import yaml
 from agent_orchestrator import contracts
 from fixtures import DRIVER, ROWS, assignment, report_wait, resume_id, wait_result
 from test_drain import DrainFixture
@@ -387,6 +388,62 @@ class RestartAfterAmend(DrainFixture, WakeFixture, unittest.TestCase):
         self.restart()
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RELEASED")
         self.assertEqual(self.spawned().count("demo-t1"), 2, "a fresh attempt of the unit")
+
+
+class ParkUnderAnAdoptedAmendment(DrainFixture, WakeFixture, unittest.TestCase):
+    """The request is raised under the approved plan; the drive adopts an amendment while the request is still open;
+    the Lead then decides `amend` on that request. The park must name the approval the request was raised under."""
+
+    rows = ("T1",)
+
+    def approved_digest(self):
+        return yaml.safe_load(self.approved)["approval"]["digest"]
+
+    def adopted_digest(self):
+        return yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]["digest"]
+
+    def amended_goal(self):
+        return self.edit(lambda data: data.update(goal=data["goal"] + " (amended)"))
+
+    def resume_tasks(self):
+        return [r["args"]["task"] for r in self.calls("resume") if r["args"]["name"] == "demo-t1"]
+
+    def test_S1_a_park_names_the_approval_its_request_was_raised_under(self):
+        self.waits(
+            [
+                self.blocked(),
+                wait_result(
+                    self.working("demo-t1"),
+                    write=self.writes(self.amended_goal()),
+                    run=[self.amend_argv()],
+                ),
+                self.decide_step("t1", "amend", "the ticket needs another path"),
+                self.timeout("demo-t1"),
+            ]
+        )
+        self.run_driver()
+        self.assertTrue(self.run_events("amended"), "the drive never adopted the amendment")
+        self.assertEqual(self.task()["gate"], "awaiting-amendment", "the unit did not park")
+        self.assertEqual(
+            self.task()["request"]["digest"],
+            self.approved_digest(),
+            "the request does not record the approval it was raised under",
+        )
+        self.assertEqual(
+            self.task()["amend_from"],
+            self.approved_digest(),
+            "the park names the approval the drive holds, not the one its request was raised under",
+        )
+        # a run that starts again releases the parked unit: the drive holds an approval other than the park's
+        self.waits([self.timeout("demo-t1"), wait_result()])
+        self.run_driver()
+        self.assertEqual(len(self.run_events("amend-released")), 1, "the parked unit was not released")
+        resumed = self.resume_tasks()
+        self.assertEqual(len(resumed), 1, resumed)
+        self.assertIn("amendment was adopted", resumed[0])
+        self.assertEqual(self.task()["gate"], None)
+        self.assertEqual(self.task()["status"], "ACTIVE")
+        self.assertEqual(self.spawned().count("demo-t1"), 1, "the same worker, not a new one")
 
 
 class AmendmentKeepsOpenBlockers(DrainFixture, unittest.TestCase):

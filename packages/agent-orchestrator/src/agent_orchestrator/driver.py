@@ -2288,7 +2288,15 @@ class Driver:
             return None
         unit = task["packet"]["unit"]
         path, _ = next_path(self.run_dir / unit, "request", ".json")
-        asked = {"path": str(path), "kind": kind, "from_gate": from_gate or task.get("gate")}
+        asked = {
+            "path": str(path),
+            "kind": kind,
+            "from_gate": from_gate or task.get("gate"),
+            # The approval the request was raised under. A park names this one, not whatever the drive holds when the
+            # Lead decides `amend`: an amendment the drive adopts between the two must still release the unit, and a
+            # park of the held approval can never be released.
+            "digest": self.approval.digest if self.approval else None,
+        }
         if answerer:
             asked["answerer"] = answerer
         if menu:
@@ -5023,13 +5031,16 @@ class Driver:
         """The Lead decided `amend`: the unit parks, its worker stays where it is and nothing is sent or started. The
         Lead edits the plan and runs `plan amend`; the adopted amendment releases the unit (`release_amendment`)."""
         unit, name = task["packet"]["unit"], task["packet"]["worker"]
+        asked = task.get("request") or {}
         with self.book() as data:
-            # the digest it parked under: a park outlives the run, and any later approval releases it
+            # the digest the request was raised under: a park outlives the run, and the approval the drive adopted
+            # after the request was raised is exactly the one that releases it
             data["tasks"][task_id].update(
                 gate=AMENDING,
                 updated_at=now(),
                 held=[],
-                amend_from=self.approval.digest if self.approval else None,
+                amend_from=asked.get("digest")
+                or (self.approval.digest if self.approval else None),
             )
         for message in task.get("held") or []:
             self.log("held-dropped", unit=unit, task=task_id, held=message["kind"], why="amend")
