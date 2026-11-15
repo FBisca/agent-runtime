@@ -30,11 +30,8 @@ back to its approved bytes),
 
 import json
 import os
-from datetime import datetime, timezone
 
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
+from .timeutil import iso as now
 
 
 def append(path, kind, **fields):

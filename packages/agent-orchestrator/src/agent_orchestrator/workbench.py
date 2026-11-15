@@ -12,7 +12,6 @@ The driver owns the ledger and the state layout, and imports this module; the he
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +19,7 @@ from . import evidence, verify, workbench_needs, workbench_totals
 from . import plan as yaml_plan
 from . import workbench_metrics as metrics
 from .plan import DiscoveryError, PlanError, PlanLayout
+from .timeutil import now
 
 SCHEMA_VERSION = 1
 
@@ -221,10 +221,6 @@ def plans(args):
         "plans": [shown for shown, _ in rows],
         "needs_me": [item for _, items in rows for item in items],
     }
-
-
-def now():
-    return datetime.now(timezone.utc)
 
 
 def totals_source(entry, repo, args):
