@@ -92,7 +92,7 @@ the suite before a reviewer notices it in a diff.
 ## Requirements: suite-cost
 
 - **R222** WHEN the fast suite runs, THEN the sum of its tests' call time is under three seconds and no unit test costs half a second or more, measured once per run and failing the build only at half again those numbers, so a shared runner is not the gate. (from suite-cost/S4)
-- **R223** WHEN CI writes the junit of the whole suite, THEN it fails the build naming each test that costs over fifteen seconds, with its seconds and the ceiling, and naming the suite when its summed call time is past the one ceiling the committed budget names, so a slow runner is not the gate and no per-module row has to be edited by a rename, a split or a move; the repository holds those two ceilings and nothing about any module. (from suite-cost/S5; rewritten by structure-budget/S18)
+- **R223** WHEN CI writes the junit of the whole suite, THEN it fails the build naming each test that costs over eighteen seconds, with its seconds and the ceiling, and naming the suite when its summed call time is past the one ceiling the committed budget names, so a slow runner is not the gate and no per-module row has to be edited by a rename, a split or a move; the repository holds those two ceilings and nothing about any module. (from suite-cost/S5; rewritten by structure-budget/S18)
 - **R224** WHEN a test starts a child process and another test asserts the ledger's busy deadline, THEN the child is killed and reaped in one cleanup so the test pays no sleep, and the deadline is injected through the environment while the default stays sixty seconds. (from suite-cost/S1)
 
 ## Coverage: suite-cost
