@@ -255,14 +255,19 @@ class SinceTests(unittest.TestCase):
         return root
 
     @staticmethod
-    def write(root, source):
-        (root / "pkg" / "big.py").write_text(source, encoding="utf-8")
+    def write(root, source, name="pkg/big.py"):
+        (root / name).write_text(source, encoding="utf-8")
 
     @staticmethod
     def git(root, *args):
-        subprocess.run(
+        done = subprocess.run(
             ["git", "-C", str(root), *args], check=True, capture_output=True, timeout=120
         )
+        return done.stdout.decode().strip()
+
+    def commit(self, root, message="change"):
+        """Commit the tracked change, so the next run reads the move or the growth as the tree."""
+        self.git(root, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qam", message)
 
     def stamp(self, root):
         """The budget committed beside a checkout, written once so a `--write` run is seen."""
@@ -271,8 +276,8 @@ class SinceTests(unittest.TestCase):
             path.write_text(json.dumps(budget["baseline_document"]()), encoding="utf-8")
         return path
 
-    def drive(self, root, *args):
-        """The script driven as a program over `root`, held to every ceiling at `HEAD`."""
+    def drive(self, root, *args, since="HEAD"):
+        """The script driven as a program over `root`, held to every ceiling at `since`."""
         return subprocess.run(
             [
                 sys.executable,
@@ -282,12 +287,30 @@ class SinceTests(unittest.TestCase):
                 "--baseline",
                 str(self.stamp(root)),
                 "--since",
-                "HEAD",
+                since,
                 *args,
             ],
             capture_output=True,
             text=True,
             timeout=120,
+        )
+
+    @pytest.mark.integration
+    def test_S19_a_moved_offender_keeps_the_number_it_had_at_the_base(self):
+        """structure-budget/S19: a git mv carries an offender's number to the path it moved to."""
+        root = self.checkout(base_lines=1150)
+        base = self.git(root, "rev-parse", "HEAD")
+        self.git(root, "mv", "pkg/big.py", "pkg/moved.py")
+        self.commit(root, "move the module")
+        moved = self.drive(root, since=base)
+        self.assertEqual(moved.returncode, 0, moved.stdout + moved.stderr)
+        self.assertIn(base, moved.stderr, "the run is held to the revision it named, not the move")
+        self.write(root, long_module(1200), "pkg/moved.py")
+        self.commit(root, "grow the moved module")
+        grown = self.drive(root, since=base)
+        self.assertEqual(grown.returncode, 1, grown.stdout + grown.stderr)
+        self.assertIn(
+            "pkg/moved.py: module-lines 1200 > recorded 1150 (ceiling 1000)", grown.stdout
         )
 
     @pytest.mark.integration

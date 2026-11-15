@@ -225,6 +225,43 @@ def measure_at(root, rev):
     return measured_sources(archive_sources(done.stdout, prefix))
 
 
+def moved_paths(root, rev):
+    """{path now: path at `rev`} for every move git's own rename detection reports.
+
+    `git diff` reads the revision against the working tree, so a staged, uncommitted or committed
+    `git mv` is seen once. A file that was copied rather than moved is no move: its original is
+    still there, holding its number. Paths come out relative to `root`, as the base's do.
+    """
+    done = git(root, "diff", "--name-status", "--find-renames", "--relative", rev, "--")
+    if done.returncode != 0:
+        raise Refused(
+            "structure budget: cannot read the moves since %s in %s: %s"
+            % (rev, root, done.stderr.strip())
+        )
+    moved = {}
+    for line in done.stdout.splitlines():
+        status, _, rest = line.partition("\t")
+        if not status.startswith("R"):
+            continue
+        before, _, now = rest.partition("\t")
+        moved[now] = before
+    return moved
+
+
+def inherited(base, moved):
+    """The base with every moved file's numbers carried to the path that now holds it.
+
+    A move is not a crossing: the content under the new path was measured at `rev` under the old
+    one. A path that measured a file of its own at `rev` keeps that number, so a move onto it
+    cannot launder growth.
+    """
+    carried = dict(base)
+    for now, before in moved.items():
+        if now not in carried and before in carried:
+            carried[now] = carried[before]
+    return carried
+
+
 def ceilings_of(budget):
     """The ceilings the committed budget declares, a metric it left out falling back to ours.
 
@@ -370,6 +407,7 @@ def check(args):
     measured = measure_tree(args.root)
     paths = paid_paths(measured, args.paid)
     base = measure_at(args.root, args.since)
+    base = inherited(base, moved_paths(args.root, args.since))
     return measured, budget, growth_lines(measured, base, ceilings_of(budget), paths, args.metric)
 
 
