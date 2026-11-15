@@ -5039,8 +5039,7 @@ class Driver:
                 gate=AMENDING,
                 updated_at=now(),
                 held=[],
-                amend_from=asked.get("digest")
-                or (self.approval.digest if self.approval else None),
+                amend_from=asked.get("digest") or (self.approval.digest if self.approval else None),
             )
         for message in task.get("held") or []:
             self.log("held-dropped", unit=unit, task=task_id, held=message["kind"], why="amend")

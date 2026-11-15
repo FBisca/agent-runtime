@@ -437,7 +437,9 @@ class ParkUnderAnAdoptedAmendment(DrainFixture, WakeFixture, unittest.TestCase):
         # a run that starts again releases the parked unit: the drive holds an approval other than the park's
         self.waits([self.timeout("demo-t1"), wait_result()])
         self.run_driver()
-        self.assertEqual(len(self.run_events("amend-released")), 1, "the parked unit was not released")
+        self.assertEqual(
+            len(self.run_events("amend-released")), 1, "the parked unit was not released"
+        )
         resumed = self.resume_tasks()
         self.assertEqual(len(resumed), 1, resumed)
         self.assertIn("amendment was adopted", resumed[0])
