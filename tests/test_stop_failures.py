@@ -11,7 +11,7 @@ from unittest import mock
 
 import test_event_wait as event_helpers
 from test_mcp_server import RUNTIME_SRC, SERVER
-from test_tools import raw
+from tools_harness import raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest

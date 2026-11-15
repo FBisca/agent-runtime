@@ -8,7 +8,7 @@ import test_event_wait as event_helpers
 from agent_runtime.dispatch_store import Store
 from test_event_wait import LazySessions
 from test_mcp_server import InProcessSession, Session
-from test_tools import InProcessToolCase
+from tools_harness import InProcessToolCase
 
 pytestmark = pytest.mark.integration
 

@@ -8,7 +8,7 @@ from test_event_wait import (
     EventRig,
 )
 from test_mcp_server import RUNTIME_SRC
-from test_tools import ToolCase
+from tools_harness import ToolCase
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest

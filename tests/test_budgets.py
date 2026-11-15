@@ -14,7 +14,7 @@ from agent_runtime.dispatch_store import (
 )
 from test_mcp_server import TOOLS
 from test_team_limit import team_of
-from test_tools import ToolCase
+from tools_harness import ToolCase
 
 pytestmark = pytest.mark.integration
 

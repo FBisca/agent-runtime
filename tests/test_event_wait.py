@@ -17,7 +17,7 @@ import time
 from unittest import mock
 
 from test_mcp_server import RUNTIME_SRC, Session
-from test_tools import FAKE, ToolCase, raw
+from tools_harness import FAKE, ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest

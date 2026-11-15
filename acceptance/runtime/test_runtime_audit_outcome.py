@@ -1,6 +1,6 @@
 """Outcome oracle for the runtime-audit-fixes plan (the 2026-11-11 static audit, issue #34).
 
-It drives the public seams only: the real MCP server over stdio against the fake hc of test_tools, the real
+It drives the public seams only: the real MCP server over stdio against the fake hc of tools_harness, the real
 PreToolUse hook as a subprocess with JSON on stdin, the `agent-runtime` CLI, and, for the one store failure the
 plan injects, the server's own call path in process with a patched store (as test_spawn_cleanup does).
 
@@ -30,7 +30,7 @@ from unittest import mock
 import pytest
 from test_mcp_server import RUNTIME_SRC, SERVER
 from test_team_limit import seed_workers, team_of
-from test_tools import FAKE, ToolCase, hc_in_process, raw
+from tools_harness import FAKE, ToolCase, hc_in_process, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 from agent_runtime import hc_tools, mcp_server  # noqa: E402

@@ -6,7 +6,7 @@ import threading
 import pytest
 import test_event_wait as event_helpers
 from test_event_wait import Session
-from test_tools import ToolCase
+from tools_harness import ToolCase
 
 pytestmark = pytest.mark.integration
 
