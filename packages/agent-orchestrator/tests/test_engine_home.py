@@ -6,6 +6,8 @@ member's suite, would let the two copies diverge again without anything failing.
 """
 
 import ast
+import importlib
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -41,6 +43,29 @@ class EngineHomeTests(unittest.TestCase):
         # that directory rather than by the parent of a flat module, and the flat module is gone.
         self.assertEqual(Path(driver.__file__).resolve().parent.parent, MEMBER.resolve())
         self.assertFalse((MEMBER / "driver.py").exists())
+
+    def test_S10_the_driver_is_a_package_every_entry_point_still_reaches(self):
+        """structure-budget/S10"""
+        import agent_orchestrator
+        from agent_orchestrator import driver
+
+        # The engine is a package, not the flat module it was: the split that follows needs a
+        # directory to put its modules in, and flattening it back loses that home.
+        self.assertTrue(hasattr(driver, "__path__"), "agent_orchestrator.driver is not a package")
+        self.assertEqual(Path(driver.__file__).name, "__init__.py")
+        # The names the package, the suite and the entry points ask for still resolve.
+        self.assertTrue(callable(driver.main))
+        self.assertTrue(callable(driver.run_cli))
+        self.assertTrue(callable(agent_orchestrator.main))
+        # `python -m agent_orchestrator` calls the package's own run_cli, so it drives the same
+        # commands with the same arguments; so does the installed console script's target.
+        entry = importlib.import_module("agent_orchestrator.__main__")
+        self.assertIs(entry.run_cli, driver.run_cli)
+        target = tomllib.loads((MEMBER.parents[1] / "pyproject.toml").read_text(encoding="utf-8"))[
+            "project"
+        ]["scripts"]["agent-orchestrator"]
+        module, _, attribute = target.partition(":")
+        self.assertIs(getattr(importlib.import_module(module), attribute), driver.run_cli)
 
     def test_S1_the_repository_holds_one_copy_of_the_engine(self):
         """orchestrator-engine/R1"""
