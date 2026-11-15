@@ -4,6 +4,7 @@
 PreToolUse hook, so the server authorizes a Pi session itself.
 
 - [Pi as a lead](#pi-as-a-lead)
+- [Pi rhythm: the extension](#pi-rhythm-the-extension)
 - [Pi as a worker](#pi-as-a-worker)
 - [Routing models with the orchestrator](#routing-models-with-the-orchestrator)
 - [Local configuration](#local-configuration)
@@ -56,6 +57,62 @@ for it - and reaches only the workers of its own team. Register the server in Pi
 `exposure: direct` declares the tools to the model (the default, `codemode`, keeps them reachable only
 from codemode scripts). The server needs the durable dispatch store, so `AGENT_RUNTIME_DISPATCH=1` is
 required, and the lead needs an `hc` terminal to start workers from.
+
+## Pi rhythm: the extension
+
+Pi has no Stop or PreToolUse hook, so the rhythm Claude Code and Codex get from theirs arrives in a Pi session
+through the extension in `extensions/agent-runtime/`. It translates, and decides nothing: the hook entry decides
+the stop, the driver writes the wakes, and the server refuses a mutating verb while the lead has undelivered
+reports.
+
+- **A turn is kept open while the team works.** At every turn end the extension runs the same entry the other
+  hooks run — `agent-runtime-hook stop --cli pi --dialect json` — and turns a block into one more provider request
+  carrying the hook's reason, word for word. An allowed stop adds nothing, so an errored or aborted response stays
+  the hard exit it was. The block budget (three extra requests per user work period) and the `seen` fingerprint
+  stay the runtime's, keyed by terminal and scope: switching host, or restarting Pi, in one terminal does not hand
+  the session a fresh set of blocks.
+- **A wake is pushed, not slept for.** The driver books one wake per escalation in the run's `wakes.jsonl`; the
+  extension reads the file every two seconds and sends every line it has not pushed yet, in the order the driver
+  booked them (one `advance()` round can book several), with a triggered turn, so an idle lead starts on it. The
+  cursor is a position in the file, not its newest text, so a burst of wakes is not collapsed to one; a wake it
+  already pushed — after a restart too — is pushed once, and an empty line pushes nothing.
+- **Only the run's own lead receives them.** The driver runs in an hc terminal named after its plan, whose parent
+  is the terminal that launched it; a run started in the lead's own terminal is that terminal. The extension
+  pushes only the runs this session is the lead of, and it keeps one cursor per session in
+  `$XDG_STATE_HOME/agent-runtime/pi-wakes.json` (`~/.local/state` by default), so a Pi worker — another session on
+  the same machine — neither receives the lead's wakes nor spends its cursor. A run whose pane no longer shows the
+  session as its lead is left to `await` and to the driver's own `hc send`.
+- **A long sleep is refused.** A `bash` call that sleeps 60 seconds or more is refused, the reason naming
+  `wait(all)`, because a sleep parks a turn only a wake can end; a sleep under a minute, and every other tool, is
+  left alone. This is defence in depth: the server is the authority.
+
+Register the extension in Pi's own settings (`~/.pi/agent/settings.json`). The installer prints this entry and
+never writes the file:
+
+```json
+{
+  "extensions": ["/absolute/path/to/agent-runtime/extensions/agent-runtime"]
+}
+```
+
+Pi also discovers an extension linked into `~/.pi/agent/extensions/`, which a checkout install may prefer:
+
+```sh
+ln -s "$PWD/extensions/agent-runtime" ~/.pi/agent/extensions/agent-runtime
+```
+
+Two variables change where it looks. `AGENT_RUNTIME_HOOK` names the hook entry; without it the extension uses
+this checkout's `bin/agent-runtime-hook`, then `agent-runtime-hook` on the `PATH`. `AGENT_RUNTIME_WAKES` narrows
+the wake files it considers to a `:`-separated list; without it, every run under
+`$XDG_STATE_HOME/orchestrate/<repo>/<slug>/wakes.jsonl` is considered. Naming a file does not make it the
+reader's: a run's wakes go to the run's lead, and a file outside a run tree goes to a session whose own `hc`
+terminal is a lead, so a worker that inherits the variable still receives nothing.
+
+A Pi worker gets the same extension, and there the turn end is the worker's stop. The naming half of that answer
+is the hook's, not the extension's: `hooks/stop_guard.py` is what tells a worker which assignment it still owes,
+aiming `report complete` and `report blocked` as the two ways out, and `tests/test_hooks.py` is where that
+wording is proved. A hook that refuses nothing — a lead without a team, or a worker before that guard exists —
+is an allowed stop, and the extension adds nothing to it.
 
 ## Pi as a worker
 
@@ -131,6 +188,7 @@ A working setup looks like this:
 |---|---|---|
 | The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 <checkout>/server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct`, a 600 s timeout. The runtime writes this entry itself before it starts a Pi worker, so the path always points at the running runtime; the other servers in that file are left alone |
 | The host policy | `~/.config/agent-runtime/hosts.json` | the `pi` host: `mutations` on, `backends` `["pi", "claude-minimax", "codex", "claude"]`, `paths` covering the checkouts under the developer's home |
+| The rhythm | `~/.pi/agent/settings.json` | an `extensions` entry naming this checkout's `extensions/agent-runtime`, which is what keeps a lead's turn open, pushes a wake and refuses a long sleep (the installer prints it; it never writes the file) |
 
 The `pi` backend in `backends` is what lets a Pi lead start a Pi worker; without it the spawn is
 refused with the policy's reason.
