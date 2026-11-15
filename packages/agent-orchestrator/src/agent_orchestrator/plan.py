@@ -538,7 +538,12 @@ def person_only_problems(model, repo):
 
 # A word of a test name that names a scenario, as the plans write them: `test_S1_x` carries S1, `test_S4a_x` S4a.
 SCENARIO_WORD = re.compile(r"^S\d+[a-z]?$")
-CONTROL_TEST = "test_control"
+
+
+def control_test(function):
+    """Whether a test is a control: `control` is one of its words, so both `test_control_x` and the per-scenario
+    `test_S1_control_x` a plan writes to guard S1's fixture are controls, and neither carries a scenario's proof."""
+    return "control" in function.split("_")
 
 
 def pytest_selector(check):
@@ -608,9 +613,9 @@ def selector_problems(model, path):
 
     A selector must name the scenario's id; it must select a test other than a control in those files (none means
     the tests are not written yet, and `baseline: fail` passes vacuously); and every test it selects that carries a
-    scenario id must carry one the selector names (`S1` also selects `test_S10_x` by substring). Control tests
-    (`test_control_*`) are always allowed. A legacy plan, a check with no `-k` and a check that runs no pytest are
-    not linted."""
+    scenario id must carry one the selector names (`S1` also selects `test_S10_x` by substring). Control tests —
+    `control` is one of the name's words, as in `test_control_x` and `test_S1_control_x` — are always allowed. A
+    legacy plan, a check with no `-k` and a check that runs no pytest are not linted."""
     layout = PlanLayout(path)
     if not layout.is_folder:
         return []
@@ -660,7 +665,7 @@ def selector_problems(model, path):
             for names, function in tests
             if any(term in n.lower() for term in lowered for n in names)
         ]
-        scenario_tests = [f for f in selected if not f.startswith(CONTROL_TEST)]
+        scenario_tests = [f for f in selected if not control_test(f)]
         if not scenario_tests:
             problems.append(
                 f"{where}: {sid}: the -k selector {expression!r} selects no test in {', '.join(ev.acceptance)} but "
