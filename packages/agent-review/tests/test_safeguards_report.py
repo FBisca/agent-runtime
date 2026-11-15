@@ -169,9 +169,9 @@ def test_S2_a_sensitive_path_recommends_a_full_deep_review(review):
     assert escalation["recommended"] is True, (
         "a sensitive path routes the change to a full deep review (D12)"
     )
-    matched = [reason for reason in escalation["reasons"] if reason["rule"] == "sensitive-path"]
+    matched = [reason for reason in escalation["reasons"] if reason["rule"] == "protected-path"]
     assert matched, "the added path under server/ is a sensitive path"
     assert matched[0]["pattern"] == "server/**", "the reason names the pattern it matched"
-    assert matched[0]["source"] == "global", (
+    assert matched[0]["source"] == "baseline", (
         "the mandatory baseline is where that pattern came from"
     )

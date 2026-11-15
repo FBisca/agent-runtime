@@ -167,7 +167,7 @@ def test_S5_a_discovered_configuration_extends_the_baseline_without_a_flag(revie
     )
     assert (matched["pyproject.toml"]["pattern"], matched["pyproject.toml"]["source"]) == (
         "pyproject.toml",
-        "global",
+        "baseline",
     )
 
 
@@ -202,7 +202,7 @@ def test_S8_a_hit_writes_completed_escalated_and_names_what_a_person_should_do(r
     assert report["usage"]["requests"] == 0
     assert report["input"] == {"base": review.base, "head": review.head}
     said = capsys.readouterr().out.lower()
-    assert "sensitive-path" in said, "the summary names the rule"
+    assert "protected-path" in said, "the summary names the rule"
     assert "server/extra.py" in said, "the summary names the path it matched"
     assert "deep review" in said, "a refusal names the way out"
 

@@ -63,7 +63,7 @@ thresholds:
   engineering.abstraction-levels:
     value: 0.53
 
-# The mandatory sensitive-path baseline (D13): a change that reaches one
+# The mandatory protected-path baseline (D13): a change that reaches one
 # of these paths escalates to a person whatever the repository configures. A
 # repository's own `.agent-review.yaml` adds to this list and never replaces
 # it. Patterns are matched from the repository root: `**` crosses directories,
