@@ -150,6 +150,19 @@ class SelectorLint(RunFixture, unittest.TestCase):
         self.write("test_S1_ or test_control_")
         self.accepted()
 
+    def test_control_a_control_named_for_its_scenario_is_allowed(self):
+        # A plan may write one control per scenario, `test_S2_control_…`, and `-k "S1 or control"` selecting it is not
+        # the substring bleed: a control guards the fixture, it carries no scenario's proof.
+        tests = (
+            "import unittest\n\n\n"
+            "class ProbeTests(unittest.TestCase):\n"
+            "    def test_S1_the_first_behaviour(self):\n        pass\n\n"
+            "    def test_S2_control_a_healthy_drive_records_no_park(self):\n        pass\n\n"
+            "    def test_S4_control_a_genuinely_edited_plan_still_drains(self):\n        pass\n"
+        )
+        self.write("S1 or control", tests=tests)
+        self.accepted()
+
     def test_control_a_check_without_k_is_not_linted(self):
         self.write(check='uv run pytest pkg/acceptance/plan/%s -q --junitxml="$EEC_JUNIT"' % PROBE)
         self.accepted()
