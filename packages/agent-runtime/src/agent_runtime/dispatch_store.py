@@ -92,6 +92,15 @@ READ_MEMBERS_SQL = (
     "JOIN workers w ON w.id=a.worker WHERE a.team=? AND {selection} ORDER BY a.rowid"
 )
 READ_MESSAGES_SQL = "SELECT body FROM messages WHERE team=? AND recipient=? AND acked=0"
+# The undelivered rule, written where it runs: a lead-addressed message no read has delivered. A receipt
+# names what a page handed over, so a message a receipt names is delivered even before the next call
+# acknowledges it. One reader decides it: the Stop guard counts it to block a turn, and the server counts
+# it to refuse a mutating verb, so the two cannot drift apart.
+UNDELIVERED_SQL = (
+    "SELECT COUNT(*) FROM messages m WHERE m.team=? AND m.recipient=? AND m.acked=0 AND NOT EXISTS "
+    "(SELECT 1 FROM receipts r, json_each(r.ids) j WHERE r.team=m.team AND r.recipient=m.recipient "
+    "AND j.value=m.id)"
+)
 READ_NAMED_CLAUSE = " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
 
 
@@ -238,6 +247,11 @@ def owner_session_tree(owner_generation, ancestors=None):
     if not owner:
         return False
     return int(owner.group(1)) in ((ancestors or lib.ancestor_pids)())
+
+
+def undelivered_count(db, team, lead):
+    """Lead-addressed messages no read has delivered yet: unacknowledged and named by no receipt."""
+    return db.execute(UNDELIVERED_SQL, (team, lead)).fetchone()[0]
 
 
 def team_holds_work(db, team, lead=None):
