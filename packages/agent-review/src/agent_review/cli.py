@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from agent_review import chunks, questions, revisions, safeguards
+from agent_review import calibration, chunks, pricing, questions, revisions, safeguards
 from agent_review.change import read as read_change
 from agent_review.chunks import Chunk
 from agent_review.errors import ReviewError, ScreeningError
@@ -47,7 +47,11 @@ The invocation writes `report.json` under
 
 The report names what produced it: the provider endpoint it screened through (or the fixture it answered
 from), the model the provider served beside the configured alias, the input limit in force, whether long
-context was requested, and a digest of the bank it screened. An execution that stops after the provider
+context was requested, and a digest of the bank it screened. The calibrated thresholds and confidence bands
+decide an escalation from what the provider answered - a noul below its value, a score above it, or a
+confidence below its band - and a critical or high signal recommends a full deep review. --pricing names a
+declared price table, so the report's usage carries the cost of the model the provider served and its basis;
+a served model the table does not name is unknown, never zero. An execution that stops after the provider
 answered keeps the usage it paid for and the judgments it already learned, and a refusal writes no report
 at all: it names the report an earlier invocation left in --output, so that verdict is never read as this
 run's.
@@ -114,6 +118,15 @@ def build_parser() -> argparse.ArgumentParser:
             "and 64k per request); it reads a large change more forgivingly and costs accuracy"
         ),
     )
+    code.add_argument(
+        "--pricing",
+        metavar="PATH",
+        type=Path,
+        help=(
+            "a declared price table (version and per-million rates per served model); the report "
+            "carries what the served model cost, and an unpriced model is unknown rather than free"
+        ),
+    )
     return parser
 
 
@@ -176,6 +189,7 @@ def screen(args: argparse.Namespace) -> Report:
     """One screening of the configured bank over `args.base..args.head`, as the report it produces."""
     repo = Path.cwd()
     bank = _configuration(args, repo)
+    table = None if args.pricing is None else pricing.load(args.pricing)
     base, head = revisions.resolve(repo, args.base, args.head)
     change = revisions.diff(repo, base, head)
     _prepare_output(args.output, base, head)
@@ -195,6 +209,7 @@ def screen(args: argparse.Namespace) -> Report:
             bank=bank,
             base=base,
             head=head,
+            price_table=table,
             long_context=args.long_context,
             requests=0,
             escalation=escalation,
@@ -205,26 +220,30 @@ def screen(args: argparse.Namespace) -> Report:
     )
     covered = chunks.coverage(parsed, planned, bank)
     # A cross-file question cannot read a change wider than the limit together, so the screen is partial:
-    # the report records the gap and recommends a full deep review (D42, D43).
+    # the report records the gap and recommends a full deep review (D42, D43). The calibrated thresholds and
+    # confidence bands decide the rest from what the provider answered, and the model never sees them (D06,
+    # D07, D48).
     gap = () if covered.gap is None else (covered.gap.as_escalation(),)
     port = _port(args, bank.model)
     screened = _Screened()
     for chunk in planned:
         if not screened.ask(port, bank, chunk, len(planned), base=base, head=head):
             break
+    judged = tuple(screened.judgments)
     return Report(
         bank=bank,
         base=base,
         head=head,
         provider=port.provider,
         resolved_model=screened.resolved_model,
-        judgments=tuple(screened.judgments),
+        judgments=judged,
         input_tokens=screened.input_tokens,
         output_tokens=screened.output_tokens,
         requests=screened.requests,
         chunks=planned,
         coverage=covered,
-        escalation=gap,
+        escalation=(*gap, *calibration.escalation(judged, bank)),
+        price_table=table,
         long_context=args.long_context,
         failure=screened.failure,
     )
