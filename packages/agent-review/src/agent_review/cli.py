@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_review import calibration, chunks, pricing, questions, revisions, safeguards
+from agent_review.change import Change
 from agent_review.change import read as read_change
 from agent_review.chunks import Chunk
 from agent_review.errors import ReviewError, ScreeningError
@@ -185,6 +186,41 @@ def _revision(standing: Path) -> str:
     return f"{base}..{head}" if isinstance(base, str) and isinstance(head, str) else ""
 
 
+def _safeguard_report(
+    parsed: Change,
+    bank: QuestionBank,
+    *,
+    base: str,
+    head: str,
+    long_context: bool,
+    price_table: pricing.PriceTable | None,
+) -> Report | None:
+    """The report a safeguard decides before the model is asked, or nothing when no rule fires.
+
+    The safeguards read the frozen diff beside the rules configuration declares: a hit decides the change,
+    so no port is built, no credential is read and no request is spent (SG-D2, SG-D6, SG-D10). The
+    baseline's paths apply whatever was configured, and the configuration's own paths add to them (D13);
+    the members it declares standard-library-only are read beside them.
+    """
+    rules = safeguards.rule_set(
+        baseline_paths=questions.baseline().sensitive_paths,
+        repository_paths=bank.sensitive_paths,
+        stdlib_only_paths=bank.safeguards.get(safeguards.STDLIB_ONLY_SETTING, ()),
+    )
+    escalation = safeguards.decide(parsed, rules)
+    if not escalation:
+        return None
+    return Report(
+        bank=bank,
+        base=base,
+        head=head,
+        price_table=price_table,
+        long_context=long_context,
+        requests=0,
+        escalation=escalation,
+    )
+
+
 def screen(args: argparse.Namespace) -> Report:
     """One screening of the configured bank over `args.base..args.head`, as the report it produces."""
     repo = Path.cwd()
@@ -193,27 +229,12 @@ def screen(args: argparse.Namespace) -> Report:
     base, head = revisions.resolve(repo, args.base, args.head)
     change = revisions.diff(repo, base, head)
     _prepare_output(args.output, base, head)
-    # The safeguards read the frozen diff beside the rules configuration declares: a hit decides the change,
-    # so no port is built, no credential is read and no request is spent (SG-D2, SG-D6, SG-D10). The
-    # baseline's paths apply whatever was configured, and the configuration's own paths add to them (D13);
-    # the members it declares standard-library-only are read beside them.
-    rules = safeguards.rule_set(
-        baseline_paths=questions.baseline().sensitive_paths,
-        repository_paths=bank.sensitive_paths,
-        stdlib_only_paths=bank.safeguards.get(safeguards.STDLIB_ONLY_SETTING, ()),
-    )
     parsed = read_change(change)
-    escalation = safeguards.decide(parsed, rules)
-    if escalation:
-        return Report(
-            bank=bank,
-            base=base,
-            head=head,
-            price_table=table,
-            long_context=args.long_context,
-            requests=0,
-            escalation=escalation,
-        )
+    decided = _safeguard_report(
+        parsed, bank, base=base, head=head, long_context=args.long_context, price_table=table
+    )
+    if decided is not None:
+        return decided
     # The change is split inside the budget in force, and each chunk is asked the whole bank once (D41).
     planned = chunks.split(
         parsed, change, budget=chunks.budget(bank, long_context=args.long_context)
