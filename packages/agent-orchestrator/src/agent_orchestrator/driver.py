@@ -29,6 +29,7 @@ from . import contracts, events, evidence, narrate, routes, runner, timeutil, ve
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .plan import PlanError
+from .report_rules import require, require_report
 from .runtime_client import (
     OPERATION_ADOPTED,
     CliRuntimeClient,
@@ -40,11 +41,6 @@ from .runtime_client import RuntimeError as RuntimeCallError
 
 ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
 now = timeutil.iso
-
-
-def require(condition, message):
-    if not condition:
-        raise ValueError(message)
 
 
 def read_json(path):
@@ -357,8 +353,9 @@ def merged_snapshot(path):
 def require_completable(task, report):
     """The rules a report meets to be COMPLETE, apart from the ledger's own state. Raises ValueError naming the first
     that fails; `checkpoint` and the report gate share it, so a report is refused for the same reason in both."""
-    # Total over a schema-valid report: the report gate runs before the ledger's structural checks, which
-    # turn a malformed `remaining` or check into the Lead request they always did.
+    # Total over a schema-valid report: the report gate applies `require_report` first, so a malformed `remaining`
+    # or check is already refused to its sender and never reaches these rules; `checkpoint`'s own ValueError is
+    # still the Lead request `record_report` makes.
     checks = [c for c in report.get("checks") or [] if isinstance(c, dict)]
     require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
     require(not report.get("remaining"), "complete result has remaining work")
@@ -402,25 +399,12 @@ def checkpoint(data, task_id, report, merged=False):
     require(isinstance(report, dict), "report must be an object")
     require(task["status"] not in ("COMPLETE", "RELEASED"), "assignment is closed")
     require(report.get("task_id") == task_id, "report task ID does not match")
-    status = report.get("status")
-    require(status in ("PARTIAL", "BLOCKED", "COMPLETE"), "invalid result status")
-    require(
-        isinstance(report.get("summary"), str) and report["summary"].strip(), "summary is required"
-    )
-    for key in ("files", "decisions", "interfaces", "remaining", "checks"):
-        require(isinstance(report.get(key), list), key + " must be a list")
-    checks = report["checks"]
-    for check in checks:
-        require(isinstance(check, dict) and isinstance(check.get("command"), str), "invalid check")
-        require(check.get("outcome") in ("passed", "failed", "not_run"), "invalid check outcome")
-        require(
-            check.get("outcome") == "passed" or check.get("reason"),
-            "failed or omitted check needs a reason",
-        )
+    require_report(report)
     require(
         "review_rounds" not in report or whole(report["review_rounds"]),
         "review_rounds must be a whole number",
     )
+    status = report["status"]
     if status == "COMPLETE":
         require(task["runtime_id"], "bind the runtime agent before completion")
         require_completable(task, report)
@@ -2820,6 +2804,13 @@ class Driver:
         report = self.read_payload(task_id, "report", path, read_report)
         if report is None:
             return  # the gate keeps waiting: the worker was warned, or the Lead is asked
+        # A report whose shape the ledger refuses is the sender's to fix, never the drive's to crash on: the same
+        # words `checkpoint` would raise with go back to the worker that wrote it.
+        try:
+            require_report(report)
+        except ValueError as error:
+            self.warn_sender(task_id, "report", path, str(error), accept=True)
+            return
         self.log_clarifications(task_id, "report", report, path)
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
