@@ -1,4 +1,4 @@
-"""`report.json` when a safeguard decides the change (00c-agent-review-safeguards/S1, S8).
+"""`report.json` when a safeguard decides the change (00c-agent-review-safeguards/S1).
 
 A hit completes the execution - `status: completed` and exit 0 - with the verdict `escalated`, no
 judgments, and `usage.requests: 0`: the provider was never asked, which the run proves by holding no
@@ -128,7 +128,7 @@ def test_S1_the_report_carries_one_reason_naming_the_rule_the_path_and_where_it_
     ]
 
 
-def test_S8_a_safeguard_writes_a_completed_escalated_report_and_names_the_way_out(review, capsys):
+def test_the_summary_names_the_rule_the_path_and_the_way_out(review, capsys):
     assert review.screen() == 0
     report = review.report()
     assert report["status"] == "completed"

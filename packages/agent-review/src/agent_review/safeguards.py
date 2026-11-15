@@ -14,8 +14,8 @@ the root: the value a computed target holds is not in a diff (SG-D5). So:
   (`<target>.is_relative_to(...)`, `<target>.relative_to(...)`, `<target>.resolve().parent == ...`) or calls
   a guard the same change adds whose body confines; any other computed target fires;
 - a computed target the change itself writes or creates in that function is its own artifact: deleting what
-the change makes is not a delete of anything outside the change, and the historical defect's own test helper
-(`429625b`) recreates the plan file it unlinks;
+  the change makes is not a delete of anything outside the change, and the historical defect's own test helper
+  (`429625b`) recreates the plan file it unlinks;
 - the deletes are named here rather than inferred from names, and a write is not one of them: whether a write
 destroys anything depends on what the target already held, which a diff does not show, and the change that
 fixed the case this rule was learned from writes a computed path itself (`109c98b`). A rule that guessed
@@ -42,9 +42,6 @@ _DELETIONS = ("shutil.rmtree(", "os.remove(", "os.unlink(", "os.rmdir(")
 # A call that deletes the expression it is made on.
 _METHODS = (".unlink(", ".rmdir(")
 _QUOTED = re.compile(r"""^[rRbBuUfF]{0,2}("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$""")
-# What the change itself creates or writes, as the line spells it: a target the change makes is its own
-# artifact, and deleting it deletes nothing the change did not put there.
-_CREATIONS = re.compile(r"\.\s*(?:write_text|write_bytes|touch|mkdir)\s*\(")
 _PATH_WRAPPER = re.compile(r"^(?:pathlib\.)?Path\((.*)\)$")
 _DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 _DEF = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>\w+)")
