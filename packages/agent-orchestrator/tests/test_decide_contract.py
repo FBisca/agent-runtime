@@ -212,6 +212,51 @@ class DecideJson(WakeFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1"])
 
 
+class SoleUnitReleasedByAmendment(DrainFixture, WakeFixture, unittest.TestCase):
+    """One unit, parked for an amendment that releases it: the release is work again, so the round that adopts the
+    amendment is not the round that ends the run (R51)."""
+
+    rows = ("T1",)
+
+    def widened(self):
+        """An edit that changes T1's own contract, so the amendment hands its worker a new packet."""
+
+        def change(data):
+            data["tickets"][0]["delivers"] = "first, and wider"
+
+        return self.edit(change)
+
+    def test_R51_the_round_that_adopts_an_amendment_releasing_a_unit_never_ends_the_run(self):
+        self.waits(
+            [
+                self.blocked(),
+                self.decide_step("t1", "amend", "T1 needs a test path"),
+                # the Lead edits the plan, then amends it: the adoption releases the parked unit and resumes its
+                # worker, and the runtime then lists that worker as working -- the run has work again
+                wait_result(write=self.writes(self.widened())),
+                wait_result(run=[self.amend_argv()]),
+                wait_result([assignment("demo-t1")], reason="timeout"),
+                # the resumed worker is the one that reports: its assignment id is the resume's, not the spawn's
+                self.blocked(id=resume_id("demo-t1", 1)),
+                self.decide_step("t1", "mark blocked", "stop it"),
+            ]
+        )
+        self.run_driver("--idle-minutes", "9999")
+        (released,) = self.run_events("amend-released")
+        events = self.run_events()
+        asks = [i for i, e in enumerate(events) if e["kind"] == "wake" and "blocked" in str(e)]
+        self.assertEqual(len(asks), 2, "the released unit never asked again")
+        self.assertLess(
+            events.index(released), asks[1], "the released unit never got as far as asking again"
+        )
+        finished = [i for i, e in enumerate(events) if e["kind"] == "finish"]
+        self.assertEqual(len(finished), 1, "the run did not end exactly once")
+        self.assertLess(asks[1], finished[0])
+        # Today the adoption round ends the run: four waits consumed, the release the last thing before `finish`.
+        # Released work means the run waits on it and carries on: six or more waits, ending on the park it made after.
+        self.assertGreaterEqual(len(self.calls("wait")), 6, [c["args"] for c in self.calls("wait")])
+
+
 class AwaitingAmendment(DrainFixture, WakeFixture, unittest.TestCase):
     """T1 and T3 run; T1 asks, the Lead answers `amend`, then edits the plan and amends it."""
 

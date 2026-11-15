@@ -878,6 +878,7 @@ class Driver:
         self.stranded = (
             set()
         )  # tasks the last reconciliation could not settle: the run must not finish over them
+        self.released = 0  # units an amendment released: work in the round it was released
         self.unfinished = set()  # the assignment ids the runtime's last `wait` listed as unfinished
         self.reconciled = False
         self.touched = (
@@ -1399,6 +1400,7 @@ class Driver:
                 )
             self.write_status(unit.upper(), "IN PROGRESS")
             self.log("amend-released", unit=unit, task=task_id, resumed=alive)
+            self.released += 1  # R51: the round that released a unit made work
             narrate.say(
                 "info",
                 "build",
@@ -1505,9 +1507,7 @@ class Driver:
         idle = False
         while True:
             self.read_plan()  # Integrity precedes gates, which can also spawn workers.
-            acted = (
-                self.advance()
-            )  # before the plan is read: a merge it makes unblocks work in this same round
+            acted, self.released = self.advance() + self.released, 0  # a release is work too
             plan, valid = self.current_plan()
             if valid:
                 acted += self.integrate(plan) + self.advance_mutations()
