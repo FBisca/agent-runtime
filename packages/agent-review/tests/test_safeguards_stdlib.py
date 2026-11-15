@@ -160,10 +160,10 @@ def test_S6_a_second_statement_on_the_added_line_is_read_as_an_import_too():
 
 
 def test_S6_an_import_quoted_in_a_docstring_is_not_a_dependency_the_member_adds():
-    text = diff(
-        "hooks/pre_tool_use.py", 'def load(path):\n    return """\nimport requests\n"""\n'
+    text = diff("hooks/pre_tool_use.py", 'def load(path):\n    return """\nimport requests\n"""\n')
+    assert decided(text) == (), (
+        "an import a docstring quotes is text, not a module the member imports"
     )
-    assert decided(text) == (), "an import a docstring quotes is text, not a module the member imports"
 
 
 def test_S7_a_declaration_that_covers_no_member_escalates_nothing():

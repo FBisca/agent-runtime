@@ -29,7 +29,7 @@ CONFIG = textwrap.dedent(
         ask: Does the change keep the documented error-handling contract
     safeguards:
       stdlib_only:
-        - hooks/
+        - plugin/
     """
 )
 
@@ -61,7 +61,7 @@ def git(where, *args):
 class Review:
     """Two revisions of a real repository changing `path`, a configuration, a fixture and no credential."""
 
-    def __init__(self, tmp_path, path="hooks/pre_tool_use.py"):
+    def __init__(self, tmp_path, path="plugin/tool.py"):
         self.checkout = tmp_path / "checkout"
         self.checkout.mkdir()
         self.output = tmp_path / "review"
@@ -174,7 +174,7 @@ def test_S6_a_declared_member_that_imports_outside_the_standard_library_escalate
     assert report["escalation"]["reasons"] == [
         {
             "rule": "stdlib-only",
-            "path": "hooks/pre_tool_use.py",
+            "path": "plugin/tool.py",
             "pattern": "import requests",
             "source": "diff",
             "module": "requests",
@@ -186,7 +186,7 @@ def test_S6_the_summary_names_the_member_the_module_and_the_way_out(review, caps
     assert review.screen() == 0
     summary = capsys.readouterr().out
     assert "stdlib-only" in summary, "the summary names the rule"
-    assert "hooks/pre_tool_use.py" in summary, "the summary names the member's path"
+    assert "plugin/tool.py" in summary, "the summary names the member's path"
     assert "requests" in summary, "the summary names the module a person must act on"
     assert "standard library" in summary, "the summary says what a person should do about it"
 
@@ -203,7 +203,7 @@ def test_S6_a_commented_import_line_escalates_without_a_request(tmp_path, monkey
     )
     assert report["usage"]["requests"] == 0, "no request is spent on a hit"
     assert [reason["module"] for reason in report["escalation"]["reasons"]] == ["requests"]
-    assert report["escalation"]["reasons"][0]["path"] == "hooks/pre_tool_use.py"
+    assert report["escalation"]["reasons"][0]["path"] == "plugin/tool.py"
 
 
 def test_S6_each_package_the_member_adds_is_its_own_reason_in_the_report(tmp_path, monkeypatch):
@@ -219,7 +219,7 @@ def test_S6_each_package_the_member_adds_is_its_own_reason_in_the_report(tmp_pat
     assert [reason["module"] for reason in reasons] == ["yaml", "dotenv"], (
         "a from-import and a function-local import are imports too, and each names its module"
     )
-    assert {reason["path"] for reason in reasons} == {"hooks/pre_tool_use.py"}
+    assert {reason["path"] for reason in reasons} == {"plugin/tool.py"}
     assert {reason["rule"] for reason in reasons} == {"stdlib-only"}
 
 

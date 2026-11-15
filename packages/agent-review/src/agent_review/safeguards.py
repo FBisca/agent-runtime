@@ -331,7 +331,29 @@ def imported_modules(text: str) -> tuple[tuple[str, str], ...]:
 
 def _statements(text: str) -> tuple[str, ...]:
     """The statements one added line makes, split on `;` as Python splits a simple-statement line."""
-    return tuple(part.strip() for part in text.split(";") if part.strip())
+    return tuple(part.strip() for part in _code(text).split(";") if part.strip())
+
+
+def _code(text: str) -> str:
+    """`text` up to the comment that ends it, reading quotes so a `#` inside a string is not one.
+
+    A comment is not code: a comma or a `;` in a note beside an import is not a second module, and a `#` in a
+    string a line holds is not where a comment starts.
+    """
+    index = 0
+    while index < len(text):
+        for delimiter in ('"""', "'''", '"', "'"):
+            if text.startswith(delimiter, index):
+                closing = text.find(delimiter, index + len(delimiter))
+                if closing == -1:
+                    return text
+                index = closing + len(delimiter)
+                break
+        else:
+            if text[index] == "#":
+                return text[:index]
+            index += 1
+    return text
 
 
 def _statement_modules(statement: str) -> tuple[tuple[str, str], ...]:
@@ -343,7 +365,7 @@ def _statement_modules(statement: str) -> tuple[tuple[str, str], ...]:
     match = _IMPORT.match(statement)
     if match is None:
         return ()
-    inside = match.group("modules").strip()
+    inside = _code(match.group("modules")).strip()
     if inside.startswith("("):
         inside = inside[1:]
     found: list[tuple[str, str]] = []
@@ -370,7 +392,7 @@ def _open_string(text: str) -> str:
             index = at + len(open_triple)
             open_triple = ""
             continue
-        if text.startswith('"""', index) or text.startswith("\'\'\'", index):
+        if text.startswith('"""', index) or text.startswith("'''", index):
             open_triple = text[index : index + 3]
             index += 3
             continue
