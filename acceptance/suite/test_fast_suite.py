@@ -76,7 +76,7 @@ class FastSuiteTests(unittest.TestCase):
     FAST_SUITE_SECONDS = 3.0  # R222: the fast suite's tests cost under three seconds
     UNIT_TEST_SECONDS = 0.5
     # A shared runner is slower than the machine these numbers were measured on, and a build fails on
-    # the behaviour, not on the runner: half again before a row is a red build, as R223's budget does.
+    # the behaviour, not on the runner: half again before a row is a red build.
     RUNNER_FACTOR = 1.5
 
     _profile = None

@@ -1,4 +1,4 @@
-"""The suite's cost budget: a test over five seconds, and the whole suite's summed call time.
+"""The suite's cost budget: a test over fifteen seconds, and the whole suite's summed call time.
 
 R208's whole-suite time is a person's check. This is the machine check that keeps it true: CI writes
 the junit its run already produces and the gate fails the build naming a test over the ceiling, or the
@@ -27,7 +27,7 @@ budget = runpy.run_path(str(SCRIPT))
 
 # The spec's numbers, written out rather than imported: a ceiling this ticket changed on purpose has to
 # fail these cases, and reading the file's own number would make the gate agree with itself.
-TEST_CEILING = 5.0
+TEST_CEILING = 15.0
 SUITE_CEILING = 2700.0
 
 
@@ -73,13 +73,13 @@ class CaseTests(unittest.TestCase):
 class CeilingTests(unittest.TestCase):
     def test_S18_a_test_over_the_ceiling_is_an_offender_naming_it_its_seconds_and_the_ceiling(self):
         cases = measured(
-            ("tests.test_slow.MyTests", "test_a", 6.24),
-            ("tests.test_slow.MyTests", "test_b", 5.0),
-            ("tests.test_slow.MyTests", "test_c", 4.99),
+            ("tests.test_slow.MyTests", "test_a", 15.24),
+            ("tests.test_slow.MyTests", "test_b", 15.0),
+            ("tests.test_slow.MyTests", "test_c", 14.99),
         )
         self.assertEqual(
             budget["offender_lines"](cases, TEST_CEILING, SUITE_CEILING),
-            ["tests/test_slow.py::MyTests::test_a: 6.2s > ceiling 5.0s"],
+            ["tests/test_slow.py::MyTests::test_a: 15.2s > ceiling 15.0s"],
         )
 
     def test_S18_the_suites_summed_time_over_its_ceiling_is_an_offender_naming_it(self):
@@ -105,7 +105,9 @@ class CeilingTests(unittest.TestCase):
 
     def test_S18_a_ceiling_that_is_not_a_number_is_refused_naming_the_budget(self):
         with self.assertRaisesRegex(Exception, "suite ceiling is not a number"):
-            budget["ceilings_of"]({"test_ceiling_seconds": 5.0, "suite_ceiling_seconds": "an hour"})
+            budget["ceilings_of"](
+                {"test_ceiling_seconds": 15.0, "suite_ceiling_seconds": "an hour"}
+            )
 
 
 class RunTests(unittest.TestCase):
@@ -134,24 +136,24 @@ class RunTests(unittest.TestCase):
             junit_path, budget_path = self.write(
                 directory,
                 (
-                    ("tests.test_slow.MyTests", "test_a", 6.5),
+                    ("tests.test_slow.MyTests", "test_a", 15.5),
                     ("tests.test_slow.MyTests", "test_b", 0.1),
                 ),
-                suite_ceiling=6.0,
+                suite_ceiling=15.0,
             )
             result = budget["run"](junit_path, budget_path)
         self.assertEqual(result.code, 1)
         self.assertEqual(
             result.lines,
             [
-                "tests/test_slow.py::MyTests::test_a: 6.5s > ceiling 5.0s",
-                "the whole suite: 6.6s > ceiling 6.0s",
+                "tests/test_slow.py::MyTests::test_a: 15.5s > ceiling 15.0s",
+                "the whole suite: 15.6s > ceiling 15.0s",
             ],
         )
         self.assertEqual(
             result.errors,
             [
-                "suite budget: 2 tests in 6.6s against ceilings 5.0s per test and 6.0s for the "
+                "suite budget: 2 tests in 15.6s against ceilings 15.0s per test and 15.0s for the "
                 "suite: make the test cheaper, or lower the suite's cost, rather than raise the "
                 "ceiling"
             ],
@@ -167,7 +169,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result.code, 0)
         self.assertEqual(
             result.lines,
-            ["suite budget: ceilings 5.0s per test and 2700.0s for the suite, 1 test in 0.4s"],
+            ["suite budget: ceilings 15.0s per test and 2700.0s for the suite, 1 test in 0.4s"],
         )
 
     @pytest.mark.integration

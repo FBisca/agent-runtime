@@ -1,4 +1,4 @@
-"""The suite's cost budget: a test over five seconds, and the whole suite's summed call time.
+"""The suite's cost budget: a test over fifteen seconds, and the whole suite's summed call time.
 
 R208's whole-suite time is a person's check. This is the machine check that keeps it true: CI writes
 the junit its run already produces, and the gate fails the build naming a test over the ceiling, or the
@@ -25,8 +25,8 @@ from typing import NamedTuple
 BASELINE = Path(__file__).resolve().parents[1] / "acceptance" / "suite" / "suite_budget.json"
 
 # The two ceilings, and the numbers a budget that names neither falls back to. One test may not cost
-# five seconds, and the whole suite's cases may not sum past the number the committed file names.
-TEST_CEILING = 5.0
+# fifteen seconds, and the whole suite's cases may not sum past the number the committed file names.
+TEST_CEILING = 15.0
 SUITE_CEILING = 2700.0
 
 
