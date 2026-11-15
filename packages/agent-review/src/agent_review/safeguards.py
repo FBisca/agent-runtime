@@ -43,6 +43,12 @@ names where the pattern came from - the global baseline or the repository - as w
 A hit recommends a full deep review (D12): a path configuration declares load-bearing is read by a person,
 however clean the screen looked.
 
+The words are the plan's, not the archived plan's: this rule was `protected-path` and reported
+`source: baseline` for a mandatory path, and the smart-screening plan renamed both - `sensitive-path`, and
+`global` for the mandatory list - in its approved acceptance. R15-R17 of `docs/specs/agent-review.md` still
+read the old words, so the rename lands with the amendment those requirements need; a frozen report from
+before it carries the older pair, which is why the reason's fields are never free text.
+
 `stdlib-only` fires when a path the rules declare (`safeguards.stdlib_only`, read as path prefixes) adds an
 import of a module the standard library does not ship. The members are configuration and the rule is code
 (SG-D6), and a module outside the standard library is the dependency a member that ships without them must
