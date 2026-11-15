@@ -1203,6 +1203,10 @@ class StopGuardTests(HookStoreCase):
         "tool": "wait",
         "status": "running",
     }
+    WORKER_REASON = (
+        "agent-runtime: assignment %s is unreported — call report complete or report blocked "
+        "before ending the turn"
+    )
 
     def setUp(self):
         super().setUp()
@@ -1485,16 +1489,39 @@ class StopGuardTests(HookStoreCase):
         self.worker(self.store, newer)  # it still holds work, so it owns the terminal
         self.assertIsNone(child.run(STOP, self.STOP)[0])
         self.assertIsNone(self.stop()[0])  # t0 leads no team with needs
+        bound_env = dict(self.env, HC_TERMINAL_ID="t6")
+        (self.root / "b").mkdir()
+        bound = FakeCliProcess(bound_env, self.root / "b")
+        self.addCleanup(bound.close)
+        ident = self.store.register(self.team_id, "w-bound")
+        self.store.bind(ident["assignment_id"], "t6", "scope")
+        self.assertEqual(
+            bound.run(STOP, self.STOP)[0],
+            {"decision": "block", "reason": self.WORKER_REASON % ident["assignment_id"]},
+        )
+        self.sql(
+            self.store, "UPDATE assignments SET state='blocked' WHERE id=?", ident["assignment_id"]
+        )
+        self.assertIsNone(bound.run(STOP, self.STOP)[0])  # no such assignment: allowed
+        (self.root / "s").mkdir()
+        superseded = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t7"), self.root / "s")
+        self.addCleanup(superseded.close)
+        old = self.store.register(self.team_id, "w-old")
+        self.store.bind(old["assignment_id"], "t7", "scope")
+        self.assertEqual(  # its team still owns the terminal: refused
+            superseded.run(STOP, self.STOP)[0],
+            {"decision": "block", "reason": self.WORKER_REASON % old["assignment_id"]},
+        )
+        self.stray_team(self.other_live_generation())  # a newer live team now owns t0
+        self.assertIsNone(superseded.run(STOP, self.STOP)[0])  # superseded team: allowed
         other = dispatch_store.Store(self.env)
         dead = other.team("scope", "t9", "999:dead")  # a dead generation
-        self.worker(other, dead)
-        nobody = (
-            FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t9"), self.root / "n")
-            if (self.root / "n").mkdir() is None
-            else None
-        )
+        gone = other.register(dead, "w-gone")
+        other.bind(gone["assignment_id"], "t9", "scope")
+        (self.root / "n").mkdir()
+        nobody = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="t9"), self.root / "n")
         self.addCleanup(nobody.close)
-        self.assertIsNone(nobody.run(STOP, self.STOP)[0])
+        self.assertIsNone(nobody.run(STOP, self.STOP)[0])  # dead team generation: allowed
 
     def test_reported_unchanged_stall_counts_as_seen_until_progress(self):
         """agent-runtime/R128"""
@@ -1622,6 +1649,42 @@ class StopGuardTests(HookStoreCase):
         absent = both()
         self.assertEqual(absent[0], absent[1])
         self.assertEqual(absent[0], recovered[0])  # absent behaves as "not reported"
+
+    def test_S5_a_worker_with_its_own_unreported_assignment_is_blocked_until_it_reports(self):
+        """pi-lead-rhythm/S5: a worker's own assignment, not a lead's team, keeps its Stop open on
+        Claude, Codex and Pi with the lead guard's reason shape, and `report blocked` is the way out."""
+        worker_env = dict(self.env, HC_TERMINAL_ID="wt0")
+        (self.root / "wrk").mkdir()  # the worker session is its own terminal, leading no team
+        worker = FakeCliProcess(worker_env, self.root / "wrk")
+        self.addCleanup(worker.close)
+        ident = self.store.register(self.team_id, "w1")
+        self.store.bind(ident["assignment_id"], "wt0", "scope")
+        reason = self.WORKER_REASON % ident["assignment_id"]
+        out, err, code = worker.run(STOP, self.STOP)
+        self.assertEqual((out, code), ({"decision": "block", "reason": reason}, 0), err)
+        out, err, code = worker.run(STOP, self.STOP, args=("--cli", "codex"))
+        self.assertEqual((out, code), ({"decision": "block", "reason": reason}, 0), err)
+        out, err, code = worker.run(STOP, self.STOP, args=("--cli", "pi", "--dialect", "json"))
+        self.assertEqual((out, code), ({"block": True, "reason": reason}, 0), err)
+        self.store.publish(
+            "scope", "wt0", "t0", ident["assignment_id"], "stuck on the fixture", "blocked"
+        )
+        self.assertIsNone(worker.run(STOP, self.STOP)[0])  # reporting blocked is the way out
+        self.assertEqual(self.budget(), 3)  # and the work period starts over
+
+    def test_S5_a_workers_parked_wait_does_not_exempt_its_own_assignment(self):
+        """pi-lead-rhythm/S5: parking a wait is the lead's way out; a worker's own unreported
+        assignment still keeps its turn open, and only a report ends it."""
+        (self.root / "wp").mkdir()
+        worker = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="wt1"), self.root / "wp")
+        self.addCleanup(worker.close)
+        ident = self.store.register(self.team_id, "w-park")
+        self.store.bind(ident["assignment_id"], "wt1", "scope")
+        payload = dict(self.STOP, background_tasks=[self.MCP_WAIT])
+        self.assertEqual(
+            worker.run(STOP, payload)[0],
+            {"decision": "block", "reason": self.WORKER_REASON % ident["assignment_id"]},
+        )
 
     def test_S1_the_claude_codex_and_pi_stops_refuse_one_state_with_one_reason(self):
         """pi-lead-rhythm/S1: one predicate, three dialects, one reason."""

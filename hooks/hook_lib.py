@@ -1,9 +1,11 @@
-"""Shared helpers for read-only, fail-open lead hooks (Stop guard, context reminders).
+"""Shared helpers for read-only, fail-open hooks (Stop guard, context reminders).
 
 Hooks never write the store: it is opened through a `mode=ro` URI with a short busy timeout, and every
 error (bad stdin, missing or locked store, no identity) means "allow, print nothing". Identity is
-computed exactly like the MCP server's: scope from the hc socket/scope, lead from HC_TERMINAL_ID, and
-the generation from the nearest Claude/Codex ancestor (agent_runtime.cli_generation).
+computed exactly like the MCP server's: scope from the hc socket/scope, the caller from
+HC_TERMINAL_ID, and the generation from the nearest Claude/Codex ancestor
+(agent_runtime.cli_generation). A caller that leads no team is asked about the assignment bound to its
+own terminal, so the guard covers a lead's team and a worker's assignment alike.
 """
 
 import fcntl
@@ -185,6 +187,20 @@ def lead_check(env=None, who=None):
 def lead_needs(env=None):
     """needs() for the caller's own team, or None when it leads none (or anything is unavailable)."""
     return lead_check(env)[1]
+
+
+def worker_check(who, env=None):
+    """The id of the caller's own current assignment while it is still unreported, or None. The runtime
+    decides it (`rhythm.worker_assignment`); this holds the read-only snapshot."""
+    db = open_readonly(env)
+    try:
+        db.execute("BEGIN")  # one read snapshot, like the lead's check
+        try:
+            return rhythm.worker_assignment(db, who)
+        finally:
+            db.rollback()
+    finally:
+        db.close()
 
 
 # --- Stop-guard block budget (the only file hooks write; never the dispatch store) ---------------------

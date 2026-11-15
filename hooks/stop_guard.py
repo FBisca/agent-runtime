@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Claude, Codex and Pi Stop hook: refuse to end a lead's turn while it has undelivered messages or
-unseen working assignments, at most three times per user work period.
+unseen working assignments, and a worker's turn while its own assignment is unreported, at most three
+times per user work period.
 
 The runtime decides (`agent_runtime.rhythm`); this entry only formats the answer for the host's
 dialect: `{"decision": "block"}` for Claude and Codex, or — when the host asks for it with
@@ -47,15 +48,21 @@ def main(argv=None):
     explicit = hook_lib.option(argv, "--dialect")
     dialect = explicit or caps.stop_dialect
     who, found = hook_lib.lead_check()
-    reason = rhythm.stop_refusal(found) if who else None
+    lead = found is not None
+    if not who:
+        reason = None
+    elif lead:
+        reason = rhythm.stop_refusal(found)
+    else:  # no team owns this terminal: the session is a worker, and its own assignment is the work
+        reason = rhythm.worker_refusal(hook_lib.worker_check(who))
     if not reason:
         if who:
             hook_lib.reset_budget(os.environ, who)  # nothing to block on: a new period
         return emit(dialect, False, answered=bool(explicit))
-    if caps.can_park_wait and hook_lib.running_wait_task(payload):
+    if lead and caps.can_park_wait and hook_lib.running_wait_task(payload):
         return emit(
             dialect, False, answered=bool(explicit)
-        )  # a backgrounded wait(all) will deliver; no budget spent, none reset
+        )  # only a lead's wait(all) delivers; a worker's way out is its report, not a parked wait
     allowed, first_time = hook_lib.spend_budget(os.environ, who)
     if allowed:
         return emit(dialect, True, reason)
