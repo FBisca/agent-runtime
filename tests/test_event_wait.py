@@ -1679,7 +1679,9 @@ os._exit(0)
             return [c for c in self.runs("get") if c[1] in ("w1", "w2", "t1", "t2")]
 
         before = len(workers())
-        self.wait_all(timeout=0.3)  # nothing to report: the wait takes its deadline, so keep it short
+        self.wait_all(
+            timeout=0.3
+        )  # nothing to report: the wait takes its deadline, so keep it short
         self.assertEqual(len(workers()), before)
 
 
