@@ -17,6 +17,9 @@ concurrency:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    env:
+      # A pull request is held to its base head; a push to the tip replaced.
+      SINCE: ${{ github.event.pull_request.base.sha || github.event.before }}
     strategy:
       fail-fast: false
       matrix:
@@ -40,12 +43,13 @@ jobs:
       # R208's per-module half is a check: a module that grew past its baseline fails the build.
       - name: suite budget
         run: python3 scripts/suite_budget.py --junit "$RUNNER_TEMP/suite.xml"
-      # The structure budget: a module, a class or a function that grew past the
-      # number recorded for it fails the build, naming the file and the metric.
+      # The structure budget: a file may exceed a ceiling only if it did at the
+      # revision the change grew from, and only by getting no worse.
       - name: structure budget
         run: >-
           python3 scripts/structure_budget.py --root .
           --baseline acceptance/structure/structure_budget.json
+          --since "$SINCE"
       # The legacy tree is not lint-clean yet. The gate tracks the debt instead of hiding it:
       # a diagnostic above the budget fails the build, a diagnostic below it does not.
       - name: ruff check (legacy budget)

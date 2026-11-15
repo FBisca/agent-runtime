@@ -1,11 +1,19 @@
-"""The structure budget: five ceilings over every Python file, one baseline, a ratchet on growth.
+"""The structure budget: five ceilings over every Python file, one base revision, a ratchet on growth.
 
 The script is the seam: these cases drive its decisions in process, while the program's own contract
-(its exit code and the line it prints) is the acceptance file's. A ceiling here is the spec's number,
-written out rather than imported, so a changed ceiling fails these cases.
+(its exit codes and the lines it prints) is the acceptance file, driven over a real checkout. A
+ceiling here is the spec's number, written out rather than imported, so a changed ceiling fails these
+cases.
+
+A file may exceed a ceiling only if it already did at the base revision, and only by getting no
+worse, so `git` holds the base and the committed budget holds the ceilings alone.
 """
 
+import json
 import runpy
+import subprocess
+import sys
+import tempfile
 import tomllib
 import unittest
 from datetime import datetime, timezone
@@ -17,7 +25,9 @@ from pytest_impacted.file_map import map_changed_files, matches_any_glob, parse_
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[1]
-budget = runpy.run_path(str(REPO / "scripts" / "structure_budget.py"))
+SCRIPT = REPO / "scripts" / "structure_budget.py"
+budget = runpy.run_path(str(SCRIPT))
+BASELINE = REPO / "acceptance" / "structure" / "structure_budget.json"
 
 CEILINGS = {
     "module-lines": 1000,
@@ -35,125 +45,157 @@ def measured(**numbers):
     return {**UNDER, **numbers}
 
 
-def baseline(rows=(), ceilings=None):
-    """A baseline document: recorded rows by path, and the ceilings it declares."""
-    return {
-        "measured_at": "2026-11-15T00:00:00+00:00",
-        "ceilings": ceilings or CEILINGS,
-        "files": dict(rows),
-    }
+def long_module(lines):
+    """A module of exactly `lines` source lines: short functions, so only its size trips a ceiling."""
+    body = []
+    name = 0
+    while len(body) + 3 <= lines:
+        body.extend(["def f%d():" % name, "    return 0", ""])
+        name += 1
+    body.extend("# padding %d" % index for index in range(lines - len(body)))
+    return "\n".join(body) + "\n"
 
 
-class BaselineTests(unittest.TestCase):
-    """S1, S2, S3, S4, S5: what the committed baseline says and what a run answers."""
+class BaseDecisionTests(unittest.TestCase):
+    """S2, S3, S15, S16, S17: a ceiling is held only by a file that held it at the base."""
 
-    def test_S1_a_tree_at_its_baseline_passes_and_the_line_names_the_ceilings_it_read(self):
-        """structure-budget/S1"""
-        tree = {"pkg/mod.py": measured(**{"module-lines": 120})}
-        recorded = baseline({"pkg/mod.py": {"module-lines": 120}})
-        self.assertEqual(budget["growth_lines"](tree, recorded), [])
-        line = budget["summary"](tree, recorded)
-        for metric, ceiling in CEILINGS.items():
-            self.assertIn(metric, line)
-            self.assertIn(str(ceiling), line)
-        self.assertIn("recorded", line)
-
-    def test_S2_a_file_that_grows_past_its_row_is_named_alone(self):
-        """structure-budget/S2"""
-        tree = {
-            "pkg/mod.py": measured(**{"module-lines": 120}),
-            "pkg/fine.py": measured(**{"module-lines": 120}),
-        }
-        recorded = baseline(
-            {"pkg/mod.py": {"module-lines": 37}, "pkg/fine.py": {"module-lines": 120}}
-        )
+    def test_S15_a_file_that_crossed_a_ceiling_since_the_base_is_named_with_the_ceiling(self):
+        """structure-budget/S15"""
+        tree = {"pkg/big.py": measured(**{"module-lines": 1100})}
+        at_base = {"pkg/big.py": measured(**{"module-lines": 900})}
         self.assertEqual(
-            budget["growth_lines"](tree, recorded),
-            ["pkg/mod.py: module-lines 120 > recorded 37 (ceiling 1000)"],
+            budget["growth_lines"](tree, at_base),
+            ["pkg/big.py: module-lines 1100 > ceiling 1000"],
         )
-        self.assertNotIn("fine.py", " ".join(budget["growth_lines"](tree, recorded)))
 
-    def test_S3_a_file_with_no_row_over_a_ceiling_is_named_with_the_ceiling(self):
+    def test_S3_a_file_with_no_measurement_at_the_base_is_named_with_the_ceiling(self):
         """structure-budget/S3"""
         tree = {"pkg/wide.py": measured(**{"class-methods": 26})}
         self.assertEqual(
-            budget["growth_lines"](tree, baseline()),
+            budget["growth_lines"](tree, {}),
             ["pkg/wide.py: class-methods 26 > ceiling 25"],
         )
 
-    def test_S4_write_records_today_and_the_recorded_number_holds(self):
+    def test_S2_a_file_that_grows_past_what_it_measured_at_the_base_is_named_alone(self):
+        """structure-budget/S2"""
+        tree = {
+            "pkg/big.py": measured(**{"module-lines": 1250}),
+            "pkg/fine.py": measured(**{"module-lines": 120}),
+        }
+        at_base = {
+            "pkg/big.py": measured(**{"module-lines": 1150}),
+            "pkg/fine.py": measured(**{"module-lines": 120}),
+        }
+        lines = budget["growth_lines"](tree, at_base)
+        self.assertEqual(lines, ["pkg/big.py: module-lines 1250 > recorded 1150 (ceiling 1000)"])
+        self.assertNotIn("fine.py", " ".join(lines), "a file that did not worsen is not named")
+
+    def test_S16_an_offender_that_grows_names_its_number_at_the_base_and_may_only_shrink(self):
+        """structure-budget/S16"""
+        at_base = {"pkg/big.py": measured(**{"module-lines": 1100})}
+        self.assertEqual(
+            budget["growth_lines"]({"pkg/big.py": measured(**{"module-lines": 1150})}, at_base),
+            ["pkg/big.py: module-lines 1150 > recorded 1100 (ceiling 1000)"],
+        )
+        self.assertEqual(
+            budget["growth_lines"]({"pkg/big.py": measured(**{"module-lines": 1050})}, at_base),
+            [],
+            "an offender that shrinks holds its grandfather, even over the ceiling",
+        )
+
+    def test_S17_growth_under_a_ceiling_is_free_and_no_file_is_stored(self):
+        """structure-budget/S17"""
+        tree = {"pkg/mod.py": measured(**{"module-lines": 400})}
+        at_base = {"pkg/mod.py": measured(**{"module-lines": 120})}
+        self.assertEqual(budget["growth_lines"](tree, at_base), [])
+        document = budget["baseline_document"]()
+        self.assertEqual(sorted(document), ["ceilings", "measured_at"])
+        self.assertEqual(document["ceilings"], CEILINGS)
+
+    def test_S4_write_stamps_today_and_stores_no_per_file_row(self):
         """structure-budget/S4"""
-        tree = {"pkg/wide.py": measured(**{"class-methods": 26})}
-        document = budget["baseline_document"](tree)
+        document = budget["baseline_document"]()
         stamp = datetime.fromisoformat(document["measured_at"])
         age = abs((datetime.now(timezone.utc) - stamp).total_seconds())
         self.assertLess(age, 120, "the baseline records the day it was measured")
-        self.assertEqual(document["files"], {"pkg/wide.py": {"class-methods": 26}})
-        self.assertEqual(budget["growth_lines"](tree, document), [])
+        self.assertNotIn("files", document, "a deliberate change is recorded as the day, not a row")
 
-    def test_S5_the_baseline_names_the_ceilings_and_rows_only_the_oversized_files(self):
+    def test_S5_the_committed_baseline_names_the_ceilings_and_no_file(self):
         """structure-budget/S5"""
-        tree = {"pkg/wide.py": measured(**{"class-methods": 26}), "pkg/small.py": measured()}
-        document = budget["baseline_document"](tree)
+        document = json.loads(BASELINE.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(document), ["ceilings", "measured_at"])
         self.assertEqual(document["ceilings"], CEILINGS)
-        self.assertEqual(sorted(document["files"]), ["pkg/wide.py"])
         self.assertEqual(
-            budget["growth_lines"]({"pkg/small.py": measured()}, baseline()),
+            budget["growth_lines"]({"pkg/small.py": measured()}, {}),
             [],
             "a file under every ceiling needs no row",
         )
 
+    def test_S1_a_tree_at_its_base_passes_and_the_line_names_the_ceilings_it_read(self):
+        """structure-budget/S1"""
+        tree = {"pkg/mod.py": measured(**{"module-lines": 120})}
+        at_base = {"pkg/mod.py": measured(**{"module-lines": 120})}
+        self.assertEqual(budget["growth_lines"](tree, at_base), [])
+        line = budget["summary"](tree, {"ceilings": CEILINGS}, "origin/main")
+        for metric, ceiling in CEILINGS.items():
+            self.assertIn(metric, line)
+            self.assertIn(str(ceiling), line)
+        self.assertIn("origin/main", line, "a reader sees the revision the base was read at")
+
 
 class PaidTests(unittest.TestCase):
-    """S6: a recorded row a paid metric declares is a debt, even under its ceiling."""
+    """S6: a paid path takes no grandfather from the base, and only for the metrics it names."""
 
-    ROWS = {"pkg/mod.py": {"module-lines": 120, "class-methods": 1}}
-    TREE = {"pkg/mod.py": measured(**{"module-lines": 120, "class-methods": 1})}
+    TREE = {"pkg/big.py": measured(**{"module-lines": 1050})}
+    AT_BASE = {"pkg/big.py": measured(**{"module-lines": 1100})}
 
-    def test_S6_a_paid_metric_fails_under_its_ceiling_and_a_metric_not_paid_is_left_alone(self):
+    def test_S6_a_paid_metric_may_not_be_grandfathered_and_a_metric_not_paid_is_left_alone(self):
         """structure-budget/S6"""
-        recorded = baseline(self.ROWS)
-        self.assertEqual(budget["growth_lines"](self.TREE, recorded), [])
         self.assertEqual(
-            budget["paid_lines"](self.TREE, recorded, "pkg/", ["module-lines"]),
-            ["pkg/mod.py: module-lines paid (recorded 120)"],
+            budget["growth_lines"](self.TREE, self.AT_BASE),
+            [],
+            "grandfathered and shrinking: unpaid, the base is what it is held to",
         )
-        self.assertEqual(budget["paid_lines"](self.TREE, recorded, "pkg/", ["function-lines"]), [])
+        self.assertEqual(
+            budget["growth_lines"](
+                self.TREE, self.AT_BASE, paid_paths=["pkg"], paid_metrics=["module-lines"]
+            ),
+            ["pkg/big.py: module-lines 1050 > paid (ceiling 1000)"],
+        )
+        self.assertEqual(
+            budget["growth_lines"](
+                self.TREE, self.AT_BASE, paid_paths=["pkg"], paid_metrics=["class-methods"]
+            ),
+            [],
+            "a row for a metric that was not paid is left alone",
+        )
 
-    def test_S6_metric_may_be_repeated_and_every_named_metric_is_paid(self):
+    def test_S6_a_paid_metric_may_be_repeated_and_every_named_metric_is_paid(self):
         """structure-budget/S6"""
-        paid = budget["paid_lines"](
-            self.TREE, baseline(self.ROWS), "pkg/", ["module-lines", "class-methods"]
+        tree = {"pkg/big.py": measured(**{"module-lines": 1050, "class-methods": 26})}
+        paid = budget["growth_lines"](
+            tree,
+            {},
+            paid_paths=["pkg/"],
+            paid_metrics=["module-lines", "class-methods"],
         )
         self.assertEqual(
             paid,
             [
-                "pkg/mod.py: module-lines paid (recorded 120)",
-                "pkg/mod.py: class-methods paid (recorded 1)",
+                "pkg/big.py: module-lines 1050 > paid (ceiling 1000)",
+                "pkg/big.py: class-methods 26 > paid (ceiling 25)",
             ],
         )
 
     def test_S6_a_paid_path_that_measures_no_file_is_refused(self):
         """structure-budget/S6"""
         with self.assertRaises(budget["Refused"]) as caught:
-            budget["paid_lines"](self.TREE, baseline(self.ROWS), "pkq/", ["module-lines"])
+            budget["paid_paths"](self.TREE, ["pkq/"])
         self.assertIn("pkq/", str(caught.exception))
-
-    def test_S6_a_file_over_a_ceiling_with_no_row_is_an_offender_on_a_paid_run_too(self):
-        """structure-budget/S6"""
-        tree = {"pkg/huge.py": measured(**{"module-lines": 1050})}
-        self.assertEqual(
-            budget["growth_lines"](tree, baseline()),
-            ["pkg/huge.py: module-lines 1050 > ceiling 1000"],
-        )
 
 
 class MeasureTests(unittest.TestCase):
     """S8 and the five definitions: a test module is measured exactly as source is."""
-
-    SOURCE = "".join(
-        "def %s(a, b, c, d, e, f, g, h):\n    return 0\n\n" % name for name in ("one",)
-    )
 
     def test_the_five_metrics_are_the_numbers_their_ceilings_name(self):
         numbers = budget["metrics_of"](
@@ -181,18 +223,101 @@ class MeasureTests(unittest.TestCase):
     def test_S8_a_test_module_and_its_test_class_carry_the_same_ceilings_and_rows(self):
         """structure-budget/S8"""
         suite = "class Tests:\n" + "".join(
-            "    def test_%d(self):\n        return 0\n" % index for index in range(26)
+            "    def test_%d(self):\n        return 0\n" % index for index in range(27)
         )
         numbers = budget["metrics_of"]("import unittest\n\n\n" + suite)
-        self.assertEqual(numbers["class-methods"], 26)
-        recorded = baseline({"tests/test_wide.py": {"class-methods": 3}})
+        self.assertEqual(numbers["class-methods"], 27)
+        at_base = {"tests/test_wide.py": measured(**{"class-methods": 26})}
         self.assertEqual(
-            budget["growth_lines"]({"tests/test_wide.py": numbers}, recorded),
-            ["tests/test_wide.py: class-methods 26 > recorded 3 (ceiling 25)"],
+            budget["growth_lines"]({"tests/test_wide.py": numbers}, at_base),
+            ["tests/test_wide.py: class-methods 27 > recorded 26 (ceiling 25)"],
         )
         walked = budget["walk"](str(REPO))
         self.assertIn("tests/test_structure_budget.py", walked, "the test tree is measured too")
         self.assertIn("scripts/structure_budget.py", walked)
+
+
+class SinceTests(unittest.TestCase):
+    """S15 and S16 across the boundary: the base is the tree at the `--since` revision in git."""
+
+    def checkout(self, head_lines=None):
+        """A checkout whose one module is committed at 1150 lines and optionally grown after."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name) / "repo"
+        (root / "pkg").mkdir(parents=True)
+        self.write(root, long_module(1150))
+        for command in (("init", "-q", "-b", "main"), ("add", "-A")):
+            self.git(root, *command)
+        self.git(root, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "base")
+        if head_lines is not None:
+            self.write(root, long_module(head_lines))
+        return root
+
+    @staticmethod
+    def write(root, source):
+        (root / "pkg" / "big.py").write_text(source, encoding="utf-8")
+
+    @staticmethod
+    def git(root, *args):
+        subprocess.run(
+            ["git", "-C", str(root), *args], check=True, capture_output=True, timeout=120
+        )
+
+    @pytest.mark.integration
+    def test_S16_the_base_is_the_tree_at_the_since_revision_in_git(self):
+        """structure-budget/S16: the number an offender may not pass comes from git, not a file."""
+        root = self.checkout(head_lines=1250)
+        at_base = budget["measure_at"](str(root), "HEAD")
+        self.assertEqual(at_base["pkg/big.py"]["module-lines"], 1150)
+        self.assertEqual(
+            budget["growth_lines"](budget["measure_tree"](str(root)), at_base),
+            ["pkg/big.py: module-lines 1250 > recorded 1150 (ceiling 1000)"],
+        )
+
+    @pytest.mark.integration
+    def test_S16_a_clean_run_that_keeps_a_grandfather_reports_on_stderr(self):
+        """structure-budget/S16: stdout is what the gate refused, so a clean run keeps it empty."""
+        root = self.checkout(head_lines=900)
+        stamp = root / "budget.json"
+        stamp.write_text(json.dumps(budget["baseline_document"]()), encoding="utf-8")
+
+        def run():
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--root",
+                    str(root),
+                    "--baseline",
+                    str(stamp),
+                    "--since",
+                    "HEAD",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+
+        at_ceilings = run()
+        self.assertEqual(at_ceilings.returncode, 0, at_ceilings.stdout + at_ceilings.stderr)
+        self.assertIn("module-lines 1000", at_ceilings.stdout, "a tree at its ceilings names them")
+        # The same file, over the ceiling at the base and shrunk back: clean, but holding debt.
+        self.write(root, long_module(1100))
+        kept = run()
+        self.assertEqual(kept.returncode, 0, kept.stdout + kept.stderr)
+        self.assertEqual(
+            kept.stdout.strip(), "", "a kept grandfather is a diagnostic, not a refusal"
+        )
+        self.assertIn("module-lines 1000", kept.stderr)
+
+    @pytest.mark.integration
+    def test_S15_a_since_that_is_not_a_revision_is_refused_naming_it(self):
+        """structure-budget/S15"""
+        root = self.checkout()
+        with self.assertRaises(budget["Refused"]) as caught:
+            budget["measure_at"](str(root), "no-such-rev")
+        self.assertIn("no-such-rev", str(caught.exception))
 
 
 class AffectedMapTests(unittest.TestCase):
