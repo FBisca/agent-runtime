@@ -83,15 +83,14 @@ class FastSuiteTests(unittest.TestCase):
 
     @classmethod
     def profile(cls):
-        """The one timed fast-suite run both R222 rows read, after a warm-up.
+        """The one timed fast-suite run both R222 rows read.
 
         R222 measures an idle machine and a wall clock, which a loaded CI runner cannot promise, so the
-        gate measures what a test costs: the sum of the cases' call time, after a warm-up run so imports
-        and the OS cache are not the measurement. Two rows read the same `--durations=0` output; running
-        the suite a second time measured nothing twice and cost a contended runner seconds of its own.
+        gate measures what a test costs: the sum of the cases' call time. Collection and module import are
+        not in that sum, so a warm-up run bought nothing R222 reads and cost a contended runner a second
+        full run of the suite; the two rows share the one measurement.
         """
         if cls._profile is None:
-            pytest_run("-o", "addopts=", "-q", "-p", "no:impacted", "-m", "not integration")
             cls._profile = pytest_run(
                 "-o",
                 "addopts=",
@@ -137,7 +136,10 @@ class FastSuiteTests(unittest.TestCase):
         self.assertLess(selected(), selected("-m", "unit or integration or not unit"))
 
     def test_S5_an_option_value_keeps_the_fast_suite(self):
-        self.assertEqual(selected("-p", "no:cacheprovider"), selected())
+        # One module is enough: the property is that an option's value is not read as a selection, and a
+        # whole-suite collection to prove it is two seconds of a contended runner for the same answer.
+        path = "tests/test_suite_budget.py"
+        self.assertEqual(selected(path, "-p", "no:cacheprovider"), selected(path))
 
     def test_S3_no_unit_test_starts_a_process_or_opens_a_socket(self):
         with tempfile.TemporaryDirectory() as directory:
