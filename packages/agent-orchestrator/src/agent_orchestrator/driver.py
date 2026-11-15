@@ -40,6 +40,8 @@ from . import (
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
+from .invariants import AMENDING, PARKED, next_path
+from .invariants import checked_write as ledger
 from .plan import PlanError
 from .report_rules import require, require_report
 from .runtime_client import (
@@ -119,17 +121,6 @@ def adopt_review(review):
     return canonical
 
 
-def carried_reviews(review):
-    """The review paths a record supersedes, newest first, kept when the next review file is allocated.
-
-    A review written to a fixed path would be lost to the next pass: its blockers would stop being nameable. The
-    record therefore hands them on, and every place that asks for a new file carries them instead of dropping the
-    record it replaces.
-    """
-    review = review or {}
-    return [path for path in [review.get("path"), *(review.get("earlier") or [])] if path]
-
-
 def announced_path(text, root):
     """The file a report names, when it names one inside `root`.
 
@@ -200,19 +191,6 @@ def owned_paths(packet):
         require(target.is_relative_to(root), "ownership follows a symlink outside checkout")
         paths.append(target)
     return paths
-
-
-@contextmanager
-def ledger(path, **options):
-    """The ledger under its lock, through the module the evidence runner shares: a busy ledger is waited out under one
-    deadline, and a ledger without the kind marker gets it before the block runs. A block that changed a state the
-    invariants read is checked before the write, so an illegal state is refused where it is written and never stored;
-    a read-only block compares one fingerprint and writes nothing."""
-    with ledgers.locked(path, **options) as data:
-        before = invariants.shape(data)
-        yield data
-        if invariants.shape(data) != before:
-            invariants.check(data)
 
 
 ROUTE = {
@@ -499,20 +477,6 @@ def unit_summary(data, unit):
     }
 
 
-def check_ledger(path):
-    """`ledger check`: a captured ledger the invariants hold on, or the first state they refuse, by name, with the
-    task and the way out (`LedgerInvariant`: exit 2, nothing written). A read: it takes no lock, so a live run is not
-    held up while its ledger is diagnosed."""
-    data = ledgers.load(path)
-    if data is None:
-        raise ValueError(
-            "no ledger at %s: pass the ledger a run wrote (`show --state` names it)" % path
-        )
-    data = ledgers.validate(data, path)
-    invariants.check(data)
-    return {"ok": True, "tasks": len(data["tasks"])}
-
-
 def task_summary(task):
     summary = {
         "task_id": task["packet"]["task_id"],
@@ -793,9 +757,6 @@ def assignment_of(result):
     return found
 
 
-GATES = invariants.GATES  # ledger `gate` stages the loop acts on
-
-
 def merge_state(view):
     """One word for what a pull request's merge state asks of the driver, in precedence order: merged, closed,
     conflict, unknown, behind, open. A conflict wins over red checks (it can keep CI from starting). A draft reports
@@ -816,15 +777,8 @@ def merge_state(view):
     return "open"
 
 
-AMENDING = (
-    invariants.AMENDING
-)  # the Lead decided `amend`: the unit waits for the driver to adopt the new plan
 PARK_ASK_FIRST = 15 * 60.0  # seconds a parked drive waits for the Lead before it asks again
 PARK_ASK_EVERY = 30 * 60.0  # seconds between the asks after the first, until the park ends
-PARKED = (
-    invariants.PARKED
-)  # nothing runs for the unit until the user acts (`attention`: runs of the old driver) or,
-# for AMENDING, until the driver adopts an amendment
 SILENT = (
     "idle",
     "done",
@@ -904,15 +858,6 @@ def unreadable_decision(path, error):
             % version
         )
     return str(error)
-
-
-def next_path(directory, stem, suffix):
-    """The first write-once file name free in `directory`: <stem><suffix>, <stem>.2<suffix>, ..."""
-    for index in range(1, 1000):
-        path = directory / (stem + ("" if index == 1 else ".%d" % index) + suffix)
-        if not path.exists():
-            return path, index
-    raise ValueError("too many %s files in %s" % (stem, directory))
 
 
 # The tail of a failing job's log that a fix round shows; the full log is at log_path.
@@ -1136,6 +1081,14 @@ def metrics_table(metrics):
             "lead model turns: %d" % metrics["lead"]["model_turns"],
         ]
     )
+
+
+def step_failed(drive, task_id, gate, error):
+    """Book a gate step's failure: the unit is stuck at its gate, the run names the error and the reader hears it."""
+    drive.stuck.add((task_id, gate))
+    drive.errors.append("%s: %s" % (task_id, error))
+    drive.log("error", unit=drive.unit_of(task_id), task=task_id, gate=gate, error=str(error)[:500])
+    narrate.say("fail", narrate.step_of(gate), "step %s failed: %s" % (gate, error), task=task_id)
 
 
 class Driver:
@@ -2332,47 +2285,20 @@ class Driver:
                     )  # a request now, so the unit is not `stuck` after the decision
                     break
                 except invariants.LedgerInvariant as error:
-                    # A ledger state the invariants refuse is the Lead's to settle, so the refusal becomes a request
-                    # naming the invariant, the task and the way out. A ledger already illegal before this write
-                    # cannot hold the request either: the refusal is then the run's error, and `ledger check` names
-                    # the repair.
-                    if not self.request_ledger_refusal(task_id, gate, error):
-                        self.step_failed(task_id, gate, error)
+                    try:  # the Lead settles an illegal ledger: the refusal becomes a request naming the way out
+                        self.request(task_id, gate, str(error))
+                    except invariants.LedgerInvariant:
+                        # A ledger already illegal before this write holds no request either: the refusal is the run's
+                        # error, and `ledger check` names the repair.
+                        step_failed(self, task_id, gate, error)
                     break
                 except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                     if self.decision_unapplied(task_id, gate, error):
                         break  # the Lead is asked again, as for an unsettled intent: not an error of the run
-                    self.step_failed(task_id, gate, error)
+                    step_failed(self, task_id, gate, error)
                     break
                 acted += 1
         return acted
-
-    def step_failed(self, task_id, gate, error):
-        """Book a gate step's failure: the unit is stuck at its gate, the run names the error and the reader hears it."""
-        self.stuck.add((task_id, gate))
-        self.errors.append("%s: %s" % (task_id, error))
-        self.log(
-            "error",
-            unit=self.unit_of(task_id),
-            task=task_id,
-            gate=gate,
-            error=str(error)[:500],
-        )
-        narrate.say(
-            "fail",
-            narrate.step_of(gate),
-            "step %s failed: %s" % (gate, error),
-            task=task_id,
-        )
-
-    def request_ledger_refusal(self, task_id, gate, error):
-        """Ask the Lead about a ledger state the invariants refused, naming the invariant, the task and the way out.
-        False when the ledger cannot hold the request either: the caller books the refusal as the run's error."""
-        try:
-            self.request(task_id, gate, str(error))
-        except invariants.LedgerInvariant:
-            return False
-        return True
 
     def awaiting(self):
         """Tickets whose PR is not merged yet, or whose request the Lead has not answered: the run stays up."""
@@ -3107,7 +3033,7 @@ class Driver:
             # Write-once: a file that already holds a review is never handed to another pass, so a rework that keeps
             # the task id (an answered worker) writes the next one. The record keeps the paths it superseded, newest
             # first, so a resolution can still close a blocker an earlier review raised.
-            superseded = carried_reviews(review)
+            superseded = invariants.carried_reviews(review)
             path, index = next_path(self.run_dir / unit, "review", ".json")
             record: dict[str, Any] = {
                 "name": name,
@@ -3448,14 +3374,6 @@ class Driver:
                 known.add(item.get("id"))
         return kept
 
-    @staticmethod
-    def review_paths(task):
-        """The review files one attempt wrote, oldest first: the path it holds now, and the ones a rework superseded
-        (the record's `earlier` names its immediate predecessor first, so the list is walked backwards)."""
-        review = task.get("review") or {}
-        earlier = [path for path in review.get("earlier") or [] if path]
-        return [*reversed(earlier), review.get("path")]
-
     def reviews_of(self, unit):
         """The unit's reviews, oldest first, as (path, document); a review file that no longer reads is skipped."""
         with self.book() as data:
@@ -3463,7 +3381,7 @@ class Driver:
                 path
                 for task in data["tasks"].values()
                 if task["packet"].get("unit") == unit
-                for path in self.review_paths(task)
+                for path in invariants.review_paths(task)
             ]
         found, seen = [], set()
         for path in paths:
@@ -3526,7 +3444,7 @@ class Driver:
         paths += [
             Path(path)
             for t in tasks
-            for path in self.review_paths(t)
+            for path in invariants.review_paths(t)
             if path and path != current_review
         ]
         for path in paths:
@@ -3727,7 +3645,7 @@ class Driver:
             # draft (the poll's ensure_draft, once readiness is forgotten) and is readied again on its return
             self.unready(self.unit_of(task_id))
             reviewed = task.get("reviewed_commit")
-            held = carried_reviews(task.get("review"))
+            held = invariants.carried_reviews(task.get("review"))
             self.mark(
                 task_id,
                 answers=dict(answers, state="done"),
@@ -8756,6 +8674,38 @@ def report_crash(driver, error):
         print("could not log the crash: %s" % failed, file=sys.stderr, flush=True)
 
 
+def add_task_commands(commands):
+    """The task ledger's own verbs on the parser `main` builds: one parser per verb, its state path and the options
+    that verb alone needs."""
+    for name in ("claim", "bind", "checkpoint", "release", "show"):
+        sub = commands.add_parser(name)
+        sub.add_argument(
+            "--state", required=True, help="Shared ledger path outside tracked product files"
+        )
+        if name in ("bind", "checkpoint", "release"):
+            sub.add_argument("--task", required=True)
+        if name == "show":
+            sub.add_argument(
+                "--task", help="Show the full record for one task; otherwise show a compact index"
+            )
+            sub.add_argument("--unit", help="Sum failed reviews and cutoffs over a unit's attempts")
+        if name == "claim":
+            sub.add_argument("--packet", required=True)
+        if name == "bind":
+            sub.add_argument("--runtime-id", required=True)
+        if name == "checkpoint":
+            sub.add_argument("--report", required=True)
+        if name == "release":
+            sub.add_argument("--reason", required=True)
+            sub.add_argument(
+                "--stopped", action="store_true", help="Assert runtime confirms the worker stopped"
+            )
+            sub.add_argument(
+                "--cutoff", action="store_true", help="The worker was stopped at its cutoff"
+            )
+    invariants.ledger_commands(commands)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -8803,41 +8753,7 @@ def main(argv=None):
         "inspect", help="Read checkout identity and installed command paths"
     )
     inspect.add_argument("--checkout", default=".")
-    for name in ("claim", "bind", "checkpoint", "release", "show"):
-        sub = commands.add_parser(name)
-        sub.add_argument(
-            "--state", required=True, help="Shared ledger path outside tracked product files"
-        )
-        if name in ("bind", "checkpoint", "release"):
-            sub.add_argument("--task", required=True)
-        if name == "show":
-            sub.add_argument(
-                "--task", help="Show the full record for one task; otherwise show a compact index"
-            )
-            sub.add_argument("--unit", help="Sum failed reviews and cutoffs over a unit's attempts")
-        if name == "claim":
-            sub.add_argument("--packet", required=True)
-        if name == "bind":
-            sub.add_argument("--runtime-id", required=True)
-        if name == "checkpoint":
-            sub.add_argument("--report", required=True)
-        if name == "release":
-            sub.add_argument("--reason", required=True)
-            sub.add_argument(
-                "--stopped", action="store_true", help="Assert runtime confirms the worker stopped"
-            )
-            sub.add_argument(
-                "--cutoff", action="store_true", help="The worker was stopped at its cutoff"
-            )
-    ledger_commands = commands.add_parser(
-        "ledger", help="Read a captured ledger the way the driver checks it where it writes"
-    ).add_subparsers(dest="ledger_command", required=True)
-    checked = ledger_commands.add_parser(
-        "check",
-        help="Refuse the states the driver's invariants forbid (two open attempts on one review file, a park with no "
-        "release key, an unknown gate); exit 2 names the invariant, the task and the way out",
-    )
-    checked.add_argument("path", help="A captured ledger (<state>/<slug>.json)")
+    add_task_commands(commands)
     sub = commands.add_parser("context")
     sub.add_argument("--sample", required=True)
     sub.add_argument("--reserve-tokens", type=int, required=True)
@@ -9152,7 +9068,7 @@ def main(argv=None):
         require(args.samples, "metrics needs a plan file (rebuild its metrics.json) or --samples")
         return metrics(read_json(args.samples))
     if args.command == "ledger":
-        return check_ledger(args.path)
+        return invariants.check_command(args.path)
     if args.command == "show":
         # A read: the snapshot needs no lock, so `show` never waits for the driver or makes it wait.
         found = ledgers.snapshot(args.state)
