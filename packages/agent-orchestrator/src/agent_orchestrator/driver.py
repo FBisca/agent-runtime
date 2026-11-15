@@ -755,6 +755,36 @@ NO_TEST_MENU = ("amend",) + tuple(action for action in contracts.ACTIONS if acti
 DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
 
 
+def archive_retry_refusal(state):
+    """(reason, way out): the Lead's `retry` for the archive is refused while the plan is not accepted.
+
+    The archive waits for an accepted plan: a retry over a plan that is not accepted would build a branch and open a
+    pull request nobody may merge. The reason names the plan's state; the way out names how the plan gets accepted."""
+    reason = (
+        "the plan's state is %s, not ACCEPTED or ACCEPTED_WITH_HUMAN: the archive's retry is refused"
+        % (state or "unknown")
+    )
+    way_out = (
+        "the archive waits for an accepted plan: `run` again to verify the plan, or `accept <plan> <S-id> --note ...` "
+        "for an item a person has checked (the plan is then ACCEPTED_WITH_HUMAN)"
+    )
+    return reason, way_out
+
+
+def archive_retry_allowed(state):
+    """Whether the archive may be rebuilt: only over a plan the outcome accepted."""
+    return state in ACCEPTED_STATES
+
+
+def plan_state_of(ledger_path):
+    """The plan's state in its ledger, or None when the ledger holds none."""
+    try:
+        data = ledgers.snapshot(ledger_path) or {}
+    except (OSError, ValueError):
+        return None
+    return (data.get("plan") or {}).get("state")
+
+
 def readable_request(path):
     """The request on disk, or None when it is missing or does not validate: the driver owns the file, so either way
     it writes the file again rather than leave the unit waiting on a decision no `decide` can record."""
@@ -6487,7 +6517,15 @@ class Driver:
 
     def retry_archive(self, task_id):
         """The Lead's `retry`: the archive branch is rebuilt from the current base and pushed again. A pull request
-        that was readied goes back to draft first, so nobody merges a branch that is changing."""
+        that was readied goes back to draft first, so nobody merges a branch that is changing.
+
+        The archive waits for an accepted plan: over a plan that is not accepted the retry builds nothing and opens no
+        pull request, and the Lead is asked again, naming the plan's state and the way out."""
+        state = self.plan_state()
+        if not archive_retry_allowed(state):
+            reason, way_out = archive_retry_refusal(state)
+            self.request(task_id, "archive", "%s. %s" % (reason, way_out))
+            return
         url = self.pr_of(task_id)
         if url and self.unit_flag(ARCHIVE, "pr_ready") and not self.undraft(task_id, url):
             return False
@@ -8104,7 +8142,8 @@ def decided(args, source):
                 "the decision needs an action and a --reason",
                 "run `decide <plan> <unit> <action> --reason <why>`, or `decide <plan> <unit> --json <file|->`",
             )
-    run_dir, unit = run_dir_of(args), args.unit.lower()
+    _, ledger_path, run_dir = plan_home(args)
+    unit = args.unit.lower()
     unit_dir = run_dir / unit
     unit_dir.mkdir(parents=True, exist_ok=True)
     fd = os.open(unit_dir / ".decide.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -8137,6 +8176,13 @@ def decided(args, source):
                 "action %r is not on the menu" % (action,),
                 "choose one of: %s" % ", ".join(menu),
             )
+        if unit == ARCHIVE and action == "retry":
+            # The archive waits for an accepted plan: a retry over a plan that is not accepted is refused here, and
+            # the request stays open for a decision the plan allows.
+            state = plan_state_of(ledger_path)
+            if not archive_retry_allowed(state):
+                reason, way_out = archive_retry_refusal(state)
+                raise Refused(reason, way_out)
         if action == "answer" and answer:
             wrong = foreign_attempt(answer, unit, request["task"])
             if wrong:
