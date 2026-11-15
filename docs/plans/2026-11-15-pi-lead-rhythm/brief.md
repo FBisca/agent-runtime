@@ -51,6 +51,14 @@ two tickets, and it carries `state`, `external` and `retry-idempotency`.
 - D7 Give the worker guard to all three hosts in one ticket, over Pi alone: the
   "ended without a report" hole is on all three, and both hook payloads are
   already recorded in `tests/test_hooks.py` (round 2 Q9)
+- D8 Fix the tests the authority invalidates inside T2, over a waiver that lets
+  them fail: five tests in `tests/test_peer_dispatch.py`, `tests/test_event_wait.py`
+  and `tests/test_operations.py` publish a report and then mutate without
+  acknowledging it, so they encode the behaviour D3 removes. They gain a
+  `wait(all)` and a receipt before the lead's mutating verb and keep every
+  assertion, because the refusal is right and a test that has to weaken to pass
+  is the defect. The same pattern is fixed wherever it appears, not in the three
+  instances the impacted check happened to report (t2 request, decision `amend`)
 
 ## Out of scope
 
