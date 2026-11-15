@@ -963,3 +963,50 @@ class IsolationTests(GateFixture, unittest.TestCase):
         isolated = self.root / "home" / ".local" / "state" / "orchestrate" / "approvals"
         self.assertTrue(isolated.is_dir() and any(isolated.iterdir()))
         self.assertEqual(sorted(real.iterdir()) if real.is_dir() else [], before)
+
+
+class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
+    """S3: a unit answered after its review writes the next review file, so the blockers it named stay nameable."""
+
+    def answered_report(self, task_id="t1"):
+        """A wait step: the answered worker writes the next write-once report and says complete again."""
+        name = "demo-t1"
+        step = report_wait(name, "complete", id=resume_id(name, 1))
+        step["write"] = [[str(self.run_dir / task_id / "report.2.json"), self.report(task_id)]]
+        return step
+
+    def read_review(self, name):
+        return json.loads((self.run_dir / "t1" / name).read_text(encoding="utf-8"))
+
+    def test_S3_a_rework_after_an_answer_writes_the_next_review_file(self):
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(
+                    write=[[str(self.run_dir / "t1" / "review.json"), self.blocking()]]
+                ),
+                self.decide_step(
+                    "t1", "answer", answer="the guard is per target", reason="rule on it"
+                ),
+                self.answered_report(),
+                self.reviewer_done(
+                    write=[[str(self.run_dir / "t1" / "review.2.json"), self.review2()]]
+                ),
+                self.skipped(),
+            ]
+        )
+        self.run_driver("--max-fix-rounds", "0")
+        self.assertEqual(
+            Path(self.task("t1")["review"]["path"]).name,
+            "review.2.json",
+            "the rework reused the first review file",
+        )
+        self.assertEqual(
+            [item["id"] for item in self.read_review("review.json")["items"]],
+            ["B1"],
+            "the earlier review lost the blocker it named",
+        )
+        self.assertTrue((self.run_dir / "t1" / "review.2.json").exists())
+
+    def blocking(self):
+        return self.review2(verdict="block", items=[BLOCKING])

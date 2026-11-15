@@ -25,7 +25,18 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import config as repo_config
-from . import contracts, events, evidence, narrate, routes, runner, timeutil, verify, workbench
+from . import (
+    contracts,
+    events,
+    evidence,
+    invariants,
+    narrate,
+    routes,
+    runner,
+    timeutil,
+    verify,
+    workbench,
+)
 from . import ledger as ledgers
 from . import plan as yaml_plan
 from .ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
@@ -183,9 +194,14 @@ def owned_paths(packet):
 @contextmanager
 def ledger(path, **options):
     """The ledger under its lock, through the module the evidence runner shares: a busy ledger is waited out under one
-    deadline, and a ledger without the kind marker gets it before the block runs."""
+    deadline, and a ledger without the kind marker gets it before the block runs. A block that changed a state the
+    invariants read is checked before the write, so an illegal state is refused where it is written and never stored;
+    a read-only block compares one fingerprint and writes nothing."""
     with ledgers.locked(path, **options) as data:
+        before = invariants.shape(data)
         yield data
+        if invariants.shape(data) != before:
+            invariants.check(data)
 
 
 ROUTE = {
@@ -472,6 +488,20 @@ def unit_summary(data, unit):
     }
 
 
+def check_ledger(path):
+    """`ledger check`: a captured ledger the invariants hold on, or the first state they refuse, by name, with the
+    task and the way out (`LedgerInvariant`: exit 2, nothing written). A read: it takes no lock, so a live run is not
+    held up while its ledger is diagnosed."""
+    data = ledgers.load(path)
+    if data is None:
+        raise ValueError(
+            "no ledger at %s: pass the ledger a run wrote (`show --state` names it)" % path
+        )
+    data = ledgers.validate(data, path)
+    invariants.check(data)
+    return {"ok": True, "tasks": len(data["tasks"])}
+
+
 def task_summary(task):
     summary = {
         "task_id": task["packet"]["task_id"],
@@ -752,18 +782,7 @@ def assignment_of(result):
     return found
 
 
-GATES = (
-    "reported",
-    "converged",
-    "reviewed",
-    "fix-pending",
-    "requested",
-    "decided",
-    "redo-pending",
-    "ready-for-ci",
-    "awaiting-merge",
-    "cleanup",
-)  # ledger `gate` stages the loop acts on
+GATES = invariants.GATES  # ledger `gate` stages the loop acts on
 
 
 def merge_state(view):
@@ -786,16 +805,15 @@ def merge_state(view):
     return "open"
 
 
-AMENDING = "awaiting-amendment"  # the Lead decided `amend`: the unit waits for the driver to adopt the new plan
+AMENDING = (
+    invariants.AMENDING
+)  # the Lead decided `amend`: the unit waits for the driver to adopt the new plan
 PARK_ASK_FIRST = 15 * 60.0  # seconds a parked drive waits for the Lead before it asks again
 PARK_ASK_EVERY = 30 * 60.0  # seconds between the asks after the first, until the park ends
 PARKED = (
-    "attention",
-    "blocked",
-    "skipped",
-    AMENDING,
-)  # nothing runs for the unit until the user acts (`attention`: runs of the old driver) or, for AMENDING, until the
-# driver adopts an amendment
+    invariants.PARKED
+)  # nothing runs for the unit until the user acts (`attention`: runs of the old driver) or,
+# for AMENDING, until the driver adopts an amendment
 SILENT = (
     "idle",
     "done",
@@ -3053,7 +3071,9 @@ class Driver:
         packet = task["packet"]
         unit, name = packet["unit"], worker_name(self.slug, packet["unit"][1:], "-review")
         review = task.get("review")
-        if not review:
+        if not review or not review.get("path") or Path(review["path"]).exists():
+            # Write-once: a file that already holds a review is never handed to another pass, so a rework that keeps
+            # the task id (an answered worker) writes the next one and the earlier blockers stay nameable.
             path, index = next_path(self.run_dir / unit, "review", ".json")
             review = {
                 "name": name,
@@ -8761,6 +8781,15 @@ def main(argv=None):
             sub.add_argument(
                 "--cutoff", action="store_true", help="The worker was stopped at its cutoff"
             )
+    ledger_commands = commands.add_parser(
+        "ledger", help="Read a captured ledger the way the driver checks it where it writes"
+    ).add_subparsers(dest="ledger_command", required=True)
+    checked = ledger_commands.add_parser(
+        "check",
+        help="Refuse the states the driver's invariants forbid (two open attempts on one review file, a park with no "
+        "release key, an unknown gate); exit 2 names the invariant, the task and the way out",
+    )
+    checked.add_argument("path", help="A captured ledger (<state>/<slug>.json)")
     sub = commands.add_parser("context")
     sub.add_argument("--sample", required=True)
     sub.add_argument("--reserve-tokens", type=int, required=True)
@@ -9074,6 +9103,8 @@ def main(argv=None):
             return rebuild_metrics(args)
         require(args.samples, "metrics needs a plan file (rebuild its metrics.json) or --samples")
         return metrics(read_json(args.samples))
+    if args.command == "ledger":
+        return check_ledger(args.path)
     if args.command == "show":
         # A read: the snapshot needs no lock, so `show` never waits for the driver or makes it wait.
         found = ledgers.snapshot(args.state)
@@ -9112,6 +9143,11 @@ def run_cli(argv=None):
         print(json.dumps(error.output, separators=(",", ":")), file=sys.stderr)
         return 2
     except JsonRefusal as error:
+        print(json.dumps(error.output), file=sys.stderr)
+        return 2
+    except invariants.LedgerInvariant as error:
+        # A state the ledger's invariants refuse is a refusal, not a crash: exit 2 says nothing was written, and the
+        # object names the invariant, the task and the way out.
         print(json.dumps(error.output), file=sys.stderr)
         return 2
     except PlanError as error:
