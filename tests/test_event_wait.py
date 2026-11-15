@@ -1670,8 +1670,10 @@ os._exit(0)
     def test_all_statuses_non_null_runs_no_hc_get(self):
         """agent-runtime/R106"""
         self.prepare()
+
         def workers():
             return [c for c in self.runs("get") if c[1] in ("w1", "w2", "t1", "t2")]
+
         before = len(workers())
         self.wait_all()
         self.assertEqual(len(workers()), before)

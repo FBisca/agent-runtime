@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 from fake_runtime import Completed
-from fixtures import assignment, envelope, report_wait, resume_id, spawn_id, wait_result
+from fixtures import report_wait, resume_id, spawn_id, wait_result
 from test_envelope import RESPONSE, EnvelopeFixture
 from test_gates import GateFixture
 from test_pr import PR, PrFixture
@@ -172,64 +172,6 @@ class IntentBooking(OperationRuntime, unittest.TestCase):
         self.assertTrue(self.refusals, "the driver never sent the keyed spawn")
         self.assertEqual(self.keyed("spawn"), [], "a spawn went out without its operation id")
         self.assertTrue(self.wake_lines("not-dispatched"), "the Lead was not told")
-
-
-class UnreadReportRace(OperationRuntime):
-    """One mutating call refused because a report landed after the driver's last wait page."""
-
-    unread_left = 0
-
-    def runtime_process(self, argv, timeout=None):
-        if argv[2] in ("spawn", "resume", "stop") and self.unread_left:
-            self.unread_left -= 1
-            return Completed(
-                argv,
-                1,
-                json.dumps(
-                    {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "refusing spawn: 1 undelivered report; "
-                                "call wait(all) to receive it, then retry",
-                            }
-                        ],
-                        "isError": True,
-                    }
-                ),
-                "",
-            )
-        return super().runtime_process(argv, timeout)
-
-
-class UnreadReport(UnreadReportRace, unittest.TestCase):
-    def a_report_lands(self):
-        """The report a worker published while the driver was advancing or merging."""
-        reported = assignment("demo-old", state="complete")
-        return wait_result([reported], [envelope(reported, "complete")])
-
-    def test_S6_a_report_landing_before_the_next_spawn_is_read_and_the_unit_dispatches(self):
-        """S6: the driver's own spawn is refused, it reads the report, retries, and nothing is parked."""
-        self.unread_left = 1
-        self.waits(
-            [
-                self.a_report_lands(),
-                self.worker_done(),
-                self.worker_done("t1r1", tests=True),
-                self.reviewer_done(),
-            ]
-        )
-        self.run_driver()  # exit 0: the scheduler's routine race did not end the run
-        self.assertEqual(self.unread_left, 0, "the refusal never reached the driver")
-        self.assertTrue(
-            [c for c in self.calls("spawn") if c["args"]["name"] == "demo-t1"],
-            "the refused spawn was not retried",
-        )
-        self.assertTrue(
-            [c for c in self.calls("wait") if c["args"].get("timeout") == 0],
-            "the driver retried without reading the report",
-        )
-        self.assertFalse(self.wake_lines("not-dispatched"), "the race woke the Lead")
 
 
 class ChaseAndAnswersKeys(OperationRuntime, EnvelopeFixture, unittest.TestCase):

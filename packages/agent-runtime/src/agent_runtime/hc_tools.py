@@ -1409,7 +1409,16 @@ def undelivered_reports(store, team, lead):
 
 
 def refuse_unread(ctx, scope, generation, caller, name):
-    """Refuse a mutating verb while the caller's own team has reports it has not read; a failed count never refuses."""
+    """Refuse a mutating verb while the caller's own team has reports it has not read; a failed count never refuses.
+
+    The orchestrator's dispatch loop calls through `agent-runtime call --lead` and reads its reports at the
+    end of every loop, so a report landing between that page and its next spawn is its routine race, not a
+    nudge it should answer. A nudge-reachable session (the MCP tool surface) has no such path: the CLI's
+    ancestry gate refuses an LLM-run `agent-runtime call`, and its live-lead gate refuses another generation
+    of a terminal whose lead still holds reports.
+    """
+    if lib.FORCED_LEAD:
+        return
     try:
         if ctx.actor["worker_id"]:
             team, lead = ctx.store.owned_team(scope, caller, generation), caller
