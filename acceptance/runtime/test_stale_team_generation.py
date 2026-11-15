@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 from test_mcp_server import RUNTIME_SRC, FakeCli
-from test_tools import ToolCase, raw
+from tools_harness import ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 from agent_runtime import agent_runtime as lib  # noqa: E402

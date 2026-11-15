@@ -1,6 +1,6 @@
 """Operation keys: `operation_id` on spawn and resume, replay and conflict, and the owner-scoped lookup.
 
-The store is real (a temporary HOME), hc is the fake of test_tools, and the calls are the server's own call path in
+The store is real (a temporary HOME), hc is the fake of tools_harness, and the calls are the server's own call path in
 process, so every behaviour here is observable the way an MCP client or `agent-runtime call` sees it.
 """
 
@@ -17,7 +17,7 @@ from unittest import mock
 import pytest
 from test_mcp_server import RUNTIME_SRC
 from test_team_limit import seed_workers, team_of
-from test_tools import FAKE, ToolCase, raw
+from tools_harness import FAKE, ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 from agent_runtime import hc_tools, mcp_server  # noqa: E402
@@ -353,7 +353,7 @@ class OperationReplayTests(Operations):
 
 
 def hc_tools_raw(name_, parent):
-    from test_tools import raw
+    from tools_harness import raw
 
     return raw(name_, parent)
 

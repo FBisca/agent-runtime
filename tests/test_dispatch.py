@@ -12,7 +12,7 @@ from unittest import mock
 from test_mcp_server import RUNTIME_SRC, FakeCli
 from test_operations import FakeHc
 from test_team_limit import team_of
-from test_tools import ToolCase, hc_in_process, raw
+from tools_harness import ToolCase, hc_in_process, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest

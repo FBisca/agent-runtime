@@ -9,7 +9,7 @@ from unittest import mock
 
 import test_event_wait as event_helpers
 from test_mcp_server import RUNTIME_SRC
-from test_tools import raw, unwrap
+from tools_harness import raw, unwrap
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest

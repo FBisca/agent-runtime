@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from test_mcp_server import FakeCli, Session
-from test_tools import ToolCase, raw, unwrap
+from tools_harness import ToolCase, raw, unwrap
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"))
 import pytest

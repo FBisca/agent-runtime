@@ -24,7 +24,7 @@ from agent_runtime import (
     hc_tools,  # noqa: E402
     usage,  # noqa: E402
 )
-from test_tools import ToolCase, raw, unwrap  # noqa: E402
+from tools_harness import ToolCase, raw, unwrap  # noqa: E402
 
 pytestmark = pytest.mark.integration
 

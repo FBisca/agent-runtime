@@ -7,7 +7,7 @@ import pytest
 import test_event_wait as event_helpers
 from agent_runtime import hc_tools
 from agent_runtime.dispatch_store import Store
-from test_tools import raw
+from tools_harness import raw
 
 pytestmark = pytest.mark.integration
 
