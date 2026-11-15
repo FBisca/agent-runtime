@@ -113,13 +113,11 @@ def led_team(db, who):
 
 
 def undelivered(db, team, lead):
-    """Lead-addressed messages not acknowledged and not named by any receipt (a delivered final read)."""
-    return db.execute(
-        "SELECT COUNT(*) FROM messages m WHERE m.team=? AND m.recipient=? AND m.acked=0 AND NOT EXISTS "
-        "(SELECT 1 FROM receipts r, json_each(r.ids) j WHERE r.team=m.team AND r.recipient=m.recipient "
-        "AND j.value=m.id)",
-        (team, lead),
-    ).fetchone()[0]
+    """Lead-addressed messages not acknowledged and not named by any receipt (a delivered final read).
+
+    The rule is the store's (`dispatch_store.undelivered_count`), so the count a Stop hook blocks on is the
+    count the server refuses a mutating verb on: one reader, two hosts."""
+    return dispatch.undelivered_count(db, team, lead)
 
 
 def working(db, team):

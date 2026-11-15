@@ -3676,6 +3676,15 @@ class Driver:
             return 1, "", str(error)
         return result.returncode, result.stdout, result.stderr
 
+    def closed_prs(self, unit):
+        """The pull requests this unit's gate has already seen closed: recorded when it happened, never guessed."""
+        with self.book() as data:
+            return {
+                task["pr_closed"]
+                for task in data["tasks"].values()
+                if task.get("packet", {}).get("unit") == unit and task.get("pr_closed")
+            }
+
     def pr_url(self, task_id):
         """The unit's pull request: a fix round opens none, so fall back to an earlier attempt's report."""
         task = self.task(task_id)
@@ -3691,7 +3700,17 @@ class Driver:
                 for t in data["tasks"].values()
                 if t["packet"].get("unit") == task["packet"]["unit"] and t.get("report")
             ]
-        url = next((r["pr"] for r in reports if r.get("pr")), None)
+        named = [r["pr"] for r in reports if r.get("pr")]
+        # A pull request the merge gate has already seen closed is not this unit's: the Lead closed it to send the
+        # work back, so a later attempt's branch needs one of its own. The ledger records it (`pr_closed`), so this
+        # fallback answers without spending another `gh` call.
+        closed = self.closed_prs(task["packet"]["unit"])
+        url = next((u for u in named if u not in closed), None)
+        if url is None and named:
+            raise ValueError(
+                "every pull request this unit's reports name was closed (%s): open a new one for this branch's "
+                "head and report it as `pr`" % ", ".join(named)
+            )
         match = re.fullmatch(r"https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)/?", url or "")
         if match is None:
             raise ValueError("report.json names no pull request URL to check (pr: %r)" % url)
@@ -3877,6 +3896,7 @@ class Driver:
         if kind == "merged":
             return False  # the next poll completes it (merged_early)
         if kind == "closed":
+            self.mark(task_id, pr_closed=url)  # a later attempt must not fall back to it
             return self.request(task_id, "merge", "%s was closed without a merge" % url)
         moved = self.merge_moved(task_id, url, view)
         if moved is not None:
@@ -4076,6 +4096,7 @@ class Driver:
         state = self.pr_view(url)
         kind = merge_state(state)
         if kind == "closed":
+            self.mark(task_id, pr_closed=url)  # a later attempt must not fall back to it
             return self.request(task_id, "merge", "%s was closed without a merge" % url)
         if kind != "merged":
             moved = self.merge_moved(task_id, url, state)
@@ -6511,31 +6532,38 @@ class Driver:
         narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
 
     def ticket_covers(self):
-        """{scenario: [node, ...]}: the union of every ticket report's `covers` and of the nodes `complete` recorded for
-        a person ticket. The report file is read again, so a
-        node the Lead added after a request counts; the ledger's copy is the fallback."""
+        """{scenario: [node, ...]}: what each unit ended with, plus the nodes `complete` recorded for a person ticket.
+
+        The unit speaks with its newest report, read from disk so a node the Lead added after a request counts, with
+        the ledger's copy as the fallback; an earlier attempt only fills a scenario that report does not name. A
+        superseded attempt may claim a test the attempt that replaced it reverted, and a promoted spec has to cite
+        what merged, not what was tried."""
         with self.book() as data:
-            rows = [
-                (t.get("report_path"), t.get("report"))
-                for t in data["tasks"].values()
-                if t["packet"].get("unit") != ARCHIVE
-            ]
-            # a person ticket has no report: its nodes are the ones `complete` recorded
-            rows += [
-                (None, {"covers": covers}) for covers in (data.get("person_covers") or {}).values()
-            ]
+            tasks = [t for t in data["tasks"].values() if t["packet"].get("unit") != ARCHIVE]
+            person = list((data.get("person_covers") or {}).values())
         found: dict[str, list[str]] = {}
-        for path, stored in rows:
-            report = None
-            if path:
-                try:
-                    report = contracts.load(path, contracts.validate_report)
-                except (contracts.ContractError, ValueError):
-                    report = None
-            for sid, nodes in ((report or stored or {}).get("covers") or {}).items():
+
+        def extend(covers):
+            for sid, nodes in (covers or {}).items():
                 for node in nodes:
                     if node not in found.setdefault(sid, []):
                         found[sid].append(node)
+
+        spoken: set[str] = set()
+        for task in sorted(tasks, key=lambda t: str(t.get("updated_at") or ""), reverse=True):
+            unit = task["packet"]["unit"]
+            if unit in spoken:
+                continue
+            spoken.add(unit)
+            report = None
+            if task.get("report_path"):
+                try:
+                    report = contracts.load(task["report_path"], contracts.validate_report)
+                except (contracts.ContractError, ValueError):
+                    report = None
+            extend((report or task.get("report") or {}).get("covers"))
+        for covers in person:
+            extend(covers)
         return found
 
     def scenario_nodes(self):

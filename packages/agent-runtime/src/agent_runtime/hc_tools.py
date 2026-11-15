@@ -1396,16 +1396,11 @@ MUTATING = ("spawn", "message", "resume", "stop")
 def undelivered_reports(store, team, lead):
     """Lead-addressed messages no receipt has delivered yet: the count the lead hooks block on.
 
-    A report handed over in a page carries a receipt naming it, so it is delivered even before the
-    next call acknowledges that receipt.
+    The rule is the store's (`dispatch_store.undelivered_count`), the one the Stop guard counts too, so a
+    host that reads the guard's reason sees the number the server refuses on.
     """
     with store.transaction() as db:
-        return db.execute(
-            "SELECT COUNT(*) FROM messages m WHERE m.team=? AND m.recipient=? AND m.acked=0 AND NOT EXISTS "
-            "(SELECT 1 FROM receipts r, json_each(r.ids) j WHERE r.team=m.team AND r.recipient=m.recipient "
-            "AND j.value=m.id)",
-            (team, lead),
-        ).fetchone()[0]
+        return dispatch.undelivered_count(db, team, lead)
 
 
 def refuse_unread(ctx, scope, generation, caller, name):
