@@ -47,7 +47,12 @@ def main(argv=None):
     explicit = hook_lib.option(argv, "--dialect")
     dialect = explicit or caps.stop_dialect
     who, found = hook_lib.lead_check()
-    reason = rhythm.stop_refusal(found) if who else None
+    if not who:
+        reason = None
+    elif found is not None:
+        reason = rhythm.stop_refusal(found)
+    else:  # no team owns this terminal: the session is a worker, and its own assignment is the work
+        reason = hook_lib.worker_refusal(who)
     if not reason:
         if who:
             hook_lib.reset_budget(os.environ, who)  # nothing to block on: a new period

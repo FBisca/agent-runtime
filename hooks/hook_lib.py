@@ -187,6 +187,43 @@ def lead_needs(env=None):
     return lead_check(env)[1]
 
 
+WORKER_REASON = (
+    "agent-runtime: assignment %s is unreported — call report complete or report blocked "
+    "before ending the turn"
+)
+
+
+def worker_assignment(db, who):
+    """The id of the caller's own current assignment while it is unreported, else None.
+
+    A session is a worker, not a lead, when no team row owns its terminal; the assignment then belongs
+    to the team its terminal is bound to. A report ends the obligation: complete, blocked and decision
+    all leave the working state, so only a pending or working assignment keeps the turn open."""
+    scope, terminal, _generation = who
+    row = db.execute(
+        "SELECT a.id FROM assignments a JOIN workers w ON w.id=a.worker "
+        "JOIN teams t ON t.id=a.team WHERE w.address=? AND w.active=1 AND a.current=1 "
+        "AND a.state IN ('pending','working') AND t.scope=? ORDER BY a.id LIMIT 1",
+        (terminal, scope),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def worker_refusal(who, env=None):
+    """The Stop reason for a worker whose own assignment is unreported, or None: the way out is a
+    report, which is also how a worker ends its assignment."""
+    db = open_readonly(env)
+    try:
+        db.execute("BEGIN")  # one read snapshot, like the lead's check
+        try:
+            assignment = worker_assignment(db, who)
+        finally:
+            db.rollback()
+    finally:
+        db.close()
+    return WORKER_REASON % assignment if assignment else None
+
+
 # --- Stop-guard block budget (the only file hooks write; never the dispatch store) ---------------------
 
 BUDGET = rhythm.REQUEST_CAP  # blocks per user work period; -1 marks "spent and already noted"
