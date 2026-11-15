@@ -123,9 +123,17 @@ scenarios:
   - id: S26
     when: the orchestrate shim is asked for `plan check`, `plan approve`, `plans list`, `verify`, `accept` or `status`
     then: it hands them to the member unchanged, and the agent-skills tree carries no converge skill
+    evidence:
+      human: >-
+        Read the shim and the agent-skills tree: every command is handed to the
+        member unchanged and no converge skill is left
   - id: S30
     when: start-planning writes a Python oracle for a repository whose formatter is configured (ruff format in pyproject.toml)
     then: "the oracle is formatted as that formatter formats its promoted path (`ruff format --stdin-filename <place>/<name>.py`) before `plan check` and `plan approve`, so the byte-identical copy promoted at archive passes the repository's format gate"
+    evidence:
+      human: >-
+        Write an oracle in a repository whose formatter is configured and
+        confirm the promoted copy passes the repository's format gate
 
   # Removal
   - id: S28

@@ -495,17 +495,59 @@ def discard_problems(model, path, repo):
     return [not_under_plans_dir(layout.folder, cfg.plans_dir)]
 
 
+def person_only_problems(model, repo):
+    """The scenarios nothing can prove: no evidence, and only person-owned tickets satisfy them.
+
+    A scenario with evidence is proven by it (a `human` item by a person, a `check` by the driver). A scenario an
+    agent ticket satisfies is proven by that ticket's report, whose `covers` names the node. A scenario that
+    carries no evidence and that only a person's ticket satisfies has no proof at all: the acceptance never asks
+    for it, and the archive asks for a node at the very end. The lint refuses it early and names every way out:
+    `human` evidence, an agent ticket, or a node the person records with `complete --cover`.
+
+    A person-owned ticket that holds no test is out of the lint's reach: its work is not a test, so its proof is a
+    node the person records by hand, wherever it lives (R57) — the lint cannot judge that node, and the
+    person-ticket flow it would break is the one that flow is for. A person-owned ticket that could hold a test
+    is in the lint's reach: the plan says how that scenario is proven."""
+    patterns = repo_config(repo).test_patterns
+    problems = []
+    for scenario in model.scenarios:
+        if scenario.evidence is not None:
+            continue
+        tickets = [t for t in model.tickets if scenario.id in t.satisfies]
+        if not tickets or any(t.owner.strip().lower() == "agent" for t in tickets):
+            continue
+        if all(holds_no_test(ticket.paths, patterns) for ticket in tickets):
+            continue
+        problems.append(
+            "%s: no evidence and only person-owned tickets satisfy it (%s), so nothing can prove it — attach "
+            "`human` evidence to %s, let an agent ticket satisfy %s, or record a test node with "
+            "`complete --cover %s=<node>`"
+            % (
+                scenario.id,
+                ", ".join(t.id for t in tickets),
+                scenario.id,
+                scenario.id,
+                scenario.id,
+            )
+        )
+    return problems
+
+
 def lint_problems(model, repo, path):
     """Problems `plan check`, `plan approve` and `plan amend` refuse; the driver's load never runs this, so a plan
     approved before a rule existed keeps running."""
     patterns = repo_config(repo).test_patterns
-    return discard_problems(model, path, repo) + [
-        f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
-        "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
-        "tests, to its paths"
-        for i, ticket in enumerate(model.tickets)
-        if ticket.owner.strip().lower() == "agent" and holds_no_test(ticket.paths, patterns)
-    ]
+    return (
+        discard_problems(model, path, repo)
+        + person_only_problems(model, repo)
+        + [
+            f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
+            "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
+            "tests, to its paths"
+            for i, ticket in enumerate(model.tickets)
+            if ticket.owner.strip().lower() == "agent" and holds_no_test(ticket.paths, patterns)
+        ]
+    )
 
 
 def semantic_problems(data, path, repo):
