@@ -2320,27 +2320,48 @@ class Driver:
                         task_id, error
                     )  # a request now, so the unit is not `stuck` after the decision
                     break
+                except invariants.LedgerInvariant as error:
+                    # A ledger state the invariants refuse is the Lead's to settle, so the refusal becomes a request
+                    # naming the invariant, the task and the way out. A ledger already illegal before this write
+                    # cannot hold the request either: the refusal is then the run's error, and `ledger check` names
+                    # the repair.
+                    if not self.request_ledger_refusal(task_id, gate, error):
+                        self.step_failed(task_id, gate, error)
+                    break
                 except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                     if self.decision_unapplied(task_id, gate, error):
                         break  # the Lead is asked again, as for an unsettled intent: not an error of the run
-                    self.stuck.add((task_id, gate))
-                    self.errors.append("%s: %s" % (task_id, error))
-                    self.log(
-                        "error",
-                        unit=self.unit_of(task_id),
-                        task=task_id,
-                        gate=gate,
-                        error=str(error)[:500],
-                    )
-                    narrate.say(
-                        "fail",
-                        narrate.step_of(gate),
-                        "step %s failed: %s" % (gate, error),
-                        task=task_id,
-                    )
+                    self.step_failed(task_id, gate, error)
                     break
                 acted += 1
         return acted
+
+    def step_failed(self, task_id, gate, error):
+        """Book a gate step's failure: the unit is stuck at its gate, the run names the error and the reader hears it."""
+        self.stuck.add((task_id, gate))
+        self.errors.append("%s: %s" % (task_id, error))
+        self.log(
+            "error",
+            unit=self.unit_of(task_id),
+            task=task_id,
+            gate=gate,
+            error=str(error)[:500],
+        )
+        narrate.say(
+            "fail",
+            narrate.step_of(gate),
+            "step %s failed: %s" % (gate, error),
+            task=task_id,
+        )
+
+    def request_ledger_refusal(self, task_id, gate, error):
+        """Ask the Lead about a ledger state the invariants refused, naming the invariant, the task and the way out.
+        False when the ledger cannot hold the request either: the caller books the refusal as the run's error."""
+        try:
+            self.request(task_id, gate, str(error))
+        except invariants.LedgerInvariant:
+            return False
+        return True
 
     def awaiting(self):
         """Tickets whose PR is not merged yet, or whose request the Lead has not answered: the run stays up."""
@@ -3073,13 +3094,19 @@ class Driver:
         review = task.get("review")
         if not review or not review.get("path") or Path(review["path"]).exists():
             # Write-once: a file that already holds a review is never handed to another pass, so a rework that keeps
-            # the task id (an answered worker) writes the next one and the earlier blockers stay nameable.
+            # the task id (an answered worker) writes the next one. The record keeps the paths it superseded, newest
+            # first, so a resolution can still close a blocker an earlier review raised.
+            superseded = [p for p in [review.get("path") if review else None] if p]
+            superseded += list((review or {}).get("earlier") or [])
             path, index = next_path(self.run_dir / unit, "review", ".json")
-            review = {
+            record: dict[str, Any] = {
                 "name": name,
                 "path": str(path),
                 "dir": str(self.run_dir / (unit + "-review" + ("" if index == 1 else str(index)))),
             }
+            if superseded:
+                record["earlier"] = superseded
+            review = record
             self.mark(task_id, review=review)
         review_dir = Path(review["dir"])
         review_dir.mkdir(exist_ok=True, mode=0o700)
@@ -3411,13 +3438,22 @@ class Driver:
                 known.add(item.get("id"))
         return kept
 
+    @staticmethod
+    def review_paths(task):
+        """The review files one attempt wrote, oldest first: the path it holds now, and the ones a rework superseded
+        (the record's `earlier` names its immediate predecessor first, so the list is walked backwards)."""
+        review = task.get("review") or {}
+        earlier = [path for path in review.get("earlier") or [] if path]
+        return [*reversed(earlier), review.get("path")]
+
     def reviews_of(self, unit):
         """The unit's reviews, oldest first, as (path, document); a review file that no longer reads is skipped."""
         with self.book() as data:
             paths = [
-                (task.get("review") or {}).get("path")
+                path
                 for task in data["tasks"].values()
                 if task["packet"].get("unit") == unit
+                for path in self.review_paths(task)
             ]
         found, seen = [], set()
         for path in paths:
@@ -3478,9 +3514,10 @@ class Driver:
             tasks = [t for t in data["tasks"].values() if t["packet"].get("unit") == unit]
         paths = [self.run_dir / t["packet"]["task_id"] / "findings.json" for t in tasks]
         paths += [
-            Path(t["review"]["path"])
+            Path(path)
             for t in tasks
-            if t.get("review") and t["review"]["path"] != current_review
+            for path in self.review_paths(t)
+            if path and path != current_review
         ]
         for path in paths:
             try:

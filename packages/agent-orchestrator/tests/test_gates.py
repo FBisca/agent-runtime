@@ -12,6 +12,7 @@ from unittest import mock
 
 import pytest
 import yaml
+from agent_orchestrator import invariants
 from agent_orchestrator import plan as yaml_plan
 from fixtures import (
     RunFixture,
@@ -999,8 +1000,27 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
         step["write"] = [[str(self.run_dir / task_id / "report.2.json"), self.report(task_id)]]
         return step
 
+    def rereview(self, text):
+        """The re-review's report, under the assignment the resumed reviewer pane holds, its review written to the
+        file the driver allocated for it."""
+        return report_wait(
+            "demo-t1-review",
+            "complete",
+            id=resume_id("demo-t1-review", 1),
+            write=[[str(self.run_dir / "t1" / "review.2.json"), text]],
+        )
+
     def read_review(self, name):
         return json.loads((self.run_dir / "t1" / name).read_text(encoding="utf-8"))
+
+    def open_ids(self, unit="t1"):
+        """The ids still open for the unit, as `record_blockers` left them."""
+        path = self.run_dir / unit / "open-findings.json"
+        return (
+            [item["id"] for item in json.loads(path.read_text(encoding="utf-8"))["items"]]
+            if path.exists()
+            else []
+        )
 
     def test_S3_a_rework_after_an_answer_writes_the_next_review_file(self):
         self.waits(
@@ -1013,10 +1033,7 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
                     "t1", "answer", answer="the guard is per target", reason="rule on it"
                 ),
                 self.answered_report(),
-                self.reviewer_done(
-                    write=[[str(self.run_dir / "t1" / "review.2.json"), self.review2()]]
-                ),
-                self.skipped(),
+                self.rereview(self.review2()),
             ]
         )
         self.run_driver("--max-fix-rounds", "0")
@@ -1030,7 +1047,81 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
             ["B1"],
             "the earlier review lost the blocker it named",
         )
-        self.assertTrue((self.run_dir / "t1" / "review.2.json").exists())
+        # The re-review was read (it carries no resolution, so the blocker it left open holds the unit): the driver
+        # asks the reviewer to close it rather than losing it with the file.
+        asked = [
+            c["args"]["task"] for c in self.calls("resume") if c["args"]["name"] == "demo-t1-review"
+        ]
+        self.assertTrue(asked, "the re-review was never read")
+        self.assertIn(
+            "resolutions", asked[-1], "the driver forgot the blocker the earlier review raised"
+        )
+
+    def test_S3_a_rework_resolution_closes_the_blocker_the_first_review_raised(self):
+        """S3's promise: the earlier blockers stay nameable, so the next review can close one with a resolution."""
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(
+                    write=[[str(self.run_dir / "t1" / "review.json"), self.blocking()]]
+                ),
+                self.decide_step(
+                    "t1", "answer", answer="the guard is per target", reason="rule on it"
+                ),
+                self.answered_report(),
+                self.rereview(self.review2(**self.closure(BLOCKING))),
+            ]
+        )
+        self.run_driver("--max-fix-rounds", "0")
+        self.assertEqual(
+            [event["reason"] for event in self.run_events("payload-warning")],
+            [],
+            "the driver refused the resolution that closes the earlier blocker",
+        )
+        self.assertEqual(self.open_ids(), [], "B1 is still open after a supported resolution")
+        self.assertEqual(self.task("t1")["gate"], "done")
 
     def blocking(self):
         return self.review2(verdict="block", items=[BLOCKING])
+
+
+class LedgerRefusedAtAStepTests(GateFixture, unittest.TestCase):
+    """S2 where it is written: a refusal that lands on a gate step's own write asks the Lead, by name."""
+
+    def refusing(self, *gates):
+        """A checker that refuses every write once a task holds one of these gates, as the real one refuses the
+        illegal states it reads: injected here so a step's own write is the refused one."""
+
+        def check(data):
+            held = {task.get("gate") for task in data["tasks"].values()}
+            if held & set(gates):
+                raise invariants.LedgerInvariant(
+                    invariants.UNKNOWN_GATE, "t1", "names the gate 'reviewer'"
+                )
+
+        return mock.patch.object(invariants, "check", check)
+
+    def test_S2_a_refused_step_write_asks_the_lead_instead_of_ending_the_run(self):
+        self.waits([self.worker_done(tests=True), self.skipped()])
+        with self.refusing("converged"):
+            self.run_driver()
+        asked = self.request()["reason"]
+        self.assertIn(invariants.UNKNOWN_GATE, asked)
+        self.assertIn("t1", asked)
+        self.assertIn(invariants.WAY_OUT[invariants.UNKNOWN_GATE], asked)
+        self.assertEqual(
+            self.run_events("error"), [], "the drive booked a ledger refusal as its own error"
+        )
+        self.assertEqual(
+            self.task("t1")["request"]["kind"], "reported", "the request does not name the step"
+        )
+
+    def test_S2_a_ledger_that_cannot_hold_the_request_stops_the_run_by_name(self):
+        """A ledger already illegal before the write holds no request either: the run stops naming the invariant."""
+        self.waits([self.worker_done(tests=True)])
+        with self.refusing("converged", "requested"):
+            self.run_driver(expect=1)
+        self.assertIn(
+            invariants.UNKNOWN_GATE, " ".join(e["error"] for e in self.run_events("error"))
+        )
+        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
