@@ -52,6 +52,20 @@ from ..runtime_client import (
     refuses_operation_ids,
 )
 
+# The durable record has one owner: `driver/book.py`. The package publishes every write of it, so a
+# caller, a test and the entry points keep asking `driver.<name>`.
+from .book import (
+    ARCHIVE,
+    Book,
+    bind,
+    checkpoint,
+    claim,
+    release,
+    settle_merged,
+    task_summary,
+    unit_summary,
+)
+
 # The record helpers live in their own module and the package publishes every one of them, so a caller,
 # a test and the entry points keep asking `driver.<name>`. The two aliases are the re-export ruff asks
 # for where no line here calls the name itself.
@@ -71,15 +85,19 @@ from .records import (
     normalise_check,
     ready,
     require_completable,
-    routed,
     satisfied,
     split_row,
     terminal_gone,
     unique_checks,
-    whole,
+)
+from .records import (
+    routed as routed,
 )
 from .records import (
     scenario_number as scenario_number,
+)
+from .records import (
+    whole as whole,
 )
 from .report import (
     USAGE_COLUMNS as USAGE_COLUMNS,
@@ -105,13 +123,15 @@ from .runtime import (
     TREE_TIMEOUT,
     checkout_snapshot,
     head_of,
-    merged_snapshot,
     resolve_runtime,
     run,
     runtime_call,
 )
 from .runtime import (
     gh_process as gh_process,
+)
+from .runtime import (
+    merged_snapshot as merged_snapshot,
 )
 from .runtime import (
     runtime_process as runtime_process,
@@ -219,200 +239,6 @@ def announced_path(text, root):
         if inside == resolved or inside in resolved.parents:
             return resolved
     return None
-
-
-def owned_paths(packet):
-    root = Path(packet["checkout"]).resolve()
-    owned = packet.get("owns")
-    require(isinstance(owned, list) and owned, "owns must contain relative files or directories")
-    paths = []
-    for item in owned:
-        require(
-            isinstance(item, str) and item and not any(c in item for c in "*?[]"),
-            "owns requires literal paths, not glob patterns",
-        )
-        rel = Path(item)
-        require(
-            not rel.is_absolute() and ".." not in rel.parts, "ownership must stay inside checkout"
-        )
-        target = (root / rel).resolve()
-        require(target.is_relative_to(root), "ownership follows a symlink outside checkout")
-        paths.append(target)
-    return paths
-
-
-def claim(data, packet):
-    require(isinstance(packet, dict), "packet must be an object")
-    for key in ("task_id", "worker", "plan", "objective", "checkout", "backend"):
-        require(isinstance(packet.get(key), str) and packet[key].strip(), "missing " + key)
-    require(packet["backend"] in ("codex", "claude", "pi"), "backend must be codex, claude or pi")
-    require(
-        isinstance(packet.get("acceptance"), list) and packet["acceptance"],
-        "acceptance is required",
-    )
-    require(isinstance(packet.get("checks"), list), "checks must be a list")
-    require(
-        all(isinstance(c, str) and c.strip() for c in packet["checks"]), "invalid check command"
-    )
-    require(
-        all(isinstance(c, str) and c.strip() for c in packet["acceptance"]),
-        "invalid acceptance criterion",
-    )
-    require(
-        isinstance(packet.get("depends_on", []), list)
-        and all(isinstance(c, str) for c in packet.get("depends_on", [])),
-        "invalid dependency list",
-    )
-    if routed(packet):
-        for key, allowed in ROUTE.items():
-            require(packet.get(key) in allowed, key + " must be one of " + ", ".join(allowed))
-        require(
-            isinstance(packet.get("model"), str) and packet["model"].strip(),
-            "a routed packet needs its model",
-        )
-        require(
-            isinstance(packet.get("unit"), str) and packet["unit"].strip(),
-            "a routed packet needs its unit",
-        )
-    snapshot = checkout_snapshot(packet["checkout"])
-    packet = dict(packet, checkout=snapshot["checkout"])
-    paths = owned_paths(packet)
-    task_id = packet["task_id"]
-    tasks = data["tasks"]
-    if task_id in tasks:
-        require(tasks[task_id]["packet"] == packet, "task ID already has a different assignment")
-        return {"action": "existing", "task": tasks[task_id]}
-    for dep in packet.get("depends_on", []):
-        require(
-            dep in tasks and tasks[dep]["status"] == "COMPLETE", "dependency not complete: " + dep
-        )
-    for task in tasks.values():
-        if task["status"] in ("COMPLETE", "RELEASED"):
-            continue
-        other = task["packet"]
-        require(other["worker"] != packet["worker"], "worker already has an unfinished assignment")
-        for left in paths:
-            for right in owned_paths(other):
-                require(
-                    not (left.is_relative_to(right) or right.is_relative_to(left)),
-                    "ownership overlaps task " + other["task_id"],
-                )
-    tasks[task_id] = {
-        "packet": packet,
-        "status": "RESERVED",
-        "runtime_id": None,
-        "started_at": now(),
-        "checkout_at_claim": snapshot,
-    }
-    return {"action": "reserved", "task": tasks[task_id]}
-
-
-def bind(data, task_id, runtime_id):
-    task = data["tasks"][task_id]
-    require(task["status"] not in ("COMPLETE", "RELEASED"), "assignment is closed")
-    require(runtime_id.strip(), "runtime ID is empty")
-    require(
-        task["runtime_id"] in (None, runtime_id),
-        "assignment already belongs to another runtime agent",
-    )
-    for other_id, other in data["tasks"].items():
-        if other_id != task_id and other["status"] not in ("COMPLETE", "RELEASED"):
-            require(
-                other["runtime_id"] != runtime_id,
-                "runtime agent already has an unfinished assignment",
-            )
-    task.update(runtime_id=runtime_id, status="ACTIVE")
-    return task
-
-
-def checkpoint(data, task_id, report, merged=False):
-    task = data["tasks"][task_id]
-    require(isinstance(report, dict), "report must be an object")
-    require(task["status"] not in ("COMPLETE", "RELEASED"), "assignment is closed")
-    require(report.get("task_id") == task_id, "report task ID does not match")
-    require_report(report)
-    require(
-        "review_rounds" not in report or whole(report["review_rounds"]),
-        "review_rounds must be a whole number",
-    )
-    status = report["status"]
-    if status == "COMPLETE":
-        require(task["runtime_id"], "bind the runtime agent before completion")
-        require_completable(task, report)
-        task["finished_at"] = now()
-    elif status == "BLOCKED":
-        require(
-            report.get("blocker") and report["remaining"],
-            "blocked result needs a blocker and next action",
-        )
-    task.update(
-        status=status,
-        report=report,
-        updated_at=now(),
-        # A live worker with no tree is a real fault, so only the merge path tolerates a missing one.
-        checkout_at_checkpoint=(merged_snapshot if merged else checkout_snapshot)(
-            task["packet"]["checkout"]
-        ),
-    )
-    return task
-
-
-def settle_merged(data, task_id, report):
-    """A merged unit is COMPLETE whatever its report says: the merge is final. The checks stay as the worker reported
-    them; the caller records why the rules were not met."""
-    task = data["tasks"][task_id]
-    require(task["status"] not in ("COMPLETE", "RELEASED"), "assignment is closed")
-    task["finished_at"] = now()
-    task.update(
-        status="COMPLETE",
-        report=report,
-        updated_at=now(),
-        checkout_at_checkpoint=merged_snapshot(task["packet"]["checkout"]),
-    )
-    return task
-
-
-def release(data, task_id, reason, cutoff=False):
-    task = data["tasks"][task_id]
-    require(reason.strip(), "release requires a reason")
-    require(task["status"] != "COMPLETE", "completed task cannot be released")
-    task.update(status="RELEASED", release_reason=reason, cutoff=cutoff, updated_at=now())
-    return task
-
-
-def unit_summary(data, unit):
-    """Failed reviews and cutoffs summed over every attempt at one logical unit."""
-    attempts = [t for t in data["tasks"].values() if t["packet"].get("unit") == unit]
-    require(attempts, "no attempts for unit " + unit)
-    counted = (data.get("rounds") or {}).get(
-        unit
-    )  # the driver's own count; a run of the old driver has only the reports'
-    failed = (
-        counted
-        if counted is not None
-        else sum((t.get("report") or {}).get("review_rounds", 0) for t in attempts)
-    )
-    cutoffs = sum(1 for t in attempts if t.get("cutoff"))
-    return {
-        "unit": unit,
-        "attempts": [task_summary(t) for t in attempts],
-        "failed_reviews": failed,
-        "cutoffs": cutoffs,
-        "escalate": failed >= 2 or cutoffs >= 2,
-    }
-
-
-def task_summary(task):
-    summary = {
-        "task_id": task["packet"]["task_id"],
-        "worker": task["packet"]["worker"],
-        "status": task["status"],
-        "runtime_id": task["runtime_id"],
-    }
-    for key in ("unit", *ROUTE, "model"):
-        if key in task["packet"]:
-            summary[key] = task["packet"][key]
-    return summary
 
 
 def metrics(samples):
@@ -546,7 +372,6 @@ ATTENTION = {
     "decision": "asked for a decision",
     "exited": "ended without a report",
 }
-ARCHIVE = "archive"  # the unit (and task id) of the driver's own archive
 ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or replace
 # An archive whose pull request conflicts is a base that moved, not a defect: rebuilding re-reads the spec on the new
 # base. Twice, so a genuinely conflicting plan still reaches the Lead instead of looping.
@@ -755,38 +580,13 @@ class Driver(SpecSections):
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
         self.run_logs = {}  # run id -> its failed-step log, once a round: the findings reuse the readiness read
+        # The durable record: every read and write of the ledger goes through the Book below.
+        self.book = Book(self)
 
     # ---- the event log: every state change is on disk before the next step -----------------------------------
 
     def log(self, kind, **fields):
         events.append(self.run_dir / "events.jsonl", kind, **fields)
-
-    @contextmanager
-    def book(self):
-        """The ledger, plus one `state` event for every task whose gate or status the block changed. The line is
-        appended before the ledger is written, so the log is never behind the state it describes."""
-        with ledger(self.ledger_path) as data:
-            before = {
-                task_id: (task.get("gate"), task["status"])
-                for task_id, task in data["tasks"].items()
-            }
-            yield data
-            for task_id, task in data["tasks"].items():
-                old, new = before.get(task_id, (None, None)), (task.get("gate"), task["status"])
-                if old == new:
-                    continue
-                packet = task["packet"]
-                route = {
-                    k: packet[k] for k in ("size", "difficulty", "class", "model") if k in packet
-                }
-                self.log(
-                    "state",
-                    unit=packet.get("unit") or task_id,
-                    task=task_id,
-                    gate=[old[0], new[0]],
-                    status=[old[1], new[1]],
-                    route=route if task_id not in before and route else None,
-                )
 
     def read_plan(self):
         """The plan as the run gates and dispatches it: the approved snapshot, until an amendment is adopted.
@@ -1924,24 +1724,19 @@ class Driver(SpecSections):
 
     def awaiting(self):
         """Tickets whose PR is not merged yet, or whose request the Lead has not answered: the run stays up."""
-        with self.book() as data:
-            return any(
-                t.get("gate") in ("ready-for-ci", "awaiting-merge", "requested")
-                for t in data["tasks"].values()
-            ) or any(r.get("state") == "reviewing" for r in (data.get("mutation") or {}).values())
+        return self.book.awaiting()
 
     def task(self, task_id):
-        with self.book() as data:
-            return copy.deepcopy(data["tasks"][task_id])
+        """One attempt as the record holds it, as a copy."""
+        return self.book.task(task_id)
 
     def unit_of(self, task_id):
-        with self.book() as data:
-            task = data["tasks"].get(task_id)
-        return (task["packet"].get("unit") or task_id) if task else task_id
+        """The logical unit one attempt belongs to."""
+        return self.book.unit_of(task_id)
 
     def mark(self, task_id, **fields):
-        with self.book() as data:
-            data["tasks"][task_id].update(fields, updated_at=now())
+        """Set fields on one attempt, and say when it was set."""
+        return self.book.mark(task_id, **fields)
 
     # ---- the Lead: a request.json and one wake per escalation, answered by `decide` -------------------------------
     # A unit that needs a decision (a worker that blocks or asks, a failed gate past the cap, a handoff file that is
@@ -2167,10 +1962,8 @@ class Driver(SpecSections):
                 )
 
     def write_status(self, ticket_id, status):
-        if ticket_id == ARCHIVE.upper():
-            return  # the archive unit has no ticket row
-        with self.book() as data:
-            data.setdefault("ticket_status", {})[ticket_id] = status
+        """The plan ticket's Status cell; the archive unit has no row to write."""
+        return self.book.write_status(ticket_id, status)
 
     def refresh_attention(self):
         """Rewrite attention.md from the ledger's `needs you` tickets and its park. Appending left a completed
