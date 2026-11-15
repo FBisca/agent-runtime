@@ -253,7 +253,8 @@ suite runs here, against the member, and the member answers the way the engine a
 ### R22–R37 — a merged unit always completes
 
 - `packages/agent-orchestrator/tests/test_checkpoint_rules.py`: `test_S1_…`, `test_S1a_…`, `test_S2_…`, `test_S3_…`, `test_S3a_…`, `test_S3b_…`, `test_S4_…`, `test_S8a_…` — the pure COMPLETE rules (R22–R28, R35)
-- `packages/agent-orchestrator/tests/test_gates.py`: `test_S5_a_ready_report_that_fails…`, `test_S5a_report_refusals…`, `test_S5_a_report_the_ledger…` — the report-time refusal (R29, R30)
+- `packages/agent-orchestrator/tests/test_gates.py`: `test_S5_a_ready_report_that_fails…`, `test_S5a_report_refusals…` — the report-time refusal (R29, R30)
+- `packages/agent-orchestrator/tests/test_report_gate.py`: `test_S1_a_report_the_ledger_cannot_read…`, `test_S1_a_refusal_the_sender_repeats…` — a payload the ledger cannot read (R159)
 - `packages/agent-orchestrator/tests/test_merge.py`: `test_S6_…`, `test_S8_…` (two), `test_S9_cleanup_keeps…` — the merge wins, the missing checkout, the busy check (R31, R34, R36)
 - `packages/agent-orchestrator/tests/test_pr.py`: `test_S7_…`, `test_S7a_…`, `test_S10_several_failing_checks…` — the early merge and the CI excerpt (R32, R33, R37)
 
