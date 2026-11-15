@@ -36,10 +36,12 @@ must read, and the file is the unit a review is opened on. A capability is per m
 so `stdlib-only` carries one reason per module a member adds: a change that imports two packages leaves two
 things for a person to act on, however the statements spell them.
 
-`protected-path` fires on a changed path a pattern declares sensitive, on either side of a rename and for
-an added, modified or deleted file alike. The patterns are configuration (SG-D4, SG-D6): the packaged
-baseline ships the mandatory ones and a repository's `.agent-review.yaml` adds to them, so a reason names
-where the pattern came from as well as the path it matched.
+`sensitive-path` fires on a changed file, directory, or either side of a rename that a pattern declares
+sensitive, for an added, modified or deleted file alike. The patterns are configuration (SG-D4, SG-D6): the
+packaged baseline ships the mandatory ones and a repository's `.agent-review.yaml` adds to them, so a reason
+names where the pattern came from - the global baseline or the repository - as well as the path it matched.
+A hit recommends a full deep review (D12): a path configuration declares load-bearing is read by a person,
+however clean the screen looked.
 
 `stdlib-only` fires when a path the rules declare (`safeguards.stdlib_only`, read as path prefixes) adds an
 import of a module the standard library does not ship. The members are configuration and the rule is code
@@ -62,17 +64,21 @@ from typing import Any
 from agent_review.change import ADDED, Change, DiffLine, FileChange, Hunk, indent_columns
 
 TARGET_OUTSIDE_ROOT = "target-outside-root"
-PROTECTED_PATH = "protected-path"
+SENSITIVE_PATH = "sensitive-path"
 STDLIB_ONLY = "stdlib-only"
+
+# The rules whose hit means a person reads the change in a full deep review rather than a signal recorded
+# beside the screen (D12, D43). A rule that only records a signal is not named here.
+FULL_REVIEW = (SENSITIVE_PATH,)
 
 # The configuration key a run declares its standard-library-only members under (SG-D6).
 STDLIB_ONLY_SETTING = "stdlib_only"
 
 # Where a reason's evidence came from: this rule reads the change, a sensitive-path rule reads the mandatory
-# baseline or a repository's own list (T2), and a member rule reads a declaration. The field is what P2
-# routes on, so it is never free text.
+# baseline's global list or a repository's own (D13), and a member rule reads a declaration. The field is what
+# P2 routes on, so it is never free text.
 DIFF = "diff"
-BASELINE = "baseline"
+GLOBAL = "global"
 REPOSITORY = "repository"
 
 # A call that deletes its target: the whole function is spelled out so a `remove` in a sentence is not one.
@@ -109,24 +115,24 @@ _MODULE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
 
 
 @dataclass(frozen=True)
-class ProtectedPath:
-    """One pattern that declares a path sensitive, and whether the baseline or the repository declared it."""
+class SensitivePath:
+    """One pattern declaring a path sensitive, and whether the global baseline or the repository declared it."""
 
     pattern: str
-    source: str = BASELINE
+    source: str = GLOBAL
 
 
 @dataclass(frozen=True)
 class RuleSet:
-    """What configuration contributes to the rules: the protected paths and the stdlib-only members."""
+    """What configuration contributes to the rules: the sensitive paths and the stdlib-only members."""
 
-    protected_paths: tuple[ProtectedPath, ...] = ()
+    sensitive_paths: tuple[SensitivePath, ...] = ()
     # The members that may carry only the standard library, as path prefixes (SG-D6).
     stdlib_only: tuple[str, ...] = ()
 
 
 def rule_set(
-    baseline_paths: Iterable[str] = (),
+    global_paths: Iterable[str] = (),
     repository_paths: Iterable[str] = (),
     stdlib_only_paths: Iterable[str] = (),
 ) -> RuleSet:
@@ -136,16 +142,25 @@ def rule_set(
     keeps the baseline as its source: the mandatory list is what proves that path, whatever else repeats it.
     The declared members are parsed here once, so a rule reads them as the paths they are.
     """
-    protected = [ProtectedPath(pattern=pattern, source=BASELINE) for pattern in baseline_paths]
-    named = {path.pattern for path in protected}
-    protected.extend(
-        ProtectedPath(pattern=pattern, source=REPOSITORY)
+    declared = [SensitivePath(pattern=pattern, source=GLOBAL) for pattern in global_paths]
+    named = {path.pattern for path in declared}
+    declared.extend(
+        SensitivePath(pattern=pattern, source=REPOSITORY)
         for pattern in repository_paths
         if pattern not in named
     )
     return RuleSet(
-        protected_paths=tuple(protected), stdlib_only=stdlib_only_members(stdlib_only_paths)
+        sensitive_paths=tuple(declared), stdlib_only=stdlib_only_members(stdlib_only_paths)
     )
+
+
+def recommends_full_review(reasons: Iterable["EscalationReason"]) -> bool:
+    """Whether a person must read this change in a full deep review, rather than a signal beside the screen.
+
+    One shape for every rule that routes to a person, so a report says what happens next in one place: a
+    sensitive path now, a coverage gap or a calibrated threshold beside it later (D12, D43).
+    """
+    return any(reason.rule in FULL_REVIEW for reason in reasons)
 
 
 def stdlib_only_members(paths: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -279,7 +294,7 @@ def decide(
     members = rules.stdlib_only
     reasons: list[EscalationReason] = []
     for file in change.files:
-        reasons.extend(_protected_path(file, rules))
+        reasons.extend(_sensitive_path(file, rules))
         found = _target_outside_root(file, scope)
         if found is not None:
             reasons.append(found)
@@ -297,19 +312,19 @@ def _as_rules(rules: RuleSet | Mapping[str, Any] | None) -> RuleSet:
     return RuleSet(stdlib_only=stdlib_only_members(declared if isinstance(declared, list) else ()))
 
 
-def _protected_path(file: FileChange, rules: RuleSet) -> list[EscalationReason]:
+def _sensitive_path(file: FileChange, rules: RuleSet) -> list[EscalationReason]:
     """One reason per changed path a pattern declares sensitive, both sides of a rename included (D13)."""
     reasons: list[EscalationReason] = []
     for path in file.paths:
         matched = next(
-            (candidate for candidate in rules.protected_paths if matches(candidate.pattern, path)),
+            (candidate for candidate in rules.sensitive_paths if matches(candidate.pattern, path)),
             None,
         )
         if matched is None:
             continue
         reasons.append(
             EscalationReason(
-                rule=PROTECTED_PATH, path=path, pattern=matched.pattern, source=matched.source
+                rule=SENSITIVE_PATH, path=path, pattern=matched.pattern, source=matched.source
             )
         )
     return reasons
@@ -470,10 +485,10 @@ def way_out(reason: EscalationReason) -> str:
             "the call - `target.is_relative_to(root)` against the root this run reviews - or drop the call; "
             "the review cannot tell how far the target reaches, so a person decides."
         )
-    if reason.rule == PROTECTED_PATH:
+    if reason.rule == SENSITIVE_PATH:
         holder = (
             "the mandatory sensitive-path baseline"
-            if reason.source == BASELINE
+            if reason.source == GLOBAL
             else "this repository's own sensitive-path list"
         )
         return (

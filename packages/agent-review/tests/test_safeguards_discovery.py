@@ -23,7 +23,7 @@ CONFIG = textwrap.dedent(
     """\
     model: test-model-v1
     questions:
-      - id: contract.error-handling
+      - id: repo.error-handling
         priority: critical
         type: noul
         ask: Does the change keep the documented error-handling contract
@@ -35,7 +35,15 @@ DISCOVERED = CONFIG + "sensitive_paths:\n  - pkg/**\n"
 
 ANSWER = {
     "model": "jev-1.14.0",
-    "answers": {"contract.error-handling": {"type": "noul", "noul": 0.9}},
+    "answers": {"repo.error-handling": {"type": "noul", "noul": 0.9}},
+    "usage": {"input_tokens": 40, "output_tokens": 5},
+}
+
+# A run without a configuration asks the packaged baseline, so its canned answer names a baseline question:
+# the repository's own question is only asked when the configuration declaring it is read.
+BASELINE_ANSWER = {
+    "model": "jev-1.14.0",
+    "answers": {"contract.error-handling": {"type": "score", "score": 0.0, "confidence": 0.9}},
     "usage": {"input_tokens": 40, "output_tokens": 5},
 }
 
@@ -159,11 +167,12 @@ def test_S5_a_discovered_configuration_extends_the_baseline_without_a_flag(revie
     )
     assert (matched["pyproject.toml"]["pattern"], matched["pyproject.toml"]["source"]) == (
         "pyproject.toml",
-        "baseline",
+        "global",
     )
 
 
 def test_S4_a_change_that_matches_no_pattern_is_screened(review):
+    review.answers.write_text(json.dumps({"responses": [BASELINE_ANSWER]}), encoding="utf-8")
     review.revisions(
         {"pkg/service.py": "def load(path):\n    return path\n"},
         {
@@ -193,7 +202,7 @@ def test_S8_a_hit_writes_completed_escalated_and_names_what_a_person_should_do(r
     assert report["usage"]["requests"] == 0
     assert report["input"] == {"base": review.base, "head": review.head}
     said = capsys.readouterr().out.lower()
-    assert "protected-path" in said, "the summary names the rule"
+    assert "sensitive-path" in said, "the summary names the rule"
     assert "server/extra.py" in said, "the summary names the path it matched"
     assert "deep review" in said, "a refusal names the way out"
 

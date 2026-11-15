@@ -25,13 +25,13 @@ DISCOVERED = ".agent-review.yaml"
 EPILOG = """\
 `code` resolves two revisions to their commit shas, reads the change between them, and screens it once
 against the configured question bank. Without --config it discovers the checkout's root `.agent-review.yaml`
-and, absent one, evaluates the packaged baseline bank; a configuration replaces that bank in this phase, and
-additive repository questions, which extend the baseline and never override or disable it, are a later
-phase's (D05). Its sensitive paths are different: the packaged baseline ships the mandatory ones, and a
-configuration's own list adds to them and never replaces them (D13), so a protected path escalates however
-the repository is configured. A bank that asks nothing, or a declaration no rule can read, is refused
-rather than screened. The invocation writes `report.json` under --output either way and prints a summary
-for a person; the report, not the exit status, carries the verdict.
+and, absent one, evaluates the packaged baseline bank. A configuration is additive: the packaged baseline is
+always asked, a repository's own questions extend it and never override or disable one, and its sensitive
+paths add to the mandatory ones (D05, D13) - so a protected path escalates however the repository is
+configured. The numbers the screening is decided with are configuration too: a configuration's weights and
+thresholds are laid over the baseline's per question, and the model never chooses or sees them (D07, D48).
+A declaration no rule can read is refused rather than screened. The invocation writes `report.json` under
+--output either way and prints a summary for a person; the report, not the exit status, carries the verdict.
 
 The report names what produced it: the provider endpoint it screened through (or the fixture it answered
 from), the model the provider served beside the configured alias, the input limit in force, whether long
@@ -83,9 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         type=Path,
         help=(
-            "the question configuration; absent, a root .agent-review.yaml is discovered and, without "
-            "one, the packaged baseline bank is evaluated. A configuration's sensitive paths extend the "
-            "mandatory baseline and never replace it"
+            "the question configuration, which extends the packaged baseline; absent, a root "
+            ".agent-review.yaml is discovered and, without one, the packaged baseline bank is "
+            "evaluated. Its questions and sensitive paths add to the baseline and never replace it"
         ),
     )
     code.add_argument(
@@ -169,20 +169,19 @@ def screen(args: argparse.Namespace) -> Report:
     _prepare_output(args.output, base, head)
     # The safeguards read the frozen diff beside the rules configuration declares: a hit decides the change,
     # so no port is built, no credential is read and no request is spent (SG-D2, SG-D6, SG-D10). The
-    # mandatory baseline's paths apply whatever was configured, and the configuration's own paths add to
-    # them (D13); the members it declares standard-library-only are read beside them.
+    # mandatory baseline's global paths apply whatever was configured, and the configuration's own paths add
+    # to them (D13); the members it declares standard-library-only are read beside them.
     rules = safeguards.rule_set(
-        baseline_paths=questions.baseline().sensitive_paths,
+        global_paths=questions.baseline().sensitive_paths,
         repository_paths=bank.sensitive_paths,
         stdlib_only_paths=bank.safeguards.get(safeguards.STDLIB_ONLY_SETTING, ()),
     )
     escalation = safeguards.decide(read_change(change), rules)
     if escalation:
         return Report(
-            model=bank.model,
+            bank=bank,
             base=base,
             head=head,
-            questions=bank.questions,
             long_context=args.long_context,
             requests=0,
             escalation=escalation,
@@ -196,10 +195,9 @@ def screen(args: argparse.Namespace) -> Report:
     except ScreeningError as error:
         # An incomplete run keeps what it knows and records why it stopped; no verdict is inferred (D34, D40).
         return Report(
-            model=bank.model,
+            bank=bank,
             base=base,
             head=head,
-            questions=bank.questions,
             provider=port.provider,
             long_context=args.long_context,
             failure=str(error),
@@ -208,10 +206,9 @@ def screen(args: argparse.Namespace) -> Report:
     # paid for stay in the report: it is the only record of a screening that happened (S6, D47).
     held = collected(bank.questions, reply.judgments, base=base, head=head)
     return Report(
-        model=bank.model,
+        bank=bank,
         base=base,
         head=head,
-        questions=bank.questions,
         provider=port.provider,
         resolved_model=reply.model,
         judgments=held.judgments,

@@ -22,7 +22,7 @@ CONFIG = textwrap.dedent(
     """\
     model: test-model-v1
     questions:
-      - id: contract.error-handling
+      - id: repo.error-handling
         priority: critical
         type: noul
         ask: Does the change keep the documented error-handling contract
@@ -31,7 +31,7 @@ CONFIG = textwrap.dedent(
 
 ANSWER = {
     "model": "jev-1.14.0",
-    "answers": {"contract.error-handling": {"type": "noul", "noul": 0.9}},
+    "answers": {"repo.error-handling": {"type": "noul", "noul": 0.9}},
     "usage": {"input_tokens": 40, "output_tokens": 5},
 }
 

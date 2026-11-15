@@ -36,11 +36,11 @@ FIXED = "109c98b"
 CONFIG = """\
 model: jev-latest
 questions:
-  - id: contract.error-handling
+  - id: repo.error-handling
     priority: critical
     type: noul
     ask: Does the change keep every new failure actionable
-  - id: engineering.hidden-state
+  - id: repo.hidden-state
     priority: high
     type: noul
     ask: Does the change keep its state explicit
@@ -53,8 +53,8 @@ safeguards:
 CANNED = {
     "model": "jev-1.14.0",
     "answers": {
-        "contract.error-handling": {"type": "noul", "noul": 0.8},
-        "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+        "repo.error-handling": {"type": "noul", "noul": 0.8},
+        "repo.hidden-state": {"type": "noul", "noul": 0.7},
     },
     "usage": {"input_tokens": 120, "output_tokens": 12},
 }
@@ -300,7 +300,7 @@ class OutsideRootTests(SafeguardFixture):
         self.assertEqual(self.report()["verdict"], "screened", self.report())
 
 
-class ProtectedPathTests(SafeguardFixture):
+class SensitivePathTests(SafeguardFixture):
     """S3-S5: a changed path the baseline or the repository declares protected."""
 
     def protect(self):
@@ -318,7 +318,7 @@ class ProtectedPathTests(SafeguardFixture):
         head = self.protect()
         result = self.invoke(base=self.base, head=head)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
-        matched = {reason["path"]: reason for reason in self.reasons("protected-path")}
+        matched = {reason["path"]: reason for reason in self.reasons("sensitive-path")}
         self.assertEqual(
             sorted(matched),
             [
@@ -344,7 +344,7 @@ class ProtectedPathTests(SafeguardFixture):
             "hooks/**",
             "the side a rename leaves is a changed path too",
         )
-        self.assertTrue(all(reason["source"] == "baseline" for reason in matched.values()), matched)
+        self.assertTrue(all(reason["source"] == "global" for reason in matched.values()), matched)
         self.assertEqual(self.report()["verdict"], "escalated")
         self.assertEqual(self.report()["usage"]["requests"], 0)
 
@@ -354,7 +354,7 @@ class ProtectedPathTests(SafeguardFixture):
         head = self.commit("an issue template beside the workflows directory")
         result = self.invoke(base=self.base, head=head, canned=True)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
-        self.assertEqual(self.reasons("protected-path"), [], self.report())
+        self.assertEqual(self.reasons("sensitive-path"), [], self.report())
         self.assertEqual(self.report()["verdict"], "screened")
 
     def test_S5_a_repository_configuration_extends_the_baseline_without_replacing_it(self):
@@ -369,17 +369,17 @@ class ProtectedPathTests(SafeguardFixture):
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         self.assertEqual(self.report()["verdict"], "escalated")
         self.assertEqual(self.report()["usage"]["requests"], 0)
-        reasons = self.reasons("protected-path")
+        reasons = self.reasons("sensitive-path")
         self.assertEqual(len(reasons), 2, reasons)
         matched = {reason["path"]: reason for reason in reasons}
         self.assertEqual(
             {reason.get("source") for reason in matched.values()},
-            {"baseline", "repository"},
+            {"global", "repository"},
             self.report(),
         )
         self.assertEqual(matched["pkg/service.py"]["pattern"], "pkg/**")
         self.assertEqual(matched["pkg/service.py"]["source"], "repository")
-        self.assertEqual(matched["pyproject.toml"]["source"], "baseline")
+        self.assertEqual(matched["pyproject.toml"]["source"], "global")
 
 
 class CapabilityTests(SafeguardFixture):
@@ -410,7 +410,7 @@ class CapabilityTests(SafeguardFixture):
 
     def test_S7_the_standard_library_and_an_undeclared_member_stay_quiet(self):
         # A declared member outside `hooks/`: the mandatory baseline protects that directory, so a change there
-        # escalates as `protected-path` and can never show that the screening proceeded.
+        # escalates as `sensitive-path` and can never show that the screening proceeded.
         self.write_text("pkg/plugin/loader.py", "import json\nimport os\n")
         self.write_text("pkg/yaml_helpers.py", "import yaml\n")
         head = self.commit(
@@ -438,7 +438,7 @@ class EscalationReportTests(SafeguardFixture):
         self.assertEqual(report["input"]["base"], self.base)
         self.assertEqual(report["input"]["head"], head)
         said = (result.stdout + result.stderr).lower()
-        self.assertIn("protected-path", said)
+        self.assertIn("sensitive-path", said)
         self.assertIn("server/extra.py", said)
         self.assertIn("deep review", said, "a refusal names the reason and the way out")
 

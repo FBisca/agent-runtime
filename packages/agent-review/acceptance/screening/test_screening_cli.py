@@ -34,7 +34,7 @@ CONFIG = textwrap.dedent(
     """\
     model: test-model-v1
     questions:
-      - id: contract.error-handling
+      - id: repo.error-handling
         priority: critical
         type: noul
         ask: Does the change keep the documented error-handling contract
@@ -48,13 +48,13 @@ CONFIG = textwrap.dedent(
 RESPONSE = {
     "model": "jev-1.14.0",
     "answers": {
-        "contract.error-handling": {"type": "noul", "noul": 0.9},
+        "repo.error-handling": {"type": "noul", "noul": 0.9},
         "design.naming": {"type": "noul", "noul": 0.1},
     },
     "usage": {"input_tokens": 900, "output_tokens": 20},
 }
 
-ANSWERED = "contract.error-handling"
+ANSWERED = "repo.error-handling"
 
 BASE_FILE = "def load(path):\n    return open(path).read()\n"
 
@@ -164,7 +164,7 @@ class CompletedScreeningTests(ScreeningFixture):
         self.assertEqual(report["verdict"], "screened", "nothing was escalated in P0 (D39)")
         self.assertIsNone(report["failure"])
         judgments = {judgment["question"]: judgment for judgment in report["judgments"]}
-        self.assertEqual(set(judgments), {"contract.error-handling", "design.naming"})
+        self.assertEqual(set(judgments), {"repo.error-handling", "design.naming"})
         self.assertEqual(
             judgments[ANSWERED]["value"], 0.9, "the noul's probability is the native value (D44)"
         )
@@ -214,10 +214,16 @@ class ReportProvenanceTests(ScreeningFixture):
         report = self.report()
         self.assertEqual(report["input"]["base"], self.base)
         self.assertEqual(report["input"]["head"], self.head)
+        asked = [question["id"] for question in report["questions"]]
         self.assertEqual(
-            [question["id"] for question in report["questions"]],
-            ["contract.error-handling", "design.naming"],
-            "the report names the question configuration it evaluated",
+            asked[-2:],
+            ["repo.error-handling", "design.naming"],
+            "the report names the configuration's own questions after the baseline it extends",
+        )
+        self.assertIn(
+            "contract.requirement-traceability",
+            asked,
+            "a configuration extends the mandatory baseline and never replaces it",
         )
         self.assertEqual(report["model"], "test-model-v1", "the report names the model (D26)")
         self.assertGreaterEqual(report["usage"]["requests"], 1)

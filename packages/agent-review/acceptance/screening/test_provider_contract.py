@@ -42,7 +42,7 @@ pytestmark = pytest.mark.integration
 CONFIG = """\
 model: jev-latest
 questions:
-  - id: contract.error-handling
+  - id: repo.error-handling
     priority: critical
     type: score
     criteria:
@@ -52,7 +52,7 @@ questions:
       - a new failure is swallowed or replaced by a silent default
       - a new failure crashes, or reports success while the operation failed
     ask: How severely does the change violate error handling
-  - id: engineering.hidden-state
+  - id: repo.hidden-state
     priority: high
     type: noul
     ask: Does the change keep its state explicit
@@ -245,8 +245,8 @@ class TransportTests(ProviderContractFixture):
         self.write_config()
         body = answer(
             **{
-                "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+                "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                "repo.hidden-state": {"type": "noul", "noul": 0.7},
             }
         )
         with SystemOneServer(body) as server:
@@ -269,18 +269,23 @@ class TransportTests(ProviderContractFixture):
         self.assertNotIn("response_format", sent)
         self.assertIn("diff", json.dumps(sent["state"]))
         self.assertEqual(server.count, 1, "one screening is one request (D40)")
-        self.assertEqual(
-            sorted(sent["questions"]),
-            ["contract.error-handling", "engineering.hidden-state"],
-            "the map is keyed by the bank's ids and carries no other question",
+        self.assertLessEqual(
+            {"repo.error-handling", "repo.hidden-state"},
+            set(sent["questions"]),
+            "the map is keyed by the bank's ids, the configuration's own after the baseline's",
+        )
+        self.assertIn(
+            "contract.requirement-traceability",
+            sent["questions"],
+            "a configuration extends the mandatory baseline and never replaces it",
         )
 
     def test_S1_the_documented_credential_is_sent_when_a_fallback_is_present_too(self):
         self.write_config()
         body = answer(
             **{
-                "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+                "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                "repo.hidden-state": {"type": "noul", "noul": 0.7},
             }
         )
         with SystemOneServer(body) as server:
@@ -346,8 +351,8 @@ class NativeAnswerTests(ProviderContractFixture):
         self.write_fixture(
             answer(
                 **{
-                    "contract.error-handling": {"type": "score", "score": 7.0, "confidence": 0.9},
-                    "engineering.hidden-state": {"type": "noul", "noul": 0.6},
+                    "repo.error-handling": {"type": "score", "score": 7.0, "confidence": 0.9},
+                    "repo.hidden-state": {"type": "noul", "noul": 0.6},
                 }
             )
         )
@@ -355,15 +360,15 @@ class NativeAnswerTests(ProviderContractFixture):
         self.assertNotEqual(result.returncode, 0)
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
-        self.assertIn("contract.error-handling", report["failure"]["reason"])
+        self.assertIn("repo.error-handling", report["failure"]["reason"])
 
     def test_S3_a_score_between_the_declared_levels_is_carried_as_answered(self):
         self.write_config()
         self.write_fixture(
             answer(
                 **{
-                    "contract.error-handling": {"type": "score", "score": 0.5, "confidence": 0.9},
-                    "engineering.hidden-state": {"type": "noul", "noul": 0.6},
+                    "repo.error-handling": {"type": "score", "score": 0.5, "confidence": 0.9},
+                    "repo.hidden-state": {"type": "noul", "noul": 0.6},
                 }
             )
         )
@@ -373,7 +378,7 @@ class NativeAnswerTests(ProviderContractFixture):
         self.assertEqual(report["status"], "completed")
         judged = {judgment["question"]: judgment for judgment in report["judgments"]}
         self.assertEqual(
-            judged["contract.error-handling"]["value"],
+            judged["repo.error-handling"]["value"],
             0.5,
             "0.5 sits between the rungs of a five-level ladder (0..4) and is the provider's own answer",
         )
@@ -383,8 +388,8 @@ class NativeAnswerTests(ProviderContractFixture):
         self.write_fixture(
             answer(
                 **{
-                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 1.4},
-                    "engineering.hidden-state": {"type": "noul", "noul": 0.6},
+                    "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 1.4},
+                    "repo.hidden-state": {"type": "noul", "noul": 0.6},
                 }
             )
         )
@@ -392,24 +397,24 @@ class NativeAnswerTests(ProviderContractFixture):
         self.assertNotEqual(result.returncode, 0)
         report = self.report()
         self.assertEqual(report["status"], "incomplete")
-        self.assertIn("contract.error-handling", report["failure"]["reason"])
+        self.assertIn("repo.error-handling", report["failure"]["reason"])
 
     def test_S3_a_score_judgment_keeps_its_confidence_beside_the_value(self):
         self.write_config()
         self.write_fixture(
             answer(
                 **{
-                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.42},
-                    "engineering.hidden-state": {"type": "noul", "noul": 0.6},
+                    "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.42},
+                    "repo.hidden-state": {"type": "noul", "noul": 0.6},
                 }
             )
         )
         result = self.screen()
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         judged = {j["question"]: j for j in self.report()["judgments"]}
-        self.assertEqual(judged["contract.error-handling"]["value"], 1.0)
-        self.assertAlmostEqual(judged["contract.error-handling"]["confidence"], 0.42)
-        self.assertEqual(judged["engineering.hidden-state"]["value"], 0.6)
+        self.assertEqual(judged["repo.error-handling"]["value"], 1.0)
+        self.assertAlmostEqual(judged["repo.error-handling"]["confidence"], 0.42)
+        self.assertEqual(judged["repo.hidden-state"]["value"], 0.6)
 
 
 class ProvenanceTests(ProviderContractFixture):
@@ -419,8 +424,8 @@ class ProvenanceTests(ProviderContractFixture):
         self.write_config()
         body = answer(
             **{
-                "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+                "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                "repo.hidden-state": {"type": "noul", "noul": 0.7},
             }
         )
         with SystemOneServer(body) as server:
@@ -467,8 +472,8 @@ class BudgetTests(ProviderContractFixture):
         self.write_config()
         body = answer(
             **{
-                "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+                "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                "repo.hidden-state": {"type": "noul", "noul": 0.7},
             }
         )
         with SystemOneServer(body) as server:
@@ -497,8 +502,8 @@ class RefusalTests(ProviderContractFixture):
         self.write_fixture(
             answer(
                 **{
-                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                    "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+                    "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                    "repo.hidden-state": {"type": "noul", "noul": 0.7},
                 }
             )
         )
@@ -518,8 +523,8 @@ class RefusalTests(ProviderContractFixture):
             {
                 "model": "jev-1.14.0",
                 "answers": {
-                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                    "engineering.hidden-state": {"type": "noul", "noul": 1.4},
+                    "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                    "repo.hidden-state": {"type": "noul", "noul": 1.4},
                 },
                 "usage": {"input_tokens": 321, "output_tokens": 9},
             }
@@ -531,7 +536,7 @@ class RefusalTests(ProviderContractFixture):
         self.assertEqual(report["usage"]["input_tokens"], 321, "what was paid for is not discarded")
         self.assertEqual(
             [judgment["question"] for judgment in report["judgments"]],
-            ["contract.error-handling"],
+            ["repo.error-handling"],
             "the judgment learned before the refusal is kept, and the refused one is not",
         )
 
@@ -544,8 +549,8 @@ class OfflineTests(ProviderContractFixture):
         self.write_fixture(
             answer(
                 **{
-                    "contract.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
-                    "engineering.hidden-state": {"type": "noul", "noul": 0.7},
+                    "repo.error-handling": {"type": "score", "score": 1.0, "confidence": 0.8},
+                    "repo.hidden-state": {"type": "noul", "noul": 0.7},
                 }
             )
         )
@@ -584,6 +589,6 @@ class OfflineTests(ProviderContractFixture):
         self.assertEqual(report["usage"]["input_tokens"], 120, "the canned usage is what was read")
         self.assertEqual(
             [judgment["question"] for judgment in report["judgments"]],
-            ["contract.error-handling", "engineering.hidden-state"],
+            ["repo.error-handling", "repo.hidden-state"],
             "a report that answered nothing was not screened through the fixture",
         )

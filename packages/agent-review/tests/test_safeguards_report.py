@@ -22,7 +22,7 @@ CONFIG = textwrap.dedent(
     """\
     model: test-model-v1
     questions:
-      - id: contract.error-handling
+      - id: repo.error-handling
         priority: critical
         type: noul
         ask: Does the change keep the documented error-handling contract
@@ -139,3 +139,12 @@ def test_the_summary_names_the_rule_the_path_and_the_way_out(review, capsys):
     assert "driver.py" in summary, "the summary names the path it matched"
     assert "is_relative_to" in summary, "the summary says what a person should do about it"
     assert str(review.output / "report.json") in summary, "the summary names the report it wrote"
+
+
+def test_S2_a_rule_that_only_records_a_signal_does_not_recommend_a_deep_review(review):
+    """A sensitive path sends the change to a person; a diff-read rule records its reason and nothing more."""
+    assert review.screen() == 0
+    escalation = review.report()["escalation"]
+    assert escalation["recommended"] is False, (
+        "target-outside-root is a fact a person reads beside the screen, not a route to a full review (D12)"
+    )
