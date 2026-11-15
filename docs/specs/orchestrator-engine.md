@@ -515,7 +515,6 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | R151 | S5 | `packages/agent-orchestrator/tests/test_plan_lint.py::PlanLint::test_S5_plan_check_accepts_an_agent_ticket_or_human_evidence`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
 | R152 | S6 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_lead_s_retry_for_the_archive_is_refused_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_json_form_refuses_the_archive_retry_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
 | R153 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/acceptance/driver/test_decision_gates.py` |
-||||||| parent of 313d1f7 (feat(orchestrator): read the review the reviewer named)
 
 ## Requirements: review-payload-path
 
@@ -528,8 +527,6 @@ failure names the behaviour it broke and not a line number in a file that moved.
 |---|---|---|
 | R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only`<br>`packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py` |
 | R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path`<br>`packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py` |
-| R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only |
-| R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path |
 
 ## Requirements: plan-check-evidence-selectors
 
@@ -540,13 +537,3 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | Requirement | Scenario | Test nodes |
 |---|---|---|
 | R156 | S1 | `packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_does_not_name_the_scenario_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_selects_none_of_the_scenarios_tests_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_S1_a_selector_that_also_selects_another_scenarios_test_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_an_anchored_selector_keeps_the_plan_valid`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_a_check_without_k_is_not_linted`<br>`packages/agent-orchestrator/tests/test_plan_check_selectors.py::SelectorLint::test_control_a_legacy_plan_is_not_linted` |
-||||||| parent of 4b51b3f (test(orchestrator): run the review-payload acceptance in the suite)
-| R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only |
-| R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path |
-
-## Coverage: review-payload-path
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only`<br>`packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py` |
-| R155 | S2 | `packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_report_that_names_a_file_inside_the_run_directory_names_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AnnouncedPathTests::test_S2_a_name_relative_to_the_run_directory_resolves_inside_it`<br>`packages/agent-orchestrator/tests/test_review_payload.py::AdoptReviewTests::test_S2_a_review_named_under_another_name_is_copied_into_the_drivers_path`<br>`packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py` |
