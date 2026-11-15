@@ -205,6 +205,26 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         self.assertEqual(decision["action"], "retry")
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "resolved")
 
+    def test_S6_the_json_form_refuses_the_archive_retry_while_the_plan_is_not_accepted(self):
+        request = self.seed_request("REJECTED")
+        path = self.root / "decision-in.json"
+        path.write_text(json.dumps({"action": "retry", "reason": "again"}), encoding="utf-8")
+        result = self.cli(
+            "decide",
+            str(self.plan),
+            "archive",
+            "--json",
+            str(path),
+            "--state-dir",
+            str(self.state_dir),
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        refusal = json.loads(result.stderr)
+        self.assertIn("REJECTED", refusal["reason"])
+        self.assertTrue(refusal["way_out"])
+        self.assertFalse((self.run_dir / "archive" / "decision.json").exists())
+        self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
+
     def test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted(self):
         """A retry the Lead's own CLI would have refused, written as an older CLI wrote it: the driver asks again."""
         self.waits(
