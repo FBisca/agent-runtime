@@ -119,6 +119,17 @@ def adopt_review(review):
     return canonical
 
 
+def carried_reviews(review):
+    """The review paths a record supersedes, newest first, kept when the next review file is allocated.
+
+    A review written to a fixed path would be lost to the next pass: its blockers would stop being nameable. The
+    record therefore hands them on, and every place that asks for a new file carries them instead of dropping the
+    record it replaces.
+    """
+    review = review or {}
+    return [path for path in [review.get("path"), *(review.get("earlier") or [])] if path]
+
+
 def announced_path(text, root):
     """The file a report names, when it names one inside `root`.
 
@@ -3096,8 +3107,7 @@ class Driver:
             # Write-once: a file that already holds a review is never handed to another pass, so a rework that keeps
             # the task id (an answered worker) writes the next one. The record keeps the paths it superseded, newest
             # first, so a resolution can still close a blocker an earlier review raised.
-            superseded = [p for p in [review.get("path") if review else None] if p]
-            superseded += list((review or {}).get("earlier") or [])
+            superseded = carried_reviews(review)
             path, index = next_path(self.run_dir / unit, "review", ".json")
             record: dict[str, Any] = {
                 "name": name,
@@ -3717,11 +3727,12 @@ class Driver:
             # draft (the poll's ensure_draft, once readiness is forgotten) and is readied again on its return
             self.unready(self.unit_of(task_id))
             reviewed = task.get("reviewed_commit")
+            held = carried_reviews(task.get("review"))
             self.mark(
                 task_id,
                 answers=dict(answers, state="done"),
                 gate="converged",
-                review=None,
+                review={"earlier": held} if held else None,
                 ci_green=None,
                 ci_state=None,
                 ci_rows=None,

@@ -1000,15 +1000,23 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
         step["write"] = [[str(self.run_dir / task_id / "report.2.json"), self.report(task_id)]]
         return step
 
-    def rereview(self, text):
+    def rereview(self, text, name="review.2.json", nth=1):
         """The re-review's report, under the assignment the resumed reviewer pane holds, its review written to the
         file the driver allocated for it."""
         return report_wait(
             "demo-t1-review",
             "complete",
-            id=resume_id("demo-t1-review", 1),
-            write=[[str(self.run_dir / "t1" / "review.2.json"), text]],
+            id=resume_id("demo-t1-review", nth),
+            write=[[str(self.run_dir / "t1" / name), text]],
         )
+
+    def answers_report(self, responses, nth=2):
+        """A wait step: the answerer of the review's questions writes its responses and says complete."""
+        step = report_wait("demo-t1", "complete", id=resume_id("demo-t1", nth))
+        step["write"] = [
+            [str(self.run_dir / "t1a1" / "report.json"), self.report("t1a1", responses=responses)]
+        ]
+        return step
 
     def read_review(self, name):
         return json.loads((self.run_dir / "t1" / name).read_text(encoding="utf-8"))
@@ -1083,6 +1091,53 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
 
     def blocking(self):
         return self.review2(verdict="block", items=[BLOCKING])
+
+    def test_S3_the_delta_rereview_of_a_disputed_answer_still_names_the_earlier_blocker(self):
+        """S3 one pass later: the delta re-review a disputed answer starts is the same rework, so the reviews the
+        unit already had stay nameable and its resolution still closes the blocker they raised."""
+        disputed = {
+            "id": "Q1",
+            "status": "disputed",
+            "commit": "abc1234",
+            "note": "the contract says no",
+            "changes_code": True,
+        }
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(
+                    write=[[str(self.run_dir / "t1" / "review.json"), self.blocking()]]
+                ),
+                self.decide_step(
+                    "t1", "answer", answer="the guard is per target", reason="rule on it"
+                ),
+                self.answered_report(),
+                self.rereview(
+                    self.review2(items=[QUESTION], **self.closure(BLOCKING)),
+                    "review.2.json",
+                    1,
+                ),
+                self.answers_report([disputed]),
+                self.rereview(self.review2(**self.closure(BLOCKING)), "review.3.json", 2),
+            ]
+        )
+        self.run_driver("--max-fix-rounds", "0")
+        self.assertEqual(
+            [event["reason"] for event in self.run_events("payload-warning")],
+            [],
+            "the delta re-review refused the resolution that closes the earlier blocker",
+        )
+        self.assertEqual(self.open_ids(), [], "B1 is still open after a supported resolution")
+        self.assertEqual(
+            [Path(path).name for path in self.task("t1")["review"]["earlier"]],
+            ["review.2.json", "review.json"],
+            "the delta re-review lost the reviews the unit already had",
+        )
+        self.assertEqual(
+            [item["id"] for item in self.read_review("review.json")["items"]],
+            ["B1"],
+            "the earlier review lost the blocker it named",
+        )
 
 
 class LedgerRefusedAtAStepTests(GateFixture, unittest.TestCase):
