@@ -5,6 +5,7 @@ safe_dump(sort_keys=True) after dropping approval: comments, key order and YAML
 presentation are preserved on disk but do not affect the contract digest.
 """
 
+import ast
 import copy
 import fcntl
 import fnmatch
@@ -12,6 +13,8 @@ import functools
 import hashlib
 import os
 import posixpath
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -533,6 +536,149 @@ def person_only_problems(model, repo):
     return problems
 
 
+# A word of a test name that names a scenario, as the plans write them: `test_S1_x` carries S1, `test_S4a_x` S4a.
+SCENARIO_WORD = re.compile(r"^S\d+[a-z]?$")
+CONTROL_TEST = "test_control"
+
+
+def pytest_selector(check):
+    """The `-k` expression of a check that runs pytest, or None when the check runs no pytest, carries no `-k`, or
+    cannot be split as a shell line: those checks are not linted. The last `-k` wins, as pytest's own parser does."""
+    try:
+        words = shlex.split(check)
+    except ValueError:
+        return None
+    if not any(Path(word).name in ("pytest", "py.test") for word in words):
+        return None
+    selector = None
+    for i, word in enumerate(words):
+        if word == "-k" and i + 1 < len(words):
+            selector = words[i + 1]
+        elif word.startswith("-k") and len(word) > 2:
+            selector = word[2:]
+    return selector
+
+
+def selector_terms(expression):
+    """The terms of a `-k` expression made of words joined by `or`, or None for any other expression.
+
+    pytest matches each term as a case-insensitive substring of a test's names. Not modelled, so an expression that
+    uses them is not linted: `and`, `not`, parentheses, matching against directory names, markers or the ids of
+    parametrized tests, and the files the check names outside its acceptance files."""
+    words = expression.split()
+    if not words or len(words) % 2 == 0 or any(op != "or" for op in words[1::2]):
+        return None
+    terms = words[0::2]
+    if any(term in ("and", "not", "or") or "(" in term or ")" in term for term in terms):
+        return None
+    return terms
+
+
+def named_scenarios(term):
+    """The scenario ids a selector term spells out as a word: `S1`, `test_S1_` and `s1` all name S1."""
+    found = set()
+    for word in re.split(r"[^A-Za-z0-9]+", term):
+        if re.fullmatch(r"[Ss]\d+[A-Za-z]?", word):
+            found.add("S" + word[1:].lower())
+    return found
+
+
+def collected_tests(source, module):
+    """[(names pytest matches `-k` against, function name)] for the tests of a module, read statically: no import,
+    no execution. A test is a `test_*` function at module level, or a `test_*` method of a class named `Test*` or of
+    a class with a base (a unittest.TestCase subclass, which pytest collects whatever its name)."""
+    tests = []
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+            "test_"
+        ):
+            tests.append(((module, node.name), node.name))
+        elif isinstance(node, ast.ClassDef) and (node.name.startswith("Test") or node.bases):
+            for item in node.body:
+                if isinstance(
+                    item, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and item.name.startswith("test_"):
+                    tests.append(((module, node.name, item.name), item.name))
+    return tests
+
+
+def selector_problems(model, path):
+    """The folder plan's checks whose pytest `-k` selector does not select its own scenario's tests, and only them,
+    from the acceptance files the evidence names.
+
+    A selector must name the scenario's id; it must select a test other than a control in those files (none means
+    the tests are not written yet, and `baseline: fail` passes vacuously); and every test it selects that carries a
+    scenario id must carry one the selector names (`S1` also selects `test_S10_x` by substring). Control tests
+    (`test_control_*`) are always allowed. A legacy plan, a check with no `-k` and a check that runs no pytest are
+    not linted."""
+    layout = PlanLayout(path)
+    if not layout.is_folder:
+        return []
+    problems = []
+    for i, scenario in enumerate(model.scenarios):
+        ev = scenario.evidence
+        if ev is None or not ev.check or not ev.acceptance:
+            continue
+        expression = pytest_selector(ev.check)
+        terms = selector_terms(expression) if expression is not None else None
+        if terms is None:
+            continue
+        sid = scenario.id
+        where = f"scenarios[{i}].evidence.check"
+        anchored = f'-k "test_{sid}_ or test_control_"'
+        named = set().union(*(named_scenarios(term) for term in terms))
+        if sid not in named:
+            why = (
+                f"{sid}: the -k selector {expression!r} names no scenario id"
+                if not named
+                else f"{sid}: the -k selector {expression!r} names {', '.join(sorted(named))} but not {sid}"
+            )
+            problems.append(
+                f"{where}: {why}, so the check does not run {sid}'s tests — select them with {anchored}"
+            )
+            continue
+        tests, unreadable = [], []
+        for name in ev.acceptance:
+            if not name.endswith(".py"):
+                continue
+            source = layout.folder / "acceptance" / name
+            try:
+                tests += collected_tests(source.read_text(encoding="utf-8"), Path(name).name)
+            except (OSError, SyntaxError, UnicodeDecodeError):
+                unreadable.append(name)
+        if unreadable:
+            problems.append(
+                f"{where}: {sid}: the acceptance file {', '.join(unreadable)} does not parse, so the -k selector "
+                f"{expression!r} can select no test of {sid} — fix the file; then select test_{sid}_ tests with {anchored}"
+            )
+            continue
+        if not any(n.endswith(".py") for n in ev.acceptance):
+            continue
+        lowered = [term.lower() for term in terms]
+        selected = [
+            function
+            for names, function in tests
+            if any(term in n.lower() for term in lowered for n in names)
+        ]
+        scenario_tests = [f for f in selected if not f.startswith(CONTROL_TEST)]
+        if not scenario_tests:
+            problems.append(
+                f"{where}: {sid}: the -k selector {expression!r} selects no test in {', '.join(ev.acceptance)} but "
+                f"controls, so the check never runs {sid}'s tests and baseline: fail passes vacuously — write the "
+                f"test_{sid}_ tests in the acceptance file, and select them with {anchored}"
+            )
+            continue
+        for function in scenario_tests:
+            others = sorted({w for w in function.split("_") if SCENARIO_WORD.match(w)} - named)
+            if others:
+                problems.append(
+                    f"{where}: {sid}: the -k selector {expression!r} also selects {function}, which carries "
+                    f"{', '.join(others)}, by substring — anchor the selector as {anchored}, or name "
+                    f"{', '.join(others)} in it on purpose"
+                )
+    return problems
+
+
 def lint_problems(model, repo, path):
     """Problems `plan check`, `plan approve` and `plan amend` refuse; the driver's load never runs this, so a plan
     approved before a rule existed keeps running."""
@@ -540,6 +686,7 @@ def lint_problems(model, repo, path):
     return (
         discard_problems(model, path, repo)
         + person_only_problems(model, repo)
+        + selector_problems(model, path)
         + [
             f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
             "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
