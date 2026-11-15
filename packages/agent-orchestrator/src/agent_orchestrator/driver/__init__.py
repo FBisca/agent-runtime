@@ -47,12 +47,10 @@ from ..plan import PlanError
 from ..report_rules import require, require_report
 from ..runtime_client import (
     OPERATION_ADOPTED,
-    CliRuntimeClient,
     approval_refusal,
     operation_state,
     refuses_operation_ids,
 )
-from ..runtime_client import RuntimeError as RuntimeCallError
 
 # The record helpers live in their own module and the package publishes every one of them, so a caller,
 # a test and the entry points keep asking `driver.<name>`. The two aliases are the re-export ruff asks
@@ -82,6 +80,41 @@ from .records import (
 )
 from .records import (
     scenario_number as scenario_number,
+)
+from .report import (
+    USAGE_COLUMNS as USAGE_COLUMNS,
+)
+
+# The reporting tables and the lines a run is read by, published the same way.
+from .report import (
+    cell,
+    describe,
+    item_text,
+    render_status,
+    short,
+    show,
+)
+from .report import (
+    metrics_table as metrics_table,
+)
+
+# The processes live in their own module and the package publishes every one of them, so a caller, a
+# test and the entry points keep asking `driver.<name>`. The names below that no line here calls
+# itself are the re-exports ruff asks for.
+from .runtime import (
+    TREE_TIMEOUT,
+    checkout_snapshot,
+    head_of,
+    merged_snapshot,
+    resolve_runtime,
+    run,
+    runtime_call,
+)
+from .runtime import (
+    gh_process as gh_process,
+)
+from .runtime import (
+    runtime_process as runtime_process,
 )
 
 # The spec-section grammar keeps the same home for the same budget reason; the archive's guard and
@@ -188,37 +221,6 @@ def announced_path(text, root):
     return None
 
 
-# A call that walks or writes the whole tree (`worktree add`, `status`) scales with the repository: a large one
-# outruns `run()`'s default, which stays short so the small calls still fail fast.
-TREE_TIMEOUT = 600
-
-
-def run(argv, timeout=15):
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    require(result.returncode == 0, result.stderr.strip() or "Command failed: " + argv[0])
-    return result.stdout.strip()
-
-
-def checkout_snapshot(path):
-    root = Path(path).resolve(strict=True)
-    # one `git rev-parse` for the three answers: the root, the head and the branch
-    identity = run(
-        ["git", "-C", str(root), "rev-parse", "--show-toplevel", "HEAD", "--abbrev-ref", "HEAD"]
-    ).splitlines()
-    require(len(identity) == 3, "git rev-parse answered %r" % identity)
-    actual = Path(identity[0]).resolve()
-    require(root == actual, "checkout must be the repository/worktree root")
-    return {
-        "checkout": str(root),
-        "head": identity[1],
-        "branch": identity[2],
-        # This is an inventory, NOT a content fingerprint. Re-read affected source.
-        "worktree_status": run(
-            ["git", "-C", str(root), "status", "--porcelain=v1"], timeout=TREE_TIMEOUT
-        ),
-    }
-
-
 def owned_paths(packet):
     root = Path(packet["checkout"]).resolve()
     owned = packet.get("owns")
@@ -321,15 +323,6 @@ def bind(data, task_id, runtime_id):
             )
     task.update(runtime_id=runtime_id, status="ACTIVE")
     return task
-
-
-def merged_snapshot(path):
-    """The checkout's snapshot, or None when the tree is gone: after a merge the snapshot is evidence, not a
-    precondition."""
-    try:
-        return checkout_snapshot(path)
-    except FileNotFoundError:
-        return None
 
 
 def checkpoint(data, task_id, report, merged=False):
@@ -475,25 +468,6 @@ def metrics(samples):
     }
 
 
-def resolve_runtime():
-    """Ask the agent-runtime CLI which runtime this session runs in; never fail inspect.
-
-    Resolution order: `$AGENT_RUNTIME_HOME/server/agent_runtime.py`, then `agent-runtime` on PATH.
-    """
-    home = os.environ.get("AGENT_RUNTIME_HOME")
-    script = Path(home).expanduser() / "server" / "agent_runtime.py" if home else None
-    if home and not (script and script.is_file()):
-        print(
-            f"warning: AGENT_RUNTIME_HOME={home} has no server/agent_runtime.py; falling back to agent-runtime on PATH",
-            file=sys.stderr,
-        )
-    argv = [sys.executable, str(script)] if script and script.is_file() else ["agent-runtime"]
-    try:
-        return json.loads(run(argv + ["resolve", "--json"]))
-    except (ValueError, OSError, subprocess.TimeoutExpired):
-        return {"runtime": "unknown"}
-
-
 MATRIX = {
     ("small", "simple"): ("small", "low"),
     ("small", "complex"): ("medium", "medium"),
@@ -542,32 +516,6 @@ def worker_name(slug, number, tail=""):
     """`<slug>-t<n>[tail]` within agent-runtime's 32-character name limit; the `-t<n>` suffix always survives."""
     suffix = "-t" + str(number) + tail
     return slug[: 32 - len(suffix)].rstrip("-_") + suffix
-
-
-def runtime_process(argv, timeout=None):
-    """One `agent-runtime` process. The tests answer it in process (a fake module), so a driver run starts no
-    process per call: the seam is the process, not the answer."""
-    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-
-
-def gh_process(argv, timeout=None, cwd=None):
-    """One `gh` process; `cwd` names the repository for a call whose argv does not (`pr create`)."""
-    return subprocess.run(["gh", *argv], capture_output=True, text=True, timeout=timeout, cwd=cwd)
-
-
-def runtime_call(lead, tool, arguments, timeout=120):
-    """One dispatch tool call, through the runtime's public CLI.
-
-    The seam is the `RuntimeClient` protocol: the driver never imports the runtime's modules and
-    never reads its store. The process the client speaks through is the seam the tests answer, so a
-    driver run starts no process per call. A refusal is a `ValueError`, the driver's word for it.
-    """
-    try:
-        return CliRuntimeClient(lead, process=runtime_process).call(
-            tool, arguments, timeout=timeout
-        )
-    except RuntimeCallError as error:
-        raise ValueError(str(error)) from None
 
 
 class Unreadable(ValueError):
@@ -705,79 +653,6 @@ def failure_line(text):
     return found[-1] if found else ""
 
 
-def cell(text, limit=160):
-    """Text safe inside one plan table cell: one line, no pipes, cut at `limit`."""
-    flat = " ".join(str(text).replace("|", "/").split())
-    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
-
-
-def show(value):
-    """A plan field as one line: a list joined, anything else as it reads."""
-    return ", ".join(value) if isinstance(value, list) else str(value)
-
-
-def item_text(item):
-    """What a finding says, whichever contract wrote it: a contract 2 `summary`, a contract 1 `problem` or deferred
-    `note`, a converge or CI `excerpt`."""
-    return next(
-        (str(item[k]) for k in ("summary", "problem", "note", "excerpt") if item.get(k)), ""
-    )
-
-
-def describe(item):
-    """The lines a fix round shows for one findings item (text lines of contract 1 are shown as they are)."""
-    if not isinstance(item, dict):
-        return str(item)
-    if item.get("source") in ("converge", "verify", "ci", "conflict"):
-        return "%s %s: %s (exit %s of `%s`; full log %s)" % (
-            item["source"],
-            item["check"],
-            item["excerpt"],
-            item["exit"],
-            item["command"],
-            item["log_path"],
-        )
-    # Only a blocking item must carry a line; a concern, question or nit may name just its file.
-    place = "%s:%s" % (item["file"], item["line"]) if item.get("line") else item.get("file")
-    where = place + " " if place else ""
-    line = "%s%s%s: %s%s" % (
-        item["id"],
-        " (%s)" % item["kind"] if item.get("kind") else "",
-        ", answer required" if item.get("answer_required") else "",
-        where,
-        item_text(item),
-    )
-    if item.get("fix"):
-        line += ". Fix: %s" % item["fix"]
-    evidence = item.get("evidence")
-    if isinstance(evidence, dict):
-        line += ". Evidence: `%s` exited %s (log %s): %s" % (
-            evidence["command"],
-            evidence["exit"],
-            evidence["log_path"],
-            cell(evidence["excerpt"], 300),
-        )
-    return line
-
-
-def short(item):
-    """A finding in a few words, for a request's reason and a ledger `remaining` line."""
-    if not isinstance(item, dict):
-        return str(item)
-    if item.get("source") in ("converge", "verify", "ci"):
-        return (
-            item["excerpt"].splitlines()[0]
-            if item["excerpt"]
-            else "%s %s failed" % (item["source"], item["check"])
-        )
-    return "%s: %s" % (item.get("id"), item_text(item))
-
-
-def head_of(checkout):
-    """The checkout's HEAD sha."""
-    return run(["git", "-C", str(checkout), "rev-parse", "HEAD"])
-
-
 YAML_ARCHIVE_ACCEPTANCE = [
     "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
     "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies; the oracles the driver placed are untouched; no test is renamed and no Status is written into plan.yaml",
@@ -821,53 +696,6 @@ def legacy_imports(data):
             }
         )
     return rows
-
-
-USAGE_COLUMNS = (
-    ("input", "input_tokens"),
-    ("output", "output_tokens"),
-    ("cached", "cached_input_tokens"),
-    ("cache_write", "cache_write_tokens"),
-    ("reasoning", "reasoning_tokens"),
-    ("model_calls", "model_calls"),
-    ("tool_calls", "tool_calls"),
-    ("cost_usd", "cost_usd"),
-)
-
-
-def metrics_table(metrics):
-    rows = [
-        ("unit", "route", "rounds", "escalations", "deciders", *(name for name, _ in USAGE_COLUMNS))
-    ]
-    for unit, row in metrics["tickets"].items():
-        route = "%s·%s" % (row["route"]["size"], row["route"]["difficulty"])
-        usage = row["usage"]
-        # A figure nobody reported prints as null, never as 0 or as a blank.
-        figures = [
-            usage
-            if isinstance(usage, str)
-            else json.dumps((usage if isinstance(usage, dict) else {}).get(key))
-            for _, key in USAGE_COLUMNS
-        ]
-        rows.append(
-            (
-                unit,
-                route,
-                str(row["review_rounds"]),
-                str(row["escalations"]),
-                str(row["decider_calls"]),
-                *figures,
-            )
-        )
-    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
-    lines = ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
-    return "\n".join(
-        [
-            "metrics for %s" % metrics["slug"],
-            *lines,
-            "lead model turns: %d" % metrics["lead"]["model_turns"],
-        ]
-    )
 
 
 def step_failed(drive, task_id, gate, error):
@@ -7862,21 +7690,6 @@ def read_ledger_file(path):
     data = ledgers.snapshot(path)
     require(data is not None, "cannot read the ledger %s: no such file" % path)
     return data
-
-
-def render_status(status):
-    lines = ["%s: %s" % (status["slug"], status["state"]), "run: " + status["run_dir"]]
-    for ticket in status["tickets"]:
-        lines.append(
-            "%s  %s%s%s"
-            % (
-                ticket["id"],
-                ticket["state"],
-                " · " + ticket["reason"] if ticket["reason"] else "",
-                "  " + ticket["pr"] if ticket["pr"] else "",
-            )
-        )
-    return "\n".join(lines)
 
 
 def plan_slug(plan_path):

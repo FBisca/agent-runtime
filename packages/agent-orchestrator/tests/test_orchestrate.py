@@ -442,7 +442,11 @@ class ContextAndTransportTests(unittest.TestCase):
 
     def test_inspect_survives_resolver_failure(self):
         """orchestrator-engine/R2: agent-runtime/R23"""
-        with patch.object(app, "run", side_effect=ValueError("boom")):
+        # The resolver reads `run` in the module that starts the process, `driver.runtime`; the
+        # package publishes it for callers, and a patch there would leave the resolver's own call real.
+        from agent_orchestrator.driver import runtime
+
+        with patch.object(runtime, "run", side_effect=ValueError("boom")):
             self.assertEqual(app.resolve_runtime(), {"runtime": "unknown"})
 
 
