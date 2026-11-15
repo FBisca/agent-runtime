@@ -24,7 +24,7 @@ def canonical(payload):
 
 
 class BudgetTests(ToolCase):
-    spawn = event_helpers.EventWaitTests.spawn
+    spawn = event_helpers.EventRig.spawn
 
     def prepare(self):
         """The lead's session and its two spawned workers, w1 and w2. A budget test seeds what the workers report

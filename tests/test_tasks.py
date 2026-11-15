@@ -12,9 +12,9 @@ pytestmark = pytest.mark.integration
 
 
 class TaskTests(ToolCase):
-    prepare = event_helpers.EventWaitTests.prepare
-    spawn = event_helpers.EventWaitTests.spawn
-    publish = event_helpers.EventWaitTests.publish
+    prepare = event_helpers.EventRig.prepare
+    spawn = event_helpers.EventRig.spawn
+    publish = event_helpers.EventRig.publish
 
     def task(self, session, index=None, ok=True, **arguments):
         if index is not None:

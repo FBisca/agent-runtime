@@ -39,8 +39,8 @@ class Rig(InProcessToolCase):
 
     # The helpers come through the module: binding the class here would collect it a second time in
     # this file, and the whole class would run twice in every parallel run.
-    spawn = event_helpers.EventWaitTests.spawn
-    publish = event_helpers.EventWaitTests.publish
+    spawn = event_helpers.EventRig.spawn
+    publish = event_helpers.EventRig.publish
 
     def prepare(self):
         def terminal(name, address, parent="t0", state="working"):
