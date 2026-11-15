@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""Claude and Codex Stop hook: refuse to end a lead's turn while it has undelivered messages or unseen working
-assignments, at most three times per user work period. Fails open on every error."""
+"""Claude, Codex and Pi Stop hook: refuse to end a lead's turn while it has undelivered messages or
+unseen working assignments, at most three times per user work period.
+
+The runtime decides (`agent_runtime.rhythm`); this entry only formats the answer for the host's
+dialect: `{"decision": "block"}` for Claude and Codex, or the neutral `{"block", "reason"}` for Pi,
+which answers on every Stop so the extension can read a decision without guessing. Fails open on
+every error."""
 
 import json
 import os
@@ -10,41 +15,41 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-def main():
-    import hook_lib  # inside the fail-open path: an import error must not fail the host
+def emit(dialect, block, reason=""):
+    """Print one answer. Pi's dialect answers on every Stop; the Claude/Codex dialect only blocks, and
+    spells a spent budget as one stderr note instead."""
+    if dialect == "json":
+        print(json.dumps({"block": block, "reason": reason}))
+    elif block:
+        print(json.dumps({"decision": "block", "reason": reason}))
+    elif reason:
+        print(reason, file=sys.stderr)
 
+
+def main(argv=None):
+    import hook_lib  # inside the fail-open path: an import error must not fail the host
+    from agent_runtime import rhythm
+
+    argv = list(sys.argv[1:] if argv is None else argv)
     payload = hook_lib.read_payload()
     if not payload or payload.get("hook_event_name") not in (None, "Stop"):
         return
+    caps = rhythm.capabilities(hook_lib.harness_cli(argv))
+    dialect = hook_lib.option(argv, "--dialect") or caps.stop_dialect
     who, found = hook_lib.lead_check()
-    if not who:
-        return
-    blocking = bool(found) and (
-        found["undelivered"] > 0 or (found["working"] > 0 and not found["seen"])
-    )
-    if not blocking:
-        hook_lib.reset_budget(os.environ, who)  # nothing to block on: a new period
-        return
-    codex = "codex" in sys.argv[1:]  # Codex payloads carry no background_tasks: no exemption there
-    if not codex and hook_lib.running_wait_task(payload):
-        return  # a backgrounded wait(all) will deliver; no budget spent, none reset
+    reason = rhythm.stop_refusal(found) if who else None
+    if not reason:
+        if who:
+            hook_lib.reset_budget(os.environ, who)  # nothing to block on: a new period
+        return emit(dialect, False)
+    if caps.can_park_wait and hook_lib.running_wait_task(payload):
+        return emit(
+            dialect, False
+        )  # a backgrounded wait(all) will deliver; no budget spent, none reset
     allowed, first_time = hook_lib.spend_budget(os.environ, who)
     if allowed:
-        print(
-            json.dumps(
-                {
-                    "decision": "block",
-                    "reason": "agent-runtime: %d unfinished, %d undelivered — "
-                    "call wait(all) before ending the turn"
-                    % (found["unfinished"], found["undelivered"]),
-                }
-            )
-        )
-    elif first_time:
-        print(
-            "agent-runtime: stop guard budget spent; allowing the stop (resets on your next prompt)",
-            file=sys.stderr,
-        )
+        return emit(dialect, True, reason)
+    emit(dialect, False, rhythm.BUDGET_SPENT if first_time else "")
 
 
 if __name__ == "__main__":
