@@ -11,6 +11,15 @@
 # stable and unique: a question whose meaning changes takes a new id, so a
 # frozen report stays comparable (D26, D51). Expand the bank only after
 # evidence of a gap (D49).
+#
+# VERSION BREAK (D26): `contract.error-handling` keeps its id but changes
+# instrument from this version on. It was a noul - the probability that the
+# change satisfies the question, higher is better - and is now a score on a
+# five-level severity ladder, lower is better, whose levels are listed on the
+# question. A frozen judgment recorded under the old instrument is therefore
+# not comparable with one from this bank: read a benchmark across this change as
+# two versions, never as one series. A noul probability for the same question
+# can be asked again only under a new id.
 
 model: jev-latest
 

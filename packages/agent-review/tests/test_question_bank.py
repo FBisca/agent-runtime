@@ -5,11 +5,10 @@ bank. The bank is the packaged YAML baseline or a configured one; the providers 
 in test_screening_transport.py.
 """
 
-import json
 import textwrap
 
 import pytest
-from agent_review import cli, questions, report, screening
+from agent_review import cli, questions, report
 from agent_review.errors import ReviewError
 
 pytestmark = pytest.mark.unit
@@ -439,8 +438,8 @@ def test_S1_a_calibration_no_rule_can_read_is_refused_by_path(tmp_path, body, na
     assert refused.value.code == 2, "a configuration no rule can honour is a usage error"
 
 
-def test_S1_the_weights_and_thresholds_never_travel_to_the_provider(tmp_path):
-    """The model answers the questions; the numbers decide what the answers mean (D07, D48)."""
+def test_S1_the_loaded_bank_carries_the_weights_and_thresholds_it_declares(tmp_path):
+    """A repository's numbers reach the run through the bank, beside the questions (D07, D48)."""
     path = tmp_path / "config.yaml"
     path.write_text(
         "model: test-model-v1\nquestions: []\nweights:\n  contract.error-handling: 3\n"
@@ -448,10 +447,11 @@ def test_S1_the_weights_and_thresholds_never_travel_to_the_provider(tmp_path):
         encoding="utf-8",
     )
     bank = questions.load(path)
-    asked = screening.question_map(bank.questions)
-    assert "thresholds" not in json.dumps(asked) and "weights" not in json.dumps(asked), (
-        "the provider is asked the questions, never the calibration they are read against"
+    assert bank.weight("contract.error-handling") == 3
+    assert bank.threshold("contract.error-handling") == questions.Threshold(value=1.5), (
+        "the value an answer must clear is carried beside the questions it grades"
     )
+    assert {question.id for question in bank.questions} >= {"contract.error-handling"}
 
 
 def test_S1_a_recalibrated_threshold_is_a_different_bank():
@@ -463,3 +463,35 @@ def test_S1_a_recalibrated_threshold_is_a_different_bank():
     assert report.bank_digest(bank.model, bank.questions, bank.weights, recalibrated) != same, (
         "the same questions read against other numbers are not the same bank"
     )
+
+
+@pytest.mark.parametrize(
+    ("body", "named"),
+    [
+        ("chunk: banana\n", "chunk must be a mapping"),
+        ("chunk: {max_diff_tokens: banana}\n", "chunk['max_diff_tokens']"),
+        ("cross_file: {max_files: 0}\n", "cross_file['max_files']"),
+        ("cross_file: [1]\n", "cross_file must be a mapping"),
+    ],
+    ids=["not-a-mapping", "a-name-not-a-budget", "a-budget-below-one", "a-list"],
+)
+def test_S1_a_budget_no_stage_can_read_is_refused_by_path(tmp_path, body, named):
+    """`chunk` and `cross_file` are honoured by the chunking stage, but their shape is refused here."""
+    path = tmp_path / "config.yaml"
+    path.write_text("model: test-model-v1\nquestions: []\n" + body, encoding="utf-8")
+    with pytest.raises(ReviewError) as refused:
+        questions.load(path)
+    assert named in str(refused.value), "the refusal names the budget by its path"
+    assert refused.value.code == 2, "a budget no stage can read is a usage error"
+
+
+def test_S1_a_declared_chunk_budget_is_carried_beside_the_bank(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "model: test-model-v1\nquestions: []\nchunk: {max_diff_tokens: 400}\n"
+        "cross_file: {max_files: 40}\n",
+        encoding="utf-8",
+    )
+    bank = questions.load(path)
+    assert bank.chunk == {"max_diff_tokens": 400}
+    assert bank.cross_file == {"max_files": 40}

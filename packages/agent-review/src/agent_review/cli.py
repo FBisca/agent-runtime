@@ -30,7 +30,9 @@ always asked, a repository's own questions extend it and never override or disab
 paths add to the mandatory ones (D05, D13) - so a protected path escalates however the repository is
 configured. The numbers the screening is decided with are configuration too: a configuration's weights and
 thresholds are laid over the baseline's per question, and the model never chooses or sees them (D07, D48).
-A declaration no rule can read is refused rather than screened. The invocation writes `report.json` under
+A declaration no rule or stage can read is refused rather than screened, `chunk` and `cross_file` included:
+those two are the budgets a change is split under, accepted and shape-checked now and honoured by the
+chunking stage. The invocation writes `report.json` under
 --output either way and prints a summary for a person; the report, not the exit status, carries the verdict.
 
 The report names what produced it: the provider endpoint it screened through (or the fixture it answered

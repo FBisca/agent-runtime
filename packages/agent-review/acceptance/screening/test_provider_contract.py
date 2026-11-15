@@ -279,6 +279,12 @@ class TransportTests(ProviderContractFixture):
             sent["questions"],
             "a configuration extends the mandatory baseline and never replaces it",
         )
+        # The calibration is the tool's own input: the model is asked the questions, never the numbers the
+        # answers are read against (D07, D48). The request is where that promise is observable.
+        self.assertNotIn(
+            "weights", sent, "a weight is decided by configuration, never by the model"
+        )
+        self.assertNotIn("thresholds", sent, "a threshold is the tool's, never the provider's")
 
     def test_S1_the_documented_credential_is_sent_when_a_fallback_is_present_too(self):
         self.write_config()

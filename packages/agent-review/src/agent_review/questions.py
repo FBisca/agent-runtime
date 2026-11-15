@@ -21,7 +21,9 @@ adds to the packaged baseline's per question rather than dropping it, so no conf
 un-calibrates a question the baseline calibrated. A threshold may name a question this run does not ask:
 a repository carries the calibration of its whole catalogue and asks part of it per run.
 
-The bank also carries the paths this run protects and the safeguards it declares. The packaged baseline
+The bank also carries the paths this run protects, the safeguards it declares and the budgets a change is
+split under (`chunk`, `cross_file`): the first two are read by rules, the last two by the chunking stage,
+and all four are refused here by path when their shape is not one a stage can read. The packaged baseline
 ships the mandatory sensitive paths (D13); a repository's configuration extends that list and never
 replaces it, so the two lists are carried apart and joined where the rule reads them (SG-D4). A declaration
 a rule will read is refused here, by its field path, when its shape is not the one that rule can use: a
@@ -60,7 +62,8 @@ TOP_LEVEL = (
 FIELDS = ("id", "priority", "type", "ask", "criteria")
 # The declarations whose shape a rule reads; a declaration no rule reads is carried as configured.
 DECLARATIONS = ("stdlib_only",)
-# The run's own declarations the question bank carries whole, so the stage that reads one finds it here.
+# The run's own declarations the question bank carries whole, so the stage that reads one finds it here. Each is
+# a block of budgets and limits: a positive whole number per setting, refused here rather than honoured nowhere.
 CARRIED = ("chunk", "cross_file")
 # What a question weighs in a screening when no configuration declares a weight for it.
 DEFAULT_WEIGHT = 1.0
@@ -122,8 +125,8 @@ class QuestionBank:
 
     `weights` and `thresholds` are what the screening is decided with, declared beside the questions and
     never chosen by the model: a question's weight, and the calibrated value and confidence band its
-    answer is read against. `chunk` and `cross_file` are the run's own declarations the chunking stage
-    reads, carried as configured for the same reason as `safeguards`.
+    answer is read against. `chunk` and `cross_file` are the budgets the chunking stage reads: accepted and
+    shape-checked here, honoured there.
     """
 
     model: str
@@ -332,14 +335,25 @@ def _band(value: Any, field_name: str, path: Path) -> float:
 
 
 def _carried(data: dict[str, Any], name: str, path: Path) -> Mapping[str, Any]:
-    """A declaration no rule in this stage reads, carried whole beside the questions as configured."""
+    """A block of budgets the chunking stage reads, carried beside the questions and checked for its shape.
+
+    `chunk` and `cross_file` are honoured where a change is split and a cross-file question is bounded, not
+    here, but their shape is refused here: a budget no stage can read (`chunk: {max_diff_tokens: banana}`)
+    would otherwise be accepted silently and leave the request unbounded.
+    """
     if name not in data:
         return {}
     block = data[name]
     if not isinstance(block, dict):
         raise ReviewError(
-            f"{path}: {name} must be a mapping of declarations, not {type(block).__name__}"
+            f"{path}: {name} must be a mapping of settings, not {type(block).__name__}"
         )
+    for setting, value in block.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ReviewError(
+                f"{path}: {name}[{setting!r}] must be a positive whole number, not {value!r}; it is a "
+                "budget the chunking stage reads"
+            )
     return dict(block)
 
 
