@@ -12,7 +12,7 @@ from . import dispatch_store as dispatch
 
 
 class Capabilities(NamedTuple):
-    """What one harness contributes to the lead's rhythm.
+    """What one harness contributes to a session's rhythm.
 
     can_refuse_stop: the host acts on a refusal to end the turn.
     can_park_wait: the host can leave a wait running in the background, so a block is unnecessary.
