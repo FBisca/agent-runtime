@@ -24,7 +24,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
-from . import (
+from .. import (
     approval_recovery,
     contracts,
     events,
@@ -37,22 +37,22 @@ from . import (
     verify,
     workbench,
 )
-from . import config as repo_config
-from . import ledger as ledgers
-from . import plan as yaml_plan
-from .ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
-from .invariants import AMENDING, PARKED, next_path
-from .invariants import checked_write as ledger
-from .plan import PlanError
-from .report_rules import require, require_report
-from .runtime_client import (
+from .. import config as repo_config
+from .. import ledger as ledgers
+from .. import plan as yaml_plan
+from ..ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
+from ..invariants import AMENDING, PARKED, next_path
+from ..invariants import checked_write as ledger
+from ..plan import PlanError
+from ..report_rules import require, require_report
+from ..runtime_client import (
     OPERATION_ADOPTED,
     CliRuntimeClient,
     approval_refusal,
     operation_state,
     refuses_operation_ids,
 )
-from .runtime_client import RuntimeError as RuntimeCallError
+from ..runtime_client import RuntimeError as RuntimeCallError
 
 ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
 now = timeutil.iso
@@ -9117,7 +9117,3 @@ def run_cli(argv=None):
     except (ValueError, KeyError, OSError, subprocess.TimeoutExpired, ledgers.LedgerBusy) as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 1
-
-
-if __name__ == "__main__":
-    sys.exit(run_cli())

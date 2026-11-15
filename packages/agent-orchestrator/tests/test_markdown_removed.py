@@ -36,7 +36,11 @@ class MarkdownRemovedTests(RunFixture, unittest.TestCase):
         self.assertFalse(hasattr(spec, "CONVERGE"))
         self.assertFalse(hasattr(spec, "set_status"))
         self.assertFalse(hasattr(spec, "parse_plan"))
-        self.assertNotIn("--converge", (PACKAGE / "driver.py").read_text(encoding="utf-8"))
+        # The driver is a package: read every module of it, so a split cannot carry the adapter along.
+        driver_source = "\n".join(
+            path.read_text(encoding="utf-8") for path in sorted((PACKAGE / "driver").glob("*.py"))
+        )
+        self.assertNotIn("--converge", driver_source)
 
 
 class WaitChecksRemovedTests(unittest.TestCase):
