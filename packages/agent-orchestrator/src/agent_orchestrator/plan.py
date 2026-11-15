@@ -34,6 +34,7 @@ from pydantic import (
     model_validator,
 )
 
+from . import approval_recovery as recovery
 from . import config, runner, runtime_client
 from . import ledger as ledgers
 
@@ -1234,39 +1235,6 @@ def digest(repo_identity, base, plan_bytes, files):
     return h.hexdigest()
 
 
-def snapshot_path(approval, state_dir):
-    # Filenames are not digest inputs: renaming a contract must reuse its snapshot.
-    return Path(state_dir).expanduser() / "approvals" / approval.digest / "plan.yaml"
-
-
-def verify_snapshot(path, model, repo, state_dir):
-    way_out = f"run agent-orchestrator plan approve {path}"
-    snap = snapshot_path(model.approval, state_dir)
-    if not snap.is_file():
-        raise PlanError(f"approval: snapshot missing at {snap} — {way_out}")
-    snap_data, errors = read_yaml(snap)
-    if errors or not isinstance(snap_data, dict):
-        raise PlanError(f"approval: invalid snapshot {snap} — {way_out}")
-    old_plan = snap.read_bytes()
-    old_files = snapshot_files(snap.parent, path)
-    live_data, _ = read_yaml(path)
-    live_files = approved_files(path, live_data)
-    changed = []
-    if canonical(live_data) != old_plan:
-        changed.append(str(path))
-    changed += [
-        str(file_path(path, n))
-        for n in sorted(old_files.keys() | live_files.keys())
-        if old_files.get(n) != live_files.get(n)
-    ]
-    if digest(identity(repo), model.approval.base, old_plan, old_files) != model.approval.digest:
-        changed.append(f"repo identity/base or snapshot {snap.parent}")
-    if changed:
-        raise PlanError("approval: changed " + ", ".join(changed) + " — " + way_out)
-    # The driver consumes the snapshot, after checking the authored file against it.
-    return Plan.model_validate(snap_data).model_copy(update={"approval": model.approval})
-
-
 def load(
     path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, verify=True, lint=None
 ):
@@ -1300,51 +1268,12 @@ def load(
     if lint and (found := lint_problems(model, repo, path)):
         raise PlanError("; ".join(found))
     if model.approval and verify:
-        return verify_snapshot(path, model, repo, state_dir)
+        return recovery.verify_snapshot(path, model, repo, state_dir)
     if require_approval and model.approval is None:
         raise PlanError(
             f"approval: {path} is unapproved — run agent-orchestrator plan approve {path}"
         )
     return model
-
-
-def approval_block(record):
-    """The `Approval` a record names, or None: the drive's own block, or the ledger's record of it (its `base` and its
-    `digest`). The ledger keeps neither who approved the plan nor when, so a record that does not name them is
-    recovered as `unknown`, at the moment it is recovered."""
-    if isinstance(record, Approval):
-        return record
-    if not isinstance(record, dict) or not record.get("base") or not record.get("digest"):
-        return None
-    return Approval(
-        by=record.get("by") or "unknown",
-        at=record.get("at") or datetime.now(timezone.utc).isoformat(),
-        base=record["base"],
-        digest=record["digest"],
-    )
-
-
-def recover_approval(path, record, *, repo=None, state_dir=DEFAULT_STATE):
-    """The plan at `path` read with the approval `record` names restored onto it, or None when the file is not that
-    approval's plan.
-
-    A hand edit can drop the `approval` span and leave the contract alone. The snapshot the digest names proves
-    whether it did — the plan's bytes and its files, exactly — so a caller repairs the span instead of treating the
-    plan as edited. A plan whose contract moved, or that does not load, is the edit it looks like and stays one."""
-    restored = approval_block(record)
-    if restored is None:
-        return None
-    path = Path(path).resolve()
-    repo = repository(path, repo)
-    try:
-        model = load(path, repo=repo, state_dir=state_dir, verify=False, lint=False)
-        if model.approval is not None:
-            return None  # the file carries the block it was last given: nothing was lost
-        return verify_snapshot(
-            path, model.model_copy(update={"approval": restored}), repo, state_dir
-        )
-    except PlanError:
-        return None
 
 
 def replaced_text(text, name, new):
@@ -1679,14 +1608,12 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=False)
     if model.approval is None:
-        # A hand edit that dropped the `approval` span leaves a plan the ledger still holds the approval of: the
-        # amendment takes it from there and publishes the spans back, instead of refusing the plan as unapproved.
-        approval = approval_block(recorded_approval(repo, model.slug, state_dir))
-        if approval is None:
-            raise PlanError(
-                f"approval: {path} is unapproved, so there is nothing to amend — run agent-orchestrator plan approve {path}"
-            )
-        model = model.model_copy(update={"approval": approval})
+        # A hand edit that dropped the `approval` span leaves a plan the ledger still holds the approval of.
+        model = recovery.ledger_approved(model, repo, state_dir)
+    if model is None:
+        raise PlanError(
+            f"approval: {path} is unapproved, so there is nothing to amend — run agent-orchestrator plan approve {path}"
+        )
     if not reason.strip():
         raise PlanError("amend: --reason is empty — say why the plan changes")
     if found := lint_problems(model, repo, path):
@@ -1708,20 +1635,6 @@ def completed(repo, slug, state_dir):
     return {
         t for t, status in statuses.items() if str(status).strip().upper().startswith("COMPLETE")
     }
-
-
-def recorded_approval(repo, slug, state_dir):
-    """The approval a plan's ledger keeps (its `base` and `digest`), or None: the record that outlives the plan file,
-    which is what loses the span. A read: a command that writes nothing creates nothing, so no ledger is made here."""
-    # The state key is the driver's, and the driver imports this module.
-    from . import driver
-
-    state = Path(state_dir).expanduser()
-    for path in (state / driver.repo_key(repo) / (slug + ".json"), state / (slug + ".json")):
-        approval = (ledgers.snapshot(path) or {}).get("approval")
-        if isinstance(approval, dict) and approval:
-            return approval
-    return None
 
 
 def frozen_problems(old, new, done):
@@ -1750,7 +1663,7 @@ def frozen_problems(old, new, done):
 def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     previous = model.approval
     way_out = f"run agent-orchestrator plan approve {path}"
-    snap = snapshot_path(previous, state_dir)
+    snap = recovery.snapshot_path(previous, state_dir)
     if not snap.is_file():
         raise PlanError(f"approval: snapshot of the approved plan missing at {snap} — {way_out}")
     old, errors = read_yaml(snap)
