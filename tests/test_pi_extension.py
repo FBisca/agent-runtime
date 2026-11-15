@@ -346,6 +346,26 @@ class WakePushTests(ExtensionCase):
         )
         self.assertEqual(self.poll()["result"], ["t1 asked for a decision"])
 
+    def test_S7_a_run_whose_pane_name_the_driver_truncated_is_still_its_own(self):
+        # hc allows 32 characters, so the driver cuts the pane's name and strips the hyphens the cut
+        # leaves; the run is still this session's, matched by the name the driver built.
+        slug = "pi-lead-rhythm-long-extra"
+        self.assertGreater(len("orchestrate-" + slug), 32, "the name does not fit hc's limit")
+        pane = ("orchestrate-" + slug)[:32].rstrip("-")
+        self.assertEqual(
+            pane, "orchestrate-pi-lead-rhythm-long", "the cut ends in a stripped hyphen"
+        )
+        run = self.state / "orchestrate" / "repo" / slug / "wakes.jsonl"
+        run.parent.mkdir(parents=True, exist_ok=True)
+        run.write_text(self.wake("t2 needs attention") + "\n", encoding="utf-8")
+        self.terminals(
+            [
+                {"name": "pi-lead", "address": self.LEAD, "parent": None},
+                {"name": pane, "address": self.PANE, "parent": self.LEAD},
+            ]
+        )
+        self.assertEqual(self.poll()["result"], ["t2 needs attention"])
+
     def test_S7_an_explicitly_named_wake_file_still_belongs_to_a_lead(self):
         # Naming a file is not a claim to it: a worker inherits the lead's environment and must not
         # take the wakes — its own terminal has a parent — while the lead that named it receives them.
