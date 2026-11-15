@@ -159,11 +159,11 @@ def measure_tree(root):
     return measured_sources(tree_sources(root))
 
 
-def git(root, *args):
+def git(root, *args, text=True):
     """One git command run in `root`, its output captured; the caller reads the exit code."""
     try:
         return subprocess.run(
-            ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=300
+            ["git", "-C", str(root), *args], capture_output=True, text=text, timeout=300
         )
     except OSError as error:
         raise Refused("structure budget: git is not available, so --since has no base: %s" % error)
@@ -231,20 +231,37 @@ def moved_paths(root, rev):
     `git diff` reads the revision against the working tree, so a staged, uncommitted or committed
     `git mv` is seen once. A file that was copied rather than moved is no move: its original is
     still there, holding its number. Paths come out relative to `root`, as the base's do.
+
+    `-z` keeps each path as the bytes it is: git else C-quotes any name holding a non-ASCII
+    character or a quote, a backslash or a tab, and the quoted spelling matches no base row. One
+    field per NUL, a rename carrying both its paths and every other status one, is the stride that
+    stays aligned beside a modified file in the same diff.
     """
-    done = git(root, "diff", "--name-status", "--find-renames", "--relative", rev, "--")
+    done = git(
+        root,
+        "diff",
+        "--name-status",
+        "--find-renames",
+        "--relative",
+        "-z",
+        rev,
+        "--",
+        text=False,
+    )
     if done.returncode != 0:
         raise Refused(
             "structure budget: cannot read the moves since %s in %s: %s"
-            % (rev, root, done.stderr.strip())
+            % (rev, root, done.stderr.decode("utf-8", "replace").strip())
         )
+    fields = done.stdout.decode("utf-8", "surrogateescape").split("\0")
     moved = {}
-    for line in done.stdout.splitlines():
-        status, _, rest = line.partition("\t")
-        if not status.startswith("R"):
-            continue
-        before, _, now = rest.partition("\t")
-        moved[now] = before
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        paths = 2 if status.startswith("R") else 1
+        if paths == 2:
+            moved[fields[index + 2]] = fields[index + 1]
+        index += paths + 1
     return moved
 
 
