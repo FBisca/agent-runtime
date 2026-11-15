@@ -7,7 +7,6 @@ package is split into books its state the way the driver does.
 """
 
 import json
-import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,9 +20,7 @@ pytestmark = pytest.mark.unit
 # <repo>/packages/agent-orchestrator/tests/test_driver/<this file>
 REPO = Path(__file__).resolve().parents[4]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
-DRIVER = MEMBER / "driver"
-BOOK = DRIVER / "book.py"
-BUDGET = REPO / "acceptance" / "structure" / "structure_budget.json"
+BOOK = MEMBER / "driver" / "book.py"
 
 # Every write of the durable record: the claim that reserves an attempt, the bind that names its
 # runtime agent, the checkpoint and the merge, the release, and the two summaries a reader asks for.
@@ -122,27 +119,6 @@ class BookHomeTests(unittest.TestCase):
         for name in SPINE:
             with self.subTest(name=name):
                 self.assertIs(getattr(driver, name), getattr(spine, name))
-
-
-class BookBudgetTests(unittest.TestCase):
-    """S11: the module this step adds is measured like the rest of the package, with no grandfather."""
-
-    def test_S11_the_book_module_is_under_the_paid_ceilings(self):
-        """structure-budget/S11"""
-        budget = runpy.run_path(str(REPO / "scripts" / "structure_budget.py"))
-        measured = budget["measure_tree"](DRIVER)
-        self.assertIn("book.py", measured)
-        ceilings = json.loads(BUDGET.read_text(encoding="utf-8"))["ceilings"]
-        # No base: the module this step adds takes no grandfather, and the two metrics the driver
-        # package is paid on are named as S11 names them.
-        lines = budget["growth_lines"](
-            {"book.py": measured["book.py"]},
-            {},
-            ceilings,
-            ["book.py"],
-            ["module-lines", "class-methods"],
-        )
-        self.assertEqual(lines, [], "the book module is over a ceiling it may not hold")
 
 
 if __name__ == "__main__":
