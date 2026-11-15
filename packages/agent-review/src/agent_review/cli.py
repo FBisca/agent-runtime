@@ -7,7 +7,8 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from agent_review import questions, revisions
+from agent_review import questions, revisions, safeguards
+from agent_review.change import read as read_change
 from agent_review.errors import ReviewError, ScreeningError
 from agent_review.judgments import collected
 from agent_review.report import REPORT, Report
@@ -159,6 +160,19 @@ def screen(args: argparse.Namespace) -> Report:
     base, head = revisions.resolve(repo, args.base, args.head)
     change = revisions.diff(repo, base, head)
     _prepare_output(args.output, base, head)
+    # The safeguards read the frozen diff beside the provider's state: a hit decides the change, so no port
+    # is built, no credential is read and no request is spent (SG-D2, SG-D10).
+    escalation = safeguards.decide(read_change(change))
+    if escalation:
+        return Report(
+            model=bank.model,
+            base=base,
+            head=head,
+            questions=bank.questions,
+            long_context=args.long_context,
+            requests=0,
+            escalation=escalation,
+        )
     port = _port(args, bank.model)
     request = ScreeningRequest(
         model=bank.model, questions=bank.questions, diff=change, base=base, head=head
