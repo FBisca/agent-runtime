@@ -44,7 +44,11 @@ jobs:
       - run: uv sync --frozen --all-packages
       # The whole suite, in parallel: the fast suite (`uv run pytest`) is the unit tests alone.
       - run: uv run pytest -n 4 --junitxml="$RUNNER_TEMP/suite.xml"
-      # R208's per-module half is a check: a module that grew past its baseline fails the build.
+      # R208's half is a check: no test over eighteen seconds, and
+      # the suite's summed call time under the one ceiling the
+      # committed budget names. Both are absolute, so a slower
+      # runner is not the gate and no per-module row has to be
+      # edited by every rename, split or move.
       - name: suite budget
         run: python3 scripts/suite_budget.py --junit "$RUNNER_TEMP/suite.xml"
       # The structure budget: a file may exceed a ceiling only if it did at the

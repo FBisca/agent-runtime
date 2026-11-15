@@ -76,7 +76,7 @@ class FastSuiteTests(unittest.TestCase):
     FAST_SUITE_SECONDS = 3.0  # R222: the fast suite's tests cost under three seconds
     UNIT_TEST_SECONDS = 0.5
     # A shared runner is slower than the machine these numbers were measured on, and a build fails on
-    # the behaviour, not on the runner: half again before a row is a red build, as R223's budget does.
+    # the behaviour, not on the runner: half again before a row is a red build.
     RUNNER_FACTOR = 1.5
 
     _profile = None
@@ -134,8 +134,17 @@ class FastSuiteTests(unittest.TestCase):
             "a unit test over half a second slows every run; make it cheaper or move it to the boundary",
         )
 
-    def test_control_the_fast_suite_selects_fewer_tests_than_the_whole_suite(self):
-        self.assertLess(selected(), selected("-m", "unit or integration or not unit"))
+    def test_control_the_fast_suite_leaves_an_integration_test_out(self):
+        """The default fast suite drops what is marked integration; naming its module keeps it.
+
+        `-k` is an option, not a path, so the default selection still applies. One whole-suite
+        collection answers it: the two counts a whole-suite-versus-every-marker comparison needs were
+        two collections, and a test that only asks which tests a run selected pays for both.
+        """
+        name = "test_S1_the_fast_suite_reports_under_three_seconds"
+        module = "acceptance/suite/test_fast_suite.py"
+        self.assertEqual(selected("-k", name), 0)
+        self.assertEqual(selected(module, "-k", name), 1)
 
     def test_S5_an_option_value_keeps_the_fast_suite(self):
         # One module is enough: the property is that an option's value is not read as a selection, and a
