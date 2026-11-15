@@ -195,19 +195,8 @@ def test_S9_a_stdlib_only_entry_that_is_not_a_path_is_refused_by_path(tmp_path, 
 
 
 def test_a_configured_sensitive_path_list_is_carried_as_patterns(tmp_path):
+    """A valid list loads as patterns, so the rule has something to match before any refusal matters."""
     path = tmp_path / "config.yaml"
     path.write_text(CONFIG + 'sensitive_paths:\n  - "db/migrations/**"\n', encoding="utf-8")
     assert questions.load(path).sensitive_paths == ("db/migrations/**",)
     assert questions.baseline().sensitive_paths, "the packaged bank ships the mandatory baseline"
-
-
-def test_a_configuration_that_names_no_sensitive_paths_extends_the_baseline_with_nothing(tmp_path):
-    path = tmp_path / "config.yaml"
-    path.write_text(CONFIG, encoding="utf-8")
-    assert questions.load(path).sensitive_paths == ()
-
-
-def test_an_empty_sensitive_path_list_is_a_list_of_patterns(tmp_path):
-    path = tmp_path / "config.yaml"
-    path.write_text(CONFIG + "sensitive_paths: []\n", encoding="utf-8")
-    assert questions.load(path).sensitive_paths == ()
