@@ -98,6 +98,32 @@ def new():
     return {"version": VERSION, "kind": KIND, "tasks": {}}
 
 
+def record_approval(data, approval):
+    """The approval the drive gates on, at the ledger's top level: its base and its digest. The plan file is what
+    loses the span (a hand edit drops it), and a run that starts again reads the base from here. `approval` is a
+    mapping with `base` and `digest`; an empty one records nothing."""
+    if not approval:
+        return None
+    data["approval"] = {"base": approval["base"], "digest": approval["digest"]}
+    return data["approval"]
+
+
+def record_park(data, park):
+    """The park the drive is in, at the ledger's top level: its kind, its cause, the error, the approval the drive
+    holds, since when, the units it holds and the way out. One record for the wake, attention.md and the run's exit."""
+    data["park"] = dict(park)
+    return data["park"]
+
+
+def end_park(data, kind=None):
+    """The park is over: forget it, and return the record that was forgotten (or None). With `kind`, only a park of
+    that kind ends: a plan the drive cannot use and units that wait for an amendment are not the same park."""
+    park = data.get("park")
+    if not park or (kind is not None and park.get("kind") != kind):
+        return None
+    return data.pop("park")
+
+
 def stamp(data):
     """The marker, beside `version`, which stays what it was."""
     rest = {k: v for k, v in data.items() if k not in ("version", "kind")}

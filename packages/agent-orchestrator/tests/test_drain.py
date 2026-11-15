@@ -394,3 +394,153 @@ class AmendTests(DrainFixture, unittest.TestCase):
         current = yaml.safe_load(self.plan.read_text(encoding="utf-8"))
         current["tickets"] = data["tickets"]
         return yaml.safe_dump(current, sort_keys=False)
+
+
+class ParkedDrive(DrainFixture, unittest.TestCase):
+    """A drive that cannot use its plan: it records the park, shows it, wakes the Lead with a way out that works, and
+    asks again while nothing is in flight without giving up the plan (parked-drive-release/S2, S3)."""
+
+    rows = ("T1", "T2")  # T2 waits for T1's merge, so a park that starts no worker is visible
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "clock").write_text("0", encoding="utf-8")
+
+    def clock(self):
+        return int((self.root / "clock").read_text(encoding="utf-8") or 0)
+
+    def tick(self, seconds):
+        """A wait step that moves the drive's clock: the park's next ask falls due."""
+        return wait_result(write=[[str(self.root / "clock"), str(seconds)]])
+
+    def widened_t1(self):
+        """An edit that leaves every ticket and path alone but changes the plan's bytes."""
+
+        def change(data):
+            data["tickets"][0]["delivers"] = "first, and wider"
+
+        return self.edit(change)
+
+    def snapshot(self):
+        """A wait step that copies the ledger and attention.md aside: the state of the drive while it is parked."""
+        out = self.root / "parked"
+        return wait_result(
+            self.working("demo-t1"),
+            run=[
+                [
+                    "sh",
+                    "-c",
+                    "mkdir -p '%s' && cp '%s' '%s/ledger.json'"
+                    % (out, self.state_dir / "demo.json", out),
+                ],
+                ["sh", "-c", "cp '%s' '%s/attention.md'" % (self.run_dir / "attention.md", out)],
+            ],
+        )
+
+    def parked(self):
+        return json.loads((self.root / "parked" / "ledger.json").read_text(encoding="utf-8"))[
+            "park"
+        ]
+
+    def parked_attention(self):
+        return (self.root / "parked" / "attention.md").read_text(encoding="utf-8")
+
+    def approval(self, text=None):
+        return yaml.safe_load(text or self.approved)["approval"]
+
+    def approve_argv(self, base):
+        return [
+            "plan",
+            "approve",
+            str(self.plan),
+            "--repo",
+            str(self.repo),
+            "--state-dir",
+            str(self.state_dir),
+            "--base",
+            base,
+        ]
+
+    def test_S2_a_parked_drive_records_the_park_and_names_a_way_out_that_works(self):
+        edit = self.widened_t1()
+        self.waits(
+            [
+                wait_result(self.working("demo-t1"), write=self.writes(edit)),
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.snapshot(),
+                # the way out it names works: the approved bytes come back and the park ends
+                wait_result(self.working("demo-t1"), write=self.writes(self.approved)),
+                self.timeout("demo-t2"),
+            ]
+        )
+        self.run_driver("--max-workers", "2")
+        park = self.parked()
+        self.assertEqual(park["cause"], "edited")
+        self.assertIn(self.plan.name, park["error"])
+        self.assertEqual(park["digest"], self.approval()["digest"])
+        self.assertEqual(
+            park["base"], self.approval()["base"], "the park does not name its own base"
+        )
+        self.assertTrue(park["since"], "the park does not say since when")
+        attention = self.parked_attention()
+        self.assertIn("Parked", attention)
+        self.assertIn("plan approve --base", attention)
+        self.assertIn(park["base"], attention)
+        (wake,) = self.wake_lines("drain")
+        self.assertIn("plan approve --base", wake)
+        self.assertIn(park["base"], wake)
+        self.assertIn("plan amend", wake)
+        # it started no new work while it was parked: T2 waited for the park to end, not for a slot
+        (t2,) = self.at_call("spawn", "demo-t2")
+        self.assertTrue(self.drain_had_ended(t2), "demo-t2 was started while the drive was parked")
+        # the ledger holds the approval the drive gates on, and stops naming a park that has ended
+        self.assertEqual(
+            self.ledger()["approval"],
+            {"base": self.approval()["base"], "digest": self.approval()["digest"]},
+        )
+        self.assertIsNone(self.ledger().get("park"), "the ledger still names a park that ended")
+        # the way out works on the edit the drive could not use, at the approval's own base
+        self.plan.write_text(edit, encoding="utf-8")
+        approved = self.cli(*self.approve_argv(park["base"]))
+        self.assertEqual(approved.returncode, 0, approved.stderr)
+        reapproved = self.approval(self.plan.read_text(encoding="utf-8"))
+        self.assertEqual(reapproved["base"], park["base"], "the way out left the approval's base")
+
+    def test_S3_a_parked_drive_asks_again_after_fifteen_minutes_and_then_every_thirty(self):
+        # a person's ticket: no worker is in flight, so only the park is left
+        self.set_plan(("T4",))
+        self.approved = self.plan.read_text(encoding="utf-8")
+        self.waits(
+            [
+                wait_result(write=self.writes("tickets: [unclosed\n")),
+                wait_result(),  # a quiet tick: nothing is due yet
+                self.tick(16 * 60),  # sixteen minutes in: the first re-ask falls due
+                wait_result(),
+                self.tick(16 * 60 + 31 * 60),  # thirty-one since the last ask: the second falls due
+                wait_result(),
+                self.tick(16 * 60 + 32 * 60),  # a minute later: nothing is due
+                wait_result(),
+                # the plan comes back: the way out works and the park ends
+                wait_result(write=self.writes(self.approved)),
+                wait_result(),
+            ]
+        )
+        spec = load_script()
+        with mock.patch.object(spec.Driver, "clock", staticmethod(self.clock)):
+            self.run_driver()
+        wakes = self.wake_lines("drain")
+        self.assertEqual(
+            len(wakes), 3, "the park did not ask again after 15 and 30 minutes: %s" % wakes
+        )
+        for wake in wakes[1:]:
+            self.assertIn("still parked", wake)
+            self.assertIn("plan approve --base", wake)
+        self.assertEqual(self.spawned(), [], "a worker started while the drive was parked")
+        self.assertTrue(self.plan.exists(), "the drive gave up the plan")
+        self.assertEqual([e["kind"] for e in self.run_events("finish", "crash")], ["finish"])
+        self.assertEqual(
+            [e.get("state") for e in self.run_events("drain")],
+            ["draining", "ended"],
+            "the park ended without the plan ever being given up",
+        )

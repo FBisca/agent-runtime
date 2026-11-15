@@ -316,6 +316,35 @@ class OnlyParked(WakeFixture, unittest.TestCase):
         self.assertEqual([e["kind"] for e in self.run_events("finish", "crash")], ["finish"])
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "ACTIVE")
 
+    def test_S6_a_run_that_ends_with_parked_units_says_why_it_ended(self):
+        reason = "T1 needs its test file"
+        self.waits(
+            [
+                self.blocked(),
+                self.decide_step("t1", "amend", reason),
+                wait_result(),
+                wait_result(),
+            ]
+        )
+        result = self.run_driver()
+        park = self.ledger().get("park")
+        self.assertIsNotNone(park, "the ledger does not name the park the run ends with")
+        self.assertEqual(park["units"], ["t1"])
+        self.assertEqual(park["cause"], "awaiting-amendment")
+        self.assertIn(reason, park["error"])
+        self.assertIn("plan amend", park["way_out"], "the ledger does not name the way out")
+        self.assertTrue(park["since"])
+        attention = (self.run_dir / "attention.md").read_text(encoding="utf-8")
+        self.assertIn("Parked", attention)
+        self.assertIn(reason, attention)
+        self.assertIn("plan amend", attention)
+        self.assertEqual(
+            json.loads(result.stdout).get("parked"),
+            ["t1"],
+            "the run's exit does not say the units are parked",
+        )
+        self.assertIn("parked", result.stderr.lower())
+
     def test_control_a_unit_parked_as_blocked_ends_the_run_the_same_way(self):
         self.waits(
             [self.blocked(), self.decide_step("t1", "mark blocked"), wait_result(), wait_result()]
