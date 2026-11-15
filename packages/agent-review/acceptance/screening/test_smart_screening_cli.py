@@ -10,8 +10,8 @@ chunk budget is tokens, and escalation is a calibrated threshold or a confidence
 
   - a repository question extends the packaged baseline and never replaces a baseline id; a score question carries its
     levels; an empty additions list asks the baseline alone; weights, thresholds and calibration sit beside the bank
-  - a changed path, or either side of a rename, matching a global or repository sensitive path recommends full review
-    with a `sensitive-path` reason naming the pattern and its source
+  - a changed path, or either side of a rename, matching a baseline or repository protected path recommends full
+    review with a `protected-path` reason naming the pattern and whether it came from the baseline or the repository
   - chunks are built inside the token budget in path order, each chunk is screened once with the whole bank —
     `usage.requests == len(chunks)`, never `1 + len(chunks)` — and `coverage.changed_regions == coverage.covered`
   - a change wider than `cross_file.max_files` records `coverage.gap` and a `coverage-gap` reason
@@ -108,7 +108,11 @@ def noul(value):
 
 
 class SmartScreeningFixture(unittest.TestCase):
-    """A repository whose head edit renames a doc into `server/`, touches a migration, and adds a big module."""
+    """A repository whose head edit adds a migration and a big module, and by default renames a doc into `server/`."""
+
+    # A protected path answers before a request is made (R15-R17, R20), so only the scenarios about that
+    # answer keep the rename; the screening scenarios need a change that reaches a request at all.
+    protected_path = True
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -119,9 +123,9 @@ class SmartScreeningFixture(unittest.TestCase):
         self.config = Path(self.tmp.name, "config.yaml")
         self.fixture = Path(self.tmp.name, "screening.json")
         self.pricing = Path(self.tmp.name, "pricing.yaml")
-        self.base, self.head = self.two_revisions()
+        self.base, self.head = self.two_revisions(protected=self.protected_path)
 
-    def two_revisions(self):
+    def two_revisions(self, *, protected=True):
         git(self.workspace, "init", "-b", "main")
         for name, text in BASE_FILES.items():
             path = self.workspace / name
@@ -133,9 +137,10 @@ class SmartScreeningFixture(unittest.TestCase):
             "create index items_id on items (id);\n", encoding="utf-8"
         )
         (self.workspace / "pipeline.py").write_text(PIPELINE, encoding="utf-8")
-        # `git mv` will not create the destination directory, and `server/` is new in this head edit.
-        (self.workspace / "server").mkdir(parents=True, exist_ok=True)
-        git(self.workspace, "mv", "docs/guide.md", "server/guide.md")
+        if protected:
+            # `git mv` will not create the destination directory, and `server/` is new in this head edit.
+            (self.workspace / "server").mkdir(parents=True, exist_ok=True)
+            git(self.workspace, "mv", "docs/guide.md", "server/guide.md")
         self.commit("head")
         return base, git(self.workspace, "rev-parse", "HEAD")
 
@@ -282,7 +287,7 @@ class AdditiveConfigurationTests(SmartScreeningFixture):
 
 
 class SensitivePathTests(SmartScreeningFixture):
-    """S2: a global and a repository pattern each route to full review, renames included."""
+    """S2: a baseline and a repository pattern each route to full review, renames included."""
 
     def test_S2_a_rename_into_a_global_sensitive_path_recommends_full_review(self):
         self.write_config()
@@ -293,9 +298,9 @@ class SensitivePathTests(SmartScreeningFixture):
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         report = self.report()
         self.assertTrue(report["escalation"]["recommended"])
-        matched = [r for r in report["escalation"]["reasons"] if r["rule"] == "sensitive-path"]
-        self.assertTrue(matched, "the rename into server/ is a sensitive path")
-        self.assertEqual(matched[0]["source"], "global")
+        matched = [r for r in report["escalation"]["reasons"] if r["rule"] == "protected-path"]
+        self.assertTrue(matched, "the rename into server/ is a protected path")
+        self.assertEqual(matched[0]["source"], "baseline")
         self.assertIn("server/", matched[0]["pattern"])
 
     def test_S2_a_repository_pattern_is_named_with_its_source(self):
@@ -306,7 +311,7 @@ class SensitivePathTests(SmartScreeningFixture):
         result = self.screen()
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         matched = [
-            r for r in self.report()["escalation"]["reasons"] if r["rule"] == "sensitive-path"
+            r for r in self.report()["escalation"]["reasons"] if r["rule"] == "protected-path"
         ]
         self.assertTrue(
             any(r["source"] == "repository" and "db/migrations" in r["pattern"] for r in matched)
@@ -315,6 +320,8 @@ class SensitivePathTests(SmartScreeningFixture):
 
 class ChunkingTests(SmartScreeningFixture):
     """S3: one request per chunk with the whole bank, total coverage, no applicability call."""
+
+    protected_path = False
 
     def test_S3_two_chunks_are_two_requests_and_every_region_is_covered(self):
         self.write_config(max_diff_tokens=400)
@@ -345,6 +352,8 @@ class ChunkingTests(SmartScreeningFixture):
 class CoverageGapTests(SmartScreeningFixture):
     """S4: a change wider than the cross-file limit records the gap instead of a clean screen."""
 
+    protected_path = False
+
     def test_S4_a_change_wider_than_the_cross_file_limit_records_the_gap(self):
         self.write_config(max_files=1)
         self.write_fixture(
@@ -359,6 +368,8 @@ class CoverageGapTests(SmartScreeningFixture):
 
 class EscalationTests(SmartScreeningFixture):
     """S5: a calibrated threshold or a confidence band decides, not the model."""
+
+    protected_path = False
 
     def test_S5_a_score_above_its_threshold_escalates(self):
         self.write_config()
@@ -401,6 +412,8 @@ class EscalationTests(SmartScreeningFixture):
 
 class CostTests(SmartScreeningFixture):
     """S6: cost from the declared table against the served model, unknown for an unlisted one."""
+
+    protected_path = False
 
     def test_S6_cost_is_computed_from_the_table_for_the_served_model(self):
         self.write_config()
