@@ -366,26 +366,35 @@ class SinceTests(unittest.TestCase):
         self.assertIn("pkg/big.py: module-lines 1100 > ceiling 1000", gate.stdout)
 
     @pytest.mark.integration
-    def test_S23_a_copy_this_checkout_does_not_track_is_no_source_and_a_tree_outside_one_is_walked(
-        self,
-    ):
-        """structure-budget/S23: git decides which files the tree holds; outside one the walk answers."""
+    def test_S23_git_decides_which_files_the_tree_holds_and_a_tree_outside_one_is_walked(self):
+        """structure-budget/S23: a file this checkout carries is measured; a copy another tree holds is not."""
         root = self.checkout()
-        (root / "pkg" / "scratch").mkdir()
-        (root / "pkg" / "scratch" / "big.py").write_text(long_module(1200))
+        (root / "pkg" / "new.py").write_text(long_module(1200))
+        self.assertEqual(
+            budget["walk"](str(root)),
+            ["pkg/big.py", "pkg/new.py"],
+            "a file the checkout carries counts whether or not it was committed yet",
+        )
+        grown = self.drive(root)
+        self.assertEqual(grown.returncode, 1, grown.stdout + grown.stderr)
+        self.assertIn("pkg/new.py: module-lines 1200 > ceiling 1000", grown.stdout)
+
+        (root / "pkg" / "new.py").unlink()
         (root / ".gitignore").write_text("ignored/\n")
         (root / "ignored").mkdir()
         (root / "ignored" / "big.py").write_text(long_module(1200))
+        (root / ".venv" / "lib").mkdir(parents=True)
+        (root / ".venv" / "lib" / "big.py").write_text(long_module(1200))
         (root / "pkg" / "checkout").mkdir()
         self.git(root / "pkg" / "checkout", "init", "-q", "-b", "main")
         (root / "pkg" / "checkout" / "big.py").write_text(long_module(1200))
         self.assertEqual(
             budget["walk"](str(root)),
             ["pkg/big.py"],
-            "an untracked, ignored or nested checkout's copy is no source of this tree",
+            "an ignored tree, a cache tree and another checkout are no source of this one",
         )
-        gate = self.drive(root)
-        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+        clean = self.drive(root)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
 
         outside = root.parent / "outside"
         (outside / "pkg").mkdir(parents=True)

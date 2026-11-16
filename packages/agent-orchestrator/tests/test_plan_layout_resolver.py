@@ -176,17 +176,37 @@ class PackageCopyTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S23_a_copy_git_ignores_is_no_module_of_the_package_and_a_committed_one_is_named(self):
-        """structure-budget/S23: a nested checkout's copy neither clashes nor is named the module."""
-        copy = self.repo / "pkg" / ".worktrees" / "wt" / "acceptance" / "probe.txt"
-        copy.parent.mkdir(parents=True)
-        copy.write_text("probe\n")
-        self.assertEqual(self.problems(), [], "a copy in an ignored tree is no module of the package")
+        """structure-budget/S23: a nested checkout's or an ignored tree's copy is no module of the package."""
+        ignored = self.repo / "pkg" / ".worktrees" / "wt" / "acceptance" / "probe.txt"
+        ignored.parent.mkdir(parents=True)
+        ignored.write_text("probe\n")
+        self.assertEqual(
+            self.problems(), [], "a copy in an ignored tree is no module of the package"
+        )
+        nested = self.repo / "pkg" / "checkout"
+        (nested / "acceptance").mkdir(parents=True)
+        self.nested_checkout(nested)
+        self.assertEqual(
+            self.problems(), [], "a copy in a nested worktree is no module of the package"
+        )
         tracked = self.repo / "pkg" / "tests" / "probe.txt"
         tracked.parent.mkdir()
         tracked.write_text("already here")
         self.commit("a module of that basename")
         message = "\n".join(self.problems())
-        self.assertIn("pkg/tests/probe.txt", message, "the refusal names the copy, not only a basename")
+        self.assertIn(
+            "pkg/tests/probe.txt", message, "the refusal names the copy, not only a basename"
+        )
+
+    def nested_checkout(self, path):
+        """`path` as another checkout: its own repository, holding a copy of the plan folder."""
+        (path / "acceptance" / "probe.txt").write_text("probe\n")
+        for args in (
+            ("init", "-q", "-b", "main"),
+            ("add", "-A"),
+            ("-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "the copy"),
+        ):
+            subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
 
 
 class AskedByTests(ResolverFixture):

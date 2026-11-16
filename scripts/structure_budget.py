@@ -122,25 +122,29 @@ def metrics_of(source):
 def tracked(root):
     """The Python files git says `root` holds, relative to it and POSIX, or None outside a checkout.
 
-    Git is what decides which files the tree holds: it tracks the files a commit carries, it never
-    descends into another checkout, and an ignored directory is not source at all. A scratch copy or
-    a nested worktree therefore cannot be measured as this tree's source, whatever it holds.
+    Git is what decides which files the tree holds: the ones it tracks and the new ones it would carry,
+    so a file the branch adds is measured before anyone commits it. What it does not descend into —
+    another checkout — and what it ignores — a scratch copy — is no source of this tree, whatever it
+    holds. The cache trees SKIP names are dropped by hand: git lists them when it ignores them not.
     """
     try:
-        done = git(root, "ls-files", "-z", "--cached", text=False)
+        done = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", text=False)
     except Refused:  # no git at all: the walk is the only answer there is
         return None
     if done.returncode:
         return None
     names = done.stdout.decode("utf-8", "surrogateescape").split("\0")
-    return sorted(name for name in names if name.endswith(".py"))
+    return sorted(
+        name for name in names if name.endswith(".py") and not SKIP.intersection(name.split("/"))
+    )
 
 
 def walk(root):
     """Every Python file under `root`, as a POSIX path relative to it, sorted.
 
-    What belongs to the tree is what git tracks, so a copy another tree holds is neither measured nor
-    a growth. A tree outside a repository has no index to ask, and is walked instead.
+    What belongs to the tree is what git lists: a file it tracks or would carry, and no ignored
+    directory's or another checkout's copy. A tree outside a repository has no index to ask, and is
+    walked instead.
     """
     root = Path(root)
     listed = tracked(root)
