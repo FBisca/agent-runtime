@@ -28,7 +28,7 @@ from .. import config as repo_config
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
 from ..invariants import AMENDING, PARKED, next_path
-from .book import ARCHIVE, bind, claim, release
+from .book import ARCHIVE
 from .records import is_agent, is_done
 from .report import cell
 from .runtime import TREE_TIMEOUT, head_of
@@ -447,10 +447,10 @@ class Archive:
             "model": "driver",
         }
         with self.book() as data:
-            claim(data, packet)
+            _engine().claim(data, packet)
             task = data["tasks"][ARCHIVE]
             if not task["runtime_id"]:
-                bind(data, ARCHIVE, DRIVER_ID)
+                _engine().bind(data, ARCHIVE, DRIVER_ID)
         (self.run_dir / ARCHIVE).mkdir(exist_ok=True, mode=0o700)
 
     def build_archive(self, task_id):
@@ -773,7 +773,7 @@ class Archive:
             if self.pane_alive(task["packet"]["worker"]):
                 self.stop_agent(task["packet"]["worker"], task["packet"]["unit"], "reopened")
             with self.book() as data:
-                release(
+                _engine().release(
                     data,
                     task_id,
                     "the user set %s to %s"

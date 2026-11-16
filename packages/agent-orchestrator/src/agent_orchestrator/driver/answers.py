@@ -29,7 +29,6 @@ from .watch import (
     PAYLOAD_WARNINGS,
     archive_retry_allowed,
     archive_retry_refusal,
-    payload_waits,
     plan_state_of,
 )
 
@@ -526,7 +525,7 @@ class Answers:
         ambiguous: ask the sender to resolve the names instead of selecting one by existence or order.
         """
         candidates = [path, *[a for a in alternates if a]]
-        payload_waits(candidates)
+        _engine().payload_waits(candidates)
         present = [p for p in candidates if Path(p).is_file()]
         if len(present) > 1:
             self.warn_sender(
