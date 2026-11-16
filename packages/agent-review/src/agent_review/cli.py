@@ -5,10 +5,20 @@ import contextlib
 import json
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from agent_review import calibration, chunks, pricing, questions, revisions, safeguards
+from agent_review import (
+    calibration,
+    chunks,
+    deep_review,
+    pricing,
+    questions,
+    readonly,
+    revisions,
+    safeguards,
+)
 from agent_review.change import Change
 from agent_review.change import read as read_change
 from agent_review.chunks import Chunk
@@ -63,6 +73,17 @@ not a judgment the question's type allows is an incomplete execution: the report
 clean verdict. Exit 2 is a refusal that screens nothing and names what it refused: an invalid
 configuration, a malformed fixture or a revision this repository does not have.
 
+An escalated change is read by one reviewer when the caller names a harness with --deep-review, never by
+a swarm (D12, D14). A calibrated signal points where the reviewer should look, so a review of those alone is
+`focused`; a sensitive path, a safeguard hit or a coverage gap is about the change itself, so it is `full`
+(D43). The instruction sets it is given are configuration: one that declares no `applies` joins every review,
+and one matching a fired rule or a changed path joins too, named in the report in declaration order (D07,
+D29). The reviewer is read-only (D18): the family answers with the arguments that hold it to reading and
+searching, or the harness is refused before the screening starts and nothing is spawned (D38). What the
+reviewer answered is judged by the review that reads it; --deep-review-fixture replaces the spawn with a
+canned reviewer recording what it was asked in `spawns.json`, which is how a review is checked without a
+model.
+
 The provider is TypeSafe System One (D37): TYPESAFE_API_KEY authenticates it, AGENT_REVIEW_API_KEY is
 sent only as its fallback, and AGENT_REVIEW_BASE_URL defaults to https://api.typesafe.ai/v1, whose
 /systemone route is the endpoint. The tool never truncates the change to fit: the provider's own
@@ -82,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     code = commands.add_parser("code", help="screen the change between two Git revisions")
+    _change_options(code)
+    _screening_options(code)
+    _review_options(code)
+    return parser
+
+
+def _change_options(code: argparse.ArgumentParser) -> None:
+    """What the review reads and where it writes: the two revisions and the output directory."""
     code.add_argument(
         "--base", required=True, metavar="REV", help="the revision the change starts at"
     )
@@ -95,6 +124,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="the directory this review writes into",
     )
+
+
+def _screening_options(code: argparse.ArgumentParser) -> None:
+    """How the change is screened: the configuration, the canned provider, the budget and the prices."""
     code.add_argument(
         "--config",
         metavar="PATH",
@@ -128,7 +161,28 @@ def build_parser() -> argparse.ArgumentParser:
             "carries what the served model cost, and an unpriced model is unknown rather than free"
         ),
     )
-    return parser
+
+
+def _review_options(code: argparse.ArgumentParser) -> None:
+    """How an escalated change is reviewed: the harness it is spawned through, or the canned reviewer."""
+    code.add_argument(
+        "--deep-review",
+        metavar="HARNESS",
+        help=(
+            "spawn one read/search-only reviewer over an escalated change through this harness "
+            "family; a family that cannot hold its reviewer to reading and searching is refused "
+            "before the screening starts"
+        ),
+    )
+    code.add_argument(
+        "--deep-review-fixture",
+        metavar="DIR",
+        type=Path,
+        help=(
+            "a canned reviewer replacing the spawn: it records what it was asked for in "
+            "spawns.json, so a review is checked without a model"
+        ),
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -152,7 +206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     print(report.summary(path))
     if report.failure is not None:
-        print(f"agent-review: screening failed: {report.failure}", file=sys.stderr)
+        print(f"agent-review: execution incomplete: {report.failure}", file=sys.stderr)
         return 1
     return 0
 
@@ -224,6 +278,9 @@ def _safeguard_report(
 def screen(args: argparse.Namespace) -> Report:
     """One screening of the configured bank over `args.base..args.head`, as the report it produces."""
     repo = Path.cwd()
+    # A harness that cannot hold its reviewer is refused here, before a revision is read or a credential
+    # looked for: nothing is screened for a review that could only run unrestricted (D38, S3).
+    reviewer = _reviewer(args)
     bank = _configuration(args, repo)
     table = None if args.pricing is None else pricing.load(args.pricing)
     base, head = revisions.resolve(repo, args.base, args.head)
@@ -233,17 +290,37 @@ def screen(args: argparse.Namespace) -> Report:
     decided = _safeguard_report(
         parsed, bank, base=base, head=head, long_context=args.long_context, price_table=table
     )
-    if decided is not None:
-        return decided
+    report = (
+        decided
+        if decided is not None
+        else _screened(parsed, change, bank, base=base, head=head, table=table, args=args)
+    )
+    target = deep_review.Target(diff=change, base=base, head=head, paths=parsed.paths, root=repo)
+    return _reviewed(report, reviewer, target)
+
+
+def _screened(
+    parsed: Change,
+    change: str,
+    bank: QuestionBank,
+    *,
+    base: str,
+    head: str,
+    table: pricing.PriceTable | None,
+    args: argparse.Namespace,
+) -> Report:
+    """The report a screening produces: the change split inside the budget, each chunk asked the bank once.
+
+    A cross-file question cannot read a change wider than the limit together, so the screen is partial: the
+    report records the gap and recommends a full deep review (D42, D43). The calibrated thresholds and
+    confidence bands decide the rest from what the provider answered, and the model never sees them (D06,
+    D07, D48).
+    """
     # The change is split inside the budget in force, and each chunk is asked the whole bank once (D41).
     planned = chunks.split(
         parsed, change, budget=chunks.budget(bank, long_context=args.long_context)
     )
     covered = chunks.coverage(parsed, planned, bank)
-    # A cross-file question cannot read a change wider than the limit together, so the screen is partial:
-    # the report records the gap and recommends a full deep review (D42, D43). The calibrated thresholds and
-    # confidence bands decide the rest from what the provider answered, and the model never sees them (D06,
-    # D07, D48).
     gap = () if covered.gap is None else (covered.gap.as_escalation(),)
     port = _port(args, bank.model)
     screened = _Screened()
@@ -268,6 +345,29 @@ def screen(args: argparse.Namespace) -> Report:
         long_context=args.long_context,
         failure=screened.failure,
     )
+
+
+def _reviewed(
+    report: Report,
+    reviewer: deep_review.Reviewer | None,
+    target: deep_review.Target,
+) -> Report:
+    """The report with the one deep review an escalation asks for, or the report unchanged (D12, D14).
+
+    Nothing is spawned when the caller named no harness, when no reason fired, or when the run stopped
+    before it could conclude: a review that never asked for one has no reviewer to spawn.
+    """
+    if reviewer is None or not report.escalation or report.failure is not None:
+        return report
+    reviewed = deep_review.review(
+        settings=report.bank.deep_review,
+        escalation=report.escalation,
+        target=target,
+        reviewer=reviewer,
+    )
+    # A reviewer that stopped leaves the screening it paid for standing: the report says incomplete and
+    # names the stop, never throwing away judgments and usage the provider already answered (D20, R10).
+    return replace(report, deep_review=reviewed, failure=reviewed.failure)
 
 
 class _Screened:
@@ -323,6 +423,31 @@ class _Screened:
             self.failure = str(held.error)
             return False
         return True
+
+
+def _reviewer(args: argparse.Namespace) -> deep_review.Reviewer | None:
+    """The reviewer this invocation spawns, or nothing when the caller asked for no deep review (S3).
+
+    The harness's controls are resolved here, before a revision is read or a credential looked for: a family
+    that cannot hold its reviewer to reading and searching refuses the run, and nothing is spawned with a
+    control the family would drop (D18, D38).
+    """
+    if args.deep_review is None:
+        if args.deep_review_fixture is not None:
+            raise ReviewError(
+                "--deep-review-fixture names a canned reviewer, but no --deep-review harness asks it "
+                "for a review; name the harness the reviewer would be spawned through"
+            )
+        return None
+    try:
+        invocation = readonly.invocation(args.deep_review)
+    except readonly.ReadOnlyError as refusal:
+        raise ReviewError(str(refusal)) from None
+    if args.deep_review_fixture is not None:
+        return deep_review.FixtureReviewer(
+            args.deep_review, invocation.controls, args.deep_review_fixture
+        )
+    return deep_review.HarnessReviewer(args.deep_review, invocation)
 
 
 def _configuration(args: argparse.Namespace, repo: Path) -> questions.QuestionBank:
