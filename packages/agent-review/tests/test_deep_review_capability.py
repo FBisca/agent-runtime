@@ -96,6 +96,10 @@ def test_S3_a_review_the_runtime_cannot_answer_for_is_refused_rather_than_crashi
     assert status == 2, "a review nothing can hold to reading is a refusal, not a crash"
     stderr = capsys.readouterr().err
     assert "agent-runtime" in stderr, "the refusal names the install that would answer it"
+    assert "install agent-runtime" in stderr, (
+        "the way out is the install that answers which controls a family enforces; a second table here "
+        "would fork that answer"
+    )
     assert not (output / "report.json").is_file(), (
         "a refusal writes no report to be read as this run's"
     )

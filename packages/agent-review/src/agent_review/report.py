@@ -192,30 +192,43 @@ class Report:
         return "\n".join(lines)
 
     def _conclusion(self) -> list[str]:
-        """The verdict in a person's words: what was screened, or what stopped it, and what it concluded."""
+        """The verdict in a person's words, told apart by which stage stopped (D34, D35, R20).
+
+        Three cases. A screening that stopped has nothing to show, so the summary says the change was not
+        screened and names why. A screening that concluded and a review that then stopped keeps what the
+        screening decided - the judgments it paid for, or the rule, matched path and way out a person acts
+        on - and says the review stopped; only a run whose every stage concluded prints a verdict.
+        """
         change = f"{self.base}..{self.head}"
-        if self.failure is not None:
+        if self.failure is not None and self.deep_review is None:
             return [
                 f"screened nothing: {change} was not screened with {self.model}",
                 f"execution: {self.status}",
                 f"reason: {self.failure}",
             ]
+        judged = [
+            f"  {judgment['question']} [{judgment['priority']}] {json.dumps(judgment['value'])}"
+            for judgment in self.judgments
+        ]
         if not self.escalation:
-            lines = [f"screened {change} with {self.model}"]
-            lines.extend(
-                f"  {judgment['question']} [{judgment['priority']}] {json.dumps(judgment['value'])}"
-                for judgment in self.judgments
-            )
-            return lines + [f"verdict: {self.verdict}"]
-        # A person reads the change instead of trusting the screen: the rule, the path it matched and the
-        # way out are what they can act on (S8). A coverage gap is decided after the screen, so the report
-        # says the screening happened rather than claiming no model was asked (D43).
-        asked = f"screened with {self.model}" if self.provider else "no model was asked"
-        lines = [f"escalated {change}: {asked}"]
-        for reason in self.escalation:
-            lines.append(f"  {reason.rule} at {reason.path}" if reason.path else f"  {reason.rule}")
-            lines.append(f"    {reason.pattern}")
-            lines.append(f"    {way_out(reason)}")
+            lines = [f"screened {change} with {self.model}", *judged]
+        else:
+            # A person reads the change instead of trusting the screen: the rule, the path it matched and
+            # the way out are what they can act on (S8). A coverage gap is decided after the screen, so the
+            # report says the screening happened rather than claiming no model was asked (D43).
+            asked = f"screened with {self.model}" if self.provider else "no model was asked"
+            lines = [f"escalated {change}: {asked}"]
+            for reason in self.escalation:
+                lines.append(
+                    f"  {reason.rule} at {reason.path}" if reason.path else f"  {reason.rule}"
+                )
+                lines.append(f"    {reason.pattern}")
+                lines.append(f"    {way_out(reason)}")
+            if self.failure is not None:
+                # Nothing concluded, so the judgments the screening paid for are what the run keeps.
+                lines.extend(judged)
+        if self.failure is not None:
+            return lines + [f"execution: {self.status}", f"review stopped: {self.failure}"]
         return lines + [f"verdict: {self.verdict}"]
 
     def _provenance(self, path: Path | None) -> list[str]:
@@ -226,11 +239,19 @@ class Report:
         elif self.escalation:
             lines.append("screened by: no provider was asked; a safeguard decided the change")
         if self.deep_review is not None:
-            signals = len(self.deep_review.signals)
-            lines.append(
-                f"deep review: {self.deep_review.scope}, {signals} signal"
-                f"{'' if signals == 1 else 's'} read by {self.deep_review.harness}"
-            )
+            # A reviewer that never answered read nothing: the line names its own stop, never a count.
+            stopped = self.deep_review.failure
+            if stopped is None:
+                signals = len(self.deep_review.signals)
+                lines.append(
+                    f"deep review: {self.deep_review.scope}, {signals} signal"
+                    f"{'' if signals == 1 else 's'} read by {self.deep_review.harness}"
+                )
+            else:
+                lines.append(
+                    f"deep review: {self.deep_review.scope}, {self.deep_review.harness} did not "
+                    f"answer: {stopped}"
+                )
         if self.coverage is not None and self.coverage.gap is not None:
             lines.append(f"coverage: {self.coverage.gap.reason}")
         if self.resolved_model is not None:

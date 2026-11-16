@@ -56,6 +56,7 @@ sys.stdout.write(os.environ.get("STUB_ANSWER", "no findings to report"))
 
 CONFIG = """\
 model: jev-latest
+sensitive_paths: {sensitive_paths}
 thresholds:
   {question}:
     value: 1.5
@@ -86,6 +87,8 @@ BASE_FILES = {
     "docs/guide.md": "guide\n",
 }
 
+MIGRATION = "db/migrations/002_index.sql"
+
 HEAD_EDIT = "def load(path):\n    with open(path) as stream:\n        return stream.read()\n"
 
 COMMIT = (
@@ -109,9 +112,13 @@ def git(where, *args):
 
 
 class Spawn:
-    """A repository whose head edit is small, a calibrated critical question, and a canned reviewer."""
+    """A repository whose head edit is small, a calibrated critical question, and a canned reviewer.
 
-    def __init__(self, tmp_path):
+    `sensitive_paths` and `migration` shape a change a safeguard decides rather than the model: the head
+    edit then adds a file under the declared path, so the escalation comes from the safeguard list.
+    """
+
+    def __init__(self, tmp_path, *, sensitive_paths=(), migration=False):
         self.checkout = tmp_path / "checkout"
         self.checkout.mkdir()
         self.output = tmp_path / "review"
@@ -119,12 +126,21 @@ class Spawn:
         self.screening = tmp_path / "screening.json"
         self.reviewer = tmp_path / "reviewer"
         self.reviewer.mkdir()
-        self.config.write_text(CONFIG.format(question=QUESTION, timeout=600), encoding="utf-8")
+        self.sensitive_paths = tuple(sensitive_paths)
+        self.migration = migration
+        self.write_config()
         self.base, self.head = self.two_revisions()
 
     def write_config(self, *, timeout: float = 600):
         """The configuration this review runs with: one calibrated question and the review's own budget."""
-        self.config.write_text(CONFIG.format(question=QUESTION, timeout=timeout), encoding="utf-8")
+        self.config.write_text(
+            CONFIG.format(
+                question=QUESTION,
+                timeout=timeout,
+                sensitive_paths=json.dumps(list(self.sensitive_paths)),
+            ),
+            encoding="utf-8",
+        )
         return self.config
 
     def two_revisions(self):
@@ -137,6 +153,10 @@ class Spawn:
         git(self.checkout, *COMMIT, "base")
         base = git(self.checkout, "rev-parse", "HEAD")
         (self.checkout / "store.py").write_text(HEAD_EDIT, encoding="utf-8")
+        if self.migration:
+            added = self.checkout / MIGRATION
+            added.parent.mkdir(parents=True, exist_ok=True)
+            added.write_text("create index items_id on items (id);\n", encoding="utf-8")
         git(self.checkout, "add", "--all")
         git(self.checkout, *COMMIT, "head")
         return base, git(self.checkout, "rev-parse", "HEAD")
@@ -361,8 +381,81 @@ def test_S1_a_reviewer_that_times_out_leaves_the_screening_and_records_why(
     )
 
 
-def _repository(tmp_path, monkeypatch):
-    """A scratch repository whose head edit fires one calibrated question, positioned at its checkout."""
-    where = Spawn(tmp_path)
+def test_S2_a_safeguard_hit_whose_reviewer_stops_still_names_the_rule_the_path_and_the_way_out(
+    tmp_path, monkeypatch, capsys
+):
+    """A safeguard decided the change before the model was asked: the review stopping keeps that reason."""
+    review = _repository(
+        tmp_path, monkeypatch, sensitive_paths=("db/migrations/**",), migration=True
+    )
+    review.spawn_harness("pi", monkeypatch, tmp_path)
+    monkeypatch.setenv("STUB_EXIT", "3")
+    monkeypatch.setenv("STUB_STDERR", "the model refused the change")
+    review.write_screening(value=1.0, confidence=0.9)
+    status = review.spawn("pi")
+    out = capsys.readouterr().out
+    assert status == 1, "the review stopped, so the execution did not complete"
+    assert "screened nothing" not in out, "a safeguard DID decide the change; nothing was hidden"
+    assert "protected-path" in out, "the terminal names the rule that fired"
+    assert MIGRATION in out, "and the path it matched"
+    assert "a person reads the path" in out, "and the way out R20 promises a person"
+    assert "execution: incomplete" in out
+    report = review.report()
+    assert report["status"] == "incomplete"
+    assert [reason["rule"] for reason in report["escalation"]["reasons"]] == ["protected-path"]
+    assert report["deep_review"]["scope"] == "full", "a safeguard is read whole"
+    assert "exited 3" in report["failure"]["reason"]
+
+
+def test_S1_a_threshold_escalation_whose_reviewer_stops_keeps_its_judgment_on_the_terminal(
+    tmp_path, monkeypatch, capsys
+):
+    """The screening answered and paid for a judgment: a stopped review cannot un-say that."""
+    review = _repository(tmp_path, monkeypatch)
+    review.spawn_harness("pi", monkeypatch, tmp_path)
+    monkeypatch.setenv("STUB_EXIT", "3")
+    monkeypatch.setenv("STUB_STDERR", "the model refused the change")
+    review.write_screening()
+    status = review.spawn("pi")
+    out = capsys.readouterr().out
+    assert status == 1
+    assert "screened nothing" not in out, (
+        "the screening did answer; the summary may not say it did not"
+    )
+    assert "escalated" in out
+    assert "value-above-threshold" in out, "the rule that fired is what a person acts on"
+    assert QUESTION in out and "2.5" in out, "the judgment the screening paid for is kept"
+    assert "usage: 1 request, 900 input tokens" in out, "and so is what it cost"
+    assert "execution: incomplete" in out
+    assert "review stopped" in out and "exited 3" in out, (
+        "the terminal says the review stopped and why"
+    )
+    assert "signals read by" not in out, "the reviewer never answered, so nothing was read"
+    assert "did not answer" in out, "the provenance reports the review's own stop"
+
+
+def test_a_fixture_directory_the_run_cannot_write_refuses_rather_than_recording_a_review(
+    tmp_path, monkeypatch, capsys
+):
+    """The caller's fixture is input, not a reviewer: a broken one refuses instead of claiming a review."""
+    review = _repository(tmp_path, monkeypatch)
+    review.write_screening()
+    review.reviewer.chmod(0o500)
+    try:
+        status = review.run()
+    finally:
+        review.reviewer.chmod(0o700)
+    err = capsys.readouterr().err
+    assert status == 2, "an unwritable fixture is a refusal, not an incomplete review"
+    assert str(review.reviewer) in err, "the refusal names the directory the caller gave"
+    assert "cannot record the deep review" in err
+    assert not (review.output / "report.json").is_file(), (
+        "a refusal writes no report to be read as a review that happened"
+    )
+
+
+def _repository(tmp_path, monkeypatch, **options):
+    """A scratch repository whose head edit fires the escalation under test, at its checkout."""
+    where = Spawn(tmp_path, **options)
     monkeypatch.chdir(where.checkout)
     return where

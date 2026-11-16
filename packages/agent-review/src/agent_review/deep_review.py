@@ -45,6 +45,16 @@ INSTRUCTION_FIELDS = ("id", "text", "applies")
 APPLIES_FIELDS = ("rules", "paths")
 
 
+class ReviewerStopped(Exception):
+    """The reviewer was spawned and did not answer: it timed out, exited nonzero or never started.
+
+    A stop is the reviewer's own, so the review records it and the screening it was asked about survives
+    (D20, R10). A caller's input that the invocation cannot use - a fixture directory it cannot write - is
+    not a stop: it is a `ReviewError` refusal, raised where it happens and never recorded as a review that
+    ran.
+    """
+
+
 @dataclass(frozen=True)
 class Instruction:
     """One specialized instruction set: what it says, and the rules or changed paths that make it join.
@@ -198,7 +208,11 @@ class Review:
 
 
 class Reviewer(Protocol):
-    """The one seam a deep review reaches: the harness's own CLI, or a canned reviewer replacing it."""
+    """The one seam a deep review reaches: the harness's own CLI, or a canned reviewer replacing it.
+
+    `spawn` raises `ReviewerStopped` when the reviewer itself did not answer, and `ReviewError` when the
+    caller's input cannot be used - the two are told apart by who stopped the run.
+    """
 
     # The family this reviewer is spawned through, named in the report beside what it was asked.
     harness: str
@@ -263,16 +277,16 @@ class HarnessReviewer:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            raise ReviewError(
+            raise ReviewerStopped(
                 f"the {self.harness} reviewer did not answer within {request.timeout_seconds} s"
             ) from None
         except OSError as error:
-            raise ReviewError(
+            raise ReviewerStopped(
                 f"cannot start the {self.harness} reviewer: {error.strerror or error}; install the "
                 "harness or name one that this checkout can run"
             ) from None
         if done.returncode != 0:
-            raise ReviewError(
+            raise ReviewerStopped(
                 f"the {self.harness} reviewer exited {done.returncode}: "
                 f"{(done.stderr or done.stdout).strip()[-2000:]}"
             )
@@ -330,7 +344,8 @@ def review(
     reviewer's choice; the reviewer is spawned once, with the frozen change in hand (D18, D20). A reviewer
     that cannot start, times out or exits nonzero is recorded here as the review's own stop and not raised:
     the screening it was asked about already happened, and what the execution then is belongs to the report
-    that keeps it (D20, R10).
+    that keeps it (D20, R10). A caller's input that cannot be used is refused instead - a `ReviewError` from
+    the seam propagates, so a broken fixture never becomes a review that is recorded as having happened.
     """
     signals = tuple(escalation)
     request = Spawn(
@@ -349,9 +364,10 @@ def review(
     stop = None
     try:
         reviewer.spawn(request)
-    except ReviewError as ended:
+    except ReviewerStopped as ended:
         # The screening already answered: the review records what stopped it, and the report keeps the
         # judgments and usage it paid for instead of the invocation refusing with no report (D20, R10).
+        # A caller's broken fixture is not a stop: it raises `ReviewError` and refuses the run untouched.
         stop = str(ended)
     return Review(
         harness=request.harness,
