@@ -102,3 +102,13 @@ the suite before a reviewer notices it in a diff.
 | R222 | S4 | `acceptance/suite/test_fast_suite.py::FastSuiteTests::test_S1_the_fast_suite_reports_under_three_seconds`<br>`acceptance/suite/test_fast_suite.py::FastSuiteTests::test_S1_no_unit_test_costs_more_than_half_a_second` |
 | R223 | S5 | `tests/test_suite_budget.py::CeilingTests::test_S18_a_test_over_the_ceiling_is_an_offender_naming_it_its_seconds_and_the_ceiling`<br>`tests/test_suite_budget.py::CeilingTests::test_S18_the_suites_summed_time_over_its_ceiling_is_an_offender_naming_it`<br>`tests/test_suite_budget.py::CeilingTests::test_S18_the_committed_budget_carries_the_two_ceilings_and_no_per_module_row`<br>`packages/agent-orchestrator/tests/test_engine_home.py::EngineHomeTests::test_S3_ci_runs_the_member_suite_and_the_tracked_budgets` |
 | R224 | S1 | `packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S2_the_deadline_reads_the_test_seam_and_an_unusable_value_keeps_sixty`<br>`packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S2_the_injected_deadline_reaches_the_lock_so_the_test_need_not_wait_a_minute`<br>`tests/test_dispatch_ownership.py::TeamOwnershipTests::test_S4_a_live_newer_row_owns_the_terminal_and_fences_the_live_lead` |
+
+## Requirements: structure-budget
+
+- **R225** WHEN the structure budget measures every Python file of the tree, source and test alike, THEN it holds that tree to the five ceilings of the one committed budget — 1000 module lines, 25 class public methods, 50 function lines, 12 function branch points and 7 parameters — against the tree the change grew from in `git`, with one line per offender and no per-file row, and each of the five is counted by the script's own walk over the syntax tree and by no other tool: ruff has no module-length rule, `PLR0915` counts statements rather than lines, and its three neighbouring rules count a different thing — `PLR0904` a dunder method as public, `PLR0912` no comprehension filter, conditional expression or `assert` as a branch point, `PLR0913` no `self` as a parameter — so a ceiling handed to one of them would name different files, and a test measures that difference over the tree rather than trusting it. (from structure-budget/S20)
+
+## Coverage: structure-budget
+
+| Requirement | Scenario | Test nodes |
+|---|---|---|
+| R225 | S20 | `tests/test_structure_budget.py::RuffDivergenceTests::test_S20_a_ruff_branch_ceiling_would_let_files_off_the_offender_list`<br>`tests/test_structure_budget.py::RuffDivergenceTests::test_S20_a_ruff_method_ceiling_would_name_classes_the_script_does_not`<br>`tests/test_structure_budget.py::RuffDivergenceTests::test_S20_a_ruff_parameter_ceiling_would_let_an_offender_off_the_list` |

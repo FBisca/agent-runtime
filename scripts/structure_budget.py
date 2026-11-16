@@ -13,6 +13,14 @@ One sentence decides every line: a file may exceed a ceiling only if it already 
 only by getting no worse. Nothing per file is stored — `git` holds the base, so a split, a rename or
 a move costs the gate nothing.
 
+Every one of the five numbers is counted here, by this file's own walk over the syntax tree, and no
+other tool counts it: ruff has no module-length rule at all, `PLR0915` counts statements rather than
+lines, and its three neighbouring rules count something else — `PLR0904` a dunder method as public,
+`PLR0912` no comprehension filter, conditional expression or `assert` as a branch point, `PLR0913` no
+`self` as a parameter. A ceiling is the thing a tool counts, so handing one of these to ruff would name
+different files; `tests/test_structure_budget.py` measures that difference over this tree rather than
+trusting it.
+
 Exit 0 is a clean tree, 1 an offender, 2 a refusal: a budget that cannot be read, a `--since` that is
 not a revision, or a `--paid` path that measures no file. A paid path takes no grandfather from the
 base for the metrics it names, so a deliberate debt has to be paid down rather than inherited. The

@@ -10,7 +10,9 @@ worse, so `git` holds the base and the committed budget holds the ceilings alone
 """
 
 import json
+import re
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +39,18 @@ CEILINGS = {
     "parameters": 7,
 }
 
+# The ruff rule nearest each of the three ceilings the script counts itself, and the setting its number
+# would land in. They are named to be measured, not to be adopted: the tests below are what keeps the
+# ceilings the script's own numbers.
+RUFF_RULES = {
+    "class-methods": ("PLR0904", "lint.pylint.max-public-methods"),
+    "function-branches": ("PLR0912", "lint.pylint.max-branches"),
+    "parameters": ("PLR0913", "lint.pylint.max-args"),
+}
+
+# The number a ruff violation prints: "Too many branches (13 > 12)".
+RUFF_NUMBER = re.compile(r"\((\d+) > \d+\)")
+
 UNDER = dict.fromkeys(CEILINGS, 1)
 
 
@@ -54,6 +68,47 @@ def long_module(lines):
         name += 1
     body.extend("# padding %d" % index for index in range(lines - len(body)))
     return "\n".join(body) + "\n"
+
+
+def ruff_numbers(root, names):
+    """{path: {metric: number}} as ruff's own three rules measure them, every number asked for.
+
+    A ceiling of zero makes each rule report the worst case it found in a file, so what comes back is a
+    number to compare with the script's rather than a verdict. The names are the ones the script
+    resolved, so both measurements cover the same files. Ruff is a dependency of the workspace and so
+    is on `PATH` under `uv run`; without it there is nothing to compare and the test says so.
+    """
+    found = shutil.which("ruff")
+    assert found, "ruff is what these tests measure against: run them through `uv run`"
+    rules = sorted(RUFF_RULES.items())
+    command = [
+        found,
+        "check",
+        "--preview",  # PLR0904 is preview-only
+        "--isolated",
+        "--no-cache",
+        "--ignore-noqa",
+        "--output-format",
+        "json",
+        "--select",
+        ",".join(code for _, (code, _) in rules),
+        *(argument for _, (_, option) in rules for argument in ("--config", "%s=0" % option)),
+        *(str(Path(root) / name) for name in names),
+    ]
+    done = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    assert done.returncode in (0, 1), done.stderr  # 1 is "violations found", which is the point
+    codes = {code: metric for metric, (code, _) in rules}
+    numbers = {}
+    for diagnostic in json.loads(done.stdout or "[]"):
+        metric = codes.get(diagnostic.get("code"))
+        if metric is None:
+            continue
+        number = RUFF_NUMBER.search(diagnostic.get("message") or "")
+        assert number, "ruff's %s message carries no number: %r" % (metric, diagnostic)
+        name = Path(diagnostic["filename"]).resolve().relative_to(Path(root).resolve()).as_posix()
+        per_file = numbers.setdefault(name, {})
+        per_file[metric] = max(per_file.get(metric, 0), int(number.group(1)))
+    return numbers
 
 
 class BaseDecisionTests(unittest.TestCase):
@@ -239,6 +294,79 @@ class MeasureTests(unittest.TestCase):
         resolved = budget["resolve"](str(REPO))
         self.assertIn("tests/test_structure_budget.py", resolved, "the test tree is measured too")
         self.assertIn("scripts/structure_budget.py", resolved)
+
+
+@pytest.mark.integration
+class RuffDivergenceTests(unittest.TestCase):
+    """S20: the five ceilings are this script's numbers, and ruff's neighbouring rules are not.
+
+    Handing a ceiling to ruff looks like removing a second implementation and is not: a ceiling is the
+    thing a tool counts, and ruff counts a different thing, so the offender lines would move. Both
+    measurements are taken once for the class over the whole tree, and each case reads the same pair.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.gate = budget["measure_tree"](str(REPO))
+        cls.ruff = ruff_numbers(REPO, budget["resolve"](str(REPO)))
+
+    def delegated(self, metric):
+        """The gate's numbers with one ceiling left to ruff's rule instead, as a swap would leave them."""
+        return {
+            name: {**numbers, metric: self.ruff.get(name, {}).get(metric, 0)}
+            for name, numbers in self.gate.items()
+        }
+
+    @staticmethod
+    def over(numbers, metric):
+        """The files one set of numbers holds over one ceiling, which is the script's own number."""
+        ceiling = budget["ceilings_of"]({"ceilings": {}})[metric]
+        return {name for name, found in numbers.items() if found[metric] > ceiling}
+
+    def test_S20_a_ruff_branch_ceiling_would_let_files_off_the_offender_list(self):
+        """structure-budget/S20: PLR0912 counts no comprehension filter, conditional or assert."""
+        dropped = sorted(
+            self.over(self.gate, "function-branches")
+            - self.over(self.delegated("function-branches"), "function-branches")
+        )
+        self.assertTrue(
+            dropped,
+            "ruff's PLR0912 counts neither a comprehension filter nor a conditional expression nor an "
+            "assert, so a branch ceiling handed to it would leave the files this script counts over "
+            "the ceiling off the list; it left none off here, which means the two rules now agree and "
+            "the delegation costs nothing: measure the two over this tree before believing that, then "
+            "delegate it and delete this test",
+        )
+
+    def test_S20_a_ruff_method_ceiling_would_name_classes_the_script_does_not(self):
+        """structure-budget/S20: PLR0904 counts a dunder method as public, and this script does not."""
+        added = sorted(
+            self.over(self.delegated("class-methods"), "class-methods")
+            - self.over(self.gate, "class-methods")
+        )
+        self.assertTrue(
+            added,
+            "ruff's PLR0904 counts a dunder method as public and this script counts public methods "
+            "alone, so a method ceiling handed to it would name classes that hold no more public "
+            "method than the ceiling allows; it named none here, which means the two rules now agree "
+            "and the delegation costs nothing: measure the two over this tree before believing that, "
+            "then delegate it and delete this test",
+        )
+
+    def test_S20_a_ruff_parameter_ceiling_would_let_an_offender_off_the_list(self):
+        """structure-budget/S20: PLR0913 counts no `self`, and this script counts every parameter."""
+        dropped = sorted(
+            self.over(self.gate, "parameters")
+            - self.over(self.delegated("parameters"), "parameters")
+        )
+        self.assertTrue(
+            dropped,
+            "ruff's PLR0913 counts no `self` and this script counts every parameter a function "
+            "declares, so a parameter ceiling handed to it would leave methods this script counts "
+            "over the ceiling off the list; it left none off here, which means the two rules now "
+            "agree and the delegation costs nothing: measure the two over this tree before believing "
+            "that, then delegate it and delete this test",
+        )
 
 
 class SinceTests(unittest.TestCase):
