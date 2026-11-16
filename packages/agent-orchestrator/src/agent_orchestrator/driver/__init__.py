@@ -19,7 +19,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -47,6 +47,11 @@ from ..report_rules import (
     require_report as require_report,
 )
 from ..runtime_client import approval_refusal
+
+# The plan's end of life has one home: `driver/archive.py`, the `Archive` a Driver holds, the park it books
+# and the crash report the run's guard calls. The package publishes them, so a caller, a test, `await` and
+# the Lead's commands keep asking `driver.<name>`.
+from .archive import Archive, crash_line, report_crash
 
 # The durable record has one owner: `driver/book.py`. The package publishes every write of it, so a
 # caller, a test and the entry points keep asking `driver.<name>`.
@@ -141,13 +146,15 @@ from .report import (
 from .runtime import (
     TREE_TIMEOUT,
     checkout_snapshot,
-    head_of,
     resolve_runtime,
     run,
     runtime_call,
 )
 from .runtime import (
     gh_process as gh_process,
+)
+from .runtime import (
+    head_of as head_of,
 )
 from .runtime import (
     merged_snapshot as merged_snapshot,
@@ -380,8 +387,6 @@ class IntentUnsettled(ValueError):
         self.operations = list(operations)
 
 
-PARK_ASK_FIRST = 15 * 60.0  # seconds a parked drive waits for the Lead before it asks again
-PARK_ASK_EVERY = 30 * 60.0  # seconds between the asks after the first, until the park ends
 SILENT = (
     "idle",
     "done",
@@ -403,7 +408,6 @@ ARCHIVE_REBUILDS = 2
 
 # A covers gate that can never pass because the ticket's Paths hold no test: the way out is the plan, so `amend` leads.
 NO_TEST_MENU = ("amend",) + tuple(action for action in contracts.ACTIONS if action != "amend")
-DRIVER_ID = "driver"  # the runtime id of a unit the driver does itself: no agent is behind it
 
 
 def archive_retry_refusal(state):
@@ -480,12 +484,6 @@ def failure_line(text):
             return found[-1]
     found = [line for line in lines if FAILURE_LINE.search(line)]
     return found[-1] if found else ""
-
-
-YAML_ARCHIVE_ACCEPTANCE = [
-    "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
-    "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies; the oracles the driver placed are untouched; no test is renamed and no Status is written into plan.yaml",
-]
 
 
 sum_usage = events.sum_usage
@@ -576,6 +574,8 @@ class Driver(SpecSections):
         self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
         self.run_logs = {}  # run id -> its failed-step log, once a round: the findings reuse the readiness read
+        # The plan's end of life: the park, the archive and the crash report go through the Archive below.
+        self._archive = Archive(self)
         # The durable record: every read and write of the ledger goes through the Book below.
         self.book = Book(self)
         # The state machine: every gate a task waits at is moved by one step of the Gates below.
@@ -596,6 +596,19 @@ class Driver(SpecSections):
         lane = self.__dict__.get("_pull")
         if lane is None:
             lane = self.__dict__["_pull"] = Pull(self)
+        return lane
+
+    @property
+    def archive(self):
+        """The plan's end of life: the park it waits in, the archive that closes it, the park reopened.
+
+        The lane keeps no state of its own - the record, the plan and the processes are the Driver's - so the
+        one a Driver holds is created on the first ask, and a Driver a test stubs without running `__init__`
+        still answers the names the package publishes.
+        """
+        lane = self.__dict__.get("_archive")
+        if lane is None:
+            lane = self.__dict__["_archive"] = Archive(self)
         return lane
 
     # ---- the event log: every state change is on disk before the next step -----------------------------------
@@ -705,121 +718,43 @@ class Driver(SpecSections):
         self.drain = None
         self.end_park()
 
-    # ---- the park: what the ledger keeps, attention.md shows and the Lead is woken for ----------------------------
-    # A park outlives the pane: the ledger keeps the one record a Lead reads when they come back, attention.md shows
-    # it beside the tickets that need them, and the wake names the way out. A drive parked with nothing in flight
-    # asks again, and a run that ends with units parked says why instead of reading as a run with nothing left.
+    # ---- the park has one home: `driver/archive.py` ----------------------------------------------------
+    # A park outlives the pane: the ledger keeps the one record a Lead reads when they come back, attention.md
+    # shows it beside the tickets that need them, and the wake names the way out. A drive parked with nothing in
+    # flight asks again, and a run that ends with units parked says why instead of reading as a run with nothing
+    # left. `Archive` owns that record and the ask that repeats; the Driver keeps one delegating method per
+    # published name, so the loop, the drain and the exit ask the same surface as before.
 
     def held_approval(self):
-        """The approval the drive gates on, as the ledger and the park keep it: the plan file is what loses the span
-        (a hand edit drops it), so the base is read from the record when a run starts again."""
-        if self.approval is None:
-            return {}
-        return {"base": self.approval.base, "digest": self.approval.digest}
-
-    def park_snapshot(self, park):
-        """The approved bytes a plan park names to restore from: the snapshot of the approval the park holds."""
-        digest = (park or {}).get("digest")
-        if not digest:
-            return ""
-        # The snapshot's layout is the plan's rule, not the driver's: ask it, with the digest the park holds.
-        return str(
-            approval_recovery.snapshot_path(SimpleNamespace(digest=digest), self.args.state_dir)
-        )
-
-    def park_record(self):
-        """The park of the plan the drive cannot use: what it holds, why it is parked and since when."""
-        drain = self.drain or {}
-        held = self.held_approval()
-        return {
-            "kind": "plan",
-            "cause": drain.get("cause"),
-            "error": drain.get("error"),
-            "digest": held.get("digest"),
-            "base": held.get("base"),
-            "since": self.parked_since,
-            "units": [],
-        }
+        """The approval the drive gates on, as the ledger and the park keep it: the plan file is what
+        loses the span (a hand edit drops it), so the base is read from the record when a run starts
+        again."""
+        return self.archive.held_approval()
 
     def park_here(self):
-        """Book the park the drive is in, and hand back the record it wrote: the wake, attention.md and the exit all
-        read the same record."""
-        record = self.park_record()
-        return self.book_park(record)
-
-    def book_park(self, record):
-        """The park in the ledger (with the approval the drive holds) and in attention.md, which is rebuilt from it."""
-        record["way_out"] = narrate.park_way_out(record, self.plan_path, self.park_snapshot(record))
-        with self.book() as data:
-            ledgers.record_approval(data, self.held_approval())
-            ledgers.record_park(data, record)
-        self.refresh_attention()
-        return record
+        """Book the park the drive is in, and hand back the record it wrote: the wake, attention.md and
+        the exit all read the same record."""
+        return self.archive.park_here()
 
     def end_park(self, kind="plan"):
-        """The park is over: the ledger and attention.md stop naming it. With `kind`, only a park of that kind ends,
-        so a plan the drive could not use and units that wait for an amendment are not taken for each other."""
-        with self.book() as data:
-            ended = ledgers.end_park(data, kind)
-        if ended is None:
-            return None
-        self.refresh_attention()
-        return ended
+        """The park is over: the ledger and attention.md stop naming it."""
+        return self.archive.end_park(kind)
 
     def park_due(self):
-        """Whether the park owes the Lead another ask: fifteen minutes in, then every thirty, while nothing is in
-        flight. A parked unit's assignment is open in the runtime but is no work (`parked_assignments`), so it never
-        silences the park: the unit the Lead parked to amend the plan is the one watching for the answer. The plan is
-        never given up for it (R126 keeps the drain's promise) and no worker starts."""
-        if not self.drain or self.unfinished - self.parked_assignments():
-            return False
-        interval = PARK_ASK_EVERY if self.park_asks else PARK_ASK_FIRST
-        return self.clock() - (self.asked_at or 0) >= interval
+        """Whether the park owes the Lead another ask: fifteen minutes in, then every thirty, while
+        nothing is in flight."""
+        return self.archive.park_due()
 
     def ask_parked(self):
-        """Ask the Lead again about the park it has not answered, in the same words: silence is not progress."""
-        self.park_asks += 1
-        self.asked_at = self.clock()
-        park = self.park_record()
-        park["way_out"] = narrate.park_way_out(park, self.plan_path, self.park_snapshot(park))
-        narrate.say("ask", None, narrate.park_ask(park, again=True))
-        self.wake("drain", None, narrate.park_ask(park, again=True))
-
-    def parked_units(self):
-        """(unit, why it waits, since when) for every unit parked `awaiting-amendment`: nothing runs for it and only
-        an amendment releases it."""
-        with self.book() as data:
-            return [
-                (
-                    task["packet"]["unit"],
-                    (task.get("amend") or {}).get("reason") or "waiting for the plan to be amended",
-                    (task.get("amend") or {}).get("since"),
-                )
-                for task in data["tasks"].values()
-                if task.get("gate") == AMENDING and task["status"] not in ("COMPLETE", "RELEASED")
-            ]
+        """Ask the Lead again about the park it has not answered, in the same words: silence is not
+        progress."""
+        return self.archive.ask_parked()
 
     def park_at_exit(self):
-        """A run that ends with units parked says why it ends: the ledger and attention.md name the park, its cause
-        and the way out, and the exit lists the units rather than reading as a run with nothing left to do."""
-        parked = self.parked_units()
-        if not parked:
-            # a run can end on a plan whose earlier run parked units that this one released: the record is stale
-            self.end_park("units")
-            return []
-        held = self.held_approval()
-        record = {
-            "kind": "units",
-            "cause": AMENDING,
-            "error": "; ".join("%s: %s" % (unit, reason) for unit, reason, _ in parked),
-            "digest": held.get("digest"),
-            "base": held.get("base"),
-            "since": min((since for _, _, since in parked if since), default=None),
-            "units": [unit for unit, _, _ in parked],
-        }
-        self.book_park(record)
-        narrate.say("ask", None, narrate.park_ask(record))
-        return record["units"]
+        """A run that ends with units parked says why it ends: the ledger and attention.md name the
+        park, its cause and the way out, and the exit lists the units rather than reading as a run
+        with nothing left to do."""
+        return self.archive.park_at_exit()
 
     def adopt_amendment(self, held, plan):
         """The plan carries a valid approval other than the one this run holds: gate and dispatch against it from
@@ -1533,16 +1468,9 @@ class Driver(SpecSections):
                 )
 
     def parked_assignments(self):
-        """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the runtime, not work."""
-        with self.book() as data:
-            parked = {
-                agent.get("assignment_id")
-                for task in data["tasks"].values()
-                if task.get("gate") in PARKED
-                for agent in (task, task.get("review") or {}, task.get("decision") or {})
-            } - {None}
-            # The gaps reviewer is advisory: its open assignment never keeps the run up, ended or not.
-            return parked | {(data.get("gaps") or {}).get("assignment_id")}
+        """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the
+        runtime, not work."""
+        return self.archive.parked_assignments()
 
     def on_agent_attention(self, assignment_id, kind, text="", quiet=False, silent=False):
         """An agent reported `blocked` or `decision`, or its assignment failed or ended with no report. Each event is
@@ -3187,30 +3115,9 @@ class Driver(SpecSections):
         return {"effort": efforts[min(efforts.index(packet["effort"]) + 1, len(efforts) - 1)]}
 
     def park_for_amendment(self, task_id, task, reason):
-        """The Lead decided `amend`: the unit parks, its worker stays where it is and nothing is sent or started. The
-        Lead edits the plan and runs `plan amend`; the adopted amendment releases the unit (`release_amendment`)."""
-        unit, name = task["packet"]["unit"], task["packet"]["worker"]
-        asked = task.get("request") or {}
-        with self.book() as data:
-            # the digest the request was raised under: a park outlives the run, and the approval the drive adopted
-            # after the request was raised is exactly the one that releases it
-            data["tasks"][task_id].update(
-                gate=AMENDING,
-                updated_at=now(),
-                held=[],
-                # what the park waits for and since when: a run that ends with it parked names both
-                amend={"reason": reason, "since": now()},
-                amend_from=asked.get("digest") or (self.approval.digest if self.approval else None),
-            )
-        for message in task.get("held") or []:
-            self.log("held-dropped", unit=unit, task=task_id, held=message["kind"], why="amend")
-        self.write_status(unit.upper(), "IN PROGRESS · awaiting amendment: " + cell(reason))
-        narrate.say(
-            "info",
-            "decide",
-            "%s waits for the plan to be amended: edit it, then run `plan amend`" % name,
-            task=task_id,
-        )
+        """The Lead decided `amend`: the unit parks, its worker stays where it is and nothing is sent
+        or started."""
+        return self.archive.park_for_amendment(task_id, task, reason)
 
     def answer_text(self, task, decision):
         packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
@@ -3580,72 +3487,14 @@ class Driver(SpecSections):
             return "error", [str(error)[:500]]
         return ("FAIL", items) if items else ("PASS", [])
 
-    def archive_mismatches(self, checkout, model):
-        """Placed oracles on the archive head that are not the approval snapshot's bytes. Read before the runner
-        re-places anything, so an edit cannot be masked by the re-run. The copied plan files are the reviewer's."""
-        files = self.oracles()
-        root = Path(checkout)
-        bad = []
-        for rel, name in self.oracle_targets(model):
-            path = root / rel
-            if not path.is_file() or path.read_bytes() != files[name]:
-                bad.append(rel)
-        return bad
+    # ---- the archive has one home: `driver/archive.py` -------------------------------------------------
+    # The driver's own unit, with no agent: the oracles it places, the plan files it copies, the spec section it
+    # writes, the branch and the pull request it builds, the evidence re-run on that head, and the Lead's `retry`.
 
     def archive_evidence(self, task_id, packet):
-        """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
-        changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set
-        verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can
-        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round.
-        A discarded plan promoted nothing and wrote no spec, so there is nothing to hold on its archive head."""
-        if self.archive_mode() == "discard":
-            return "PASS", []
-        try:
-            commit = verify.snapshot_commit(packet["checkout"])
-            tree = self.tree_of(commit)
-            model = self.contract()[0]
-            items = []
-            mismatched = self.archive_mismatches(packet["checkout"], model)
-            log = self.run_dir / task_id / "approved-bytes.log"
-            if mismatched:
-                log.parent.mkdir(parents=True, exist_ok=True)
-                log.write_text(
-                    "\n".join("differs: " + rel for rel in mismatched) + "\n", encoding="utf-8"
-                )
-            for rel in mismatched:
-                items.append(
-                    {
-                        "id": "E%d" % (len(items) + 1),
-                        "kind": "blocking",
-                        "source": "verify",
-                        "check": "approved bytes",
-                        "command": "cmp",
-                        "exit": 1,
-                        "excerpt": "%s differs from the approved bytes; restore it byte-identical"
-                        % rel,
-                        "log_path": str(log),
-                    }
-                )
-            with self.book() as data:
-                held = {
-                    i["scenario"] for i in self.acceptance_of(data)["items"] if i["state"] == "PASS"
-                }
-            for scenario in verify.check_scenarios(model):
-                if scenario.id not in model.outcome or scenario.id not in held:
-                    continue
-                result = self.run_evidence(scenario.id, "archive", commit, task=task_id)
-                if result.receipt["result"] != "PASS":
-                    items.append(self.evidence_item(len(items) + 1, scenario.id, result))
-            with self.book() as data:
-                data["archive"] = {
-                    "sha": commit,
-                    "tree": tree,
-                    "digest": self.contract()[1].digest,
-                    "at": now(),
-                }
-        except (runner.RunnerError, verify.VerifyError) as error:
-            return "error", [str(error)[:500]]
-        return ("FAIL", items) if items else ("PASS", [])
+        """The outcome's evidence, run again on the archive head: the promoted oracles and the spec
+        must not have changed what the plan delivered."""
+        return self.archive.archive_evidence(task_id, packet)
 
     def evidence_item(self, number, scenario_id, result):
         """A fix-round item for evidence that did not pass: the command and the tail of its log."""
@@ -4197,195 +4046,23 @@ class Driver(SpecSections):
         return yaml_plan.PlanLayout(self.plan_path, self.repo)
 
     def start_archive(self, plan):
-        agents = [t for t in plan["tickets"] if is_agent(t)]
-        # Verify starts on the agent tickets; the archive waits for every ticket, a person's included, because a
-        # scenario only a person can prove has its test node from that person's `complete`.
-        if not agents or not all(is_done(t) for t in plan["tickets"]) or ARCHIVE in self.failed:
-            return 0
-        if self.plan_state() not in ACCEPTED_STATES:
-            return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
-        with self.book() as data:
-            held = data["tasks"].get(ARCHIVE)
-        # A task bound to a worker is an archive of an earlier driver: it keeps its ledger task. A task bound to
-        # the driver that never reported is one this driver died building: it is built again.
-        if held and held["runtime_id"]:
-            interrupted = (
-                held["runtime_id"] == DRIVER_ID
-                and held["status"] == "ACTIVE"
-                and not held.get("gate")
-            )
-            if not interrupted:
-                return 0
-        try:
-            if self.archive_mode() == "discard" and not self.folder_tracked():
-                return self.discard_plan(plan)
-            self.claim_archive()
-        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            self.failed.add(ARCHIVE)
-            self.errors.append("archive: %s" % error)
-            narrate.say("fail", "archive", "archive not started: %s" % error)
-            return 0
-        self.build_archive(ARCHIVE)
-        return 1
-
-    def archive_mode(self):
-        """promote | discard. Only a plan in its own folder can discard: a legacy plan always promotes."""
-        path = getattr(
-            self, "plan_path", None
-        )  # a driver that holds no plan (a unit test's) promotes
-        if path is None or not self.layout.is_folder:
-            return "promote"
-        return self.plan_model().archive or yaml_plan.repo_config(self.repo).archive_mode
-
-    def plan_folder_rel(self):
-        """The plan folder's path in the repository, or None for a legacy plan or a folder plan kept outside it. A
-        folder that is the repository, or holds it, is refused: deleting it would delete the work."""
-        return self.layout.folder_place()
-
-    def folder_tracked(self):
-        """Whether the plan folder is tracked on the base branch, which is the tree an archive branch is built from."""
-        rel = self.plan_folder_rel()
-        if rel is None:
-            return False
-        remote, _, branch = self.args.base.partition("/")
-        run(["git", "-C", str(self.repo), "fetch", "-q", remote, branch], timeout=120)
-        listed = run(
-            [
-                "git",
-                "-C",
-                str(self.repo),
-                "ls-tree",
-                "-r",
-                "--name-only",
-                self.args.base,
-                "--",
-                rel,
-            ],
-            timeout=TREE_TIMEOUT,
-        )
-        return bool(listed)
-
-    def guard_plan_folder(self):
-        """Refuse to delete a plan folder that is not directly under plans.dir. The config is read again here, not
-        taken from the plan's load: it can change mid-run, and this is the check at the deletion itself."""
-        layout = self.layout
-        plans_dir = repo_config.load(self.repo).plans_dir
-        if layout.folder is not None and not layout.directly_under(plans_dir):
-            raise ValueError(yaml_plan.not_under_plans_dir(layout.folder, plans_dir))
+        """The archive's own unit, started once every ticket is done and the outcome holds: a discard
+        deletes the folder, a promote claims the unit that builds the branch."""
+        return self.archive.start_archive(plan)
 
     def discard_plan(self, plan):
-        """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No
-        worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan."""
-        self.guard_plan_folder()
-        folder = self.layout.folder
-        shutil.rmtree(folder)
-        self.discarded = True
-        with self.book() as data:
-            enter_plan_state(data, "ARCHIVED")
-        self.log("archive-discarded", folder=str(folder))
-        narrate.say("done", "archive", "plan discarded: %s deleted" % folder)
-        self.start_gaps(plan)
-        return 1
+        """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is
+        ARCHIVED."""
+        return self.archive.discard_plan(plan)
 
     def remove_plan_folder(self, checkout):
-        """Delete the plan folder from an archive checkout (a plan kept outside the repository has none there)."""
-        rel = self.plan_folder_rel()
-        if rel is not None:
-            self.guard_plan_folder()
-            shutil.rmtree(Path(checkout) / rel, ignore_errors=True)
-
-    def archive_owns(self):
-        """What the archive unit writes: the spec, the files it copies or places, and the plan folder it deletes."""
-        model = self.plan_model()
-        owns = [model.spec] if model.spec and self.archive_mode() == "promote" else []
-        if self.archive_mode() == "promote":
-            owns += [rel for rel, _ in self.yaml_copies()] + [
-                rel for rel, _ in self.yaml_places(model)
-            ]
-        folder = self.plan_folder_rel()
-        return owns + ([folder + "/"] if folder else [])
-
-    def claim_archive(self):
-        name = self.slug[: 32 - len("-archive")].rstrip("-_") + "-archive"
-        klass, effort = MATRIX[("small", "simple")]
-        checkout = self.worktree(name, "feat/" + name)
-        plan_model = self.model
-        assert plan_model is not None  # read_plan sets it before any unit is dispatched
-        packet = {
-            "task_id": ARCHIVE,
-            "worker": name,
-            "plan": str(self.plan_path),
-            "objective": "Archive the plan into the living spec"
-            if self.archive_mode() == "promote"
-            else "Delete the discarded plan folder",
-            "checkout": str(checkout),
-            "backend": self.args.cli,
-            "owns": self.archive_owns(),
-            "acceptance": YAML_ARCHIVE_ACCEPTANCE,
-            "checks": [],  # no local gate: the pull request's CI and the outcome re-run are the gates
-            "depends_on": [],
-            "unit": ARCHIVE,
-            "size": "small",
-            "difficulty": "simple",
-            "class": klass,
-            "effort": effort,
-            "model": "driver",
-        }
-        with self.book() as data:
-            claim(data, packet)
-            task = data["tasks"][ARCHIVE]
-            if not task["runtime_id"]:
-                bind(data, ARCHIVE, DRIVER_ID)
-        (self.run_dir / ARCHIVE).mkdir(exist_ok=True, mode=0o700)
+        """Delete the plan folder from an archive checkout (a plan kept outside the repository has none
+        there)."""
+        return self.archive.remove_plan_folder(checkout)
 
     def build_archive(self, task_id):
-        """Build, push and open the archive, then hand its report to the gates. Any trouble asks the Lead."""
-        try:
-            missing = self.archive_missing() if self.archive_mode() == "promote" else []
-            if missing:
-                return self.request(
-                    task_id,
-                    "archive",
-                    "no test node for %s: add a node to a ticket report's `covers` and `retry`, or `skip` and "
-                    "archive by hand" % ", ".join(missing),
-                )
-            head = self.archive_branch(task_id)
-            url = self.archive_pr(task_id)
-        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            return self.request(
-                task_id,
-                "archive",
-                "the archive could not be built: %s. `retry` builds it again from the current base, `skip` "
-                "leaves it to you" % " ".join(str(error).split())[:400],
-            )
-        path = next_path(self.run_dir / task_id, "report", ".json")[0]
-        report = {
-            "contract": contracts.VERSION,
-            "task_id": task_id,
-            "status": "COMPLETE",
-            "summary": "the driver archived the plan: %s"
-            % (
-                "oracles placed, plan files copied, spec section appended"
-                if self.archive_mode() == "promote" and not self.layout.is_folder
-                else "acceptance files moved into their domain, plan folder deleted, spec section appended"
-                if self.archive_mode() == "promote"
-                else "the discarded plan folder deleted"
-            ),
-            "acceptance_met": True,
-            "files": self.archive_owns(),
-            "decisions": [],
-            "interfaces": [],
-            "remaining": [],
-            "checks": [],
-            "review_rounds": 0,
-            "usage": "unknown",
-            "head": head,
-            "pr": url,
-        }
-        write_atomic(path, json.dumps(report, indent=2) + "\n")
-        self.mark(task_id, gate="reported")
-        self.log("archive-built", task=task_id, pr=url, head=head)
-        narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
+        """Build, push and open the archive, then hand its report to the gates."""
+        return self.archive.build_archive(task_id)
 
     def ticket_covers(self):
         """{scenario: [node, ...]}: what each unit ended with, plus the nodes `complete` recorded for a person ticket.
@@ -4435,229 +4112,36 @@ class Driver(SpecSections):
         }
 
     def archive_missing(self):
-        """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no placed oracle."""
-        nodes = self.scenario_nodes()
-        return [
-            s.id
-            for s in self.plan_model().scenarios
-            if not (s.evidence and s.evidence.human) and not nodes[s.id]
-        ]
+        """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no
+        placed oracle."""
+        return self.archive.archive_missing()
 
     @staticmethod
     def flat(text):
         return " ".join(str(text).split())
 
-    def archive_branch(self, task_id):
-        """The archive branch, rebuilt from the current base: oracles placed, plan files copied, the spec section
-        appended, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
-        packet = self.task(task_id)["packet"]
-        path, branch = Path(packet["checkout"]), "feat/" + packet["worker"]
-        remote = self.args.base.partition("/")[0]
-        run(
-            ["git", "-C", str(self.repo), "fetch", "-q", remote, self.args.base.partition("/")[2]],
-            timeout=120,
-        )
-        run(["git", "-C", str(path), "reset", "-q", "--hard"], timeout=TREE_TIMEOUT)
-        run(["git", "-C", str(path), "clean", "-fdq"], timeout=TREE_TIMEOUT)
-        run(
-            ["git", "-C", str(path), "checkout", "-q", "-B", branch, self.args.base],
-            timeout=TREE_TIMEOUT,
-        )
-        # A plan in its own folder leaves the tree: its acceptance files go to their domain, a discarded plan's go
-        # nowhere. Deleted first, so a destination inside the folder is written after it.
-        self.remove_plan_folder(path)
-        message = "docs(%s): delete the discarded plan folder" % self.slug
-        if self.archive_mode() == "promote":
-            message = "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec)
-            self.place_oracles(path)
-            for rel, source in self.yaml_copies():
-                if source.is_dir():
-                    for child in sorted(p for p in source.rglob("*") if p.is_file()):
-                        target = path / rel.rstrip("/") / child.relative_to(source)
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(child.read_bytes())
-                else:
-                    target = path / rel
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(source.read_bytes())
-            spec = path / self.plan_model().spec
-            try:
-                before = spec.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                before = ""
-            text = self.spec_text(before, self.held_requirements(spec))
-            already = spec_defects(before)
-            if (
-                already
-            ):  # the base was already broken: not this archive's to fix, and not silently passed on
-                self.log("spec-defects", spec=self.plan_model().spec, defects=len(already))
-            spec.parent.mkdir(parents=True, exist_ok=True)
-            spec.write_text(text, encoding="utf-8")
-        run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
-        identity = (
-            []
-            if subprocess.run(
-                ["git", "-C", str(path), "config", "user.email"], capture_output=True, text=True
-            ).stdout.strip()
-            else [
-                "-c",
-                "user.name=agent-orchestrator",
-                "-c",
-                "user.email=agent-orchestrator@localhost",
-            ]
-        )
-        run(
-            [
-                "git",
-                "-C",
-                str(path),
-                *identity,
-                "commit",
-                "-q",
-                "-m",
-                message,
-            ],
-            timeout=TREE_TIMEOUT,
-        )
-        run(
-            ["git", "-C", str(path), "push", "-q", "--force", remote, "HEAD:refs/heads/" + branch],
-            timeout=300,
-        )
-        return head_of(path)
-
-    def archive_pr(self, task_id):
-        """The archive's pull request: the one an earlier build opened while it is still open, else a new draft."""
-        existing = self.pr_of(task_id)
-        if existing and self.pr_view(existing).get("state") == "OPEN":
-            return existing
-        packet = self.task(task_id)["packet"]
-        code, out, err = self.gh(
-            [
-                "pr",
-                "create",
-                "--draft",
-                "--base",
-                self.args.base.partition("/")[2],
-                "--head",
-                "feat/" + packet["worker"],
-                "--title",
-                "docs(%s): archive the plan" % self.slug
-                if self.archive_mode() == "promote"
-                else "docs(%s): delete the discarded plan folder" % self.slug,
-                "--body",
-                self.archive_body(),
-            ],
-            timeout=120,
-            cwd=packet["checkout"],
-        )
-        found = re.findall(r"https?://\S+/pull/\d+", out or "")
-        if code != 0 or not found:
-            raise ValueError(
-                "gh pr create failed: %s" % ((err or out).strip()[:300] or "no url printed")
-            )
-        return found[-1]
-
-    def archive_body(self):
-        """The archive pull request's description, by what the archive does with the plan."""
-        spec = self.plan_model().spec
-        if self.archive_mode() == "discard":
-            return "Deletes the discarded plan folder `%s`; it changes nothing else." % (
-                self.plan_folder_rel()
-            )
-        if self.layout.is_folder:
-            where = self.plan_folder_rel()
-            return (
-                "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
-                "is deleted and the spec section with its Coverage table is written by the driver."
-                % ("folder `%s`" % where if where else "`%s`" % self.layout.folder, spec)
-            )
-        return (
-            "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-            "with its Coverage table, written by the driver." % (self.layout.plan_place, spec)
-        )
-
     def undraft_archive(self, task_id):
-        """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a failing one."""
-        url = self.pr_of(task_id)
-        if url and self.unit_flag(ARCHIVE, "pr_ready"):
-            self.undraft(task_id, url)
+        """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a
+        failing one."""
+        return self.archive.undraft_archive(task_id)
 
     def retry_archive(self, task_id):
-        """The Lead's `retry`: the archive branch is rebuilt from the current base and pushed again. A pull request
-        that was readied goes back to draft first, so nobody merges a branch that is changing.
-
-        The archive waits for an accepted plan: over a plan that is not accepted the retry builds nothing and opens no
-        pull request, and the Lead is asked again, naming the plan's state and the way out."""
-        state = self.plan_state()
-        if not archive_retry_allowed(state):
-            reason, way_out = archive_retry_refusal(state)
-            self.request(task_id, "archive", "%s. %s" % (reason, way_out))
-            return
-        url = self.pr_of(task_id)
-        if url and self.unit_flag(ARCHIVE, "pr_ready") and not self.undraft(task_id, url):
-            return False
-        self.unready(ARCHIVE)
-        self.mark(task_id, status="ACTIVE", gate=None, ci_state=None, ci_rows=None, ci_head=None)
-        self.build_archive(task_id)
+        """The Lead's `retry`: the archive branch is rebuilt from the current base and pushed again."""
+        return self.archive.retry_archive(task_id)
 
     def scenario_targets(self, scenario):
-        """(repo-relative place, the file's name in the approval snapshot) for each file a scenario's evidence
-        promotes. A legacy oracle keeps its source name without the `.oracle` suffix: only the promoted name is
-        collected as a test. A folder plan's acceptance file is placed in its domain under its own name."""
-        evidence = scenario.evidence
-        if not evidence:
-            return []
-        if getattr(
-            evidence, "acceptance", None
-        ):  # only a folder plan's evidence has acceptance files
-            placed = yaml_plan.placed_files(self.plan_path, self.plan_model(), evidence, self.repo)
-            return [(rel, "acceptance/" + name) for rel, name in zip(placed, evidence.acceptance)]
-        if evidence.promote and evidence.place:
-            return [
-                (evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle"), name)
-                for name in evidence.oracle
-            ]
-        return []
-
-    def oracle_targets(self, model):
-        """(repo-relative place, snapshot file name) for each promoted file. One derivation for the placing, the
-        comparison and the brief, so they cannot disagree."""
-        return [
-            target for scenario in model.scenarios for target in self.scenario_targets(scenario)
-        ]
-
-    def place_oracles(self, checkout):
-        """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
-        The worker starts after this, so it never has to copy a test it is not allowed to change."""
-        files = self.oracles()
-        for rel, name in self.oracle_targets(self.contract()[0]):
-            target = Path(checkout) / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(files[name])
+        """(repo-relative place, the file's name in the approval snapshot) for each file a scenario's
+        evidence promotes."""
+        return self.archive.scenario_targets(scenario)
 
     def yaml_copies(self):
-        """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
-        The narrative is copied only when the plan has one."""
-        layout = self.layout
-        if layout.is_folder:
-            return []  # a plan folder is deleted, never copied: its acceptance files are placed instead
-        copies = [(layout.plan_place, layout.path)]
-        if layout.narrative.exists():
-            copies.append((self.beside_plan(layout.narrative), layout.narrative))
-        copies.append((self.beside_plan(layout.oracle_dir) + "/", layout.oracle_dir))
-        return copies
+        """(repo-relative destination, approved source) for the plan files the archive copies byte-
+        identical."""
+        return self.archive.yaml_copies()
 
     def yaml_places(self, model):
         """(repo-relative destination, approved source) for each promote oracle file, at its place."""
-        return [
-            (rel, yaml_plan.file_path(self.plan_path, name))
-            for rel, name in self.oracle_targets(model)
-        ]
-
-    def beside_plan(self, path):
-        """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
-        the plan itself sits outside the repository."""
-        return (PurePosixPath(self.layout.plan_place).parent / Path(path).name).as_posix()
+        return self.archive.yaml_places(model)
 
     def start_gaps(self, _plan):
         """Spawn the advisory gaps reviewer once, after the archive PR has merged (S6). Its failure never blocks
@@ -5057,55 +4541,12 @@ class Driver(SpecSections):
             count += 1
         return count
 
+    # ---- reopening a park has one home: `driver/archive.py` -------------------------------------------
+    # The user answers a pause through the plan; `Archive` books the release and the fresh attempt.
+
     def reopen_parked(self, plan):
-        """The user answers a pause through the plan (S4). A parked ticket whose Status is now TO-DO gets a fresh
-        attempt of the same unit; one now COMPLETE (done by hand) is released so its dependents and the archive
-        proceed. Any other Status leaves it parked. The held worker is stopped first, when its pane is live."""
-        by_id = {t["#"].lower(): t for t in plan["tickets"]}
-        with self.book() as data:
-            parked = [
-                (task_id, copy.deepcopy(task))
-                for task_id, task in data["tasks"].items()
-                if task.get("gate") in PARKED and task["status"] not in ("COMPLETE", "RELEASED")
-            ]
-        count = 0
-        for task_id, task in parked:
-            ticket = by_id.get(task["packet"]["unit"])
-            if not ticket or not is_agent(ticket):
-                continue
-            status = ticket["Status"].strip().upper()
-            if not status.startswith(("TO-DO", "COMPLETE")):
-                continue
-            again = status.startswith("TO-DO")
-            if self.pane_alive(task["packet"]["worker"]):
-                self.stop_agent(task["packet"]["worker"], task["packet"]["unit"], "reopened")
-            with self.book() as data:
-                release(
-                    data,
-                    task_id,
-                    "the user set %s to %s"
-                    % (ticket["#"], "TO-DO: retry" if again else "COMPLETE: done by hand"),
-                )
-            narrate.say(
-                "info",
-                None,
-                "reopened by you: fresh attempt" if again else "completed by hand",
-                task=ticket["#"],
-            )
-            if not again:
-                continue
-            with self.book() as data:
-                taken = set(data["tasks"])
-            attempt = next(
-                n for n in range(1, 1000) if "%sp%d" % (task["packet"]["unit"], n) not in taken
-            )
-            try:
-                self.dispatch(plan, ticket, "%sp%d" % (task["packet"]["unit"], attempt))
-            except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.not_dispatched(ticket, error, "not re-dispatched")
-                continue
-            count += 1
-        return count
+        """The user answers a pause through the plan (S4)."""
+        return self.archive.reopen_parked(plan)
 
     def tier_checks(self, owns):
         """The checks a worker runs: the named `--gate` alone, else the repo's `fast` and rendered `affected` tiers.
@@ -6280,11 +5721,6 @@ def run_finished(run_dir):
     return bool(mark) and mark["kind"] == "finish"
 
 
-def crash_line(run_dir, text):
-    """What the Lead is told of a crashed driver: where the log is and the line the guard wrote."""
-    return "crashed -> %s: %s" % (run_dir / "events.jsonl", text)
-
-
 def driver_gone(run_dir, lock_path):
     """What a run whose driver is not running left behind, as the line `await` prints; None when a driver may still
     come or still be there. The run lock is the proof of life: `flock` dies with the process, so no lock held and a
@@ -6419,36 +5855,6 @@ def drive_locked(driver):
         "parked": driver.parked,
         "errors": driver.errors,
     }
-
-
-def report_crash(driver, error):
-    """Log the crash, wake the Lead and say it on stderr. It takes no ledger lock and books nothing in the ledger: the
-    crash may be the ledger itself, and the guard must not wait for what failed. A step of it that fails is said on
-    stderr and the rest still happens."""
-    reason = (
-        str(error)
-        if isinstance(error, ledgers.LedgerBusy)
-        else "%s: %s" % (type(error).__name__, error)
-    )
-    reason = " ".join(reason.split())[:500]
-    text = "crashed " + reason
-    print(text, file=sys.stderr, flush=True)
-    try:
-        if getattr(driver, "run_dir", None) is None:  # it crashed before it knew its run directory
-            driver.run_dir = locate_state(
-                driver.args.state_dir, driver.plan_path, driver.repo, driver.slug
-            )[1]
-            driver.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        driver.log("crash", reason=reason, text=text)
-        driver.wake(
-            "crash",
-            None,
-            crash_line(driver.run_dir, text),
-        )
-    except (
-        Exception
-    ) as failed:  # the original error is the news; this one only says the Lead may not have heard
-        print("could not log the crash: %s" % failed, file=sys.stderr, flush=True)
 
 
 def add_task_commands(commands):
