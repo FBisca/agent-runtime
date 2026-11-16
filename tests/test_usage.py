@@ -1,5 +1,6 @@
 """The Codex worker profile: the launch flag, the usability check, and the per-worker metadata."""
 
+import contextlib
 import json
 import re
 import stat
@@ -21,12 +22,22 @@ sys.path.insert(0, str(RUNTIME_SRC))
 
 import pytest
 from agent_runtime import (
+    hc_boundary,  # noqa: E402
     hc_tools,  # noqa: E402
     usage,  # noqa: E402
 )
 from tools_harness import ToolCase, raw, unwrap  # noqa: E402
 
 pytestmark = pytest.mark.integration
+
+
+def hc_process(fake):
+    """The one hc process seam: `spawn` starts the terminal through its own binding of `run`, and `hc`
+    reads the terminal back through its own, so a fake of the hc process takes both."""
+    stack = contextlib.ExitStack()
+    stack.enter_context(mock.patch.object(hc_tools, "run", fake))
+    stack.enter_context(mock.patch.object(hc_boundary, "run", fake))
+    return stack
 
 
 class CodexProfileTests(ToolCase):
@@ -310,7 +321,7 @@ class CodexProfileTests(ToolCase):
         with (
             mock.patch.object(hc_tools.lib, "resolve", return_value={"runtime": "hc"}),
             mock.patch.object(hc_tools.lib, "cli_generation", return_value=self.lead_generation()),
-            mock.patch.object(hc_tools, "run", side_effect=worker_starts),
+            hc_process(worker_starts),
             mock.patch.object(usage, "now_ms", side_effect=lambda: clock[0]),
         ):
             result = hc_tools.spawn(

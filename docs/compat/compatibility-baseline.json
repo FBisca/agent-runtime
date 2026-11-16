@@ -88,8 +88,11 @@
   "runtime_dependencies": [],
   "sqlite_imports": [
     "packages/agent-runtime/src/agent_runtime/dispatch_connections.py",
+    "packages/agent-runtime/src/agent_runtime/dispatch_guards.py",
     "packages/agent-runtime/src/agent_runtime/dispatch_store.py",
-    "packages/agent-runtime/src/agent_runtime/hc_tools.py"
+    "packages/agent-runtime/src/agent_runtime/hc_tools.py",
+    "packages/agent-runtime/src/agent_runtime/operations.py",
+    "packages/agent-runtime/src/agent_runtime/store_failures.py"
   ],
   "pr_pins": {
     "39": "90fee0253e1088146ce1e14ac672553bdadc1971",
