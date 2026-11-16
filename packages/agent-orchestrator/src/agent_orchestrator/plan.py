@@ -3,611 +3,122 @@
 Digest inputs use eight-byte big-endian length prefixes. The plan input is
 safe_dump(sort_keys=True) after dropping approval: comments, key order and YAML
 presentation are preserved on disk but do not affect the contract digest.
+
+This module holds the rules the contract itself makes - the semantic validator, the legacy and folder
+rules, the selector lint, the approval's baseline and its amendment - and every other collaborator
+lives in the module beside it: the YAML document in `plan_document.py`, where a plan's files live in
+`plan_layout.py`, the refusals over a plan's paths in `plan_checks.py`, the pytest selector in
+`plan_selectors.py`, what an approval covers in `plan_approval.py`, the state and its locks in
+`plan_locks.py`, and plan discovery in `plan_discovery.py`. The names those modules publish are
+re-exported here, so a caller, a test and the CLI keep asking `plan.<name>`.
 """
 
-import ast
+import ast as ast
 import copy
-import fcntl
-import fnmatch
-import functools
-import hashlib
-import os
-import posixpath
+import fcntl as fcntl
+import fnmatch as fnmatch
+import functools as functools
+import hashlib as hashlib
+import os as os
+import posixpath as posixpath
 import re
-import shlex
-import shutil
-import subprocess
-import tempfile
-from contextlib import ExitStack, contextmanager
+import shlex as shlex
+import shutil as shutil
+import subprocess as subprocess
+import tempfile as tempfile
+from contextlib import ExitStack
+from contextlib import contextmanager as contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated as Annotated
+from typing import Literal as Literal
 
-import yaml
-from pydantic import (
-    AfterValidator,
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationError,
-    field_validator,
-    model_validator,
-)
+import yaml as yaml
+from pydantic import AfterValidator as AfterValidator
+from pydantic import BaseModel as BaseModel
+from pydantic import ConfigDict as ConfigDict
+from pydantic import Field as Field
+from pydantic import ValidationError
+from pydantic import field_validator as field_validator
+from pydantic import model_validator as model_validator
 
+# Published, not used here: `dir(plan)` is what callers and tests read, so a module and a helper the
+# groups above are built on keeps its name in this module even where only they use it.
 from . import approval_recovery as recovery
-from . import config, runner, runtime_client
+from . import config as config
 from . import ledger as ledgers
+from . import runner, runtime_client
+from .plan_approval import DEFAULT_STATE as DEFAULT_STATE
+from .plan_approval import FOLDER_PAYLOADS as FOLDER_PAYLOADS
+from .plan_approval import UNDIGESTED as UNDIGESTED
+from .plan_approval import approved_files as approved_files
+from .plan_approval import approved_text as approved_text
+from .plan_approval import canonical as canonical
+from .plan_approval import checked_scenarios as checked_scenarios
+from .plan_approval import completed as completed
+from .plan_approval import destination as destination
+from .plan_approval import digest as digest
+from .plan_approval import evidence_key as evidence_key
+from .plan_approval import file_path as file_path
+from .plan_approval import folder_files as folder_files
+from .plan_approval import frozen_problems as frozen_problems
+from .plan_approval import git_email as git_email
+from .plan_approval import payloads as payloads
+from .plan_approval import placed_files as placed_files
+from .plan_approval import publish as publish
+from .plan_approval import replaced_text as replaced_text
+from .plan_approval import runner_inputs as runner_inputs
+from .plan_approval import snapshot_files as snapshot_files
+from .plan_checks import discard_problems as discard_problems
+from .plan_checks import holds_no_test as holds_no_test
+from .plan_checks import is_test_path as is_test_path
+from .plan_checks import person_only_problems as person_only_problems
+from .plan_discovery import DiscoveryError as DiscoveryError
+from .plan_discovery import discover as discover
+from .plan_discovery import folder_plans as folder_plans
+from .plan_discovery import plan_entries as plan_entries
+from .plan_discovery import repo_config as repo_config
+from .plan_discovery import repository_root as repository_root
+from .plan_discovery import slug_of as slug_of
+from .plan_document import Amendment as Amendment
+from .plan_document import Approval as Approval
+from .plan_document import Evidence as Evidence
+from .plan_document import Mapping as Mapping
+from .plan_document import Plan as Plan
+from .plan_document import PlanError as PlanError
+from .plan_document import RepoPath as RepoPath
+from .plan_document import Scenario as Scenario
+from .plan_document import ScenarioId as ScenarioId
+from .plan_document import Text as Text
+from .plan_document import Ticket as Ticket
+from .plan_document import TicketId as TicketId
+from .plan_document import UniqueLoader as UniqueLoader
+from .plan_document import literal_path as literal_path
+from .plan_document import read_yaml as read_yaml
+from .plan_document import yaml_path as yaml_path
+from .plan_layout import FOLDER_PLAN as FOLDER_PLAN
+from .plan_layout import LISTED as LISTED
+from .plan_layout import PlanLayout as PlanLayout
+from .plan_layout import git as git
+from .plan_layout import identity as identity
+from .plan_layout import not_under_plans_dir as not_under_plans_dir
+from .plan_layout import package_files as package_files
+from .plan_layout import repository as repository
+from .plan_locks import amend_lock as amend_lock
+from .plan_locks import plan_lock as plan_lock
+from .plan_locks import run_lock as run_lock
+from .plan_locks import state_paths as state_paths
+from .plan_selectors import collected_tests as collected_tests
+from .plan_selectors import control_test as control_test
+from .plan_selectors import named_scenarios as named_scenarios
+from .plan_selectors import pytest_selector as pytest_selector
+from .plan_selectors import selector_terms as selector_terms
 
-DEFAULT_STATE = "~/.local/state/orchestrate"
-# A plan in its own folder is always named this; a legacy plan is `<name>.plan.yaml` beside `<name>.oracle/`.
-FOLDER_PLAN = "plan.yaml"
-# The folder's subdirectories whose every file the approval digests.
-FOLDER_PAYLOADS = ("acceptance", "negatives")
 ARCHIVE_MODES = ("promote", "discard")
-# What git lists for a tree: the files it tracks and the new ones it would carry, minus what it ignores.
-LISTED = ("ls-files", "-z", "--cached", "--others", "--exclude-standard")
-ScenarioId = Annotated[str, Field(pattern=r"^S\d+[a-z]?$")]
-TicketId = Annotated[str, Field(pattern=r"^T\d+$")]
-Text = Annotated[str, Field(min_length=1)]
-
-
-class PlanError(ValueError):
-    """A contract refusal; the CLI exits 2 before dispatch."""
-
-
-def literal_path(value):
-    if (
-        not value
-        or Path(value).is_absolute()
-        or ".." in Path(value).parts
-        or any(c in value for c in "*?[]")
-    ):
-        raise ValueError("use a literal repo-relative path without globs, absolute paths or ..")
-    return value
-
-
-RepoPath = Annotated[
-    Text, AfterValidator(literal_path), Field(description="Literal repository-relative path")
-]
-
-
-class Mapping(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=False)
-
-
-class Evidence(Mapping):
-    human: Text | None = None
-    check: Text | None = None
-    baseline: Literal["pass", "fail"] | None = None
-    oracle: list[RepoPath] = Field(default_factory=list)
-    place: RepoPath | None = None
-    acceptance: list[RepoPath] = Field(
-        default_factory=list,
-        description="Folder plans: test files in the plan folder's acceptance/, placed for the check at "
-        "<package>/<acceptance.dir>/<domain>/<file>",
-    )
-    package: RepoPath | None = Field(
-        default=None,
-        description="Folder plans: the repository directory (or .) whose acceptance dir the files are placed in",
-    )
-    timeout: Annotated[int, Field(gt=0)] = 600
-    env: list[Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]] = Field(
-        default_factory=list
-    )
-    negative: RepoPath | None = Field(
-        default=None,
-        description="A patch that must make the check fail; a legacy plan names an oracle file, a folder plan a "
-        "path relative to the plan folder",
-    )
-    promote: bool = True
-
-    @property
-    def has_tests(self):
-        """Whether the item brings test files of its own: legacy oracles or a folder plan's acceptance files."""
-        return bool(self.oracle or self.acceptance)
-
-    @model_validator(mode="after")
-    def evidence_kind(self):
-        if bool(self.human) == bool(self.check):
-            raise ValueError("choose exactly one of human or check + baseline")
-        if self.check and self.baseline is None:
-            raise ValueError("check requires baseline: pass or fail")
-        if self.human and self.model_fields_set - {"human"}:
-            raise ValueError("human evidence may only contain human; remove check options")
-        return self
-
-    @field_validator("place", "negative", "package")
-    @classmethod
-    def paths(cls, value):
-        return literal_path(value) if value is not None else value
-
-    @field_validator("oracle", "acceptance")
-    @classmethod
-    def oracle_paths(cls, values):
-        return [literal_path(v) for v in values]
-
-
-class Scenario(Mapping):
-    id: ScenarioId
-    when: Text
-    then: Text
-    evidence: Evidence | None = None
-
-
-class Ticket(Mapping):
-    id: TicketId
-    delivers: Text
-    satisfies: Annotated[list[ScenarioId], Field(min_length=1)]
-    paths: Annotated[list[RepoPath], Field(min_length=1)]
-    size: Literal["small", "regular"] | None = None
-    difficulty: Literal["simple", "complex"] | None = None
-    blocked_by: list[TicketId] = Field(default_factory=list)
-    owner: Text = "agent"
-    risk: list[
-        Literal["security", "concurrency", "retry-idempotency", "migration", "external", "state"]
-    ] = Field(default_factory=list)
-    evidence_waiver: Text | None = None
-    max_fix_rounds: Annotated[int, Field(ge=0)] | None = None
-    repo: Text | None = None
-
-    @model_validator(mode="after")
-    def agent_route(self):
-        if self.owner.strip().lower() == "agent":
-            if self.size is None or self.difficulty is None:
-                raise ValueError(
-                    "agent tickets require size and difficulty; supply the missing route fields"
-                )
-            if self.repo is not None:
-                raise ValueError(
-                    "repo is only allowed for non-agent owners; remove repo or assign to the Lead"
-                )
-        return self
-
-    @field_validator("size", mode="before")
-    @classmethod
-    def chunked(cls, value):
-        if value == "big":
-            raise ValueError("big needs chunked dispatch; split it")
-        return value
-
-
-class Approval(Mapping):
-    by: Text
-    at: Text
-    base: Annotated[str, Field(pattern=r"^[0-9a-f]{40,64}$")]
-    digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-
-
-class Amendment(Mapping):
-    prev_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-    digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-    at: Text
-    by: Text
-    reason: Text
-    tickets: list[TicketId] = Field(default_factory=list)
-
-
-class Plan(Mapping):
-    schema_version: Literal["plan/1"] = Field(alias="schema")
-    slug: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
-    goal: Text
-    spec: RepoPath | None = Field(
-        default=None,
-        description="The living spec the archive writes; required unless the plan is a folder plan that discards",
-    )
-    domain: Annotated[str, Field(pattern=r"^[a-z0-9-]+$")] | None = Field(
-        default=None,
-        description="Folder plans: the slug of the folder under <package>/<acceptance.dir>/ that promoted tests "
-        "join; required to promote",
-    )
-    archive: Literal["promote", "discard"] | None = Field(
-        default=None,
-        description="Folder plans: what archive does with the plan folder; the repo config's archive.mode when "
-        "absent",
-    )
-    outcome: Annotated[list[ScenarioId], Field(min_length=1)]
-    scenarios: Annotated[list[Scenario], Field(min_length=1)]
-    tickets: Annotated[list[Ticket], Field(min_length=1)]
-    approval: Approval | None = None
-    amendments: list[Amendment] = Field(
-        default_factory=list,
-        description="The history `plan amend` appends to: neither it nor the approval is part of the digest",
-    )
-
-    @field_validator("spec")
-    @classmethod
-    def spec_path(cls, value):
-        return literal_path(value) if value is not None else value
-
-    def legacy(self, statuses=None):
-        """Keep the existing loop's routes and blocking semantics in one place."""
-        statuses = statuses or {}
-        return {
-            "slug": self.slug,
-            "status": "APPROVED" if self.approval else None,
-            "scenarios": {
-                s.id: f"- **{s.id}** WHEN {s.when}, THEN {s.then}" for s in self.scenarios
-            },
-            "tickets": [
-                {
-                    "line": i,
-                    "#": t.id,
-                    "What it delivers": t.delivers,
-                    "Satisfies": ",".join(t.satisfies),
-                    "Blocked by": ",".join(t.blocked_by) or "none",
-                    "Paths": ",".join(t.paths),
-                    "Size": t.size,
-                    "Difficulty": t.difficulty,
-                    "Owner": t.owner,
-                    "Status": statuses.get(t.id, "TO-DO"),
-                }
-                for i, t in enumerate(self.tickets)
-            ],
-            "has_table": True,
-            "caps": {t.id: t.max_fix_rounds for t in self.tickets if t.max_fix_rounds is not None},
-            "cap_problems": [],
-        }
-
-
-def yaml_path(loc):
-    result = ""
-    for item in loc:
-        result += f"[{item}]" if isinstance(item, int) else ("." if result else "") + str(item)
-    return result or "plan"
-
-
-class UniqueLoader(yaml.SafeLoader):
-    """SafeLoader with duplicate diagnostics tied to the original YAML paths."""
-
-    def __init__(self, stream):
-        super().__init__(stream)
-        self.paths: dict[int, tuple] = {}
-        self.problems: list[str] = []
-
-    def construct_mapping(self, node, deep=False):
-        seen = set()
-        for key, _ in node.value:
-            name = self.construct_object(key, deep=deep)
-            if name in seen:
-                self.problems.append(
-                    f"{yaml_path(self.paths[id(node)] + (name,))}: duplicate key — remove the duplicate"
-                )
-            seen.add(name)
-        return super().construct_mapping(node, deep=deep)
-
-
-def read_yaml(path):
-    try:
-        raw = Path(path).read_text(encoding="utf-8")
-        loader = UniqueLoader(raw)
-        try:
-            node = loader.get_single_node()
-            loader.paths, loader.problems = {}, []
-
-            def walk(n, loc):
-                if id(n) in loader.paths:
-                    return
-                loader.paths[id(n)] = loc
-                if isinstance(n, yaml.MappingNode):
-                    for k, v in n.value:
-                        walk(v, loc + (k.value,))
-                elif isinstance(n, yaml.SequenceNode):
-                    for i, v in enumerate(n.value):
-                        walk(v, loc + (i,))
-
-            if node is None:
-                return None, ["plan: empty YAML — write a plan/1 mapping"]
-            walk(node, ())
-            return loader.construct_document(node), loader.problems
-        finally:
-            loader.dispose()
-    except (OSError, UnicodeError, yaml.YAMLError, TypeError) as error:
-        # Parser diagnostics can include command/env values; expose only the location.
-        mark = getattr(error, "problem_mark", None)
-        where = f" at line {mark.line + 1}" if mark else ""
-        raise PlanError(
-            f"{path}: unreadable or invalid YAML{where} — fix the file and run plan check"
-        ) from None
-
-
-class PlanLayout:
-    """The one place that knows how a plan lays out its files, for a plan in its own folder (`<folder>/plan.yaml`)
-    and a legacy plan (`<stem>.plan.yaml` beside `<stem>.plan.md` and `<stem>.oracle/`). Built from the plan path and
-    the repository; every command that reads, snapshots, places, guards or copies a plan's files asks it, so the
-    file name is read in this class only. `repo` may be left out where only the path is asked."""
-
-    YAML = ".plan.yaml"
-    MARKDOWN = ".plan.md"
-
-    def __init__(self, path, repo=None):
-        self.path = Path(path)
-        self.repo = Path(repo) if repo is not None else None
-        self.kind = "folder" if self.path.name == FOLDER_PLAN else "legacy"
-
-    @classmethod
-    def of(cls, path, repo=None):
-        return path if isinstance(path, cls) else cls(path, repo)
-
-    @classmethod
-    def is_plan_file(cls, path):
-        """Whether `path` is named like a plan/1 YAML plan: `plan.yaml` or `<stem>.plan.yaml`."""
-        name = Path(path).name
-        return name == FOLDER_PLAN or name.endswith(cls.YAML)
-
-    @classmethod
-    def is_listed(cls, path):
-        """Whether a plan listing shows `path`: a `<stem>.plan.yaml` or `<stem>.plan.md` plan (a folder plan is listed
-        from its plans dir, not by name)."""
-        return Path(path).name.endswith((cls.YAML, cls.MARKDOWN))
-
-    @property
-    def is_folder(self):
-        return self.kind == "folder"
-
-    @property
-    def format(self):
-        return "markdown" if self.path.name.endswith(self.MARKDOWN) else "yaml"
-
-    @property
-    def stem(self):
-        """What names the plan: its folder's name for a folder plan, else the file name without its suffixes."""
-        if self.is_folder:
-            return self.path.parent.name
-        return self.path.name.removesuffix(self.YAML).removesuffix(self.MARKDOWN)
-
-    @property
-    def folder(self):
-        """The plan's own folder, or None for a legacy plan."""
-        return self.path.parent if self.is_folder else None
-
-    @property
-    def oracle_dir(self):
-        """A legacy plan's oracle directory beside it, or None for a folder plan."""
-        return None if self.is_folder else self.path.with_name(self.stem + ".oracle")
-
-    @property
-    def narrative(self):
-        """A legacy plan's Markdown narrative beside it, or None for a folder plan."""
-        return None if self.is_folder else self.path.with_name(self.stem + self.MARKDOWN)
-
-    @property
-    def contract_files(self):
-        """The paths that are the plan's contract: the folder plan's plan.yaml (the rest of its folder is read from
-        `owns`), a legacy plan's file, narrative and oracle directory."""
-        if self.is_folder:
-            return [self.path]
-        return [self.path, self.narrative, self.oracle_dir]
-
-    @property
-    def repository(self):
-        """The repository the layout was built with; asking for a place in it without one is a mistake."""
-        if self.repo is None:
-            raise ValueError("this answer needs the repository: build PlanLayout(path, repo)")
-        return self.repo
-
-    def place(self, path):
-        """`path` relative to the repository, or None when it is outside it."""
-        repo = self.repository  # read outside the try: a missing repository is no "outside"
-        try:
-            return Path(path).relative_to(repo).as_posix()
-        except ValueError:
-            return None
-
-    @property
-    def plan_place(self):
-        """Where the plan file sits in the repository; a legacy plan kept outside it is placed under docs/plans/,
-        where an archive copies it. A folder plan outside the repository has no place (None)."""
-        placed = self.place(self.path)
-        if placed is None and not self.is_folder:
-            return "docs/plans/" + self.path.name
-        return placed
-
-    def owns(self, name):
-        """Whether the repository path `name` belongs to the plan: anything in a folder plan's folder, or a legacy
-        plan's file or oracle directory. A folder plan kept outside the repository owns no repository path."""
-        if self.is_folder:
-            folder = self.place(self.folder)
-            return folder is not None and name.startswith(folder + "/")
-        plan = self.plan_place
-        oracles = posixpath.dirname(plan) + "/" + self.oracle_dir.name
-        return name == plan or name.startswith(oracles + "/")
-
-    def holds_repo(self):
-        folder = self.folder
-        repo = self.repository
-        return folder is not None and (repo == folder or repo.is_relative_to(folder))
-
-    def may_delete_folder(self):
-        """Whether the plan has a folder of its own that may be deleted: a folder that is the repository, or holds
-        it, may not, because deleting it would delete the work."""
-        return self.is_folder and not self.holds_repo()
-
-    def directly_under(self, plans_dir):
-        """Whether the plan folder's resolved parent is the resolved `plans_dir`: the only place a folder is deleted
-        from. Resolving both means a folder nested deeper, or a symlink into `plans_dir`, is not directly under it."""
-        folder = self.folder
-        return folder is not None and folder.resolve().parent == Path(plans_dir).resolve()
-
-    def folder_place(self):
-        """The deletable folder's path in the repository; None for a legacy plan or a folder kept outside the
-        repository. A folder that is or holds the repository is refused."""
-        if not self.is_folder:
-            return None
-        if self.holds_repo():
-            raise ValueError(
-                "the plan folder %s is or holds the repository; move plan.yaml into a folder of its own"
-                % self.folder
-            )
-        return self.place(self.folder)
-
-
-def git(repo, *args):
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=15
-    )
-    if result.returncode:
-        raise PlanError(f"repo/base: git {args[0]} failed — supply a valid --repo and --base")
-    return result.stdout.strip()
-
-
-def repository(path, repo=None):
-    return (
-        Path(repo).resolve()
-        if repo is not None
-        else Path(_toplevel(str(Path(path).parent.resolve()))).resolve()
-    )
-
-
-def identity(repo):
-    return _identity(str(Path(repo).resolve()))
-
-
-# A checkout's top level and git common dir do not change while it exists, and a driver tick asks for them dozens of
-# times: one git process each was a large share of a tick. A failure raises, so it is never cached.
-@functools.lru_cache(maxsize=256)
-def _toplevel(directory):
-    return git(directory, "rev-parse", "--show-toplevel")
-
-
-@functools.lru_cache(maxsize=256)
-def _identity(repo):
-    common = Path(git(repo, "rev-parse", "--git-common-dir"))
-    return str((Path(repo) / common).resolve())
-
-
-def is_test_path(path, patterns):
-    """Whether `path` can hold a test: its file name matches a pattern or one of its directories is `tests`."""
-    parts = Path(path).parts
-    name = "" if str(path).endswith("/") else parts[-1] if parts else ""
-    directories = parts if str(path).endswith("/") else parts[:-1]
-    return "tests" in directories or any(fnmatch.fnmatchcase(name, p) for p in patterns)
-
-
-def holds_no_test(paths, patterns):
-    """True when none of `paths` is a directory (a trailing slash) or a test file: no test can be added there."""
-    return not any(str(p).endswith("/") or is_test_path(p, patterns) for p in paths)
-
-
-def discard_problems(model, path, repo):
-    """The refusal of a folder plan that discards from a folder that is not directly under plans.dir, as a list. It
-    is no part of the load every driver tick makes: a config that moves mid-run must reach the deletion's own check,
-    not drain a run that holds an approved plan."""
-    layout = PlanLayout(path, repo)
-    cfg = repo_config(repo)
-    if not layout.is_folder or (model.archive or cfg.archive_mode) != "discard":
-        return []
-    if layout.directly_under(cfg.plans_dir):
-        return []
-    return [not_under_plans_dir(layout.folder, cfg.plans_dir)]
-
-
-def person_only_problems(model, repo):
-    """The scenarios nothing can prove: no evidence, and only person-owned tickets satisfy them.
-
-    A scenario with evidence is proven by it (a `human` item by a person, a `check` by the driver). A scenario an
-    agent ticket satisfies is proven by that ticket's report, whose `covers` names the node. A scenario that
-    carries no evidence and that only a person's ticket satisfies has no proof at all: the acceptance never asks
-    for it, and the archive asks for a node at the very end. The lint refuses it early and names every way out:
-    `human` evidence, an agent ticket, or a node the person records with `complete --cover`.
-
-    A person-owned ticket that holds no test is out of the lint's reach: its work is not a test, so its proof is a
-    node the person records by hand, wherever it lives (R57) — the lint cannot judge that node, and the
-    person-ticket flow it would break is the one that flow is for. A person-owned ticket that could hold a test
-    is in the lint's reach: the plan says how that scenario is proven."""
-    patterns = repo_config(repo).test_patterns
-    problems = []
-    for scenario in model.scenarios:
-        if scenario.evidence is not None:
-            continue
-        tickets = [t for t in model.tickets if scenario.id in t.satisfies]
-        if not tickets or any(t.owner.strip().lower() == "agent" for t in tickets):
-            continue
-        if all(holds_no_test(ticket.paths, patterns) for ticket in tickets):
-            continue
-        problems.append(
-            "%s: no evidence and only person-owned tickets satisfy it (%s), so nothing can prove it — attach "
-            "`human` evidence to %s, let an agent ticket satisfy %s, or record a test node with "
-            "`complete --cover %s=<node>`"
-            % (
-                scenario.id,
-                ", ".join(t.id for t in tickets),
-                scenario.id,
-                scenario.id,
-                scenario.id,
-            )
-        )
-    return problems
 
 
 # A word of a test name that names a scenario, as the plans write them: `test_S1_x` carries S1, `test_S4a_x` S4a.
 SCENARIO_WORD = re.compile(r"^S\d+[a-z]?$")
-
-
-def control_test(function):
-    """Whether a test is a control: `control` is one of its words, so both `test_control_x` and the per-scenario
-    `test_S1_control_x` a plan writes to guard S1's fixture are controls, and neither carries a scenario's proof."""
-    return "control" in function.split("_")
-
-
-def pytest_selector(check):
-    """The `-k` expression of a check that runs pytest, or None when the check runs no pytest, carries no `-k`, or
-    cannot be split as a shell line: those checks are not linted. The last `-k` wins, as pytest's own parser does."""
-    try:
-        words = shlex.split(check)
-    except ValueError:
-        return None
-    if not any(Path(word).name in ("pytest", "py.test") for word in words):
-        return None
-    selector = None
-    for i, word in enumerate(words):
-        if word == "-k" and i + 1 < len(words):
-            selector = words[i + 1]
-        elif word.startswith("-k") and len(word) > 2:
-            selector = word[2:]
-    return selector
-
-
-def selector_terms(expression):
-    """The terms of a `-k` expression made of words joined by `or`, or None for any other expression.
-
-    pytest matches each term as a case-insensitive substring of a test's names. Not modelled, so an expression that
-    uses them is not linted: `and`, `not`, parentheses, matching against directory names, markers or the ids of
-    parametrized tests, and the files the check names outside its acceptance files."""
-    words = expression.split()
-    if not words or len(words) % 2 == 0 or any(op != "or" for op in words[1::2]):
-        return None
-    terms = words[0::2]
-    if any(term in ("and", "not", "or") or "(" in term or ")" in term for term in terms):
-        return None
-    return terms
-
-
-def named_scenarios(term):
-    """The scenario ids a selector term spells out as a word: `S1`, `test_S1_` and `s1` all name S1."""
-    found = set()
-    for word in re.split(r"[^A-Za-z0-9]+", term):
-        if re.fullmatch(r"[Ss]\d+[A-Za-z]?", word):
-            found.add("S" + word[1:].lower())
-    return found
-
-
-def collected_tests(source, module):
-    """[(names pytest matches `-k` against, function name)] for the tests of a module, read statically: no import,
-    no execution. A test is a `test_*` function at module level, or a `test_*` method of a class named `Test*` or of
-    a class with a base (a unittest.TestCase subclass, which pytest collects whatever its name)."""
-    tests = []
-    for node in ast.parse(source).body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
-            "test_"
-        ):
-            tests.append(((module, node.name), node.name))
-        elif isinstance(node, ast.ClassDef) and (node.name.startswith("Test") or node.bases):
-            for item in node.body:
-                if isinstance(
-                    item, (ast.FunctionDef, ast.AsyncFunctionDef)
-                ) and item.name.startswith("test_"):
-                    tests.append(((module, node.name, item.name), item.name))
-    return tests
 
 
 def selector_problems(model, path):
@@ -986,34 +497,6 @@ def legacy_problems(data, scenarios):
     return problems
 
 
-def package_files(package, skip):
-    """{basename: first path} of every file of `package` outside the `skip` trees: pytest imports a test module by
-    its basename, so a promoted file needs a name no other module in the package has. What belongs to the package
-    is what git lists: another checkout's or an ignored directory's copy is no module of it, and a tree outside a
-    repository, which has no index to ask, is walked instead."""
-    try:
-        listed = git(package, *LISTED).split("\0")
-        # An untracked directory git does not descend into is one entry ending in `/`, and holds no file.
-        paths = [Path(package, name) for name in listed if name and not name.endswith("/")]
-    except PlanError:
-        paths = [Path(here, name) for here, _, names in os.walk(package) for name in names]
-    return {
-        path.name: path
-        for path in paths
-        if not any(t in (path.resolve(), *path.resolve().parents) for t in skip)
-    }
-
-
-def not_under_plans_dir(folder, plans_dir):
-    """The refusal of a plan folder that may not be deleted, naming the folder, plans.dir and the way out."""
-    resolved = Path(folder).resolve()
-    return (
-        f"plan folder {folder}: a plan that is deleted must sit directly under plans.dir ({plans_dir}), and its "
-        f"folder resolves to {resolved} — move the folder to {plans_dir}/{resolved.name}, or set plans.dir in "
-        f".orchestrate/config.yaml to {resolved.parent}"
-    )
-
-
 def folder_problems(data, path, repo, scenarios):
     """The rules of a plan in its own folder: the folder keys, their files, and what a promote may not clobber."""
     problems = []
@@ -1126,112 +609,6 @@ def folder_problems(data, path, repo, scenarios):
     return problems
 
 
-# What a person or `plan amend` writes about the contract, not the contract: neither enters the digest.
-UNDIGESTED = ("approval", "amendments")
-
-
-def canonical(data):
-    return yaml.safe_dump(
-        {k: v for k, v in data.items() if k not in UNDIGESTED}, sort_keys=True
-    ).encode("utf-8")
-
-
-def payloads(directory):
-    return (
-        {
-            p.relative_to(directory).as_posix(): p.read_bytes()
-            for p in sorted(directory.rglob("*"))
-            if p.is_file()
-        }
-        if directory.exists()
-        else {}
-    )
-
-
-def folder_files(path, data):
-    """{folder-relative name: bytes} of a folder plan's acceptance/ and negatives/ and of each negative the plan
-    names: what approval digests, snapshots and later compares. Interpreter caches are not the plan's."""
-    folder = Path(path).parent
-    names = set()
-    for sub in FOLDER_PAYLOADS:
-        base = folder / sub
-        if base.is_dir():
-            names.update(
-                p.relative_to(folder).as_posix()
-                for p in base.rglob("*")
-                if p.is_file() and "__pycache__" not in p.relative_to(base).parts
-            )
-    for scenario in data.get("scenarios", []) if isinstance(data, dict) else []:
-        named = scenario.get("evidence", {}).get("negative") if isinstance(scenario, dict) else None
-        if isinstance(named, str) and (folder / named).is_file():
-            names.add(posixpath.normpath(named))
-    return {n: (folder / n).read_bytes() for n in sorted(names)}
-
-
-def approved_files(path, data):
-    """The files an approval of `path` covers, by the name the digest and the snapshot use."""
-    layout = PlanLayout(path)
-    return folder_files(path, data) if layout.is_folder else payloads(layout.oracle_dir)
-
-
-def snapshot_files(snapshot, path):
-    """The files of an approval snapshot directory: `oracle/` for a legacy plan, the folder-relative names for a
-    folder plan (everything beside its plan.yaml)."""
-    if not PlanLayout(path).is_folder:
-        return payloads(snapshot / "oracle")
-    return {n: b for n, b in payloads(snapshot).items() if n != "plan.yaml"}
-
-
-def file_path(path, name):
-    """Where a snapshot file name lives in the authored plan, for a message."""
-    layout = PlanLayout(path)
-    return layout.folder / name if layout.is_folder else layout.oracle_dir / name
-
-
-def destination(model, item, repo):
-    """The repo-relative directory a folder plan's acceptance files are placed in for `item`:
-    `<package>/<acceptance.dir>/<domain>`. A plan with no domain (it discards) has none."""
-    parts = [item.package or ".", repo_config(repo).acceptance_dir] + (
-        [model.domain] if model.domain else []
-    )
-    return posixpath.normpath(posixpath.join(*parts))
-
-
-def runner_inputs(path, model, item, files, repo):
-    """(oracles, place, negative) the runner takes for an evidence item: test file bytes by name, the directory they
-    are placed in, and the negative patch as (name, bytes). One derivation for the baseline, the runs and the
-    mutation checks, whichever layout the plan has."""
-    negative = (item.negative, files[item.negative]) if item.negative else None
-    if not PlanLayout(path).is_folder:
-        return {name: files[name] for name in item.oracle}, item.place, negative
-    return (
-        {name: files["acceptance/" + name] for name in item.acceptance},
-        destination(model, item, repo) if item.acceptance else None,
-        negative,
-    )
-
-
-def placed_files(path, model, item, repo):
-    """Repo-relative path of each test file an evidence item places."""
-    if not PlanLayout(path).is_folder:
-        return [
-            ((item.place or "").rstrip("/") + "/" + name.removesuffix(".oracle")).lstrip("/")
-            for name in item.oracle
-        ]
-    return [posixpath.join(destination(model, item, repo), name) for name in item.acceptance]
-
-
-def digest(repo_identity, base, plan_bytes, files):
-    parts = [repo_identity.encode(), base.encode(), plan_bytes]
-    for name, content in sorted(files.items()):
-        parts.extend((name.encode(), content))
-    h = hashlib.sha256()
-    for part in parts:
-        h.update(len(part).to_bytes(8, "big"))
-        h.update(part)
-    return h.hexdigest()
-
-
 def load(
     path, *, repo=None, state_dir=DEFAULT_STATE, require_approval=False, verify=True, lint=None
 ):
@@ -1271,61 +648,6 @@ def load(
             f"approval: {path} is unapproved — run agent-orchestrator plan approve {path}"
         )
     return model
-
-
-def replaced_text(text, name, new):
-    """`text` with its top-level `name` set to `new` (appended when absent), every other byte kept: the
-    author's comments survive."""
-    node = yaml.compose(text, Loader=yaml.SafeLoader)
-    existing = next(((k, v) for k, v in node.value if k.value == name), None)
-    if node.flow_style:
-        entry = yaml.safe_dump({name: new}, default_flow_style=True, width=10000).strip()[1:-1]
-        if existing:
-            key, value = existing
-            return text[: key.start_mark.index] + entry + text[value.end_mark.index :]
-        end = node.end_mark.index - 1
-        return text[:end] + (", " if node.value else "") + entry + text[end:]
-    eol = "\r\n" if "\r\n" in text else "\n"
-    block = yaml.safe_dump({name: new}, sort_keys=False).replace("\n", eol)
-    if existing:
-        key, value = existing
-        start, end = key.start_mark.index, value.end_mark.index
-        if text[end:].startswith(eol):
-            end += len(eol)
-    else:
-        # An explicit YAML document terminator must stay after the new block.
-        start = end = next(
-            (
-                e.start_mark.index
-                for e in yaml.parse(text)
-                if isinstance(e, yaml.DocumentEndEvent) and e.explicit
-            ),
-            len(text),
-        )
-    prefix = text[:start]
-    return prefix + (eol if prefix and not prefix.endswith("\n") else "") + block + text[end:]
-
-
-def approved_text(text, approval):
-    return replaced_text(text, "approval", approval)
-
-
-def evidence_key(path, model, item, files, repo):
-    """What one check evidence item runs: the check, its oracle bytes (by hash), place, env names, timeout and
-    negative. Two items with one key observe the same thing at one commit."""
-    oracles, place, negative = runner_inputs(path, model, item, files, repo)
-    return (
-        item.check,
-        tuple(sorted((name, runner.sha256(content)) for name, content in oracles.items())),
-        place,
-        tuple(item.env),
-        item.timeout,
-        (negative[0], runner.sha256(negative[1])) if negative else None,
-    )
-
-
-def checked_scenarios(model):
-    return [s for s in model.scenarios if s.evidence is not None and s.evidence.check]
 
 
 def baseline(path, model, repo, base_sha, approval_digest, files, carried=None):
@@ -1427,73 +749,6 @@ def carried_baselines(path, repo, old, old_files, model, files, previous, sha, s
     return carried
 
 
-def state_paths(repo, slug, state_dir):
-    """(ledger path, receipts directory) of a plan: `<state>/<repo-key>/<slug>.json` and `.../<slug>/receipts` (D17).
-
-    A ledger an older driver wrote under `<state>/<slug>.json` is imported first when this repository owns it, so
-    creating the ledger here never hides it."""
-    # The driver owns the state key and imports this module, so it is imported late.
-    from . import driver
-
-    state = Path(state_dir).expanduser()
-    keyed = state / driver.repo_key(repo)
-    ledger, run_dir = keyed / (slug + ".json"), keyed / slug
-    driver.import_old_ledger(state, repo, slug, ledger, run_dir)
-    return ledger, run_dir / "receipts"
-
-
-@contextmanager
-def plan_lock(repo, filename, who, refusal):
-    """A non-blocking flock on `<git common dir>/agent-orchestrator/<filename>`, the protocol of `driver.run_lock`
-    (it is written here because the driver's helper runs git through a function its callers replace). The file names
-    its holder; `refusal` is the PlanError text for a held lock, given that holder."""
-    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
-    directory = common / "agent-orchestrator"
-    directory.mkdir(exist_ok=True, mode=0o700)
-    fd = os.open(directory / filename, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "r+", encoding="utf-8") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise PlanError(refusal(lock.read().strip() or "another process")) from None
-        lock.seek(0)
-        lock.truncate()
-        lock.write(
-            "%s, pid %d since %s\n"
-            % (who, os.getpid(), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        )
-        lock.flush()
-        yield
-
-
-def run_lock(repo, slug):
-    """The plan's run lock, the file a driver holds for a whole run, so a live driver refuses approval and a driver
-    refuses to start under one."""
-    return plan_lock(
-        repo,
-        slug + ".lock",
-        "plan approve",
-        lambda holder: (
-            "plan %s is being driven by %s; stop that driver (close its orchestrate-%s pane), then "
-            "run plan approve again" % (slug, holder, slug)
-        ),
-    )
-
-
-def amend_lock(repo, slug):
-    """The lock of one `plan amend` at a time. It is not the run lock: a live driver holds that for its whole run
-    and an amendment must go through it, so two amendments exclude each other here and a driver never needs it."""
-    return plan_lock(
-        repo,
-        slug + ".amend.lock",
-        "plan amend",
-        lambda holder: (
-            "plan %s is being amended by %s; wait for that plan amend to finish, then run it again"
-            % (slug, holder)
-        ),
-    )
-
-
 def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
     """Approve a plan: run its baseline, then write the receipts, their ledger hashes, the snapshot and the block.
 
@@ -1546,51 +801,6 @@ def approve_locked(path, repo, model, state_dir, base):
     return approval
 
 
-def git_email(repo):
-    email = subprocess.run(
-        ["git", "-C", str(repo), "config", "user.email"], capture_output=True, text=True, timeout=15
-    ).stdout.strip()
-    return email or os.environ.get("USER") or "unknown"
-
-
-def publish(path, text, plan_bytes, files, sha, state_dir):
-    """Write the approval snapshot of digest `sha`, then replace the plan file with `text`, in that order: a driver
-    that reads the file in between finds the snapshot of the old approval and of the new one."""
-    approvals = Path(state_dir).expanduser() / "approvals"
-    approvals.mkdir(parents=True, exist_ok=True)
-    target = approvals / sha
-    snap = target / "plan.yaml"
-    if (
-        not snap.is_file()
-        or snap.read_bytes() != plan_bytes
-        or snapshot_files(target, path) != files
-    ):
-        temporary = Path(tempfile.mkdtemp(prefix=".approval-", dir=approvals))
-        try:
-            (temporary / "plan.yaml").write_bytes(plan_bytes)
-            for name, content in files.items():
-                dest = (
-                    temporary / name if PlanLayout(path).is_folder else temporary / "oracle" / name
-                )
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(content)
-            if target.exists():
-                shutil.rmtree(target)
-            temporary.rename(target)
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary)
-    fd, temporary = tempfile.mkstemp(prefix=".approval-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        shutil.copymode(path, temporary)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
 def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
     """Re-approve an approved plan after an edit, at the base its approval already has.
 
@@ -1622,39 +832,6 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
             raise PlanError(
                 "approval: %s — the plan was not amended; fix that and run plan amend again" % error
             ) from None
-
-
-def completed(repo, slug, state_dir):
-    """The ticket IDs the plan's ledger marks COMPLETE."""
-    ledger, _ = state_paths(repo, slug, state_dir)
-    found = ledgers.snapshot(ledger)  # a read: it never waits for the driver
-    statuses = (found or {}).get("ticket_status") or {}
-    return {
-        t for t, status in statuses.items() if str(status).strip().upper().startswith("COMPLETE")
-    }
-
-
-def frozen_problems(old, new, done):
-    """What an edit may not do to the tickets in `done`: change or drop them, or change the `when` or `then` of a
-    scenario they satisfy. A scenario's `evidence` may change."""
-    before, after = ({t["id"]: t for t in d.get("tickets", [])} for d in (old, new))
-    scenarios = (
-        {s["id"]: s for s in d.get("scenarios", []) if isinstance(s, dict)} for d in (old, new)
-    )
-    old_scenarios, new_scenarios = scenarios
-    problems = []
-    for ticket in sorted(done & before.keys()):
-        if ticket not in after:
-            problems.append(f"{ticket} is COMPLETE and the edit drops it")
-        elif after[ticket] != before[ticket]:
-            problems.append(f"{ticket} is COMPLETE and the edit changes it")
-        for sid in before[ticket]["satisfies"]:
-            was, now = old_scenarios.get(sid), new_scenarios.get(sid)
-            if was and (now is None or (was["when"], was["then"]) != (now["when"], now["then"])):
-                problems.append(
-                    f"{sid} is satisfied by COMPLETE {ticket} and the edit changes its when or then"
-                )
-    return problems
 
 
 def amend_locked(path, repo, model, state_dir, reason, runtime_id):
@@ -1714,122 +891,3 @@ def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     )
     publish(path, replaced_text(text, "approval", approval), plan_bytes, files, sha, state_dir)
     return {"approval": approval, "amendment": entry}
-
-
-class DiscoveryError(PlanError):
-    """Plan discovery refused for a reason a reader can tell apart: `kind` is not_a_repo, ambiguous or no_such_path."""
-
-    def __init__(self, kind, text, *, root=None, directories=()):
-        super().__init__(text)
-        self.kind, self.root, self.directories = kind, root, list(directories)
-
-
-def plan_entries(directory):
-    """The plan files directly in `directory`; nothing is created when it does not exist."""
-    if not directory.is_dir():
-        return []
-    return sorted(
-        (p for p in directory.iterdir() if p.is_file() and PlanLayout.is_listed(p)),
-        key=lambda p: p.name,
-    )
-
-
-def slug_of(path):
-    """The key a plan's ledger lives under: a YAML plan's `slug:` field, else the file name without its suffixes.
-
-    A Markdown plan, or a YAML plan whose file cannot be read, keeps the file-derived slug: a listing never fails on
-    the plan it lists."""
-    layout = PlanLayout(path)
-    derived = layout.stem  # a folder plan is named by its folder
-    if not PlanLayout.is_plan_file(path):
-        return derived  # a Markdown plan keeps the file-derived slug
-    try:
-        data = read_yaml(path)[0]
-    except PlanError:
-        return derived
-    slug = data.get("slug") if isinstance(data, dict) else None
-    return slug if isinstance(slug, str) and slug else derived
-
-
-def repo_config(root):
-    """The repo config as a PlanError, so every command refuses it the way it refuses a plan."""
-    try:
-        return config.load(root)
-    except config.ConfigError as error:
-        raise PlanError(f"config: {error}") from error
-
-
-def folder_plans(directory):
-    """`<directory>/<folder>/plan.yaml` for each folder that has one; nothing is created."""
-    if not directory.is_dir():
-        return []
-    return sorted(p / FOLDER_PLAN for p in directory.iterdir() if (p / FOLDER_PLAN).is_file())
-
-
-def repository_root(cwd, repo=None):
-    """The repository `discover` reads: the one named, else the one holding `cwd`; not_a_repo when it is neither."""
-    where = Path(repo).resolve() if repo is not None else Path(cwd).resolve()
-    found = subprocess.run(
-        ["git", "-C", str(where), "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    if found.returncode:
-        raise DiscoveryError(
-            "not_a_repo",
-            f"plans: {where} is not inside a git repository — run inside one or pass --repo R",
-            root=where,
-        )
-    return where if repo is not None else Path(found.stdout.strip()).resolve()
-
-
-def discover(repo=None, explicit=None):
-    """Plans for the Lead, the skills and the panel: the explicit plan (or the plan directory it
-    names), else the one directory of the repository's tracked plan files.
-
-    Several directories refuse, naming each and the explicit-path way out; none is an empty list."""
-    if explicit is not None:
-        path = Path(explicit).expanduser().resolve()
-        if not path.exists():
-            raise DiscoveryError(
-                "no_such_path",
-                f"plans: {path} does not exist — pass an existing plan or directory",
-                root=path,
-            )
-        directory = path if path.is_dir() else path.parent
-        files = set(plan_entries(directory))
-        if path.is_file():
-            files.add(path)
-    else:
-        root = repository_root(Path.cwd(), repo)
-        plans_dir = repo_config(root).plans_dir
-        configured = folder_plans(plans_dir)
-        tracked = git(root, "ls-files").splitlines()
-        dirs = sorted({str(Path(f).parent) for f in tracked if PlanLayout.is_listed(f)})
-        # A repo that writes its config has named its plans dir, so plan files elsewhere (test
-        # fixtures) cannot make the listing ambiguous. The built-in default names nothing.
-        if len(dirs) > 1 and (root / config.CONFIG_PATH).is_file():
-            chosen = [d for d in dirs if (root / d).resolve() == plans_dir.resolve()]
-            dirs = chosen or dirs
-        if len(dirs) > 1:
-            raise DiscoveryError(
-                "ambiguous",
-                "plans: several plan directories in "
-                + str(root)
-                + ": "
-                + ", ".join(dirs)
-                + " — pass one plan path to choose: agent-orchestrator plans list --json <plan>",
-                root=root,
-                directories=dirs,
-            )
-        files = set(plan_entries(root / dirs[0])) if dirs else set()
-        files.update(configured)
-    return [
-        {
-            "path": str(p),
-            "format": PlanLayout(p).format,
-            "slug": slug_of(p),
-        }
-        for p in sorted(files)
-    ]
