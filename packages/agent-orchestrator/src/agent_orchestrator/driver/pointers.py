@@ -1,12 +1,13 @@
 """Render a collection with the size a reader can check."""
 
+import os
 from pathlib import Path
 
 
 def reference(base, value, role):
     """Resolve a typed reference before it is handed to a reader."""
     values = value if isinstance(value, (list, tuple)) else [value]
-    paths = [(Path(base) / item).resolve() for item in values]
+    paths = [Path(os.path.abspath(Path(base) / item)) for item in values]
     if len(paths) != 1:
         raise ValueError("%s: expected one reference; restore it or choose a valid path" % value)
     if role == "pattern":
