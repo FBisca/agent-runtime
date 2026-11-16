@@ -80,9 +80,15 @@ a swarm (D12, D14). A calibrated signal points where the reviewer should look, s
 and one matching a fired rule or a changed path joins too, named in the report in declaration order (D07,
 D29). The reviewer is read-only (D18): the family answers with the arguments that hold it to reading and
 searching, or the harness is refused before the screening starts and nothing is spawned (D38). What the
-reviewer answered is judged by the review that reads it; --deep-review-fixture replaces the spawn with a
-canned reviewer recording what it was asked in `spawns.json`, which is how a review is checked without a
-model.
+reviewer answers is judged by the review that reads it (D15, D16, D17): every fired signal gets its own
+disposition carrying the value, the confidence and the threshold that fired, a confirmed finding on a
+critical-priority question is blocking whatever the reviewer's own flag said, and a signal nobody disposed
+of leaves the execution incomplete. The verdict tells `screened` (nothing escalated) from `passed` (a deep
+review completed with nothing blocking) and `blocked` (one confirmed); a reviewer that times out, fails or
+answers something no review can accept is incomplete with the evidence it had, and is never retried or
+fallen back from (D20, D34, D39). --deep-review-fixture replaces the spawn with a canned reviewer recording
+what it was asked in `spawns.json` and answering from `answers.json`, which is how a review is checked
+without a model.
 
 The provider is TypeSafe System One (D37): TYPESAFE_API_KEY authenticates it, AGENT_REVIEW_API_KEY is
 sent only as its fallback, and AGENT_REVIEW_BASE_URL defaults to https://api.typesafe.ai/v1, whose
@@ -179,8 +185,8 @@ def _review_options(code: argparse.ArgumentParser) -> None:
         metavar="DIR",
         type=Path,
         help=(
-            "a canned reviewer replacing the spawn: it records what it was asked for in "
-            "spawns.json, so a review is checked without a model"
+            "a canned reviewer replacing the spawn: it records what it was asked for in spawns.json "
+            "and answers from answers.json, so a review is checked without a model"
         ),
     )
 
@@ -364,6 +370,7 @@ def _reviewed(
         escalation=report.escalation,
         target=target,
         reviewer=reviewer,
+        bank=report.bank,
     )
     # A reviewer that stopped leaves the screening it paid for standing: the report says incomplete and
     # names the stop, never throwing away judgments and usage the provider already answered (D20, R10).

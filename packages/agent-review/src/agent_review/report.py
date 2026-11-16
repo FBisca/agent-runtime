@@ -3,8 +3,11 @@
 One invocation writes exactly one report under the caller's directory (D53, D54), whether the screening
 completed or not: `status` says whether the execution finished, `verdict` says what the review concluded
 and is null when nothing was concluded, and `failure.reason` names why an incomplete run stopped (D34,
-D35, D39, D40). The report also freezes what the run was made of - both revisions, the question
-configuration, the model and the usage - so the same frozen input can be recognised again (D26, D44).
+D35, D39, D40). The verdict tells the cases apart: `screened` is a change nobody escalated, `passed` a deep
+review that completed with nothing blocking, `blocked` one that confirmed a blocking finding (D39). A screen
+is never read as a pass, because a consumer deciding sufficiency needs to know whether anything looked. The
+report also freezes what the run was made of - both revisions, the question configuration, the model and the
+usage - so the same frozen input can be recognised again (D26, D44).
 
 `usage.requests` is how many times the provider was asked. One screening of one chunk is one request (D40):
 a retry or a model fallback would show as a second one, and a change larger than one request's budget is
@@ -99,12 +102,18 @@ class Report:
 
     @property
     def verdict(self) -> str | None:
-        """What the review concluded: `escalated` when a safeguard fired, `screened` once screened, and
+        """What the review concluded, never what the execution did: `escalated`, `screened`, `passed` or
+        `blocked`, and nothing when the execution did not complete (D34, D39).
 
-        nothing when the execution did not complete.
+        `screened` says no escalation was required and a clean deep review says `passed`: a consumer that
+        treats a screen as sufficiency would read an unreviewed change as reviewed, so the two are never the
+        same word. `escalated` names a change waiting for a review, `blocked` a review that confirmed a
+        blocking finding.
         """
         if self.failure is not None:
             return None
+        if self.deep_review is not None:
+            return self.deep_review.verdict
         return ESCALATED if self.escalation else SCREENED
 
     @property
