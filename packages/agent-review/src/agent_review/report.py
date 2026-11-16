@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_review.chunks import Chunk, Coverage
+from agent_review.deep_review import Review
 from agent_review.pricing import Cost, PriceTable, no_table
 from agent_review.questions import Question, QuestionBank, Threshold
 from agent_review.safeguards import EscalationReason, recommends_full_review, way_out
@@ -76,6 +77,9 @@ class Report:
     price_table: PriceTable | None = None
     # Long context is the caller's opt-in, so the report says whether the larger budget was asked for.
     long_context: bool = False
+    # The one deep review an escalation asked for, or nothing when nothing escalated: its scope, the
+    # instructions it composed and the signals the reviewer was given (D12, D14, P2-D3).
+    deep_review: Review | None = None
     failure: str | None = field(default=None)
 
     @property
@@ -161,6 +165,7 @@ class Report:
                 "reasons": [reason.as_dict() for reason in self.escalation],
                 "recommended": self.recommended,
             },
+            "deep_review": None if self.deep_review is None else self.deep_review.as_dict(),
             "failure": None if self.failure is None else {"reason": self.failure},
         }
 
@@ -178,46 +183,61 @@ class Report:
         Without `path` the report line is left out: a summary printed because the report could not be
         written must not claim a file that is not there (S6).
         """
+        lines = self._conclusion()
+        lines.append(
+            f"usage: {self.requests} request{'s' if self.requests != 1 else ''}, "
+            f"{self.input_tokens} input tokens, {self.output_tokens} output tokens"
+        )
+        lines.extend(self._provenance(path))
+        return "\n".join(lines)
+
+    def _conclusion(self) -> list[str]:
+        """The verdict in a person's words: what was screened, or what stopped it, and what it concluded."""
         change = f"{self.base}..{self.head}"
         if self.failure is not None:
-            lines = [f"screened nothing: {change} was not screened with {self.model}"]
-            lines.append(f"execution: {self.status}")
-            lines.append(f"reason: {self.failure}")
-        elif self.escalation:
-            # A person reads the change instead of trusting the screen: the rule, the path it matched and the
-            # way out are what they can act on (S8). A coverage gap is decided after the screen, so the
-            # report says the screening happened rather than claiming no model was asked (D43).
-            asked = f"screened with {self.model}" if self.provider else "no model was asked"
-            lines = [f"escalated {change}: {asked}"]
-            for reason in self.escalation:
-                lines.append(
-                    f"  {reason.rule} at {reason.path}" if reason.path else f"  {reason.rule}"
-                )
-                lines.append(f"    {reason.pattern}")
-                lines.append(f"    {way_out(reason)}")
-            lines.append(f"verdict: {self.verdict}")
-        else:
+            return [
+                f"screened nothing: {change} was not screened with {self.model}",
+                f"execution: {self.status}",
+                f"reason: {self.failure}",
+            ]
+        if not self.escalation:
             lines = [f"screened {change} with {self.model}"]
             lines.extend(
                 f"  {judgment['question']} [{judgment['priority']}] {json.dumps(judgment['value'])}"
                 for judgment in self.judgments
             )
-            lines.append(f"verdict: {self.verdict}")
-        lines.append(
-            f"usage: {self.requests} request{'s' if self.requests != 1 else ''}, "
-            f"{self.input_tokens} input tokens, {self.output_tokens} output tokens"
-        )
+            return lines + [f"verdict: {self.verdict}"]
+        # A person reads the change instead of trusting the screen: the rule, the path it matched and the
+        # way out are what they can act on (S8). A coverage gap is decided after the screen, so the report
+        # says the screening happened rather than claiming no model was asked (D43).
+        asked = f"screened with {self.model}" if self.provider else "no model was asked"
+        lines = [f"escalated {change}: {asked}"]
+        for reason in self.escalation:
+            lines.append(f"  {reason.rule} at {reason.path}" if reason.path else f"  {reason.rule}")
+            lines.append(f"    {reason.pattern}")
+            lines.append(f"    {way_out(reason)}")
+        return lines + [f"verdict: {self.verdict}"]
+
+    def _provenance(self, path: Path | None) -> list[str]:
+        """What produced the verdict and where it was written: the provider, the review, the coverage."""
+        lines: list[str] = []
         if self.provider:
             lines.append(f"provider: {self.provider}")
         elif self.escalation:
             lines.append("screened by: no provider was asked; a safeguard decided the change")
+        if self.deep_review is not None:
+            signals = len(self.deep_review.signals)
+            lines.append(
+                f"deep review: {self.deep_review.scope}, {signals} signal"
+                f"{'' if signals == 1 else 's'} read by {self.deep_review.harness}"
+            )
         if self.coverage is not None and self.coverage.gap is not None:
             lines.append(f"coverage: {self.coverage.gap.reason}")
         if self.resolved_model is not None:
             lines.append(f"served: {self.resolved_model}")
         if path is not None:
             lines.append(f"report: {path}")
-        return "\n".join(lines)
+        return lines
 
 
 def bank_digest(

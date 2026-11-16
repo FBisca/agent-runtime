@@ -38,6 +38,8 @@ from typing import Any
 
 import yaml
 
+from agent_review import deep_review
+from agent_review.deep_review import Settings as DeepReviewSettings
 from agent_review.errors import ReviewError
 from agent_review.numbers import band as _band
 from agent_review.numbers import number as _number
@@ -60,6 +62,7 @@ TOP_LEVEL = (
     "thresholds",
     "chunk",
     "cross_file",
+    "deep_review",
 )
 FIELDS = ("id", "priority", "type", "ask", "criteria")
 # The declarations whose shape a rule reads; a declaration no rule reads is carried as configured.
@@ -129,6 +132,10 @@ class QuestionBank:
     never chosen by the model: a question's weight, and the calibrated value and confidence band its
     answer is read against. `chunk` and `cross_file` are the budgets the chunking stage reads: accepted and
     shape-checked here, honoured there.
+
+    `deep_review` is what a deep review of an escalated change is told and may spend: its budget and the
+    instruction sets it composes from, read by the review's own stage and refused here when no stage could
+    read it (P2-D5).
     """
 
     model: str
@@ -139,6 +146,7 @@ class QuestionBank:
     thresholds: Mapping[str, Threshold] = field(default_factory=dict)
     chunk: Mapping[str, Any] = field(default_factory=dict)
     cross_file: Mapping[str, Any] = field(default_factory=dict)
+    deep_review: DeepReviewSettings = field(default_factory=DeepReviewSettings)
 
     def weight(self, question: Question | str) -> float:
         """What this question weighs, and `DEFAULT_WEIGHT` when no configuration declares one."""
@@ -178,6 +186,7 @@ def load(path: Path | str) -> QuestionBank:
         thresholds=_thresholds(data, path, packaged.thresholds),
         chunk=_carried(data, "chunk", path),
         cross_file=_carried(data, "cross_file", path),
+        deep_review=deep_review.settings(data.get("deep_review"), path),
     )
 
 
@@ -192,6 +201,7 @@ def _bank(data: dict[str, Any], path: Path) -> QuestionBank:
         thresholds=_thresholds(data, path, {}),
         chunk=_carried(data, "chunk", path),
         cross_file=_carried(data, "cross_file", path),
+        deep_review=deep_review.settings(data.get("deep_review"), path),
     )
 
 

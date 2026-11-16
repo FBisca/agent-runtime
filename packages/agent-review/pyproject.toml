@@ -3,8 +3,9 @@ name = "agent-review"
 version = "0.1.0"
 description = "Screen the change between two Git revisions against a curated question bank."
 requires-python = ">=3.11"
-# The question bank is declarative YAML (D29): PyYAML is the member's one dependency.
-dependencies = ["PyYAML>=6.0"]
+# The question bank is declarative YAML (D29); which harness can hold a reviewer to reading is the
+# runtime's one answer (D38, P2-D2), asked from here rather than restated.
+dependencies = ["PyYAML>=6.0", "agent-runtime"]
 
 [project.scripts]
 agent-review = "agent_review.cli:main"
@@ -12,6 +13,10 @@ agent-review = "agent_review.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+# The read-only spawn controls live in the runtime, beside its profiles; one answer, asked from here.
+agent-runtime = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_review"]
