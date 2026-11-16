@@ -64,7 +64,7 @@ def owned_scope(checkout, paths):
         elif str(name).endswith("/"):
             result.append("0 files in %s" % path.resolve())
         else:
-            result.append(reference(checkout, name, "write"))
+            result.append("write %s" % reference(checkout, name, "write"))
     return ", ".join(result)
 
 

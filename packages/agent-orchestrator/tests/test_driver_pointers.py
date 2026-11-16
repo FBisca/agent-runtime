@@ -135,7 +135,7 @@ class PointerGuard:
         import re
 
         problems = []
-        pattern = r"(?<![\w:/.-])/[^\s`\"',;()]+|(?<![\w/.*-])[\w.-]*\*[\w.-]+(?![\w*.-])|(?<![\w/.-])[\w-]+\*(?![\w/.*-])"
+        pattern = r"(?<![\w:/.-])/[^\s`\"',;()]+|(?<![\w/.*-])[\w.-]*\*[\w.-]+(?![\w*.-])|(?<![\w/.-])[\w-]+\*(?![\w/.*-])|(?<![\w*])\*(?![\w*])"
         for line in content.splitlines():
             match = re.search(r"\b(?:newest|latest|most recent)\b", line, re.I)
             if match:
@@ -174,6 +174,7 @@ class PointerRun(GateFixture, unittest.TestCase):
                 str(self.run_dir / "*.json"),
                 "*.json",
                 "report*",
+                "*",
                 str(self.run_dir / "t1"),
                 "newest",
             ):
@@ -239,7 +240,9 @@ class PointerRun(GateFixture, unittest.TestCase):
 
 class TestRenderedPointers:
     def test_S3_rendered_instructions_name_their_files(self, tmp_path):
-        from agent_orchestrator.driver.pointers import reference
+        from types import SimpleNamespace
+
+        from agent_orchestrator.driver.pointers import reference, task_text
 
         existing = tmp_path / "README"
         existing.write_text("read me")
@@ -249,6 +252,22 @@ class TestRenderedPointers:
         guard = PointerGuard(tmp_path)
         assert not guard.violations("Write %s" % reference(tmp_path, "newfile", "write"))
         assert not guard.violations("Read %s" % reference(tmp_path, "README", "read"))
+        (tmp_path / "contract.md").write_text("contract")
+        packet = {
+            "checks": [],
+            "owns": ["newfile"],
+            "checkout": str(tmp_path),
+            "worker": "t1",
+            "task_id": "t1",
+        }
+        driver = SimpleNamespace(
+            run_dir=tmp_path, plan_path=existing, args=SimpleNamespace(base="origin/main")
+        )
+        task = task_text(
+            driver, None, {"#": "T1", "What it delivers": "work"}, packet, [], tmp_path
+        )
+        assert str(tmp_path / "newfile") in task
+        assert not guard.violations(task), guard.violations(task)
         for missing in ("missing", str(tmp_path / "missing")):
             with pytest.raises(ValueError, match="missing.*expected.*(restore|choose)"):
                 reference(tmp_path, missing, "read")
