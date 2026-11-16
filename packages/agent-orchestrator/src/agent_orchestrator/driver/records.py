@@ -334,13 +334,35 @@ def unit_attempts(data, unit):
     return [task for _, task in tasks]
 
 
-def unit_attempt(data, unit, *, open_only=False):
-    """The newest attempt, or the newest attempt whose ledger status is open."""
+def unit_attempt(data, unit):
+    """The unit's newest attempt, whatever its ledger status."""
+    return next(iter(unit_attempts(data, unit)), None)
+
+
+def open_attempt(data, unit):
+    """The attempt the record's status says is still open: the newest one that is not COMPLETE or RELEASED."""
     return next(
         (
             task
             for task in unit_attempts(data, unit)
-            if not open_only or task.get("status") not in ("COMPLETE", "RELEASED")
+            if task.get("status") not in ("COMPLETE", "RELEASED")
+        ),
+        None,
+    )
+
+
+def reported_attempt(data, unit):
+    """The unit's newest report: the newest attempt that has one.
+
+    A unit-scoped question, and the answer is the attempt the record says was made last among those that
+    reported. It is not a search for a file: an attempt that never reported contributes nothing, and an
+    attempt-scoped reader (which report is this attempt's?) still answers only for its own attempt.
+    """
+    return next(
+        (
+            task
+            for task in unit_attempts(data, unit)
+            if task.get("report_path") or task.get("report")
         ),
         None,
     )

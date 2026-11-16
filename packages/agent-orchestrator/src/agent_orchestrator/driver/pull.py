@@ -24,7 +24,7 @@ from .. import contracts, narrate, timeutil
 from ..ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from ..invariants import PARKED, next_path
 from .book import ARCHIVE, checkpoint, settle_merged
-from .records import merge_state, unit_attempt
+from .records import merge_state, open_attempt, reported_attempt, unit_attempt
 from .report import item_text
 from .runtime import head_of
 
@@ -196,9 +196,7 @@ class Pull:
         with self.book() as data:
             units = {t["packet"].get("unit") or tid for tid, t in data["tasks"].items()}
             return {
-                unit: copy.deepcopy(task)
-                for unit in units
-                if (task := unit_attempt(data, unit, open_only=True))
+                unit: copy.deepcopy(task) for unit in units if (task := open_attempt(data, unit))
             }
 
     def unit_flag(self, unit, key):
@@ -511,10 +509,10 @@ class Pull:
         narrate.say("done", "merge", "merged early: %s" % url, task=task_id)
 
     def _reported_checks(self, task_id):
-        """The newest attempt's checks, or [] when it has not reported."""
+        """The unit's newest report's checks, or [] when no attempt has reported."""
         with self.book() as data:
             unit = data["tasks"][task_id]["packet"].get("unit") or task_id
-            task = unit_attempt(data, unit)
+            task = reported_attempt(data, unit)
             return list(((task or {}).get("report") or {}).get("checks") or [])
 
     def merged_report(self, task_id, url):
