@@ -210,6 +210,23 @@ def git(root, *args, text=True):
         raise Refused("structure budget: git is not available, so --since has no base: %s" % error)
 
 
+def merge_base(root, rev):
+    """The revision `rev` and HEAD diverged at: where this change actually grew from.
+
+    `--since origin/main` names the base branch's *head*, and a head moves with every merge into it.
+    A branch that was merely behind was then measured against a tree it never grew from, and the gate
+    reported growth the branch did not make -- the same file at the same size, over a recorded number
+    that had since been paid down. The merge base is that same name held still.
+
+    Where the baseline was already right nothing moves: a base commit that is an ancestor of HEAD --
+    what a pull request's base is in CI, and what the tip a push replaced is -- answers itself.
+    """
+    done = git(root, "merge-base", rev, "HEAD")
+    if done.returncode == 0 and done.stdout.strip():
+        return done.stdout.strip()
+    return rev
+
+
 def archive_prefix(root):
     """Where `root` sits inside its checkout, as the archive member prefix its files carry."""
     done = git(root, "rev-parse", "--show-prefix")
@@ -454,7 +471,7 @@ def write_budget(args):
     return 0
 
 
-def check(args):
+def check(args, since):
     """The measured tree, the budget it is held to, and the offender lines of one run."""
     budget = read_baseline(args.baseline)
     if args.paid and not args.metric:
@@ -464,8 +481,8 @@ def check(args):
         )
     measured = measure(args.root, resolve(args.root))
     paths = paid_paths(measured, args.paid)
-    base = measure_at(args.root, args.since)
-    base = inherited(base, moved_paths(args.root, args.since))
+    base = measure_at(args.root, since)
+    base = inherited(base, moved_paths(args.root, since))
     return measured, budget, growth_lines(measured, base, ceilings_of(budget), paths, args.metric)
 
 
@@ -509,7 +526,9 @@ def main(argv=None):
     try:
         if args.write:
             return write_budget(args)
-        measured, budget, lines = check(args)
+        # The baseline is where this change grew from, not where the base branch happens to point.
+        since = merge_base(args.root, args.since)
+        measured, budget, lines = check(args, since)
     except Refused as error:
         print(error, file=sys.stderr)
         return 2
@@ -519,14 +538,14 @@ def main(argv=None):
         print(
             "structure budget: %d file(s) are over a ceiling they may not hold: bring each under "
             "the ceiling, or back to the number it had at %s"
-            % (len({line.split(":", 1)[0] for line in lines}), args.since),
+            % (len({line.split(":", 1)[0] for line in lines}), since),
             file=sys.stderr,
         )
         return 1
     # stdout is the list of what the gate refused. A tree still holding a grandfather is clean but
     # not at its ceilings, and saying so belongs on stderr, where it cannot read as a refusal.
     at_ceilings = not over_ceiling(measured, ceilings_of(budget))
-    print(summary(measured, budget, args.since), file=sys.stdout if at_ceilings else sys.stderr)
+    print(summary(measured, budget, since), file=sys.stdout if at_ceilings else sys.stderr)
     return 0
 
 
