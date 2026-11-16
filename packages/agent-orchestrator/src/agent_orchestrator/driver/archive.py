@@ -464,12 +464,7 @@ class Archive:
                     "archive by hand" % ", ".join(missing),
                 )
             head = self._archive_branch(task_id)
-            if self._archive_mode() == "promote":
-                checkout = self.task(task_id)["packet"]["checkout"]
-                shutil.copyfile(
-                    Path(checkout) / self.plan_model().spec,
-                    self.run_dir / task_id / "archived-spec",
-                )
+            self._snapshot_spec(task_id)
             url = self._archive_pr(task_id)
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             return self.request(
@@ -506,6 +501,14 @@ class Archive:
         self.mark(task_id, gate="reported")
         self.log("archive-built", task=task_id, pr=url, head=head)
         narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
+
+    def _snapshot_spec(self, task_id):
+        if self._archive_mode() == "promote":
+            checkout = self.task(task_id)["packet"]["checkout"]
+            shutil.copyfile(
+                Path(checkout) / self.plan_model().spec,
+                self.run_dir / task_id / "archived-spec",
+            )
 
     def archive_missing(self):
         """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no placed oracle."""
