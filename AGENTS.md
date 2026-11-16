@@ -14,6 +14,19 @@ produced them.
 - Fix the class, not the instance: when you fix a defect, search every other place with the same
   pattern.
 
+## An invariant, not a point fix
+
+A gate, a config or a test either states a rule that decides every case, or it enumerates today's
+answers: a per-file allowance, a table of known offenders, a snapshot of this week's numbers. The
+enumeration rots. Every file, rename and split edits it, it drifts from the tree, and reviewers end
+up reading diffs of numbers instead of diffs of code.
+
+Prefer the invariant: one sentence that decides the cases nobody has written yet. `git` holds the
+past (a merge base) and the tree holds the present (a ceiling), so most rules need nothing stored at
+all. "Does this still hold when the tree doubles?" is the test: a per-file row fails it, a count, a
+ceiling and a comparison against the merge base pass it. Where the environment already knows a fact
+(the history, the filesystem, a manifest), read it there instead of copying it here.
+
 ## Testing
 
 - **Unit:** In-process, isolated, deterministic; mock external dependencies.
