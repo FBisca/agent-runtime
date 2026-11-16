@@ -630,21 +630,29 @@ class Archive:
 
     def _archive_body(self):
         """The archive pull request's description, by what the archive does with the plan."""
-        spec = self.plan_model().spec
+        from .pointers import reference
+
+        checkout = self.task(ARCHIVE)["packet"]["checkout"]
+        spec = (
+            reference(checkout, self.plan_model().spec, "read")
+            if self._archive_mode() == "promote"
+            else ""
+        )
         if self._archive_mode() == "discard":
-            return "Deletes the discarded plan folder `%s`; it changes nothing else." % (
-                self._plan_folder_rel()
+            return "Deletes the discarded plan folder %s; it changes nothing else." % reference(
+                self.repo, self._plan_folder_rel(), "collection"
             )
         if self.layout.is_folder:
-            where = self._plan_folder_rel()
+            where = reference(self.repo, self.layout.folder, "collection")
             return (
                 "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
                 "is deleted and the spec section with its Coverage table is written by the driver."
-                % ("folder `%s`" % where if where else "`%s`" % self.layout.folder, spec)
+                % (where, spec)
             )
         return (
             "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-            "with its Coverage table, written by the driver." % (self.layout.plan_place, spec)
+            "with its Coverage table, written by the driver."
+            % (reference(self.repo, self.plan_path, "read"), spec)
         )
 
     def undraft_archive(self, task_id):

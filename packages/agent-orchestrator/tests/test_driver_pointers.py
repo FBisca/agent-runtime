@@ -111,26 +111,11 @@ def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
 class PointerGuard:
     def __init__(self, checkout):
         self.checkout = checkout
-        self.refs = {}
-
-    def git_ref(self, token):
-        import subprocess
-
-        base = token.split("...")[0].split("..")[0]
-        if base not in self.refs:
-            result = subprocess.run(
-                ["git", "-C", str(self.checkout), "rev-parse", "--verify", "--quiet", base],
-                capture_output=True,
-            )
-            self.refs[base] = result.returncode == 0
-        return self.refs[base]
 
     def invalid(self, token, content):
         import re
 
         token = token.rstrip(".:/")
-        if not token.startswith(("/", "./", "../")) and self.git_ref(token):
-            return None
         if any(c in token for c in "*?[]"):
             return token
         path = Path(token)
@@ -150,7 +135,7 @@ class PointerGuard:
         import re
 
         problems = []
-        pattern = r"(?<![\w:/.-])(?:/|\.{1,2}/|[\w.-]+/)[^\s`\"',;()]+|(?<![\w/.-])[\w*?\[\]-]+\.[A-Za-z]{1,8}(?![\w/.-])|(?<![\w/.-])[\w-]+\*(?![\w/.*-])"
+        pattern = r"(?<![\w:/.-])/[^\s`\"',;()]+|(?<![\w/.*-])[\w.-]*\*[\w.-]+(?![\w*.-])|(?<![\w/.-])[\w-]+\*(?![\w/.*-])"
         for line in content.splitlines():
             match = re.search(r"\b(?:newest|latest|most recent)\b", line, re.I)
             if match:
@@ -185,6 +170,7 @@ class PointerRun(GateFixture, unittest.TestCase):
             assert not guard.violations(content), (artifact, guard.violations(content))
             for token in (
                 str(self.run_dir / "unwritten.txt"),
+                str(self.run_dir / "unwritten"),
                 str(self.run_dir / "*.json"),
                 "*.json",
                 "report*",
@@ -252,10 +238,71 @@ class PointerRun(GateFixture, unittest.TestCase):
 
 
 class TestRenderedPointers:
-    def test_S3_rendered_instructions_name_their_files(self):
+    def test_S3_rendered_instructions_name_their_files(self, tmp_path):
+        from agent_orchestrator.driver.pointers import reference
+
+        existing = tmp_path / "README"
+        existing.write_text("read me")
+        assert reference(tmp_path, "README", "read") == str(existing)
+        assert reference(tmp_path, "newfile", "write") == str(tmp_path / "newfile")
+        assert reference(tmp_path, "READ*", "pattern") == str(existing)
+        guard = PointerGuard(tmp_path)
+        assert not guard.violations("Write %s" % reference(tmp_path, "newfile", "write"))
+        assert not guard.violations("Read %s" % reference(tmp_path, "README", "read"))
+        for missing in ("missing", str(tmp_path / "missing")):
+            with pytest.raises(ValueError, match="missing.*expected.*(restore|choose)"):
+                reference(tmp_path, missing, "read")
+        for invalid in ("*", "."):
+            with pytest.raises(ValueError, match="expected"):
+                reference(tmp_path, invalid, "read")
+        with pytest.raises(ValueError, match="README.*expected.*(restore|choose)"):
+            reference(tmp_path, ["README", "README"], "read")
         case = PointerRun()
         case.setUp()
         try:
             case.runTest()
         finally:
             case.doCleanups()
+        archive_output(tmp_path)
+
+
+def archive_output(tmp_path):
+    from types import SimpleNamespace
+
+    from agent_orchestrator.driver.archive import Archive
+
+    plan = tmp_path / "plan"
+    plan.write_text("plan")
+    spec = tmp_path / "spec"
+    spec.write_text("spec")
+    (tmp_path / "archive").mkdir()
+    calls = []
+
+    def gh(argv, **kwargs):
+        calls.append(argv)
+        return 0, "https://example.com/o/r/pull/1", ""
+
+    driver = SimpleNamespace(
+        repo=tmp_path,
+        run_dir=tmp_path,
+        plan_path=plan,
+        slug="demo",
+        args=SimpleNamespace(base="origin/main"),
+        layout=SimpleNamespace(is_folder=False, plan_place="plan"),
+        plan_model=lambda: SimpleNamespace(spec="spec"),
+        task=lambda _: {"packet": {"checkout": str(tmp_path), "worker": "demo-archive"}},
+        pr_of=lambda _: None,
+        gh=gh,
+        mark=lambda *a, **k: None,
+        log=lambda *a, **k: None,
+    )
+    archive = Archive(driver)
+    archive.archive_missing = lambda: []
+    archive._archive_mode = lambda: "promote"
+    archive._archive_branch = lambda _: "commit"
+    archive._archive_owns = lambda: ["spec"]
+    archive.build_archive("archive")
+    (call,) = calls
+    body = call[call.index("--body") + 1]
+    assert not PointerGuard(tmp_path).violations(body), body
+    assert (tmp_path / "archive" / "report.json").is_file()

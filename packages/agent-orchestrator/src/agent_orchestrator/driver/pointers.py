@@ -3,10 +3,42 @@
 from pathlib import Path
 
 
+def reference(base, value, role):
+    """Resolve a typed reference before it is handed to a reader."""
+    values = value if isinstance(value, (list, tuple)) else [value]
+    paths = [(Path(base) / item).resolve() for item in values]
+    if len(paths) != 1:
+        raise ValueError("%s: expected one reference; restore it or choose a valid path" % value)
+    if role == "pattern":
+        import glob
+
+        matches = sorted(Path(p) for p in glob.glob(str(paths[0]), recursive=True))
+        if not matches or any(not path.is_file() for path in matches):
+            raise ValueError(
+                "%s: expected matching files; restore them or choose another pattern" % value
+            )
+        return ", ".join(str(path) for path in matches)
+    invalid = any(c in str(value) for c in "*?[]")
+    path = paths[0]
+    if role == "read":
+        invalid |= not path.is_file()
+    elif role == "write":
+        invalid |= path.is_dir()
+    elif role == "collection":
+        invalid |= path.exists() and not path.is_dir()
+    else:
+        raise ValueError("unknown reference role: %s" % role)
+    if invalid:
+        raise ValueError(
+            "%s: expected one %s file; restore it or choose a valid path" % (value, role)
+        )
+    if role == "collection":
+        return "%d files in %s" % (sum(1 for p in path.rglob("*") if p.is_file()), path)
+    return str(path)
+
+
 def collection(path):
-    root = Path(path)
-    count = sum(1 for entry in root.rglob("*") if entry.is_file())
-    return "%d files in %s" % (count, root)
+    return reference(Path.cwd(), path, "collection")
 
 
 def owned_collections(checkout, paths):
@@ -15,9 +47,24 @@ def owned_collections(checkout, paths):
     for name in paths:
         path = Path(checkout) / name
         if path.is_dir() or str(name).endswith("/"):
-            count = sum(1 for entry in path.rglob("*") if entry.is_file())
-            result.append("%d files in %s" % (count, name.rstrip("/")))
+            if path.is_dir():
+                result.append(reference(checkout, name, "collection"))
+            else:
+                result.append("0 files in %s" % path.resolve())
     return ", ".join(result) or "none"
+
+
+def owned_scope(checkout, paths):
+    result = []
+    for name in paths:
+        path = Path(checkout) / name
+        if path.is_dir():
+            result.append(reference(checkout, name, "collection"))
+        elif str(name).endswith("/"):
+            result.append("0 files in %s" % path.resolve())
+        else:
+            result.append(reference(checkout, name, "write"))
+    return ", ".join(result)
 
 
 def tdd_instruction():
@@ -28,11 +75,7 @@ def tdd_instruction():
         return "Read the TDD rules in the contract first."
     rules = Path(skill).with_name("rules.md")
     for path in (Path(skill), rules):
-        if not path.is_file():
-            raise ValueError(
-                "%s: expected a TDD instruction file; restore it or choose a valid skill path"
-                % path
-            )
+        reference(Path.cwd(), path, "read")
     return "Read the `tdd` skill first: %s; read its rules at %s." % (skill, rules)
 
 
@@ -55,7 +98,7 @@ def task_text(self, _plan, ticket, packet, scenarios, task_dir):
             % (packet["checkout"], packet["worker"], self.args.base),
             "Checkout contents: %s" % collection(packet["checkout"]),
             "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
-            "Owns (edit nothing else): %s." % ", ".join(packet["owns"]),
+            "Owns (edit nothing else): %s." % owned_scope(packet["checkout"], packet["owns"]),
             "Shared databases are read-only; schema changes go through migrations in your own branch.",
             "",
             "Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists.",

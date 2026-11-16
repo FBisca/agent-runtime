@@ -146,7 +146,7 @@ from .report import (
 
 # The reviewer's packet has one home: `driver/review.py` — the brief a review is read from and the trail
 # of attempts it is given, both read from the record rather than from the order a dictionary carries.
-from .pointers import collection, owned_collections, task_text
+from .pointers import collection, owned_collections, owned_scope, task_text
 from .review import attempt_trail, review_brief
 
 # The processes live in their own module and the package publishes every one of them, so a caller, a
@@ -2456,7 +2456,7 @@ class Driver(SpecSections):
                     % (
                         packet["checkout"],
                         task["checkout_at_claim"]["branch"],
-                        ", ".join(packet["owns"]),
+                        owned_scope(packet["checkout"], packet["owns"]),
                     ),
                     "Checkout contents: %s" % collection(packet["checkout"]),
                     "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
@@ -2973,7 +2973,7 @@ class Driver(SpecSections):
                     self.run_dir / unit / "task.md",
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
+                    owned_scope(packet["checkout"], packet["owns"]),
                 ),
                 "Checkout contents: %s" % collection(packet["checkout"]),
                 "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
@@ -3042,7 +3042,7 @@ class Driver(SpecSections):
                 % (
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
+                    owned_scope(packet["checkout"], packet["owns"]),
                 ),
                 "Checkout contents: %s" % collection(packet["checkout"]),
                 "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
@@ -3072,7 +3072,7 @@ class Driver(SpecSections):
                 % (
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
+                    owned_scope(packet["checkout"], packet["owns"]),
                 ),
                 "Checkout contents: %s" % collection(packet["checkout"]),
                 "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
@@ -3142,7 +3142,7 @@ class Driver(SpecSections):
                 % (
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
+                    owned_scope(packet["checkout"], packet["owns"]),
                 ),
                 "Checkout contents: %s" % collection(packet["checkout"]),
                 "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),

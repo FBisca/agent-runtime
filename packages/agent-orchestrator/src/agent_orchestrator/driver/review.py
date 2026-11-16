@@ -12,7 +12,7 @@ lines, and because the one reading of "which report is this" has one home.
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .pointers import collection
+from .pointers import collection, reference
 from .records import newest_attempts
 
 
@@ -32,10 +32,12 @@ def _reported(driver, packet):
     path = task.get("report_path")
     if not path:
         return "- What it reported: no report recorded for this attempt yet"
-    if not Path(path).is_file():
+    try:
+        path = reference(driver.run_dir, path, "read")
+    except ValueError:
         raise ValueError(
             "%s: expected the recorded report file; restore it and retry the review" % path
-        )
+        ) from None
     head = (task.get("report") or {}).get("head")
     return (
         "- What it reported: %s, written %s, claiming head %s (its status, files, covers, checks)"
