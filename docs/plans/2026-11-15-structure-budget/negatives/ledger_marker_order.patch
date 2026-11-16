@@ -1,0 +1,13 @@
+diff --git a/packages/agent-orchestrator/src/agent_orchestrator/ledger.py b/packages/agent-orchestrator/src/agent_orchestrator/ledger.py
+index b7465e0..e70ff41 100644
+--- a/packages/agent-orchestrator/src/agent_orchestrator/ledger.py
++++ b/packages/agent-orchestrator/src/agent_orchestrator/ledger.py
+@@ -112,7 +112,7 @@ def snapshot(path):
+ 
+ 
+ def new():
+-    return {"version": VERSION, "kind": KIND, "tasks": {}}
++    return {"kind": KIND, "version": VERSION, "tasks": {}}
+ 
+ 
+ def record_approval(data, approval):
