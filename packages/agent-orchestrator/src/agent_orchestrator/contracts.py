@@ -201,9 +201,9 @@ class Check(Open):
 
 
 class TestCost(Strict):
-    """What the tests a ticket added or changed cost, measured with `--durations`.
+    """What the tests a ticket added or changed cost, as the repository's test runner timed them.
 
-    `command` is the command that measured it (it must name `--durations`); `modules` maps each
+    `command` is the command that timed them; `modules` maps each
     touched test file to its seconds, `tests` maps each covered `path::name` node to its seconds.
     Verify requires a `test_cost` only when the ticket's diff adds or changes a test, so a report
     from before the field existed is still read."""

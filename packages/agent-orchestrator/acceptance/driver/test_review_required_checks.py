@@ -47,12 +47,12 @@ class RequiredChecksAcceptance(RunFixture, unittest.TestCase):
         self.run_driver("--gate", "scripts/checks.sh")
         self.assertEqual(self.ledger()["tasks"]["t1"]["packet"]["checks"], ["scripts/checks.sh"])
 
-    def test_S1_equivalent_launcher_forms_share_one_required_assignment(self):
+    def test_S1_whitespace_spellings_of_one_command_share_one_required_assignment(self):
         config = self.repo / ".orchestrate" / "config.yaml"
         config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text(
-            "checks:\n  fast: uv run pytest -q\n  affected: python3 -m pytest -q\n"
-            "  full:\n    run: pytest -q\n"
+            'checks:\n  fast: uv run pytest -q\n  affected: "uv run  pytest -q"\n'
+            '  full:\n    run: "uv run pytest   -q"\n'
         )
         self.set_plan(("T1",))
         self.run_driver()
@@ -69,6 +69,6 @@ class RequiredChecksAcceptance(RunFixture, unittest.TestCase):
                 "remaining": [],
                 "review_rounds": 0,
                 "usage": "unknown",
-                "checks": [{"command": "python3 -m pytest -q", "outcome": "passed"}],
+                "checks": [{"command": "uv run pytest  -q", "outcome": "passed"}],
             },
         )

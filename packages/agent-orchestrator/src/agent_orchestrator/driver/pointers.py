@@ -84,7 +84,7 @@ def tdd_instruction():
 
 
 def task_text(self, _plan, ticket, packet, scenarios, task_dir):
-    from . import PROXY_INSTRUCTION
+    from . import CHECK_INSTRUCTIONS
 
     gate = packet["checks"] or ["the repository's full CI gate"]
     return "\n".join(
@@ -111,7 +111,7 @@ def task_text(self, _plan, ticket, packet, scenarios, task_dir):
             *scenarios,
             "",
             "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
-            PROXY_INSTRUCTION,
+            CHECK_INSTRUCTIONS,
             *(
                 [
                     "`%s` is the whole suite: do not run it; verify and CI run it."

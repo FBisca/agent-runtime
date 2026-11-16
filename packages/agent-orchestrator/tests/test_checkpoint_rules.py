@@ -51,80 +51,42 @@ class CheckpointRulesTests(unittest.TestCase):
     def passed(self, command):
         return {"command": command, "outcome": "passed"}
 
-    def test_S1_bash_and_dot_slash_prefixes_match_the_required_check(self):
+    def test_S1_the_required_spelling_matches_whitespace_apart(self):
         """orchestrator-engine/R22"""
-        for command in (
-            "bash scripts/checks.sh",
-            "./scripts/checks.sh",
-            "sh ./scripts/checks.sh",
-        ):
+        for command in ("scripts/checks.sh", "  scripts/checks.sh ", "scripts/checks.sh\t"):
             with self.subTest(command=command):
                 done = app.checkpoint(self.data, "validation", self.report([self.passed(command)]))
                 self.assertEqual(done["status"], "COMPLETE")
                 self.data["tasks"]["validation"]["status"] = "ACTIVE"
 
-    def test_S1a_uv_run_python_m_prefix_matches_pytest(self):
+    def test_S1a_a_launcher_around_the_required_check_is_another_command(self):
         """orchestrator-engine/R23"""
-        self.packet["checks"] = ["pytest"]
-        done = app.checkpoint(
-            self.data, "validation", self.report([self.passed("uv run python -m pytest")])
-        )
-        self.assertEqual(done["status"], "COMPLETE")
-
-    def test_S1_the_rtk_proxy_launcher_is_stripped_before_the_check_is_compared(self):
-        """orchestrator-engine/R141"""
-        self.packet["checks"] = ["uv run pytest -q"]
-        done = app.checkpoint(
-            self.data,
-            "validation",
-            self.report([self.passed("rtk proxy uv run pytest -q")]),
-        )
-        self.assertEqual(done["status"], "COMPLETE")
-
-    def test_S1a_the_rtk_proxy_launcher_is_stripped_before_any_other_launcher(self):
-        """orchestrator-engine/R141"""
-        self.packet["checks"] = ["scripts/checks.sh"]
-        for command in (
-            "rtk proxy bash scripts/checks.sh",
-            "rtk proxy sh scripts/checks.sh",
-            "rtk proxy ./scripts/checks.sh",
+        # The driver works in any repository behind any shell: it strips no launcher it would have to know.
+        for required, reported in (
+            ("scripts/checks.sh", "bash scripts/checks.sh"),
+            ("scripts/checks.sh", "./scripts/checks.sh"),
+            ("pytest", "uv run python -m pytest"),
+            ("uv run pytest -q", "rtk proxy uv run pytest -q"),
         ):
-            with self.subTest(command=command):
-                done = app.checkpoint(self.data, "validation", self.report([self.passed(command)]))
-                self.assertEqual(done["status"], "COMPLETE")
-                self.data["tasks"]["validation"]["status"] = "ACTIVE"
+            with self.subTest(reported=reported):
+                self.packet["checks"] = [required]
+                with self.assertRaises(ValueError) as caught:
+                    app.checkpoint(self.data, "validation", self.report([self.passed(reported)]))
+                self.assertIn(required, str(caught.exception))
+                self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
-    def test_S2_a_command_behind_the_proxy_that_is_not_the_required_check_is_refused(self):
-        """orchestrator-engine/R142"""
-        self.packet["checks"] = ["uv run pytest -q"]
-        # The proxy is stripped, and what stands behind it is not the required check: nothing else is.
-        self.assertEqual(
-            app.normalise_check("rtk proxy echo uv run pytest -q"), "echo uv run pytest -q"
-        )
-        with self.assertRaises(ValueError) as caught:
-            app.checkpoint(
-                self.data,
-                "validation",
-                self.report([self.passed("rtk proxy echo uv run pytest -q")]),
-            )
-        self.assertIn("uv run pytest -q", str(caught.exception))
-        self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
+    def test_S4_the_contract_states_the_spelling_rule_and_names_no_launcher(self):
+        """orchestrator-engine/R141"""
+        self.assertIn("spelled as the task gives it", app.CONTRACT)
+        for launcher in ("rtk", "uv run", "python -m", "`bash`", "--durations"):
+            with self.subTest(launcher=launcher):
+                self.assertNotIn(launcher, app.CONTRACT)
 
-    def test_S4_the_contract_names_every_launcher_prefix_the_strip_list_holds(self):
-        """orchestrator-engine/R143"""
-        for prefix in app.CHECK_PREFIXES:
-            with self.subTest(prefix=prefix):
-                self.assertIn(" ".join(prefix), app.CONTRACT)
-        self.assertIn("rtk proxy", app.CONTRACT)
-
-    def test_S2_prefix_off_the_strip_list_or_absent_check_is_refused(self):
+    def test_S2_another_or_an_absent_check_is_refused(self):
         """orchestrator-engine/R24"""
         for checks in (
             [self.passed("echo scripts/checks.sh")],
-            [self.passed("python scripts/checks.sh")],
-            [self.passed("run scripts/checks.sh")],
-            [self.passed("-m scripts/checks.sh")],
-            [self.passed("uv scripts/checks.sh")],
+            [self.passed("scripts/checks.sh --fast")],
             [],
         ):
             with self.subTest(checks=checks):
@@ -186,4 +148,4 @@ class CheckpointRulesTests(unittest.TestCase):
         self.assertIn("not_run", app.CONTRACT)
         self.assertIn("reason", app.CONTRACT)
         self.assertIn("required", app.CONTRACT)
-        self.assertIn("bash", app.CONTRACT)
+        self.assertIn("whitespace apart", app.CONTRACT)

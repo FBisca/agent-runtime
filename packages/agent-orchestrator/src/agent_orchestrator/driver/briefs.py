@@ -13,7 +13,7 @@ from typing import Any
 
 from ..invariants import next_path
 from .pointers import collection, owned_collections, owned_scope
-from .records import PROXY_INSTRUCTION
+from .records import CHECK_INSTRUCTIONS
 from .report import describe
 
 
@@ -62,7 +62,7 @@ class Briefs:
                 "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                 "Commit and push to the same branch. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
+                CHECK_INSTRUCTIONS,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]
@@ -92,7 +92,7 @@ class Briefs:
                 "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                 "Commit and push to the same branch. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
+                CHECK_INSTRUCTIONS,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]
@@ -133,7 +133,7 @@ class Briefs:
                 ),
                 "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
+                CHECK_INSTRUCTIONS,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]
@@ -229,7 +229,7 @@ class Briefs:
                 "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                 "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
+                CHECK_INSTRUCTIONS,
                 "Report review_rounds 0: the driver counts failed rounds.",
                 "",
             ]

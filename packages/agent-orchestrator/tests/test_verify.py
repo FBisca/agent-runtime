@@ -213,7 +213,7 @@ class CoversTests(VerifyFixture):
 
 
 class TestCostTests(VerifyFixture):
-    """A ticket that changes a test names what those tests cost, measured with --durations."""
+    """A ticket that changes a test names what those tests cost, timed by whatever runner the repository uses."""
 
     def changed_test(self):
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
@@ -223,22 +223,32 @@ class TestCostTests(VerifyFixture):
         findings = self.gate(self.changed_test(), test_cost=None)
         (finding,) = [f for f in self.found(findings) if f[0] == "test_cost"]
         self.assertIn("no test_cost", finding[1])
-        self.assertIn("--durations", finding[1])
+        self.assertIn("the command that timed the touched tests", finding[1])
 
-    def test_S1_a_test_cost_without_a_durations_command_is_refused(self):
+    def test_S1_a_test_cost_without_a_command_is_refused(self):
         covers = self.changed_test()
         cost = self.measured(covers)
-        cost["command"] = "uv run pytest tests/ -q"
+        cost["command"] = " "
         findings = self.gate(covers, test_cost=cost)
         self.assertEqual(
             [f for f in self.found(findings) if f[0] == "test_cost"],
             [
                 (
                     "test_cost",
-                    "test_cost.command names no --durations: run `uv run pytest <paths> --durations=0 -q` and name it",
+                    "test_cost.command is empty: time the touched tests and name the command that did",
                 )
             ],
         )
+
+    def test_S1_any_runners_timing_command_is_accepted(self):
+        """The repository may use any runner: verify names no runner or flag of its own."""
+        covers = self.changed_test()
+        for command in ("npx vitest run --reporter=verbose tests/a.test.ts", "go test -v ./..."):
+            with self.subTest(command=command):
+                cost = self.measured(covers)
+                cost["command"] = command
+                findings = self.gate(covers, test_cost=cost)
+                self.assertEqual([f for f in self.found(findings) if f[0] == "test_cost"], [])
 
     def test_S1_a_missing_module_row_names_the_file(self):
         covers = self.changed_test()

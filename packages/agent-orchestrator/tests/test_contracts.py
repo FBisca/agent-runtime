@@ -11,6 +11,7 @@ from unittest import mock
 
 import pytest
 from agent_orchestrator import contracts, driver
+from agent_orchestrator.driver.records import SPELLING_INSTRUCTION, TEST_SCOPE_INSTRUCTION
 
 pytestmark = pytest.mark.unit
 
@@ -863,7 +864,7 @@ class TierBriefTests(unittest.TestCase):
         self.assertIn("do not run", others[0])
         self.assertNotIn("full CI gate", text)
 
-    def test_S3_the_brief_names_the_proxy_and_asks_for_the_command_the_worker_ran(self):
+    def test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled(self):
         packet, text = self.drive()
         # The required-check line is the ticket's own: it stays as it is.
         self.assertEqual(
@@ -874,15 +875,20 @@ class TierBriefTests(unittest.TestCase):
             ],
             ["Before you report COMPLETE, run: uv run ruff check; " + self.AFFECTED + "."],
         )
-        proxy = [line for line in text.splitlines() if "rtk proxy" in line]
-        self.assertTrue(proxy, text)
-        self.assertTrue(any("run" in line.lower() for line in proxy), text)
-        self.assertTrue(
-            any(
-                "report" in line.lower() and "command" in line.lower() for line in text.splitlines()
-            ),
-            text,
-        )
+        self.assertIn(SPELLING_INSTRUCTION, text.splitlines())
+        self.assertNotIn("rtk", text)
+
+    def test_every_brief_keeps_the_worker_on_targeted_tests_run_in_the_foreground(self):
+        """A worker that runs a whole test directory, or backgrounds a run and polls its log, stalls the drive."""
+        for gate in ((), ["scripts/checks.sh"]):
+            _packet, text = self.drive(gate=gate)
+            self.assertIn(TEST_SCOPE_INSTRUCTION, text.splitlines())
+        rule = TEST_SCOPE_INSTRUCTION
+        self.assertIn("run only the test files you wrote or changed", rule)
+        self.assertIn("foreground", rule)
+        # The driver briefs workers in any repository: the rule names no runner of its own.
+        for runner_word in ("pytest", "node id", "--lf", ".pytest"):
+            self.assertNotIn(runner_word, rule)
 
     def test_S3_a_named_gate_is_the_required_checks_alone_and_the_tiers_are_not_applied(self):
         packet, text = self.drive(gate=["scripts/checks.sh"])
@@ -910,17 +916,17 @@ class TierBriefTests(unittest.TestCase):
         packet, text = self.drive()
         self.assertIn("Read the `tdd` skill first", text)
         self.assertIn("TDD:", driver.CONTRACT)
-        self.assertIn("--durations", driver.CONTRACT)
         self.assertIn("test_cost", driver.CONTRACT)
+        self.assertIn("the command that timed the touched tests", driver.CONTRACT)
 
     def test_S4_the_tdd_path_is_the_environment_then_the_hosts_place(self):
         with mock.patch.dict(os.environ, {driver.TDD_SKILL_ENV: "/tmp/tdd/SKILL.md"}):
             self.assertEqual(driver.tdd_skill_path(), "/tmp/tdd/SKILL.md")
 
-    def test_S1_launcher_spellings_of_one_command_are_required_once(self):
+    def test_S1_whitespace_spellings_of_one_command_are_required_once(self):
         config = (
-            "checks:\n  fast: uv run pytest -q\n  affected: python3 -m pytest -q\n"
-            "  full:\n    run: pytest -q\n"
+            'checks:\n  fast: uv run pytest -q\n  affected: "uv run  pytest -q"\n'
+            '  full:\n    run: "uv run pytest   -q"\n'
         )
         packet, text = self.drive(config=config)
         self.assertEqual(packet["checks"], ["uv run pytest -q"])
@@ -928,7 +934,7 @@ class TierBriefTests(unittest.TestCase):
         self.assertNotIn("do not run", text)
         driver.require_completable(
             {"packet": dict(packet, unit="t1")},
-            report(checks=[{"command": "python3 -m pytest -q", "outcome": "passed"}]),
+            report(checks=[{"command": "uv run pytest  -q", "outcome": "passed"}]),
         )
 
     def test_S2_a_distinct_full_is_verify_owned_while_fast_and_affected_are_kept(self):

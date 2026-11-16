@@ -168,6 +168,12 @@ class PointerRun(GateFixture, unittest.TestCase):
         assert {"t1", "t1r1", "t1-review", "t1a1"} <= {p.parent.name for p in artifacts}
         rendered = [(str(path), path.read_text()) for path in artifacts]
         rendered.extend(self.other_outputs())
+        from agent_orchestrator.driver.records import TEST_SCOPE_INSTRUCTION
+
+        # Every brief that sends a worker back to its gate keeps it on targeted tests.
+        for name, content in rendered:
+            if name in ("rebase", "answer", "retry"):
+                assert TEST_SCOPE_INSTRUCTION in content, name
         guard = PointerGuard(self.worktree)
         for artifact, content in rendered:
             assert not guard.violations(content), (artifact, guard.violations(content))

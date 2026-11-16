@@ -224,7 +224,7 @@ def seconds(value):
 def test_cost(report, repo, base, files, added):
     """Why the report's `test_cost` does not account for the tests this ticket added or changed.
 
-    A diff that adds or changes a test pays the suite; the report names the `--durations` command, the
+    A diff that adds or changes a test pays the suite; the report names the command that timed it, the
     seconds of each touched test file and the seconds of each covered node. A ticket that changes no
     test needs no `test_cost`, and a report from before the field existed still reads."""
     mapped = {node for nodes in (report.get("covers") or {}).values() for node in nodes}
@@ -240,18 +240,17 @@ def test_cost(report, repo, base, files, added):
             {
                 "check": "test_cost",
                 "excerpt": "a test changed but the report carries no test_cost; add "
-                '{"command": "uv run pytest <paths> --durations=0 -q", "modules": {<file>: <seconds>}, '
+                '{"command": <the command that timed the touched tests>, "modules": {<file>: <seconds>}, '
                 '"tests": {<path::test>: <seconds>}}',
             }
         ]
     findings = []
     command = cost.get("command")
-    if not isinstance(command, str) or "--durations" not in command:
+    if not isinstance(command, str) or not command.strip():
         findings.append(
             {
                 "check": "test_cost",
-                "excerpt": "test_cost.command names no --durations: run `uv run pytest <paths> "
-                "--durations=0 -q` and name it",
+                "excerpt": "test_cost.command is empty: time the touched tests and name the command that did",
             }
         )
     modules = cost.get("modules")
@@ -268,8 +267,8 @@ def test_cost(report, repo, base, files, added):
                 findings.append(
                     {
                         "check": "test_cost",
-                        "excerpt": "test_cost.modules has no seconds for %s; add it, measured with "
-                        "--durations" % name,
+                        "excerpt": "test_cost.modules has no seconds for %s; time it and add it"
+                        % name,
                     }
                 )
     tests = cost.get("tests")
@@ -286,8 +285,8 @@ def test_cost(report, repo, base, files, added):
                 findings.append(
                     {
                         "check": "test_cost",
-                        "excerpt": "test_cost.tests has no seconds for %s; add it, measured with "
-                        "--durations" % node,
+                        "excerpt": "test_cost.tests has no seconds for %s; time it and add it"
+                        % node,
                     }
                 )
     return findings
