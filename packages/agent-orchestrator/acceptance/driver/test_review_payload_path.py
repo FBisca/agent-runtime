@@ -10,8 +10,7 @@ pytestmark = pytest.mark.integration
 
 
 class ReviewPayloadPathAcceptance(GateFixture, unittest.TestCase):
-    """R147, R148: the reviewer is told where to write the review, and a review it wrote under another name
-    inside the run directory is the review the gate reads."""
+    """The reviewer is told where to write the one review the gate reads."""
 
     def reviewer_wrote(self, path, text=None):
         """A wait step: the reviewer wrote its review at `path` and named that file in its report."""
@@ -31,24 +30,14 @@ class ReviewPayloadPathAcceptance(GateFixture, unittest.TestCase):
         task = spawns[0]["args"]["task"]
         self.assertIn(str(self.run_dir / "t1" / "review.json"), task)
 
-    def test_S2_a_review_written_under_another_name_is_the_review_the_gate_reads(self):
-        """orchestrator-engine/R155: review-payload-path/S2"""
+    def test_S2_a_review_written_under_another_name_is_not_read(self):
         elsewhere = self.run_dir / "t1-review" / "review.json"
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.reviewer_wrote(elsewhere),
-            ]
-        )
+        self.waits([self.worker_done(tests=True), *self.repeated(self.reviewer_wrote(elsewhere)), self.skipped()])
         self.run_driver()
-        self.assertEqual(
-            self.reviewer_resumes(), [], "the reviewer is not asked for a file it already wrote"
-        )
-        self.assertIn("reviewed_commit", self.task(), "the gate read the review the reviewer named")
-        self.assertTrue(
-            (self.run_dir / "t1" / "review.json").is_file(),
-            "the review the gate read is the one the driver's own path holds",
-        )
+        self.assertNotIn("reviewed_commit", self.task())
+        self.assertFalse((self.run_dir / "t1" / "review.json").exists())
+        self.assertTrue(self.reviewer_resumes())
+        self.assertEqual(self.request()["event"], "review")
 
     def test_control_a_review_named_outside_the_run_directory_is_not_read(self):
         """The driver reads its own run directory: a file elsewhere is nobody's."""

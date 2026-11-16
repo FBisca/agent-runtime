@@ -229,56 +229,6 @@ def payload_waits(paths, grace=None, clock=time.monotonic, sleep=time.sleep):
     return True
 
 
-# The name a report gives a file: anything that ends in `.json`, the way a reviewer writes the path of its review.
-ANNOUNCED_FILE_NAME = re.compile(r"[^\s\"'`]+\.json\b")
-
-
-def adopt_review(review):
-    """The review file the gate reads: the path the driver named, or the one the reviewer named.
-
-    A review the reviewer wrote under another name inside the run directory has been delivered all the same: the
-    file is copied into the driver's path, so the open set, the deferred findings and a re-review's delta all read
-    one file, and the gate does not spend a turn asking for it again. The driver's own path wins whenever it holds
-    a file, and a named file that breaks the contract is left where it is: the gate refuses it as it refuses any
-    other unreadable review.
-    """
-    canonical = Path(review["path"])
-    announced = review.get("announced")
-    if not announced or canonical.exists():
-        return canonical
-    source = Path(announced)
-    if not source.is_file():
-        return canonical
-    try:
-        contracts.load(source, contracts.validate_review)
-    except (contracts.ContractError, ValueError, OSError):
-        return canonical
-    canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    write_atomic(canonical, source.read_text(encoding="utf-8"))
-    return canonical
-
-
-def announced_path(text, root):
-    """The file a report names, when it names one inside `root`.
-
-    The reviewer's brief orders a report of `<n> blocking - <path>`, and that line is the first place to look; a
-    report that names the file in another shape still counts when the name is a `.json` file inside `root`. A name
-    outside `root` is nobody's: the driver reads its own run directory and nothing else.
-    """
-    inside = Path(root).resolve()
-    for name in reversed(ANNOUNCED_FILE_NAME.findall(text or "")):
-        candidate = Path(name.strip(".,;:)]}\"'"))
-        if not candidate.is_absolute():
-            candidate = inside / candidate
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            continue
-        if inside == resolved or inside in resolved.parents:
-            return resolved
-    return None
-
-
 def metrics(samples):
     """Normalize per-request observations. Never price tokens using guessed rates."""
     require(isinstance(samples, list), "metrics input must be a list of per-request records")
@@ -1400,14 +1350,12 @@ class Driver(SpecSections):
                         break
                     if gate == "reviewing" and task["review"].get("assignment_id") == assignment_id:
                         task["gate"] = "reviewed"
-                        self.note_announced(task, message.get("text") or "")
                         break
                     if not gate and task.get("assignment_id") == assignment_id:
                         task["gate"] = "reported"
                         break
                     if gate == "requested" and self.escalated_reviewer(task, assignment_id):
                         task["gate"] = "reviewed"
-                        self.note_announced(task, message.get("text") or "")
                         closing = task["packet"]["task_id"]
                         break
                     if gate == "requested" and task.get("assignment_id") == assignment_id:
@@ -1857,15 +1805,6 @@ class Driver(SpecSections):
         except (contracts.ContractError, ValueError) as error:
             self.warn_sender(task_id, where, found, str(error))
             return None
-
-    def note_announced(self, task, text):
-        """The file a report names, kept with the task's review: the gate reads it when the driver's own path holds
-        nothing. A reviewer that wrote its review under another name inside the run directory has still delivered
-        it, and the gate does not spend a turn asking for it again.
-        """
-        path = announced_path(text, self.run_dir)
-        if path:
-            task["review"] = dict(task["review"], announced=str(path))
 
     def warn_sender(self, task_id, where, path, reason, accept=False):
         """Tell the agent that sent the report what the driver still needs from it. False when the Lead must ask.
