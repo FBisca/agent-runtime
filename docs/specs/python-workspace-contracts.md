@@ -133,12 +133,12 @@ the suite before a reviewer notices it in a diff.
 
 | Requirement | Scenario | Test nodes |
 |---|---|---|
-| R226 | S1 | `tests/test_structure_budget.py::BaselineTests::test_S1_a_tree_at_its_baseline_passes_and_the_line_names_the_ceilings_it_read` |
-| R227 | S2 | `tests/test_structure_budget.py::BaseDecisionTests::test_S2_a_file_that_grows_past_what_it_measured_at_the_base_is_named_alone`<br>`tests/test_structure_budget.py::BaselineTests::test_S2_a_file_that_grows_past_its_row_is_named_alone`<br>`acceptance/structure/test_structure_budget_outcome.py` |
-| R228 | S3 | `tests/test_structure_budget.py::BaseDecisionTests::test_S3_a_file_with_no_measurement_at_the_base_is_named_with_the_ceiling`<br>`tests/test_structure_budget.py::BaselineTests::test_S3_a_file_with_no_row_over_a_ceiling_is_named_with_the_ceiling` |
-| R229 | S4 | `tests/test_structure_budget.py::BaselineTests::test_S4_write_records_today_and_the_recorded_number_holds` |
-| R230 | S5 | `tests/test_structure_budget.py::BaselineTests::test_S5_the_baseline_names_the_ceilings_and_rows_only_the_oversized_files` |
-| R231 | S6 | `tests/test_structure_budget.py::PaidTests::test_S6_a_paid_metric_fails_under_its_ceiling_and_a_metric_not_paid_is_left_alone`<br>`tests/test_structure_budget.py::PaidTests::test_S6_metric_may_be_repeated_and_every_named_metric_is_paid`<br>`tests/test_structure_budget.py::PaidTests::test_S6_a_paid_path_that_measures_no_file_is_refused`<br>`tests/test_structure_budget.py::PaidTests::test_S6_a_file_over_a_ceiling_with_no_row_is_an_offender_on_a_paid_run_too` |
+| R226 | S1 | `tests/test_structure_budget.py::BaseDecisionTests::test_S1_a_tree_at_its_base_passes_and_the_line_names_the_ceilings_it_read` |
+| R227 | S2 | `tests/test_structure_budget.py::BaseDecisionTests::test_S2_a_file_that_grows_past_what_it_measured_at_the_base_is_named_alone`<br>`acceptance/structure/test_structure_budget_outcome.py` |
+| R228 | S3 | `tests/test_structure_budget.py::BaseDecisionTests::test_S3_a_file_with_no_measurement_at_the_base_is_named_with_the_ceiling` |
+| R229 | S4 | `tests/test_structure_budget.py::BaseDecisionTests::test_S4_write_stamps_today_and_stores_no_per_file_row` |
+| R230 | S5 | `tests/test_structure_budget.py::BaseDecisionTests::test_S5_the_committed_baseline_names_the_ceilings_and_no_file` |
+| R231 | S6 | `tests/test_structure_budget.py::PaidTests::test_S6_a_paid_metric_may_not_be_grandfathered_and_a_metric_not_paid_is_left_alone`<br>`tests/test_structure_budget.py::PaidTests::test_S6_a_paid_metric_may_be_repeated_and_every_named_metric_is_paid`<br>`tests/test_structure_budget.py::PaidTests::test_S6_a_paid_path_that_measures_no_file_is_refused` |
 | R232 | S7 | `packages/agent-orchestrator/tests/test_engine_home.py::EngineHomeTests::test_S3_ci_runs_the_member_suite_and_the_tracked_budgets` |
 | R233 | S8 | `tests/test_structure_budget.py::MeasureTests::test_S8_a_test_module_and_its_test_class_carry_the_same_ceilings_and_rows` |
 | R234 | S9 | `tests/test_structure_budget.py::AffectedMapTests::test_S9_the_map_text_routes_the_script_to_its_own_test_module`<br>`tests/test_structure_budget.py::AffectedMapTests::test_S9_a_change_to_the_script_selects_its_own_test_module` |
