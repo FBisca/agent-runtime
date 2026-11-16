@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 import pytest
-from fixtures import assignment, load_script, wait_result
+from fixtures import assignment, envelope, load_script, wait_result
 from test_gates import GateFixture
 
 # Every test here runs the driver: these are integration tests.
@@ -62,6 +62,74 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertEqual(
             (task.get("report") or {}).get("task_id"), "t1", "the driver did not read the report"
         )
+
+    def test_S1_idle_partial_after_progress_requests_a_decision(self):
+        """idle-partial-handoff/S1: the file, not progress text, supplies the blocker."""
+        worker = assignment("demo-t1", "working", "idle")
+        report = self.report(
+            "t1",
+            contract=3,
+            covers={"S1": ["tests/test_x.py::test_x"]},
+            status="PARTIAL",
+            acceptance_met=False,
+            summary="Git index is read-only",
+            remaining=["Commit and push"],
+            context={"status": "unknown"},
+            test_cost=None,
+            pr=None,
+        )
+        step = wait_result(
+            [worker],
+            [envelope(worker, "progress", "still working")],
+            write=[[str(self.run_dir / "t1" / "report.json"), report]],
+        )
+        self.waits([step, self.skipped()])
+        self.run_driver()
+        request = self.request()
+        self.assertEqual(request["event"], "blocked")
+        self.assertIn("Git index is read-only", request["reason"])
+        self.assertIn("Commit and push", request["reason"])
+        self.assertEqual(len(self.wake_lines("decision")), 1)
+
+    def test_S2_progress_text_and_wrong_task_report_do_not_open_a_blocker(self):
+        """idle-partial-handoff/S2: neither progress text nor another task's file is a handoff."""
+        worker = assignment("demo-t1", "working", "idle")
+        report = self.report(
+            "other",
+            status="PARTIAL",
+            acceptance_met=False,
+            summary="unrelated blocker",
+            remaining=["unrelated work"],
+        )
+        step = wait_result(
+            [worker],
+            [envelope(worker, "progress", "BLOCKED: arbitrary text")],
+            write=[[str(self.run_dir / "t1" / "report.json"), report]],
+        )
+        self.waits([step] + [self.turn_ended(report=False)] * 3 + [self.skipped()])
+        self.run_driver("--idle-minutes", "0")
+        request = self.request()
+        self.assertEqual(request["event"], "idle")
+        self.assertNotIn("arbitrary text", request["reason"])
+        self.assertNotIn("unrelated blocker", request["reason"])
+
+    def test_S1_idle_blocked_report_requests_a_decision(self):
+        """idle-partial-handoff/S1: BLOCKED files take the same recovery path."""
+        report = self.report(
+            "t1",
+            status="BLOCKED",
+            acceptance_met=False,
+            summary="No access",
+            remaining=["Grant access"],
+        )
+        step = wait_result(
+            [assignment("demo-t1", "working", "done")],
+            write=[[str(self.run_dir / "t1" / "report.json"), report]],
+        )
+        self.waits([step, self.skipped()])
+        self.run_driver()
+        self.assertEqual(self.request()["event"], "blocked")
+        self.assertIn("Grant access", self.request()["reason"])
 
     def test_S5_a_worker_whose_turn_ended_without_a_report_stays_pending_until_its_complete(self):
         """orchestrator-engine/R62: orchestrator-silent-idle/S5 — idle and done are a live worker, not an exit."""

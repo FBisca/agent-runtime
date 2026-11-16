@@ -574,3 +574,13 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | R166 | S4 | `packages/agent-orchestrator/tests/test_drain.py::RecoveredSpan::test_S4_a_plan_that_lost_its_approval_span_is_recovered_and_the_drive_keeps_running`<br>`packages/agent-orchestrator/tests/test_drain.py::RecoveredSpan::test_S4_a_restarted_drive_recovers_the_approval_its_ledger_holds`<br>`packages/agent-orchestrator/acceptance/park/test_parked_release.py` |
 | R167 | S5 | `packages/agent-orchestrator/tests/test_plan_amend.py::LostSpanTests::test_S5_an_amendment_succeeds_on_a_plan_whose_approval_span_was_lost`<br>`packages/agent-orchestrator/tests/test_plan_amend.py::LostSpanTests::test_S5_the_amendment_publishes_the_spans_back_when_the_span_is_all_that_was_lost`<br>`packages/agent-orchestrator/tests/test_plan_amend.py::LostSpanTests::test_S5_control_a_lost_span_no_ledger_holds_is_refused_naming_plan_approve` |
 | R168 | S6 | `packages/agent-orchestrator/tests/test_decide_contract.py::OnlyParked::test_S6_a_run_that_ends_with_parked_units_says_why_it_ended` |
+
+## Idle partial handoff
+
+- **R171** WHEN a worker's turn ends and its valid report belongs to the current task attempt, THEN a PARTIAL or BLOCKED report opens a blocked request for the Lead containing its summary and remaining work; COMPLETE recovery keeps its existing acceptance checks. Progress message text alone is never a handoff. The same rule applies when reconciling an idle or lost worker (from idle-partial-handoff/S1–S3).
+
+| Requirement | Scenario | Coverage |
+|---|---|---|
+| R171 | S1 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_partial_after_progress_requests_a_decision`<br>`packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_blocked_report_requests_a_decision` |
+| R171 | S2 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S2_progress_text_and_wrong_task_report_do_not_open_a_blocker` |
+| R171 | S3 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today` |
