@@ -25,7 +25,7 @@ from .report import cell
 from .runtime import head_of
 
 
-def engine():
+def _engine():
     """The package this module is split from, asked when a step runs.
 
     A step calls helpers the engine publishes - `run`, `worker_name`,
@@ -180,7 +180,7 @@ class Gates:
         """Wait for the Lead: a resolved request moves the unit on to `decided`. False while it is still open."""
         task = self.task(task_id)
         path = Path(task["request"]["path"])
-        request = engine().readable_request(path)
+        request = _engine().readable_request(path)
         if request is None:
             self.write_request(
                 task_id
@@ -253,7 +253,7 @@ class Gates:
     def step_converged(self, task_id):
         task = self.task(task_id)
         packet = task["packet"]
-        unit, name = packet["unit"], engine().worker_name(self.slug, packet["unit"][1:], "-review")
+        unit, name = packet["unit"], _engine().worker_name(self.slug, packet["unit"][1:], "-review")
         review = self._review_slot(task_id, task.get("review"), unit, name)
         review_dir = Path(review["dir"])
         review_dir.mkdir(exist_ok=True, mode=0o700)
@@ -597,8 +597,8 @@ class Gates:
         reason = self._cleanup_unpushed(path, branch)
         if reason:
             return self.keep(task_id, reason)
-        engine().run(["git", "-C", str(self.repo), "worktree", "remove", str(path)], timeout=60)
-        engine().run(["git", "-C", str(self.repo), "worktree", "prune"], timeout=60)
+        _engine().run(["git", "-C", str(self.repo), "worktree", "remove", str(path)], timeout=60)
+        _engine().run(["git", "-C", str(self.repo), "worktree", "prune"], timeout=60)
         self.mark(task_id, gate="done", cleanup="panes stopped, worktree removed")
         narrate.say("done", "cleanup", "panes stopped, worktree removed", task=task_id)
 
@@ -718,7 +718,7 @@ class Gates:
             decision = contracts.load(task["decision"]["path"], contracts.validate_decision)
         except contracts.ContractError as error:
             return self.request(
-                task_id, "decision", engine().unreadable_decision(task["decision"]["path"], error)
+                task_id, "decision", _engine().unreadable_decision(task["decision"]["path"], error)
             )
         action, reason, unit = decision["action"], decision["reason"], task["packet"]["unit"]
         narrate.say("info", "decide", "Lead decided %s: %s" % (action, reason), task=task_id)

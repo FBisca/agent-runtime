@@ -29,7 +29,7 @@ from .report import item_text
 from .runtime import head_of
 
 
-def engine():
+def _engine():
     """The package this module is split from, asked when GitHub is spoken to.
 
     `gh` goes through the one seam the suite answers (`driver.gh_process`) and a merge enters the plan's
@@ -105,7 +105,7 @@ class Pull:
     def gh(self, argv, timeout=60, cwd=None):
         """Run `gh` and return (exit code, stdout, stderr). A `gh` that cannot run is an error, not a guess."""
         try:
-            result = engine().gh_process(argv, timeout=timeout, **({"cwd": cwd} if cwd else {}))
+            result = _engine().gh_process(argv, timeout=timeout, **({"cwd": cwd} if cwd else {}))
         except subprocess.TimeoutExpired:
             return 1, "", "gh timed out"
         except OSError as error:
@@ -454,7 +454,7 @@ class Pull:
         with self.book() as data:
             data["tasks"][task_id].update(fields, gate="cleanup", updated_at=timeutil.iso())
             if data["tasks"][task_id]["packet"]["unit"] == ARCHIVE:
-                engine().enter_plan_state(data, "ARCHIVED")
+                _engine().enter_plan_state(data, "ARCHIVED")
 
     def complete_merged(self, task_id, report):
         """The ledger's COMPLETE for a merged unit. A merge is final, so a report that fails the COMPLETE rules does
@@ -597,3 +597,112 @@ class Pull:
     def keep(self, task_id, reason):
         self.mark(task_id, gate="done", cleanup="kept: " + reason)
         narrate.say("warn", "cleanup", "worktree kept: %s" % reason, task=task_id)
+
+
+class PullSurface:
+    """The published surface of the pull request lane.
+
+    Each name answers with the one `Pull` the Driver holds, so a gate step, the suite and the Lead's
+    commands keep asking the Driver while the lane keeps one home.
+    """
+
+    def __getattr__(self, name) -> Any:
+        """The engine behind this mixin: the record, the plan and the processes are the
+        Driver's own, and only what this module owns lives here."""
+        raise AttributeError(name)
+
+    def gh(self, argv, timeout=60, cwd=None):
+        """Run `gh` and return (exit code, stdout, stderr)."""
+        return self.pull.gh(argv, timeout, cwd)
+
+    def closed_prs(self, unit):
+        """The pull requests this unit's gate has already seen closed."""
+        return self.pull.closed_prs(unit)
+
+    def pr_url(self, task_id):
+        """The unit's pull request and its `owner/repo#number`, from the newest report that names one."""
+        return self.pull.pr_url(task_id)
+
+    def pr_of(self, task_id):
+        """The unit's pull request URL, or None when no report names one."""
+        return self.pull.pr_of(task_id)
+
+    def pr_view(self, url) -> dict[str, Any]:
+        """The pull request as `gh` sees it, or an `error` the next round polls again."""
+        return self.pull.pr_view(url)
+
+    def pr_checks(self, url):
+        """The pull request's checks as (state, rows)."""
+        return self.pull.pr_checks(url)
+
+    def units(self):
+        """Every unit of the run with the task that is still open for it."""
+        return self.pull.units()
+
+    def unit_flag(self, unit, key):
+        """True when any attempt of the unit carries the flag."""
+        return self.pull.unit_flag(unit, key)
+
+    def poll(self):
+        """One non-blocking look at every unit's pull request."""
+        return self.pull.poll()
+
+    def ensure_draft(self, task_id, url, state):
+        """Put a pull request a worker opened ready back to draft while the review runs."""
+        return self.pull.ensure_draft(task_id, url, state)
+
+    def undraft(self, task_id, url):
+        """Put the pull request back to draft before its code changes again."""
+        return self.pull.undraft(task_id, url)
+
+    def unready(self, unit):
+        """Forget that the unit's pull request was readied."""
+        return self.pull.unready(unit)
+
+    def poll_checks(self, task_id, url, head=None):
+        """The pull request's checks once per round, and the head they were read on."""
+        return self.pull.poll_checks(task_id, url, head)
+
+    def merge_moved(self, task_id, url, view):
+        """What an open pull request's merge state asks for: a conflict round, an update, or another poll."""
+        return self.pull.merge_moved(task_id, url, view)
+
+    def update_branch(self, task_id, url, view):
+        """The pull request is behind its base: `gh pr update-branch` brings it up to date."""
+        return self.pull.update_branch(task_id, url, view)
+
+    def conflict(self, task_id, url, view, evidence=None):
+        """A pull request that conflicts with its base: a fix round of its own, rebased and re-reviewed."""
+        return self.pull.conflict(task_id, url, view, evidence)
+
+    def ci_items(self, task_id, url, rows):
+        """The failing CI checks as evidence items, each with the tail of its own job's log."""
+        return self.pull.ci_items(task_id, url, rows)
+
+    def put_status(self, task_id, status):
+        """The ticket's Status cell; the archive unit has no row."""
+        return self.pull.put_status(task_id, status)
+
+    def ticket_name(self, task_id):
+        """The ticket a task belongs to, as its Status cell names it."""
+        return self.pull.ticket_name(task_id)
+
+    def mark_merged(self, task_id, **fields):
+        """The unit's cleanup gate, and for the archive unit the plan's ARCHIVED, in one transaction."""
+        return self.pull.mark_merged(task_id, **fields)
+
+    def complete_merged(self, task_id, report):
+        """The ledger's COMPLETE for a merged unit: a merge is final."""
+        return self.pull.complete_merged(task_id, report)
+
+    def merged_early(self, task_id, state):
+        """The pull request was merged while the unit was still working: a merge is final."""
+        return self.pull.merged_early(task_id, state)
+
+    def merged_report(self, task_id, url):
+        """The report a unit that was merged before it finished completes with."""
+        return self.pull.merged_report(task_id, url)
+
+    def keep(self, task_id, reason):
+        """The worktree stays, for the reason the reader is shown."""
+        return self.pull.keep(task_id, reason)

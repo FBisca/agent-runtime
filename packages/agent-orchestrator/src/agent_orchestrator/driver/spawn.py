@@ -14,6 +14,7 @@ and because everything that reaches the runtime to start or resume a worker is o
 import subprocess
 import sys
 import uuid
+from typing import Any
 
 from .. import narrate, timeutil
 from ..runtime_client import OPERATION_ADOPTED, operation_state, refuses_operation_ids
@@ -21,7 +22,7 @@ from .records import context_verdict
 from .runtime import runtime_call
 
 
-def engine():
+def _engine():
     """The package this module is split from, asked when a send runs.
 
     A send calls helpers the engine publishes - `assignment_of`, and the record's `claim`, `bind` and
@@ -124,7 +125,7 @@ class Spawning:
                     % (error, name)
                 ) from None
             raise
-        assignment_id = engine().assignment_of(result)
+        assignment_id = _engine().assignment_of(result)
         self.settle_intent(operation_id, "bound", assignment_id=assignment_id)
         return result, assignment_id
 
@@ -427,7 +428,7 @@ class Spawning:
         if not self.pane_alive(name):
             return False
         answer = runtime_call(self.lead, "resume", {"name": name, "task": text})
-        assignment_id = engine().assignment_of(answer)
+        assignment_id = _engine().assignment_of(answer)
         with self.book() as data:
             data["tasks"][task_id]["assignment_id"] = assignment_id
             if name in (data.get("agents") or {}):
@@ -447,8 +448,8 @@ class Spawning:
         with self.book() as data:
             before = data["tasks"][task_id]["status"]
             if before != "RELEASED":
-                engine().release(data, task_id, "superseded by " + new_id)
-            reserved = engine().claim(data, successor)["action"] == "reserved"
+                _engine().release(data, task_id, "superseded by " + new_id)
+            reserved = _engine().claim(data, successor)["action"] == "reserved"
             bound = data["tasks"][new_id]["runtime_id"]
         if not bound:
             try:
@@ -467,7 +468,7 @@ class Spawning:
                         del data["tasks"][new_id]
                 raise
             with self.book() as data:
-                engine().bind(data, new_id, str(runtime_id))
+                _engine().bind(data, new_id, str(runtime_id))
                 data["tasks"][new_id]["assignment_id"] = assignment_id
                 self.keep_address(data, new_id, successor["worker"])
 
@@ -561,3 +562,96 @@ class Spawning:
             task=successor["task_id"],
         )
         return address, assignment_id
+
+
+class SpawnSurface:
+    """The published surface of the workers' door to the runtime.
+
+    Each name answers with the one `Spawning` the Driver holds, so a gate step, the suite and the Lead's
+    commands keep asking the Driver while the send surface keeps one home.
+    """
+
+    def __getattr__(self, name) -> Any:
+        """The engine behind this mixin: the record, the plan and the processes are the
+        Driver's own, and only what this module owns lives here."""
+        raise AttributeError(name)
+
+    def resume_worker(self, task_id, packet, text):
+        """Resume the attempt's own worker with `text`; False when there is nobody to tell."""
+        return self.spawning.resume_worker(task_id, packet, text)
+
+    def agent_live(self, name):
+        """True when the runtime knows a live agent of this name."""
+        return self.spawning.agent_live(name)
+
+    def open_intent(self, name):
+        """True when the ledger holds an intent for `name` that was never bound."""
+        return self.spawning.open_intent(name)
+
+    def spawn_args(self, spawn, role):
+        """The spawn arguments, plus the run's role and profile when the Lead named them."""
+        return self.spawning.spawn_args(spawn, role)
+
+    def book_intent(self, operation, name, role, unit, attempt):
+        """Book the intent for one spawn or resume and return its operation id."""
+        return self.spawning.book_intent(operation, name, role, unit, attempt)
+
+    def settle_intent(self, operation_id, state, assignment_id=None, why=None):
+        """Close an intent as bound, adopted, absent, refused or released."""
+        return self.spawning.settle_intent(operation_id, state, assignment_id, why)
+
+    def release_intents(self, operations, why):
+        """The Lead decided, or the unit was given up: these intents no longer stand for a send."""
+        return self.spawning.release_intents(operations, why)
+
+    def send(self, operation, name, role, unit, attempt, arguments):
+        """One spawn or resume under its own intent: (the runtime's answer, its assignment id)."""
+        return self.spawning.send(operation, name, role, unit, attempt, arguments)
+
+    def reconcile_intent(self, name):
+        """What became of an intent left open for `name`: (assignment id, intent), or None."""
+        return self.spawning.reconcile_intent(name)
+
+    def adopt(self, name, role, unit, assignment_id, intent):
+        """Bind an assignment a restart found under an intent, as the send that made it would have."""
+        return self.spawning.adopt(name, role, unit, assignment_id, intent)
+
+    def hold_intent(self, task_id, error):
+        """An intent the driver cannot settle: the unit's Lead is asked."""
+        return self.spawning.hold_intent(task_id, error)
+
+    def ensure_agent(self, name, role, unit, spawn, fresh=False, attempt=None):
+        """Put one agent under `name` and return (address, assignment_id)."""
+        return self.spawning.ensure_agent(name, role, unit, spawn, fresh, attempt)
+
+    def swap_due(self, name, role, unit, assignment_id):
+        """True when the agent is below the context reserve (D5b)."""
+        return self.spawning.swap_due(name, role, unit, assignment_id)
+
+    def handoff(self, name, unit):
+        """What a fresh agent that replaces `name` reads in place of the transcript."""
+        return self.spawning.handoff(name, unit)
+
+    def stop_agent(self, name, unit, why):
+        """End the agent of that name, for the reason the log keeps."""
+        return self.spawning.stop_agent(name, unit, why)
+
+    def stop_unit_agents(self, unit, why):
+        """Stop the unit's implementer and reviewer panes (the ones still alive)."""
+        return self.spawning.stop_unit_agents(unit, why)
+
+    def pane_alive(self, name):
+        """True when the runtime lists a live pane for that name."""
+        return self.spawning.pane_alive(name)
+
+    def hand_round(self, task, successor, task_md, text, fresh=False, answer=None):
+        """Close the unit's open task, claim its successor and put a worker on it."""
+        return self.spawning.hand_round(task, successor, task_md, text, fresh, answer)
+
+    def hand_over(self, task, successor, task_md, text, fresh=False, answer=None):
+        """Put a worker on the successor attempt: the live pane resumed, a gone pane replaced."""
+        return self.spawning.hand_over(task, successor, task_md, text, fresh, answer)
+
+    unsettled_text = staticmethod(Spawning.unsettled_text)
+
+    keep_address = staticmethod(Spawning.keep_address)
