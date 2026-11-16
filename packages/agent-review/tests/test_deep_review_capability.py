@@ -8,21 +8,24 @@ answer before it screens anything, so a harness that cannot hold its reviewer is
 unrestricted (S3).
 """
 
+import sys
+
 import pytest
+from agent_review import readonly
 from agent_review.cli import main
-from agent_runtime import profiles, read_only
+from agent_runtime import profiles
 
 pytestmark = pytest.mark.unit
 
 
 def test_S3_every_family_the_runtime_knows_answers_with_controls_or_a_named_refusal():
     """The capability answer is total: the module iterates the families the runtime knows, never a list here."""
-    enforcing = read_only.enforcing()
+    enforcing = readonly.enforcing()
     assert enforcing, "no family could be held to read/search-only, so no deep review could run"
     for family in profiles.BUILTINS:
         try:
-            controls = read_only.controls(family)
-        except read_only.ReadOnlyError as refusal:
+            controls = readonly.controls(family)
+        except readonly.ReadOnlyError as refusal:
             reason = str(refusal)
             assert family in reason, "the refusal names the harness it refused"
             assert "read" in reason, "the refusal names the capability it cannot enforce"
@@ -35,8 +38,8 @@ def test_S3_every_family_the_runtime_knows_answers_with_controls_or_a_named_refu
 
 
 def test_S3_an_unknown_harness_is_refused_naming_the_capability_and_a_family_that_enforces_it():
-    with pytest.raises(read_only.ReadOnlyError) as refused:
-        read_only.controls("zsh")
+    with pytest.raises(readonly.ReadOnlyError) as refused:
+        readonly.controls("zsh")
     reason = str(refused.value)
     assert "zsh" in reason, "the refusal names the harness it refused"
     assert "read" in reason, "the refusal names the capability it cannot enforce"
@@ -66,6 +69,33 @@ def test_S3_a_harness_that_cannot_enforce_read_only_is_refused_before_anything_r
     assert "zsh" in stderr
     assert "read" in stderr
     assert "pi" in stderr, "the way out is another harness, named"
+    assert not (output / "report.json").is_file(), (
+        "a refusal writes no report to be read as this run's"
+    )
+
+
+def test_S3_a_review_the_runtime_cannot_answer_for_is_refused_rather_than_crashing(
+    tmp_path, capsys, monkeypatch
+):
+    """The answer has one home in the runtime: an environment without it holds no family, so nothing spawns."""
+    monkeypatch.setitem(sys.modules, "agent_runtime.read_only", None)
+    output = tmp_path / "review"
+    status = main(
+        [
+            "code",
+            "--base",
+            "no-such-revision",
+            "--head",
+            "no-such-revision",
+            "--output",
+            str(output),
+            "--deep-review",
+            "pi",
+        ]
+    )
+    assert status == 2, "a review nothing can hold to reading is a refusal, not a crash"
+    stderr = capsys.readouterr().err
+    assert "agent-runtime" in stderr, "the refusal names the install that would answer it"
     assert not (output / "report.json").is_file(), (
         "a refusal writes no report to be read as this run's"
     )

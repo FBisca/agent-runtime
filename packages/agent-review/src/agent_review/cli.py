@@ -9,14 +9,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from agent_runtime import read_only
-
 from agent_review import (
     calibration,
     chunks,
     deep_review,
     pricing,
     questions,
+    readonly,
     revisions,
     safeguards,
 )
@@ -441,8 +440,8 @@ def _reviewer(args: argparse.Namespace) -> deep_review.Reviewer | None:
             )
         return None
     try:
-        controls = read_only.controls(args.deep_review)
-    except read_only.ReadOnlyError as refusal:
+        controls = readonly.controls(args.deep_review)
+    except readonly.ReadOnlyError as refusal:
         raise ReviewError(str(refusal)) from None
     if args.deep_review_fixture is not None:
         return deep_review.FixtureReviewer(args.deep_review, controls, args.deep_review_fixture)

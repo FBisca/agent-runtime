@@ -29,8 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from agent_runtime import read_only
-
+from agent_review import readonly
 from agent_review.errors import ReviewError
 from agent_review.numbers import number
 from agent_review.safeguards import EscalationReason, matches
@@ -116,7 +115,7 @@ class Spawn:
     @property
     def capabilities(self) -> tuple[str, ...]:
         """What the reviewer may do, which is what every read-only control leaves it."""
-        return read_only.CAPABILITIES
+        return readonly.capabilities()
 
     @property
     def prompt(self) -> str:
@@ -181,7 +180,7 @@ class Review:
     @property
     def capabilities(self) -> tuple[str, ...]:
         """What the reviewer was allowed to do, as the read-only answer gave it."""
-        return read_only.CAPABILITIES
+        return readonly.capabilities()
 
     def as_dict(self) -> dict[str, Any]:
         """The section as `report.json` holds it, in the contract's field order."""
