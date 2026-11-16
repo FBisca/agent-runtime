@@ -2,7 +2,7 @@
 
 It drives the public seams only: the real MCP server over stdio against the fake hc of tools_harness, the real
 PreToolUse hook as a subprocess with JSON on stdin, the `agent-runtime` CLI, and, for the one store failure the
-plan injects, the server's own call path in process with a patched store (as test_spawn_cleanup does).
+plan injects, the server's own call path in process with a patched store (as test_store_failures does).
 
 A long-lived lead is limited by its active workers, not its history; the receipts guard protects only real
 orchestrator state; a resume that fails on the store rolls back; the server survives malformed ids and bounds its
