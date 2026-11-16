@@ -308,3 +308,16 @@ def check_commit(claimed, head, what="review.json"):
         head.startswith(claimed),
         "%s: commit %s is not the checkout's HEAD (%s)" % (what, claimed, head[:12]),
     )
+
+
+def newest_attempts(tasks):
+    """The attempts at one unit, newest first, by the order the record holds: the claim that wrote each one's
+    `started_at`.
+
+    Never by the order a dictionary carries them. A ledger read back is a dict of task ids, and that file's key
+    order is not a fact a reader may lean on: it survives a re-serialised, merged or hand-edited ledger, where the
+    attempts may be inserted in any order at all. `started_at` is the record's own claim of when an attempt was
+    made, so the newest attempt is the one the record says was made last, and a stale attempt's report cannot
+    stand in for the change under review.
+    """
+    return sorted(tasks, key=lambda task: str(task.get("started_at") or ""), reverse=True)

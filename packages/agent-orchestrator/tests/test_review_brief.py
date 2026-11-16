@@ -1,6 +1,9 @@
 """The reviewer's brief keeps it on targeted tests: a reviewer that reruns a whole suite serially stalls the gate."""
 
+import os
+import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -11,18 +14,35 @@ from agent_orchestrator import driver as app
 pytestmark = pytest.mark.unit
 
 
+class AttemptRecord:
+    """The record of the attempt under review, as the brief reads it: its report file and the head it claims."""
+
+    def __init__(self, report=None, head=None):
+        self.report = Path(report) if report else None
+        self.head = head
+
+    def task(self, task_id):
+        """One attempt, as the ledger holds it."""
+        return {
+            "packet": {"task_id": task_id},
+            "report_path": str(self.report) if self.report else None,
+            "report": {"head": self.head} if self.head else {},
+        }
+
+
 class ReviewBriefTests(unittest.TestCase):
-    def brief(self, delta=None):
-        # review_text reads only these three attributes; a whole Driver needs a repo and a runtime.
+    def brief(self, delta=None, run=None, attempt=None):
+        # review_text reads only these attributes; a whole Driver needs a repo and a runtime.
         stub = cast(
             Any,
             SimpleNamespace(
-                run_dir=Path("/run"),
+                run_dir=run or Path("/run"),
                 plan_path=Path("/plan.yaml"),
                 args=SimpleNamespace(base="main"),
+                book=attempt or AttemptRecord(),
             ),
         )
-        packet = {"unit": "t1", "checkout": "/nonexistent"}
+        packet = {"unit": "t1", "task_id": "t1o1", "checkout": "/nonexistent"}
         return app.Driver.review_text(
             stub, packet, Path("/run/t1/review.json"), delta, [] if delta else None
         )
@@ -73,13 +93,34 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("over 2 s", text)
         self.assertIn("materially slows the suite", text)
 
+    @pytest.mark.integration
     def test_S1_the_brief_names_the_report_whose_claims_the_pass_checks(self):
-        """orchestrator-engine/R145"""
-        text = self.brief()
-        self.assertIn("newest report", text)
-        self.assertIn(str(Path("/run/t1")), text)
-        self.assertIn(str(Path("/run/receipts")), text)
-        self.assertIn(str(Path("/run/contract.md")), text)
+        """orchestrator-engine/R145: structure-budget/S24"""
+        # The unit's directory holds the first attempt's report, stale the moment the unit was
+        # re-dispatched; the attempt under review wrote its own, and that is the one the pass checks.
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "t1").mkdir()
+            (run / "t1" / "report.json").write_text("{}", encoding="utf-8")
+            report = run / "t1o1" / "report.json"
+            report.parent.mkdir()
+            report.write_text("{}", encoding="utf-8")
+            written = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+            os.utime(report, (written, written))
+            text = self.brief(run=run, attempt=AttemptRecord(report, "c0ffee1"))
+        # The task file, the run's contract and its evidence, by path.
+        self.assertIn(str(run / "t1" / "task.md"), text)
+        self.assertIn(str(run / "contract.md"), text)
+        self.assertIn(str(run / "receipts"), text)
+        # The attempt under review's own report, when it was written, and the head it claims.
+        self.assertIn(str(report), text)
+        self.assertIn("2026-11-16T10:00:00", text)
+        self.assertIn("c0ffee1", text)
+        # Never the glob a stale report in the unit's directory would answer with, and never a file read
+        # under another name as a fallback for the review the driver asked for.
+        self.assertNotIn("report*.json", text)
+        self.assertNotIn(str(run / "t1" / "report.json"), text)
+        self.assertNotIn("written under another name", text)
 
     def test_S1_the_brief_says_what_makes_a_test_prove_its_scenario(self):
         """orchestrator-engine/R145"""

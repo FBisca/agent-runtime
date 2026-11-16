@@ -24,7 +24,7 @@ from .. import contracts, narrate, timeutil
 from ..ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from ..invariants import PARKED, next_path
 from .book import ARCHIVE, checkpoint, settle_merged
-from .records import merge_state
+from .records import merge_state, newest_attempts
 from .report import item_text
 from .runtime import head_of
 
@@ -562,7 +562,8 @@ class Pull:
                 return list(document["items"])
         with self.book() as data:
             tasks = [t for t in data["tasks"].values() if t["packet"].get("unit") == unit]
-        for task in reversed(tasks):
+        # The newest attempt's fix items, by the order the record holds, as the trail above reads it.
+        for task in newest_attempts(tasks):
             items = (task.get("fix") or {}).get("items") or []
             if items:
                 return list(items)
