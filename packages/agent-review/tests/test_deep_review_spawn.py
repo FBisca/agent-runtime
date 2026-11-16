@@ -4,17 +4,55 @@ A calibrated signal - a value past its threshold, or a confidence below its band
 points: one reviewer is spawned, its scope is focused, and the instruction sets that match the fired rules
 join the ones that always do (D12, D14, P2-D3, P2-D5). The report says what the review asked for, and the
 canned reviewer records the same request, so a spawn is checked without reaching a model (P2-D1).
+
+Two seams are checked here that a canned reviewer cannot reach: the family's own CLI, replaced by a stub on
+PATH that records its argv and stdin, and the run that stops - a nonzero exit or a timeout - which is an
+incomplete execution keeping the screening it paid for (D20, R10) rather than a refusal with no report.
 """
 
 import json
+import os
 import subprocess
+import sys
 
 import pytest
+from agent_review import readonly
 from agent_review.cli import main
 
 pytestmark = pytest.mark.integration
 
 QUESTION = "repo.migration-safety"
+
+# Each family's read-only, non-interactive run, as its own CLI spells it: the arguments that hold it to reading
+# and searching, then the flag that makes it answer once and print. A family the runtime answers for without a
+# row here is what this table's assert names, so a fourth family cannot arrive uninvoked.
+EXPECTED_ARGV = {
+    "claude": [
+        "--permission-mode",
+        "plan",
+        "--allowedTools",
+        "Read,Grep,Glob",
+        "--disallowedTools",
+        "Bash,Edit,Write,NotebookEdit",
+        "-p",
+    ],
+    "pi": ["--tools", "read,grep,find,ls", "--no-mcp", "--no-extensions", "-p"],
+}
+
+# A stand-in for a family's CLI. It records what it was given before it does anything else, so a run that is
+# stopped by a timeout still shows the prompt arriving; env decides how it ends.
+STUB = """\
+#!{python}
+import json, os, sys, time
+with open(os.environ["STUB_RECORD"], "w", encoding="utf-8") as stream:
+    json.dump({{ "argv": sys.argv[1:], "stdin": sys.stdin.read() }}, stream)
+if os.environ.get("STUB_SLEEP"):
+    time.sleep(float(os.environ["STUB_SLEEP"]))
+if os.environ.get("STUB_EXIT"):
+    sys.stderr.write(os.environ.get("STUB_STDERR", ""))
+    sys.exit(int(os.environ["STUB_EXIT"]))
+sys.stdout.write(os.environ.get("STUB_ANSWER", "no findings to report"))
+"""
 
 CONFIG = """\
 model: jev-latest
@@ -23,7 +61,7 @@ thresholds:
     value: 1.5
     confidence: 0.6
 deep_review:
-  timeout_seconds: 600
+  timeout_seconds: {timeout}
   instructions:
     - id: evidence-first
       text: Cite the changed line for every finding you report.
@@ -81,8 +119,13 @@ class Spawn:
         self.screening = tmp_path / "screening.json"
         self.reviewer = tmp_path / "reviewer"
         self.reviewer.mkdir()
-        self.config.write_text(CONFIG.format(question=QUESTION), encoding="utf-8")
+        self.config.write_text(CONFIG.format(question=QUESTION, timeout=600), encoding="utf-8")
         self.base, self.head = self.two_revisions()
+
+    def write_config(self, *, timeout: float = 600):
+        """The configuration this review runs with: one calibrated question and the review's own budget."""
+        self.config.write_text(CONFIG.format(question=QUESTION, timeout=timeout), encoding="utf-8")
+        return self.config
 
     def two_revisions(self):
         git(self.checkout, "init", "-b", "main")
@@ -143,6 +186,42 @@ class Spawn:
             ]
         )
 
+    def spawn_harness(self, family, monkeypatch, tmp_path):
+        """Put a stub named for `family` first on PATH, and name the file it records its argv and stdin to."""
+        where = tmp_path / "bin"
+        where.mkdir(exist_ok=True)
+        stub = where / family
+        stub.write_text(STUB.format(python=sys.executable), encoding="utf-8")
+        stub.chmod(0o755)
+        self.record = tmp_path / "harness.json"
+        monkeypatch.setenv("STUB_RECORD", str(self.record))
+        monkeypatch.setenv("PATH", f"{where}{os.pathsep}{os.environ['PATH']}")
+        return self
+
+    def spawn(self, harness):
+        """One invocation that spawns the family's own CLI, with no canned reviewer standing in for it."""
+        return main(
+            [
+                "code",
+                "--base",
+                self.base,
+                "--head",
+                self.head,
+                "--output",
+                str(self.output),
+                "--config",
+                str(self.config),
+                "--screening-fixture",
+                str(self.screening),
+                "--deep-review",
+                harness,
+            ]
+        )
+
+    def recorded(self):
+        assert self.record.is_file(), f"the stub harness recorded nothing at {self.record}"
+        return json.loads(self.record.read_text(encoding="utf-8"))
+
     def report(self):
         path = self.output / "report.json"
         assert path.is_file(), f"no report at {path}: an invocation writes one either way"
@@ -190,3 +269,100 @@ def test_S1_one_reviewer_is_spawned_focused_on_the_signals_with_the_matching_ins
     assert "deep review: focused" in capsys.readouterr().out, (
         "a person reads that a reviewer was spawned and what scope it was given"
     )
+
+
+@pytest.mark.parametrize("family", readonly.enforcing())
+def test_S1_every_family_the_runtime_holds_receives_the_prompt_whole_and_its_controls(
+    family, tmp_path, monkeypatch, capsys
+):
+    """The reviewer is the family's own CLI: nothing variadic may swallow the prompt, for any family.
+
+    The parametrisation is the runtime's own answer, and its other side - a family that cannot be held - is
+    checked by `test_deep_review_capability`, which refuses each such family by name: a family added to
+    `profiles.BUILTINS` fails whichever side it lands on, until it is answered.
+    """
+    assert family in EXPECTED_ARGV, (
+        f"no expected invocation for {family}: decide what its own CLI needs to run one question "
+        "read-only and print the answer, and add it to EXPECTED_ARGV"
+    )
+    review = _repository(tmp_path, monkeypatch)
+    review.spawn_harness(family, monkeypatch, tmp_path)
+    review.write_screening()
+    assert review.spawn(family) == 0, capsys.readouterr().err
+    recorded = review.recorded()
+    assert recorded["argv"] == EXPECTED_ARGV[family], (
+        "the family is started with the arguments that hold it to reading and searching, and the flag "
+        "that makes it answer once"
+    )
+    prompt = recorded["stdin"]
+    assert prompt.startswith(f"Review the change {review.base}..{review.head}"), (
+        "the prompt arrives whole on stdin, where no option of the family's own parsing can reach it"
+    )
+    assert "with open(path) as stream" in prompt, "the frozen change travels with it"
+    assert "cite the changed line" in prompt.lower(), "and the composed instructions"
+    assert review.report()["deep_review"]["harness"] == family
+    assert review.report()["status"] == "completed", (
+        "a reviewer that answered leaves a completed run"
+    )
+
+
+def test_S1_a_reviewer_that_stops_leaves_the_screening_and_records_why(
+    tmp_path, monkeypatch, capsys
+):
+    """A nonzero exit is an incomplete execution: the screening it paid for is kept, not thrown away."""
+    review = _repository(tmp_path, monkeypatch)
+    review.spawn_harness("pi", monkeypatch, tmp_path)
+    monkeypatch.setenv("STUB_EXIT", "3")
+    monkeypatch.setenv("STUB_STDERR", "the model refused the change")
+    review.write_screening()
+    status = review.spawn("pi")
+    report = review.report()
+    assert status == 1, "a review that stopped is incomplete, not a refusal and not a clean verdict"
+    assert report["status"] == "incomplete"
+    assert "exited 3" in report["failure"]["reason"]
+    assert "the model refused the change" in report["failure"]["reason"]
+    assert report["judgments"], "the screening's judgments survive the reviewer's stop"
+    assert report["usage"]["input_tokens"] == 900, "and so does what the screening paid for"
+    assert [reason["rule"] for reason in report["escalation"]["reasons"]] == [
+        "value-above-threshold",
+        "confidence-below-band",
+    ], "and the escalation that asked for the review"
+    assert report["deep_review"]["spawns"] == 1, "one spawn, no retry and no fallback"
+    assert "exited 3" in report["deep_review"]["failure"], (
+        "the review's own record names why it stopped"
+    )
+    assert "exited 3" in capsys.readouterr().err, "the terminal names the reviewer's stop"
+    assert "with open(path) as stream" in review.recorded()["stdin"], (
+        "the reviewer read the prompt and the change before it stopped: the run keeps what it had"
+    )
+
+
+def test_S1_a_reviewer_that_times_out_leaves_the_screening_and_records_why(
+    tmp_path, monkeypatch, capsys
+):
+    """A reviewer given no time to answer is an incomplete execution, with everything it already had."""
+    review = _repository(tmp_path, monkeypatch)
+    review.spawn_harness("pi", monkeypatch, tmp_path)
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    review.write_config(timeout=0.2)
+    review.write_screening()
+    status = review.spawn("pi")
+    report = review.report()
+    assert status == 1, "a timeout is incomplete, not a refusal"
+    assert report["status"] == "incomplete"
+    assert "did not answer within" in report["failure"]["reason"]
+    assert report["judgments"], "the screening it paid for is kept"
+    assert report["usage"]["input_tokens"] == 900
+    assert "did not answer within" in report["deep_review"]["failure"], (
+        "the review's own record names why it stopped"
+    )
+    assert "did not answer within" in capsys.readouterr().err, (
+        "the terminal names the reviewer's stop"
+    )
+
+
+def _repository(tmp_path, monkeypatch):
+    """A scratch repository whose head edit fires one calibrated question, positioned at its checkout."""
+    where = Spawn(tmp_path)
+    monkeypatch.chdir(where.checkout)
+    return where

@@ -176,6 +176,8 @@ class Review:
     instructions: tuple[Instruction, ...]
     signals: tuple[EscalationReason, ...]
     spawns: int = 1
+    # Why the reviewer never finished, when it did not: the review records its own stop (D20, R10).
+    failure: str | None = None
 
     @property
     def capabilities(self) -> tuple[str, ...]:
@@ -191,6 +193,7 @@ class Review:
             "instructions": [entry.id for entry in self.instructions],
             "spawns": self.spawns,
             "signals": [signal.as_dict() for signal in self.signals],
+            "failure": self.failure,
         }
 
 
@@ -234,23 +237,25 @@ class FixtureReviewer:
 
 
 class HarnessReviewer:
-    """One read/search-only reviewer, run through its harness's own CLI with the controls it enforces."""
+    """One read/search-only reviewer, run through its harness's own CLI with the arguments that hold it."""
 
-    def __init__(self, harness: str, controls: Sequence[str]) -> None:
+    def __init__(self, harness: str, invocation: readonly.Invocation) -> None:
         self.harness = harness
-        self.controls = tuple(controls)
+        self.invocation = invocation
+        self.controls = tuple(invocation.controls)
 
     def spawn(self, request: Spawn) -> None:
-        """Start the reviewer with its read-only arguments and the prompt, prompt last (D38).
+        """Ask the family one question read-only, with the prompt on stdin and the answer left on stdout.
 
-        A harness that cannot start, times out or exits nonzero stops the invocation rather than reporting a
-        review that never happened; what an incomplete review's status is belongs to the report that judges
-        the reviewer's answer (D20).
+        The prompt never travels as a positional: a family's options can be variadic, and a prompt after them
+        is read as another value of theirs. A harness that cannot start, times out or exits nonzero stops the
+        review, and the report records the stop rather than throwing the screening away (D20, R10).
         """
-        argv = [self.harness, *self.controls, request.prompt]
+        argv = [self.harness, *self.invocation.argv]
         try:
             done = subprocess.run(
                 argv,
+                input=request.prompt,
                 cwd=request.root,
                 capture_output=True,
                 text=True,
@@ -322,7 +327,10 @@ def review(
     """Spawn the one reviewer this escalation asks for, and answer what it was asked (D14, D19, P2-D3).
 
     The scope and the instructions are decided here, from the reasons the tool recorded, so neither is the
-    reviewer's choice; the reviewer is spawned once, with the frozen change in hand (D18, D20).
+    reviewer's choice; the reviewer is spawned once, with the frozen change in hand (D18, D20). A reviewer
+    that cannot start, times out or exits nonzero is recorded here as the review's own stop and not raised:
+    the screening it was asked about already happened, and what the execution then is belongs to the report
+    that keeps it (D20, R10).
     """
     signals = tuple(escalation)
     request = Spawn(
@@ -338,12 +346,19 @@ def review(
         diff=target.diff,
         root=target.root,
     )
-    reviewer.spawn(request)
+    stop = None
+    try:
+        reviewer.spawn(request)
+    except ReviewError as ended:
+        # The screening already answered: the review records what stopped it, and the report keeps the
+        # judgments and usage it paid for instead of the invocation refusing with no report (D20, R10).
+        stop = str(ended)
     return Review(
         harness=request.harness,
         scope=request.scope,
         instructions=request.instructions,
         signals=signals,
+        failure=stop,
     )
 
 

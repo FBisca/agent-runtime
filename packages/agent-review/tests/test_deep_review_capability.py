@@ -118,3 +118,41 @@ def test_S3_a_canned_reviewer_that_no_harness_asks_is_refused_rather_than_ignore
     )
     assert status == 2
     assert "deep-review-fixture" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "family", [name for name in profiles.BUILTINS if name not in readonly.enforcing()]
+)
+def test_S3_every_family_that_cannot_be_held_is_refused_before_a_reviewer_is_spawned(
+    family, tmp_path, capsys
+):
+    """A family the runtime knows but cannot hold is refused by name, with a family that can as the way out."""
+    output = tmp_path / "review"
+    status = main(
+        [
+            "code",
+            "--base",
+            "no-such-revision",
+            "--head",
+            "no-such-revision",
+            "--output",
+            str(output),
+            "--deep-review",
+            family,
+        ]
+    )
+    assert status == 2, "a family that cannot hold its reviewer screens nothing"
+    stderr = capsys.readouterr().err
+    assert family in stderr, "the refusal names the family it refused"
+    assert readonly.cannot(family), (
+        f"the runtime knows {family} and says nothing about what it cannot enforce"
+    )
+    assert readonly.cannot(family) in stderr, (
+        "the refusal names what the family cannot enforce, in the runtime's own words"
+    )
+    assert any(name in stderr for name in readonly.enforcing()), (
+        "the refusal names a family that can enforce it"
+    )
+    assert not (output / "report.json").is_file(), (
+        "a refusal writes no report to be read as this run's"
+    )

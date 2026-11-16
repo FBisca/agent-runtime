@@ -206,7 +206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     print(report.summary(path))
     if report.failure is not None:
-        print(f"agent-review: screening failed: {report.failure}", file=sys.stderr)
+        print(f"agent-review: execution incomplete: {report.failure}", file=sys.stderr)
         return 1
     return 0
 
@@ -359,15 +359,15 @@ def _reviewed(
     """
     if reviewer is None or not report.escalation or report.failure is not None:
         return report
-    return replace(
-        report,
-        deep_review=deep_review.review(
-            settings=report.bank.deep_review,
-            escalation=report.escalation,
-            target=target,
-            reviewer=reviewer,
-        ),
+    reviewed = deep_review.review(
+        settings=report.bank.deep_review,
+        escalation=report.escalation,
+        target=target,
+        reviewer=reviewer,
     )
+    # A reviewer that stopped leaves the screening it paid for standing: the report says incomplete and
+    # names the stop, never throwing away judgments and usage the provider already answered (D20, R10).
+    return replace(report, deep_review=reviewed, failure=reviewed.failure)
 
 
 class _Screened:
@@ -440,12 +440,14 @@ def _reviewer(args: argparse.Namespace) -> deep_review.Reviewer | None:
             )
         return None
     try:
-        controls = readonly.controls(args.deep_review)
+        invocation = readonly.invocation(args.deep_review)
     except readonly.ReadOnlyError as refusal:
         raise ReviewError(str(refusal)) from None
     if args.deep_review_fixture is not None:
-        return deep_review.FixtureReviewer(args.deep_review, controls, args.deep_review_fixture)
-    return deep_review.HarnessReviewer(args.deep_review, controls)
+        return deep_review.FixtureReviewer(
+            args.deep_review, invocation.controls, args.deep_review_fixture
+        )
+    return deep_review.HarnessReviewer(args.deep_review, invocation)
 
 
 def _configuration(args: argparse.Namespace, repo: Path) -> questions.QuestionBank:
