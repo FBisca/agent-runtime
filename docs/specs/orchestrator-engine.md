@@ -584,3 +584,13 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | R171 | S1 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_partial_after_progress_requests_a_decision`<br>`packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_blocked_report_requests_a_decision` |
 | R171 | S2 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S2_progress_text_and_wrong_task_report_do_not_open_a_blocker` |
 | R171 | S3 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today` |
+
+## Requirements: locator-invariants
+
+- **R173** WHEN the engine renders an instruction for an agent or a person, THEN each pointer names a file that exists, the file the reader is asked to write, or a collection with its number of files; no pointer is a glob, a bare directory to search, or a request for the newest file, and a pointer resolving to zero or several files is refused naming the pointer, the expected file and the way out (from locator-invariants/S3, S7, S8, S9)
+
+## Coverage: locator-invariants
+
+| Requirement | Scenario | Tests |
+|---|---|---|
+| R173 | S3, S7, S8, S9 | `packages/agent-orchestrator/tests/test_driver_pointers.py::TestRenderedPointers::test_S3_rendered_instructions_name_their_files`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S7_unresolvable_pointers_are_refused`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S8_spec_names_the_pointer_rule_and_its_guard`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S9_repository_instructions_name_the_rule` |

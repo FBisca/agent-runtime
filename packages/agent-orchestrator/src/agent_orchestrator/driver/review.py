@@ -12,6 +12,7 @@ lines, and because the one reading of "which report is this" has one home.
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .pointers import collection, reference
 from .records import newest_attempts
 
 
@@ -31,9 +32,15 @@ def _reported(driver, packet):
     path = task.get("report_path")
     if not path:
         return "- What it reported: no report recorded for this attempt yet"
+    try:
+        path = reference(driver.run_dir, path, "read")
+    except ValueError:
+        raise ValueError(
+            "%s: expected the recorded report file; restore it and retry the review" % path
+        ) from None
     head = (task.get("report") or {}).get("head")
     return (
-        "- What it reported: %s, written %s, claiming head %s (its status, files, covers, checks), beside report.md"
+        "- What it reported: %s, written %s, claiming head %s (its status, files, covers, checks)"
         % (
             path,
             _written_at(path) or "not on disk",
@@ -52,6 +59,7 @@ def _paths(driver, packet, delta, open_items):
         "- The task the implementer was given: %s (its What it delivers, Paths, the scenarios verbatim, "
         "the checks it owed)" % (unit_dir / "task.md"),
         _reported(driver, packet),
+        "- Checkout contents: %s" % collection(checkout),
         "- The rules every task in this run follows: %s" % (driver.run_dir / "contract.md"),
         "- Plan: %s (its Decisions, Scenarios and Seams)" % driver.plan_path,
         *(
@@ -160,7 +168,8 @@ def _verdict(review_path):
         "`evidence` {command, exit, excerpt, log_path}: the command that shows the defect, its exit code, an excerpt "
         "and the path of the full output you saved. `scenario`, `why` and `verify` are optional; any other field you "
         "add is passed on verbatim.",
-        'The verdict is "block" exactly when an item has kind blocking. Prose for people may go in review.md beside it.',
+        'The verdict is "block" exactly when an item has kind blocking. Write optional prose to %s.'
+        % Path(review_path).with_name("review.md"),
         'To close a blocking finding an earlier review raised, add it to `resolutions`: `{"id", "status": '
         '"fixed|disproven", "commit" (the commit you reviewed), "note" (what changed, or why the finding was '
         'wrong: nonempty), "evidence" {command, exit 0, excerpt, log_path}}`, and list that same command, its '

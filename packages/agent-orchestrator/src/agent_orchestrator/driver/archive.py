@@ -464,6 +464,7 @@ class Archive:
                     "archive by hand" % ", ".join(missing),
                 )
             head = self._archive_branch(task_id)
+            self._snapshot_spec(task_id)
             url = self._archive_pr(task_id)
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             return self.request(
@@ -500,6 +501,14 @@ class Archive:
         self.mark(task_id, gate="reported")
         self.log("archive-built", task=task_id, pr=url, head=head)
         narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
+
+    def _snapshot_spec(self, task_id):
+        if self._archive_mode() == "promote":
+            checkout = self.task(task_id)["packet"]["checkout"]
+            shutil.copyfile(
+                Path(checkout) / self.plan_model().spec,
+                self.run_dir / task_id / "archived-spec",
+            )
 
     def archive_missing(self):
         """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no placed oracle."""
@@ -630,21 +639,28 @@ class Archive:
 
     def _archive_body(self):
         """The archive pull request's description, by what the archive does with the plan."""
-        spec = self.plan_model().spec
+        from .pointers import reference
+
+        spec = (
+            reference(self.run_dir / ARCHIVE, "archived-spec", "read")
+            if self._archive_mode() == "promote"
+            else ""
+        )
         if self._archive_mode() == "discard":
-            return "Deletes the discarded plan folder `%s`; it changes nothing else." % (
-                self._plan_folder_rel()
+            return "Deletes the discarded plan folder %s; it changes nothing else." % reference(
+                self.repo, self._plan_folder_rel(), "collection"
             )
         if self.layout.is_folder:
-            where = self._plan_folder_rel()
+            where = reference(self.repo, self.layout.folder, "collection")
             return (
-                "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
-                "is deleted and the spec section with its Coverage table is written by the driver."
-                % ("folder `%s`" % where if where else "`%s`" % self.layout.folder, spec)
+                "Archives the plan %s into the living spec: its acceptance files move to their domain, the folder "
+                "is deleted and the spec section with its Coverage table is written by the driver. Spec snapshot: `%s`."
+                % (where, spec)
             )
         return (
-            "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-            "with its Coverage table, written by the driver." % (self.layout.plan_place, spec)
+            "Archives `%s` into the living spec: the plan files, the promoted oracles and the spec section "
+            "with its Coverage table, written by the driver. Spec snapshot: `%s`."
+            % (reference(self.repo, self.plan_path, "read"), spec)
         )
 
     def undraft_archive(self, task_id):

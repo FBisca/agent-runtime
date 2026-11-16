@@ -10,6 +10,8 @@ lines, and because a rendering its callers share has one home.
 
 import json
 
+from .pointers import collection
+
 # The usage figures a metrics table prints, in the order it prints them.
 USAGE_COLUMNS = (
     ("input", "input_tokens"),
@@ -59,7 +61,7 @@ def metrics_table(metrics):
 
 
 def render_status(status):
-    lines = ["%s: %s" % (status["slug"], status["state"]), "run: " + status["run_dir"]]
+    lines = ["%s: %s" % (status["slug"], status["state"]), "run: " + collection(status["run_dir"])]
     for ticket in status["tickets"]:
         lines.append(
             "%s  %s%s%s"
