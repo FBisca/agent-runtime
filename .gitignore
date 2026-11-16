@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+
+# Worktrees hold whole checkouts of this repo: their own .git, and the same files tracked twice.
+.worktrees/
+
+# The orchestration runtime writes here while a drive runs; it is not source.
+.orchestrate/
