@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .pointers import collection, reference
-from .records import newest_attempts
+from .records import reported_attempt, unit_attempts
 
 
 def _written_at(path):
@@ -203,13 +203,21 @@ def review_brief(driver, packet, review_path, delta=None, open_items=None):
 
 def attempt_trail(driver, unit):
     """(last reviewed commit, newest findings.json, newest report.json) over the unit's attempts, read newest first by
-    the order the record holds; "" when none yet."""
-    reviewed = findings = report = ""
+    the order the record holds; each answer is the newest attempt that has that thing, and "" when none has it.
+
+    Three unit-scoped questions with one order: the newest attempt that was reviewed, the newest attempt that
+    left findings on disk, the newest attempt that reported. An attempt that lacks one of the three does not
+    erase it for the unit, and no answer is reconstructed by searching the unit's directory."""
     with driver.book() as data:
-        tasks = [t for t in data["tasks"].values() if t["packet"].get("unit") == unit]
-    for task in newest_attempts(tasks):
-        reviewed = reviewed or task.get("reviewed_commit") or ""
-        report = report or task.get("report_path") or ""
-        candidate = driver.run_dir / task["packet"]["task_id"] / "findings.json"
-        findings = findings or (str(candidate) if candidate.exists() else "")
-    return reviewed, findings, report
+        tasks = unit_attempts(data, unit)
+        reported = reported_attempt(data, unit)
+    reviewed = next((t.get("reviewed_commit") for t in tasks if t.get("reviewed_commit")), "")
+    findings = next(
+        (
+            driver.run_dir / task["packet"]["task_id"] / "findings.json"
+            for task in tasks
+            if (driver.run_dir / task["packet"]["task_id"] / "findings.json").exists()
+        ),
+        None,
+    )
+    return reviewed, str(findings) if findings else "", (reported or {}).get("report_path") or ""

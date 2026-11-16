@@ -321,3 +321,48 @@ def newest_attempts(tasks):
     stand in for the change under review.
     """
     return sorted(tasks, key=lambda task: str(task.get("started_at") or ""), reverse=True)
+
+
+def unit_attempts(data, unit):
+    """The unit's attempts newest first, breaking equal timestamps by ledger position."""
+    tasks = [
+        (index, task)
+        for index, (tid, task) in enumerate(data["tasks"].items())
+        if (task["packet"].get("unit") or tid) == unit
+    ]
+    tasks.sort(key=lambda pair: (str(pair[1].get("started_at") or ""), pair[0]), reverse=True)
+    return [task for _, task in tasks]
+
+
+def unit_attempt(data, unit):
+    """The unit's newest attempt, whatever its ledger status."""
+    return next(iter(unit_attempts(data, unit)), None)
+
+
+def open_attempt(data, unit):
+    """The attempt the record's status says is still open: the newest one that is not COMPLETE or RELEASED."""
+    return next(
+        (
+            task
+            for task in unit_attempts(data, unit)
+            if task.get("status") not in ("COMPLETE", "RELEASED")
+        ),
+        None,
+    )
+
+
+def reported_attempt(data, unit):
+    """The unit's newest report: the newest attempt that has one.
+
+    A unit-scoped question, and the answer is the attempt the record says was made last among those that
+    reported. It is not a search for a file: an attempt that never reported contributes nothing, and an
+    attempt-scoped reader (which report is this attempt's?) still answers only for its own attempt.
+    """
+    return next(
+        (
+            task
+            for task in unit_attempts(data, unit)
+            if task.get("report_path") or task.get("report")
+        ),
+        None,
+    )
