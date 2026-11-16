@@ -28,6 +28,7 @@ __all__ = [
     "BUILDERS",
     "Book",
     "BookSurface",
+    "Briefs",
     "CHECKS_WARNING",
     "CHECK_PREFIXES",
     "CI_EXCERPT_CHARS",
@@ -176,6 +177,7 @@ __all__ = [
     "now",
     "numbered",
     "old_ledger_of",
+    "open_attempt",
     "owned_collections",
     "owned_paths",
     "owned_scope",
@@ -205,6 +207,7 @@ __all__ = [
     "repo_root",
     "report_crash",
     "report_reader",
+    "reported_attempt",
     "require",
     "require_completable",
     "require_report",
@@ -246,6 +249,8 @@ __all__ = [
     "timeutil",
     "tree_in",
     "unique_checks",
+    "unit_attempt",
+    "unit_attempts",
     "unit_summary",
     "unreadable_decision",
     "verify",
@@ -407,9 +412,11 @@ from .records import is_flaky as is_flaky
 from .records import merge_state as merge_state
 from .records import newest_attempts as newest_attempts
 from .records import normalise_check as normalise_check
+from .records import open_attempt as open_attempt
 from .records import passed_checks as passed_checks
 from .records import ready as ready
 from .records import report_reader as report_reader
+from .records import reported_attempt as reported_attempt
 from .records import require_completable as require_completable
 from .records import routed as routed
 from .records import satisfied as satisfied
@@ -417,6 +424,8 @@ from .records import scenario_number as scenario_number
 from .records import split_row as split_row
 from .records import terminal_gone as terminal_gone
 from .records import unique_checks as unique_checks
+from .records import unit_attempt as unit_attempt
+from .records import unit_attempts as unit_attempts
 from .records import whole as whole
 from .report import USAGE_COLUMNS as USAGE_COLUMNS
 from .report import cell as cell

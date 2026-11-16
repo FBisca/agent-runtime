@@ -101,12 +101,23 @@ class FacadeTests(unittest.TestCase):
         for path in sorted(DIR.glob("*.py")):
             for name in defined_names(path.read_text(encoding="utf-8")):
                 defined.setdefault(name, []).append(path.name)
+
+        def where(names):
+            return ", ".join("%s (%s)" % (name, ", ".join(defined[name])) for name in names)
+
+        # Reachable as an attribute, whoever binds it: an import in the facade publishes a name too,
+        # so `driver.PlanError` answers even though the package did not write it.
         missing = sorted(set(defined) - set(vars(driver)))
         self.assertEqual(
-            missing,
+            missing, [], "the facade drops names the modules define: %s" % where(missing)
+        )
+        # And published: `__all__` is the set a star import and a caller reading the package by name
+        # agree on, so a name the facade only happens to import is not part of the contract.
+        unpublished = sorted(set(defined) - set(driver.__all__))
+        self.assertEqual(
+            unpublished,
             [],
-            "the facade drops names the modules define: %s"
-            % ", ".join("%s (%s)" % (name, ", ".join(defined[name])) for name in missing),
+            "the facade does not publish names the modules define: %s" % where(unpublished),
         )
 
     def test_S22_no_module_of_the_package_takes_the_name_of_a_published_one(self):
