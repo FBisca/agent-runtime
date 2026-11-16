@@ -232,9 +232,13 @@ class MeasureTests(unittest.TestCase):
             budget["growth_lines"]({"tests/test_wide.py": numbers}, at_base),
             ["tests/test_wide.py: class-methods 27 > recorded 26 (ceiling 25)"],
         )
-        walked = budget["walk"](str(REPO))
-        self.assertIn("tests/test_structure_budget.py", walked, "the test tree is measured too")
-        self.assertIn("scripts/structure_budget.py", walked)
+
+    @pytest.mark.integration
+    def test_S8_the_checkouts_own_test_tree_is_measured_as_source_is(self):
+        """structure-budget/S8: what git lists decides, and the test tree is part of what it lists."""
+        resolved = budget["resolve"](str(REPO))
+        self.assertIn("tests/test_structure_budget.py", resolved, "the test tree is measured too")
+        self.assertIn("scripts/structure_budget.py", resolved)
 
 
 class SinceTests(unittest.TestCase):
@@ -360,6 +364,53 @@ class SinceTests(unittest.TestCase):
         gate = self.drive(root)
         self.assertEqual(gate.returncode, 1, gate.stdout + gate.stderr)
         self.assertIn("pkg/big.py: module-lines 1100 > ceiling 1000", gate.stdout)
+
+    @pytest.mark.integration
+    def test_S23_resolve_lists_the_tree_git_holds_and_a_tree_outside_one_is_measured_by_walking(
+        self,
+    ):
+        """structure-budget/S23: a file this checkout carries is resolved; a copy another tree holds is not."""
+        root = self.checkout()
+        (root / "pkg" / "new.py").write_text(long_module(1200))
+        self.assertEqual(
+            budget["resolve"](str(root)),
+            ["pkg/big.py", "pkg/new.py"],
+            "a file the checkout carries counts whether or not it was committed yet",
+        )
+        grown = self.drive(root)
+        self.assertEqual(grown.returncode, 1, grown.stdout + grown.stderr)
+        self.assertIn("pkg/new.py: module-lines 1200 > ceiling 1000", grown.stdout)
+
+        (root / "pkg" / "new.py").unlink()
+        (root / ".gitignore").write_text("ignored/\n")
+        (root / "ignored").mkdir()
+        (root / "ignored" / "big.py").write_text(long_module(1200))
+        (root / ".venv" / "lib").mkdir(parents=True)
+        (root / ".venv" / "lib" / "big.py").write_text(long_module(1200))
+        (root / "pkg" / "checkout").mkdir()
+        self.git(root / "pkg" / "checkout", "init", "-q", "-b", "main")
+        (root / "pkg" / "checkout" / "big.py").write_text(long_module(1200))
+        self.assertEqual(
+            budget["resolve"](str(root)),
+            ["pkg/big.py"],
+            "an ignored tree, a cache tree and another checkout are no source of this one",
+        )
+        clean = self.drive(root)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+
+        outside = root.parent / "outside"
+        (outside / "pkg").mkdir(parents=True)
+        (outside / "pkg" / "big.py").write_text(long_module(1200))
+        self.assertEqual(
+            budget["resolve"](str(outside)),
+            ["pkg/big.py"],
+            "a tree outside a repository has no index to ask, so the walk answers",
+        )
+        self.assertEqual(
+            budget["measure_tree"](str(outside))["pkg/big.py"]["module-lines"],
+            1200,
+            "the tree it is given is still measured by walking",
+        )
 
     @pytest.mark.integration
     def test_S15_a_since_that_is_not_a_revision_is_refused_naming_it(self):

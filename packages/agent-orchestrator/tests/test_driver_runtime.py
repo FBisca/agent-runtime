@@ -62,7 +62,8 @@ class DriverBudgetTests(unittest.TestCase):
     def test_S11_the_split_modules_are_under_the_paid_ceilings(self):
         """structure-budget/S11"""
         budget = runpy.run_path(str(REPO / "scripts" / "structure_budget.py"))
-        measured = budget["measure_tree"](DRIVER)
+        # The measure takes the file list: a unit test names the module it means and starts no process.
+        measured = budget["measure"](DRIVER, SPLIT)
         added = {name: measured[name] for name in SPLIT if name in measured}
         self.assertEqual(sorted(added), sorted(SPLIT))
         ceilings = json.loads(BUDGET.read_text(encoding="utf-8"))["ceilings"]

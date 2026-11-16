@@ -128,7 +128,7 @@
       "test_S12_swallowed_resume_returns_not_started_without_resending",
       "test_S13_mcp_pending_wait_wakes_for_resume_report"
     ],
-    "tests/test_dispatch.py": [
+    "tests/test_dispatch_clocked_wait.py": [
       "test_resume_then_immediate_wait_ignores_the_old_done_turn"
     ],
     "tests/test_usage.py": [

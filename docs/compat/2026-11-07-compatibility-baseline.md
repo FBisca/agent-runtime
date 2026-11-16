@@ -85,7 +85,7 @@ each pinned commit carries the semantics the plan names for that PR (the subject
 the resume work, the subject of #45 the usage work), so pinning the wrong commit fails too.
 
 The contract does **not** re-test their semantics: `tests/test_stop_failures.py`,
-`tests/test_event_wait_batches.py`, `tests/test_event_wait_resume.py`, `tests/test_dispatch.py`, `tests/test_usage.py` and
+`tests/test_event_wait_batches.py`, `tests/test_event_wait_resume.py`, `tests/test_dispatch_clocked_wait.py`, `tests/test_usage.py` and
 `tests/test_live_acceptance.py` already own them, and the contract only checks that those tests
 are still there. `pr_regression_coverage` in the baseline records, per PR, the tests that own the
 live semantics, so deleting one of them breaks the contract instead of quietly shrinking the
