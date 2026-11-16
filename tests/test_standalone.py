@@ -215,15 +215,19 @@ class HostsSectionTest(unittest.TestCase):
     }
     SERVER_POINTS = {
         "packages/agent-runtime/src/agent_runtime/hc_tools.py": [
-            "hc",
-            "run",
             "spawn",
-            "hc_server",
-            "me",
-            "collect",
             "wait",
             "stop",
         ],
+        "packages/agent-runtime/src/agent_runtime/hc_boundary.py": [
+            "hc",
+            "run",
+        ],
+        "packages/agent-runtime/src/agent_runtime/team_session.py": [
+            "hc_server",
+            "me",
+        ],
+        "packages/agent-runtime/src/agent_runtime/observation.py": ["collect"],
         "packages/agent-runtime/src/agent_runtime/agent_runtime.py": [
             "hc_get",
             "run_command",

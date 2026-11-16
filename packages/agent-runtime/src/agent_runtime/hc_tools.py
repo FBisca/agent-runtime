@@ -1,557 +1,154 @@
 """Tool implementations for the agent-runtime MCP server. Each tool resolves the runtime and runs
-the runtime's command itself. Terminal mutations go through hc; durable reports use the private store."""
+the runtime's command itself. Terminal mutations go through hc; durable reports use the private store.
 
-import hashlib
+The names the split moved - and the standard library modules they took with them - are still bound
+here: a caller or a test reads `hc_tools.<name>`, so each is re-exported explicitly rather than left
+as an unused import.
+"""
+
+import hashlib as hashlib
 import json
 import os
-import re
+import re as re
 import sqlite3
-import stat
-import subprocess
-import threading
-import time
-from pathlib import Path
+import stat as stat
+import subprocess as subprocess
+import threading as threading
+import time as time
+from pathlib import Path as Path
 
 from . import agent_runtime as lib
 from . import dispatch_store as dispatch
 from . import dispatch_wait, host_policy, pi_mcp, profiles, usage
+from .dispatch_guards import (
+    MUTATING,
+    WAIT_NUDGE,
+    lead_unfinished,
+    refuse_unread,
+    require_dispatch,
+)
+from .dispatch_guards import (
+    undelivered_reports as undelivered_reports,
+)
+from .hc_boundary import (
+    discard,
+    hc,
+    legacy_wait,
+    message,
+    require_child,
+    run,
+    send,
+    terminal_gone,
+)
+from .observation import (
+    COLLECT_LINES as COLLECT_LINES,
+)
+from .observation import (
+    HISTORY_LINES as HISTORY_LINES,
+)
+from .observation import (
+    attach_usage,
+    collect,
+    list_agents,
+    status,
+)
+from .operations import (
+    OPERATION_ID as OPERATION_ID,
+)
+from .operations import (
+    linked_task,
+    operation,
+    operation_fingerprint,
+    operation_id,
+    operation_owner,
+    replayed,
+)
+from .reports import legacy_report as legacy_report
+from .reports import report, task
+from .store_failures import STORE_DOWN, row_state, settle, store_down
+from .team_session import (
+    NATIVE_TOOLS as NATIVE_TOOLS,
+)
+from .team_session import (
+    dispatch_identity,
+    lead_store,
+    require_hc,
+)
+from .team_session import (
+    hc_server as hc_server,
+)
+from .team_session import (
+    me as me,
+)
+from .tool_call import (
+    DIAGNOSTICS,
+    SHORT_SECONDS,
+    WAIT_DEFAULT,
+    DiagnosticUnavailable,
+    ToolError,
+    bounded,
+    dispatch_enabled,
+    gap,
+    need,
+    result,
+    wait_seconds,
+    worker_name,
+)
+from .tool_call import (
+    NAME_RE as NAME_RE,
+)
+from .tool_call import (
+    WAIT_MAX as WAIT_MAX,
+)
+from .tool_call import (
+    Context as Context,
+)
+from .tool_call import (
+    legacy_wait_seconds as legacy_wait_seconds,
+)
+from .worker_launch import (
+    AGENT_CLAUDE as AGENT_CLAUDE,
+)
+from .worker_launch import (
+    AGENT_CODEX as AGENT_CODEX,
+)
+from .worker_launch import (
+    EFFORTS as EFFORTS,
+)
+from .worker_launch import (
+    LEGACY_WORKER_PROTOCOL,
+    ROLE_FILE_CLIS,
+    WORKER_PROTOCOL,
+    codex_instructions,
+    owned_orphan,
+    profile_launch_error,
+    profile_launcher,
+    role_text,
+    spawn_agent,
+    spawn_effort,
+    spawn_instructions,
+    spawn_model,
+)
+from .worker_launch import (
+    NO_AGENT as NO_AGENT,
+)
+from .worker_launch import (
+    PROFILE_STARTUP_WINDOW_SECONDS as PROFILE_STARTUP_WINDOW_SECONDS,
+)
+from .worker_launch import (
+    role_body as role_body,
+)
+from .worker_launch import (
+    role_path as role_path,
+)
 
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-COLLECT_LINES = 200
-HISTORY_LINES = 1000
-SHORT_SECONDS = 30
-# Configured launches get at most one second to expose a diagnostic or terminal exit.
-PROFILE_STARTUP_WINDOW_SECONDS = 3.0
-WAIT_DEFAULT, WAIT_MAX = 170, 590
 KINDS = ("worker", "lookup")
+
+
 CLIS = profiles.BUILTINS
+
+
 SUBAGENT_TOOL = {"claude": "Claude's Agent tool", "codex": "Codex's MultiAgent V2 spawn tool"}
-NATIVE_TOOLS = {
-    "herdmates": "SendMessage and the Agent tool (named teammate), the CLI's own subagent tool",
-    "native": "the CLI's own subagent tool (Claude Agent tool, Codex MultiAgent spawn tool)",
-}
-
-
-class ToolError(Exception):
-    """A tool failure whose text goes to the model."""
-
-
-class DiagnosticUnavailable(Exception):
-    """Dispatch cannot be consulted (store, session identity or hc role lookup failed), as opposed to a
-    caller being refused. Diagnostics (status, collect, list) degrade to hc-only state on this alone."""
-
-
-DIAGNOSTICS = ("status", "collect", "list")
-
-
-class Context:
-    """Per-call cancellation: kills the running subprocess when the client cancels.
-
-    `session` is the state one server process shares between its calls: the session's identity is
-    resolved once and kept, so a slow ancestry walk cannot change it between two calls.
-    """
-
-    def __init__(self, session=None):
-        self.cancelled = threading.Event()
-        self.proc = None
-        self.wake = None
-        self.session = session if session is not None else {}
-
-    def cancel(self):
-        self.cancelled.set()
-        wake = self.wake
-        if wake is not None:
-            wake()
-        proc = self.proc
-        if proc is not None and proc.poll() is None:
-            proc.kill()
-
-
-def dispatch_enabled(env):
-    return env.get("AGENT_RUNTIME_DISPATCH") == "1"
-
-
-def result(payload, is_error=False, structured=False):
-    body = payload if isinstance(payload, str) else json.dumps(payload, separators=(",", ":"))
-    response = {"content": [{"type": "text", "text": body}], "isError": is_error}
-    if structured and isinstance(payload, dict):
-        response["structuredContent"] = payload
-    return response
-
-
-def gap(what, command):
-    return ToolError("gap: add %s → %s; ask the user" % (what, command))
-
-
-def run(argv, env, ctx, timeout: float = SHORT_SECONDS):
-    """(returncode, stdout, stderr); ToolError on a missing binary, timeout or cancel."""
-    try:
-        proc = subprocess.Popen(
-            argv,
-            env=env,
-            text=True,
-            errors="replace",
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as error:
-        raise ToolError("cannot run %s: %s" % (argv[0], error))
-    ctx.proc = proc
-    deadline = time.monotonic() + timeout
-    while True:
-        if ctx.cancelled.is_set():
-            proc.kill()
-            proc.communicate()
-            raise ToolError("cancelled")
-        try:
-            out, err = proc.communicate(timeout=0.2)
-            return proc.returncode, out, err
-        except subprocess.TimeoutExpired:
-            if time.monotonic() > deadline:
-                proc.kill()
-                proc.communicate()
-                raise ToolError("%s timed out after %ss" % (" ".join(argv[:2]), timeout))
-
-
-def hc(args, env, ctx, timeout: float = SHORT_SECONDS):
-    code, out, err = run(["hc"] + args, env, ctx, timeout)
-    if code != 0:
-        raise ToolError((err.strip() or out.strip() or "hc %s failed" % args[0]))
-    return out.strip()
-
-
-def need(arguments, *names):
-    values = []
-    for name in names:
-        value = arguments.get(name)
-        if not isinstance(value, str) or not value.strip():
-            raise ToolError("%s is required" % name)
-        values.append(value)
-    return values
-
-
-def worker_name(value):
-    if not NAME_RE.match(value):
-        raise ToolError(
-            "invalid name %r: use 1-32 of a-z 0-9 - _ , not starting with - or _" % value
-        )
-    return value
-
-
-def me(env):
-    """Caller identity, and its hc address (None outside hc)."""
-    info = lib.resolve(env)
-    return info, env.get("HC_TERMINAL_ID") if info["runtime"] == "hc" else None
-
-
-def require_hc(env):
-    info, caller = me(env)
-    if info["runtime"] != "hc":
-        raise gap("%s support for worker tools" % info["runtime"], NATIVE_TOOLS[info["runtime"]])
-    return info, caller
-
-
-def codex_instructions(agent="implementer"):
-    path = os.path.join(os.path.expanduser("~"), ".codex", "agents", "%s.toml" % agent)
-    try:
-        with open(path, encoding="utf-8") as handle:
-            text = handle.read()
-        try:
-            import tomllib
-
-            found = tomllib.loads(text)["developer_instructions"]
-        except ImportError:  # Python < 3.11
-            match = re.search(r'^developer_instructions\s*=\s*"""(.*?)"""', text, re.S | re.M)
-            if not match:
-                raise KeyError("developer_instructions")
-            found = match.group(1)
-        if not isinstance(found, str) or not found.strip():
-            raise ValueError("developer_instructions must be a non-empty string")
-        return found.strip()
-    except (OSError, KeyError, ValueError) as error:
-        raise ToolError("cannot read Codex %s instructions from %s: %s" % (agent, path, error))
-
-
-# The CLIs that load a role file themselves: Claude reads ~/.claude/agents/<agent>.md on its own, so the
-# runtime never injects the role's text for it and never takes an instructions_file for it.
-ROLE_FILE_CLIS = ("claude",)
-
-
-def role_path(agent, env):
-    """Where a role's own file lives: the user's Claude roles, unless the operator moved them."""
-    home = env.get("HOME") or os.path.expanduser("~")
-    directory = env.get("AGENT_RUNTIME_ROLE_DIR") or os.path.join(home, ".claude", "agents")
-    return os.path.join(directory, "%s.md" % agent)
-
-
-def role_body(text):
-    """The role's content, without the metadata its file carries for the CLI that loads it.
-
-    Claude's role files open with a front matter block naming that CLI's tools, model and
-    permissions. A backend that does not load the file itself has no use for the block, and the
-    tools it names are not the tools that backend has."""
-    stripped = text.strip()
-    if stripped.startswith("---"):
-        end = stripped.find("\n---", 3)
-        if end != -1:
-            return stripped[end + 4 :].strip()
-    return stripped
-
-
-def role_text(agent, env):
-    """The role's content for a backend with no role file of its own.
-
-    The user's Claude roles are the roles this machine has, so they are what such a backend reads:
-    the same discipline Claude would have loaded, without the metadata Claude reads it with. A role
-    file that is missing, empty or unreadable is a refusal: nothing is launched."""
-    path = role_path(agent, env)
-    try:
-        with open(path, encoding="utf-8") as handle:
-            text = handle.read()
-    except OSError as error:
-        raise ToolError(
-            "cannot read the %s role file %s: %s"
-            % (agent, path, error.strerror or type(error).__name__)
-        ) from None
-    body = role_body(text)
-    if not body:
-        raise ToolError("the %s role file %s is empty" % (agent, path))
-    return body
-
-
-# The dispatch contract, for a worker whose role file does not carry it: how to report, and what a result is.
-WORKER_PROTOCOL = (
-    "Worker protocol: send your result with the agent-runtime report tool as "
-    "report(kind, assignment_id), where kind is progress, complete, blocked or decision; a final "
-    "message alone never reaches the parent. Return a compact block: STATUS: COMPLETE | BLOCKED | "
-    "PARTIAL, then task id, files changed, checks (command and outcome), decisions, remaining work."
-)
-LEGACY_WORKER_PROTOCOL = WORKER_PROTOCOL.replace(
-    "report(kind, assignment_id), where kind is progress, complete, blocked or decision",
-    "report(text)",
-)
-
-
-def discard(name, env):
-    """Best effort: end and remove a terminal we may have started."""
-    fresh = Context()
-    for command in ("kill", "rm"):
-        try:
-            hc([command, name], env, fresh)
-        except ToolError:
-            pass
-
-
-# What a store failure leaves behind, by tool, when it escapes the handler before the tool's external effect:
-# every pending change was a transaction the store already rolled back, so retrying the call is safe.
-STORE_DOWN = {
-    "spawn": "nothing was started",
-    "resume": "nothing was sent",
-    "message": "the message was not delivered",
-    "report": "the report was not recorded",
-    "stop": "nothing was stopped",
-    "task": "the task was not changed",
-}
-
-
-def store_down(name, error):
-    return ToolError("store failure (%s): %s; retry the %s" % (error, STORE_DOWN[name], name))
-
-
-def settle(store, assignment, **kwargs):
-    """Fail an assignment after its launch or send went wrong; returns the store error that stopped it, never raises.
-
-    The caller is already reporting a failure of its own: a second one must not replace it."""
-    try:
-        store.fail(assignment, **kwargs)
-    except (sqlite3.Error, dispatch.StoreError) as error:
-        return error
-    return None
-
-
-def row_state(raw):
-    status = raw.get("status")
-    return status.get("state") if isinstance(status, dict) else status
-
-
-def hc_server(env):
-    """Runtime scope is the hc server, shared by a lead and its workers. HC_SCOPE is a per-starter
-    token that differs between them, so it is only a fallback when no socket is visible."""
-    socket = env.get("HC_TERMINAL_SOCKET")
-    return os.path.realpath(socket) if socket else env.get("HC_SCOPE") or "default"
-
-
-def dispatch_identity(env, ctx=None):
-    """Scope plus CLI session generation; MCP process restarts retain the CLI ancestor.
-
-    The generation is the nearest CLI process PID/start time alone, shared with hooks. Hosts
-    without visible CLI ancestry must supply a session ID.
-
-    A session's generation is resolved once and kept: the walk spends a `ps` per hop, and a loaded
-    machine can push a hop past its budget. An identity that changes between two calls of one
-    session forks the team, and the workers of the first team go stale.
-    """
-    cached = getattr(ctx, "identity", None)
-    if cached:
-        return cached  # computed once per call
-    session = getattr(ctx, "session", None) if ctx is not None else None
-    if session is not None and session.get("identity"):
-        return session["identity"]  # the session's own identity, resolved when the session started
-    scope = hc_server(env)
-    generation = lib.cli_generation()
-    if not generation:
-        # A Pi lead is identified by its own process: an environment variable alone never stands in
-        # for a session, and two hosts claiming the same session are ambiguous, not Claude.
-        if lib.pi_marked(env):
-            if len(lib.marked_harnesses(env)) > 1:
-                raise ToolError(
-                    "cannot establish the lead session: the environment claims more than "
-                    "one host, so the lead identity is ambiguous"
-                )
-            raise ToolError(
-                "cannot establish a Pi lead session: no Pi process runs above this "
-                "server; start the MCP server from Pi"
-            )
-        # The Claude variable that is actually set is CLAUDE_CODE_SESSION_ID.
-        generation = env.get("CODEX_THREAD_ID") or env.get("CLAUDE_CODE_SESSION_ID")
-    if not generation:
-        raise ToolError(
-            "cannot establish lead session generation; host must supply a CLI session ID"
-        )
-    if session is not None:
-        session["identity"] = (scope, generation)
-    return scope, generation
-
-
-def lead_store(env, ctx=None):
-    if ctx is not None and getattr(ctx, "owned_team", None):
-        return ctx.store, ctx.owned_team
-    _, caller = require_hc(env)
-    scope, generation = dispatch_identity(env, ctx)
-    store = getattr(ctx, "store", None) or dispatch.Store(env)
-    team = store.team(scope, caller, generation)
-    if ctx is not None:
-        ctx.owned_team = team
-    return store, team
-
-
-def linked_task(arguments, env):
-    task_id = arguments.get("task_id")
-    if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
-        raise ToolError("task_id must be a task ID")
-    if task_id is not None and not dispatch_enabled(env):
-        raise ToolError("task_id requires AGENT_RUNTIME_DISPATCH=1")
-    return task_id
-
-
-OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
-
-
-def operation_id(arguments, env, required=False):
-    """The caller's idempotency key, or None. It lives in the durable store, so it needs dispatch."""
-    key = arguments.get("operation_id")
-    if key is None and not required:
-        return None
-    if not isinstance(key, str) or not OPERATION_ID.fullmatch(key):
-        raise ToolError(
-            "operation_id must be 1-128 characters of A-Z a-z 0-9 . _ : - starting with a letter or digit"
-        )
-    if not dispatch_enabled(env):
-        raise ToolError("operation_id requires AGENT_RUNTIME_DISPATCH=1")
-    return key
-
-
-def operation_owner(env, caller):
-    """The terminal on one bound hc socket, independent of orchestrator generations.
-
-    Path and terminal addresses can both be reused after restart. Device/inode/ctime identify
-    the socket incarnation; no session marker or path-only fallback can prove that identity.
-    """
-    socket = env.get("HC_TERMINAL_SOCKET")
-    if not socket:
-        raise OSError(
-            "cannot identify the hc server instance; restore HC_TERMINAL_SOCKET and retry"
-        )
-    info = os.stat(socket)
-    if not stat.S_ISSOCK(info.st_mode):
-        raise OSError("cannot identify the hc server instance; restore its Unix socket and retry")
-    return "%s\n%s\nsocket:%s:%s:%s" % (
-        hc_server(env),
-        caller,
-        info.st_dev,
-        info.st_ino,
-        info.st_ctime_ns,
-    )
-
-
-def operation_fingerprint(verb, **fields):
-    """Every argument that changes what a spawn or resume does, normalized; a replay must match it exactly."""
-    body = json.dumps(dict(fields, verb=verb), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(body.encode()).hexdigest()
-
-
-def replayed(store, identity, name, caller, address=None):
-    """The answer to a repeated operation_id: the first call's assignment and where it stands now. Nothing is sent."""
-    view = store.assignment_info(identity["assignment_id"])
-    payload: dict = dict(
-        identity,
-        name=view.get("name") or name,
-        address=address or store.worker_address(identity["team_id"], view.get("name") or name),
-        parent=caller,
-        state=view["state"],
-        replayed=True,
-    )
-    if view["state"] == "failed":
-        payload["reason"] = (
-            "this operation_id already failed: start the work again with a new operation_id"
-        )
-    elif view.get("reason"):
-        payload["reason"] = view["reason"]
-    return result(payload, structured=True)
-
-
-# Effort levels every CLI accepts: claude --effort, codex model_reasoning_effort, pi --thinking.
-# Pi knows off and minimal as well; the runtime never sends a level a CLI does not take.
-EFFORTS = ("low", "medium", "high", "xhigh", "max")
-AGENT_CODEX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
-AGENT_CLAUDE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_:-]{0,63}")
-
-
-def spawn_model(arguments):
-    model = arguments.get("model")
-    if model is None:
-        return []
-    if not isinstance(model, str) or not model.strip():
-        raise ToolError("model must be a model name")
-    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in model):
-        raise ToolError("model must not contain whitespace or control characters")
-    if model.startswith("-"):
-        raise ToolError("model must not start with '-'")
-    return ["--model", model]
-
-
-def spawn_effort(arguments, cli):
-    """Per-task effort as a launch flag, so it never touches the CLI's saved default."""
-    effort = arguments.get("effort")
-    if effort is None:
-        return []
-    if effort not in EFFORTS:
-        raise ToolError("effort must be one of %s" % ", ".join(EFFORTS))
-    if cli == "claude":
-        return ["--effort", effort]
-    if cli == "pi":
-        return ["--thinking", effort]
-    return ["-c", 'model_reasoning_effort="%s"' % effort]
-
-
-NO_AGENT = "none"  # the reserved agent name: no role file, no role text
-
-
-def spawn_agent(arguments, cli):
-    """The role the worker runs under: a name, or None for no role at all."""
-    agent = arguments.get("agent")
-    if agent is None:
-        return None
-    pattern = AGENT_CLAUDE if cli == "claude" else AGENT_CODEX
-    if not isinstance(agent, str):
-        raise ToolError("agent must match %s" % pattern.pattern)
-    if agent == NO_AGENT:
-        return None
-    # Codex reads ~/.codex/agents/<agent>.toml, so it never takes ':' (path-safe names only).
-    if cli == "codex" and ":" in agent:
-        raise ToolError("Codex agents cannot contain ':' (Claude plugin agents only)")
-    if not pattern.fullmatch(agent):
-        raise ToolError("agent must match %s" % pattern.pattern)
-    return agent
-
-
-def spawn_instructions(arguments, env):
-    """Role text from the file the caller names; None when there is none."""
-    path = arguments.get("instructions_file")
-    if path is None:
-        return None
-    if not isinstance(path, str) or not path.strip():
-        raise ToolError("instructions_file must be a path")
-    home = env.get("HOME") or os.path.expanduser("~")
-    expanded = home + path[1:] if path.startswith("~/") else path
-    if not os.path.isabs(expanded):
-        raise ToolError("instructions_file must be an absolute or ~/ path: %s" % path)
-    if not os.path.isfile(expanded):
-        raise ToolError("instructions_file is not a file: %s" % path)
-    try:
-        with open(expanded, encoding="utf-8") as handle:
-            text = handle.read()
-    except OSError as error:
-        raise ToolError(
-            "cannot read instructions_file %s: %s" % (path, error.strerror or type(error).__name__)
-        )
-    if not text.strip():
-        raise ToolError("instructions_file is empty: %s" % path)
-    return text.strip()
-
-
-def owned_orphan(name, caller, env, earlier, other):
-    """True only when a terminal we may have started exists under our parent and no other spawn of this name owns it.
-
-    earlier: the address bound before our spawn registered; other(address): another live assignment bound it."""
-    try:
-        raw = json.loads(hc(["get", name, "--json"], env, Context()))
-    except (ToolError, ValueError):
-        return False
-    return bool(
-        isinstance(raw, dict)
-        and raw.get("parent") == caller
-        and raw.get("address")
-        and raw.get("address") != earlier
-        and not other(raw["address"])
-    )
-
-
-def profile_launch_error(name, env, ctx):
-    """Allow a bounded startup window for a launcher diagnostic, including a delayed exit."""
-    deadline = time.monotonic() + PROFILE_STARTUP_WINDOW_SECONDS
-    while time.monotonic() < deadline:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        if ctx.cancelled.is_set():
-            return ToolError("cancelled")
-        exited = False
-        try:
-            raw = json.loads(hc(["get", name, "--json"], env, ctx, min(1.0, remaining)))
-            exited = isinstance(raw, dict) and lib.hc_state(raw) == "exited"
-        except (ToolError, ValueError):
-            pass
-        remaining = deadline - time.monotonic()
-        try:
-            screen = (
-                hc(["read", name, "--lines", "30"], env, ctx, min(1.0, remaining))
-                if remaining > 0
-                else ""
-            )
-        except ToolError:
-            screen = ""
-        for line in screen.splitlines():
-            if line.startswith("agent-runtime-profile:"):
-                return ToolError(line)
-        if exited:
-            return ToolError("worker %s launcher exited during startup" % name)
-        ctx.cancelled.wait(min(0.05, max(0, deadline - time.monotonic())))
-    return None
-
-
-def profile_launcher():
-    """The checkout's profile launcher; an installed runtime falls back to the command on PATH.
-
-    The runtime lives in the member (`packages/agent-runtime/src/agent_runtime`), so the repository root
-    is found by walking up to the directory that carries the launcher, not by assuming a layout.
-    """
-    for parent in Path(__file__).resolve().parents:
-        script = parent / "bin" / "agent-runtime-profile"
-        if script.is_file():
-            return str(script)
-    return "agent-runtime-profile"
 
 
 def spawn(arguments, env, ctx):
@@ -855,38 +452,6 @@ def spawn(arguments, env, ctx):
     return result(dict(info, **identity), structured=True)
 
 
-def require_child(name, env, ctx):
-    _, caller = require_hc(env)
-    try:
-        raw = json.loads(hc(["get", name, "--json"], env, ctx))
-    except ValueError:
-        raise ToolError("cannot read %s" % name)
-    if not caller or not isinstance(raw, dict) or raw.get("parent") != caller:
-        raise ToolError("%s is not your child; refusing" % name)
-    return raw
-
-
-def send(args_before, target, text, env, ctx, timeout=SHORT_SECONDS):
-    worker_name(target)
-    require_child(target, env, ctx)
-    out = hc(["send"] + args_before + [target, text], env, ctx, timeout)
-    return out
-
-
-def message(arguments, env, ctx):
-    to, text = need(arguments, "to", "text")
-    if dispatch_enabled(env):
-        actor = ctx.actor
-        if actor["worker_id"]:
-            store, own_team = lead_store(env, ctx)
-            if store.has_worker(own_team, to):
-                actor = store.actor(actor["scope"], actor["address"], None, ctx.generation)
-        return result(
-            ctx.store.peer(actor, to, text, arguments.get("message_id"), ctx.ack), structured=True
-        )
-    return result(send([], to, text, env, ctx) or "sent")
-
-
 def resume(arguments, env, ctx):
     name, task = need(arguments, "name", "task")
     task_id = linked_task(arguments, env)
@@ -976,68 +541,6 @@ def resume(arguments, env, ctx):
         )
     out = send(["--wait", "--timeout", str(WAIT_DEFAULT)], name, task, env, ctx, WAIT_DEFAULT + 10)
     return result(out or "turn ended")
-
-
-def operation(arguments, env, ctx):
-    """Where a spawn or resume with this operation_id stands, for the lead that made it. Read-only: it never
-    acknowledges a report, so it takes no receipt and returns no inbox."""
-    key = operation_id(arguments, env, required=True)
-    _, caller = require_hc(env)
-    try:
-        store = getattr(ctx, "store", None) or dispatch.Store(env)
-        found = store.operation(operation_owner(env, caller), key)
-    except (sqlite3.Error, OSError, dispatch.StoreError) as error:
-        found = {
-            "state": "unknown",
-            "assignment_id": None,
-            "reason": "the store could not be read (%s); restore access to the store and retry the lookup"
-            % error,
-        }
-    return result(dict(found, operation_id=key), structured=True)
-
-
-def legacy_wait_seconds(arguments):
-    value = arguments.get("timeout", WAIT_DEFAULT)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        raise ToolError("timeout must be a positive number of seconds")
-    return int(min(value, WAIT_MAX))
-
-
-def legacy_wait(arguments, env, ctx):
-    (target,) = need(arguments, "target")
-    seconds = legacy_wait_seconds(arguments)
-    _, _ = require_hc(env)
-    if target in ("any", "all"):
-        argv = ["wait", "--children", target, "--timeout", str(seconds), "--json"]
-    else:
-        argv = ["wait", worker_name(target), "--timeout", str(seconds), "--json"]
-    try:
-        code, out, err = run(["hc"] + argv, env, ctx, seconds + 10)
-        text = out.strip() or err.strip()
-        try:
-            news = {"exit": code, "news": json.loads(text)}
-        except ValueError:
-            news = {"exit": code, "output": text}
-    except ToolError as error:
-        if ctx.cancelled.is_set():
-            raise
-        news = {"exit": None, "output": str(error)}
-    if target in ("any", "all"):
-        workers = lib.list_children("hc", env)
-    else:
-        workers = [lib.status("hc", target, env)]
-    return result({"wait": news, "workers": workers})
-
-
-def wait_seconds(arguments):
-    value = arguments.get("timeout", WAIT_DEFAULT)
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not 0 <= value < float("inf")
-    ):
-        raise ToolError("timeout must be a nonnegative finite number of seconds")
-    return min(value, WAIT_MAX)
 
 
 def wait(arguments, env, ctx):
@@ -1138,55 +641,6 @@ def wait(arguments, env, ctx):
     return result(batch, structured=True)
 
 
-def attach_usage(batch, env):
-    """Add each returned row's measured `usage`; a row whose worker has no measurement gets no key.
-
-    Done once, on the batch the wait returns, outside the store's transaction and the listener. The
-    store budgets a worst-case dict per row, so the attached response stays under its cap.
-    """
-    measured = {}
-
-    def figures(worker):
-        if worker not in measured:
-            try:
-                measured[worker] = usage.assignment_usage(env, worker)
-            except Exception:  # measuring is garnish: it never fails a wait
-                measured[worker] = {}
-        return measured[worker]
-
-    for row in batch.get("assignments") or ():
-        found = figures(row.get("name")).get(row.get("assignment_id"))
-        if found:
-            row["usage"] = found
-
-
-def collect(arguments, env, ctx):
-    (name,) = need(arguments, "name")
-    worker_name(name)
-    require_hc(env)
-    try:
-        app = lib.hc_app(json.loads(hc(["get", name, "--json"], env, ctx)))
-    except ValueError:
-        app = None
-    screen = hc(["read", name, "--lines", str(HISTORY_LINES)], env, ctx)
-    block = lib.last_prompt_block(screen, app) if app else []
-    lines = block or screen.splitlines()  # unknown CLI or no task prompt: the whole screen
-    return result("\n".join(lines[-COLLECT_LINES:]))
-
-
-def terminal_gone(error, name):
-    """hc reports a missing terminal as error.kind == "not_found" (or `no terminal "<name>"`); nothing else is gone."""
-    text = str(error)
-    try:
-        body = json.loads(text)
-        info = body.get("error") if isinstance(body, dict) else None
-        if isinstance(info, dict):
-            return info.get("kind") == "not_found"
-    except ValueError:
-        pass
-    return text.strip() == 'no terminal "%s"' % name
-
-
 def stop(arguments, env, ctx):
     (name,) = need(arguments, "name")
     worker_name(name)
@@ -1257,71 +711,6 @@ def stop(arguments, env, ctx):
     return result("stopped %s%s" % (name, note))
 
 
-def legacy_report(arguments, env, ctx):
-    (text,) = need(arguments, "text")
-    info, _ = me(env)
-    if info["runtime"] != "hc":
-        raise gap("%s support for report" % info["runtime"], NATIVE_TOOLS[info["runtime"]])
-    if info["role"] != "worker" or not info.get("parent"):
-        raise ToolError("report is for hc workers; a lead reads results with collect")
-    hc(["send", info["parent"], text], env, ctx)
-    return result("reported to %s" % info["parent"])
-
-
-def report(arguments, env, ctx):
-    if not dispatch_enabled(env):
-        return legacy_report(arguments, env, ctx)
-    text, assignment = need(arguments, "text", "assignment_id")
-    info, caller = me(env)
-    if info["runtime"] != "hc":
-        raise gap("%s support for report" % info["runtime"], NATIVE_TOOLS[info["runtime"]])
-    if info["role"] != "worker" or not info.get("parent"):
-        raise ToolError("report is for hc workers with a registered assignment")
-    scope = hc_server(env)
-    if ctx.cancelled.is_set():
-        raise ToolError("cancelled")
-    try:
-        raw = json.loads(hc(["get", caller, "--json"], env, ctx))
-    except ValueError:
-        raise ToolError("cannot verify report sender")
-    if not isinstance(raw, dict) or raw.get("parent") != info["parent"]:
-        raise ToolError("report sender changed during resolution")
-    return result(
-        ctx.store.publish(
-            scope,
-            caller,
-            info["parent"],
-            assignment,
-            text,
-            arguments.get("kind"),
-            arguments.get("message_id"),
-            caller_name=raw.get("name"),
-            ack=ctx.ack,
-            generation=ctx.generation,
-        ),
-        structured=True,
-    )
-
-
-def task(arguments, env, ctx):
-    if not dispatch_enabled(env):
-        raise ToolError("task requires AGENT_RUNTIME_DISPATCH=1")
-    (action,) = need(arguments, "action")
-    return result(ctx.store.task(ctx.actor, action, arguments, ack=ctx.ack), structured=True)
-
-
-def status(arguments, env, _ctx):
-    (name,) = need(arguments, "name")
-    return result(lib.status(lib.resolve(env)["runtime"], name, env))
-
-
-def list_agents(_arguments, env, _ctx):
-    runtime = lib.resolve(env)["runtime"]
-    if runtime != "hc":
-        raise ToolError("list is hc-only; use the runtime's own tools")
-    return result(lib.list_children(runtime, env))
-
-
 HANDLERS = {
     "spawn": spawn,
     "message": message,
@@ -1335,29 +724,6 @@ HANDLERS = {
     "task": task,
     "operation": operation,  # a `call` verb only: the MCP tool list stays the ten tools
 }
-
-
-def bounded(out):
-    """Dispatch mode: a text result whose JSON encoding exceeds half MAX_BASE_BYTES becomes an explicit
-    partial structured result keeping the tail, where collect's
-    result is (escaped size, not raw bytes, is what the canonical payload counts)."""
-    if out.get("isError") or out.get("structuredContent") is not None:
-        return out
-    body = out["content"][0]["text"]
-    if len(json.dumps(body)) <= dispatch.MAX_BASE_BYTES // 2:
-        return out
-    budget = (
-        dispatch.MAX_BASE_BYTES // 2 - 1024
-    )  # headroom for the partial/kept/original_bytes fields
-    keep = body[
-        -budget:
-    ]  # escaped size is at least the char count; shrink from the head until it fits
-    while len(json.dumps(keep)) > budget:
-        keep = keep[max(1, (len(json.dumps(keep)) - budget) // 6) :]
-    return result(
-        {"result": keep, "partial": True, "kept": "tail", "original_bytes": len(body.encode())},
-        structured=True,
-    )
 
 
 def diagnostic(name, arguments, env, ctx, error):
@@ -1386,73 +752,6 @@ def diagnostic(name, arguments, env, ctx, error):
         "any receipt was not processed" % (reason, error)
     )
     return result(payload, structured=True)
-
-
-WAIT_NUDGE = "call wait(target=all) to receive their reports"
-# The verbs that change the team: a lead that has not read its reports must not use them.
-MUTATING = ("spawn", "message", "resume", "stop")
-
-
-def undelivered_reports(store, team, lead):
-    """Lead-addressed messages no receipt has delivered yet: the count the lead hooks block on.
-
-    The rule is the store's (`dispatch_store.undelivered_count`), the one the Stop guard counts too, so a
-    host that reads the guard's reason sees the number the server refuses on.
-    """
-    with store.transaction() as db:
-        return dispatch.undelivered_count(db, team, lead)
-
-
-def refuse_unread(ctx, scope, generation, caller, name):
-    """Refuse a mutating verb while the caller's own team has reports it has not read; a failed count never refuses.
-
-    The orchestrator's dispatch loop calls through `agent-runtime call --lead` and reads its reports at the
-    end of every loop, so a report landing between that page and its next spawn is its routine race, not a
-    nudge it should answer. A nudge-reachable session (the MCP tool surface) has no such path: the CLI's
-    ancestry gate refuses an LLM-run `agent-runtime call`, and its live-lead gate refuses another generation
-    of a terminal whose lead still holds reports.
-    """
-    if lib.FORCED_LEAD:
-        return
-    try:
-        if ctx.actor["worker_id"]:
-            team, lead = ctx.store.owned_team(scope, caller, generation), caller
-        else:
-            team, lead = ctx.actor["team_id"], ctx.actor["recipient"]
-        pending = undelivered_reports(ctx.store, team, lead) if team else 0
-    except (dispatch.StoreError, sqlite3.Error):
-        return
-    if pending:
-        raise ToolError(
-            "refusing %s: %d undelivered report%s; call wait(all) to receive %s, then retry"
-            % (name, pending, "" if pending == 1 else "s", "it" if pending == 1 else "them")
-        )
-
-
-def lead_unfinished(name, arguments, ctx, scope, generation, caller):
-    """Unfinished count over the caller's own team, or 0; a failed count never fails the call."""
-    try:
-        if not ctx.actor["worker_id"]:
-            return ctx.store.unfinished_count(ctx.actor["team_id"])
-        team = ctx.store.owned_team(
-            scope, caller, generation
-        )  # a worker with children leads its own team
-        if not team or (name == "message" and not ctx.store.has_worker(team, arguments.get("to"))):
-            return 0
-        return ctx.store.unfinished_count(team)
-    except (dispatch.StoreError, sqlite3.Error):
-        return 0
-
-
-def require_dispatch(env):
-    """A restricted host needs the durable store: without it there is no identity, no attribution
-    and no scope to check."""
-    host = host_policy.host_of(env)
-    if host_policy.restricted(host):
-        raise ToolError(
-            "the %s host needs the durable dispatch store: start the MCP server with "
-            "AGENT_RUNTIME_DISPATCH=1" % host
-        )
 
 
 def call(name, arguments, env, ctx):
