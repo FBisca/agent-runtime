@@ -70,7 +70,8 @@ class RecordBudgetTests(unittest.TestCase):
     def test_S11_the_record_module_is_under_the_paid_ceilings(self):
         """structure-budget/S11"""
         budget = runpy.run_path(str(REPO / "scripts" / "structure_budget.py"))
-        measured = budget["measure_tree"](DRIVER)
+        # The measure takes the file list: a unit test names the module it means and starts no process.
+        measured = budget["measure"](DRIVER, ["records.py"])
         self.assertIn("records.py", measured)
         ceilings = json.loads(BUDGET.read_text(encoding="utf-8"))["ceilings"]
         # No base: every file in this measurement takes no grandfather, and the two metrics the
