@@ -254,6 +254,10 @@ from .spec import (
     without_coverage as without_coverage,
 )
 
+# The runtime's own verdict on an attempt, and the words the Lead reads for it, keep one home: the idle tick asks
+# the same question from screen freshness, and the answer is already in the `wait` result it holds.
+from .verdict import ATTENTION, VERDICTS, attention
+
 ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
 now = timeutil.iso
 
@@ -409,19 +413,6 @@ class IntentUnsettled(ValueError):
         self.operations = list(operations)
 
 
-SILENT = (
-    "idle",
-    "done",
-)  # runtime_state of a `working` assignment whose turn ended: a live agent, maybe waiting on a background job
-TURN_ENDED = SILENT + (
-    "unreported",
-    "error",
-)  # runtime_state of a `working` assignment that needs attention
-ATTENTION = {
-    "blocked": "reported blocked",
-    "decision": "asked for a decision",
-    "exited": "ended without a report",
-}
 ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or replace
 # An archive whose pull request conflicts is a base that moved, not a defect: rebuilding re-reads the spec on the new
 # base. Twice, so a genuinely conflicting plan still reaches the Lead instead of looping.
@@ -1468,24 +1459,13 @@ class Driver(SpecSections):
         return document["status"] == "open"
 
     def check_ended(self, assignments):
-        """Attention from assignment states, as `wait` reports them: `failed`, `blocked` or `decision`, or `working`
-        with a `runtime_state` that says the turn ended (idle, done: `silent`) or needs a person (unreported, error)."""
-        for assignment in assignments:
-            state, runtime = assignment.get("state"), assignment.get("runtime_state")
-            if state in ("blocked", "decision"):
-                kind, text = state, ""
-            elif state == "failed" or (state == "working" and runtime in TURN_ENDED):
-                kind, text = "exited", ("runtime state " + runtime) if runtime else ""
-            else:
-                continue
-            if assignment.get("assignment_id"):
-                self.on_agent_attention(
-                    assignment["assignment_id"],
-                    kind,
-                    text,
-                    quiet=True,
-                    silent=state == "working" and runtime in SILENT,
-                )
+        """Attention from assignment states and the runtime's verdicts, as `wait` reports them: `failed`, `blocked`
+        or `decision`, a `working` assignment whose turn ended (idle, done: `silent`) or needs a person
+        (unreported, error), and an attempt the runtime watched produce nothing. The last is the answer to the
+        question the idle tick asks from screen freshness, so it is acted on when `wait` delivers it: the tick would
+        log a worker the runtime has given up on as waiting, for two ticks (20 minutes)."""
+        for assignment_id, kind, text, silent in attention(assignments):
+            self.on_agent_attention(assignment_id, kind, text, quiet=True, silent=silent)
 
     def parked_assignments(self):
         """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the
@@ -1520,6 +1500,10 @@ class Driver(SpecSections):
                 elif not gate and task.get("assignment_id") == assignment_id:
                     hit = (task_id, "worker", task["packet"]["worker"])
         if not hit:
+            if kind in VERDICTS:
+                # A verdict on an assignment no step of the drive owns: nothing here waits on it, and its attempt
+                # is not ended by silence — only an exit ends a support reviewer's attempt.
+                return None
             if silent:
                 return self.support_silent(assignment_id)
             if self.mutation_ended(assignment_id):
