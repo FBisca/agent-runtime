@@ -91,7 +91,7 @@ class SpawnHomeTests(unittest.TestCase):
             with self.subTest(name=name):
                 body = [
                     line.strip()
-                    for line in inspect.getsource(vars(engine.Driver)[name]).splitlines()
+                    for line in inspect.getsource(getattr(engine.Driver, name)).splitlines()
                     if line.strip()
                 ]
                 self.assertTrue(

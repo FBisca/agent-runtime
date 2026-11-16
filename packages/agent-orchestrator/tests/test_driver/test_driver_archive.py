@@ -81,7 +81,8 @@ INTERNAL = (
 PUBLISHED = PARK + ARCHIVED + ("reopen_parked",)
 
 # The rules only this lane reads: the two asks of a park, the acceptance the archive's worker is held
-# to, and the runtime id of the unit the driver does itself. They move with their one reader.
+# to, and the runtime id of the unit the driver does itself. They keep one home; the package publishes
+# that home's object rather than a second copy.
 OWNED = ("PARK_ASK_FIRST", "PARK_ASK_EVERY", "YAML_ARCHIVE_ACCEPTANCE", "DRIVER_ID")
 
 # The crash report: the function the run's guard calls and the line it wakes the Lead with.
@@ -195,11 +196,12 @@ class ArchiveHomeTests(unittest.TestCase):
                 self.assertIn(name, vars(archive))
                 self.assertIs(getattr(driver, name), getattr(archive, name))
         # A rule only the lane reads has one copy too: left behind in the package it would be the second
-        # answer to the same question.
+        # answer to the same question. The package publishes it, so `driver.<name>` is the lane's own
+        # object and never a restatement of it.
         for name in OWNED:
             with self.subTest(name=name):
                 self.assertIn(name, vars(archive))
-                self.assertNotIn(name, vars(driver))
+                self.assertIs(getattr(driver, name), getattr(archive, name))
 
     def test_S13_the_driver_reaches_every_moved_member_through_the_collaborator(self):
         """structure-budget/S13"""
@@ -214,7 +216,7 @@ class ArchiveHomeTests(unittest.TestCase):
             with self.subTest(name=name):
                 body = [
                     line.strip()
-                    for line in inspect.getsource(vars(engine.Driver)[name]).splitlines()
+                    for line in inspect.getsource(getattr(engine.Driver, name)).splitlines()
                     if line.strip()
                 ]
                 self.assertTrue(

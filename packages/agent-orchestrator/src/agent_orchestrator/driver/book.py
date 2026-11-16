@@ -13,6 +13,7 @@ lines, and because a rule the whole engine shares has one home.
 import copy
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from .. import timeutil
 from ..invariants import checked_write as ledger
@@ -337,3 +338,36 @@ class Book:
                 t.get("gate") in ("ready-for-ci", "awaiting-merge", "requested")
                 for t in data["tasks"].values()
             ) or any(r.get("state") == "reviewing" for r in (data.get("mutation") or {}).values())
+
+
+class BookSurface:
+    """The published surface of the durable record.
+
+    Each name answers with the one `Book` the Driver holds, so a caller and a test keep asking the
+    Driver while the record keeps one owner.
+    """
+
+    def __getattr__(self, name) -> Any:
+        """The engine behind this mixin: the record, the plan and the processes are the
+        Driver's own, and only what this module owns lives here."""
+        raise AttributeError(name)
+
+    def awaiting(self):
+        """Tickets whose PR is not merged yet, or whose request the Lead has not answered: the run stays up."""
+        return self.book.awaiting()
+
+    def task(self, task_id):
+        """One attempt as the record holds it, as a copy."""
+        return self.book.task(task_id)
+
+    def unit_of(self, task_id):
+        """The logical unit one attempt belongs to."""
+        return self.book.unit_of(task_id)
+
+    def mark(self, task_id, **fields):
+        """Set fields on one attempt, and say when it was set."""
+        return self.book.mark(task_id, **fields)
+
+    def write_status(self, ticket_id, status):
+        """The plan ticket's Status cell; the archive unit has no row to write."""
+        return self.book.write_status(ticket_id, status)
