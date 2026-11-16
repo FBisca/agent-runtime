@@ -21,7 +21,7 @@ def _written_at(path):
         stamp = Path(path).stat().st_mtime
     except OSError:
         return ""
-    return datetime.fromtimestamp(stamp, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _reported(driver, packet):
