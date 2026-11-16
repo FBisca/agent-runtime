@@ -40,8 +40,9 @@ bridge to the MCP tools and lists them in its usage error.
   and no module under `server/` imports a third-party package.
 * The runtime modules are imported as top-level siblings (`import dispatch_store`, `import hc_tools`,
   `import usage`, …) from `server/`; `hooks/` adds `hook_lib` and `lead_context`.
-* Only `server/dispatch_store.py` and `server/hc_tools.py` import `sqlite3`. That is the store
-  layer: nothing else may touch the database directly (S3).
+* Only `server/dispatch_store.py`, the store modules beside it (`dispatch_connections.py` opens the
+  connection every family shares) and `server/hc_tools.py` import `sqlite3`. That is the store layer:
+  nothing else may touch the database directly (S3).
 * The agent skills (the `orchestrate` skill and its companions) do not live in this repository: they
   ship from `agent-skills/skills/`, which the uv-workspace plan wires in T4. This baseline therefore
   records the runtime they call — the `agent-runtime` shim and the `spawn`, `resume`, `collect` and

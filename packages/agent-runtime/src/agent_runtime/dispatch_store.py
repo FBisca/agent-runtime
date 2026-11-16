@@ -5,363 +5,94 @@ message array (UTF-8, ensure_ascii=True, separators=(',', ':'), including bracke
 and commas), 65536 bytes per report (UTF-8 and JSON-encoded text). Oversize publication
 fails explicitly; reads never truncate or acknowledge implicitly. A receipt names
 exactly the returned IDs; passing it on the next read acknowledges that page.
-Connections/transactions are per operation, allowing separate MCP processes.
-"""
+Connections/transactions are per operation, allowing separate MCP processes."""
 
-import hashlib
+import hashlib as hashlib
 import json
 import os
 import re
 import sqlite3
 import time
-import uuid
-from contextlib import contextmanager
+import uuid as uuid
+from contextlib import contextmanager as contextmanager
 from pathlib import Path
 
 from . import agent_runtime as lib
 from . import dispatch_events
 from .agent_runtime import ERROR_NEXT, UNREPORTED_NEXT, process_start_stamp
-
-MAX_WORKERS = MAX_MESSAGES = 32
-# How many times a registration reads the terminal's teams again when another session registers at
-# the same time: the read and the insert are separate transactions, so the picture can change.
-TEAM_ATTEMPTS = 3
-TEAM_LIMIT = "team limit is 32 active workers: stop an active worker, then retry"
-MAX_TEXT_BYTES, MAX_BATCH_BYTES = 65536, 131072
-# D22: the canonical compact-JSON result (every user-visible field, before the host's text +
-# structuredContent copies) stays under MAX_RESPONSE_BYTES. A base payload (tool result before an
-# inbox piggyback) stays under MAX_BASE_BYTES, so a legal 64 KiB report always fits beside it.
-MAX_RESPONSE_BYTES, MAX_BASE_BYTES, MAX_PAGE_BYTES = 196608, 98304, 65536
-# `wait` attaches a usage dict to each returned row after this store read. Every figure it can carry,
-# at a width no real count reaches, is budgeted per row, so the attached response stays under its cap.
-WORST_USAGE = {
-    **dict.fromkeys(
-        (
-            "input_tokens",
-            "cached_input_tokens",
-            "cache_write_tokens",
-            "output_tokens",
-            "reasoning_tokens",
-            "model_calls",
-            "tool_calls",
-        ),
-        10**20 - 1,
-    ),
-    "cost_usd": 1234567890.1234567,
-}
-STALL_NEXT = (
-    "no progress for 15 minutes: collect it, message it, ask the user, or stop it; "
-    "the runtime never stops it or marks it complete"
+from .dispatch_assignments import (
+    BIND_GONE_SQL,
+    BIND_NEWER_ADDRESS_SQL,
+    BIND_NEWER_ASSIGNMENT_SQL,
+    Assignments,
 )
-STALL_MS = 15 * 60 * 1000
-RESUME_GRACE_MS = 60 * 1000
-NOT_STARTED_NEXT = (
-    "resume has not started: collect the worker's screen or stop it if no longer needed; "
-    "the runtime never resends the task"
+from .dispatch_callers import ACTOR_SQL, Callers
+from .dispatch_connections import Connections
+from .dispatch_errors import StorageError, StoreError, TerminalRefused
+from .dispatch_ids import uid
+from .dispatch_limits import (
+    HC_RESTARTED,
+    MAX_BASE_BYTES,
+    MAX_BATCH_BYTES,
+    MAX_MESSAGES,
+    MAX_RESPONSE_BYTES,
+    MAX_TEXT_BYTES,
+    MAX_WORKERS,
+    REPORT_KINDS,
+    TEAM_ATTEMPTS,
+    TEAM_LIMIT,
+    WORST_USAGE,
 )
-REPORT_KINDS = ("progress", "complete", "blocked", "decision")
-HC_RESTARTED = (
-    "the hc server restarted or this key predates server-instance tracking; "
-    "inspect the earlier work, then use a new operation_id"
+from .dispatch_limits import MAX_PAGE_BYTES as MAX_PAGE_BYTES
+from .dispatch_operations import Operations
+from .dispatch_ownership import GENERATION_PID as GENERATION_PID
+from .dispatch_ownership import (
+    REFUSED_IN_TREE,
+    REFUSED_LIVE_OWNER,
+    alive_verdict,
+    alive_verdicts,
+    owner_session_tree,
+    owning_team,
+    team_holds_work,
+    terminal_owned,
 )
-
-
-SNAPSHOT_SQL = (
-    "SELECT a.id AS assignment_id,d.turn,d.mode,w.name,w.address,t.lead FROM assignments a "
-    "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
-    "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
-    "WHERE a.team=? AND (a.current=1 OR a.id=? OR (? IN ('all','any') AND EXISTS "
-    "(SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0))) "
-    "AND (? IN ('all','any') OR w.name=? OR a.id=?) "
-    # D26: all/any cover unfinished work of active workers plus results not yet acknowledged.
-    "AND (? NOT IN ('all','any') OR (w.active=1 AND a.state NOT IN ('complete','failed')) "
-    "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) ORDER BY a.rowid"
+from .dispatch_ownership import UNDELIVERED_SQL as UNDELIVERED_SQL
+from .dispatch_ownership import WAY_OUT as WAY_OUT
+from .dispatch_ownership import generation_alive as generation_alive
+from .dispatch_ownership import team_empty as team_empty
+from .dispatch_ownership import undelivered_count as undelivered_count
+from .dispatch_read import (
+    READ_MEMBERS_SQL,
+    READ_MESSAGES_SQL,
+    READ_NAMED_CLAUSE,
+    READ_PINNED_CLAUSE,
+    Reads,
+    wait_fingerprint,
 )
-# The liveness rule, written where it runs: the query is a literal, so the reader sees the whole rule.
-# A team holds work its lead is still serving when it has an unfinished assignment of an active worker or a
-# result that is not acknowledged yet. This is the rule the published lead-conflict requirement states
-# ("that team has unfinished assignments"), so a superseded turn of an active worker still keeps the
-# terminal. The CLI's own live-lead check reads the snapshot's "all" branch instead, which asks about the
-# current turn of every worker: it is looser, so a call it lets through is refused here, with the message
-# that names the terminal, the owner and the way out. The two readers answer different questions on
-# purpose; the store's answer is the one that decides the terminal, and the CLI's check should read this
-# rule (it lives in agent_runtime.py, outside this ticket's paths).
-READ_MEMBERS_SQL = (
-    "SELECT a.id AS assignment_id,a.worker AS worker_id,CASE WHEN a.state='complete' THEN 'complete' "
-    "WHEN a.current=0 OR w.active=0 THEN 'failed' ELSE a.state END AS state,w.name,d.turn,d.mode FROM assignments a LEFT JOIN dispatch_turns d ON d.assignment=a.id "
-    "JOIN workers w ON w.id=a.worker WHERE a.team=? AND {selection} ORDER BY a.rowid"
-)
-READ_MESSAGES_SQL = "SELECT body FROM messages WHERE team=? AND recipient=? AND acked=0"
-# The undelivered rule, written where it runs: a lead-addressed message no read has delivered. A receipt
-# names what a page handed over, so a message a receipt names is delivered even before the next call
-# acknowledges it. One reader decides it: the Stop guard counts it to block a turn, and the server counts
-# it to refuse a mutating verb, so the two cannot drift apart.
-UNDELIVERED_SQL = (
-    "SELECT COUNT(*) FROM messages m WHERE m.team=? AND m.recipient=? AND m.acked=0 AND NOT EXISTS "
-    "(SELECT 1 FROM receipts r, json_each(r.ids) j WHERE r.team=m.team AND r.recipient=m.recipient "
-    "AND j.value=m.id)"
-)
-READ_NAMED_CLAUSE = " AND assignment IN (SELECT id FROM assignments WHERE worker IN (SELECT id FROM workers WHERE team=? AND name=?) OR id=?)"
+from .dispatch_read import SNAPSHOT_SQL as SNAPSHOT_SQL
+from .dispatch_read import last_wait_state as last_wait_state
+from .dispatch_receipts import Receipts
+from .dispatch_stall import NOT_STARTED_NEXT, RESUME_GRACE_MS, STALL_MS, STALL_NEXT, Stall
+from .dispatch_tasks import TASK_REPORT_SQL, TASKS_DONE_SQL, Tasks
+from .dispatch_tasks import TASKS_DEPS_SQL as TASKS_DEPS_SQL
+from .dispatch_tasks import TASKS_LIST_SQL as TASKS_LIST_SQL
+
+# The store's namespace is its surface, and three stdlib modules are published here only because the
+# code that used them moved: hashlib with the wait digest, uuid with the id source, contextmanager with
+# the connections. They are re-exported by the redundant-alias idiom so `dir(dispatch_store)` answers
+# what it answered before the split, and a caller that reached for them keeps finding them.
 
 
-BIND_NEWER_ADDRESS_SQL = (
-    "SELECT 1 FROM workers w JOIN teams t ON t.id=w.team "
-    "JOIN assignments a ON a.worker=w.id WHERE w.address=? AND t.scope=? "
-    "AND a.current=1 AND a.rowid>? LIMIT 1"
-)
-BIND_NEWER_ASSIGNMENT_SQL = "SELECT 1 FROM assignments WHERE worker=? AND rowid>? LIMIT 1"
-BIND_GONE_SQL = (
-    "SELECT a.id,a.team,a.worker,t.lead FROM assignments a JOIN workers w ON w.id=a.worker "
-    "JOIN teams t ON t.id=a.team WHERE w.address=? AND w.id!=? AND t.scope=? "
-    "AND a.state NOT IN ('complete','failed')"
-)
-ACTOR_SQL = (
-    "SELECT a.id,a.state,w.id AS worker,t.id AS team FROM assignments a "
-    "JOIN workers w ON w.id=a.worker JOIN teams t ON t.id=a.team "
-    "WHERE t.scope=? AND t.lead=? AND ((w.address=? AND w.active=1 AND a.current=1) "
-    "OR (a.id=? AND a.state='pending' AND w.name=?)) ORDER BY a.rowid DESC LIMIT 1"
-)
-READ_PINNED_CLAUSE = " AND (assignment IN ({ids}) OR assignment IS NULL)"
-TASK_REPORT_SQL = (
-    "UPDATE tasks SET status=? WHERE assignment=? AND status IN ('in_progress','blocked')"
-)
-TASKS_DONE_SQL = "SELECT id FROM tasks WHERE team=? AND status='complete'"
-TASKS_LIST_SQL = "SELECT rowid AS cursor,* FROM tasks WHERE team=? AND rowid>? ORDER BY rowid"
-TASKS_DEPS_SQL = "SELECT id,deps FROM tasks WHERE team=?"
-
-
-class StoreError(Exception):
-    pass
-
-
-class StorageError(StoreError):
-    """The store itself is unusable (directory ownership, schema version); never an authorization verdict."""
-
-
-class TerminalRefused(StoreError):
-    """The terminal belongs to another session: this session does not own it and no team was registered."""
-
-
-# One message names a terminal's owner: the terminal, the generation that owns it and the way out.
-WAY_OUT = (
-    "run this session in its own hc terminal, "
-    "or start a new session in this terminal once the owner has exited"
-)
-
-
-# Why a session is refused: the rule that decided, in the words the rule uses.
-REFUSED_IN_TREE = "this session runs inside the owning session's own process tree"
-REFUSED_LIVE_OWNER = "the owning session is still running and its team still holds work"
-
-
-def terminal_owned(terminal, generation, reason=""):
-    """The one message a session gets when the terminal belongs to another generation.
-
-    It names the terminal, the generation that owns it, the rule that refused the call and the
-    way out, so the caller can act on it without reading the store."""
-    detail = "; %s" % reason if reason else ""
-    return "terminal %s is owned by generation %s%s; %s" % (terminal, generation, detail, WAY_OUT)
-
-
-# One rule owns a terminal: the newest team row for that scope and terminal that is neither dead nor
-# empty. A row is dead when its generation is a `pid:lstart` stamp whose process no longer carries that
-# stamp; a generation with no pid is never provably dead, so its row is judged by what it holds. A row
-# is empty when it holds no worker, assignment, message, receipt, caller, task, last_wait row or
-# operation. The caller's own row is never skipped for it, so a caller always has a team; when every
-# other row would be skipped, the newest one owns the terminal.
-GENERATION_PID = re.compile(r"^(\d+):(.+)$")
-
-
-def generation_alive(generation, stamp=None):
-    """True when the generation's process is provably alive: that pid still carries that start stamp.
-
-    A generation with no pid is never provably alive (nor provably dead): only what its team holds
-    can judge it. The process evidence is injected, so the store keeps no subprocess code and a test
-    can stand for the process table."""
-    match = GENERATION_PID.match(generation) if isinstance(generation, str) else None
-    if not match:
-        return False
-    exists, start = (stamp or process_start_stamp)(int(match.group(1)))
-    return exists and start == match.group(2)
-
-
-def alive_verdicts(generations, stamp=None):
-    """What the process table says about each generation: {generation: alive}.
-
-    The evidence is gathered once, outside the write transaction, and handed to the readers that
-    need it, so no `ps` runs while the store holds its write lock."""
-    return {generation: generation_alive(generation, stamp) for generation in set(generations)}
-
-
-def alive_verdict(liveness, generation):
-    """Whether one generation's process is alive, from the evidence gathered outside the transaction.
-
-    The map holds the verdicts for the rows the reader was given. A generation the map does not know is
-    a row that landed after the evidence was taken (another session registered in that window), so the
-    reader is asked then: the process table is read in that rare window only, never on the common path."""
-    if liveness is None:
-        return generation_alive(generation)
-    verdict = liveness.get(generation)
-    return generation_alive(generation) if verdict is None else verdict
-
-
-def team_empty(db, team):
-    """True when the team holds no worker, assignment, message, receipt, caller, task, last_wait row or
-    operation: the session that owned it left nothing behind."""
-    if db.execute("SELECT 1 FROM workers WHERE team=? LIMIT 1", (team,)).fetchone():
-        return False
-    if db.execute("SELECT 1 FROM assignments WHERE team=? LIMIT 1", (team,)).fetchone():
-        return False
-    if db.execute("SELECT 1 FROM messages WHERE team=? LIMIT 1", (team,)).fetchone():
-        return False
-    if db.execute("SELECT 1 FROM receipts WHERE team=? LIMIT 1", (team,)).fetchone():
-        return False
-    if db.execute("SELECT 1 FROM callers WHERE team=? LIMIT 1", (team,)).fetchone():
-        return False
-    if db.execute("SELECT 1 FROM last_wait WHERE team=? LIMIT 1", (team,)).fetchone():
-        return False
-    # The task and operation tables arrived with later store versions: an older one has neither.
-    if (
-        db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'").fetchone()
-        and db.execute("SELECT 1 FROM tasks WHERE team=? LIMIT 1", (team,)).fetchone()
-    ):
-        return False
-    if (
-        db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
-        ).fetchone()
-        and db.execute("SELECT 1 FROM operations WHERE team=? LIMIT 1", (team,)).fetchone()
-    ):
-        return False
-    return True
-
-
-def owner_session_tree(owner_generation, ancestors=None):
-    """True when the owner's process is in this process's ancestor chain.
-
-    A session that descends from the owner (the owner's pid in the caller's ancestor chain) is the
-    owner's own session tree, not a new session: it may not take the owner's terminal, whatever the
-    owner's team holds. The ancestry is injected, so the store keeps no subprocess code and a test
-    can stand for the process table."""
-    owner = GENERATION_PID.match(owner_generation) if isinstance(owner_generation, str) else None
-    if not owner:
-        return False
-    return int(owner.group(1)) in ((ancestors or lib.ancestor_pids)())
-
-
-def undelivered_count(db, team, lead):
-    """Lead-addressed messages no read has delivered yet: unacknowledged and named by no receipt."""
-    return db.execute(UNDELIVERED_SQL, (team, lead)).fetchone()[0]
-
-
-def team_holds_work(db, team, lead=None):
-    """True when the team holds work its lead is still serving.
-
-    This is the liveness rule, not the emptiness rule: unfinished assignments of active workers or
-    results not yet acknowledged, plus a message the lead has not acknowledged. The rule is the
-    query above, so one reader decides what a live owner holds: an owner that holds only a task, an
-    operation or a last-wait row is idle, and an idle terminal is free for the next session. The CLI's
-    live-lead check asks a looser question (the current turn of every worker), so it may let a call
-    through that this rule refuses: the store's answer is the one that keeps the terminal with its
-    owner."""
-    return bool(
-        db.execute(
-            "SELECT 1 FROM assignments a JOIN workers w ON w.id=a.worker WHERE a.team=? "
-            "AND ((w.active=1 AND a.state NOT IN ('complete','failed')) "
-            "OR EXISTS (SELECT 1 FROM messages m WHERE m.assignment=a.id AND m.acked=0)) LIMIT 1",
-            (team,),
-        ).fetchone()
-        or db.execute(
-            "SELECT 1 FROM messages WHERE team=? AND recipient=? AND acked=0 LIMIT 1", (team, lead)
-        ).fetchone()
-    )
-
-
-def owning_team(db, scope, lead, own_team=None, own_generation=None, liveness=None):
-    """The team row that owns (scope, lead), or None when the terminal has no team.
-
-    The owner is the newest row that is neither dead nor empty. The caller's own row (own_team, or the
-    row of own_generation) is never skipped for it, so a caller always has a team; when every other row
-    would be skipped, the newest one owns the terminal.
-
-    `liveness` carries the process evidence gathered outside the transaction, so this reader asks no
-    process table while the store holds its write lock; without it the reader asks the runtime. A
-    generation the evidence does not know is a row that landed after it was taken, and the reader is
-    asked for that one row alone."""
-    rows = db.execute(
-        "SELECT id,generation FROM teams WHERE scope=? AND lead=? ORDER BY rowid DESC",
-        (scope, lead),
-    ).fetchall()
-    for row in rows:
-        if row["id"] == own_team or (
-            own_generation is not None and row["generation"] == own_generation
-        ):
-            return row
-        if team_empty(db, row["id"]) and not alive_verdict(liveness, row["generation"]):
-            continue  # a session that left nothing behind never owns the terminal
-        return row
-    return rows[0] if rows else None
-
-
-def uid():
-    return uuid.uuid4().hex
-
-
-def wait_fingerprint(db, team):
-    """Pure team-state digest; accepts a read-only sqlite connection without a Store.
-
-    One SELECT captures assignment states/dispatch turns and the lead inbox's
-    message high-water mark in one SQLite snapshot. IDs and current flags include pending
-    registrations and assignment replacement; acknowledgements never change it.
-    """
-    # "Stall reported and unchanged" (R128) is part of the digest so a worker's recovery reads as new work;
-    # raw progress times and turns stay out, or every turn would flip "seen". Older stores lack stall_progress.
-    has_stall = db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'"
-    ).fetchone()
-    rows = db.execute(
-        "SELECT a.id,a.state,a.current,d.turn,d.mode,"
-        "(SELECT MAX(seq) FROM messages WHERE team=?1 "
-        "AND recipient=(SELECT lead FROM teams WHERE id=?1)),"
-        + (
-            "COALESCE(sp.stall_reported_for IS NOT NULL AND sp.stall_reported_for=sp.last_progress_ms,0)"
-            if has_stall
-            else "0"
-        )
-        + " FROM teams t LEFT JOIN assignments a ON a.team=t.id "
-        "LEFT JOIN dispatch_turns d ON d.assignment=a.id "
-        + ("LEFT JOIN stall_progress sp ON sp.assignment=a.id " if has_stall else "")
-        + "WHERE t.id=?1 ORDER BY a.id",
-        (team,),
-    )
-    payload = json.dumps([tuple(row) for row in rows], separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def last_wait_state(db, team):
-    """Return (reason, attention, stored fingerprint, current fingerprint), or None.
-
-    Both reads share one read transaction, including on mode=ro connections.
-    Preserve a caller's existing transaction; never initialize an older store.
-    """
-    own_transaction = not db.in_transaction
-    if own_transaction:
-        db.execute("BEGIN")
-    try:
-        if not db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='last_wait'"
-        ).fetchone():
-            return None
-        row = db.execute(
-            "SELECT reason,attention,fingerprint FROM last_wait WHERE team=?", (team,)
-        ).fetchone()
-        return (*row, wait_fingerprint(db, team)) if row else None
-    finally:
-        if own_transaction:
-            db.rollback()
-
-
-class Store:
+class Store(
+    Connections,
+    Stall,
+    Assignments,
+    Receipts,
+    Callers,
+    Reads,
+    Operations,
+    Tasks,
+):
     def __init__(self, env, clock=time.time, alive=None, ancestors=None):
         """The store for this user's dispatch state.
 
@@ -414,53 +145,6 @@ class Store:
             ):
                 db.execute(statement)
             db.execute("PRAGMA user_version=2")
-
-    @contextmanager
-    def reading(self):
-        """A read-only connection: the owner row and the work it holds are read outside the write
-        transaction, so no process evidence runs while the store's write lock is held."""
-        db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        db.row_factory = sqlite3.Row
-        try:
-            yield db
-        finally:
-            db.close()
-
-    @contextmanager
-    def transaction(self):
-        db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        db.row_factory = sqlite3.Row
-        try:
-            # SQLite derives rollback-journal permissions from the private database.
-            db.execute("PRAGMA journal_mode=DELETE")
-            db.execute("BEGIN IMMEDIATE")
-            yield db
-            db.commit()
-        except BaseException:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
-    def terminal_liveness(self, scope, lead):
-        """The process evidence for a terminal's team rows, gathered outside the write transaction.
-
-        No `ps` runs while the store holds its write lock: the readers that need the evidence ask
-        for it here and hand the verdict to the rule that decides."""
-        with self.reading() as db:
-            rows = db.execute(
-                "SELECT generation FROM teams WHERE scope=? AND lead=?", (scope, lead)
-            ).fetchall()
-        return alive_verdicts((row["generation"] for row in rows), self.alive)
-
-    def assignment_liveness(self, assignment, scope):
-        """The process evidence for the terminal an assignment belongs to."""
-        with self.reading() as db:
-            row = db.execute(
-                "SELECT t.lead FROM assignments a JOIN teams t ON t.id=a.team WHERE a.id=?",
-                (assignment,),
-            ).fetchone()
-        return self.terminal_liveness(scope, row["lead"]) if row else {}
 
     def team(self, scope, lead, generation):
         """Register this session's team for (scope, lead), or refuse: one terminal, one owning session.
@@ -521,64 +205,6 @@ class Store:
                 owner["generation"] if owner else generation,
                 REFUSED_LIVE_OWNER,
             )
-        )
-
-    def _link_task(self, db, team, worker, assignment, task_id, transfer):
-        """D8/D11: link a ready task to the new assignment inside the registration transaction."""
-        if not isinstance(task_id, str) or not task_id:
-            raise StoreError("task_id must be a task ID")
-        row = db.execute(
-            "SELECT status,owner,assignment,deps FROM tasks WHERE id=? AND team=?", (task_id, team)
-        ).fetchone()
-        if not row:
-            raise StoreError("unknown task for this team")
-        done = {r[0] for r in db.execute(TASKS_DONE_SQL, (team,))}
-        if row["status"] == "pending":
-            if any(d not in done for d in json.loads(row["deps"])):
-                raise StoreError("unsatisfied dependencies")
-        elif not (
-            transfer and row["status"] in ("in_progress", "blocked") and row["owner"] == worker
-        ):
-            raise StoreError("task is not pending (status %s)" % row["status"])
-        changed = db.execute(
-            "UPDATE tasks SET status='in_progress',owner=?,assignment=? WHERE id=? AND status=?",
-            (worker, assignment, task_id, row["status"]),
-        ).rowcount
-        if not changed:  # lost a concurrent claim
-            raise StoreError("task was claimed concurrently")
-        return {
-            "task_id": task_id,
-            "status": row["status"],
-            "owner": row["owner"],
-            "assignment": row["assignment"],
-        }
-
-    # Operation keys live in a side table that the first keyed call creates: a store whose lead never uses an
-    # operation_id keeps exactly the tables it had, older servers neither read nor write it, and user_version
-    # stays 2. The owner is never NULL, so the primary key really is unique per owner.
-    OPERATIONS = (
-        "CREATE TABLE IF NOT EXISTS operations (team TEXT NOT NULL, owner TEXT NOT NULL, "
-        "operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL, assignment_id TEXT NOT NULL, "
-        "PRIMARY KEY(owner,operation_id))"
-    )
-
-    @staticmethod
-    def previous_operation(db, owner, operation_id):
-        """A prior socket's key, including legacy owners whose instance was never recorded.
-
-        Keep the terminal prefix to distinguish lost provenance from an unused key: absent
-        would invite a resend. Bound parameters and substr avoid SQL wildcard path matching.
-        """
-        terminal, marker, _ = owner.rpartition("\nsocket:")
-        if not marker:
-            return False
-        prefix = terminal + "\nsocket:"
-        return bool(
-            db.execute(
-                "SELECT 1 FROM operations WHERE operation_id=? AND owner<>? "
-                "AND (owner=? OR substr(owner,1,?)=?) LIMIT 1",
-                (operation_id, owner, terminal, len(prefix), prefix),
-            ).fetchone()
         )
 
     def register(self, team, name, task_id=None, transfer=False, operation=None):
@@ -708,165 +334,6 @@ class Store:
         db.execute("UPDATE workers SET address=?,active=1 WHERE id=?", (address, row["worker"]))
         db.execute("UPDATE assignments SET state='working',current=1 WHERE id=?", (assignment,))
         db.execute("INSERT OR REPLACE INTO dispatch_turns VALUES (?,?,?)", (assignment, turn, mode))
-
-    def bind(self, assignment, address, scope, ack=None, turn=None, mode="fresh"):
-        liveness = self.assignment_liveness(assignment, scope)
-        with self.transaction() as db:
-            if ack:
-                self.acknowledge(db, *ack)
-            self._bind(db, assignment, address, scope, turn, mode, liveness=liveness)
-        dispatch_events.notify(self.directory)
-
-    def mark_resume(self, assignment, turn, mode):
-        """Record dispatch before sending, including when a report races the send response."""
-        with self.transaction() as db:
-            db.execute(
-                "INSERT INTO resume_marks VALUES (?,?,?,?)", (assignment, self.now_ms(), turn, mode)
-            )
-
-    @staticmethod
-    def _release(db, assignment):
-        """D9/D12: a dead assignment never keeps an unfinished task."""
-        db.execute(
-            "UPDATE tasks SET status='pending',owner=NULL,assignment=NULL WHERE assignment=? AND status!='complete'",
-            (assignment,),
-        )
-
-    def worker_address(self, team, name):
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT address FROM workers WHERE team=? AND name=?", (team, name)
-            ).fetchone()
-            return row[0] if row else None
-
-    def started_by_other(self, assignment, address):
-        """True when that address is the worker's bound terminal and another live assignment is its current binder.
-
-        Every bind makes the binding assignment current, so a fast report of ours (current) is never "other"."""
-        with self.transaction() as db:
-            return bool(
-                db.execute(
-                    "SELECT 1 FROM assignments o JOIN workers w ON w.id=o.worker WHERE w.address=? AND o.current=1 "
-                    "AND o.state!='failed' AND o.id!=? AND o.worker=(SELECT worker FROM assignments WHERE id=?)",
-                    (address, assignment, assignment),
-                ).fetchone()
-            )
-
-    def operation(self, owner, operation_id):
-        """What this owner's operation_id stands for, read-only: {state, assignment_id, worker_id, name} with state
-        absent, pending, bound, working, blocked, decision, complete, failed or unknown (then `reason` says what
-        to do). Reads never acknowledge or change anything."""
-        with self.transaction() as db:
-            used = None
-            if db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
-            ).fetchone():
-                used = db.execute(
-                    "SELECT assignment_id FROM operations WHERE owner=? AND operation_id=?",
-                    (owner, operation_id),
-                ).fetchone()
-                if not used and self.previous_operation(db, owner, operation_id):
-                    return {"state": "unknown", "assignment_id": None, "reason": HC_RESTARTED}
-            if not used:
-                return {"state": "absent", "assignment_id": None}
-            return self.assignment_view(db, used["assignment_id"])
-
-    def assignment_info(self, assignment):
-        with self.transaction() as db:
-            return self.assignment_view(db, assignment)
-
-    @staticmethod
-    def assignment_view(db, assignment):
-        found = db.execute(
-            "SELECT a.state,a.current,a.worker,w.name,w.active FROM assignments a "
-            "JOIN workers w ON w.id=a.worker WHERE a.id=?",
-            (assignment,),
-        ).fetchone()
-        view = {"assignment_id": assignment}
-        if not found:
-            return dict(
-                view,
-                state="unknown",
-                reason="the assignment is no longer in the store: the operation cannot be resumed, "
-                "so start the work again with a new operation_id",
-            )
-        view.update(worker_id=found["worker"], name=found["name"])
-        state = found["state"]
-        if state in ("complete", "failed", "pending"):
-            return dict(view, state=state)
-        if state in ("working", "blocked", "decision"):
-            if not found["current"] or not found["active"]:
-                return dict(
-                    view, state="failed"
-                )  # superseded or its terminal is gone, as read() says
-            if state == "working":
-                reported = db.execute(
-                    'SELECT 1 FROM messages WHERE assignment=? AND body LIKE \'%"kind":"progress"%\'',
-                    (assignment,),
-                ).fetchone()
-                state = "working" if reported else "bound"
-            return dict(view, state=state)
-        return dict(
-            view,
-            state="unknown",
-            reason="the assignment is in state %r, which this runtime does not know: "
-            "check it with status, or start again with a new operation_id" % state,
-        )
-
-    def assignment_state(self, assignment):
-        with self.transaction() as db:
-            row = db.execute("SELECT state FROM assignments WHERE id=?", (assignment,)).fetchone()
-            return row[0] if row else None
-
-    def fail_observed(self, failures):
-        """D2: persist observed exit/interrupt/replacement once: failed state, one lead message, task released.
-
-        failures maps assignment id to the observed runtime state. Assignments already complete/failed are
-        skipped, so repeated waits and restarts add nothing.
-        """
-        wrote = False
-        with self.transaction() as db:
-            for assignment, runtime in failures.items():
-                gone = db.execute(
-                    "SELECT a.id,a.team,a.worker,a.current,t.lead FROM assignments a JOIN teams t ON t.id=a.team "
-                    "WHERE a.id=? AND a.state NOT IN ('complete','failed')",
-                    (assignment,),
-                ).fetchone()
-                if not gone:
-                    continue
-                wrote = True
-                db.execute("UPDATE assignments SET state='failed' WHERE id=?", (gone["id"],))
-                self._release(db, gone["id"])
-                for old in db.execute(
-                    "SELECT id FROM assignments WHERE worker=? AND id!=? AND state NOT IN ('complete','failed')",
-                    (gone["worker"], gone["id"]),
-                ).fetchall():  # superseded by a resume
-                    db.execute("UPDATE assignments SET state='failed' WHERE id=?", (old[0],))
-                    self._release(db, old[0])
-                if not gone["current"]:
-                    continue  # superseded by a resume: failed and released silently, one message per terminal exit
-                envelope = {
-                    "message_id": uid(),
-                    "team_id": gone["team"],
-                    "worker_id": gone["worker"],
-                    "assignment_id": gone["id"],
-                    "sender": gone["worker"],
-                    "recipient": gone["lead"],
-                    "kind": "failed",
-                    "text": "worker terminal %s before completion" % runtime,
-                }
-                db.execute(
-                    "INSERT INTO messages(id,team,recipient,assignment,body) VALUES (?,?,?,?,?)",
-                    (
-                        envelope["message_id"],
-                        gone["team"],
-                        gone["lead"],
-                        gone["id"],
-                        json.dumps(envelope, separators=(",", ":")),
-                    ),
-                )
-        if wrote:
-            dispatch_events.notify(self.directory)
 
     def fail(self, assignment, inactive=False, restore: dict | None = None):
         """restore: prior link of a task a failed resume moved; it goes back to a still-live earlier assignment.
@@ -1042,9 +509,6 @@ class Store:
         dispatch_events.notify(self.directory)
         return envelope
 
-    def now_ms(self):
-        return int(self.clock() * 1000)
-
     def track_progress(self, observations):
         """Start each observed assignment's idle clock at first observation; a turn change is progress.
 
@@ -1147,71 +611,6 @@ class Store:
             # A pending fast report proves the session only when publication commits.
             return actor
 
-    def pin(self, pin):
-        """Commit a deferred first-contact pin on its own (receipt-free reads skip the inbox transaction)."""
-        with self.transaction() as db:
-            self._pin(db, *pin)
-
-    def _pin(self, db, scope, address, generation, team):
-        pinned = db.execute(
-            "SELECT team FROM callers WHERE scope=? AND address=? AND generation=?",
-            (scope, address, generation),
-        ).fetchone()
-        if pinned and pinned[0] != team:
-            raise StoreError("stale caller session cannot adopt another team generation")
-        db.execute(
-            "INSERT OR IGNORE INTO callers VALUES (?,?,?,?)", (scope, address, generation, team)
-        )
-
-    def authorize(self, db, actor, pending=False, liveness=None):
-        terminal = actor["parent"] or actor["address"]
-        owner = owning_team(
-            db, actor["scope"], terminal, own_team=actor["team_id"], liveness=liveness
-        )
-        if not owner or owner["id"] != actor["team_id"]:
-            raise StoreError(
-                "stale team generation: "
-                + terminal_owned(terminal, owner["generation"] if owner else "none")
-            )
-        if actor["worker_id"] and not pending:
-            row = db.execute(
-                "SELECT 1 FROM workers w JOIN assignments a ON a.worker=w.id "
-                "WHERE w.id=? AND w.address=? AND w.active=1 AND a.id=? AND a.current=1",
-                (actor["worker_id"], actor["address"], actor["assignment_id"]),
-            ).fetchone()
-            if not row:
-                raise StoreError("stale worker assignment")
-
-    def receipt_owner(self, receipt):
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT team,recipient FROM receipts WHERE id=?", (receipt,)
-            ).fetchone()
-            if not row:
-                raise StoreError("invalid receipt")
-            return row["team"], row["recipient"], receipt
-
-    def has_worker(self, team, target):
-        with self.transaction() as db:
-            return (
-                db.execute(
-                    "SELECT 1 FROM workers WHERE team=? AND active=1 AND (name=? OR id=?)",
-                    (team, target, target),
-                ).fetchone()
-                is not None
-            )
-
-    def team_worker(self, team, target):
-        """True when the worker belongs to this team, active or not: the ownership scope of a host."""
-        with self.transaction() as db:
-            return (
-                db.execute(
-                    "SELECT 1 FROM workers WHERE team=? AND (name=? OR id=?) LIMIT 1",
-                    (team, target, target),
-                ).fetchone()
-                is not None
-            )
-
     def peer(self, actor, target, text, message_id=None, ack=None):
         if max(len(text.encode()), len(json.dumps(text).encode())) > MAX_TEXT_BYTES:
             raise StoreError("message limit is 65536 bytes")
@@ -1259,64 +658,6 @@ class Store:
                 )
         dispatch_events.notify(self.directory)
         return envelope
-
-    def stopped(self, team, name, ack=None):
-        with self.transaction() as db:
-            if ack:
-                self.acknowledge(db, *ack)
-            worker = db.execute(
-                "SELECT id FROM workers WHERE team=? AND name=?", (team, name)
-            ).fetchone()
-            if not worker:
-                raise StoreError("worker is not registered in this team")
-            db.execute("UPDATE workers SET active=0 WHERE id=?", (worker[0],))
-            for row in db.execute(
-                "SELECT id FROM assignments WHERE worker=? AND state!='complete'", (worker[0],)
-            ).fetchall():
-                self._release(db, row[0])
-            db.execute(
-                "UPDATE assignments SET state='failed' WHERE worker=? AND state!='complete'",
-                (worker[0],),
-            )
-        dispatch_events.notify(self.directory)
-
-    def acknowledge(self, db, team, recipient, receipt):
-        if receipt is None:
-            return
-        row = db.execute("SELECT * FROM receipts WHERE id=?", (receipt,)).fetchone()
-        if not row or (row["team"], row["recipient"]) != (team, recipient):
-            raise StoreError("invalid or foreign receipt")
-        for message_id in json.loads(row["ids"]):
-            db.execute("UPDATE messages SET acked=1 WHERE id=?", (message_id,))
-
-    def snapshot(self, team, recipient, target, receipt=None, ack=None):
-        """Acknowledge the previous result and freeze membership before listening."""
-        with self.transaction() as db:
-            self.acknowledge(db, *(ack or (team, recipient, receipt)))
-            return [
-                dict(row)
-                for row in db.execute(
-                    SNAPSHOT_SQL, (team, target, target, target, target, target, target)
-                )
-            ]
-
-    def owned_team(self, scope, lead, generation):
-        """The team this caller leads, or None; never creates one."""
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT id FROM teams WHERE scope=? AND lead=? AND generation=?",
-                (scope, lead, generation),
-            ).fetchone()
-            return row[0] if row else None
-
-    def unfinished_count(self, team):
-        """Unfinished members of wait(all)'s snapshot, read without acknowledging anything."""
-        with self.transaction() as db:
-            return db.execute(
-                "SELECT COUNT(*) FROM assignments WHERE state!='complete' AND id IN "
-                "(SELECT assignment_id FROM (%s))" % SNAPSHOT_SQL,
-                (team, "all", "all", "all", "all", "all", "all"),
-            ).fetchone()[0]
 
     def read(
         self,
@@ -1515,54 +856,6 @@ class Store:
                 )
             batch.pop("_undelivered", None)
             return batch
-
-    TASK_STATUSES = ("pending", "in_progress", "complete", "blocked")
-
-    def _tasks(self, db, team, cursor=0, only=None):
-        """Team-scoped rows after rowid cursor, at most MAX_PAGE_BYTES of JSON; second item is the next cursor."""
-        done = {r[0] for r in db.execute(TASKS_DONE_SQL, (team,))}
-        page, size, last = [], 2, None
-        for r in db.execute(TASKS_LIST_SQL, (team, cursor)):
-            deps = json.loads(r["deps"])
-            item = {
-                "task_id": r["id"],
-                "subject": r["subject"],
-                "status": r["status"],
-                "owner": r["owner"],
-                "assignment_id": r["assignment"],
-                "depends_on": deps,
-                "ready": r["status"] == "pending" and all(d in done for d in deps),
-            }
-            if only is not None and r["id"] != only:
-                continue
-            entry = len(json.dumps(item, separators=(",", ":")).encode()) + 1
-            if page and size + entry > MAX_PAGE_BYTES:
-                return page, str(last)
-            page.append(item)
-            size, last = size + entry, r["cursor"]
-        return page, None
-
-    def _deps(self, db, team, task, deps):
-        if (
-            not isinstance(deps, list)
-            or len(deps) > MAX_WORKERS
-            or not all(isinstance(d, str) and len(d) <= 64 for d in deps)
-        ):
-            raise StoreError("depends_on must be a list of at most 32 task IDs")
-        known = {r[0]: json.loads(r[1]) for r in db.execute(TASKS_DEPS_SQL, (team,))}
-        for dep in deps:
-            if dep not in known:
-                raise StoreError("missing dependency: %s" % dep)
-        known[task] = deps
-        seen, stack = set(), [task]
-        while stack:  # a path from task back to itself is a cycle
-            for dep in known[stack.pop()]:
-                if dep == task:
-                    raise StoreError("dependency cycle")
-                if dep not in seen:
-                    seen.add(dep)
-                    stack.append(dep)
-        return sorted(set(deps))
 
     def task(self, actor, action, arguments, ack=None):
         """Create/list/claim/update tasks for the actor's own team in one transaction."""

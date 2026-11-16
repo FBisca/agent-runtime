@@ -87,6 +87,7 @@
   },
   "runtime_dependencies": [],
   "sqlite_imports": [
+    "packages/agent-runtime/src/agent_runtime/dispatch_connections.py",
     "packages/agent-runtime/src/agent_runtime/dispatch_store.py",
     "packages/agent-runtime/src/agent_runtime/hc_tools.py"
   ],
