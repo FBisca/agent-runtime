@@ -27,6 +27,9 @@ all. "Does this still hold when the tree doubles?" is the test: a per-file row f
 ceiling and a comparison against the merge base pass it. Where the environment already knows a fact
 (the history, the filesystem, a manifest), read it there instead of copying it here.
 
+Name the file, not how to find it; refuse a pointer that resolves to nothing or several files.
+The living spec's R172 and `packages/agent-orchestrator/tests/test_driver_pointers.py` hold this rule.
+
 ## Testing
 
 - **Unit:** In-process, isolated, deterministic; mock external dependencies.

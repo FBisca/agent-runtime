@@ -146,6 +146,7 @@ from .report import (
 
 # The reviewer's packet has one home: `driver/review.py` — the brief a review is read from and the trail
 # of attempts it is given, both read from the record rather than from the order a dictionary carries.
+from .pointers import collection, owned_collections, task_text
 from .review import attempt_trail, review_brief
 
 # The processes live in their own module and the package publishes every one of them, so a caller, a
@@ -1792,18 +1793,28 @@ class Driver(SpecSections):
         not a verdict: the sending agent is told once or twice, and only then the Lead is asked. A file that never
         arrives while nobody is left to write it goes straight to the Lead: warning a dead agent buys nothing.
 
-        `alternates` are the files the agent named in its report: the driver's own path first, then those, so a
-        payload written under another name is the agent's news and not the Lead's.
+        The named path is authoritative. Alternatives cannot substitute for it, and multiple files are
+        ambiguous: ask the sender to resolve the names instead of selecting one by existence or order.
         """
         candidates = [path, *[a for a in alternates if a]]
-        if not payload_waits(candidates):
-            self.warn_sender(task_id, where, path, "the file is not on disk")
+        payload_waits(candidates)
+        present = [p for p in candidates if Path(p).is_file()]
+        if len(present) > 1:
+            self.warn_sender(
+                task_id,
+                where,
+                path,
+                "multiple files match %s; keep only the expected file and report again"
+                % ", ".join(map(str, present)),
+            )
             return None
-        found = next((p for p in candidates if Path(p).exists()), path)
+        if not Path(path).is_file():
+            self.warn_sender(task_id, where, path, "expected this file; write it and report again")
+            return None
         try:
-            return load(found)
+            return load(path)
         except (contracts.ContractError, ValueError) as error:
-            self.warn_sender(task_id, where, found, str(error))
+            self.warn_sender(task_id, where, path, str(error))
             return None
 
     def warn_sender(self, task_id, where, path, reason, accept=False):
@@ -2447,6 +2458,8 @@ class Driver(SpecSections):
                         task["checkout_at_claim"]["branch"],
                         ", ".join(packet["owns"]),
                     ),
+                    "Checkout contents: %s" % collection(packet["checkout"]),
+                    "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                     "Re-run only what a change touches, then the final gate if you changed code. Open no new pull request.",
                     "",
                 ]
@@ -2962,6 +2975,8 @@ class Driver(SpecSections):
                     task["checkout_at_claim"]["branch"],
                     ", ".join(packet["owns"]),
                 ),
+                "Checkout contents: %s" % collection(packet["checkout"]),
+                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                 "Commit and push to the same branch. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
                 PROXY_INSTRUCTION,
@@ -3029,6 +3044,8 @@ class Driver(SpecSections):
                     task["checkout_at_claim"]["branch"],
                     ", ".join(packet["owns"]),
                 ),
+                "Checkout contents: %s" % collection(packet["checkout"]),
+                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                 "Commit and push to the same branch. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
                 PROXY_INSTRUCTION,
@@ -3057,6 +3074,8 @@ class Driver(SpecSections):
                     task["checkout_at_claim"]["branch"],
                     ", ".join(packet["owns"]),
                 ),
+                "Checkout contents: %s" % collection(packet["checkout"]),
+                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                 "Findings, verbatim, also in %s. Fix only these:" % (new_dir / "findings.json"),
                 "",
                 *["- " + describe(item) for item in findings["items"]],
@@ -3125,6 +3144,8 @@ class Driver(SpecSections):
                     task["checkout_at_claim"]["branch"],
                     ", ".join(packet["owns"]),
                 ),
+                "Checkout contents: %s" % collection(packet["checkout"]),
+                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
                 "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
                 % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
                 PROXY_INSTRUCTION,
@@ -4539,44 +4560,7 @@ class Driver(SpecSections):
             )
         return path
 
-    def task_text(self, _plan, ticket, packet, scenarios, task_dir):
-        gate = packet["checks"] or ["the repository's full CI gate (see its AGENTS.md / CLAUDE.md)"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (task_dir / "report.json"),
-                "",
-                "# %s: %s" % (ticket["#"], ticket["What it delivers"]),
-                "",
-                "Report with task_id `%s`: the driver refuses a report whose task_id is not this one."
-                % packet["task_id"],
-                "",
-                "Plan: %s (read its Decisions and Seams)." % self.plan_path,
-                "Checkout: %s on branch feat/%s (new, from %s). Work only here."
-                % (packet["checkout"], packet["worker"], self.args.base),
-                "Owns (edit nothing else): %s." % ", ".join(packet["owns"]),
-                "Shared databases are read-only; schema changes go through migrations in your own branch.",
-                "",
-                "Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists.",
-                "Read the `tdd` skill first: %s (and its rules.md)."
-                % (tdd_skill_path() or "the TDD rules in the contract"),
-                "",
-                *scenarios,
-                "",
-                "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
-                PROXY_INSTRUCTION,
-                *(
-                    [
-                        "`%s` is the whole suite: do not run it; verify and CI run it."
-                        % packet["full"],
-                    ]
-                    if packet.get("full")
-                    else []
-                ),
-                "Then open a draft pull request against %s." % self.args.base.partition("/")[2],
-                "",
-            ]
-        )
+    task_text = task_text
 
 
 def live_terminals():
