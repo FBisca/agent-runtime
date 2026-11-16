@@ -127,6 +127,13 @@ class Scope:
         )
         return self.screening
 
+    def write_review(self, dispositions):
+        """The canned reviewer's answer: the dispositions of the signals this change fired."""
+        (self.reviewer / "answers.json").write_text(
+            json.dumps({"answers": [{"dispositions": dispositions}]}), encoding="utf-8"
+        )
+        return self.reviewer
+
     def run(self, harness="pi"):
         return main(
             [
@@ -169,6 +176,15 @@ def review(tmp_path, monkeypatch):
 def test_S2_a_sensitive_path_is_read_whole_and_its_path_instruction_joins(review):
     """A focused review would read the flags; a full one reads the change, and its path sets join."""
     review.write_screening()
+    review.write_review(
+        [
+            {
+                "signal": "protected-path",
+                "disposition": "dismissed",
+                "evidence": "db/migrations/002_index.sql:1 adds the index beside its table",
+            }
+        ]
+    )
     assert review.run() == 0
     report = review.report()
     deep = report["deep_review"]

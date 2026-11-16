@@ -6,8 +6,9 @@ join the ones that always do (D12, D14, P2-D3, P2-D5). The report says what the 
 canned reviewer records the same request, so a spawn is checked without reaching a model (P2-D1).
 
 Two seams are checked here that a canned reviewer cannot reach: the family's own CLI, replaced by a stub on
-PATH that records its argv and stdin, and the run that stops - a nonzero exit or a timeout - which is an
-incomplete execution keeping the screening it paid for (D20, R10) rather than a refusal with no report.
+PATH that records its argv and stdin, and the run that stops - a nonzero exit, a timeout, or an answer that
+is not a review at all - which is an incomplete execution keeping the screening it paid for (D20, R10, S5)
+rather than a refusal with no report.
 """
 
 import json
@@ -39,6 +40,28 @@ EXPECTED_ARGV = {
     "pi": ["--tools", "read,grep,find,ls", "--no-mcp", "--no-extensions", "-p"],
 }
 
+# What a reviewer answers for a change whose two calibrated signals fired: one disposition each, dismissed with
+# the line that answers it, and no finding. A family's CLI prints it as JSON on stdout.
+ANSWER = json.dumps(
+    {
+        "findings": [],
+        "dispositions": [
+            {
+                "signal": "value-above-threshold",
+                "question": QUESTION,
+                "disposition": "dismissed",
+                "evidence": "store.py:2 closes the stream the base revision leaked",
+            },
+            {
+                "signal": "confidence-below-band",
+                "question": QUESTION,
+                "disposition": "dismissed",
+                "evidence": "store.py:2 closes the stream the base revision leaked",
+            },
+        ],
+    }
+)
+
 # A stand-in for a family's CLI. It records what it was given before it does anything else, so a run that is
 # stopped by a timeout still shows the prompt arriving; env decides how it ends.
 STUB = """\
@@ -51,7 +74,7 @@ if os.environ.get("STUB_SLEEP"):
 if os.environ.get("STUB_EXIT"):
     sys.stderr.write(os.environ.get("STUB_STDERR", ""))
     sys.exit(int(os.environ["STUB_EXIT"]))
-sys.stdout.write(os.environ.get("STUB_ANSWER", "no findings to report"))
+sys.stdout.write(os.environ.get("STUB_ANSWER", {answer!r}))
 """
 
 CONFIG = """\
@@ -161,6 +184,13 @@ class Spawn:
         git(self.checkout, *COMMIT, "head")
         return base, git(self.checkout, "rev-parse", "HEAD")
 
+    def write_review(self, dispositions):
+        """The canned reviewer's answer: the dispositions of the signals this change fired."""
+        (self.reviewer / "answers.json").write_text(
+            json.dumps({"answers": [{"dispositions": dispositions}]}), encoding="utf-8"
+        )
+        return self.reviewer
+
     def write_screening(self, value=2.5, confidence=0.3):
         """The one canned answer the whole bank gets: a score above its threshold, with a low confidence."""
         self.screening.write_text(
@@ -211,7 +241,7 @@ class Spawn:
         where = tmp_path / "bin"
         where.mkdir(exist_ok=True)
         stub = where / family
-        stub.write_text(STUB.format(python=sys.executable), encoding="utf-8")
+        stub.write_text(STUB.format(python=sys.executable, answer=ANSWER), encoding="utf-8")
         stub.chmod(0o755)
         self.record = tmp_path / "harness.json"
         monkeypatch.setenv("STUB_RECORD", str(self.record))
@@ -264,6 +294,22 @@ def test_S1_one_reviewer_is_spawned_focused_on_the_signals_with_the_matching_ins
     review, capsys
 ):
     review.write_screening()
+    review.write_review(
+        [
+            {
+                "signal": "value-above-threshold",
+                "question": QUESTION,
+                "disposition": "dismissed",
+                "evidence": "store.py:2 closes the stream the base revision leaked",
+            },
+            {
+                "signal": "confidence-below-band",
+                "question": QUESTION,
+                "disposition": "dismissed",
+                "evidence": "store.py:2 closes the stream the base revision leaked",
+            },
+        ]
+    )
     assert review.run() == 0, capsys.readouterr().err
     deep = review.report()["deep_review"]
     assert deep["spawns"] == 1, "one escalation is one spawned reviewer (D19, P2-D3)"
@@ -381,6 +427,29 @@ def test_S1_a_reviewer_that_times_out_leaves_the_screening_and_records_why(
     )
 
 
+def test_S5_a_reviewer_that_answers_prose_is_incomplete_naming_what_it_answered(
+    tmp_path, monkeypatch, capsys
+):
+    """A family's stdout is read as a review: text that is not one is a stop, never a clean review."""
+    review = _repository(tmp_path, monkeypatch)
+    review.spawn_harness("pi", monkeypatch, tmp_path)
+    monkeypatch.setenv("STUB_ANSWER", "no findings to report")
+    review.write_screening()
+    status = review.spawn("pi")
+    report = review.report()
+    assert status == 1, "an answer no review can read is an incomplete execution (D20, S5)"
+    assert report["status"] == "incomplete"
+    assert "no findings to report" in report["failure"]["reason"], (
+        "the stop carries what the reviewer actually answered"
+    )
+    assert report["verdict"] is None, "an incomplete review concluded nothing (D34)"
+    assert report["judgments"], "the screening it paid for is kept"
+    assert report["deep_review"]["spawns"] == 1, "no retry and no model fallback (D20)"
+    assert "no findings to report" in capsys.readouterr().err, (
+        "the terminal names what the reviewer answered"
+    )
+
+
 def test_S2_a_safeguard_hit_whose_reviewer_stops_still_names_the_rule_the_path_and_the_way_out(
     tmp_path, monkeypatch, capsys
 ):
@@ -449,6 +518,24 @@ def test_a_fixture_directory_the_run_cannot_write_refuses_rather_than_recording_
     assert status == 2, "an unwritable fixture is a refusal, not an incomplete review"
     assert str(review.reviewer) in err, "the refusal names the directory the caller gave"
     assert "cannot record the deep review" in err
+    assert not (review.output / "report.json").is_file(), (
+        "a refusal writes no report to be read as a review that happened"
+    )
+
+
+def test_a_fixture_that_holds_no_answer_refuses_naming_the_file_it_reads(
+    tmp_path, monkeypatch, capsys
+):
+    """A directory the run cannot be answered from is the caller's input: it refuses before a review is claimed."""
+    review = _repository(tmp_path, monkeypatch)
+    review.write_screening()
+    status = review.run()
+    err = capsys.readouterr().err
+    assert status == 2, (
+        "a fixture with nothing to answer from is a refusal, not an incomplete review"
+    )
+    assert "answers.json" in err, "the refusal names the file a canned reviewer answers from"
+    assert str(review.reviewer) in err, "and the directory the caller gave"
     assert not (review.output / "report.json").is_file(), (
         "a refusal writes no report to be read as a review that happened"
     )
