@@ -4,6 +4,7 @@ rendered for its ticket, never the whole suite (check-tiers/S2, S3)."""
 import unittest
 
 import pytest
+from agent_orchestrator.driver.records import SPELLING_INSTRUCTION
 from fixtures import RunFixture, load_script
 
 pytestmark = pytest.mark.integration
@@ -30,9 +31,9 @@ checks:
 ONE_COMMAND = """\
 checks:
   fast: uv run pytest -q
-  affected: python3 -m pytest -q
+  affected: "uv run  pytest -q"
   full:
-    run: pytest -q
+    run: "uv run pytest   -q"
 """
 
 
@@ -90,7 +91,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.assertIn("do not run", full)
         self.assertIn("verify", full)
 
-    def test_S3_the_brief_names_the_proxy_and_asks_for_the_command_the_worker_ran(self):
+    def test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled(self):
         self.declare_tiers()
         self.run_driver()
         brief = self.brief()
@@ -99,13 +100,8 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
             [x for x in brief.splitlines() if x.startswith("Before you report COMPLETE, run:")],
             ["Before you report COMPLETE, run: uv run pytest -q; " + AFFECTED + "."],
         )
-        proxy = [x for x in brief.splitlines() if "rtk proxy" in x]
-        self.assertTrue(proxy, brief)
-        self.assertTrue(any("run" in x.lower() for x in proxy), brief)
-        self.assertTrue(
-            any("report" in x.lower() and "command" in x.lower() for x in brief.splitlines()),
-            brief,
-        )
+        self.assertIn(SPELLING_INSTRUCTION, brief.splitlines())
+        self.assertNotIn("rtk", brief)
 
     def test_S3_a_named_gate_overrides_the_declared_tiers(self):
         self.declare_tiers()
@@ -131,14 +127,14 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "required checks"):
             load_script().require_completable(task, report([]))
 
-    def test_S1_launcher_spellings_of_one_command_are_one_required_assignment(self):
+    def test_S1_whitespace_spellings_of_one_command_are_one_required_assignment(self):
         self.declare(ONE_COMMAND)
         self.run_driver()
         self.assertEqual(self.required(), ["uv run pytest -q"])
         self.assertEqual([x for x in self.brief().splitlines() if "do not run" in x], [])
         load_script().require_completable(
             self.ledger()["tasks"]["t1"],
-            report([{"command": "python3 -m pytest -q", "outcome": "passed"}]),
+            report([{"command": "uv run pytest  -q", "outcome": "passed"}]),
         )
 
     def test_S2_fast_and_affected_are_kept_when_only_full_is_distinct(self):

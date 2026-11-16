@@ -89,7 +89,8 @@ class ReviewBriefTests(unittest.TestCase):
         """orchestrator-engine/R145: a test that slows every later run is a MAJOR defect."""
         text = self.brief()
         self.assertIn("test_cost", text)
-        self.assertIn("--durations", text)
+        self.assertIn("time the diff's test files yourself", text)
+        self.assertNotIn("--durations", text)
         self.assertIn("over 2 s", text)
         self.assertIn("materially slows the suite", text)
 

@@ -10,3 +10,6 @@ __pycache__/
 
 # The orchestration runtime writes here while a drive runs; it is not source.
 .orchestrate/
+
+# Every pytest run writes its outcome here (conftest.py); the next run replaces it.
+.pytest/

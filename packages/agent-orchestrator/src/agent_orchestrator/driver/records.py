@@ -33,45 +33,28 @@ def whole(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-# Launcher words a worker may put in front of a gate command. Closed on purpose: an
-# `endswith` match would let `echo scripts/checks.sh` pass as the gate.
-# Whole prefix sequences, never single words: `python` alone is not a launcher of the gate.
-# `rtk proxy` is the launcher's own proxy: it hands the command to the shell's rewriter, so the
-# command behind it is the one that ran.
-CHECK_PREFIXES = (
-    ("bash",),
-    ("sh",),
-    ("uv", "run"),
-    ("python", "-m"),
-    ("python3", "-m"),
-    ("rtk", "proxy"),
+# A report names each required check as the brief spelled it: the driver briefs workers in any repository and
+# behind any shell, so it keeps no list of launchers, wrappers or proxies to strip. Only whitespace is not part
+# of a command's spelling.
+SPELLING_INSTRUCTION = "Report each required check with its command exactly as written above, whatever your shell runs it through."
+
+# A worker that ran a test directory by hand (`pytest pkg/tests -m integration`) held a ticket for twenty minutes:
+# the gate is the cheap tiers by design, and verify and CI own the rest. The driver briefs workers in any
+# repository, so the rule names no runner, flag or file of its own: the repository's instructions supply those.
+TEST_SCOPE_INSTRUCTION = (
+    "Run the checks above, then run only the test files you wrote or changed; leave every other test to verify "
+    "and CI. Run each command in the foreground under a timeout, read its failures from that run's output or "
+    "log, and re-run only the tests that failed."
 )
 
-# What a brief tells a worker whose shell rewrites commands: the check runs through the
-# proxy, and the report names the command that ran behind it. The required-check line of
-# the brief is left as it is: the proxy is a spelling of the check, not another check.
-PROXY_INSTRUCTION = (
-    "If your shell rewrites commands, run each required check through the RTK proxy "
-    "(`rtk proxy` in front of the command) and report the command you ran."
-)
+
+# What every brief that carries required checks says about running them, after its required-check line.
+CHECK_INSTRUCTIONS = "\n".join((SPELLING_INSTRUCTION, TEST_SCOPE_INSTRUCTION))
 
 
 def normalise_check(command):
-    """The gate command, with launcher prefixes and a leading `./` removed, so `bash scripts/checks.sh` matches `scripts/checks.sh`."""
-    tokens = command.split()
-    changed = True
-    while changed and tokens:
-        changed = False
-        for prefix in CHECK_PREFIXES:
-            if tuple(tokens[: len(prefix)]) == prefix:
-                del tokens[: len(prefix)]
-                changed = True
-                break
-        else:
-            if tokens[0].startswith("./"):
-                tokens[0] = tokens[0][2:]
-                changed = True
-    return " ".join(tokens)
+    """The command as a report must spell it: its words, whitespace collapsed."""
+    return " ".join(command.split())
 
 
 def unique_checks(commands):

@@ -117,8 +117,8 @@ def _pass(driver, packet, delta):
         "code path rather than on a mock of it, and it names its scenario id. Reverting the change makes it "
         "fail. A test that would pass without the change, or that asserts a call happened instead of what the "
         "behaviour promises, is `blocking`: that is the scenario not really tested.",
-        "4. Test cost: the report's `test_cost` is the measurement, not the claim. Run its command (or "
-        "`uv run pytest <the diff's test files> --durations=0 -q`) and compare each new or changed test's "
+        "4. Test cost: the report's `test_cost` is the measurement, not the claim. Run its command (or time "
+        "the diff's test files yourself) and compare each new or changed test's "
         "seconds and each touched module's seconds with the run before this change. A new or changed test "
         "over 2 s, a module whose seconds grew materially without a new boundary, or a test that re-proves a "
         "guarantee at a costlier level is `blocking`: it slows every later run. Name the node, its seconds "

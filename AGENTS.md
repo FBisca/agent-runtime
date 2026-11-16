@@ -27,6 +27,15 @@ all. "Does this still hold when the tree doubles?" is the test: a per-file row f
 ceiling and a comparison against the merge base pass it. Where the environment already knows a fact
 (the history, the filesystem, a manifest), read it there instead of copying it here.
 
+## The orchestrator serves any repository
+
+`packages/agent-orchestrator` drives workers in repositories of any language, runner and shell, so
+its briefs, contract, gates and refusals state invariants: what a worker does and how its report is
+judged, the same in every repository. Name a tool in its code or text only when the orchestrator
+runs that tool itself (`git`, `gh`, `hc`, the agent CLIs). A repository's own tools (its package
+manager, test runner, linter, shell wrapper) reach a worker through that repository's config and
+instructions; this repo's are in `.orchestrate/config.yaml` and the sections below.
+
 Name the file, not how to find it; refuse a pointer that resolves to nothing or several files.
 The living spec's R173 and `packages/agent-orchestrator/tests/test_driver_pointers.py` hold this rule.
 
@@ -48,13 +57,19 @@ sets the environment up from a fresh checkout; `uv run pytest` is the canonical 
 | `uv run pytest -n auto` | the whole suite, one worker per core |
 | `uv run pytest --durations=20` | the whole suite, with the slowest tests |
 
-Run the fast suite while you work, and the whole suite before you report a change done. Name a file or
-a node id (`uv run pytest tests/test_pi_worker.py`) to run that one; it keeps its own marker. The tests
-are `unittest.TestCase` classes, so `python3 -B -m unittest discover -s tests` still runs them, but uv
-and pytest are how they are run. A live acceptance run needs a real terminal and is opt-in
-(`AGENT_RUNTIME_LIVE=1`). Never wait on a suite by grepping the process table for its own command line:
-`pgrep -f "pytest -m integration"` matches the polling shell and hangs. Read the log's summary line, or
-bracket the pattern (`[p]ytest`).
+Run the fast suite while you work, and the whole suite before you report a change done. A drive worker
+(its brief names its checks) runs targeted tests instead: the brief's checks and the test files it wrote
+or changed; verify and CI run the whole suite. Name a file or a node id (`uv run pytest
+tests/test_pi_worker.py`) to run every test in it, integration included. The tests are
+`unittest.TestCase` classes, so `python3 -B -m unittest discover -s tests` still runs them, but uv and
+pytest are how they are run. A live acceptance run needs a real terminal and is opt-in
+(`AGENT_RUNTIME_LIVE=1`).
+
+Run pytest in the foreground under a timeout. Every run writes its counts, failing node ids, tracebacks
+and captured output to `.pytest/last.log`, and the next run replaces it: read a run's failures there,
+then re-run only those with `--lf`. Never wait on a suite by grepping the process table for its own
+command line: `pgrep -f "pytest -m integration"` matches the polling shell and hangs; bracket the
+pattern (`[p]ytest`).
 
 Each test file carries `pytestmark = pytest.mark.unit` or `pytest.mark.integration`. Classify by what
 the test does: a test that starts a process, opens a socket or writes to the filesystem is an

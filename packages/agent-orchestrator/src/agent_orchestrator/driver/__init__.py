@@ -30,7 +30,7 @@ __all__ = [
     "BookSurface",
     "Briefs",
     "CHECKS_WARNING",
-    "CHECK_PREFIXES",
+    "CHECK_INSTRUCTIONS",
     "CI_EXCERPT_CHARS",
     "CONTRACT",
     "Coverage",
@@ -54,7 +54,6 @@ __all__ = [
     "PARK_ASK_FIRST",
     "PAYLOAD_GRACE",
     "PAYLOAD_WARNINGS",
-    "PROXY_INSTRUCTION",
     "Path",
     "PlanError",
     "Pull",
@@ -65,6 +64,7 @@ __all__ = [
     "SILENT",
     "SPEC_HEADING",
     "SPEC_MARKER",
+    "SPELLING_INSTRUCTION",
     "SPEC_REQUIREMENT",
     "SPEC_ROW",
     "STEPS",
@@ -73,6 +73,7 @@ __all__ = [
     "SpecSections",
     "TDD_SKILL_ENV",
     "TDD_SKILL_PLACES",
+    "TEST_SCOPE_INSTRUCTION",
     "TREE_TIMEOUT",
     "TURN_ENDED",
     "USAGE_COLUMNS",
@@ -400,9 +401,10 @@ from .pull import Pull as Pull
 from .pull import PullSurface as PullSurface
 from .pull import job_log as job_log
 from .pull import log_tail as log_tail
-from .records import CHECK_PREFIXES as CHECK_PREFIXES
-from .records import PROXY_INSTRUCTION as PROXY_INSTRUCTION
+from .records import CHECK_INSTRUCTIONS as CHECK_INSTRUCTIONS
 from .records import ROUTE as ROUTE
+from .records import SPELLING_INSTRUCTION as SPELLING_INSTRUCTION
+from .records import TEST_SCOPE_INSTRUCTION as TEST_SCOPE_INSTRUCTION
 from .records import assignment_of as assignment_of
 from .records import check_commit as check_commit
 from .records import context_verdict as context_verdict
