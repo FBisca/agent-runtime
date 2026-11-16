@@ -3,7 +3,6 @@
 
 No model calls and no shell evaluation. Only `run` starts workers, and only through `agent-runtime call`."""
 
-import argparse
 import copy
 import fcntl
 import hashlib
@@ -67,6 +66,71 @@ from .book import (
 )
 from .book import (
     settle_merged as settle_merged,
+)
+
+# The command line has one home: `driver/cli.py` — one builder per command group, the parser they
+# fill, and the `run_cli` every entry point shares. The package publishes every one of them, so the
+# console script, `python -m agent_orchestrator` and `agent_orchestrator.main` keep asking
+# `driver.<name>`.
+from .cli import (
+    add_accept_command as add_accept_command,
+)
+from .cli import (
+    add_await_command as add_await_command,
+)
+from .cli import (
+    add_complete_command as add_complete_command,
+)
+from .cli import (
+    add_context_command as add_context_command,
+)
+from .cli import (
+    add_decide_command as add_decide_command,
+)
+from .cli import (
+    add_evidence_command as add_evidence_command,
+)
+from .cli import (
+    add_inspect_command as add_inspect_command,
+)
+from .cli import (
+    add_launch_command as add_launch_command,
+)
+from .cli import (
+    add_ledger_command as add_ledger_command,
+)
+from .cli import (
+    add_metrics_command as add_metrics_command,
+)
+from .cli import (
+    add_plan_commands as add_plan_commands,
+)
+from .cli import (
+    add_plans_commands as add_plans_commands,
+)
+from .cli import (
+    add_run_command as add_run_command,
+)
+from .cli import (
+    add_status_command as add_status_command,
+)
+from .cli import (
+    add_task_commands as add_task_commands,
+)
+from .cli import (
+    add_verify_command as add_verify_command,
+)
+from .cli import (
+    add_workbench_commands as add_workbench_commands,
+)
+from .cli import (
+    build_parser as build_parser,
+)
+from .cli import (
+    main as main,
+)
+from .cli import (
+    run_cli as run_cli,
 )
 
 # The state machine has one home: `driver/gates.py`, the `Gates` a Driver holds and the line a round
@@ -5666,323 +5730,9 @@ def drive_locked(driver):
     }
 
 
-def add_task_commands(commands):
-    """The task ledger's own verbs on the parser `main` builds: one parser per verb, its state path and the options
-    that verb alone needs."""
-    for name in ("claim", "bind", "checkpoint", "release", "show"):
-        sub = commands.add_parser(name)
-        sub.add_argument(
-            "--state", required=True, help="Shared ledger path outside tracked product files"
-        )
-        if name in ("bind", "checkpoint", "release"):
-            sub.add_argument("--task", required=True)
-        if name == "show":
-            sub.add_argument(
-                "--task", help="Show the full record for one task; otherwise show a compact index"
-            )
-            sub.add_argument("--unit", help="Sum failed reviews and cutoffs over a unit's attempts")
-        if name == "claim":
-            sub.add_argument("--packet", required=True)
-        if name == "bind":
-            sub.add_argument("--runtime-id", required=True)
-        if name == "checkpoint":
-            sub.add_argument("--report", required=True)
-        if name == "release":
-            sub.add_argument("--reason", required=True)
-            sub.add_argument(
-                "--stopped", action="store_true", help="Assert runtime confirms the worker stopped"
-            )
-            sub.add_argument(
-                "--cutoff", action="store_true", help="The worker was stopped at its cutoff"
-            )
-    invariants.ledger_commands(commands)
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    plan_commands = commands.add_parser(
-        "plan", help="Validate and approve plan/1 YAML contracts"
-    ).add_subparsers(dest="plan_command", required=True)
-    plan_commands.add_parser("schema", help="Print the plan/1 JSON Schema")
-    plans = commands.add_parser(
-        "plans", help="List the plans of a repository (or of an explicit plan's directory)"
-    ).add_subparsers(dest="plans_command", required=True)
-    listing = plans.add_parser("list")
-    listing.add_argument("path", nargs="?", help="A plan file, or the directory holding plans")
-    listing.add_argument("--repo", help="Repository root; default the current repository")
-    listing.add_argument("--json", action="store_true", help="Print the list as a JSON array")
-    bench = commands.add_parser(
-        "workbench",
-        help="Read-only JSON views of plans for the Herdr workbench: nothing is written",
-    ).add_subparsers(dest="workbench_command", required=True)
-    for verb, what in (
-        ("plans", "Every plan of a repository with its state and ticket counts"),
-        ("plan", "One YAML plan's ticket graph: blocked_by edges, layers, states and revision"),
-        ("totals", "The last seven days of every plan, summed for the cards and their dashboards"),
-    ):
-        sub = bench.add_parser(verb, help=what)
-        sub.add_argument(
-            "plan" if verb == "plan" else "path",
-            nargs=None if verb == "plan" else "?",
-            help="The plan file"
-            if verb == "plan"
-            else "A plan file, or the directory holding plans",
-        )
-        sub.add_argument("--repo", help="Repository root; default the current repository")
-        sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-        sub.add_argument("--json", action="store_true", help="Accepted; the answer is always JSON")
-    for verb in ("check", "approve", "amend"):
-        sub = plan_commands.add_parser(verb)
-        sub.add_argument("plan")
-        sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-        sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-        if verb == "approve":
-            sub.add_argument("--base", default="origin/main")
-        if verb == "amend":
-            sub.add_argument("--reason", required=True, help="Why the approved plan changes")
-    inspect = commands.add_parser(
-        "inspect", help="Read checkout identity and installed command paths"
-    )
-    inspect.add_argument("--checkout", default=".")
-    add_task_commands(commands)
-    sub = commands.add_parser("context")
-    sub.add_argument("--sample", required=True)
-    sub.add_argument("--reserve-tokens", type=int, required=True)
-    sub.add_argument("--max-age-seconds", type=int, default=300)
-    sub = commands.add_parser(
-        "metrics", help="Rebuild a run's metrics.json from its events.jsonl, or normalize --samples"
-    )
-    sub.add_argument("plan", nargs="?", help="Plan file of the run to rebuild")
-    sub.add_argument("--samples", help="A file of per-request usage records to normalize")
-    sub.add_argument(
-        "--state-dir",
-        default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
-    )
-    sub.add_argument(
-        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
-    )
-    sub = commands.add_parser(
-        "evidence", help="Rebuild a run's attempts.jsonl (the per-attempt evidence) from its ledger"
-    )
-    sub.add_argument("plan", help="Plan file of the run to rebuild")
-    sub.add_argument(
-        "--state-dir",
-        default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
-    )
-    sub.add_argument(
-        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
-    )
-    sub = commands.add_parser(
-        "run", help="Dispatch an approved plan's ready agent tickets and wait for them"
-    )
-    sub.add_argument("plan")
-    sub.add_argument("--max-workers", type=int, default=3)
-    sub.add_argument(
-        "--max-fix-rounds",
-        type=int,
-        default=2,
-        help="Fix rounds a unit may use before the next failed gate raises a request; a plan line "
-        "`Max fix rounds: T3=3` sets it for one ticket",
-    )
-    sub.add_argument(
-        "--context-reserve",
-        type=int,
-        default=40000,
-        help="Tokens an implementer or reviewer must have left before a resume; below it the driver swaps in a fresh agent",
-    )
-    sub.add_argument(
-        "--cli",
-        choices=("claude", "codex", "pi"),
-        help="The worker backend (default claude). A run that resumes keeps the backend its ledger recorded; "
-        "an explicit --cli that differs from it stops the run",
-    )
-    sub.add_argument(
-        "--brain-cli",
-        choices=("claude", "codex", "pi"),
-        help="The backend the review gates (the reviewer and the gaps reviewer) spawn on, with its "
-        "medium model; the implementer stays on --cli",
-    )
-    sub.add_argument(
-        "--agent",
-        help="Role every worker runs under; 'none' runs them without one. "
-        "Default: implementer for implementation workers, no role for review gates",
-    )
-    sub.add_argument(
-        "--profile",
-        help="Profile every worker runs under, as the runtime knows it "
-        "(a configured profile such as 'minimax'); it replaces the CLI family "
-        "in the spawn. Default: the CLI family alone",
-    )
-    sub.add_argument(
-        "--base", default="origin/main", help="Remote branch each worktree starts from"
-    )
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    sub.add_argument(
-        "--gate", action="append", default=[], help="CI command a worker must pass (repeatable)"
-    )
-    sub.add_argument(
-        "--skip-full",
-        action="store_true",
-        help="Verify does not run the repo's whole suite (`checks.full.run`); CI runs it. "
-        "A repo can say so for every run with `checks.full.verify: false`",
-    )
-    sub.add_argument(
-        "--state-dir",
-        default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
-    )
-    sub.add_argument(
-        "--models-file",
-        help="Removed: the driver reads no model table. Naming it stops the run; pass --routes-file instead",
-    )
-    sub.add_argument(
-        "--routes-file",
-        help="Typed route config (JSON, or YAML with PyYAML): what each model class runs on. It wins over "
-        "the repository's .orchestrate/routes.json, which wins over the user's profile for --cli "
-        "(~/.config/orchestrate/routes.json for claude, routes-codex.json, routes-pi.json). "
-        "A new run with none of them stops before any worker",
-    )
-    sub.add_argument(
-        "--route",
-        action="append",
-        default=[],
-        metavar="CLASS=BACKEND/MODEL[@EFFORT]",
-        help="An explicit route for one model class: 'small=codex/gpt-s@high'. It wins over the route "
-        "config",
-    )
-    sub.add_argument(
-        "--step",
-        action="append",
-        default=[],
-        metavar="STEP=BACKEND/MODEL[@EFFORT]",
-        help="An explicit route for one step of the run: 'reviewer=codex/gpt-l@xhigh'. The steps are "
-        "implementer, reviewer and gaps. It wins over the route config and over --brain-cli",
-    )
-    sub.add_argument(
-        "--notify-terminal",
-        default=None,
-        help="hc terminal told about each new wake (`launch` passes its own); unset: wakes.jsonl only",
-    )
-    sub.add_argument(
-        "--wait-seconds",
-        type=int,
-        default=60,
-        help="Longest one wait blocks before the plan is re-read",
-    )
-    sub.add_argument(
-        "--idle-interval",
-        type=float,
-        default=30,
-        help="Seconds to sleep after an iteration that made no progress",
-    )
-    sub.add_argument(
-        "--idle-minutes",
-        type=float,
-        default=10,
-        help="Minutes between the idle ticks: a unit whose agent and CI show nothing new is logged idle, "
-        "and at two ticks in a row the Lead is asked",
-    )
-    sub.add_argument(
-        "--working-minutes",
-        type=float,
-        default=120,
-        help="Minutes a unit's agent may be reported `working` by the runtime before the idle tick counts it",
-    )
-    sub = commands.add_parser(
-        "await",
-        help="Print the next wake the Lead has not seen, or `finished -> <retro>`; waits for one",
-    )
-    sub.add_argument("plan")
-    sub.add_argument(
-        "--state-dir",
-        default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
-    )
-    sub.add_argument(
-        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
-    )
-    sub.add_argument(
-        "--poll-seconds", type=float, default=2, help="How often wakes.jsonl is read while waiting"
-    )
-    sub = commands.add_parser(
-        "decide", help="Answer a unit's open request with one action from its menu"
-    )
-    sub.add_argument("plan")
-    sub.add_argument("unit")
-    sub.add_argument(
-        "action", nargs="?", help="One of: " + ", ".join(contracts.ACTIONS) + " (or use --json)"
-    )
-    sub.add_argument("--reason", help="Why; required with an action")
-    sub.add_argument(
-        "--answer", help="The text the worker is resumed with; required for the answer action"
-    )
-    sub.add_argument(
-        "--json",
-        metavar="FILE",
-        help='The whole decision as a JSON object {"action", "reason", "answer"?}, from FILE or - for stdin; '
-        "a refusal is one JSON object {error, reason, way_out} on stderr",
-    )
-    sub.add_argument(
-        "--state-dir",
-        default="~/.local/state/orchestrate",
-        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
-    )
-    sub.add_argument(
-        "--repo", help="Repository root of a YAML plan; default the plan file's repository"
-    )
-    sub = commands.add_parser(
-        "status",
-        help="A plan's state and history and each ticket's state, reason and PR, from its ledger",
-    )
-    sub.add_argument("plan")
-    sub.add_argument("--json", action="store_true", help="Print the answer as JSON")
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-    sub = commands.add_parser(
-        "verify",
-        help="Whether a YAML plan's outcome holds on its receipts; exits non-zero when it does not",
-    )
-    sub.add_argument("plan")
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-    sub = commands.add_parser(
-        "accept",
-        help="A person accepts an evidence item that did not pass (or a human item): HUMAN_ACCEPTED",
-    )
-    sub.add_argument("plan")
-    sub.add_argument("scenario", help="The scenario id of the item, such as S3")
-    sub.add_argument(
-        "--note", required=True, help="What you checked: kept with your name, the time and the tree"
-    )
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-    sub = commands.add_parser(
-        "complete",
-        help="The Lead records a person-owned ticket COMPLETE, with the test nodes that prove its scenarios",
-    )
-    sub.add_argument("plan")
-    sub.add_argument("ticket", help="The person-owned ticket, such as T2")
-    sub.add_argument("--note", required=True, help="What was done: kept in the ticket's status")
-    sub.add_argument(
-        "--cover",
-        action="append",
-        metavar="S<n>=<node>",
-        help="A test node that proves a scenario the ticket satisfies; a node in another repository is "
-        "<repo-name>/<path>::<test>. Repeat for more",
-    )
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-    sub = commands.add_parser(
-        "launch", help="Check the plan and start `run` in a Herdr terminal named orchestrate-<slug>"
-    )
-    sub.add_argument("plan")
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    args, extra = parser.parse_known_args(argv)
-    if extra and args.command != "launch":
-        parser.error("unrecognized arguments: " + " ".join(extra))
+def dispatch(args, extra):
+    """The parsed command line answered: one branch per command, and `launch` alone takes the options
+    it forwards to `run`, which validates them."""
     config = read_repo_config(args)
     if args.command == "plan" and args.plan_command == "check":
         if config is not None and config.checks is None:
@@ -6083,32 +5833,3 @@ def main(argv=None):
         if args.command == "release":
             require(args.stopped, "release requires --stopped")
             return task_summary(release(data, args.task, args.reason, args.cutoff))
-
-
-def run_cli(argv=None):
-    """The script's entry point: dispatch, print the answer, return the exit code.
-
-    The tests call this in process, so a driver run starts no process of its own."""
-    try:
-        output = main(argv)
-        print(output if isinstance(output, str) else json.dumps(output, separators=(",", ":")))
-        return 1 if isinstance(output, dict) and output.get("errors") else 0
-    except workbench.WorkbenchError as error:
-        # stdout holds a view or nothing: a refusal is one JSON object on stderr, so a reader never mistakes it for
-        # a partial view.
-        print(json.dumps(error.output, separators=(",", ":")), file=sys.stderr)
-        return 2
-    except JsonRefusal as error:
-        print(json.dumps(error.output), file=sys.stderr)
-        return 2
-    except invariants.LedgerInvariant as error:
-        # A state the ledger's invariants refuse is a refusal, not a crash: exit 2 says nothing was written, and the
-        # object names the invariant, the task and the way out.
-        print(json.dumps(error.output), file=sys.stderr)
-        return 2
-    except PlanError as error:
-        print(json.dumps({"error": str(error)}), file=sys.stderr)
-        return 2
-    except (ValueError, KeyError, OSError, subprocess.TimeoutExpired, ledgers.LedgerBusy) as error:
-        print(json.dumps({"error": str(error)}), file=sys.stderr)
-        return 1
