@@ -28,6 +28,7 @@ __all__ = [
     "BUILDERS",
     "Book",
     "BookSurface",
+    "Briefs",
     "CHECKS_WARNING",
     "CHECK_PREFIXES",
     "CI_EXCERPT_CHARS",
