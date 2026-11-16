@@ -139,17 +139,20 @@ def tracked(root):
     )
 
 
-def walk(root):
-    """Every Python file under `root`, as a POSIX path relative to it, sorted.
+def resolve(root):
+    """Every Python file the tree holds, as a POSIX path relative to it, sorted.
 
-    What belongs to the tree is what git lists: a file it tracks or would carry, and no ignored
-    directory's or another checkout's copy. A tree outside a repository has no index to ask, and is
-    walked instead.
+    This is where membership is decided, and the one place a process is started: what git lists — the
+    files it tracks and the new ones it would carry, no ignored directory's or another checkout's copy
+    — and, for a tree outside a repository, every file a walk finds.
     """
     root = Path(root)
     listed = tracked(root)
-    if listed is not None:
-        return listed
+    return listed if listed is not None else walked(root)
+
+
+def walked(root):
+    """Every Python file a walk of `root` finds, relative to it, sorted: the tree it is given, as it stands."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(name for name in dirnames if name not in SKIP)
@@ -174,18 +177,27 @@ def measured_sources(sources: Iterable[tuple[str, str]]):
     return measured
 
 
-def tree_sources(root):
-    """(path, source) for every Python file under `root`, a file it cannot read skipped."""
-    for name in walk(root):
+def sources(root, names):
+    """(path, source) for each name under `root`, a file it cannot read skipped."""
+    for name in names:
         try:
             yield name, (Path(root) / name).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
 
 
+def measure(root, names):
+    """{path: {metric: number}} for the named files under `root`: reading and parsing, no membership.
+
+    A caller that already knows which files the tree holds — the command line after `resolve`, or a
+    test naming the modules it means — measures them without the process a resolver starts.
+    """
+    return measured_sources(sources(root, names))
+
+
 def measure_tree(root):
-    """{path: {metric: number}} for every Python file under `root`, as the working tree holds it."""
-    return measured_sources(tree_sources(root))
+    """{path: {metric: number}} for every Python file the tree holds: `measure` over `resolve`."""
+    return measure(root, resolve(root))
 
 
 def git(root, *args, text=True):
@@ -450,7 +462,7 @@ def check(args):
             "structure budget: --paid needs at least one --metric: name the metrics whose "
             "grandfather the paid paths must give up, such as --metric module-lines"
         )
-    measured = measure_tree(args.root)
+    measured = measure(args.root, resolve(args.root))
     paths = paid_paths(measured, args.paid)
     base = measure_at(args.root, args.since)
     base = inherited(base, moved_paths(args.root, args.since))
