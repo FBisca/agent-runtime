@@ -42,16 +42,21 @@ def collection(path):
     return reference(Path.cwd(), path, "collection")
 
 
+def named_collection(checkout, name):
+    """The scope path as the packet spells it, with the size beside it: the name locates the work, the count is
+    the evidence that the name still resolves. A count alone is not a pointer."""
+    path = Path(checkout) / name
+    if path.is_dir():
+        return "%s: %s" % (name, reference(checkout, name, "collection"))
+    return "%s: 0 files in %s" % (name, path.resolve())
+
+
 def owned_collections(checkout, paths):
     """The scope paths that denote collections, using their displayed names."""
     result = []
     for name in paths:
-        path = Path(checkout) / name
-        if path.is_dir() or str(name).endswith("/"):
-            if path.is_dir():
-                result.append(reference(checkout, name, "collection"))
-            else:
-                result.append("0 files in %s" % path.resolve())
+        if (Path(checkout) / name).is_dir() or str(name).endswith("/"):
+            result.append(named_collection(checkout, name))
     return ", ".join(result) or "none"
 
 
@@ -59,10 +64,8 @@ def owned_scope(checkout, paths):
     result = []
     for name in paths:
         path = Path(checkout) / name
-        if path.is_dir():
-            result.append(reference(checkout, name, "collection"))
-        elif str(name).endswith("/"):
-            result.append("0 files in %s" % path.resolve())
+        if path.is_dir() or str(name).endswith("/"):
+            result.append(named_collection(checkout, name))
         else:
             result.append("write %s" % reference(checkout, name, "write"))
     return ", ".join(result)
@@ -73,7 +76,7 @@ def tdd_instruction():
 
     skill = tdd_skill_path()
     if not skill:
-        return "Read the TDD rules in the contract first."
+        return "Read the `tdd` skill first when available; otherwise follow the TDD rules in the contract."
     rules = Path(skill).with_name("rules.md")
     for path in (Path(skill), rules):
         reference(Path.cwd(), path, "read")

@@ -239,6 +239,40 @@ class PointerRun(GateFixture, unittest.TestCase):
 
 
 class TestRenderedPointers:
+    def test_S3_scope_names_each_path_beside_its_count(self, tmp_path):
+        from agent_orchestrator.driver.pointers import owned_collections, owned_scope
+
+        directory = tmp_path / "src" / "a"
+        directory.mkdir(parents=True)
+        (directory / "one.py").write_text("one")
+        for render in (owned_scope, owned_collections):
+            # The name is the pointer; the count is the evidence that it still resolves.
+            assert render(tmp_path, ["src/a/", "src/new/"]) == (
+                "src/a/: 1 files in %s, src/new/: 0 files in %s"
+                % (directory, tmp_path / "src" / "new")
+            )
+
+    @pytest.mark.parametrize("installed", [False, True])
+    def test_S3_tdd_instruction_uses_available_skill_or_contract(
+        self, tmp_path, monkeypatch, installed
+    ):
+        from agent_orchestrator import driver
+        from agent_orchestrator.driver.pointers import tdd_instruction
+
+        skill = tmp_path / "SKILL.md"
+        rules = tmp_path / "rules.md"
+        if installed:
+            skill.write_text("skill")
+            rules.write_text("rules")
+        monkeypatch.setattr(driver, "tdd_skill_path", lambda: str(skill) if installed else None)
+        instruction = tdd_instruction()
+        assert "Read the `tdd` skill first" in instruction
+        if installed:
+            assert str(skill) in instruction and str(rules) in instruction
+        else:
+            assert "contract" in instruction.lower()
+            assert not PointerGuard(tmp_path).violations(instruction)
+
     def test_S3_rendered_instructions_name_their_files(self, tmp_path):
         from types import SimpleNamespace
 
