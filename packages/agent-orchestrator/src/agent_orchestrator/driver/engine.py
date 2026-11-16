@@ -27,8 +27,8 @@ from ..plan import PlanError
 from ..timeutil import iso as now
 from .answers import Answers
 from .archive import Archive, ArchiveSurface
-from .attention import Attention
 from .book import Book, BookSurface
+from .briefs import Briefs
 from .coverage import Coverage
 from .evidence_runs import Evidence, acceptance
 from .findings import Findings
@@ -41,6 +41,7 @@ from .runtime import runtime_call
 from .spawn import Spawning, SpawnSurface
 from .spec import SpecSections
 from .state import state_layout
+from .watch import Attention
 
 
 def _engine():
@@ -55,6 +56,7 @@ def _engine():
 class Driver(
     Routes,
     Answers,
+    Briefs,
     Attention,
     Evidence,
     Lifecycle,

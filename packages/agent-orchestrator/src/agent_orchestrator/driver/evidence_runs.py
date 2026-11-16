@@ -22,13 +22,13 @@ from .. import config as repo_config
 from .. import plan as yaml_plan
 from ..timeutil import iso as now
 from .answers import IntentUnsettled, failure_line
-from .attention import ACCEPTED_STATES
 from .book import ARCHIVE
 from .pull import log_tail
 from .records import is_agent, is_done, is_flaky
 from .routing import load_approved, repo_root, require_yaml
 from .runtime import TREE_TIMEOUT
 from .state import enter_plan_state, locate_state, read_ledger_file
+from .watch import ACCEPTED_STATES
 
 
 def _engine():

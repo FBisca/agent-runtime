@@ -28,12 +28,12 @@ from ..runtime_client import approval_refusal
 from ..timeutil import iso as now
 from .answers import decide
 from .archive import report_crash
-from .attention import ACCEPTED_STATES, read_json
 from .book import checkpoint, claim, release, task_summary, unit_summary
 from .engine import Driver
 from .evidence_runs import acceptance, tree_in
 from .lifecycle import metrics
 from .records import context_verdict, split_row
+from .report import render_status
 from .routing import (
     CHECKS_WARNING,
     forwarded,
@@ -60,6 +60,7 @@ from .state import (
     state_layout,
     take_wake,
 )
+from .watch import ACCEPTED_STATES, read_json
 
 
 def _engine():
@@ -630,6 +631,12 @@ def dispatch(args, extra):
     return _ledger_command(args)
 
 
+def _status_command(args):
+    """`status <plan> [--json]`: the state and its tickets drawn for a person, the whole record for a script."""
+    status = plan_status(args)
+    return status if args.json else render_status(status)
+
+
 def _context_command(args):
     """`context --sample FILE`: what the runtime last measured, against the reserve this run holds."""
     return context_verdict(read_json(args.sample), args.reserve_tokens, args.max_age_seconds)
@@ -737,7 +744,7 @@ def _ledger_command(args):
 # One answer per command that reads, runs, inspects or books: the group a command belongs to is the
 # one thing `dispatch` decides, so a command added later names its reader instead of adding a branch.
 _READS = {
-    "status": plan_status,
+    "status": _status_command,
     "verify": verify_plan,
     "accept": accept_item,
     "complete": complete_person_ticket,

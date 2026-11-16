@@ -18,6 +18,7 @@ from typing import Any
 
 from .. import narrate, timeutil
 from ..runtime_client import OPERATION_ADOPTED, operation_state, refuses_operation_ids
+from .pointers import collection
 from .records import context_verdict
 from .runtime import runtime_call
 
@@ -378,6 +379,7 @@ class Spawning:
                 "- The unit's task: %s" % (self.run_dir / unit / "task.md"),
                 "- Its last report: %s" % (report or "none yet"),
                 "- Its last findings: %s" % (findings or "none yet"),
+                "- Checkout contents: %s" % collection(checkout),
                 "- Commit range: `git -C %s diff %s...HEAD`%s"
                 % (
                     checkout,

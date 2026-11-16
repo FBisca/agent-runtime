@@ -22,17 +22,16 @@ from typing import Any
 from .. import contracts, narrate
 from ..invariants import next_path
 from ..timeutil import iso as now
-from .attention import (
+from .book import ARCHIVE, checkpoint
+from .report import cell
+from .state import JsonRefusal, Refused, numbered, write_atomic
+from .watch import (
     PAYLOAD_WARNINGS,
     archive_retry_allowed,
     archive_retry_refusal,
     payload_waits,
     plan_state_of,
 )
-from .book import ARCHIVE, checkpoint
-from .records import PROXY_INSTRUCTION
-from .report import cell, describe
-from .state import JsonRefusal, Refused, numbered, write_atomic
 
 
 def _engine():
@@ -523,18 +522,28 @@ class Answers:
         not a verdict: the sending agent is told once or twice, and only then the Lead is asked. A file that never
         arrives while nobody is left to write it goes straight to the Lead: warning a dead agent buys nothing.
 
-        `alternates` are the files the agent named in its report: the driver's own path first, then those, so a
-        payload written under another name is the agent's news and not the Lead's.
+        The named path is authoritative. Alternatives cannot substitute for it, and multiple files are
+        ambiguous: ask the sender to resolve the names instead of selecting one by existence or order.
         """
         candidates = [path, *[a for a in alternates if a]]
-        if not payload_waits(candidates):
-            self.warn_sender(task_id, where, path, "the file is not on disk")
+        payload_waits(candidates)
+        present = [p for p in candidates if Path(p).is_file()]
+        if len(present) > 1:
+            self.warn_sender(
+                task_id,
+                where,
+                path,
+                "multiple files match %s; keep only the expected file and report again"
+                % ", ".join(map(str, present)),
+            )
             return None
-        found = next((p for p in candidates if Path(p).exists()), path)
+        if not Path(path).is_file():
+            self.warn_sender(task_id, where, path, "expected this file; write it and report again")
+            return None
         try:
-            return load(found)
+            return load(path)
         except (contracts.ContractError, ValueError) as error:
-            self.warn_sender(task_id, where, found, str(error))
+            self.warn_sender(task_id, where, path, str(error))
             return None
 
     def warn_sender(self, task_id, where, path, reason, accept=False):
@@ -710,43 +719,6 @@ class Answers:
         assignment_id = self.resume_for_responses(task, task_id, path, missing)
         self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
 
-    def answer_text(self, task, decision):
-        packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
-        report = next_path(self.run_dir / task_id, "report", ".json")[0]
-        items = (task.get("fix") or {}).get("items") or []
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % report,
-                "",
-                "# Answer to %s (task %s)" % (unit.upper(), task_id),
-                "",
-                "What happened: %s" % task["event"]["reason"],
-                "The Lead's instruction: %s" % decision["reason"],
-                "The Lead's answer: %s" % decision["answer"],
-                *(
-                    ["", "Findings still open:", *["- " + describe(item) for item in items], ""]
-                    if items
-                    else []
-                ),
-                "This is the same attempt, not a new one: keep using task_id `%s` in your report, and write it to "
-                "the path above (files are write-once; an earlier report stays where it is)."
-                % task_id,
-                "Original task: %s. Same checkout and branch: %s on %s. Work only here; edit only: %s."
-                % (
-                    self.run_dir / unit / "task.md",
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
-                ),
-                "Commit and push to the same branch. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
-        )
-
     def report_landed(self, task_id):
         """The worker's report is on disk, it names this task, it says it finished and it belongs to this attempt:
         the turn ended after the report was written, so the driver reads the report instead of asking a human."""
@@ -785,165 +757,6 @@ class Answers:
         except contracts.ContractError:
             return False
         return report["task_id"] == task_id
-
-    def redo_text(self, task, new_id, new_dir, redo):
-        packet, unit = task["packet"], task["packet"]["unit"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (new_dir / "report.json"),
-                "",
-                "# Retry %s (task %s) after a decision" % (unit.upper(), new_id),
-                "",
-                "What happened: %s" % task["event"]["reason"],
-                "The Lead's instruction: %s" % redo["reason"],
-                *(["The Lead's answer: %s" % redo["answer"]] if redo.get("answer") else []),
-                "Original task: %s. Use task_id `%s` in your report."
-                % (self.run_dir / unit / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; edit only: %s."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
-                ),
-                "Commit and push to the same branch. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
-        )
-
-    def fix_text(self, task, new_id, new_dir, findings):
-        packet = task["packet"]
-        if findings["source"] == "conflict":
-            return self.rebase_text(task, new_id, new_dir, findings)
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (new_dir / "report.json"),
-                "",
-                "# Fix round %d for %s (task %s): %s findings"
-                % (findings["attempt"], packet["unit"].upper(), new_id, findings["source"]),
-                "",
-                "Original task: %s. Use task_id `%s` in your report."
-                % (self.run_dir / packet["unit"] / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; edit only: %s."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
-                ),
-                "Findings, verbatim, also in %s. Fix only these:" % (new_dir / "findings.json"),
-                "",
-                *["- " + describe(item) for item in findings["items"]],
-                "",
-                *self._fix_checks(findings),
-                *self._fix_answers(findings),
-                *(
-                    ["The Lead's answer: %s" % task["fix"]["answer"], ""]
-                    if task["fix"].get("answer")
-                    else []
-                ),
-                "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
-        )
-
-    def _answers_brief(self, task, answer_id, asks, findings_path):
-        """The answerer's task file: which findings it answers, what a response is, and where it works."""
-        packet, unit = task["packet"], task["packet"]["unit"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (self.run_dir / answer_id / "report.json"),
-                "",
-                "# Answers only for %s (task %s)" % (unit.upper(), answer_id),
-                "",
-                "The review passed. These findings need your answer, nothing else (also in %s):"
-                % findings_path,
-                "",
-                *["- " + describe(item) for item in asks],
-                "",
-                "Change no code unless an answer needs it. Report with task_id `%s`; `responses` holds one "
-                '`{"id", "status": "fixed|disputed", "commit", "note", "changes_code"?}` per finding above. '
-                "A `disputed` answer that needs a code change sets `changes_code` true and names the commit: the reviewer sees it."
-                % answer_id,
-                "Same checkout and branch: %s on %s. Edit only: %s."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
-                ),
-                "Re-run only what a change touches, then the final gate if you changed code. Open no new pull request.",
-                "",
-            ]
-        )
-
-    def _fix_checks(self, findings):
-        """The reviewer's checks, for a fix round to re-run only what it touches, then the final gate."""
-        if not findings.get("checks_run"):
-            return []
-        return [
-            "The reviewer already ran these; re-run only what your fix touches, then the final gate:",
-            *[
-                "- `%s` exit %s at %s" % (c["command"], c["exit"], c["at_commit"])
-                for c in findings["checks_run"]
-            ],
-            "",
-        ]
-
-    def _fix_answers(self, findings):
-        """What a fix round is told when the reviewer wants an answer per item."""
-        wants = any(
-            item.get("answer_required") is True
-            for item in findings["items"]
-            if isinstance(item, dict)
-        )
-        if not wants:
-            return []
-        return [
-            "Items marked answer_required need an answer: add `responses` to your report, one "
-            '`{"id", "status": "fixed|disputed", "commit", "note", "changes_code"?}` each. '
-            "Without them the driver asks you once more.",
-            "",
-        ]
-
-    def rebase_text(self, task, new_id, new_dir, findings):
-        """The brief of a rebase round: the branch conflicts with its base, so the worker rebases it."""
-        packet = task["packet"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (new_dir / "report.json"),
-                "",
-                "# Rebase %s (task %s): the branch conflicts with its base"
-                % (packet["unit"].upper(), new_id),
-                "",
-                "This is a rebase round: the pull request of %s conflicts with its base. Rebase the branch onto the "
-                "base, resolve the conflicts, and push the result to the same branch. What `gh` said (also in %s):"
-                % (packet["unit"].upper(), new_dir / "findings.json"),
-                "",
-                *["- " + describe(item) for item in findings["items"]],
-                "",
-                "Original task: %s. Use task_id `%s` in your report."
-                % (self.run_dir / packet["unit"] / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; edit only: %s."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    ", ".join(packet["owns"]),
-                ),
-                "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                PROXY_INSTRUCTION,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
-        )
 
     def start_answers(self, task_id, asks, review):
         task = self.task(task_id)

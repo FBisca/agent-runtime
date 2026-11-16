@@ -27,6 +27,7 @@ from .handoff import recover_worker_report
 from .records import is_agent, ready
 from .report import cell
 from .routing import pane_name
+from .verdict import ATTENTION, VERDICTS, attention
 
 
 def _engine():
@@ -74,25 +75,6 @@ def payload_waits(paths, grace=None, clock=time.monotonic, sleep=time.sleep):
             return False
         sleep(0.05)
     return True
-
-
-SILENT = (
-    "idle",
-    "done",
-)  # runtime_state of a `working` assignment whose turn ended: a live agent, maybe waiting on a background job
-
-
-TURN_ENDED = SILENT + (
-    "unreported",
-    "error",
-)  # runtime_state of a `working` assignment that needs attention
-
-
-ATTENTION = {
-    "blocked": "reported blocked",
-    "decision": "asked for a decision",
-    "exited": "ended without a report",
-}
 
 
 def archive_retry_refusal(state):
@@ -414,7 +396,9 @@ class Attention:
                 elif what == "gate":
                     task["gate"] = value
                 elif what == "closing":
-                    task["gate"] = "reviewed"  # the review the reviewer finished counts, decided or not
+                    task["gate"] = (
+                        "reviewed"  # the review the reviewer finished counts, decided or not
+                    )
                     closing = value
                 else:
                     held = value
@@ -461,24 +445,13 @@ class Attention:
         return document["status"] == "open"
 
     def check_ended(self, assignments):
-        """Attention from assignment states, as `wait` reports them: `failed`, `blocked` or `decision`, or `working`
-        with a `runtime_state` that says the turn ended (idle, done: `silent`) or needs a person (unreported, error)."""
-        for assignment in assignments:
-            state, runtime = assignment.get("state"), assignment.get("runtime_state")
-            if state in ("blocked", "decision"):
-                kind, text = state, ""
-            elif state == "failed" or (state == "working" and runtime in TURN_ENDED):
-                kind, text = "exited", ("runtime state " + runtime) if runtime else ""
-            else:
-                continue
-            if assignment.get("assignment_id"):
-                self.on_agent_attention(
-                    assignment["assignment_id"],
-                    kind,
-                    text,
-                    quiet=True,
-                    silent=state == "working" and runtime in SILENT,
-                )
+        """Attention from assignment states and the runtime's verdicts, as `wait` reports them: `failed`, `blocked`
+        or `decision`, a `working` assignment whose turn ended (idle, done: `silent`) or needs a person
+        (unreported, error), and an attempt the runtime watched produce nothing. The last is the answer to the
+        question the idle tick asks from screen freshness, so it is acted on when `wait` delivers it: the tick would
+        log a worker the runtime has given up on as waiting, for two ticks (20 minutes)."""
+        for assignment_id, kind, text, silent in attention(assignments):
+            self.on_agent_attention(assignment_id, kind, text, quiet=True, silent=silent)
 
     def on_agent_attention(self, assignment_id, kind, text="", quiet=False, silent=False):
         """An agent reported `blocked` or `decision`, or its assignment failed or ended with no report. Each event is
@@ -520,6 +493,10 @@ class Attention:
 
     def unclaimed_attention(self, assignment_id, kind, text, quiet=False, silent=False):
         """An assignment no open step holds: a support reviewer's, or one that was already handled."""
+        if kind in VERDICTS:
+            # A verdict on an assignment no step of the drive owns: nothing here waits on it, and its attempt
+            # is not ended by silence — only an exit ends a support reviewer's attempt.
+            return None
         if silent:
             return self.support_silent(assignment_id)
         if self.mutation_ended(assignment_id):

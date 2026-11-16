@@ -129,6 +129,7 @@ suite runs here, against the member, and the member answers the way the engine a
 - **R105** WHEN a gate fails, THEN the round increment, the report's checkpoint, the next phase (a fix round, or the Lead's request past the cap) and the draft the pull request still owes (`fix.draft`) are booked in one ledger write before any git or gh call, and a restart after a crash anywhere later counts the round once. (from orchestrator-audit-fixes/S16)
 - **R106** WHEN the outcome oracle drives fixture plans through the real driver with a fake runtime and gh, one drive per case (a Lead command holds the ledger lock across a booking, the driver is killed, a mutation reviewer goes silent after writing its output, the driver restarts with a resume intent whose assignment is pending, a worker runs `plan approve`), THEN the drive survives the held lock, `await` returns the crash instead of polling, the silent reviewer's output is accepted, the restart raises a Lead request and the fake runtime saw no second send, and the worker's approve is refused and the plan stays unapproved. (from orchestrator-audit-fixes/S22)
 - **R107** WHEN a new run names a brain backend with `--brain-cli` and its medium route does not run on that backend, THEN each gate (`reviewer`, `gaps`) needs a step route, from `--step reviewer=BACKEND/MODEL[@EFFORT]` or a `steps` entry of the route file; without them the run stops before any worker is spawned, naming the `--step` argument and the medium route on the brain backend that would also answer, and explicit step routes keep a brain on another backend usable. (from remove-legacy-routing/S7)
+- **R172** WHEN `wait` reports an assignment with an `attention` verdict, THEN the drive acts on the verdict on the wait that delivers it, never on the idle tick's own screen reading: an attempt the runtime decided produced nothing since it was resumed (`not_started`) is a Lead request naming the agent, the attempt, the runtime's own `next` sentence and the driver's way out (look at its terminal, and if it has finished, stop it and put a fresh worker on the round), and the unit is never logged `waiting` on that agent, whatever its gate and however few ticks it has shown. A resumed attempt that advances its turn and reports raises no request, and a verdict on an assignment no step of the drive owns ends nothing. The verdict is the runtime's (its 60-second resume grace), so the drive does not re-derive it from screen or output freshness. (small fix, 2026-11-16: a resumed fix round was bound and its prompt never landed, so the drive logged `waiting: agent` for the worker and would have asked two ticks later)
 
 ## Coverage
 
@@ -202,6 +203,7 @@ suite runs here, against the member, and the member answers the way the engine a
 | orchestrator-audit-fixes/S16 | R105 | `packages/agent-orchestrator/tests/test_intents.py`: `FailGateBooking.test_S16_*` |
 | orchestrator-audit-fixes/S22 | R106 | `packages/agent-orchestrator/tests/test_intents.py`: `IntentRestart.test_S15_a_pending_or_unknown_intent_asks_the_lead_and_never_resends`, `IntentRestart.test_S15_an_intent_the_runtime_never_saw_is_acted_on_again`; the driver-placed `packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py`: `LedgerContentionOutcome`, `SilentReviewerOutcome`, `IntentRestartOutcome.test_a_restart_over_a_pending_resume_asks_the_lead_and_sends_nothing_again`, `ApproveGateOutcome` |
 | remove-legacy-routing/S7 | R107 | `packages/agent-orchestrator/tests/test_routes_typed_selection.py`: `test_S7_*` |
+| drive-reads-delivery-verdict | R172 | `packages/agent-orchestrator/tests/test_driver_not_started.py`: `NotStartedTests.test_*`; `packages/agent-orchestrator/tests/test_driver/test_driver_verdict.py`: `VerdictTests.test_*` |
 | remove-legacy-routing/S8 | R19, R20, R94 | `packages/agent-orchestrator/tests/test_routes_docs.py`: `RoutingDocsTests.test_S8_*` |
 
 ### R4 — the route refusals
@@ -582,3 +584,13 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | R171 | S1 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_partial_after_progress_requests_a_decision`<br>`packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_blocked_report_requests_a_decision` |
 | R171 | S2 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S2_progress_text_and_wrong_task_report_do_not_open_a_blocker` |
 | R171 | S3 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today` |
+
+## Requirements: locator-invariants
+
+- **R173** WHEN the engine renders an instruction for an agent or a person, THEN each pointer names a file that exists, the file the reader is asked to write, or a collection with its number of files; no pointer is a glob, a bare directory to search, or a request for the newest file, and a pointer resolving to zero or several files is refused naming the pointer, the expected file and the way out (from locator-invariants/S3, S7, S8, S9)
+
+## Coverage: locator-invariants
+
+| Requirement | Scenario | Tests |
+|---|---|---|
+| R173 | S3, S7, S8, S9 | `packages/agent-orchestrator/tests/test_driver_pointers.py::TestRenderedPointers::test_S3_rendered_instructions_name_their_files`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S7_unresolvable_pointers_are_refused`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S8_spec_names_the_pointer_rule_and_its_guard`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S9_repository_instructions_name_the_rule` |

@@ -76,6 +76,7 @@ __all__ = [
     "TURN_ENDED",
     "USAGE_COLUMNS",
     "Unreadable",
+    "VERDICTS",
     "YAML_ARCHIVE_ACCEPTANCE",
     "accept_item",
     "acceptance",
@@ -105,6 +106,7 @@ __all__ = [
     "assignment_of",
     "attempt_pattern",
     "attempt_trail",
+    "attention",
     "await_lock_path",
     "await_wake",
     "bind",
@@ -118,6 +120,7 @@ __all__ = [
     "checkout_snapshot",
     "checkpoint",
     "claim",
+    "collection",
     "complete_person_ticket",
     "context_verdict",
     "contracts",
@@ -165,6 +168,7 @@ __all__ = [
     "merged_snapshot_of",
     "metrics",
     "metrics_table",
+    "named_collection",
     "narrate",
     "newest_attempts",
     "next_path",
@@ -172,7 +176,9 @@ __all__ = [
     "now",
     "numbered",
     "old_ledger_of",
+    "owned_collections",
     "owned_paths",
+    "owned_scope",
     "owns_ledger",
     "pane_name",
     "passed_checks",
@@ -191,6 +197,7 @@ __all__ = [
     "rebuild_evidence",
     "rebuild_metrics",
     "recover_worker_report",
+    "reference",
     "release",
     "render_status",
     "repo_config",
@@ -231,6 +238,8 @@ __all__ = [
     "sum_usage",
     "take_wake",
     "task_summary",
+    "task_text",
+    "tdd_instruction",
     "tdd_skill_path",
     "terminal_gone",
     "time",
@@ -304,18 +313,6 @@ from .archive import Archive as Archive
 from .archive import ArchiveSurface as ArchiveSurface
 from .archive import crash_line as crash_line
 from .archive import report_crash as report_crash
-from .attention import ACCEPTED_STATES as ACCEPTED_STATES
-from .attention import ATTENTION as ATTENTION
-from .attention import PAYLOAD_GRACE as PAYLOAD_GRACE
-from .attention import PAYLOAD_WARNINGS as PAYLOAD_WARNINGS
-from .attention import SILENT as SILENT
-from .attention import TURN_ENDED as TURN_ENDED
-from .attention import Attention as Attention
-from .attention import archive_retry_allowed as archive_retry_allowed
-from .attention import archive_retry_refusal as archive_retry_refusal
-from .attention import payload_waits as payload_waits
-from .attention import plan_state_of as plan_state_of
-from .attention import read_json as read_json
 from .book import ARCHIVE as ARCHIVE
 from .book import BACKENDS as BACKENDS
 from .book import PACKET_TEXT as PACKET_TEXT
@@ -335,6 +332,7 @@ from .book import settle_merged as settle_merged
 from .book import snapshot_of as snapshot_of
 from .book import task_summary as task_summary
 from .book import unit_summary as unit_summary
+from .briefs import Briefs as Briefs
 from .cli import BUILDERS as BUILDERS
 from .cli import add_accept_command as add_accept_command
 from .cli import add_await_command as add_await_command
@@ -385,6 +383,13 @@ from .handoff import recover_worker_report as recover_worker_report
 from .lifecycle import Lifecycle as Lifecycle
 from .lifecycle import metrics as metrics
 from .lifecycle import sum_usage as sum_usage
+from .pointers import collection as collection
+from .pointers import named_collection as named_collection
+from .pointers import owned_collections as owned_collections
+from .pointers import owned_scope as owned_scope
+from .pointers import reference as reference
+from .pointers import task_text as task_text
+from .pointers import tdd_instruction as tdd_instruction
 from .pull import CI_EXCERPT_CHARS as CI_EXCERPT_CHARS
 from .pull import Pull as Pull
 from .pull import PullSurface as PullSurface
@@ -485,5 +490,19 @@ from .state import split_status as split_status
 from .state import state_layout as state_layout
 from .state import take_wake as take_wake
 from .state import write_atomic as write_atomic
+from .verdict import ATTENTION as ATTENTION
+from .verdict import SILENT as SILENT
+from .verdict import TURN_ENDED as TURN_ENDED
+from .verdict import VERDICTS as VERDICTS
+from .verdict import attention as attention
+from .watch import ACCEPTED_STATES as ACCEPTED_STATES
+from .watch import PAYLOAD_GRACE as PAYLOAD_GRACE
+from .watch import PAYLOAD_WARNINGS as PAYLOAD_WARNINGS
+from .watch import Attention as Attention
+from .watch import archive_retry_allowed as archive_retry_allowed
+from .watch import archive_retry_refusal as archive_retry_refusal
+from .watch import payload_waits as payload_waits
+from .watch import plan_state_of as plan_state_of
+from .watch import read_json as read_json
 
 now = timeutil.iso

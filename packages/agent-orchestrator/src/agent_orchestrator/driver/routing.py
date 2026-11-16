@@ -26,7 +26,8 @@ from .. import ledger as ledgers
 from .. import plan as yaml_plan
 from ..plan import PlanError
 from .book import claim
-from .records import PROXY_INSTRUCTION, ROUTE, normalise_check, satisfied, unique_checks
+from .pointers import task_text
+from .records import ROUTE, normalise_check, satisfied, unique_checks
 from .review import review_brief
 from .runtime import TREE_TIMEOUT
 
@@ -569,44 +570,9 @@ class Routes:
             data["tasks"][task_id]["assignment_id"] = assignment_id
             self.keep_address(data, task_id, name)
 
-    def task_text(self, _plan, ticket, packet, scenarios, task_dir):
-        gate = packet["checks"] or ["the repository's full CI gate (see its AGENTS.md / CLAUDE.md)"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (task_dir / "report.json"),
-                "",
-                "# %s: %s" % (ticket["#"], ticket["What it delivers"]),
-                "",
-                "Report with task_id `%s`: the driver refuses a report whose task_id is not this one."
-                % packet["task_id"],
-                "",
-                "Plan: %s (read its Decisions and Seams)." % self.plan_path,
-                "Checkout: %s on branch feat/%s (new, from %s). Work only here."
-                % (packet["checkout"], packet["worker"], self.args.base),
-                "Owns (edit nothing else): %s." % ", ".join(packet["owns"]),
-                "Shared databases are read-only; schema changes go through migrations in your own branch.",
-                "",
-                "Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists.",
-                "Read the `tdd` skill first: %s (and its rules.md)."
-                % (tdd_skill_path() or "the TDD rules in the contract"),
-                "",
-                *scenarios,
-                "",
-                "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
-                PROXY_INSTRUCTION,
-                *(
-                    [
-                        "`%s` is the whole suite: do not run it; verify and CI run it."
-                        % packet["full"],
-                    ]
-                    if packet.get("full")
-                    else []
-                ),
-                "Then open a draft pull request against %s." % self.args.base.partition("/")[2],
-                "",
-            ]
-        )
+    # The task brief is rendered by the pointer guard's own module: every file an agent is told to read or
+    # write is a pointer that must resolve, and one home keeps the guard on all of them.
+    task_text = task_text
 
     def worktree(self, name, branch):
         path = self.repo.parent / (self.repo.name + ".worktrees") / name
