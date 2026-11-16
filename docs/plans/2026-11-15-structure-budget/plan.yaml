@@ -158,12 +158,32 @@ scenarios:
       package: "."
       timeout: 600
   - id: S20
-    when: three of the five metrics are measured by ruff instead of the script
+    when: a linter rule is weighed against one of the budget's five metrics
     then: >-
-      the offender lines on the same tree are unchanged, one baseline and one ratchet remain, and
-      the two metrics ruff has no rule for - module lines and function lines - stay in the script,
-      so every threshold has one implementation rather than two
+      the rule is not substituted for the metric unless it counts the same thing, and where it
+      nearly does the divergence is pinned by a test: branch points, argument counts and public
+      methods stay the gate's own counts, so a rule that counts dunder methods as public or skips a
+      comprehension filter cannot quietly replace them
 
+  - id: S23
+    when: an untracked or ignored directory sits inside the checkout, such as a nested worktree
+    then: >-
+      the plan check and the structure budget read what git tracks, so a copy of a plan folder cannot
+      make the plan unloadable and a nested checkout cannot be measured as part of the package, and
+      outside a repository the walk still measures the tree it is given
+  - id: S22
+    when: the driver package is split into modules behind its facade
+    then: >-
+      every public name the package's modules define is still reachable as driver.<name>, asserted by a
+      test that compares the two sets rather than by a reading, so a split cannot drop a name and still
+      pass because nothing happened to import it yet
+  - id: S24
+    when: a unit is re-dispatched and its second attempt is reviewed
+    then: >-
+      the reviewer's packet names the exact report of the attempt under review, with its mtime and the
+      head it claims, rather than a glob over the unit directory, and the trail's newest report is
+      chosen by an order the record holds rather than by dictionary order, so a stale file cannot be
+      read as the change under review
 tickets:
   - id: T1
     delivers: >-
@@ -309,7 +329,7 @@ tickets:
       The remaining collaborators land in driver/routes.py, driver/answers.py and driver/attention.py,
       driver/__init__.py becomes a re-export facade, and the driver package is paid on module lines
       and class methods.
-    satisfies: [S11, S13]
+    satisfies: [S11, S13, S22]
     paths:
       - packages/agent-orchestrator/src/agent_orchestrator/driver/
       - packages/agent-orchestrator/tests/test_driver
@@ -365,26 +385,76 @@ tickets:
 
   - id: T16
     delivers: >-
-      scripts/structure_budget.py stops re-implementing the three metrics ruff measures exactly -
-      branch points (PLR0912), parameters (PLR0913) and public methods (PLR0904) - and reads them from
-      ruff's JSON instead, feeding the same git-baseline comparison, so the offender lines, the one
-      committed baseline and the no-per-file-row rule are unchanged and each threshold has one
-      implementation. Module lines and function lines stay in the script: ruff has no module-length
-      rule, and PLR0915 counts statements rather than lines.
+      The substitution is refused on measurement rather than preference: ruff's PLR0912, PLR0913 and
+      PLR0904 are compared against the gate's three counters on this tree, and a test pins the
+      divergence so the swap cannot be tried again in silence - twenty files the gate counts over the
+      branch ceiling measure under ruff's twelve, and two driver classes it counts at twenty-five
+      measure twenty-six because ruff counts dunder methods as public. Every threshold keeps one
+      implementation, the gate's own, and the spec says which measures what.
     satisfies: [S20]
     paths:
       - scripts/structure_budget.py
       - tests/test_structure_budget.py
       - docs/specs/python-workspace-contracts.md
       - pyproject.toml
+      - packages/agent-orchestrator/tests/test_driver/test_driver_package.py
+      - packages/agent-orchestrator/tests/test_driver_runtime.py
+      - packages/agent-orchestrator/tests/test_driver_records.py
     size: regular
     difficulty: complex
     blocked_by: [T12]
+  - id: T18
+    delivers: >-
+      plan.py's package basename check and the structure budget's file walk decide what belongs to the
+      package from what git tracks rather than from os.walk, so an untracked or ignored directory - a
+      nested worktree, an editor's scratch copy - can neither make a plan unloadable nor be measured as
+      source, and a tree outside a repository still falls back to the walk. The refusal names the copy
+      rather than only a basename.
+    satisfies: [S23]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/plan.py
+      - packages/agent-orchestrator/tests/test_plan_layout_resolver.py
+      - packages/agent-orchestrator/tests/test_driver_records.py
+      - packages/agent-orchestrator/tests/test_driver_runtime.py
+      - scripts/structure_budget.py
+      - tests/test_structure_budget.py
+    size: regular
+    difficulty: complex
+  - id: T19
+    delivers: >-
+      A reviewer is handed the report of the attempt it reviews. review_text names the attempt's own
+      report path, its mtime and the head it claims, and loses the clause that let a file written under
+      another name be read as a fallback; unit_trail answers the newest attempt by the order the record
+      holds rather than by dictionary order, and both callers read that one answer, so a stale report in
+      the unit directory is never mistaken for the change. The engine spec's description of the brief
+      follows in the same change, so the ledger does not go on promising a glob it no longer hands out.
+    satisfies: [S24]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver/
+      - packages/agent-orchestrator/tests/test_driver
+      - packages/agent-orchestrator/tests/test_review_brief.py
+      - docs/specs/orchestrator-engine.md
+    size: regular
+    difficulty: complex
+    blocked_by: [T9]
+  - id: T20
+    delivers: >-
+      The facade exports every public name its modules define again: the attempt selectors #424 added to
+      records.py are reachable as driver.<name>, so S22 holds on main and a caller reading the package
+      by name finds them.
+    satisfies: [S22]
+    paths:
+      - packages/agent-orchestrator/src/agent_orchestrator/driver/__init__.py
+      - packages/agent-orchestrator/src/agent_orchestrator/driver/records.py
+      - packages/agent-orchestrator/tests/test_driver/test_driver_package.py
+    size: small
+    difficulty: simple
+
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-15T22:06:31.139340+00:00'
+  at: '2026-11-16T19:14:22.441503+00:00'
   base: 630a6263e6855140153634c53e3a4e9f11b7d38b
-  digest: b8cb3a62b79b56636ac5aec028c737174b62eab63c565a0f1bcb62cbac3ff882
+  digest: 04acfa28e647a1bd941ee5c309cdd1cc6638a77adcb5ac27c93789ede4446f80
 amendments:
 - prev_digest: 02b446f1055bf62a939ccc87ec387f902c96cd141bbd4984d743bcf5ee13a91d
   digest: 03f63c9e345331ecfe7e23f022201097fb38c99e52ecf012d6217543a63dd0d8
@@ -543,3 +613,84 @@ amendments:
   - T9
   - T10
   - T11
+- prev_digest: b8cb3a62b79b56636ac5aec028c737174b62eab63c565a0f1bcb62cbac3ff882
+  digest: d3df461b73e3e6344a0899123a55f478366219b613ff08ea6a2e5d452a60da15
+  at: '2026-11-16T07:39:41.188240+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: 'The plan check and the structure budget both walk the filesystem with a
+    four-name skip list, so a gitignored nested worktree holding a copy of this plan
+    made the plan unloadable and stopped the drive. The repository is what git tracks:
+    T18 reads that instead, and S23 holds it. The refusal should name the copy, not
+    only a basename.'
+  tickets:
+  - T18
+- prev_digest: d3df461b73e3e6344a0899123a55f478366219b613ff08ea6a2e5d452a60da15
+  digest: dd72fbbf073b0936f5674837aff4029923aef552c255c13522c88f46d5f0bd75
+  at: '2026-11-16T07:40:01.979213+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: 'Re-adding S22: the drive restored the plan to its previously approved bytes
+    while the nested-worktree collision was draining, which silently reverted the
+    S22 amendment from d14c262f. T12 owns the facade test again, alongside S23 from
+    T18.'
+  tickets:
+  - T12
+- prev_digest: dd72fbbf073b0936f5674837aff4029923aef552c255c13522c88f46d5f0bd75
+  digest: 26123db985c2b3439d2b45a3668be71fda809e2925253903073403fdb28c7c01
+  at: '2026-11-16T08:21:27.931930+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: T18 owns the seam change, which needs the two S11 tests that call the measuring
+    function in process. Adding test_driver_records.py and test_driver_runtime.py
+    to its fence; no other path changes.
+  tickets:
+  - T18
+- prev_digest: 26123db985c2b3439d2b45a3668be71fda809e2925253903073403fdb28c7c01
+  digest: 5aed3d72d208326ecbc345f82d8b54df2678d2e5dc3eff313b8517899a615815
+  at: '2026-11-16T10:57:22.139473+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: 'A re-dispatched unit can be reviewed against the previous attempt: review_text
+    globs the unit directory while reports live in the attempt directory, and unit_trail
+    picks the newest report by dictionary order. Its own ticket and scenario, blocked
+    behind T9 because the review lane is what T9 moves; a driver fix folded into a
+    moving PR is how it gets lost.'
+  tickets:
+  - T19
+- prev_digest: 5aed3d72d208326ecbc345f82d8b54df2678d2e5dc3eff313b8517899a615815
+  digest: 383437fb9f9952f57d6235d96cac3a826b8ad47dbfc24e263065ea26de9d27c3
+  at: '2026-11-16T11:54:04.981126+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: The review found R145 in the engine spec still promising the glob the ticket
+    removes; the ledger must not lie about the brief, so the ticket owns that spec
+    and amends the clause in the same change.
+  tickets:
+  - T19
+- prev_digest: 383437fb9f9952f57d6235d96cac3a826b8ad47dbfc24e263065ea26de9d27c3
+  digest: e5b22eef8cf0dc1df37cc062174492e96efad154c3054a259564341f454d66d8
+  at: '2026-11-16T14:25:07.566539+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: S14 claims the CLI still offers the names it offered at approval, which
+    is a subset claim; the test asserted equality, so a command added afterwards with
+    R160 failed it. Filtering the offered names to the approved twenty keeps the claim
+    the scenario makes and lets the tree gain commands without losing one.
+  tickets: []
+- prev_digest: e5b22eef8cf0dc1df37cc062174492e96efad154c3054a259564341f454d66d8
+  digest: 73a855e6a850884a0fcf34aacfe58520781bec40ff9043eef42ee3052f6076be
+  at: '2026-11-16T19:03:05.367411+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: T16 needs the three test files that read the numbers in process, because
+    one implementation per threshold means those classes start ruff and must say so.
+    The facade hole on main is its own small ticket, so the two changes do not share
+    a diff.
+  tickets:
+  - T16
+  - T20
+- prev_digest: 73a855e6a850884a0fcf34aacfe58520781bec40ff9043eef42ee3052f6076be
+  digest: 04acfa28e647a1bd941ee5c309cdd1cc6638a77adcb5ac27c93789ede4446f80
+  at: '2026-11-16T19:14:22.441503+00:00'
+  by: felippe.bisca@gmail.com (t2sh)
+  reason: 'Ruff does not measure what the budget names: PLR0904 counts dunder methods
+    as public, PLR0913 does not count self, PLR0912 counts no comprehension filter
+    or conditional expression, so twenty files leave the offender list and two driver
+    classes fail the paid ceiling. The scenario now says the rule must count the same
+    thing, and the ticket pins the divergence instead of swapping the measurer.'
+  tickets:
+  - T16
