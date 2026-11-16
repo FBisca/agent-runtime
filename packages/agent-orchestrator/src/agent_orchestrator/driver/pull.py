@@ -24,7 +24,7 @@ from .. import contracts, narrate, timeutil
 from ..ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from ..invariants import PARKED, next_path
 from .book import ARCHIVE, checkpoint, settle_merged
-from .records import merge_state, newest_attempts
+from .records import merge_state, unit_attempt
 from .report import item_text
 from .runtime import head_of
 
@@ -194,12 +194,12 @@ class Pull:
     def units(self):
         """Every unit of the run with the task that is still open for it."""
         with self.book() as data:
-            tasks = [copy.deepcopy(t) for t in data["tasks"].values()]
-        units = {}
-        for task in tasks:
-            unit = task["packet"].get("unit") or task["packet"]["task_id"]
-            units.setdefault(unit, []).append(task)
-        return {unit: group[-1] for unit, group in units.items()}
+            units = {t["packet"].get("unit") or tid for tid, t in data["tasks"].items()}
+            return {
+                unit: copy.deepcopy(task)
+                for unit in units
+                if (task := unit_attempt(data, unit, open_only=True))
+            }
 
     def unit_flag(self, unit, key):
         """True when any attempt of the unit carries the flag: the pull request belongs to the unit, not to a task."""
@@ -511,19 +511,11 @@ class Pull:
         narrate.say("done", "merge", "merged early: %s" % url, task=task_id)
 
     def _reported_checks(self, task_id):
-        """The checks of the newest attempt of the unit that holds a report: a fix round's own attempt usually has
-        none yet, and the merge must not erase the evidence its worker already stored. [] only when none reported."""
+        """The newest attempt's checks, or [] when it has not reported."""
         with self.book() as data:
             unit = data["tasks"][task_id]["packet"].get("unit") or task_id
-            attempts = [
-                tid for tid, t in data["tasks"].items() if (t["packet"].get("unit") or tid) == unit
-            ]
-            reports = {tid: data["tasks"][tid].get("report") for tid in attempts}
-        ordered = [task_id] + [tid for tid in reversed(attempts) if tid != task_id]
-        for tid in ordered:
-            if reports.get(tid):
-                return list(reports[tid].get("checks") or [])
-        return []
+            task = unit_attempt(data, unit)
+            return list(((task or {}).get("report") or {}).get("checks") or [])
 
     def merged_report(self, task_id, url):
         """The report a unit that was merged before it finished completes with: the merge settled it."""
@@ -561,13 +553,8 @@ class Pull:
             if isinstance(document, dict) and document.get("items"):
                 return list(document["items"])
         with self.book() as data:
-            tasks = [t for t in data["tasks"].values() if t["packet"].get("unit") == unit]
-        # The newest attempt's fix items, by the order the record holds, as the trail above reads it.
-        for task in newest_attempts(tasks):
-            items = (task.get("fix") or {}).get("items") or []
-            if items:
-                return list(items)
-        return []
+            task = unit_attempt(data, unit)
+            return list(((task or {}).get("fix") or {}).get("items") or [])
 
     def _deferred_file(self):
         """deferred.md, created with its header on first use."""

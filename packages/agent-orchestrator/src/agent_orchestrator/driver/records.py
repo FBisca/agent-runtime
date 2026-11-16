@@ -321,3 +321,26 @@ def newest_attempts(tasks):
     stand in for the change under review.
     """
     return sorted(tasks, key=lambda task: str(task.get("started_at") or ""), reverse=True)
+
+
+def unit_attempts(data, unit):
+    """The unit's attempts newest first, breaking equal timestamps by ledger position."""
+    tasks = [
+        (index, task)
+        for index, (tid, task) in enumerate(data["tasks"].items())
+        if (task["packet"].get("unit") or tid) == unit
+    ]
+    tasks.sort(key=lambda pair: (str(pair[1].get("started_at") or ""), pair[0]), reverse=True)
+    return [task for _, task in tasks]
+
+
+def unit_attempt(data, unit, *, open_only=False):
+    """The newest attempt, or the newest attempt whose ledger status is open."""
+    return next(
+        (
+            task
+            for task in unit_attempts(data, unit)
+            if not open_only or task.get("status") not in ("COMPLETE", "RELEASED")
+        ),
+        None,
+    )
