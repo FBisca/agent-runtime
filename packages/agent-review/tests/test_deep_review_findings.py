@@ -62,14 +62,18 @@ def signal(rule, question=QUESTION, value=None, confidence=None, pattern=""):
     )
 
 
-def reported_finding(blocking=False):
-    """The reviewer's finding on the critical question, blocking only if the reviewer says so (D15)."""
+def reported_finding(blocking=False, requirement=QUESTION):
+    """The reviewer's finding on the critical question, blocking only if the reviewer says so (D15).
+
+    `requirement` is whatever the reviewer named as the violated requirement: a question id, or the spec
+    requirement or principle that question's contract comes from (D15), which the review may not have heard of.
+    """
     return {
         "id": "F1",
         "classification": "critical",
         "path": MIGRATION,
         "line": 1,
-        "requirement": QUESTION,
+        "requirement": requirement,
         "evidence": "the index is created without a way back",
         "correction": "add the down migration beside it",
         "blocking": blocking,
@@ -158,12 +162,26 @@ def test_S4_each_fired_signal_carries_its_own_disposition_and_what_judged_it():
     assert reviewed.failure is None
 
 
-def test_S4_a_confirmed_finding_on_a_mandatory_question_blocks_whatever_the_reviewer_said():
-    """The reviewer reported a contract violation but called it advisory: the review keeps it blocking."""
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        pytest.param(QUESTION, id="the-question-id"),
+        pytest.param("R15", id="a-spec-requirement"),
+        pytest.param("evidence before opinion", id="a-principle"),
+    ],
+)
+def test_S4_a_confirmed_finding_on_a_mandatory_question_blocks_whatever_the_reviewer_said(
+    requirement,
+):
+    """The reviewer reported a contract violation but called it advisory: the review keeps it blocking.
+
+    Whichever name it gave the requirement: what decides is the confirmed disposition of a signal that fired
+    on a critical-priority question, so the guarantee never rests on the reviewer spelling that question's id.
+    """
     value = signal("value-above-threshold", value=2.5, confidence=0.3)
     reviewer = Reviewer(
         {
-            "findings": [reported_finding()],
+            "findings": [reported_finding(requirement=requirement)],
             "dispositions": [confirmation("value-above-threshold")],
         }
     )

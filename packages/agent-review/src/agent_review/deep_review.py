@@ -188,8 +188,8 @@ class Spawn:
             "Answer with one JSON object and nothing else:",
             '  {"findings": [...], "dispositions": [...], "failure": null}',
             "A finding carries id, classification, path, line, requirement, evidence, correction and "
-            "blocking: the line you read, the requirement it violates, the evidence and the smallest "
-            "correction that answers it.",
+            "blocking: the question id whose contract it violates (or the spec requirement or principle it "
+            "breaks), the line you read, the evidence and the smallest correction that answers it.",
             "One disposition per signal above, each on its own: signal, question, disposition (confirmed, "
             "dismissed or downgraded), the evidence that decision rests on, and the finding it rests on "
             "when it rests on one.",
@@ -628,9 +628,7 @@ class Judgement:
     failure: str | None = None
 
 
-def judged(
-    signals: Sequence[EscalationReason], answer: Answer, bank: QuestionBank
-) -> Judgement:
+def judged(signals: Sequence[EscalationReason], answer: Answer, bank: QuestionBank) -> Judgement:
     """The dispositions of the fired signals, the ones nobody answered, and the findings with blocking fixed.
 
     Each fired signal gets the disposition that names it - with its question when the rule alone matches more
@@ -638,27 +636,14 @@ def judged(
     unresolved rather than read as dismissed (D17, P2-D6). A finding on a critical-priority question is
     blocking unless the reviewer dismissed or downgraded it with evidence: a confirmed mandatory-contract
     violation is never downgraded by the reviewer's own flag (D16).
+
+    Which question a finding is on is decided by the review, never by the reviewer's spelling: a finding is on
+    the mandatory contract when its `requirement` names a critical-priority question, and also when a
+    confirmed disposition rests on it for a signal that fired on one. D15 lets the reviewer name a spec
+    requirement or a principle there, and the promotion may not depend on a naming convention nobody states.
     """
     matched = _matched(signals, answer.dispositions)
-    confirmed = {
-        entry.finding
-        for entry in answer.dispositions
-        if entry.finding is not None and entry.disposition == CONFIRMED
-    }
-    cleared = {
-        entry.finding
-        for entry in answer.dispositions
-        if entry.finding is not None and entry.disposition != CONFIRMED
-    } - confirmed
-    mandatory = {question.id for question in bank.questions if question.priority == MANDATORY}
-    findings = tuple(
-        replace(
-            finding,
-            blocking=finding.blocking
-            or (finding.requirement in mandatory and finding.id not in cleared),
-        )
-        for finding in answer.findings
-    )
+    findings = _blocking(answer.findings, signals, matched, answer.dispositions, bank)
     dispositions = tuple(
         entry.judged(signal) for signal, entry in zip(signals, matched, strict=True) if entry
     )
@@ -671,6 +656,47 @@ def judged(
         findings=findings,
         failure=answer.failure or _unanswered(unresolved),
     )
+
+
+def _blocking(
+    findings: Sequence[Finding],
+    signals: Sequence[EscalationReason],
+    matched: Sequence[Disposition | None],
+    answered: Sequence[Disposition],
+    bank: QuestionBank,
+) -> tuple[Finding, ...]:
+    """The findings with `blocking` fixed: a confirmed mandatory-contract violation cannot be downgraded (D16).
+
+    A finding is on the mandatory contract when its `requirement` names a critical-priority question, and also
+    when a confirmed disposition rests on it for a signal that fired on one: D15 lets the reviewer name a spec
+    requirement or a principle there, so the promotion never depends on the reviewer spelling a question id.
+    """
+    mandatory = {question.id for question in bank.questions if question.priority == MANDATORY}
+    confirmed = {entry.finding for entry in answered if _confirmed(entry)}
+    cleared = {
+        entry.finding for entry in answered if entry.finding is not None and not _confirmed(entry)
+    } - confirmed
+    confirmed_on = {
+        entry.finding
+        for signal, entry in zip(signals, matched, strict=True)
+        if entry is not None and _confirmed(entry) and signal.question in mandatory
+    }
+    return tuple(
+        replace(
+            finding,
+            blocking=finding.blocking
+            or (
+                (finding.requirement in mandatory or finding.id in confirmed_on)
+                and finding.id not in cleared
+            ),
+        )
+        for finding in findings
+    )
+
+
+def _confirmed(entry: Disposition) -> bool:
+    """Whether one answered disposition confirmed the finding it rests on, which is what promotes it (D16)."""
+    return entry.disposition == CONFIRMED and entry.finding is not None
 
 
 def _matched(
