@@ -19,11 +19,13 @@ class ReviewPacketTests(GateFixture, unittest.TestCase):
             [str(report), self.report("t1d1", head="def5678")],
             [str(self.worktree / "src/a/test_a.py"), 'def test_a():\n    """S1"""\n'],
         ]
-        self.waits([
-            report_wait("demo-t1", "blocked", "cannot continue"),
-            self.decide_step("t1", "retry"),
-            completed,
-        ])
+        self.waits(
+            [
+                report_wait("demo-t1", "blocked", "cannot continue"),
+                self.decide_step("t1", "retry"),
+                completed,
+            ]
+        )
         self.run_driver()
 
         self.assertEqual(self.task("t1d1")["report_path"], str(report))
@@ -31,7 +33,9 @@ class ReviewPacketTests(GateFixture, unittest.TestCase):
         timestamp = datetime.fromtimestamp(report.stat().st_mtime, timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-        reported = next(line for line in brief.splitlines() if line.startswith("- What it reported:"))
+        reported = next(
+            line for line in brief.splitlines() if line.startswith("- What it reported:")
+        )
         self.assertIn(str(report), reported)
         self.assertIn(timestamp, reported)
         self.assertIn("def5678", reported)

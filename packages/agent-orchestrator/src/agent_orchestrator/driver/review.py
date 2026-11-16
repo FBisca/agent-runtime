@@ -75,7 +75,10 @@ def _paths(driver, packet, delta, open_items):
             else []
         ),
         "- Evidence already in the run: %d files in %s (the driver's own runs; do not repeat them)"
-        % (sum(1 for p in (driver.run_dir / "receipts").rglob("*") if p.is_file()), driver.run_dir / "receipts"),
+        % (
+            sum(1 for p in (driver.run_dir / "receipts").rglob("*") if p.is_file()),
+            driver.run_dir / "receipts",
+        ),
         "- Repo rules: %s" % (", ".join(rules) or "none found; follow the code's own conventions"),
     ]
 

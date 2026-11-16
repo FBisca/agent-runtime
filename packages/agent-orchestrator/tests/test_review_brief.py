@@ -139,11 +139,17 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertFalse(hasattr(app, "adopt_review"))
 
     def test_S6_spec_records_the_exact_report_and_no_adoption(self):
-        spec = (Path(__file__).resolve().parents[3] / "docs/specs/orchestrator-engine.md").read_text()
-        section = spec.split("## Requirements: reviewer-brief", 1)[1].split("## Requirements: lead-decision-gates", 1)[0]
+        spec = (
+            Path(__file__).resolve().parents[3] / "docs/specs/orchestrator-engine.md"
+        ).read_text()
+        section = spec.split("## Requirements: reviewer-brief", 1)[1].split(
+            "## Requirements: lead-decision-gates", 1
+        )[0]
         self.assertIn("report path the ledger recorded", section)
         self.assertNotIn("newest `report*.json`", section)
-        payload = spec.split("## Requirements: review-payload-path", 1)[1].split("## Requirements:", 1)[0]
+        payload = spec.split("## Requirements: review-payload-path", 1)[1].split(
+            "## Requirements:", 1
+        )[0]
         self.assertNotIn("**R155**", payload)
         self.assertNotIn("| R155 |", payload)
 

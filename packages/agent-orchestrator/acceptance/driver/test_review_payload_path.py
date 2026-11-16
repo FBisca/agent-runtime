@@ -32,7 +32,13 @@ class ReviewPayloadPathAcceptance(GateFixture, unittest.TestCase):
 
     def test_S2_a_review_written_under_another_name_is_not_read(self):
         elsewhere = self.run_dir / "t1-review" / "review.json"
-        self.waits([self.worker_done(tests=True), *self.repeated(self.reviewer_wrote(elsewhere)), self.skipped()])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                *self.repeated(self.reviewer_wrote(elsewhere)),
+                self.skipped(),
+            ]
+        )
         self.run_driver()
         self.assertNotIn("reviewed_commit", self.task())
         self.assertFalse((self.run_dir / "t1" / "review.json").exists())
