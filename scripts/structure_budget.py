@@ -50,7 +50,8 @@ CEILINGS = {
 METRICS = tuple(CEILINGS)
 
 # A walk skips a virtualenv, a git store and a package tree, and nothing else: an exemption list is
-# what a new offender would use to enter the tree unmeasured.
+# what a new offender would use to enter the tree unmeasured. Only the fallback walk and the base
+# archive need it — in a checkout, git's own listing already says which files the tree holds.
 SKIP = frozenset({".git", ".venv", "node_modules", "__pycache__"})
 
 # The nodes one branch point each; a boolean operator counts one per extra operand and a
@@ -118,9 +119,33 @@ def metrics_of(source):
     return numbers
 
 
+def tracked(root):
+    """The Python files git says `root` holds, relative to it and POSIX, or None outside a checkout.
+
+    Git is what decides which files the tree holds: it tracks the files a commit carries, it never
+    descends into another checkout, and an ignored directory is not source at all. A scratch copy or
+    a nested worktree therefore cannot be measured as this tree's source, whatever it holds.
+    """
+    try:
+        done = git(root, "ls-files", "-z", "--cached", text=False)
+    except Refused:  # no git at all: the walk is the only answer there is
+        return None
+    if done.returncode:
+        return None
+    names = done.stdout.decode("utf-8", "surrogateescape").split("\0")
+    return sorted(name for name in names if name.endswith(".py"))
+
+
 def walk(root):
-    """Every Python file under `root`, as a POSIX path relative to it, sorted."""
+    """Every Python file under `root`, as a POSIX path relative to it, sorted.
+
+    What belongs to the tree is what git tracks, so a copy another tree holds is neither measured nor
+    a growth. A tree outside a repository has no index to ask, and is walked instead.
+    """
     root = Path(root)
+    listed = tracked(root)
+    if listed is not None:
+        return listed
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(name for name in dirnames if name not in SKIP)

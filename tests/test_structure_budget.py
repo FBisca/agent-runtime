@@ -232,6 +232,10 @@ class MeasureTests(unittest.TestCase):
             budget["growth_lines"]({"tests/test_wide.py": numbers}, at_base),
             ["tests/test_wide.py: class-methods 27 > recorded 26 (ceiling 25)"],
         )
+
+    @pytest.mark.integration
+    def test_S8_the_checkouts_own_test_tree_is_measured_as_source_is(self):
+        """structure-budget/S8: what git tracks decides, and the test tree is part of what it tracks."""
         walked = budget["walk"](str(REPO))
         self.assertIn("tests/test_structure_budget.py", walked, "the test tree is measured too")
         self.assertIn("scripts/structure_budget.py", walked)
@@ -360,6 +364,37 @@ class SinceTests(unittest.TestCase):
         gate = self.drive(root)
         self.assertEqual(gate.returncode, 1, gate.stdout + gate.stderr)
         self.assertIn("pkg/big.py: module-lines 1100 > ceiling 1000", gate.stdout)
+
+    @pytest.mark.integration
+    def test_S23_a_copy_this_checkout_does_not_track_is_no_source_and_a_tree_outside_one_is_walked(
+        self,
+    ):
+        """structure-budget/S23: git decides which files the tree holds; outside one the walk answers."""
+        root = self.checkout()
+        (root / "pkg" / "scratch").mkdir()
+        (root / "pkg" / "scratch" / "big.py").write_text(long_module(1200))
+        (root / ".gitignore").write_text("ignored/\n")
+        (root / "ignored").mkdir()
+        (root / "ignored" / "big.py").write_text(long_module(1200))
+        (root / "pkg" / "checkout").mkdir()
+        self.git(root / "pkg" / "checkout", "init", "-q", "-b", "main")
+        (root / "pkg" / "checkout" / "big.py").write_text(long_module(1200))
+        self.assertEqual(
+            budget["walk"](str(root)),
+            ["pkg/big.py"],
+            "an untracked, ignored or nested checkout's copy is no source of this tree",
+        )
+        gate = self.drive(root)
+        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+
+        outside = root.parent / "outside"
+        (outside / "pkg").mkdir(parents=True)
+        (outside / "pkg" / "big.py").write_text(long_module(1200))
+        self.assertEqual(
+            budget["walk"](str(outside)),
+            ["pkg/big.py"],
+            "a tree outside a repository has no index to ask, so the walk measures it",
+        )
 
     @pytest.mark.integration
     def test_S15_a_since_that_is_not_a_revision_is_refused_naming_it(self):

@@ -1,6 +1,7 @@
 """One resolver answers for both plan layouts: the kind, the folder or oracle dir, the contract files, a path's place
 relative to the repository, whether a path belongs to the plan and whether the folder may be deleted."""
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,6 +122,71 @@ class NoRepositoryTests(ResolverFixture):
         ):
             with self.assertRaisesRegex(ValueError, "needs the repository"):
                 ask()
+
+
+class PackageCopyTests(unittest.TestCase):
+    """S23: what belongs to the package is what git reports for it, not what a walk of the disk finds."""
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.repo = Path(scratch.name).resolve() / "repo"
+        self.folder = self.repo / "docs" / "plans" / "2026-11-15-demo"
+        (self.folder / "acceptance").mkdir(parents=True)
+        (self.folder / "acceptance" / "probe.txt").write_text("probe\n")
+        (self.repo / "pkg").mkdir()
+        (self.repo / ".gitignore").write_text(".worktrees/\n")
+        self.git("init", "-q", "-b", "main")
+        self.commit("the plan, its acceptance file and the package")
+
+    def git(self, *args):
+        done = subprocess.run(
+            ["git", "-C", str(self.repo), *args], check=True, capture_output=True, text=True
+        )
+        return done.stdout
+
+    def commit(self, message):
+        self.git("add", "-A")
+        self.git("-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", message)
+
+    def problems(self):
+        """The plan check's problems for a promote plan whose acceptance file lands in the package."""
+        data = {
+            "domain": "flows",
+            "archive": "promote",
+            "spec": "docs/specs/demo.md",
+            "scenarios": [
+                {
+                    "id": "S1",
+                    "when": "it runs",
+                    "then": "it passes",
+                    "evidence": {
+                        "check": "true",
+                        "baseline": "pass",
+                        "acceptance": ["probe.txt"],
+                        "package": "pkg",
+                    },
+                }
+            ],
+            "tickets": [],
+        }
+        return yaml_plan.folder_problems(
+            data, self.folder / "plan.yaml", self.repo, data["scenarios"]
+        )
+
+    @pytest.mark.integration
+    def test_S23_a_copy_git_ignores_is_no_module_of_the_package_and_a_committed_one_is_named(self):
+        """structure-budget/S23: a nested checkout's copy neither clashes nor is named the module."""
+        copy = self.repo / "pkg" / ".worktrees" / "wt" / "acceptance" / "probe.txt"
+        copy.parent.mkdir(parents=True)
+        copy.write_text("probe\n")
+        self.assertEqual(self.problems(), [], "a copy in an ignored tree is no module of the package")
+        tracked = self.repo / "pkg" / "tests" / "probe.txt"
+        tracked.parent.mkdir()
+        tracked.write_text("already here")
+        self.commit("a module of that basename")
+        message = "\n".join(self.problems())
+        self.assertIn("pkg/tests/probe.txt", message, "the refusal names the copy, not only a basename")
 
 
 class AskedByTests(ResolverFixture):
