@@ -141,6 +141,25 @@ def require_completable(task, report):
         )
 
 
+def report_reader(task_id):
+    """The report one attempt sent, refused when it names another task or is not the complete it claims:
+    the words go back to the worker that wrote it, as every payload refusal does."""
+
+    def read(where):
+        report = contracts.load(where, contracts.validate_report)
+        contracts.need(
+            report["task_id"] == task_id,
+            "report task_id %r is not %s" % (report["task_id"], task_id),
+        )
+        contracts.need(
+            report["status"] == "COMPLETE" and report["acceptance_met"],
+            "the worker said complete but report.json says %s" % report["status"],
+        )
+        return report
+
+    return read
+
+
 def context_verdict(sample, reserve, max_age=300):
     """Evaluate reported occupancy only; relevance remains an orchestrator decision."""
     require(isinstance(sample, dict), "context sample must be an object")
