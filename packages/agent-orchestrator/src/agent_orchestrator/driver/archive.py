@@ -464,6 +464,12 @@ class Archive:
                     "archive by hand" % ", ".join(missing),
                 )
             head = self._archive_branch(task_id)
+            if self._archive_mode() == "promote":
+                checkout = self.task(task_id)["packet"]["checkout"]
+                shutil.copyfile(
+                    Path(checkout) / self.plan_model().spec,
+                    self.run_dir / task_id / "archived-spec",
+                )
             url = self._archive_pr(task_id)
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             return self.request(
@@ -632,9 +638,8 @@ class Archive:
         """The archive pull request's description, by what the archive does with the plan."""
         from .pointers import reference
 
-        checkout = self.task(ARCHIVE)["packet"]["checkout"]
         spec = (
-            reference(checkout, self.plan_model().spec, "read")
+            reference(self.run_dir / ARCHIVE, "archived-spec", "read")
             if self._archive_mode() == "promote"
             else ""
         )
@@ -645,13 +650,13 @@ class Archive:
         if self.layout.is_folder:
             where = reference(self.repo, self.layout.folder, "collection")
             return (
-                "Archives the plan %s into `%s`: its acceptance files move to their domain, the folder "
-                "is deleted and the spec section with its Coverage table is written by the driver."
+                "Archives the plan %s into the living spec: its acceptance files move to their domain, the folder "
+                "is deleted and the spec section with its Coverage table is written by the driver. Spec snapshot: `%s`."
                 % (where, spec)
             )
         return (
-            "Archives `%s` into `%s`: the plan files, the promoted oracles and the spec section "
-            "with its Coverage table, written by the driver."
+            "Archives `%s` into the living spec: the plan files, the promoted oracles and the spec section "
+            "with its Coverage table, written by the driver. Spec snapshot: `%s`."
             % (reference(self.repo, self.plan_path, "read"), spec)
         )
 

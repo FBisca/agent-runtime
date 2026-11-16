@@ -267,13 +267,16 @@ class TestRenderedPointers:
 
 
 def archive_output(tmp_path):
+    import shutil
     from types import SimpleNamespace
 
     from agent_orchestrator.driver.archive import Archive
 
     plan = tmp_path / "plan"
     plan.write_text("plan")
-    spec = tmp_path / "spec"
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    spec = checkout / "spec"
     spec.write_text("spec")
     (tmp_path / "archive").mkdir()
     calls = []
@@ -290,7 +293,7 @@ def archive_output(tmp_path):
         args=SimpleNamespace(base="origin/main"),
         layout=SimpleNamespace(is_folder=False, plan_place="plan"),
         plan_model=lambda: SimpleNamespace(spec="spec"),
-        task=lambda _: {"packet": {"checkout": str(tmp_path), "worker": "demo-archive"}},
+        task=lambda _: {"packet": {"checkout": str(checkout), "worker": "demo-archive"}},
         pr_of=lambda _: None,
         gh=gh,
         mark=lambda *a, **k: None,
@@ -304,5 +307,6 @@ def archive_output(tmp_path):
     archive.build_archive("archive")
     (call,) = calls
     body = call[call.index("--body") + 1]
+    shutil.rmtree(checkout)
     assert not PointerGuard(tmp_path).violations(body), body
     assert (tmp_path / "archive" / "report.json").is_file()
