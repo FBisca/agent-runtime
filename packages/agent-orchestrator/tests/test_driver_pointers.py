@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_S8_spec_names_the_pointer_rule_and_its_guard():
     spec = (ROOT / "docs/specs/orchestrator-engine.md").read_text()
-    requirement = next(line for line in spec.splitlines() if line.startswith("- **R172**"))
+    requirement = next(line for line in spec.splitlines() if line.startswith("- **R173**"))
     for phrase in (
         "file that exists",
         "file the reader is asked to write",
@@ -22,7 +22,7 @@ def test_S8_spec_names_the_pointer_rule_and_its_guard():
         "newest",
     ):
         assert phrase in requirement
-    row = next(line for line in spec.splitlines() if line.startswith("| R172 |"))
+    row = next(line for line in spec.splitlines() if line.startswith("| R173 |"))
     assert "test_S3_" in row
     import ast
     import re
@@ -38,7 +38,7 @@ def test_S8_spec_names_the_pointer_rule_and_its_guard():
 
 def test_S9_repository_instructions_name_the_rule(tmp_path):
     instructions = (ROOT / "AGENTS.md").read_text()
-    paragraph = next(p for p in instructions.split("\n\n") if "R172" in p)
+    paragraph = next(p for p in instructions.split("\n\n") if "R173" in p)
     for phrase in ("name the file", "find it", "nothing", "several", "test_driver_pointers.py"):
         assert phrase in paragraph.lower()
     from types import SimpleNamespace
@@ -56,7 +56,7 @@ def test_S9_repository_instructions_name_the_rule(tmp_path):
     packet = {"checkout": str(tmp_path), "unit": "t1", "task_id": "t1"}
     brief = review_brief(driver, packet, tmp_path / "review.json")
     assert str(rules) in brief
-    assert "R172" in rules.read_text()
+    assert "R173" in rules.read_text()
 
 
 def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):

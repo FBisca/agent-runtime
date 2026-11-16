@@ -28,7 +28,7 @@ ceiling and a comparison against the merge base pass it. Where the environment a
 (the history, the filesystem, a manifest), read it there instead of copying it here.
 
 Name the file, not how to find it; refuse a pointer that resolves to nothing or several files.
-The living spec's R172 and `packages/agent-orchestrator/tests/test_driver_pointers.py` hold this rule.
+The living spec's R173 and `packages/agent-orchestrator/tests/test_driver_pointers.py` hold this rule.
 
 ## Testing
 
