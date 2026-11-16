@@ -75,6 +75,7 @@ from .gates import Gates
 from .gates import (
     step_failed as step_failed,
 )
+from .handoff import recover_worker_report
 
 # The pull request lane has one home: `driver/pull.py`, the `Pull` a Driver holds and the log helpers a
 # failing check is read with, so polling, the draft, the conflict, the checks and the merge read as one lane.
@@ -1543,16 +1544,8 @@ class Driver(SpecSections):
         if silent and role != "worker":
             return None
         if role == "worker":
-            if kind == "exited" and self.report_landed(task_id):
-                # The worker wrote its report and its turn ended before the runtime said so: the report is the
-                # news, not a question for the Lead.
-                self.log(
-                    "report-landed",
-                    unit=self.unit_of(task_id),
-                    task=task_id,
-                    assignment_id=assignment_id,
-                )
-                return self.mark(task_id, gate="reported")
+            if kind == "exited" and recover_worker_report(self, task_id, assignment_id):
+                return
             if silent:
                 return None
             return self.request(task_id, kind, reason)
@@ -4320,14 +4313,11 @@ class Driver(SpecSections):
                     # assignment belongs to the dead drive's team). A turn that ended with its report on disk goes to
                     # the gates; anything else nothing will ever settle, so the Lead is told.
                     ended = said in ("idle", "done")
-                    if ended and role == "worker" and self.report_landed(task_id):
-                        self.log(
-                            "report-landed",
-                            unit=self.unit_of(task_id),
-                            task=task_id,
-                            assignment_id=assignment_id,
-                        )
-                        self.mark(task_id, gate="reported")
+                    if (
+                        ended
+                        and role == "worker"
+                        and recover_worker_report(self, task_id, assignment_id)
+                    ):
                         acted += 1
                     else:
                         self.strand(
@@ -4359,9 +4349,7 @@ class Driver(SpecSections):
                     assignment_id, "exited", "the runtime answered " + said, quiet=True
                 )
                 acted += 1
-            elif self.report_landed(task_id):
-                self.log("report-landed", unit=unit, task=task_id, assignment_id=assignment_id)
-                self.mark(task_id, gate="reported")
+            elif recover_worker_report(self, task_id, assignment_id):
                 acted += 1
             else:
                 acted += self.redispatch(task_id, said)
