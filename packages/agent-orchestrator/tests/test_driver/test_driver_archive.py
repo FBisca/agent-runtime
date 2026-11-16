@@ -175,7 +175,9 @@ class ArchiveHomeTests(unittest.TestCase):
         self.assertEqual(Path(archive.__file__).resolve(), LANE.resolve())
         for name in PUBLISHED:
             with self.subTest(name=name):
-                self.assertIn(name, vars(archive.Archive), "%s is not the collaborator's own" % name)
+                self.assertIn(
+                    name, vars(archive.Archive), "%s is not the collaborator's own" % name
+                )
                 self.assertTrue(
                     callable(getattr(driver.Driver, name)),
                     "a gate step, the suite and the Lead's commands ask `Driver.%s`" % name,

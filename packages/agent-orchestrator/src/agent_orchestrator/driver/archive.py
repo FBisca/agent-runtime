@@ -574,7 +574,9 @@ class Archive:
             before = ""
         text = self.spec_text(before, self.held_requirements(spec))
         already = spec_defects(before)
-        if already:  # the base was already broken: not this archive's to fix, and not silently passed on
+        if (
+            already
+        ):  # the base was already broken: not this archive's to fix, and not silently passed on
             self.log("spec-defects", spec=self.plan_model().spec, defects=len(already))
         spec.parent.mkdir(parents=True, exist_ok=True)
         spec.write_text(text, encoding="utf-8")
