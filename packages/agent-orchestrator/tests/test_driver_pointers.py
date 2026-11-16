@@ -2,6 +2,7 @@
 
 import unittest
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from test_gates import QUESTION, GateFixture
@@ -73,7 +74,7 @@ def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
     for alternatives in ((), (other,)):
         notices.clear()
         result = driver.Driver.read_payload(
-            reader, "t1", "report", expected, Path.read_text, alternatives
+            cast(Any, reader), "t1", "report", expected, Path.read_text, alternatives
         )
         assert result is None
         assert str(expected) in str(notices)
@@ -82,7 +83,9 @@ def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
     expected.write_text("expected")
     notices.clear()
     assert (
-        driver.Driver.read_payload(reader, "t1", "report", expected, Path.read_text, (other,))
+        driver.Driver.read_payload(
+            cast(Any, reader), "t1", "report", expected, Path.read_text, (other,)
+        )
         is None
     )
     assert str(expected) in str(notices) and str(other) in str(notices)
@@ -214,7 +217,7 @@ class PointerRun(GateFixture, unittest.TestCase):
         current = self.task("t1r1")
         (self.run_dir / "t1r2").mkdir(exist_ok=True)
         (self.run_dir / "t1r2" / "findings.json").write_text("{}")
-        stub = SimpleNamespace(run_dir=self.run_dir)
+        stub = cast(Any, SimpleNamespace(run_dir=self.run_dir))
         rebase = Driver.rebase_text(stub, current, "t1r2", self.run_dir / "t1r2", {"items": []})
         current["event"] = {"reason": "needs an answer"}
         answer = Driver.answer_text(stub, current, {"reason": "continue", "answer": "continue"})
@@ -355,7 +358,7 @@ def archive_output(tmp_path):
     archive = Archive(driver)
     archive.archive_missing = lambda: []
     archive._archive_mode = lambda: "promote"
-    archive._archive_branch = lambda _: "commit"
+    archive._archive_branch = lambda task_id: "commit"
     archive._archive_owns = lambda: ["spec"]
     archive.build_archive("archive")
     (call,) = calls
