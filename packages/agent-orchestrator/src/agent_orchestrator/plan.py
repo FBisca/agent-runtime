@@ -44,6 +44,8 @@ FOLDER_PLAN = "plan.yaml"
 # The folder's subdirectories whose every file the approval digests.
 FOLDER_PAYLOADS = ("acceptance", "negatives")
 ARCHIVE_MODES = ("promote", "discard")
+# What git lists for a tree: the files it tracks and the new ones it would carry, minus what it ignores.
+LISTED = ("ls-files", "-z", "--cached", "--others", "--exclude-standard")
 ScenarioId = Annotated[str, Field(pattern=r"^S\d+[a-z]?$")]
 TicketId = Annotated[str, Field(pattern=r"^T\d+$")]
 Text = Annotated[str, Field(min_length=1)]
@@ -960,16 +962,6 @@ LEGACY_KEYS = {
     "place": "package (the destination follows from package, acceptance.dir and domain)",
     "promote": "the top-level archive: promote | discard",
 }
-SKIPPED = {
-    ".git",
-    "node_modules",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".tox",
-    ".mypy_cache",
-    ".ruff_cache",
-}
 
 
 def legacy_problems(data, scenarios):
@@ -995,16 +987,21 @@ def legacy_problems(data, scenarios):
 
 
 def package_files(package, skip):
-    """{basename: first path} of every file in `package`, minus VCS, caches and the `skip` trees: pytest imports a
-    test module by its basename, so a promoted file needs a name no other module in the package has."""
-    found = {}
-    for here, dirs, names in os.walk(package):
-        dirs[:] = sorted(
-            d for d in dirs if d not in SKIPPED and Path(here, d).resolve() not in skip
-        )
-        for name in sorted(names):
-            found.setdefault(name, Path(here, name))
-    return found
+    """{basename: first path} of every file of `package` outside the `skip` trees: pytest imports a test module by
+    its basename, so a promoted file needs a name no other module in the package has. What belongs to the package
+    is what git lists: another checkout's or an ignored directory's copy is no module of it, and a tree outside a
+    repository, which has no index to ask, is walked instead."""
+    try:
+        listed = git(package, *LISTED).split("\0")
+        # An untracked directory git does not descend into is one entry ending in `/`, and holds no file.
+        paths = [Path(package, name) for name in listed if name and not name.endswith("/")]
+    except PlanError:
+        paths = [Path(here, name) for here, _, names in os.walk(package) for name in names]
+    return {
+        path.name: path
+        for path in paths
+        if not any(t in (path.resolve(), *path.resolve().parents) for t in skip)
+    }
 
 
 def not_under_plans_dir(folder, plans_dir):
@@ -1100,8 +1097,8 @@ def folder_problems(data, path, repo, scenarios):
             if clash is not None:
                 defect(
                     where,
-                    f"the basename {Path(name).name} matches {clash.relative_to(repo)} in the package, and "
-                    "pytest imports modules by basename",
+                    f"the basename {Path(name).name} is held by the copy {clash.relative_to(repo)} in the "
+                    "package, and pytest imports modules by basename",
                     "rename the acceptance file",
                 )
             placed = package_dir / cfg.acceptance_dir / domain / name

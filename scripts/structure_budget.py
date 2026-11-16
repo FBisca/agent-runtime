@@ -50,7 +50,8 @@ CEILINGS = {
 METRICS = tuple(CEILINGS)
 
 # A walk skips a virtualenv, a git store and a package tree, and nothing else: an exemption list is
-# what a new offender would use to enter the tree unmeasured.
+# what a new offender would use to enter the tree unmeasured. Only the fallback walk and the base
+# archive need it — in a checkout, git's own listing already says which files the tree holds.
 SKIP = frozenset({".git", ".venv", "node_modules", "__pycache__"})
 
 # The nodes one branch point each; a boolean operator counts one per extra operand and a
@@ -118,9 +119,40 @@ def metrics_of(source):
     return numbers
 
 
-def walk(root):
-    """Every Python file under `root`, as a POSIX path relative to it, sorted."""
+def tracked(root):
+    """The Python files git says `root` holds, relative to it and POSIX, or None outside a checkout.
+
+    Git is what decides which files the tree holds: the ones it tracks and the new ones it would carry,
+    so a file the branch adds is measured before anyone commits it. What it does not descend into —
+    another checkout — and what it ignores — a scratch copy — is no source of this tree, whatever it
+    holds. The cache trees SKIP names are dropped by hand: git lists them when it ignores them not.
+    """
+    try:
+        done = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", text=False)
+    except Refused:  # no git at all: the walk is the only answer there is
+        return None
+    if done.returncode:
+        return None
+    names = done.stdout.decode("utf-8", "surrogateescape").split("\0")
+    return sorted(
+        name for name in names if name.endswith(".py") and not SKIP.intersection(name.split("/"))
+    )
+
+
+def resolve(root):
+    """Every Python file the tree holds, as a POSIX path relative to it, sorted.
+
+    This is where membership is decided, and the one place a process is started: what git lists — the
+    files it tracks and the new ones it would carry, no ignored directory's or another checkout's copy
+    — and, for a tree outside a repository, every file a walk finds.
+    """
     root = Path(root)
+    listed = tracked(root)
+    return listed if listed is not None else walked(root)
+
+
+def walked(root):
+    """Every Python file a walk of `root` finds, relative to it, sorted: the tree it is given, as it stands."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(name for name in dirnames if name not in SKIP)
@@ -145,18 +177,27 @@ def measured_sources(sources: Iterable[tuple[str, str]]):
     return measured
 
 
-def tree_sources(root):
-    """(path, source) for every Python file under `root`, a file it cannot read skipped."""
-    for name in walk(root):
+def sources(root, names):
+    """(path, source) for each name under `root`, a file it cannot read skipped."""
+    for name in names:
         try:
             yield name, (Path(root) / name).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
 
 
+def measure(root, names):
+    """{path: {metric: number}} for the named files under `root`: reading and parsing, no membership.
+
+    A caller that already knows which files the tree holds — the command line after `resolve`, or a
+    test naming the modules it means — measures them without the process a resolver starts.
+    """
+    return measured_sources(sources(root, names))
+
+
 def measure_tree(root):
-    """{path: {metric: number}} for every Python file under `root`, as the working tree holds it."""
-    return measured_sources(tree_sources(root))
+    """{path: {metric: number}} for every Python file the tree holds: `measure` over `resolve`."""
+    return measure(root, resolve(root))
 
 
 def git(root, *args, text=True):
@@ -167,6 +208,23 @@ def git(root, *args, text=True):
         )
     except OSError as error:
         raise Refused("structure budget: git is not available, so --since has no base: %s" % error)
+
+
+def merge_base(root, rev):
+    """The revision `rev` and HEAD diverged at: where this change actually grew from.
+
+    `--since origin/main` names the base branch's *head*, and a head moves with every merge into it.
+    A branch that was merely behind was then measured against a tree it never grew from, and the gate
+    reported growth the branch did not make -- the same file at the same size, over a recorded number
+    that had since been paid down. The merge base is that same name held still.
+
+    Where the baseline was already right nothing moves: a base commit that is an ancestor of HEAD --
+    what a pull request's base is in CI, and what the tip a push replaced is -- answers itself.
+    """
+    done = git(root, "merge-base", rev, "HEAD")
+    if done.returncode == 0 and done.stdout.strip():
+        return done.stdout.strip()
+    return rev
 
 
 def archive_prefix(root):
@@ -413,7 +471,7 @@ def write_budget(args):
     return 0
 
 
-def check(args):
+def check(args, since):
     """The measured tree, the budget it is held to, and the offender lines of one run."""
     budget = read_baseline(args.baseline)
     if args.paid and not args.metric:
@@ -421,10 +479,10 @@ def check(args):
             "structure budget: --paid needs at least one --metric: name the metrics whose "
             "grandfather the paid paths must give up, such as --metric module-lines"
         )
-    measured = measure_tree(args.root)
+    measured = measure(args.root, resolve(args.root))
     paths = paid_paths(measured, args.paid)
-    base = measure_at(args.root, args.since)
-    base = inherited(base, moved_paths(args.root, args.since))
+    base = measure_at(args.root, since)
+    base = inherited(base, moved_paths(args.root, since))
     return measured, budget, growth_lines(measured, base, ceilings_of(budget), paths, args.metric)
 
 
@@ -468,7 +526,9 @@ def main(argv=None):
     try:
         if args.write:
             return write_budget(args)
-        measured, budget, lines = check(args)
+        # The baseline is where this change grew from, not where the base branch happens to point.
+        since = merge_base(args.root, args.since)
+        measured, budget, lines = check(args, since)
     except Refused as error:
         print(error, file=sys.stderr)
         return 2
@@ -478,14 +538,14 @@ def main(argv=None):
         print(
             "structure budget: %d file(s) are over a ceiling they may not hold: bring each under "
             "the ceiling, or back to the number it had at %s"
-            % (len({line.split(":", 1)[0] for line in lines}), args.since),
+            % (len({line.split(":", 1)[0] for line in lines}), since),
             file=sys.stderr,
         )
         return 1
     # stdout is the list of what the gate refused. A tree still holding a grandfather is clean but
     # not at its ceilings, and saying so belongs on stderr, where it cannot read as a refusal.
     at_ceilings = not over_ceiling(measured, ceilings_of(budget))
-    print(summary(measured, budget, args.since), file=sys.stdout if at_ceilings else sys.stderr)
+    print(summary(measured, budget, since), file=sys.stdout if at_ceilings else sys.stderr)
     return 0
 
 
