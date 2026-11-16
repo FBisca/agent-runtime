@@ -28,7 +28,7 @@ from .runtime import head_of
 def engine():
     """The package this module is split from, asked when a step runs.
 
-    A step calls helpers the engine publishes - `run`, `worker_name`, `adopt_review`,
+    A step calls helpers the engine publishes - `run`, `worker_name`,
     `readable_request`, `unreadable_decision` - and a test answers a seam by patching `driver.<name>`
     on that package. A name bound here at import time would answer the real one and ignore the seam
     the test installed, so the package is asked each time, the way `Book` asks for its snapshots.
@@ -314,7 +314,7 @@ class Gates:
     def step_reviewed(self, task_id):
         task = self.task(task_id)
         packet = task["packet"]
-        review_path = engine().adopt_review(task["review"])
+        review_path = Path(task["review"]["path"])
 
         def read_review(where):
             review = contracts.load(where, contracts.validate_review)
@@ -323,10 +323,7 @@ class Gates:
             self.check_resolutions(packet["unit"], review)
             return review, report
 
-        alternates = [task["review"]["announced"]] if task["review"].get("announced") else []
-        loaded = self.read_payload(
-            task_id, "review", review_path, read_review, alternates=alternates
-        )
+        loaded = self.read_payload(task_id, "review", review_path, read_review)
         if loaded is None:
             return  # the gate keeps waiting: the reviewer was warned, or the Lead is asked
         review, report = loaded

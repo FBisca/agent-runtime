@@ -21,7 +21,7 @@ def _written_at(path):
         stamp = Path(path).stat().st_mtime
     except OSError:
         return ""
-    return datetime.fromtimestamp(stamp, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _reported(driver, packet):
@@ -61,7 +61,7 @@ def _paths(driver, packet, delta, open_items):
                 "- This is a re-review. Only `git -C %s diff %s..HEAD` is new; the whole change is `%s...HEAD`."
                 % (checkout, delta["from"], driver.args.base),
                 "- The earlier findings and the implementer's answers: %s."
-                % (delta.get("findings") or "none; the first review's file is in %s" % unit_dir),
+                % (delta.get("findings") or "none"),
             ]
         ),
         *(
@@ -74,8 +74,11 @@ def _paths(driver, packet, delta, open_items):
             if open_items
             else []
         ),
-        "- Evidence already in the run: %s (the driver's own runs; do not repeat them)"
-        % (driver.run_dir / "receipts"),
+        "- Evidence already in the run: %d files in %s (the driver's own runs; do not repeat them)"
+        % (
+            sum(1 for p in (driver.run_dir / "receipts").rglob("*") if p.is_file()),
+            driver.run_dir / "receipts",
+        ),
         "- Repo rules: %s" % (", ".join(rules) or "none found; follow the code's own conventions"),
     ]
 

@@ -107,11 +107,13 @@ class ReviewBriefTests(unittest.TestCase):
             report.write_text("{}", encoding="utf-8")
             written = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc).timestamp()
             os.utime(report, (written, written))
+            (run / "receipts").mkdir()
+            (run / "receipts" / "check.json").write_text("{}")
             text = self.brief(run=run, attempt=AttemptRecord(report, "c0ffee1"))
         # The task file, the run's contract and its evidence, by path.
         self.assertIn(str(run / "t1" / "task.md"), text)
         self.assertIn(str(run / "contract.md"), text)
-        self.assertIn(str(run / "receipts"), text)
+        self.assertIn("1 files in " + str(run / "receipts"), text)
         # The attempt under review's own report, when it was written, and the head it claims.
         self.assertIn(str(report), text)
         self.assertIn("2026-11-16T10:00:00", text)
@@ -128,6 +130,28 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("Reverting the change makes it fail", text)
         self.assertIn("would pass without the change", text)
         self.assertIn("scenario not really tested", text)
+
+    def test_S4_the_brief_names_one_review_file(self):
+        text = self.brief()
+        self.assertIn("/run/t1/review.json", text)
+        self.assertNotIn("a file written under another name", text)
+        self.assertFalse(hasattr(app, "announced_path"))
+        self.assertFalse(hasattr(app, "adopt_review"))
+
+    def test_S6_spec_records_the_exact_report_and_no_adoption(self):
+        spec = (
+            Path(__file__).resolve().parents[3] / "docs/specs/orchestrator-engine.md"
+        ).read_text()
+        section = spec.split("## Requirements: reviewer-brief", 1)[1].split(
+            "## Requirements: lead-decision-gates", 1
+        )[0]
+        self.assertIn("report path the ledger recorded", section)
+        self.assertNotIn("newest `report*.json`", section)
+        payload = spec.split("## Requirements: review-payload-path", 1)[1].split(
+            "## Requirements:", 1
+        )[0]
+        self.assertNotIn("**R155**", payload)
+        self.assertNotIn("| R155 |", payload)
 
     def test_S2_a_re_review_reads_the_delta_first_and_keeps_the_same_pass(self):
         """orchestrator-engine/R146"""
