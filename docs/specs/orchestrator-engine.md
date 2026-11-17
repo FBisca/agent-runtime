@@ -631,7 +631,7 @@ A contract-2 review item that asserts a requirement violation SHALL be blocking,
 
 #### Scenario: no violation
 - WHEN a review item carries no `requirement_violation`, or a clean contract-2 or a contract-1 review is read
-- THEN a `concern`, `question`, `nit` or `deferred` item does not block, the unit goes on to CI, and both readers still read the older contract unchanged
+- THEN a `deferred` item does not block, the unit goes on to CI, and both readers still read the older contract unchanged
 
 ### Requirement: Open blocking findings persist
 An earlier blocking finding SHALL stay open until a supported resolution closes it, held by a record and not by process memory.
@@ -685,15 +685,11 @@ The reviewer's assignment SHALL name the absolute path of the review file it wri
 - THEN the assignment names the absolute path of the review file, beside the brief it must read
 
 ### Requirement: Test changes carry their cost
-A worker that changes a covered test SHALL report its cost, and a reviewer SHALL judge it.
+A worker that changes a covered test SHALL report its cost.
 
 #### Scenario: the worker
 - WHEN a YAML plan's worker changes a test it covers in `covers`
 - THEN its packet names the `tdd` skill and inlines that skill's admission and cost rules for a backend with no skill loader, its report carries `test_cost` with the command that timed the touched tests, each touched test file's seconds and each covered node's seconds, and verify refuses the report without those rows
-
-#### Scenario: the reviewer
-- WHEN a reviewer reviews a diff that adds or changes tests
-- THEN its brief runs the `test_cost` command or times the diff's test files itself and treats a new or changed test over two seconds, or a module that grew materially without a new boundary, as a blocking defect naming the node, its seconds and the cheaper level that keeps the guarantee
 
 ### Requirement: A drive parks on a plan it cannot use
 A live drive SHALL park, not give up the plan, when it reads a plan it cannot use.

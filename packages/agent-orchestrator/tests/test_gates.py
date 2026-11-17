@@ -57,14 +57,14 @@ BLOCKING = {
 }
 QUESTION = {
     "id": "Q1",
-    "kind": "question",
+    "kind": "deferred",
     "summary": "should empty input raise?",
     "answer_required": True,
 }
-NIT = {"id": "N1", "kind": "nit", "summary": "rename the helper", "answer_required": False}
+NIT = {"id": "N1", "kind": "deferred", "summary": "rename the helper", "answer_required": False}
 CONCERN = {
     "id": "K1",
-    "kind": "concern",
+    "kind": "deferred",
     "summary": "the cache is never cleared",
     "answer_required": False,
 }
@@ -505,8 +505,7 @@ class GateTests(GateFixture, unittest.TestCase):
             "origin/main...HEAD",
             str(self.worktree),
             str(self.run_dir / "t1" / "review.json"),
-            "MAJOR",
-            "deferred",
+            "Report only what a user or caller would hit",
         ):
             self.assertIn(needle, text)
         task = self.task()

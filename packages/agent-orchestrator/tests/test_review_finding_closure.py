@@ -57,7 +57,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
 
     @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_previous_blocker_cannot_be_downgraded_to_a_concern(self):
-        concern = {"id": "B1", "kind": "concern", "summary": "rare case", "answer_required": False}
+        concern = {"id": "B1", "kind": "deferred", "summary": "rare case", "answer_required": False}
         self.waits(
             self.first_block() + [self.fix_report(), self.re_review(self.review2(items=[concern]))]
         )
@@ -163,7 +163,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
     def test_S3_a_requirement_concern_is_refused_before_ci_and_names_its_id(self):
         item = dict(
             BLOCKING,
-            kind="concern",
+            kind="deferred",
             requirement_violation={
                 "source": "docs/spec.md",
                 "id": "R2",
@@ -271,7 +271,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
     def test_S4_optional_concern_remains_nonblocking_in_the_driver(self):
         concern = {
             "id": "C1",
-            "kind": "concern",
+            "kind": "deferred",
             "summary": "optional cleanup",
             "answer_required": False,
         }
