@@ -2,7 +2,7 @@
 
 A driver that archives a plan is still logging into its run dir and writing its retro when ARCHIVED is
 recorded, and `await` reads that dir, so nothing deletes there. The next driver start or `plan approve`
-sweeps instead: a ledger archived at least `KEEP` ago goes with its lock, its run dir and the approval snapshots its
+sweeps instead: a ledger archived at least `_KEEP` ago goes with its lock, its run dir and the approval snapshots its
 digests name (the ledger's own, and every `amended` event's). A snapshot of an approval no ledger names
 (approved but not started, or superseded before any driver started) has no safe rule and stays.
 """
@@ -16,11 +16,11 @@ from pathlib import Path
 from .. import events
 from .. import ledger as ledgers
 
-KEEP = timedelta(days=14)  # recent runs stay available for inspection and analysis
+_KEEP = timedelta(days=14)  # recent runs stay available for inspection and analysis
 
 
 def _aged(data):
-    """Whether the ledger's ARCHIVED transition is at least KEEP old; one with no readable time is kept."""
+    """Whether the ledger's ARCHIVED transition is at least _KEEP old; one with no readable time is kept."""
     for entry in reversed((data.get("plan") or {}).get("history") or []):
         if entry.get("state") == "ARCHIVED":
             try:
@@ -29,7 +29,7 @@ def _aged(data):
                 return False
             if at.tzinfo is None:
                 at = at.replace(tzinfo=timezone.utc)
-            return datetime.now(timezone.utc) - at >= KEEP
+            return datetime.now(timezone.utc) - at >= _KEEP
     return False
 
 
@@ -74,7 +74,7 @@ def _forget(state, ledger, run_dir, lock):
 
 
 def sweep(state_dir):
-    """Delete every plan's, archived at least KEEP ago, ledger, lock, run dir and snapshots under `state_dir`."""
+    """Delete every plan's, archived at least _KEEP ago, ledger, lock, run dir and snapshots under `state_dir`."""
     state = Path(state_dir).expanduser()
     for ledger in sorted(state.glob("*/*.json")):
         if state / "approvals" == ledger.parent or ledger.is_symlink():
