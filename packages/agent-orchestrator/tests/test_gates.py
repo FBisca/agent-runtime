@@ -1013,15 +1013,12 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.assertEqual([c for c, _ in found], ["covers"])
         self.assertIn("report is contract 2, not 3", found[0][1])
 
-    def test_S10_a_file_outside_the_ticket_paths_is_a_fix_round_naming_file_and_scope(self):
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_a_file_outside_the_ticket_paths_that_no_ticket_owns_goes_to_review(self):
         self.extra_files = {"src/z/extra.py": "x = 1\n"}
-        self.waits([self.worker_done(tests=True)])
+        self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
-        self.assertEqual(
-            self.found(),
-            [("scope", "src/z/extra.py is outside the ticket paths (src/a/)")],
-        )
-        self.assertEqual(self.spawned(), ["demo-t1"])
+        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
 
     def test_S10_touching_the_plan_is_an_integrity_failure_not_a_scope_one(self):
         self.extra_files = {"docs/plans/demo.plan.yaml": "schema: plan/2\n"}

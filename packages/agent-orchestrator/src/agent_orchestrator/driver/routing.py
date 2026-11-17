@@ -62,7 +62,7 @@ CONTRACT = """# Contract for every task in this run
 - TDD: before your first edit read the `tdd` skill's `SKILL.md` and its `rules.md`; your task names the path. Codex has no skill loader, so these rules are the whole skill here: one behaviour per test at the cheapest level that shows it; build expensive setup once per class and let readers share it; wait on an event or an injected clock, never a sleep; admit a test only when it protects a requirement or a credible failure, is not already covered at the same boundary, and would fail on a regression someone could ship. Name the seams and the admission answers in report.md.
 - Test cost: a YAML ticket whose diff adds or changes a test reports `"test_cost": {"command": "<the command that timed the touched tests>", "modules": {"<test file>": <seconds>}, "tests": {"<path::test>": <seconds>}}`. verify refuses the report without a row for every touched test file and every covered node.
 - Fix the class, not the instance: when you fix a defect, search for every other place with the same pattern.
-- Edit only the Paths your task owns. Never touch other worktrees or the main checkout.
+- Start from the Paths your task lists; edit any other file the change needs, except one another unfinished ticket lists. Never touch other worktrees or the main checkout.
 - Commit with Conventional Commits and push the branch. Describe behaviour, not plan ticket numbers.
 """
 
