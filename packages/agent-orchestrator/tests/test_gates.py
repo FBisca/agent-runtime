@@ -66,7 +66,30 @@ CONCERN = {
 }
 
 
+def held(data):
+    """`data` with a person-owned sign-off ticket that waits on every agent ticket, unless it already has a person's
+    ticket. A plan is ACCEPTED once its agent tickets are COMPLETE, and the archive starts only once every ticket is:
+    the held ticket keeps a gate test's run from going on to build an archive it is not about."""
+    tickets = data["tickets"]
+    if any(str(t.get("owner", "agent")).strip().lower() != "agent" for t in tickets):
+        return data
+    tickets.append(
+        dict(
+            id="T9",
+            delivers="sign-off",
+            satisfies=[data["scenarios"][0]["id"]],
+            paths=["docs/"],
+            owner="Felippe",
+            blocked_by=[t["id"] for t in tickets],
+        )
+    )
+    return data
+
+
 class GateFixture(RunFixture):
+    # A gate test is about one unit, not the archive: its plan holds a person's ticket open. A fixture about the
+    # archive or the plan's acceptance sets this False.
+    HOLD = True
     """One ticket, scripted worker and reviewer steps; shared by the gate and merge tests."""
 
     def approved_yaml_plan(
@@ -80,6 +103,8 @@ class GateFixture(RunFixture):
                 mutate(data)
             wanted = {sid for ticket in data["tickets"] for sid in ticket["satisfies"]}
             data["scenarios"] = [s for s in data["scenarios"] if s["id"] in wanted]
+            if self.HOLD:
+                held(data)
 
         return super().approved_yaml_plan(
             rows, repo=repo, name=name, mutate=satisfied_only, state_dir=state_dir
@@ -198,6 +223,8 @@ class GateFixture(RunFixture):
                 )
             ],
         }
+        if self.HOLD:
+            held(data)
         self.plan.unlink()
         self.plan = self.plan.with_suffix(".yaml")
         self.plan.write_text(yaml.safe_dump(data, sort_keys=False))
@@ -953,7 +980,7 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
 
     def test_S9_a_report_that_is_not_contract_3_is_refused_by_name(self):
         report = json.loads(self.report("t1", contract=2))
-        del report["covers"]
+        del report["covers"], report["red"]
         self.waits([self.worker_done(tests=True, report=json.dumps(report))])
         self.run_driver()
         found = self.found()

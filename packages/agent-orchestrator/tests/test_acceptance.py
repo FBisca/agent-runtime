@@ -90,6 +90,8 @@ class SnapshotFixture(_Base):
 
 
 class AcceptanceFixture(SnapshotFixture, GateFixture):
+    HOLD = False  # the plan's acceptance and archive are what these tests are about
+
     def setUp(self):
         super().setUp()
         self.plan.unlink()

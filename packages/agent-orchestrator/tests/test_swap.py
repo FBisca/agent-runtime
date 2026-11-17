@@ -109,7 +109,8 @@ class SwapTests(ReuseFixture, unittest.TestCase):
             [(r["name"], r["role"]) for r in self.run_events("swap")],
             [("demo-t1-review", "reviewer")],
         )
-        self.assertEqual({w["kind"] for w in self.wakes()} - {"integration-waits"}, {"pr-ready"})
+        # the fixture's held sign-off ticket asks its person once the unit is done
+        self.assertEqual({w["kind"] for w in self.wakes()} - {"person"}, {"pr-ready"})
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
     def test_S19_unknown_usage_resumes_and_logs_context_unknown(self):

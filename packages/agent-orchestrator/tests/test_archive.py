@@ -24,6 +24,8 @@ TESTS = "".join('def test_%s():\n    """demo/R%d"""\n\n' % (n, i) for i, n in en
 
 
 class ArchiveFixture(SnapshotFixture, GateFixture):
+    HOLD = False  # the archive is what these tests are about
+
     def setUp(self):
         super().setUp()
         self.use_yaml_plan()

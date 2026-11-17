@@ -186,6 +186,8 @@ def red_first(ticket, report):
     for scenario in ticket.satisfies:
         excerpt = red.get(scenario)
         nodes = mapped.get(scenario) or []
+        if not nodes:
+            continue  # the covers check names a scenario with no node; its red follows once it has one
         if not isinstance(excerpt, str) or not excerpt.strip():
             findings.append(
                 {
@@ -194,7 +196,7 @@ def red_first(ticket, report):
                     "before the fix, naming its node>}" % (scenario, scenario),
                 }
             )
-        elif nodes and not any(names_node(excerpt, node) for node in nodes):
+        elif not any(names_node(excerpt, node) for node in nodes):
             findings.append(
                 {
                     "check": "red",

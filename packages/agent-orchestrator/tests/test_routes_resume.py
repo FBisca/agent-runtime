@@ -239,14 +239,14 @@ class RouteResumeTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
             route("small", "codex", "gpt-s", effort="high"),
             route("medium", "claude", "sonnet"),
             route("large", "claude", "opus", effort="max"),
-            steps=[{"step": "implementer", "backend": "claude", "model": "opus", "effort": "high"}],
+            steps=[{"step": "reviewer", "backend": "claude", "model": "opus", "effort": "high"}],
         )
         self.run_driver("--routes-file", path)
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("codex", "gpt-s"))
         record = self.ledger()["routes"]
         self.assertEqual(sorted(record["classes"]), ["large", "medium", "small"])
         self.assertEqual(record["classes"]["large"]["effort"], "max")
-        self.assertEqual(record["steps"]["implementer"]["model"], "opus")
+        self.assertEqual(record["steps"]["reviewer"]["model"], "opus")
         self.assertEqual(record["path"], path)
 
     def test_S3_a_routes_file_completes_an_incomplete_record(self):

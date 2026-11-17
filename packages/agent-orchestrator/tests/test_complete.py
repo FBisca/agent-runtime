@@ -175,7 +175,7 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
         self.assertRegex(said, r"--note")
 
     def test_S6_a_plan_with_no_ledger_is_refused_and_none_is_made(self):
-        (self.state_dir / "demo.json").unlink()
+        (self.state_dir / "demo.json").unlink(missing_ok=True)  # approve writes no ledger
         code, said = self.complete("T2")
         self.assertNotEqual(code, 0, said)
         self.assertRegex(said, r"no run yet")

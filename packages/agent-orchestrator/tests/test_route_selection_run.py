@@ -11,7 +11,8 @@ import unittest
 from unittest import mock
 
 import pytest
-from fixtures import RunFixture, load_script, report_wait, spawn_id  # noqa: E402
+from fixtures import RunFixture, load_script, red_of, report_wait, spawn_id  # noqa: E402
+from test_gates import held
 from test_step_routes import RoutedRunFixture
 
 pytestmark = pytest.mark.integration
@@ -119,7 +120,7 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
         plan = self.approved_yaml_plan(
             ("T1",),
             name="%s.plan.yaml" % slug,
-            mutate=lambda data: data.update(slug=slug),
+            mutate=lambda data: held(data).update(slug=slug),
             state_dir=state,
         )
         keyed = state / load_script().repo_key(self.repo)
@@ -129,6 +130,7 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             {
                 "contract": 3,
                 "covers": {"S1": ["src/a/test_a.py::test_a"]},
+                "red": red_of({"S1": ["src/a/test_a.py::test_a"]}),
                 "test_cost": {
                     "command": "uv run pytest src/a --durations=0 -q",
                     "modules": {"src/a/test_a.py": 0.2},

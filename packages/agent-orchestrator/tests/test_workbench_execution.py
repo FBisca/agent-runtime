@@ -6,7 +6,7 @@ import unittest
 
 import pytest
 from fixtures import spawn_id
-from test_acceptance import AcceptanceFixture
+from test_acceptance import AcceptanceFixture, ticket
 
 pytestmark = pytest.mark.integration
 
@@ -35,7 +35,13 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
         person merged it by hand."""
 
         def build():
-            self.write_plan()
+            # A person's sign-off left open keeps the accepted plan from going on to its archive.
+            self.write_plan(
+                tickets=[
+                    ticket(),
+                    ticket("T9", owner="Felippe", paths=["docs/"], blocked_by=["T1"]),
+                ]
+            )
             sha = self.merged_on_main("almost")
             self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
             self.drive([self.worker("almost", covers={"S1": ["src/a/test_feature.py::test_nope"]})])
