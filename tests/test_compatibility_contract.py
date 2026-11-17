@@ -10,9 +10,8 @@ today's tree exposes so a later packaging move cannot change it silently:
   regression coverage instead of being duplicated here.
 * S8: the runtime stays standard-library only and the durable format is recorded.
 
-The baseline the tests assert on lives in `docs/compat/compatibility-baseline.json`; the narrative
-inventory lives in `docs/compat/2026-11-07-compatibility-baseline.md`. A change to the tree that is
-not a change to the baseline must fail here first.
+The baseline the tests assert on lives in `docs/compat/compatibility-baseline.json`. A change to the tree
+that is not a change to the baseline must fail here first.
 
 The boundary-crossing half of the contract (subprocesses, the filesystem, git ancestry) lives in
 `tests/test_compatibility_contract_integration.py`.
