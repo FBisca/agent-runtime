@@ -1,0 +1,1 @@
+   This is a re-review, so read the delta `$since..HEAD` first and the whole change beside it. Check each earlier finding (resolved or not, with evidence) and raise new blocking items only inside the delta. A blocking item outside the files the delta changes is deferred, not gated, unless it is about an earlier finding: reuse that finding's `id`, or set `finding` to it.

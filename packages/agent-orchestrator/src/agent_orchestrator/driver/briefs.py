@@ -13,8 +13,27 @@ from typing import Any
 
 from ..invariants import next_path
 from .pointers import collection, owned_collections, owned_scope
+from .prompts import block, bullets, render
 from .records import CHECK_INSTRUCTIONS
 from .report import describe
+
+
+def _worker_values(run_dir, task):
+    """What every brief to a worker says about where it works and what it runs: the checkout and branch, the
+    scope and the checks it owes."""
+    packet = task["packet"]
+    return {
+        "contract": run_dir / "contract.md",
+        "unit": packet["unit"].upper(),
+        "task_md": run_dir / packet["unit"] / "task.md",
+        "checkout": packet["checkout"],
+        "branch": task["checkout_at_claim"]["branch"],
+        "scope": owned_scope(packet["checkout"], packet["owns"]),
+        "checkout_contents": collection(packet["checkout"]),
+        "scope_contents": owned_collections(packet["checkout"], packet["owns"]),
+        "checks": "; ".join(packet["checks"]) or "the repository's full CI gate",
+        "check_instructions": CHECK_INSTRUCTIONS,
+    }
 
 
 class Briefs:
@@ -30,159 +49,74 @@ class Briefs:
         raise AttributeError(name)
 
     def answer_text(self, task, decision):
-        packet, task_id, unit = task["packet"], task["packet"]["task_id"], task["packet"]["unit"]
-        report = next_path(self.run_dir / task_id, "report", ".json")[0]
+        task_id = task["packet"]["task_id"]
         items = (task.get("fix") or {}).get("items") or []
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % report,
-                "",
-                "# Answer to %s (task %s)" % (unit.upper(), task_id),
-                "",
-                "What happened: %s" % task["event"]["reason"],
-                "The Lead's instruction: %s" % decision["reason"],
-                "The Lead's answer: %s" % decision["answer"],
-                *(
-                    ["", "Findings still open:", *["- " + describe(item) for item in items], ""]
-                    if items
-                    else []
-                ),
-                "This is the same attempt, not a new one: keep using task_id `%s` in your report, and write it to "
-                "the path above (files are write-once; an earlier report stays where it is)."
-                % task_id,
-                "Original task: %s. Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
-                % (
-                    self.run_dir / unit / "task.md",
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    owned_scope(packet["checkout"], packet["owns"]),
-                ),
-                "Checkout contents: %s" % collection(packet["checkout"]),
-                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
-                "Commit and push to the same branch. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                CHECK_INSTRUCTIONS,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
+        return render(
+            "answer",
+            **_worker_values(self.run_dir, task),
+            report=next_path(self.run_dir / task_id, "report", ".json")[0],
+            task_id=task_id,
+            reason=task["event"]["reason"],
+            instruction=decision["reason"],
+            answer=decision["answer"],
+            open_findings=block("answer-open-findings", items=bullets(map(describe, items)))
+            if items
+            else "",
         )
 
     def redo_text(self, task, new_id, new_dir, redo):
-        packet, unit = task["packet"], task["packet"]["unit"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (new_dir / "report.json"),
-                "",
-                "# Retry %s (task %s) after a decision" % (unit.upper(), new_id),
-                "",
-                "What happened: %s" % task["event"]["reason"],
-                "The Lead's instruction: %s" % redo["reason"],
-                *(["The Lead's answer: %s" % redo["answer"]] if redo.get("answer") else []),
-                "Original task: %s. Use task_id `%s` in your report."
-                % (self.run_dir / unit / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    owned_scope(packet["checkout"], packet["owns"]),
-                ),
-                "Checkout contents: %s" % collection(packet["checkout"]),
-                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
-                "Commit and push to the same branch. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                CHECK_INSTRUCTIONS,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
+        return render(
+            "redo",
+            **_worker_values(self.run_dir, task),
+            report=new_dir / "report.json",
+            task_id=new_id,
+            reason=task["event"]["reason"],
+            instruction=redo["reason"],
+            lead_answer=block("redo-lead-answer", answer=redo["answer"])
+            if redo.get("answer")
+            else "",
         )
 
     def fix_text(self, task, new_id, new_dir, findings):
-        packet = task["packet"]
         if findings["source"] == "conflict":
             return self.rebase_text(task, new_id, new_dir, findings)
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (new_dir / "report.json"),
-                "",
-                "# Fix round %d for %s (task %s): %s findings"
-                % (findings["attempt"], packet["unit"].upper(), new_id, findings["source"]),
-                "",
-                "Original task: %s. Use task_id `%s` in your report."
-                % (self.run_dir / packet["unit"] / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    owned_scope(packet["checkout"], packet["owns"]),
-                ),
-                "Checkout contents: %s" % collection(packet["checkout"]),
-                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
-                "Findings, verbatim, also in %s. Fix only these:" % (new_dir / "findings.json"),
-                "",
-                *["- " + describe(item) for item in findings["items"]],
-                "",
-                *self._fix_checks(findings),
-                *self._fix_answers(findings),
-                *(
-                    ["The Lead's answer: %s" % task["fix"]["answer"], ""]
-                    if task["fix"].get("answer")
-                    else []
-                ),
-                "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                CHECK_INSTRUCTIONS,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
+        answer = task["fix"].get("answer")
+        return render(
+            "fix",
+            **_worker_values(self.run_dir, task),
+            report=new_dir / "report.json",
+            task_id=new_id,
+            attempt=findings["attempt"],
+            source=findings["source"],
+            findings_path=new_dir / "findings.json",
+            items=bullets(map(describe, findings["items"])),
+            reviewer_checks=self._fix_checks(findings),
+            answer_required=self._fix_answers(findings),
+            lead_answer=block("fix-lead-answer", answer=answer) if answer else "",
         )
 
     def _answers_brief(self, task, answer_id, asks, findings_path):
         """The answerer's task file: which findings it answers, what a response is, and where it works."""
-        packet, unit = task["packet"], task["packet"]["unit"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (self.run_dir / answer_id / "report.json"),
-                "",
-                "# Answers only for %s (task %s)" % (unit.upper(), answer_id),
-                "",
-                "The review passed. These findings need your answer, nothing else (also in %s):"
-                % findings_path,
-                "",
-                *["- " + describe(item) for item in asks],
-                "",
-                "Change no code unless an answer needs it. Report with task_id `%s`; `responses` holds one "
-                '`{"id", "status": "fixed|disputed", "commit", "note", "changes_code"?}` per finding above. '
-                "A `disputed` answer that needs a code change sets `changes_code` true and names the commit: the reviewer sees it."
-                % answer_id,
-                "Same checkout and branch: %s on %s. Start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    owned_scope(packet["checkout"], packet["owns"]),
-                ),
-                "Checkout contents: %s" % collection(packet["checkout"]),
-                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
-                "Re-run only what a change touches, then the final gate if you changed code. Open no new pull request.",
-                "",
-            ]
+        return render(
+            "answers-only",
+            **_worker_values(self.run_dir, task),
+            report=self.run_dir / answer_id / "report.json",
+            task_id=answer_id,
+            findings_path=findings_path,
+            items=bullets(map(describe, asks)),
         )
 
     def _fix_checks(self, findings):
         """The reviewer's checks, for a fix round to re-run only what it touches, then the final gate."""
         if not findings.get("checks_run"):
-            return []
-        return [
-            "The reviewer already ran these; re-run only what your fix touches, then the final gate:",
-            *[
-                "- `%s` exit %s at %s" % (c["command"], c["exit"], c["at_commit"])
+            return ""
+        return block(
+            "fix-reviewer-checks",
+            checks=bullets(
+                "`%s` exit %s at %s" % (c["command"], c["exit"], c["at_commit"])
                 for c in findings["checks_run"]
-            ],
-            "",
-        ]
+            ),
+        )
 
     def _fix_answers(self, findings):
         """What a fix round is told when the reviewer wants an answer per item."""
@@ -191,46 +125,15 @@ class Briefs:
             for item in findings["items"]
             if isinstance(item, dict)
         )
-        if not wants:
-            return []
-        return [
-            "Items marked answer_required need an answer: add `responses` to your report, one "
-            '`{"id", "status": "fixed|disputed", "commit", "note", "changes_code"?}` each. '
-            "Without them the driver asks you once more.",
-            "",
-        ]
+        return block("fix-answer-required") if wants else ""
 
     def rebase_text(self, task, new_id, new_dir, findings):
         """The brief of a rebase round: the branch conflicts with its base, so the worker rebases it."""
-        packet = task["packet"]
-        return "\n".join(
-            [
-                "Contract: %s" % (self.run_dir / "contract.md"),
-                "Report: %s" % (new_dir / "report.json"),
-                "",
-                "# Rebase %s (task %s): the branch conflicts with its base"
-                % (packet["unit"].upper(), new_id),
-                "",
-                "This is a rebase round: the pull request of %s conflicts with its base. Rebase the branch onto the "
-                "base, resolve the conflicts, and push the result to the same branch. What `gh` said (also in %s):"
-                % (packet["unit"].upper(), new_dir / "findings.json"),
-                "",
-                *["- " + describe(item) for item in findings["items"]],
-                "",
-                "Original task: %s. Use task_id `%s` in your report."
-                % (self.run_dir / packet["unit"] / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
-                % (
-                    packet["checkout"],
-                    task["checkout_at_claim"]["branch"],
-                    owned_scope(packet["checkout"], packet["owns"]),
-                ),
-                "Checkout contents: %s" % collection(packet["checkout"]),
-                "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
-                "Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: %s."
-                % ("; ".join(packet["checks"]) or "the repository's full CI gate"),
-                CHECK_INSTRUCTIONS,
-                "Report review_rounds 0: the driver counts failed rounds.",
-                "",
-            ]
+        return render(
+            "rebase",
+            **_worker_values(self.run_dir, task),
+            report=new_dir / "report.json",
+            task_id=new_id,
+            findings_path=new_dir / "findings.json",
+            items=bullets(map(describe, findings["items"])),
         )

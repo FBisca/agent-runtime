@@ -97,6 +97,8 @@ __all__ = [
     "await_lock_path",
     "await_wake",
     "bind",
+    "block",
+    "bullets",
     "build_parser",
     "cell",
     "check_commit",
@@ -180,6 +182,7 @@ __all__ = [
     "rebuild_metrics",
     "recover_worker_report",
     "reference",
+    "render",
     "release",
     "render_status",
     "repo_config",
@@ -366,6 +369,9 @@ from .pointers import reference as reference
 from .pointers import task_text as task_text
 from .pointers import tdd_instruction as tdd_instruction
 from .pointers import tdd_skill_path as tdd_skill_path
+from .prompts import block as block
+from .prompts import bullets as bullets
+from .prompts import render as render
 from .prune import sweep as sweep
 from .pull import CI_EXCERPT_CHARS as CI_EXCERPT_CHARS
 from .pull import Pull as Pull

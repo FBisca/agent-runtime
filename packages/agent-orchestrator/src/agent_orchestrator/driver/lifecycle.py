@@ -27,6 +27,7 @@ from ..timeutil import iso as now
 from .answers import IntentUnsettled, Unreadable
 from .book import release, worker_name
 from .handoff import recover_worker_report
+from .prompts import render
 from .records import is_agent, ready, satisfied, terminal_gone
 from .report import cell, metrics_table, show
 from .runtime import runtime_call
@@ -283,16 +284,8 @@ class Lifecycle:
 
     def _amended_note(self, changes):
         """What a re-packeted attempt is told changed: the fields the re-approval moved, old value to new."""
-        return "\n".join(
-            [
-                "## Your contract changed",
-                "",
-                "The plan was re-approved (%s). This packet replaces your earlier ones: keep the work already in "
-                "this checkout and finish against the contract above. What changed:"
-                % self.approved_digest()[:12],
-                *changes,
-                "",
-            ]
+        return render(
+            "amended-note", digest=self.approved_digest()[:12], changes="\n".join(changes)
         )
 
     def record_usage(self, assignments):

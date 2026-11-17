@@ -20,6 +20,7 @@ from .. import contracts, invariants, narrate, timeutil
 from ..invariants import next_path
 from ..report_rules import require_report
 from .book import ARCHIVE, release
+from .prompts import render
 from .records import check_commit, merge_state, report_reader, require_completable
 from .report import cell
 from .runtime import head_of
@@ -901,19 +902,14 @@ class Gates:
         if brief.exists():
             return brief
         brief.write_text(
-            "\n".join(
-                [
-                    "# The Lead's answer to your review of %s" % unit.upper(),
-                    "",
-                    "What happened: %s" % task["event"]["reason"],
-                    "The Lead's instruction: %s" % decision["reason"],
-                    "The Lead's answer: %s" % decision["answer"],
-                    "",
-                    "You still owe the review: your brief is %s. Write %s and report complete with the "
-                    "assignment id this message came with."
-                    % (review_dir / "task.md", review["path"]),
-                    "",
-                ]
+            render(
+                "review-answer",
+                unit=unit.upper(),
+                reason=task["event"]["reason"],
+                instruction=decision["reason"],
+                answer=decision["answer"],
+                brief=review_dir / "task.md",
+                review_path=review["path"],
             ),
             encoding="utf-8",
         )

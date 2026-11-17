@@ -1,0 +1,2 @@
+- This is a re-review. Only `git -C $checkout diff $since..HEAD` is new; the whole change is `$base...HEAD`.
+- The earlier findings and the implementer's answers: $findings.
