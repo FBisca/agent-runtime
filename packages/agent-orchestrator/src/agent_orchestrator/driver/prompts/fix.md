@@ -11,6 +11,7 @@ Findings, verbatim, also in $findings_path. Fix only these:
 $items
 
 $reviewer_checks
+$ci_instructions
 $answer_required
 $lead_answer
 Commit and push to the same branch; open no new pull request. Run before you hand in: $checks.

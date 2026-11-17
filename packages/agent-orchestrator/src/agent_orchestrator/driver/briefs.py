@@ -87,6 +87,7 @@ class Briefs:
             findings_path=new_dir / "findings.json",
             items=bullets(map(describe, findings["items"])),
             reviewer_checks=self._fix_checks(findings),
+            ci_instructions=block("fix-ci") if findings["source"] == "ci" else "",
             answer_required=self._fix_answers(findings),
             lead_answer=block("fix-lead-answer", answer=answer) if answer else "",
         )

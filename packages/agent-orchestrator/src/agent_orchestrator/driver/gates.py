@@ -450,12 +450,7 @@ class Gates:
         Lead when `gh` could not read them, another poll while they run. False as long as it waits."""
         state = task.get("ci_state")
         if state == "failed":
-            return self.fail_gate(
-                task_id,
-                task["report"],
-                "ci",
-                self.ci_items(task_id, url, task.get("ci_rows") or []),
-            )
+            return self.driver.pull.ci_failed(task_id, url, task)
         if state == "error":
             return self.request(task_id, "ci", "gh pr checks failed for %s" % url)
         narrate.say("wait", "ci", "waiting for CI on %s" % url, task=task_id)
@@ -473,6 +468,11 @@ class Gates:
             self.mark(task_id, pr_ready=True)
             narrate.say("done", "ci", "CI green; %s ready for review" % url, task=task_id)
         unit = self.unit_of(task_id)
+        rerun = task.get("ci_rerun")
+        if rerun and rerun.get("head") == task.get("ci_head") and not task.get("flaky_logged"):
+            # the checks failed, then passed on the one automatic re-run: proceed, and list it at the plan's close
+            self.log("flaky", unit=unit, task=task_id, pr=url, checks=rerun["failed"])
+            self.mark(task_id, flaky_logged=True)
         # an update-branch moves the head without a new report: the live head keys the wake, so it is sent again
         head = view.get("headRefOid") or self.task(task_id)["report"]["head"]
         self.wake("pr-ready", unit, "pr-ready %s: %s" % (unit, url), key="%s:%s" % (unit, head))
@@ -496,12 +496,7 @@ class Gates:
                 return moved
             task = self.task(task_id)
             if task.get("ci_state") == "failed":
-                return self.fail_gate(
-                    task_id,
-                    task["report"],
-                    "ci",
-                    self.ci_items(task_id, url, task.get("ci_rows") or []),
-                )
+                return self.driver.pull.ci_failed(task_id, url, task)
             return False
         stored = self.task(task_id)["report"]
         report = dict(
@@ -676,6 +671,12 @@ class Gates:
         held = task.get("held") or []
         asked = task.get("request") or {}
         self.release_intents(asked.get("intent"), "the Lead decided %s" % action)
+        with self.book() as data:
+            if (data.get("main_red") or {}).get("task") == task_id:
+                del data[
+                    "main_red"
+                ]  # the Lead has answered for main: the waiting tickets look again
+                self.driver.main_failed = None
         if action in ("mark blocked", "skip"):
             return self._decide_paused(task_id, action, reason, held, unit)
         if unit == ARCHIVE:

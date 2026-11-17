@@ -30,6 +30,8 @@ __all__ = [
     "CHECKS_WARNING",
     "CHECK_INSTRUCTIONS",
     "CI_EXCERPT_CHARS",
+    "CI_STEP_LINES",
+    "RERUN_GRACE",
     "CONTRACT",
     "FENCE",
     "DECISION_KEYS",
@@ -135,7 +137,7 @@ __all__ = [
     "is_done",
     "is_yaml",
     "item_text",
-    "job_log",
+    "failed_steps",
     "last_mark",
     "launch",
     "ledger",
@@ -370,9 +372,11 @@ from .prompts import bullets as bullets
 from .prompts import render as render
 from .prune import sweep as sweep
 from .pull import CI_EXCERPT_CHARS as CI_EXCERPT_CHARS
+from .pull import CI_STEP_LINES as CI_STEP_LINES
+from .pull import RERUN_GRACE as RERUN_GRACE
 from .pull import Pull as Pull
 from .pull import PullSurface as PullSurface
-from .pull import job_log as job_log
+from .pull import failed_steps as failed_steps
 from .pull import log_tail as log_tail
 from .records import CHECK_INSTRUCTIONS as CHECK_INSTRUCTIONS
 from .records import ROUTE as ROUTE

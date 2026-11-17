@@ -1,0 +1,1 @@
+These are CI failures; each finding names the failed job, the run id and the last lines of its failed step. Re-run those tests locally to reproduce each failure, fix it, and re-run them. When they pass locally and still fail in CI, hand in BLOCKED with a blocker that starts `environment:` and says what differs.

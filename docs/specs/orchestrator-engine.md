@@ -237,11 +237,44 @@ A unit whose pull request merged SHALL complete.
 - THEN the worktree is kept
 
 ### Requirement: CI findings are capped per job
-A CI fix round SHALL carry each failing job's own capped excerpt and stay small.
+A CI fix round SHALL carry, for each failing job, the job name, the run id and the last 50 lines of each failed step, and stay small.
 
 #### Scenario: several long logs
 - WHEN several CI checks fail with long logs
-- THEN each CI finding carries only its own job's capped excerpt, the full log is at `log_path`, and the fix-round findings file stays under 64 KiB
+- THEN each CI finding carries only its own job's name, its run id and the last lines of each failed step (never the start of the log), the full log is at `log_path`, and the fix-round findings file stays under 64 KiB
+
+### Requirement: A failed check is re-run once
+The driver SHALL re-run the failed jobs of a failing check once before it acts on the failure, treat a failure that then passes as flaky, and ask the Lead when a job fails twice with no step failing.
+
+#### Scenario: a flaky failure
+- WHEN a unit's checks fail and the one automatic `gh run rerun --failed` of those runs ends green
+- THEN the unit proceeds to merge-ready with no fix round and a `flaky` event names the checks; the events are listed in the archive pull request at plan close
+
+#### Scenario: a failure that stays
+- WHEN the checks fail again after the re-run
+- THEN the failure goes back to the worker as a fix round (the re-run is not repeated on that head); a check still running is waited for, never treated as a failure
+
+#### Scenario: an infrastructure failure
+- WHEN a job fails twice and its log holds no failed step (no test or check step failed)
+- THEN the Lead is asked; when the driver cannot tell the two apart it treats the failure as a test failure
+
+### Requirement: A failed check passing on main goes back to the worker
+A CI failure that does not also fail on the base branch SHALL go back to the unit's worker with the evidence and the way to reproduce it.
+
+#### Scenario: the fix round
+- WHEN a check fails that passes on the base branch
+- THEN the worker gets a fix round whose findings carry the failed job names, the run id and the last 50 lines of each failed step, and whose brief tells it to re-run those tests locally to reproduce, fix them and re-run them, and to hand in BLOCKED with an `environment:` blocker when they pass locally and fail in CI
+
+#### Scenario: failing three times
+- WHEN the same gate has failed three times
+- THEN the Lead is asked
+
+### Requirement: A failed check that also fails on main asks the Lead once
+A check that fails on the base branch as well as in a ticket SHALL cost the Lead one request for the whole run, not one per ticket.
+
+#### Scenario: main is red
+- WHEN a ticket's check fails that fails in the base branch's latest completed run (read once per run with `gh run list` and `gh run view`)
+- THEN one `ci` request says main is red, no worker round and no re-run is spent, and every other ticket failing a check that fails on main waits on that request; when the Lead decides it the waiting tickets look again
 
 ### Requirement: A pending CI log is not a finding
 The driver SHALL wait on a failing check whose workflow run is still in progress.
@@ -251,7 +284,7 @@ The driver SHALL wait on a failing check whose workflow run is still in progress
 - THEN the CI state stays pending and the unit is not asked; once the failing step's log is readable the gate fails and the request quotes that log, never the placeholder
 
 ### Requirement: A conflicting pull request is rebased
-A unit whose pull request conflicts SHALL go back to draft and be rebased by a fresh worker, and no ready or update call SHALL run on it meanwhile.
+A unit whose pull request conflicts SHALL go back to draft and be rebased by a fresh worker, and no ready or update call SHALL run on it meanwhile; when another open ticket changes the same files, the rebase waits for that ticket to merge.
 
 #### Scenario: a conflict while waiting for the merge
 - WHEN a unit at `awaiting-merge` has a pull request that turns `DIRTY` or `CONFLICTING`
@@ -276,6 +309,10 @@ A unit whose pull request conflicts SHALL go back to draft and be rebased by a f
 #### Scenario: a disputed change
 - WHEN a disputed answer with `changes_code` sends a unit back from `ready-for-ci` or `awaiting-merge`
 - THEN the unit's readiness is forgotten across its attempts and its checks cleared, the PR is a draft through the delta re-review, and `gh pr ready` runs again on its return
+
+#### Scenario: a conflict with another open ticket
+- WHEN a pull request conflicts and another open ticket's pull request changes a file it changes
+- THEN no rebase round is raised; the unit waits until that ticket has merged and is then rebased onto main
 
 ### Requirement: A pull request that is behind is updated
 A unit whose pull request is behind its base SHALL be updated without a fix round.

@@ -229,9 +229,7 @@ class EvidenceTests(EnvelopeFixture, unittest.TestCase):
             self.assertIn("FAILED STEP LOG TAIL for run 77", item["excerpt"])
             with open(item["log_path"], encoding="utf-8") as log:
                 self.assertIn("FAILED STEP LOG TAIL for run 77", log.read())
-        self.assertEqual(
-            findings["items"][0]["command"], "gh pr checks https://github.com/o/r/pull/7"
-        )
+        self.assertEqual(findings["items"][0]["command"], "gh run view 77 --log-failed")
 
 
 class FixRoundTests(EnvelopeFixture, unittest.TestCase):

@@ -100,6 +100,8 @@ class Driver(
     ticks: Any
     working_since: Any
     run_logs: Any
+    main_failed: Any  # the checks failing on the base branch, asked once per run (None until asked)
+    rerun_at: Any
     _archive: Any
     book: Any
     gates: Any
@@ -172,6 +174,8 @@ class Driver(
         self.recovered = approval_recovery.Recovered()  # the approval a lost span was repaired with
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
+        self.main_failed = None
+        self.rerun_at = {}  # task id -> when its failed checks were re-run
         self.run_logs = {}  # run id -> its failed-step log, once a round: the findings reuse the readiness read
 
     @property

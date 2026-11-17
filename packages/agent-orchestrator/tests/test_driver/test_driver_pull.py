@@ -52,7 +52,7 @@ MOVED = (
 )
 
 # The log helpers the lane reads a failing job with: they move with the only caller that needs them.
-HELPERS = ("CI_EXCERPT_CHARS", "job_log", "log_tail")
+HELPERS = ("CI_EXCERPT_CHARS", "failed_steps", "log_tail")
 
 
 class PullHomeTests(unittest.TestCase):
