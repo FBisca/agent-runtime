@@ -262,7 +262,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         self.assertNotIn("Q1", deferred)
         kinds = sorted((e["finding_kind"], e["id"]) for e in self.run_events("finding"))
         self.assertEqual(
-            kinds, [("blocking", "B1"), ("concern", "K1"), ("nit", "N1"), ("question", "Q1")]
+            kinds, [("blocking", "B1"), ("deferred", "K1"), ("deferred", "N1"), ("deferred", "Q1")]
         )
 
     def test_S16_a_missing_response_resumes_the_worker_once_at_no_round_cost(self):

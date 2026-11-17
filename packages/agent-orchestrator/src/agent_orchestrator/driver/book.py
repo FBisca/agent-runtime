@@ -24,6 +24,12 @@ from .records import ROUTE, require_completable, routed, whole
 ARCHIVE = "archive"
 
 
+def worker_name(slug, number, tail=""):
+    """`<slug>-t<n>[tail]` within agent-runtime's 32-character name limit; the `-t<n>` suffix always survives."""
+    suffix = "-t" + str(number) + tail
+    return slug[: 32 - len(suffix)].rstrip("-_") + suffix
+
+
 def owned_paths(packet):
     """The checkout paths one attempt owns, resolved, and refused when it names something that would
     reach outside the checkout or cover more than a literal path."""

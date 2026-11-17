@@ -47,11 +47,6 @@ class ReviewBriefTests(unittest.TestCase):
             stub, packet, Path("/run/t1/review.json"), delta, [] if delta else None
         )
 
-    def test_the_brief_asks_for_targeted_tests_and_points_at_the_suites_already_run(self):
-        text = self.brief()
-        self.assertIn("Run targeted tests only", text)
-        self.assertIn("CI already ran the suites", text)
-
     @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_the_brief_asks_a_requirement_violation_to_be_blocking_with_its_metadata(self):
         text = self.brief()
@@ -67,11 +62,9 @@ class ReviewBriefTests(unittest.TestCase):
             "Read the whole diff",
             "The ticket delivers what it says",
             "Each test proves its scenario",
-            "Test cost",
             "The report matches the code",
             "The numbered requirements it touches still hold",
-            "The code follows the repository's rules",
-            "Only then judge severity",
+            "Only then write the review",
         ]
         found = []
         for number, anchor in enumerate(anchors, start=1):
@@ -85,15 +78,18 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("## The pass, in this order", text)
         self.pass_steps(text)
 
-    @pytest.mark.spec("Test changes carry their cost")
-    def test_S4_the_brief_measures_a_tests_cost_and_blocks_a_material_slowdown(self):
-        """a test that slows every later run is a MAJOR defect."""
+    @pytest.mark.spec("The reviewer brief gives one pass")
+    def test_S4_the_brief_asks_for_correctness_bugs_only(self):
         text = self.brief()
-        self.assertIn("test_cost", text)
-        self.assertIn("time the diff's test files yourself", text)
-        self.assertNotIn("--durations", text)
-        self.assertIn("over 2 s", text)
-        self.assertIn("materially slows the suite", text)
+        self.assertIn("Report only what a user or caller would hit", text)
+        self.assertIn("a test that would still pass without the change", text)
+        self.assertIn("run no test and no command other than git reads", text)
+        self.assertIn("reading it against the diff", text)
+        self.assertNotIn("Run targeted tests", text)
+        self.assertNotIn("background jobs", text)
+        for kind in ("nit", "question", "concern"):
+            self.assertNotIn(kind + "|", text)
+            self.assertNotIn("`%s`" % kind, text)
 
     @pytest.mark.spec("The reviewer brief gives one pass")
     @pytest.mark.integration

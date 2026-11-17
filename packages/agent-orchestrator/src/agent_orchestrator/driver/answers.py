@@ -323,6 +323,38 @@ def _payload_warnings(task, where):
     return int((task.get("payload_warnings") or {}).get(where) or 0)
 
 
+def _applying(task, gate, drive):
+    """What a step was applying, or None when it was not applying a decision and nothing is owed."""
+    if task.get("gate") != gate:
+        return None
+    applying = (task.get("decision") or {}).get("applying")
+    if gate == "decided":
+        return applying or drive.decided_action(task)
+    if gate in ("redo-pending", "fix-pending") and applying:
+        return applying
+    return None
+
+
+def _handover_target(task, gate, applying):
+    """(worker, from_gate, menu, the way out) the new request names, after a hand-over the pane refused."""
+    worker, from_gate, menu = task["packet"]["worker"], None, None
+    way_out = "retry it once the pane works, or fresh worker, mark blocked or skip"
+    if (
+        gate == "decided"
+        and applying == "answer"
+        and (task.get("request") or {}).get("from_gate") == "reviewing"
+        and task.get("review")
+    ):
+        # The answer was for the reviewer: the new request names it and keeps the review routing, so the Lead's next
+        # `answer` reaches the reviewer again, not the implementer.
+        worker, from_gate = task["review"]["name"], "reviewing"
+        # `retry` and `fresh worker` on this request resume the implementer, not the reviewer: name and offer only
+        # the actions that reach the reviewer.
+        way_out = "answer again once the pane works, or mark blocked or skip"
+        menu = ("answer", "mark blocked", "skip")
+    return worker, from_gate, menu, way_out
+
+
 class Answers:
     """The Lead's requests and the answers they are given, mixed into the Driver.
 
@@ -334,6 +366,42 @@ class Answers:
         """The engine behind this mixin: the record, the plan and the processes are the
         Driver's own, and only what this module owns lives here."""
         raise AttributeError(name)
+
+    def decision_unapplied(self, task_id, gate, error):
+        """A step that was applying the Lead's decision failed (the hand-over was refused, e.g. the pane is blocked on
+        a login): the unit gets a new request naming the failure and the way out, instead of sitting stuck for the rest
+        of the run. A worker message that lands while it is open is held, and the next decision acts on it. False when
+        the step was not applying a decision."""
+        task = self.task(task_id)
+        applying = _applying(task, gate, self)
+        if applying is None:
+            return False
+        worker, from_gate, menu, way_out = _handover_target(task, gate, applying)
+        # the wake cuts a reason at 200 characters: the way out comes first, the runtime's words (all in the file) after
+        reason = "the Lead's decision (%s) could not reach %s; %s: %s" % (
+            applying or "decision",
+            worker,
+            way_out,
+            " ".join(str(error).split())[:600],
+        )
+        with self.book() as data:
+            if "decision" in data["tasks"][task_id]:
+                data["tasks"][task_id]["decision"].pop("applying", None)
+        self.log(
+            "error",
+            unit=task["packet"]["unit"],
+            task=task_id,
+            gate=gate,
+            error=str(error)[:500],
+        )
+        self.request(task_id, "handover", reason, menu=menu, from_gate=from_gate)
+        return True
+
+    def decided_action(self, task):
+        try:
+            return contracts.load(task["decision"]["path"], contracts.validate_decision)["action"]
+        except (contracts.ContractError, KeyError, OSError, ValueError):
+            return None
 
     def request(self, task_id, kind, reason, **asks):
         """The unit needs the Lead. A unit that already has an open request keeps it. `answerer` is the assignment of

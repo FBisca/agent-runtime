@@ -63,11 +63,11 @@ BLOCKING = {
 }
 QUESTION = {
     "id": "Q1",
-    "kind": "question",
+    "kind": "deferred",
     "summary": "should empty input raise?",
     "answer_required": True,
 }
-NIT = {"id": "N1", "kind": "nit", "summary": "rename the helper", "answer_required": False}
+NIT = {"id": "N1", "kind": "deferred", "summary": "rename the helper", "answer_required": False}
 
 
 def review2(**over):
@@ -233,7 +233,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_review, review2(items=["text"]), "item")
         self.rejects(
             contracts.validate_review,
-            review2(items=[dict(QUESTION, id="Q7"), {"kind": "nit"}]),
+            review2(items=[dict(QUESTION, id="Q7"), {"kind": "deferred"}]),
             "id",
         )
 
@@ -511,7 +511,7 @@ class RequirementViolationTests(unittest.TestCase):
 
     @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_an_asserted_requirement_violation_must_be_a_blocking_item(self):
-        for kind in ("concern", "question", "nit", "deferred"):
+        for kind in ("deferred",):
             self.rejects(review2(items=[self.item(kind=kind)]), "B1")
         validated = contracts.validate_review(review2(verdict="block", items=[self.item()]))
         self.assertEqual(validated, review2(verdict="block", items=[self.item()]))
@@ -534,7 +534,7 @@ class RequirementViolationTests(unittest.TestCase):
         self.rejects(review2(verdict="block", items=[self.item(requirement_violation="R2")]), "B1")
         # An explicit null asserts nothing: it names no source, requirement, expectation or observed behaviour,
         # so both readers read it as absent rather than sending the reviewer to repair a shape that claims nothing.
-        for kind, verdict in (("concern", "pass"), ("blocking", "block")):
+        for kind, verdict in (("deferred", "pass"), ("blocking", "block")):
             review = review2(
                 verdict=verdict, items=[self.item(kind=kind, requirement_violation=None)]
             )
@@ -545,7 +545,7 @@ class RequirementViolationTests(unittest.TestCase):
 
     @pytest.mark.spec("Review items assert violations as blocking")
     def test_S4_a_concern_without_a_violation_and_a_legacy_review_still_read(self):
-        concern = dict(NIT, kind="concern", summary="optional refactor")
+        concern = dict(NIT, kind="deferred", summary="optional refactor")
         self.assertEqual(contracts.validate_review(review2(items=[concern]))["items"], [concern])
         self.assertEqual(
             contracts.ReviewV2.model_validate(review2(items=[concern])).model_dump(
@@ -771,10 +771,10 @@ class DescribeTests(unittest.TestCase):
     def test_a_concern_with_a_file_and_no_line_is_described(self):
         from agent_orchestrator import driver
 
-        item = {"id": "C1", "kind": "concern", "file": "src/a.py", "summary": "racy"}
-        self.assertEqual(driver.describe(item).splitlines()[0], "C1 (concern): src/a.py racy")
+        item = {"id": "C1", "kind": "deferred", "file": "src/a.py", "summary": "racy"}
+        self.assertEqual(driver.describe(item).splitlines()[0], "C1 (deferred): src/a.py racy")
         lined = {**item, "line": 7}
-        self.assertEqual(driver.describe(lined).splitlines()[0], "C1 (concern): src/a.py:7 racy")
+        self.assertEqual(driver.describe(lined).splitlines()[0], "C1 (deferred): src/a.py:7 racy")
 
 
 class AffectedNotRunTests(unittest.TestCase):

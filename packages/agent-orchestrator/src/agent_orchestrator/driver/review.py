@@ -87,8 +87,8 @@ def _paths(driver, packet, delta, open_items):
 
 
 def _pass(driver, packet, delta):
-    """The pass, in one order: the diff, the ticket, each test proved, test cost, the report, the requirements, the
-    rules, and only then the verdict."""
+    """The pass, in one order: the diff, the ticket, each test proved, the report, the requirements, and only
+    then the verdict."""
     checkout = Path(packet["checkout"])
     return [
         "1. Read the whole diff (`git -C %s diff %s...HEAD`) first: every file, every test it adds or "
@@ -115,20 +115,12 @@ def _pass(driver, packet, delta):
         "scenario, the covering test's failing output from before the fix: judge whether it is a genuine "
         "assertion failure of that behaviour. An import or collection error, a missing fixture, or a test "
         "that cannot fail is no red, and is `blocking`.",
-        "4. Test cost: the report's `test_cost` is the measurement, not the claim. Run its command (or time "
-        "the diff's test files yourself) and compare each new or changed test's "
-        "seconds and each touched module's seconds with the run before this change. A new or changed test "
-        "over 2 s, a module whose seconds grew materially without a new boundary, or a test that re-proves a "
-        "guarantee at a costlier level is `blocking`: it slows every later run. Name the node, its seconds "
-        "and the cheaper level that keeps the guarantee.",
-        "5. The report matches the code: every `covers` node is a test that exists at the commit you review, "
+        "4. The report matches the code: every `covers` node is a test that exists at the commit you review, "
         "every `checks` entry is a command with the outcome the log shows, `head` is the commit you are "
         "reviewing, and `files` covers the diff. A claim the code contradicts is `blocking`.",
-        "6. The numbered requirements it touches still hold: read the spec the plan names, and raise the "
+        "5. The numbered requirements it touches still hold: read the spec the plan names, and raise the "
         "`requirement_violation` `blocking` item described below when one does not.",
-        "7. The code follows the repository's rules: the ones above, its own conventions, no secret in the "
-        "diff or a log, and no behaviour nobody asked for (that last one is a `concern`, not a block).",
-        "8. Only then judge severity and write the review: everything the pass found, each item once.",
+        "6. Only then write the review: each correctness bug the pass found, once.",
     ]
 
 
@@ -136,20 +128,17 @@ def _limits():
     """What may block, and what the reviewer may touch: the severity line, the requirement violation, and the
     standing orders that keep the review to the change."""
     return [
-        "Block only on MAJOR defects: wrong behaviour, data loss, a scenario that is not really tested, or a "
-        "test that materially slows the suite. Everything else is a `concern`, `question`, `nit` or "
-        "`deferred` item; it never blocks.",
+        "Report only what a user or caller would hit: wrong behaviour, data loss, a lost wake, a plan or run that cannot finish or restart, a scenario that is not really tested, or a test that would still pass without the change. Each is `blocking`. Style, naming, questions, suggestions and inputs no caller sends (huge numbers, deeply nested data) are left out of the review.",
         "A defect that breaks a numbered requirement is a `blocking` item that also asserts "
         "`requirement_violation` {`source`, `id`, `expected`, `observed`}: the spec or plan file, the requirement "
         "id, what it promises and what the code does instead, each nonempty, beside the item's own file, line, "
         "fix and evidence. A rare or post-launch failure is still a violation: rarity does not make it an "
         "observation, and the driver refuses a requirement_violation on a nonblocking item.",
-        "Touch nothing in the repository.",
-        "Run targeted tests only: name the test files or node ids the change touches. The implementer's checks "
-        "and CI already ran the suites; read their results in the report and the pull request's checks.",
-        "You may wait on background jobs (a long test run, a queued job). Ending a turn does not finish the "
-        "review: write the review after the jobs it needs finish, then report complete with the assignment id "
-        "this brief came with.",
+        "Touch nothing in the repository and run no test and no command other than git reads (`git diff`, `git show`, "
+        "`git log`). CI and the red-first gate are the executed evidence: read their results in the report and the "
+        "pull request's checks, and judge whether a test would pass without the change by reading it against the diff "
+        "and the report's `red` output. Write the review once the diff is read, then report complete with the "
+        "assignment id this brief came with.",
     ]
 
 
@@ -161,12 +150,12 @@ def _verdict(review_path):
         "Write %s as JSON, contract 2:" % review_path,
         '{"contract":2,"verdict":"pass|block","items":[...],"checks_run":[{"command","exit","at_commit"}],'
         '"clarifications":[{"finding","asked_by":"reviewer","note"}],"commit":"<git rev-parse HEAD of the checkout>"}',
-        "Every item has `id`, `kind` (blocking|concern|question|nit|deferred), `summary` and `answer_required` "
+        "Every item has `id`, `kind` (`blocking`), `summary` and `answer_required` "
         "(true only when the implementer must reply). A blocking item also needs `file`, `line`, `fix` and "
         "`evidence` {command, exit, excerpt, log_path}: the command that shows the defect, its exit code, an excerpt "
         "and the path of the full output you saved. `scenario`, `why` and `verify` are optional; any other field you "
         "add is passed on verbatim.",
-        'The verdict is "block" exactly when an item has kind blocking. Write optional prose to %s.'
+        'The verdict is "block" exactly when the review has an item; a review with none is "pass". Write optional prose to %s.'
         % Path(review_path).with_name("review.md"),
         'To close a blocking finding an earlier review raised, add it to `resolutions`: `{"id", "status": '
         '"fixed|disproven", "commit" (the commit you reviewed), "note" (what changed, or why the finding was '

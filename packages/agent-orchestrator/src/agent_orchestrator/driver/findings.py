@@ -56,6 +56,9 @@ class Findings:
     def verify_ticket(self, task_id, packet, report):
         """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
         ticket = packet["unit"].upper()
+        with self.book() as data:
+            statuses = data.get("ticket_status") or {}
+            done = {k for k, v in statuses.items() if str(v).strip().upper().startswith("COMPLETE")}
         try:
             findings = verify.invariants(
                 self.model,
@@ -64,6 +67,7 @@ class Findings:
                 repo=packet["checkout"],
                 base=self.args.base,
                 layout=self.layout,
+                done=done,
             )
         except verify.VerifyError as error:
             return "error", [str(error)[:500]]

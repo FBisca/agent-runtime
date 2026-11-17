@@ -15,7 +15,7 @@ verbatim: a review item's fields outside the core survive a round trip unchanged
                 checks each node exists and changed in the ticket and each excerpt names one of them.
 `review.json`   reviewer: `verdict` pass|block, `items[]`, `checks_run[] {command, exit, at_commit}`, optional
                 `clarifications[]`, `commit` reviewed (must equal the checkout's HEAD). An item has the core `id`, `kind`
-                (blocking|concern|question|nit|deferred), `summary`, `answer_required`; a blocking item also `file`,
+                (blocking|deferred), `summary`, `answer_required`; a blocking item also `file`,
                 `line`, `fix` and `evidence {command, exit, excerpt, log_path}`. An item that asserts a
                 `requirement_violation {source, id, expected, observed}` (each nonempty text) must be blocking: a
                 requirement breach never passes as an optional observation. An explicit `null` asserts nothing and is
@@ -71,7 +71,7 @@ SUMMARIES = {
     "answer": "Answer what the worker asked; the same worker resumes with your answer.",
 }  # what each action does, as the typed menu says it
 MAJOR_FIELDS = ("id", "file", "line", "problem", "fix")  # contract 1
-KINDS = ("blocking", "concern", "question", "nit", "deferred")
+KINDS = ("blocking", "deferred")
 CORE_FIELDS = ("id", "kind", "summary", "answer_required")
 VIOLATION_FIELDS = ("source", "id", "expected", "observed")  # a requirement violation's metadata
 EVIDENCE_FIELDS = ("command", "exit", "excerpt", "log_path")
@@ -91,7 +91,7 @@ OPEN_VERSION = 1  # the open-findings record the driver writes and reads
 Contract = Literal[1, 2]
 LeadContract = Literal[1, 2, 3]
 Status = Literal["PARTIAL", "BLOCKED", "COMPLETE"]
-Kind = Literal["blocking", "concern", "question", "nit", "deferred"]
+Kind = Literal["blocking", "deferred"]
 Source = Literal["converge", "verify", "review", "ci", "conflict"]
 ReportContract = Literal[1, 2, 3]
 Action = Literal["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]

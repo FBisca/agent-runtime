@@ -25,13 +25,13 @@ from ..plan import PlanError
 from ..report_rules import require
 from ..timeutil import iso as now
 from .answers import IntentUnsettled, Unreadable
-from .book import release
+from .book import release, worker_name
 from .handoff import recover_worker_report
 from .records import is_agent, ready, satisfied, terminal_gone
 from .report import cell, metrics_table, show
-from .routing import CONTRACT, worker_name
 from .runtime import runtime_call
 from .state import enter_plan_state, legacy_imports, state_layout
+from .ticket_dispatch import CONTRACT
 
 
 def metrics(samples):

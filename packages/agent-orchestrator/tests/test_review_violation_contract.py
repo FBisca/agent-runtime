@@ -29,7 +29,7 @@ def review(item, verdict="pass"):
 
 
 @pytest.mark.spec("Review items assert violations as blocking")
-@pytest.mark.parametrize("kind", ["concern", "nit", "question", "deferred"])
+@pytest.mark.parametrize("kind", ["deferred"])
 def test_S3_requirement_violation_requires_blocking_classification(kind):
     from agent_orchestrator import contracts
 
@@ -76,7 +76,7 @@ def test_control_optional_concern_and_legacy_clean_reviews_remain_valid():
 
     concern = {
         "id": "C1",
-        "kind": "concern",
+        "kind": "deferred",
         "summary": "optional refactor",
         "answer_required": False,
     }

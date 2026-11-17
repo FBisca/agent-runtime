@@ -57,14 +57,14 @@ BLOCKING = {
 }
 QUESTION = {
     "id": "Q1",
-    "kind": "question",
+    "kind": "deferred",
     "summary": "should empty input raise?",
     "answer_required": True,
 }
-NIT = {"id": "N1", "kind": "nit", "summary": "rename the helper", "answer_required": False}
+NIT = {"id": "N1", "kind": "deferred", "summary": "rename the helper", "answer_required": False}
 CONCERN = {
     "id": "K1",
-    "kind": "concern",
+    "kind": "deferred",
     "summary": "the cache is never cleared",
     "answer_required": False,
 }
@@ -505,8 +505,7 @@ class GateTests(GateFixture, unittest.TestCase):
             "origin/main...HEAD",
             str(self.worktree),
             str(self.run_dir / "t1" / "review.json"),
-            "MAJOR",
-            "deferred",
+            "Report only what a user or caller would hit",
         ):
             self.assertIn(needle, text)
         task = self.task()
@@ -846,15 +845,13 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
                 self.assertEqual(self.task()["gate"], "done")
 
     @pytest.mark.spec("One idle watchdog")
-    def test_S12_the_reviewer_brief_allows_background_jobs_and_names_the_report_order(self):
+    def test_S12_the_reviewer_brief_names_the_report_order(self):
         """orchestrator-silent-idle/S12"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         brief = (self.run_dir / "t1-review" / "task.md").read_text(encoding="utf-8")
         for needle in (
-            "background jobs",
-            "Ending a turn does not finish the review",
-            "after the jobs it needs finish",
+            "Write the review once the diff is read",
             "report complete with the assignment id",
         ):
             self.assertIn(needle, brief)
@@ -1013,15 +1010,12 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.assertEqual([c for c, _ in found], ["covers"])
         self.assertIn("report is contract 2, not 3", found[0][1])
 
-    def test_S10_a_file_outside_the_ticket_paths_is_a_fix_round_naming_file_and_scope(self):
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_a_file_outside_the_ticket_paths_that_no_ticket_owns_goes_to_review(self):
         self.extra_files = {"src/z/extra.py": "x = 1\n"}
-        self.waits([self.worker_done(tests=True)])
+        self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
-        self.assertEqual(
-            self.found(),
-            [("scope", "src/z/extra.py is outside the ticket paths (src/a/)")],
-        )
-        self.assertEqual(self.spawned(), ["demo-t1"])
+        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
 
     def test_S10_touching_the_plan_is_an_integrity_failure_not_a_scope_one(self):
         self.extra_files = {"docs/plans/demo.plan.yaml": "schema: plan/2\n"}

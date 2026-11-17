@@ -3,7 +3,7 @@
 A plan (`plan/2`) declares requirement changes with their scenarios, and tickets; the implementation provides its evidence. Three invariants gate a
 ticket, each a rule a worker cannot argue with:
 
-scope      every file the ticket changed is inside the ticket's paths
+scope      no file the ticket changed is one another unfinished ticket lists in its paths
 integrity  no ticket touches its plan: a folder plan's folder, or a legacy plan's file and narrative
 covers     every scenario the ticket satisfies maps, in the report's `covers`, to test nodes that exist and
            changed in the ticket; that they pass is the CI green check on the same head
@@ -283,8 +283,12 @@ def test_cost(report, repo, base, files, added):
     return findings
 
 
-def invariants(model, ticket_id, report, *, repo, base, layout):
-    """The findings of a YAML plan ticket's gate: scope, integrity, covers and red. Empty means the gate passes."""
+def invariants(model, ticket_id, report, *, repo, base, layout, done=()):
+    """The findings of a YAML plan ticket's gate: scope, integrity, covers and red. Empty means the gate passes.
+
+    `done` holds the ids of the tickets the ledger marks COMPLETE. A ticket's `paths` are its starting map and the
+    conflict map between parallel tickets: a file outside them is the ticket's to edit unless another unfinished
+    ticket lists it."""
     ticket = next((t for t in model.tickets if t.id == ticket_id), None)
     if ticket is None:
         raise VerifyError("the plan has no ticket %s" % ticket_id)
@@ -295,13 +299,24 @@ def invariants(model, ticket_id, report, *, repo, base, layout):
         if why:
             findings.append({"check": "integrity", "excerpt": "%s %s" % (name, why)})
         elif not inside(name, ticket.paths):
-            findings.append(
-                {
-                    "check": "scope",
-                    "excerpt": "%s is outside the ticket paths (%s)"
-                    % (name, ", ".join(ticket.paths)),
-                }
+            owner = next(
+                (
+                    t
+                    for t in model.tickets
+                    if t.id != ticket_id and t.id not in done and inside(name, t.paths)
+                ),
+                None,
             )
+            if owner:
+                findings.append(
+                    {
+                        "check": "scope",
+                        "excerpt": "%s is listed in the paths of %s, which is not finished; revert it here and"
+                        " report BLOCKED naming %s if this ticket needs that change (the Lead orders the"
+                        " tickets), or edit it once %s is COMPLETE"
+                        % (name, owner.id, owner.id, owner.id),
+                    }
+                )
     return (
         findings
         + covers(ticket, report, repo, base, files, added)

@@ -51,7 +51,7 @@ class Briefs:
                 "This is the same attempt, not a new one: keep using task_id `%s` in your report, and write it to "
                 "the path above (files are write-once; an earlier report stays where it is)."
                 % task_id,
-                "Original task: %s. Same checkout and branch: %s on %s. Work only here; edit only: %s."
+                "Original task: %s. Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
                 % (
                     self.run_dir / unit / "task.md",
                     packet["checkout"],
@@ -82,7 +82,7 @@ class Briefs:
                 *(["The Lead's answer: %s" % redo["answer"]] if redo.get("answer") else []),
                 "Original task: %s. Use task_id `%s` in your report."
                 % (self.run_dir / unit / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; edit only: %s."
+                "Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
                 % (
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],
@@ -112,7 +112,7 @@ class Briefs:
                 "",
                 "Original task: %s. Use task_id `%s` in your report."
                 % (self.run_dir / packet["unit"] / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; edit only: %s."
+                "Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
                 % (
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],
@@ -158,7 +158,7 @@ class Briefs:
                 '`{"id", "status": "fixed|disputed", "commit", "note", "changes_code"?}` per finding above. '
                 "A `disputed` answer that needs a code change sets `changes_code` true and names the commit: the reviewer sees it."
                 % answer_id,
-                "Same checkout and branch: %s on %s. Edit only: %s."
+                "Same checkout and branch: %s on %s. Start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
                 % (
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],
@@ -219,7 +219,7 @@ class Briefs:
                 "",
                 "Original task: %s. Use task_id `%s` in your report."
                 % (self.run_dir / packet["unit"] / "task.md", new_id),
-                "Same checkout and branch: %s on %s. Work only here; edit only: %s."
+                "Same checkout and branch: %s on %s. Work only here; start from: %s (edit any other file the change needs, except one another unfinished ticket lists in its paths)."
                 % (
                     packet["checkout"],
                     task["checkout_at_claim"]["branch"],

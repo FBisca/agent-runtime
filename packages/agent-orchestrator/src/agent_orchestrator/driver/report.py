@@ -107,7 +107,7 @@ def describe(item):
             item["command"],
             item["log_path"],
         )
-    # Only a blocking item must carry a line; a concern, question or nit may name just its file.
+    # Only a blocking item must carry a line; a deferred item may name just its file.
     place = "%s:%s" % (item["file"], item["line"]) if item.get("line") else item.get("file")
     where = place + " " if place else ""
     line = "%s%s%s: %s%s" % (

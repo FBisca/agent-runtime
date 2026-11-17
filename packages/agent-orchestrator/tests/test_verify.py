@@ -27,7 +27,7 @@ def seen_red(covers, scenarios=("S1", "S2", "S3")):
     }
 
 
-def model(**ticket):
+def model(others=(), **ticket):
     return yaml_plan.Plan.model_validate(
         {
             "schema": "plan/2",
@@ -52,7 +52,8 @@ def model(**ticket):
                         "difficulty": "simple",
                     },
                     **ticket,
-                )
+                ),
+                *others,
             ],
         }
     )
@@ -102,18 +103,19 @@ class VerifyFixture(unittest.TestCase):
 
     AUTO = object()
 
-    def gate(self, covers, test_cost=AUTO, **ticket):
+    def gate(self, covers, test_cost=AUTO, others=(), done=(), **ticket):
         report = {"contract": 3, "task_id": "t1", "covers": covers, "red": seen_red(covers)}
         cost = self.measured(covers) if test_cost is self.AUTO else test_cost
         if cost is not None:
             report["test_cost"] = cost
         return verify.invariants(
-            model(**ticket),
+            model(others, **ticket),
             "T1",
             report,
             repo=self.repo,
             base="main",
             layout=yaml_plan.PlanLayout(self.repo / PLAN_REL, self.repo),
+            done=done,
         )
 
     def found(self, findings):
@@ -293,25 +295,49 @@ class ScopeAndIntegrityTests(VerifyFixture):
         super().setUp()
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
 
-    @pytest.mark.spec("Ticket scope and plan integrity")
-    def test_S10_a_file_outside_the_ticket_paths_fails_naming_file_and_scope(self):
-        self.write("src/b/other.py", "x = 1\n")
-        self.assertEqual(
-            self.found(self.gate(self.covers)),
-            [("scope", "src/b/other.py is outside the ticket paths (src/a/, tests/test_a.py)")],
-        )
+    def second(self, paths=("src/b/",), **extra):
+        return [
+            dict(
+                {
+                    "id": "T2",
+                    "delivers": "y",
+                    "satisfies": ["S3"],
+                    "paths": list(paths),
+                    "size": "small",
+                    "difficulty": "simple",
+                },
+                **extra,
+            )
+        ]
 
     @pytest.mark.spec("Ticket scope and plan integrity")
-    def test_S10_a_file_inside_the_ticket_paths_passes_committed_or_not(self):
+    def test_S10_a_file_outside_the_ticket_paths_that_no_ticket_owns_passes(self):
+        self.write("src/c/other.py", "x = 1\n")
+        self.assertEqual(self.gate(self.covers, others=self.second()), [])
+
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_a_file_an_unfinished_ticket_owns_fails_naming_that_ticket_and_the_way_out(self):
+        self.write("src/b/other.py", "x = 1\n")
+        found = self.found(self.gate(self.covers, others=self.second()))
+        self.assertEqual([c for c, _ in found], ["scope"])
+        self.assertIn("src/b/other.py", found[0][1])
+        self.assertIn("T2", found[0][1])
+        self.assertIn("revert", found[0][1])
+
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_a_file_a_finished_ticket_owned_passes(self):
+        self.write("src/b/other.py", "x = 1\n")
+        self.assertEqual(self.gate(self.covers, others=self.second(), done=("T2",)), [])
+
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_a_file_inside_the_ticket_paths_passes_even_when_another_ticket_lists_it(self):
         self.write("src/a/x.py", "x = 1\n")
-        self.commit("work")
-        self.write("src/a/y.py", "y = 1\n")
-        self.assertEqual(self.gate(self.covers), [])
+        self.assertEqual(self.gate(self.covers, others=self.second(paths=("src/a/",))), [])
 
     @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_a_path_prefix_is_a_directory_not_a_string_prefix(self):
-        self.write("src/ab/x.py", "x = 1\n")
-        self.assertEqual([c for c, _ in self.found(self.gate(self.covers))], ["scope"])
+        self.write("src/bb/x.py", "x = 1\n")
+        self.assertEqual(self.gate(self.covers, others=self.second()), [])
 
     @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_touching_the_plan_is_an_integrity_failure_even_inside_the_paths(self):
@@ -331,8 +357,9 @@ class ScopeAndIntegrityTests(VerifyFixture):
     def test_S10_every_failing_rule_is_reported_in_one_gate(self):
         self.write("src/b/other.py", "x = 1\n")
         self.write(PLAN_REL, "schema: plan/2\n")
+        found = self.gate({"S1": ["tests/test_a.py::test_new"]}, others=self.second())
         self.assertEqual(
-            sorted(c for c, _ in self.found(self.gate({"S1": ["tests/test_a.py::test_new"]}))),
+            sorted(c for c, _ in self.found(found)),
             ["covers", "integrity", "scope"],
         )
 

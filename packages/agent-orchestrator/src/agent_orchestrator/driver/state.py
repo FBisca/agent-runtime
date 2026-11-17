@@ -10,6 +10,7 @@ lines.
 """
 
 import fcntl
+import hashlib
 import os
 import re
 import sys
@@ -17,13 +18,12 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from .. import events, timeutil
+from .. import approval_recovery, events, timeutil
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
 from ..plan import PlanError
 from ..timeutil import iso as now
 from .archive import crash_line
-from .routing import repo_key, repo_root, require_yaml
 
 
 def _engine():
@@ -33,6 +33,47 @@ def _engine():
     import time would answer the real process and ignore it.
     """
     return sys.modules[__name__.rpartition(".")[0]]
+
+
+snapshot_dir = approval_recovery.snapshot_dir
+
+
+load_approved = approval_recovery.load_approved
+
+
+def is_yaml(plan_path):
+    return yaml_plan.PlanLayout.is_plan_file(plan_path)
+
+
+def require_yaml(plan_path):
+    """A plan is a plan/2 YAML file; a Markdown plan is refused with the way out."""
+    if not is_yaml(plan_path):
+        raise PlanError(
+            "%s is not a plan/2 YAML plan (<name>.plan.yaml, or plan.yaml in its own folder): the Markdown plan format is no longer read. "
+            "Rewrite it as plan/2 YAML and run `plan check <plan.yaml>`, then `plan approve`"
+            % plan_path
+        )
+
+
+def repo_root(plan_path, repo=None):
+    """The repository a plan belongs to: the one named, else the one holding the plan file."""
+    if repo:
+        return Path(repo).resolve()
+    return Path(
+        _engine().run(
+            ["git", "-C", str(Path(plan_path).resolve().parent), "rev-parse", "--show-toplevel"]
+        )
+    ).resolve()
+
+
+def repo_key(repo):
+    """The directory a repository's YAML plan state lives in under the state dir: its name for the eye, a hash of its
+    git common dir for uniqueness. A worktree of the repository has the repository's key, and two clones that share
+    a name do not share one."""
+    common = Path(yaml_plan.identity(Path(repo).resolve()))
+    home = common.parent if common.name == ".git" else common
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", home.name.removesuffix(".git")).strip("-.") or "repo"
+    return "%s-%s" % (name[:40], hashlib.sha256(str(common).encode("utf-8")).hexdigest()[:12])
 
 
 def legacy_imports(data):

@@ -388,7 +388,7 @@ A quiet agent SHALL cost the Lead one idle request, never an early or repeated o
 
 #### Scenario: the reviewer brief
 - WHEN a reviewer is briefed
-- THEN the brief says the reviewer may wait on background jobs, that ending a turn does not finish the review, and that it writes the review after those jobs finish and then reports `complete` with the brief's assignment id
+- THEN the brief says the reviewer writes the review once the diff is read and then reports `complete` with the brief's assignment id
 
 #### Scenario: a complete that cannot be read
 - WHEN a `complete` announces a file the driver cannot read
@@ -631,7 +631,7 @@ A contract-2 review item that asserts a requirement violation SHALL be blocking,
 
 #### Scenario: no violation
 - WHEN a review item carries no `requirement_violation`, or a clean contract-2 or a contract-1 review is read
-- THEN a `concern`, `question`, `nit` or `deferred` item does not block, the unit goes on to CI, and both readers still read the older contract unchanged
+- THEN a `deferred` item does not block, the unit goes on to CI, and both readers still read the older contract unchanged
 
 ### Requirement: Open blocking findings persist
 An earlier blocking finding SHALL stay open until a supported resolution closes it, held by a record and not by process memory.
@@ -666,6 +666,10 @@ The first-review brief SHALL give the reviewer's pass as numbered steps in one o
 - WHEN a reviewer receives the brief for a unit's first review
 - THEN the brief gives the pass as numbered steps — read the whole diff first; the ticket delivers what the task file's `What it delivers` says, each satisfied scenario proved by a test the diff adds or changes that asserts the THEN's behaviour on the real code path, names its scenario and fails when the change is reverted (a test that would pass without the change is blocking); the implementer's report matches the code at the reviewed commit (`covers` nodes that exist, `checks` outcomes the log shows, `head`, `files`); the requirements the change touches still hold; the repository's rules hold — and only after that judges severity
 
+#### Scenario: the reviewer reads and reports correctness bugs only
+- WHEN a reviewer receives the brief
+- THEN it asks for a correctness bug a user or caller would hit, or a test that would still pass without the change, judged by reading the diff, the test and the report's `red` output; the reviewer runs no test and no command other than git reads, and CI and the red-first gate are the executed evidence
+
 #### Scenario: the paths
 - WHEN the steps are printed
 - THEN they follow the paths they work from: the implementer's task file, the report path the ledger recorded for the attempt under review (its exact path, mtime and claimed head), the run's `contract.md`, the plan and the repository's own rules files, with no glob over the unit's run directory and no fallback file read under another name
@@ -685,15 +689,11 @@ The reviewer's assignment SHALL name the absolute path of the review file it wri
 - THEN the assignment names the absolute path of the review file, beside the brief it must read
 
 ### Requirement: Test changes carry their cost
-A worker that changes a covered test SHALL report its cost, and a reviewer SHALL judge it.
+A worker that changes a covered test SHALL report its cost.
 
 #### Scenario: the worker
 - WHEN a YAML plan's worker changes a test it covers in `covers`
 - THEN its packet names the `tdd` skill and inlines that skill's admission and cost rules for a backend with no skill loader, its report carries `test_cost` with the command that timed the touched tests, each touched test file's seconds and each covered node's seconds, and verify refuses the report without those rows
-
-#### Scenario: the reviewer
-- WHEN a reviewer reviews a diff that adds or changes tests
-- THEN its brief runs the `test_cost` command or times the diff's test files itself and treats a new or changed test over two seconds, or a module that grew materially without a new boundary, as a blocking defect naming the node, its seconds and the cheaper level that keeps the guarantee
 
 ### Requirement: A drive parks on a plan it cannot use
 A live drive SHALL park, not give up the plan, when it reads a plan it cannot use.
