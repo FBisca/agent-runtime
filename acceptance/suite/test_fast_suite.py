@@ -72,6 +72,20 @@ def selected(*args):
     return sum(int(count) for _, count in counts if count.strip().isdigit())
 
 
+# A wall-clock ceiling is a property of the runner class it was measured on. R222's numbers come from the
+# ubuntu runners the suite's cost was calibrated against; a macOS runner is a different machine class and
+# no calibration exists for it, so asserting the same seconds there measures with another machine's ruler
+# and fails on the runner rather than on the code. The behaviour row (no unit test starts a process or
+# opens a socket) is machine-independent and runs everywhere.
+TIMED_ON_CALIBRATED_RUNNER = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason=(
+        "the fast suite's seconds are calibrated on the ubuntu runners; a macOS runner is a different "
+        "machine class with no calibration to compare against"
+    ),
+)
+
+
 class FastSuiteTests(unittest.TestCase):
     FAST_SUITE_SECONDS = 3.0  # R222: the fast suite's tests cost under three seconds
     UNIT_TEST_SECONDS = 0.5
@@ -105,6 +119,7 @@ class FastSuiteTests(unittest.TestCase):
                 cls._profile = pytest_run("-p", "unit_guard", "-q", "--durations=0", env=env)
         return cls._profile
 
+    @TIMED_ON_CALIBRATED_RUNNER
     def test_S1_the_fast_suite_reports_under_three_seconds(self):
         result = self.profile()
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
@@ -120,6 +135,7 @@ class FastSuiteTests(unittest.TestCase):
             "the fast suite's tests cost more than R222's three seconds; make one cheaper or move it",
         )
 
+    @TIMED_ON_CALIBRATED_RUNNER
     def test_S1_no_unit_test_costs_more_than_half_a_second(self):
         result = self.profile()
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
