@@ -335,7 +335,7 @@ def row(why, do, verb=None):
     return {"why": why, "do": do, "verb": verb, "gap": verb is None}
 
 
-def record(runtime, name, state, role="unknown", parent=None, turn=None, native=None, next_rows=()):
+def record(runtime, name, state, role="unknown", parent=None, turn=None, native=None, next_rows=()):  # noqa: PLR0913
     return {
         "name": name,
         "runtime": runtime,
@@ -507,11 +507,11 @@ def history_lines(lines, app_name, spec):
         return lines
     rules = [i for i, line in enumerate(lines) if is_rule(line)]
     for upper, lower in zip(rules, rules[1:]):
-        inside = [l for l in lines[upper + 1 : lower] if l.strip()]
+        inside = [l for l in lines[upper + 1 : lower] if l.strip()]  # noqa: E741
         if (
             len(inside) == 1
             and prompt_body(inside[0], spec) is not None
-            and not any(prompt_body(l, spec) is not None for l in lines[lower + 1 :])
+            and not any(prompt_body(l, spec) is not None for l in lines[lower + 1 :])  # noqa: E741
         ):
             return lines[:upper]
     return lines
@@ -551,11 +551,11 @@ def interruption_count(text, app_name):
     segments = prompt_segments(text, app_name)
     if not spec or not any(s[0] for s in segments):
         return False, 0
-    tail = any(is_marker(l, spec) for l in segments[-1][1]) if segments[-1][0] else False
+    tail = any(is_marker(l, spec) for l in segments[-1][1]) if segments[-1][0] else False  # noqa: E741
     events, previous = 0, None
     for prompt, lines in segments:
-        key = (prompt, tuple(l.strip() for l in lines if l.strip()))
-        if key != previous and any(is_marker(l, spec) for l in lines):
+        key = (prompt, tuple(l.strip() for l in lines if l.strip()))  # noqa: E741
+        if key != previous and any(is_marker(l, spec) for l in lines):  # noqa: E741
             events += 1
         previous = key
     return tail, events

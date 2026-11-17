@@ -143,7 +143,7 @@ class SpawnCleanupTests(event_helpers.HcCase):
     def test_cancel_during_address_read_removes_the_terminal(self):
         """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0"), "sleep": 30}}, ENV)
-        write = lambda m: (lead.proc.stdin.write(json.dumps(m) + "\n"), lead.proc.stdin.flush())
+        write = lambda m: (lead.proc.stdin.write(json.dumps(m) + "\n"), lead.proc.stdin.flush())  # noqa: E731
         write(
             {
                 "jsonrpc": "2.0",

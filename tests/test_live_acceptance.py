@@ -306,7 +306,7 @@ class LiveProfileTests(unittest.TestCase):
     os.environ.get("AGENT_RUNTIME_LIVE") == "1", "set AGENT_RUNTIME_LIVE=1 for the live run"
 )
 class LiveAcceptance(unittest.TestCase):
-    def test_live_mixed_cli_dispatch(self):
+    def test_live_mixed_cli_dispatch(self):  # noqa: PLR0912, PLR0915
         """agent-runtime/R57"""
         work = tempfile.mkdtemp(prefix="agent-runtime-live-")
         log_path = os.environ.get("AGENT_RUNTIME_LIVE_LOG") or os.path.join(work, "live.log")

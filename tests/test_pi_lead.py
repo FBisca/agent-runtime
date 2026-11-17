@@ -578,7 +578,7 @@ class PiLeadTests(ToolCase):
             {"kind": "worker", "cli": "claude", "name": "w1", "task": "work", "cwd": "/tmp"},
         )
         self.assertFalse(spawned["isError"], text)
-        write = lambda m: (
+        write = lambda m: (  # noqa: E731
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
         )

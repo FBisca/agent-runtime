@@ -244,7 +244,7 @@ class ToolCase(unittest.TestCase):
         return result, result["content"][0]["text"]
 
     def runs(self, command=None):
-        calls = [json.loads(l) for l in self.log.read_text().splitlines()]
+        calls = [json.loads(l) for l in self.log.read_text().splitlines()]  # noqa: E741
         return [c for c in calls if command is None or c[0] == command]
 
 

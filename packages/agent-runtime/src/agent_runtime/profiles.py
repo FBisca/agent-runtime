@@ -46,7 +46,7 @@ def config_path(env):
     ).absolute()
 
 
-def load(env, path=None):
+def load(env, path=None):  # noqa: PLR0912
     path = Path(path) if path is not None else config_path(env)
     try:
         with path.open(encoding="utf-8") as handle:

@@ -45,7 +45,7 @@ def contract():
     }
 
 
-class PlanTests(RunFixture, unittest.TestCase):
+class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
     def setUp(self):
         super().setUp()
         shutil.rmtree(self.state_dir)  # the fixture's own approval is not this test's

@@ -96,7 +96,7 @@ class ReviewBriefTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S1_the_brief_names_the_report_whose_claims_the_pass_checks(self):
-        """orchestrator-engine/R145: structure-budget/S24"""
+        """orchestrator-engine/R145"""
         # The unit's directory holds the first attempt's report, stale the moment the unit was
         # re-dispatched; the attempt under review wrote its own, and that is the one the pass checks.
         with tempfile.TemporaryDirectory() as tmp:

@@ -56,7 +56,6 @@ class SpawnHomeTests(unittest.TestCase):
     """S10: the send surface lives in `driver/spawn.py`, and the Driver holds it as one collaborator."""
 
     def test_S10_the_spawn_members_live_in_one_module(self):
-        """structure-budget/S10"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import spawn
 
@@ -80,7 +79,6 @@ class SpawnHomeTests(unittest.TestCase):
                 self.assertIs(getattr(driver.Driver, name), getattr(spawn.Spawning, name))
 
     def test_S10_the_driver_reaches_every_moved_member_through_the_collaborator(self):
-        """structure-budget/S10"""
         from agent_orchestrator import driver as engine
 
         driver = engine.Driver.__new__(engine.Driver)

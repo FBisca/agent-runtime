@@ -59,7 +59,6 @@ class PullHomeTests(unittest.TestCase):
     """S10: the pull request lane lives in `driver/pull.py`, and the Driver holds it as one collaborator."""
 
     def test_S10_the_pull_members_live_in_one_module(self):
-        """structure-budget/S10"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import pull
 
@@ -84,7 +83,6 @@ class PullHomeTests(unittest.TestCase):
                 self.assertIs(getattr(driver, name), getattr(pull, name))
 
     def test_S10_the_driver_reaches_every_moved_member_through_the_collaborator(self):
-        """structure-budget/S10"""
         from agent_orchestrator import driver as engine
 
         driver = engine.Driver.__new__(engine.Driver)

@@ -4,17 +4,15 @@ import json
 import subprocess
 import unittest
 
-from fixtures import DRIVER
-
 import pytest
+from fixtures import DRIVER
 from test_gates import BLOCKING
-
 from test_reuse import ReuseFixture
 
 pytestmark = pytest.mark.integration
 
 
-class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):
+class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR0904
     def first_block(self, *items):
         self.expected_findings = list(items) or [BLOCKING]
         return super().first_block(*items)

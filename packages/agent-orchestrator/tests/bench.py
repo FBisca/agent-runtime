@@ -87,7 +87,7 @@ def tree_gone(pgid, timeout=10.0):
         time.sleep(0.2)
 
 
-def run_budgeted(
+def run_budgeted(  # noqa: PLR0913
     argv,
     env=None,
     cwd=None,

@@ -6,7 +6,7 @@ import tempfile
 import threading
 import unittest
 
-from test_mcp_server import RUNTIME_SRC, SERVER
+from test_mcp_server import RUNTIME_SRC
 from tools_harness import ToolCase, raw
 
 sys.path.insert(0, str(RUNTIME_SRC))

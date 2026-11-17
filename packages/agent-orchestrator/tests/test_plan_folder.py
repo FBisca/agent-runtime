@@ -39,7 +39,7 @@ def folder_contract(**top):
     return {k: v for k, v in data.items() if v is not None}
 
 
-class FolderPlanTests(RunFixture, unittest.TestCase):
+class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
     def setUp(self):
         super().setUp()
         shutil.rmtree(self.state_dir)  # the fixture's own approval is not this test's

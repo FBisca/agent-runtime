@@ -64,7 +64,7 @@ def run_view(argv, home):
     return Completed(argv, *(answer + ["", ""])[:3])
 
 
-def process(argv, timeout=None, cwd=None):
+def process(argv, timeout=None, cwd=None):  # noqa: PLR0912, PLR0915
     """The answer to one `gh` argv (without the `gh` itself)."""
     home = os.environ["FAKE_RUNTIME_HOME"]
     events_path = os.environ.get("FAKE_EVENTS", "")

@@ -107,7 +107,7 @@ def plan_state_of(ledger_path):
     return (data.get("plan") or {}).get("state")
 
 
-class Attention:
+class Attention:  # noqa: PLR0904
     """The Lead's attention, mixed into the Driver: one reading per way a unit goes quiet.
 
     A member asks the driver it belongs to for everything else - the record, the log, the workers - and

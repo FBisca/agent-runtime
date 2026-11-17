@@ -216,7 +216,7 @@ def report(label, result, payload, ids):
     return body
 
 
-def main():
+def main():  # noqa: PLR0912, PLR0915
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode", choices=["tiny", "nocriteria", "full", "explicit", "limits", "nodiff", "chunks"]

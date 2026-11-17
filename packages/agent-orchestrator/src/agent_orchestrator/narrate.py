@@ -106,7 +106,7 @@ class Narrator:
         print(self.line(kind, step, text, unit, attempt, now, stream), file=stream, flush=True)
         return True
 
-    def banner(self, plan, goal, statuses, repo, base, max_workers, gates, routes):
+    def banner(self, plan, goal, statuses, repo, base, max_workers, gates, routes):  # noqa: PLR0913
         """The logo and the run's card: the plan, its tickets, where it builds and what each class and step runs on.
         `routes` is the ledger's record of them (`routes.record`)."""
         stream = self.stream or sys.stderr

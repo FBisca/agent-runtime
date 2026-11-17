@@ -46,7 +46,7 @@ def route(klass, backend, model, **extra):
     return dict({"class": klass, "backend": backend, "model": model}, **extra)
 
 
-class RouteResumeTests(RunFixture, unittest.TestCase):
+class RouteResumeTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
     """The driver resumes a run: what its ledger recorded is what its workers run on."""
 
     def run_driver(self, *extra, **kwargs):

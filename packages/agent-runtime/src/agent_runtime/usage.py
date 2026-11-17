@@ -249,7 +249,7 @@ def _is_child_thread(meta):
     return meta.get("thread_source") == "guardian_review"
 
 
-def _session_match(path, metadata):
+def _session_match(path, metadata):  # noqa: PLR0912, PLR0915
     """Match the first marked user prompt, skipping injected context and stopping at assistant output."""
     try:
         info = path.stat()
@@ -320,7 +320,7 @@ def _session_match(path, metadata):
     return None
 
 
-def resolve_session_log(env, worker):
+def resolve_session_log(env, worker):  # noqa: PLR0912
     """Resolve an assignment's CLI log to a Path, cache its identity, or return None.
 
     Candidates must be newly created and carry the assignment marker in their first marked
@@ -478,7 +478,7 @@ def _start_slice(state, entry, at, assignment):
     _slot(state, assignment)
 
 
-def _claude_record(state, entry, role, record):
+def _claude_record(state, entry, role, record):  # noqa: PLR0912
     at = _parse_time(record.get("timestamp"))
     if at is not None:
         entry["at"] = at
@@ -544,7 +544,7 @@ def _claude_record(state, entry, role, record):
             )
 
 
-def _codex_record(state, entry, role, record):
+def _codex_record(state, entry, role, record):  # noqa: PLR0912
     at = _parse_time(record.get("timestamp"))
     if at is not None:
         entry["at"] = at

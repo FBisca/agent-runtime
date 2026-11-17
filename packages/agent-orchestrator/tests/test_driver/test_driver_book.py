@@ -70,7 +70,6 @@ class PreSplitLedgerTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S13_a_ledger_written_before_the_split_opens_under_the_book(self):
-        """structure-budget/S13"""
         from agent_orchestrator.driver import book as spine
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,7 +107,6 @@ class BookHomeTests(unittest.TestCase):
     """S13: the split's record module is `driver/book.py`, and the package still publishes every write."""
 
     def test_S13_the_book_is_the_one_owner_of_the_record(self):
-        """structure-budget/S13"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import book as spine
 

@@ -464,7 +464,7 @@ class NegativeControl(RepoCase):
         self.assertIn("negative", run.receipt["reason"])
 
 
-class Baseline(RepoCase):
+class Baseline(RepoCase):  # noqa: PLR0904
     """S14: `plan approve` runs the baseline at `base` and refuses what is not a calibrated red."""
 
     def setUp(self):
