@@ -64,7 +64,11 @@ def _forget(state, ledger, run_dir, lock):
         except BlockingIOError:
             return
         data = ledgers.snapshot(ledger) or {}
-        if (data.get("plan") or {}).get("state") != "ARCHIVED" or not _aged(data) or _driver_alive(run_dir):
+        if (
+            (data.get("plan") or {}).get("state") != "ARCHIVED"
+            or not _aged(data)
+            or _driver_alive(run_dir)
+        ):
             return
         for digest in _digests(data, run_dir):
             shutil.rmtree(state / "approvals" / digest, ignore_errors=True)
