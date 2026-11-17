@@ -56,47 +56,47 @@ class CallerIdentityTests(unittest.TestCase):
             app.main(["resolve", "--json", "--cli", "claude"])
         return json.loads(buf.getvalue())["caller"]
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_ancestry_in_a_child_terminal_is_a_verified_worker(self):
-        """agent-runtime/R255"""
         self.assertEqual(
             self.caller({}, {"t1": {"pid": 40, "parent": "tX"}}),
             {"kind": "worker", "verified": True},
             "observed worker ancestry wins over missing markers",
         )
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_ancestry_in_a_parentless_terminal_is_a_verified_lead(self):
-        """agent-runtime/R255"""
         self.assertEqual(
             self.caller({}, {"t1": {"pid": 40, "parent": None}}), {"kind": "lead", "verified": True}
         )
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_own_terminal_id_is_verified_when_its_pid_is_an_ancestor(self):
-        """agent-runtime/R255"""
         terminals = {"t1": {"pid": 30, "parent": "tX"}}
         self.assertEqual(
             self.caller({"HC_TERMINAL_ID": "t1"}, terminals), {"kind": "worker", "verified": True}
         )
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_worker_markers_alone_are_never_verified(self):
-        """agent-runtime/R255"""
         terminals = {"t1": {"pid": 999, "parent": "tX"}}
         caller = self.caller({"HC_TERMINAL_ID": "t1"}, terminals)
         self.assertEqual(caller, {"kind": "worker", "verified": False})
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_a_finished_terminal_with_an_ancestor_pid_never_verifies(self):
-        """agent-runtime/R255"""
         terminals = {"t1": {"pid": 40, "parent": "tX", "state": "finished"}}
         self.assertEqual(self.caller({}, terminals), {"kind": "unknown", "verified": False})
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_a_marker_naming_a_finished_terminal_never_verifies(self):
-        """agent-runtime/R255"""
         terminals = {"t1": {"pid": 30, "parent": "tX", "state": "finished"}}
         self.assertEqual(
             self.caller({"HC_TERMINAL_ID": "t1"}, terminals), {"kind": "worker", "verified": False}
         )
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_the_nearest_live_ancestor_terminal_decides_the_kind(self):
-        """agent-runtime/R255"""
         terminals = {
             "far": {"pid": 30, "parent": None},
             "near": {"pid": 40, "parent": "far"},
@@ -106,8 +106,8 @@ class CallerIdentityTests(unittest.TestCase):
             self.caller({"HC_TERMINAL_ID": "far"}, terminals), {"kind": "worker", "verified": True}
         )
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_no_marker_and_no_ancestry_is_unknown(self):
-        """agent-runtime/R255"""
         self.assertEqual(self.caller({}, {}), {"kind": "unknown", "verified": False})
 
 
@@ -127,8 +127,8 @@ class SharedGenerationTests(unittest.TestCase):
         ):
             return app.cli_generation()
 
+    @pytest.mark.spec("Session generation")
     def test_generation_is_nearest_cli_pid_and_lstart_without_session_suffix(self):
-        """agent-runtime/R107"""
         plain = self.generation({})
         self.assertEqual(plain, "90:Wed Nov  4 10:00:00 2026")
         env = {
@@ -138,8 +138,8 @@ class SharedGenerationTests(unittest.TestCase):
         }
         self.assertEqual(self.generation(env), plain)
 
+    @pytest.mark.spec("Session generation")
     def test_lstart_is_locale_independent(self):
-        """agent-runtime/R107"""
         with tempfile.TemporaryDirectory() as tmp:
             ps = Path(tmp) / "ps"
             ps.write_text(
@@ -159,23 +159,19 @@ class SharedGenerationTests(unittest.TestCase):
                     stamps.add(app.lstart(os.getpid()))
         self.assertEqual(stamps, {"Wed Nov  4 10:00:00 2026"})
 
+    @pytest.mark.spec("Session generation")
     def test_new_session_id_in_same_process_keeps_generation(self):
-        """agent-runtime/R108"""
         before = self.generation({"CODEX_THREAD_ID": "thread-a"})
         after = self.generation({"CODEX_THREAD_ID": "thread-b"})
         self.assertEqual(before, after)
 
 
 class HookExceptionDocsTests(unittest.TestCase):
+    @pytest.mark.spec("Hook-only exceptions")
     def test_S18_agents_md_and_spec_name_the_one_hook_only_exception(self):
-        """agent-runtime/R257"""
         root = Path(__file__).resolve().parents[1]
         for doc in (root / "AGENTS.md", root / "docs" / "specs" / "agent-runtime.md"):
             text = " ".join(doc.read_text().split())
             self.assertIn("native in-process subagent cannot be told from its Lead", text, doc.name)
-            if doc.name == "AGENTS.md":
-                self.assertIn("the hook alone denies", text, doc.name)
-            else:
-                self.assertIn("R74", text, doc.name)
-                self.assertIn("R89", text, doc.name)
+            self.assertIn("the hook alone denies", text, doc.name)
             self.assertIn("no other refusal is an exception", text.lower(), doc.name)

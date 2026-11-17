@@ -47,6 +47,7 @@ def test_S1_the_baseline_bank_is_the_curated_global_contract_and_engineering_ban
         assert question.ask.strip(), f"{question.id} asks nothing"
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_configured_bank_is_read_from_yaml_with_its_model_and_questions(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(CONFIG, encoding="utf-8")
@@ -122,6 +123,7 @@ def test_a_safeguards_block_that_is_not_a_mapping_is_refused_naming_it(tmp_path)
     assert refused.value.code == 2, "an invalid configuration is a usage error"
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_an_empty_additions_list_asks_the_baseline_alone(tmp_path):
     """A configuration that adds no question asks the baseline, so an empty list is legal (D05)."""
     path = tmp_path / "config.yaml"
@@ -135,6 +137,7 @@ def test_S1_an_empty_additions_list_asks_the_baseline_alone(tmp_path):
     )
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_configuration_that_names_no_questions_asks_the_baseline_alone(tmp_path):
     """A configuration that only protects a path or recalibrates a threshold needs no question of its own."""
     path = tmp_path / "config.yaml"
@@ -144,6 +147,7 @@ def test_S1_a_configuration_that_names_no_questions_asks_the_baseline_alone(tmp_
     assert bank.sensitive_paths == ("pkg/**",), "the configuration's own protection travels"
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_repository_question_that_repeats_a_baseline_id_is_refused_by_name(tmp_path):
     """Extending the baseline is not replacing it: a repeat is refused by the id it repeats (D05, D13)."""
     path = tmp_path / "config.yaml"
@@ -236,6 +240,7 @@ def _refused(tmp_path, body: str) -> ReviewError:
     return refused.value
 
 
+@pytest.mark.spec("Question configuration validation")
 def test_S2_a_score_question_without_levels_is_refused_by_path(tmp_path):
     refused = _refused(tmp_path, _bank(SCORE.replace(LEVELS, "")))
     assert "questions[0].criteria" in str(refused), "the refusal names the field by its path"
@@ -243,6 +248,7 @@ def test_S2_a_score_question_without_levels_is_refused_by_path(tmp_path):
     assert refused.code == 2, "an invalid configuration is a usage error"
 
 
+@pytest.mark.spec("Question configuration validation")
 def test_S2_a_noul_that_carries_a_level_list_is_refused_by_path(tmp_path):
     refused = _refused(tmp_path, _bank(SCORE, NOUL.replace("      ask:", LEVELS + "      ask:")))
     assert "questions[1].criteria" in str(refused), "the misplaced field is named where it stands"
@@ -260,12 +266,14 @@ def test_S2_a_noul_that_carries_a_level_list_is_refused_by_path(tmp_path):
     ],
     ids=["mapping", "empty", "one-level", "blank-level"],
 )
+@pytest.mark.spec("Question configuration validation")
 def test_S2_a_score_criteria_that_is_not_a_ladder_of_levels_is_refused_by_path(tmp_path, criteria):
     refused = _refused(tmp_path, _bank(SCORE.replace(LEVELS, criteria)))
     assert "questions[0].criteria" in str(refused)
     assert refused.code == 2
 
 
+@pytest.mark.spec("Question configuration validation")
 def test_S2_a_noul_may_declare_criteria_as_a_mapping(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(_bank(NOUL.replace("      ask:", OPTIONS + "      ask:")), encoding="utf-8")
@@ -278,6 +286,7 @@ def test_S2_a_noul_may_declare_criteria_as_a_mapping(tmp_path):
     }, "a noul's criteria are optional and travel as configured"
 
 
+@pytest.mark.spec("Question configuration validation")
 def test_S2_a_choice_question_carries_its_options_as_criteria(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(
@@ -303,6 +312,7 @@ def test_S2_a_choice_question_carries_its_options_as_criteria(tmp_path):
     ],
     ids=["missing", "level-list", "one-option"],
 )
+@pytest.mark.spec("Question configuration validation")
 def test_S2_a_choice_without_its_options_is_refused_by_path(tmp_path, criteria):
     refused = _refused(
         tmp_path,
@@ -316,6 +326,7 @@ def test_S2_a_choice_without_its_options_is_refused_by_path(tmp_path, criteria):
     assert refused.code == 2
 
 
+@pytest.mark.spec("Question configuration validation")
 def test_S2_a_refused_bank_never_reaches_a_provider(tmp_path, monkeypatch):
     """The bank is read before the provider is built and before the change, so a refusal costs no request."""
 
@@ -338,6 +349,7 @@ def test_S2_a_refused_bank_never_reaches_a_provider(tmp_path, monkeypatch):
 # The numbers a screening is decided with are configuration, declared beside the bank and never chosen by
 # the model (D07, D26, D48): per-question weights, and the value and confidence band each answer is read
 # against. The packaged baseline declares its calibration; a repository lays its own over it per question.
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_the_baseline_declares_the_thresholds_it_is_decided_with():
     bank = questions.baseline()
     calibrated = bank.threshold("contract.error-handling")
@@ -355,6 +367,7 @@ def test_S1_the_baseline_declares_the_thresholds_it_is_decided_with():
     )
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_repository_lays_its_weights_and_thresholds_over_the_baseline(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(
@@ -391,6 +404,7 @@ def test_S1_a_repository_lays_its_weights_and_thresholds_over_the_baseline(tmp_p
     )
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_threshold_may_name_a_question_that_this_run_does_not_ask(tmp_path):
     """A repository carries the calibration of its whole catalogue and asks part of it per run."""
     path = tmp_path / "config.yaml"
@@ -429,6 +443,7 @@ def test_S1_a_threshold_may_name_a_question_that_this_run_does_not_ask(tmp_path)
         "weights-not-a-mapping",
     ],
 )
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_calibration_no_rule_can_read_is_refused_by_path(tmp_path, body, named):
     path = tmp_path / "config.yaml"
     path.write_text("model: test-model-v1\nquestions: []\n" + body, encoding="utf-8")
@@ -438,6 +453,7 @@ def test_S1_a_calibration_no_rule_can_read_is_refused_by_path(tmp_path, body, na
     assert refused.value.code == 2, "a configuration no rule can honour is a usage error"
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_the_loaded_bank_carries_the_weights_and_thresholds_it_declares(tmp_path):
     """A repository's numbers reach the run through the bank, beside the questions (D07, D48)."""
     path = tmp_path / "config.yaml"
@@ -454,6 +470,7 @@ def test_S1_the_loaded_bank_carries_the_weights_and_thresholds_it_declares(tmp_p
     assert {question.id for question in bank.questions} >= {"contract.error-handling"}
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_recalibrated_threshold_is_a_different_bank():
     """A frozen report is compared with the calibration it was made under, so the digest covers it (D26)."""
     bank = questions.baseline()
@@ -475,6 +492,7 @@ def test_S1_a_recalibrated_threshold_is_a_different_bank():
     ],
     ids=["not-a-mapping", "a-name-not-a-budget", "a-budget-below-one", "a-list"],
 )
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_budget_no_stage_can_read_is_refused_by_path(tmp_path, body, named):
     """`chunk` and `cross_file` are honoured by the chunking stage, but their shape is refused here."""
     path = tmp_path / "config.yaml"
@@ -485,6 +503,7 @@ def test_S1_a_budget_no_stage_can_read_is_refused_by_path(tmp_path, body, named)
     assert refused.value.code == 2, "a budget no stage can read is a usage error"
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_declared_chunk_budget_is_carried_beside_the_bank(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(

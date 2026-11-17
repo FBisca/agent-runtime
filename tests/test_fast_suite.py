@@ -72,7 +72,7 @@ def selected(*args):
     return sum(int(count) for _, count in counts if count.strip().isdigit())
 
 
-# A wall-clock ceiling is a property of the runner class it was measured on. R222's numbers come from the
+# A wall-clock ceiling is a property of the runner class it was measured on. The fast suite's numbers come from the
 # ubuntu runners the suite's cost was calibrated against; a macOS runner is a different machine class and
 # no calibration exists for it, so asserting the same seconds there measures with another machine's ruler
 # and fails on the runner rather than on the code. The behaviour row (no unit test starts a process or
@@ -87,7 +87,7 @@ TIMED_ON_CALIBRATED_RUNNER = pytest.mark.skipif(
 
 
 class FastSuiteTests(unittest.TestCase):
-    FAST_SUITE_SECONDS = 3.0  # R222: the fast suite's tests cost under three seconds
+    FAST_SUITE_SECONDS = 3.0  # The fast suite's tests cost under three seconds
     UNIT_TEST_SECONDS = 0.5
     # A shared runner is slower than the machine these numbers were measured on, and a build fails on
     # the behaviour, not on the runner: half again before a row is a red build.
@@ -97,9 +97,9 @@ class FastSuiteTests(unittest.TestCase):
 
     @classmethod
     def profile(cls):
-        """The one timed, guarded fast-suite run every R222 row reads.
+        """The one timed, guarded fast-suite run every fast-suite test reads.
 
-        R222 measures an idle machine and a wall clock, which a loaded CI runner cannot promise, so the
+        The budget measures an idle machine and a wall clock, which a loaded CI runner cannot promise, so the
         gate measures what a test costs: the sum of the cases' call time — collection and module import
         are not in it, so no warm-up buys anything it reads. The run carries the unit guard too, because
         a second run of the suite to prove the same tests start no process is another full suite on a
@@ -120,6 +120,7 @@ class FastSuiteTests(unittest.TestCase):
         return cls._profile
 
     @TIMED_ON_CALIBRATED_RUNNER
+    @pytest.mark.spec("Fast suite cost")
     def test_S1_the_fast_suite_reports_under_three_seconds(self):
         result = self.profile()
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
@@ -132,10 +133,11 @@ class FastSuiteTests(unittest.TestCase):
         self.assertLess(
             sum(calls),
             self.FAST_SUITE_SECONDS * self.RUNNER_FACTOR,
-            "the fast suite's tests cost more than R222's three seconds; make one cheaper or move it",
+            "the fast suite's tests cost more than the three-second budget; make one cheaper or move it",
         )
 
     @TIMED_ON_CALIBRATED_RUNNER
+    @pytest.mark.spec("Fast suite cost")
     def test_S1_no_unit_test_costs_more_than_half_a_second(self):
         result = self.profile()
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
@@ -162,12 +164,14 @@ class FastSuiteTests(unittest.TestCase):
         self.assertEqual(selected("-k", name), 0)
         self.assertEqual(selected(module, "-k", name), 1)
 
+    @pytest.mark.spec("Option-only pytest runs the fast suite")
     def test_S5_an_option_value_keeps_the_fast_suite(self):
         # One module is enough: the property is that an option's value is not read as a selection, and a
         # whole-suite collection to prove it is two seconds of a contended runner for the same answer.
         path = "tests/test_activation.py"
         self.assertEqual(selected(path, "-p", "no:cacheprovider"), selected(path))
 
+    @pytest.mark.spec("Unit tests start no process")
     def test_S3_no_unit_test_starts_a_process_or_opens_a_socket(self):
         result = self.profile()
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])

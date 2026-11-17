@@ -183,6 +183,7 @@ def review(tmp_path, monkeypatch):
     return where
 
 
+@pytest.mark.spec("Screened verdict and report")
 def test_S2_a_completed_screening_is_screened_with_native_attributed_judgments(review, capsys):
     assert review.screen(RESPONSE) == 0
     report = review.report()
@@ -219,6 +220,7 @@ def test_S2_a_completed_screening_is_screened_with_native_attributed_judgments(r
     assert "screened" in summary and str(review.output / "report.json") in summary
 
 
+@pytest.mark.spec("Screened verdict and report")
 def test_S2_the_terminal_summary_reads_the_judgments_without_the_report(review, capsys):
     assert review.screen(RESPONSE) == 0
     summary = capsys.readouterr().out
@@ -228,6 +230,7 @@ def test_S2_the_terminal_summary_reads_the_judgments_without_the_report(review, 
         json.loads(summary)
 
 
+@pytest.mark.spec("Incomplete on screening failure")
 def test_S3_a_provider_error_is_incomplete_with_an_observable_reason(review, capsys):
     assert review.screen({"error": "provider answered 500"}) != 0, "an incomplete run never exits 0"
     report = review.report()
@@ -238,6 +241,7 @@ def test_S3_a_provider_error_is_incomplete_with_an_observable_reason(review, cap
     assert "500" in capsys.readouterr().err, "the reason is observable without reading the report"
 
 
+@pytest.mark.spec("Incomplete on screening failure")
 def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
     assert (
         review.screen(
@@ -257,6 +261,7 @@ def test_S3_an_invalid_judgment_is_incomplete_naming_the_question(review):
     assert report["usage"]["requests"] == 1
 
 
+@pytest.mark.spec("Score ladder bounds")
 def test_S1_a_score_between_two_rungs_completes_with_the_providers_own_number(review):
     assert (
         review.screen(
@@ -278,6 +283,7 @@ def test_S1_a_score_between_two_rungs_completes_with_the_providers_own_number(re
     )
 
 
+@pytest.mark.spec("Score ladder bounds")
 def test_S3_a_score_outside_its_declared_levels_is_incomplete_naming_the_question(review):
     assert (
         review.screen(
@@ -298,6 +304,7 @@ def test_S3_a_score_outside_its_declared_levels_is_incomplete_naming_the_questio
     )
 
 
+@pytest.mark.spec("Incomplete on screening failure")
 def test_S3_a_judgment_on_a_question_the_run_did_not_ask_is_incomplete(review):
     assert review.screen({"answers": {"contract.not-asked": {"type": "noul", "noul": 0.9}}}) != 0, (
         "a judgment the run cannot attribute is not a screening result"
@@ -308,6 +315,7 @@ def test_S3_a_judgment_on_a_question_the_run_did_not_ask_is_incomplete(review):
     assert "contract.not-asked" in report["failure"]["reason"]
 
 
+@pytest.mark.spec("Report provenance")
 def test_S4_the_report_names_revisions_questions_model_and_usage(review):
     assert review.screen(RESPONSE) == 0
     report = review.report()
@@ -323,6 +331,7 @@ def test_S4_the_report_names_revisions_questions_model_and_usage(review):
     assert isinstance(report["usage"]["output_tokens"], int)
 
 
+@pytest.mark.spec("Report provenance")
 def test_S4_the_same_frozen_input_and_configuration_produce_the_same_report(review):
     assert review.screen(RESPONSE) == 0
     first = review.report()
@@ -345,6 +354,7 @@ def test_S5_the_report_records_the_limits_in_force_and_whether_long_context_was_
     }, "the long-context budget is recorded when it was asked for"
 
 
+@pytest.mark.spec("Report provenance")
 def test_S4_the_report_names_the_provider_served_model_limits_and_bank_digest(review):
     assert review.screen(RESPONSE) == 0
     report = review.report()
@@ -361,6 +371,7 @@ def test_S4_the_report_names_the_provider_served_model_limits_and_bank_digest(re
     )
 
 
+@pytest.mark.spec("Report provenance")
 def test_S4_the_bank_digest_follows_the_bank_and_not_the_run(review):
     assert review.screen(RESPONSE) == 0
     digest = review.report()["bank_digest"]
@@ -376,6 +387,7 @@ def test_S4_the_bank_digest_follows_the_bank_and_not_the_run(review):
     )
 
 
+@pytest.mark.spec("Calibrated escalation signals")
 def test_S5_a_critical_judgment_below_its_calibrated_threshold_escalates_in_the_report(
     review, capsys
 ):
@@ -402,6 +414,7 @@ def test_S5_a_critical_judgment_below_its_calibrated_threshold_escalates_in_the_
     assert "deep review" in summary, "and the way out, as a refusal owes the reader"
 
 
+@pytest.mark.spec("Screening cost")
 def test_S6_the_report_prices_the_screening_from_the_declared_table(review):
     review.config.write_text(CALIBRATED_CONFIG, encoding="utf-8")
     review.pricing.write_text(PRICING, encoding="utf-8")
@@ -420,6 +433,7 @@ def test_S6_the_report_prices_the_screening_from_the_declared_table(review):
     assert usage["cost_unknown"] is None
 
 
+@pytest.mark.spec("Refusal and incomplete report")
 def test_S6_an_incomplete_run_keeps_the_usage_and_the_judgments_it_learned(review):
     assert (
         review.screen(
@@ -447,6 +461,7 @@ def test_S6_an_incomplete_run_keeps_the_usage_and_the_judgments_it_learned(revie
     )
 
 
+@pytest.mark.spec("Refusal and incomplete report")
 def test_S6_a_refusal_names_the_report_it_leaves_standing(review, capsys):
     assert review.screen(RESPONSE) == 0
     capsys.readouterr()
@@ -461,6 +476,7 @@ def test_S6_a_refusal_names_the_report_it_leaves_standing(review, capsys):
     assert review.report() == standing, "a refusal writes no report of its own"
 
 
+@pytest.mark.spec("Refusal and incomplete report")
 def test_S6_an_output_that_is_not_a_directory_is_a_refusal_naming_the_path(review, capsys):
     blocked = review.output.parent / "not-a-directory"
     blocked.write_text("x", encoding="utf-8")
@@ -473,6 +489,7 @@ def test_S6_an_output_that_is_not_a_directory_is_a_refusal_naming_the_path(revie
     assert not (review.output / "report.json").exists(), "a refusal writes no report"
 
 
+@pytest.mark.spec("Refusal and incomplete report")
 def test_S6_an_existing_output_that_denies_writing_is_refused_before_the_provider_is_asked(
     review, capsys, request
 ):
@@ -490,6 +507,7 @@ def test_S6_an_existing_output_that_denies_writing_is_refused_before_the_provide
     assert not (review.output / "report.json").exists(), "a refusal writes no report"
 
 
+@pytest.mark.spec("Refusal and incomplete report")
 def test_S6_a_report_that_cannot_be_written_is_a_refusal_that_keeps_what_was_screened(
     review, capsys, monkeypatch
 ):

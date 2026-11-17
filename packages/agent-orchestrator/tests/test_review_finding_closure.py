@@ -49,11 +49,13 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         self.assertNotIn("ready-for-ci", self.states_of("t1r1"))
         self.assert_no_ci_advance()
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_omitting_a_previous_blocker_does_not_close_it(self):
         self.waits(self.first_block() + [self.fix_report(), self.re_review()])
         self.run_driver()
         self.assert_held()
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_previous_blocker_cannot_be_downgraded_to_a_concern(self):
         concern = {"id": "B1", "kind": "concern", "summary": "rare case", "answer_required": False}
         self.waits(
@@ -62,12 +64,14 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         self.run_driver()
         self.assert_held()
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_an_omitted_blocker_outside_the_new_delta_remains_open(self):
         blocker = dict(BLOCKING, file="src/zzz/other.py")
         self.waits(self.first_block(blocker) + [self.fix_report(), self.re_review()])
         self.run_driver()
         self.assert_held()
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_bare_fixed_acknowledgment_is_not_closure(self):
         resolution = {"id": "B1", "status": "fixed", "commit": "@HEAD", "note": "done"}
         self.waits(
@@ -77,6 +81,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         self.run_driver()
         self.assert_held()
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_stale_resolution_evidence_does_not_close_a_blocker(self):
         resolution = {
             "id": "B1",
@@ -101,6 +106,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         self.run_driver()
         self.assert_held()
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S7_restart_does_not_forget_a_previously_recorded_blocker(self):
         self.waits(self.first_block())
         self.run_driver()
@@ -145,12 +151,15 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         self.run_driver()
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_fixed_with_current_commit_evidence_can_complete(self):
         self.resolve_and_complete("fixed")
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_disproven_with_current_commit_evidence_can_complete(self):
         self.resolve_and_complete("disproven")
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_a_requirement_concern_is_refused_before_ci_and_names_its_id(self):
         item = dict(
             BLOCKING,
@@ -205,34 +214,44 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
     def check(self, **over):
         return dict({"command": "pytest -k last", "exit": 0, "at_commit": "@HEAD"}, **over)
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_unknown_id_is_not_closure(self):
         self.close_with([self.resolution(id="B2")], [self.check()])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_blank_justification_is_not_closure(self):
         self.close_with([self.resolution(note=" ")], [self.check()])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_unsupported_status_is_not_closure(self):
         self.close_with([self.resolution(status="acknowledged")], [self.check()])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_failed_evidence_is_not_closure(self):
         evidence = dict(self.resolution()["evidence"], exit=1)
         self.close_with([self.resolution(evidence=evidence)], [self.check(exit=1)])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_missing_check_run_is_not_closure(self):
         self.close_with([self.resolution()], [])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_different_command_is_not_closure(self):
         self.close_with([self.resolution()], [self.check(command="pytest -k unrelated")])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_stale_check_with_current_resolution_is_not_closure(self):
         self.close_with([self.resolution()], [self.check(at_commit="deadbee")])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_duplicate_resolution_ids_are_refused(self):
         self.close_with([self.resolution(), self.resolution()], [self.check()])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_conflicting_resolution_statuses_are_refused(self):
         self.close_with([self.resolution(), self.resolution(status="disproven")], [self.check()])
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_closing_one_of_two_blockers_preserves_the_other(self):
         other = dict(BLOCKING, id="B2", summary="second violation")
         self.waits(
@@ -248,6 +267,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         self.expected_findings = [other]
         self.assert_held()
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S4_optional_concern_remains_nonblocking_in_the_driver(self):
         concern = {
             "id": "C1",
@@ -263,6 +283,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         self.assertTrue(self.checks_log())
         self.assertFalse((self.run_dir / "t1r1" / "findings.json").exists())
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S4_legacy_clean_review_remains_readable_by_the_driver(self):
         self.waits([self.worker_done(tests=True), self.reviewer_done(self.review())])
         self.run_driver()

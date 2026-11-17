@@ -28,6 +28,7 @@ class ReportGateTests(GateFixture, unittest.TestCase):
         step["write"] = [[str(self.run_dir / task_id / "report.2.json"), self.report(task_id)]]
         return step
 
+    @pytest.mark.spec("A refused report goes back to its sender")
     def test_S1_a_report_the_ledger_cannot_read_is_refused_to_its_sender(self):
         """The unreadable field is the sender's to fix: the drive books no error, reaches finish, and the report the
         resumed worker writes is gated as usual."""
@@ -51,6 +52,7 @@ class ReportGateTests(GateFixture, unittest.TestCase):
         self.assertIn("checks[].outcome", resumed[0]["args"]["task"], "the field is not named")
         self.assertEqual(self.task()["gate"], "done", "the corrected report was not gated as usual")
 
+    @pytest.mark.spec("A refused report goes back to its sender")
     def test_S1_a_refusal_the_sender_repeats_asks_the_lead(self):
         """The resume is bounded: a worker that sends the same unreadable report twice is asked about, not looped."""
         self.waits(

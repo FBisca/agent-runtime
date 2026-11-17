@@ -31,6 +31,7 @@ def run_class(body):
 
 
 class FixtureCostTests(unittest.TestCase):
+    @pytest.mark.spec("Test fixtures are built once")
     def test_S8_a_class_approves_its_plan_once(self):
         """test-cost/S8: the plan every test starts from is approved once per class, not once per test."""
         real = yaml_plan.approve
@@ -43,6 +44,7 @@ class FixtureCostTests(unittest.TestCase):
         for text in seen:
             self.assertIn("approval:", text)
 
+    @pytest.mark.spec("Test fixtures are built once")
     def test_S8_each_test_of_a_class_starts_from_the_same_fresh_world(self):
         """test-cost/S8: a test that changes the repo or the fakes does not leak into the next test."""
 
@@ -57,6 +59,7 @@ class FixtureCostTests(unittest.TestCase):
         self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
         self.assertEqual(seen, [False, False, False])
 
+    @pytest.mark.spec("Test fixtures are built once")
     def test_S8_path_stays_put_across_the_class(self):
         """test-cost/S8: the per-test home does not change PATH, so every test of a class sees one PATH."""
         result, seen = run_class(lambda case: case.env()["PATH"])

@@ -95,16 +95,18 @@ class InstallerCase(unittest.TestCase):
 class LegacyInstallSnapshotTests(InstallerCase):
     """The original behaviour, snapshotted: the component work may not change it."""
 
+    @pytest.mark.spec("Selective install")
     def test_the_legacy_install_still_prints_what_it_printed(self):
-        """installer-contract/R1: the original install still prints the Claude and Codex wiring, and nothing else."""
+        """Selective install: the original install still prints the Claude and Codex wiring, and nothing else."""
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         expected = GOLDEN.read_text(encoding="utf-8")
         self.assertEqual(normalise(result.stdout, REPO, self.home), expected)
         self.assertEqual(result.stderr, "")
 
+    @pytest.mark.spec("Rerun, upgrade and uninstall")
     def test_the_legacy_install_still_links_the_four_shims(self):
-        """installer-contract/R7: the documented agent-runtime* shims are still what the legacy install links."""
+        """Rerun, upgrade and uninstall: the documented agent-runtime* shims are still what the legacy install links."""
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         for shim in SHIMS:
@@ -112,8 +114,9 @@ class LegacyInstallSnapshotTests(InstallerCase):
             self.assertTrue(link.is_symlink(), shim)
             self.assertEqual(os.readlink(link), str(REPO / "bin" / shim))
 
+    @pytest.mark.spec("Existing configuration kept")
     def test_the_legacy_install_still_refuses_a_file_it_does_not_own(self):
-        """installer-contract/R4: the original install still refuses a file it does not own."""
+        """Existing configuration kept: the original install still refuses a file it does not own."""
         bin_dir = self.home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
         (bin_dir / "agent-runtime").write_text("mine\n", encoding="utf-8")
@@ -126,8 +129,9 @@ class LegacyInstallSnapshotTests(InstallerCase):
 class SelectiveInstallTests(InstallerCase):
     """The components: what the user asks for, what comes with it, and what stays out."""
 
+    @pytest.mark.spec("Selective install")
     def test_s1_only_the_requested_components_are_installed(self):
-        """installer-contract/R1: the requested components alone, their closure honoured, no other config touched."""
+        """Selective install: the requested components alone, their closure honoured, no other config touched."""
         result = self.run_installer("--components", "runtime,pi")
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -151,8 +155,9 @@ class SelectiveInstallTests(InstallerCase):
         manifest = self.manifest()
         self.assertEqual(sorted(manifest["components"]), ["pi", "runtime"])
 
+    @pytest.mark.spec("Selective install")
     def test_s1_the_runtime_comes_with_every_component_that_needs_it(self):
-        """installer-contract/R1: the dependency closure is honoured, and it is said out loud."""
+        """Selective install: the dependency closure is honoured, and it is said out loud."""
         result = self.run_installer("--components", "pi")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("runtime: required by pi", result.stdout)
@@ -160,8 +165,9 @@ class SelectiveInstallTests(InstallerCase):
             self.assertTrue(self.shim(shim).is_symlink(), shim)
         self.assertEqual(sorted(self.manifest()["components"]), ["pi", "runtime"])
 
+    @pytest.mark.spec("Selective install")
     def test_an_unknown_component_is_refused_with_the_known_ones(self):
-        """installer-contract/R1: a name that is not a component is refused, and the known ones are named."""
+        """Selective install: a name that is not a component is refused, and the known ones are named."""
         result = self.run_installer("--components", "runtime,nope")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown component: nope", result.stderr)
@@ -172,8 +178,9 @@ class SelectiveInstallTests(InstallerCase):
 class ReleaseTests(InstallerCase):
     """The release: one version for the whole install, never a mixture."""
 
+    @pytest.mark.spec("Release coherence")
     def test_s3_the_orchestrator_needs_the_runtime_and_one_release(self):
-        """installer-contract/R3: the runtime requirement is explicit, and both come from one release."""
+        """Release coherence: the runtime requirement is explicit, and both come from one release."""
         result = self.run_installer("--components", "orchestrator")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("runtime: required by orchestrator", result.stdout)
@@ -184,8 +191,9 @@ class ReleaseTests(InstallerCase):
         self.assertEqual(releases, {"v0.1.0"})
         self.assertTrue(self.shim("agent-runtime").is_symlink())
 
+    @pytest.mark.spec("Release coherence")
     def test_a_checkout_that_mixes_releases_is_refused(self):
-        """installer-contract/R3: a checkout whose members disagree is a mixture, and it is refused."""
+        """Release coherence: a checkout whose members disagree is a mixture, and it is refused."""
         mixed = self.checkout("mixed", version="0.1.0", orchestrator_version="0.2.0")
         result = self.run_installer("--components", "orchestrator", script=mixed / "install.sh")
         self.assertEqual(result.returncode, 1)
@@ -194,8 +202,9 @@ class ReleaseTests(InstallerCase):
         self.assertIn("v0.2.0", result.stderr)
         self.assertFalse(self.shim("agent-runtime").exists())
 
+    @pytest.mark.spec("Release coherence")
     def test_an_install_that_would_mix_releases_is_refused(self):
-        """installer-contract/R3: an install that would leave a component at another release is refused."""
+        """Release coherence: an install that would leave a component at another release is refused."""
         first = self.run_installer("--components", "claude")
         self.assertEqual(first.returncode, 0, first.stderr)
         newer = self.checkout("newer", version="0.2.0")
@@ -217,8 +226,9 @@ def result_text(result):
 class ConflictTests(InstallerCase):
     """The conflicts: what the installer refuses, and what it never touches."""
 
+    @pytest.mark.spec("Existing configuration kept")
     def test_s4_an_existing_file_is_kept_and_the_install_is_refused(self):
-        """installer-contract/R4: the user's own files are kept, and the refusal names the reason and the way out."""
+        """Existing configuration kept: the user's own files are kept, and the refusal names the reason and the way out."""
         # A file the user owns is never overwritten, and nothing else is installed.
         bin_dir = self.home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
@@ -272,8 +282,9 @@ class ConflictTests(InstallerCase):
 class LifecycleTests(InstallerCase):
     """The lifecycle: a rerun, an upgrade, and a selective uninstall."""
 
+    @pytest.mark.spec("Rerun, upgrade and uninstall")
     def test_s7_a_rerun_an_upgrade_and_an_uninstall_keep_the_rest(self):
-        """installer-contract/R7: the unrelated components and the user's data survive, and the shims stay usable."""
+        """Rerun, upgrade and uninstall: the unrelated components and the user's data survive, and the shims stay usable."""
         first = self.run_installer("--components", "runtime,pi,claude")
         self.assertEqual(first.returncode, 0, first.stderr)
         before = self.manifest()
@@ -330,8 +341,9 @@ class LifecycleTests(InstallerCase):
         self.assertNotIn("claude", self.manifest()["components"])
         self.assertEqual((user_file / "config.toml").read_text(encoding="utf-8"), "mine\n")
 
+    @pytest.mark.spec("Rerun, upgrade and uninstall")
     def test_s7_a_component_is_not_orphaned_by_the_uninstall_of_what_it_needs(self):
-        """installer-contract/R7: the runtime stays while a component needs it, and the way out is named."""
+        """Rerun, upgrade and uninstall: the runtime stays while a component needs it, and the way out is named."""
         installed = self.run_installer("--components", "runtime,orchestrator,pi")
         self.assertEqual(installed.returncode, 0, installed.stderr)
 
@@ -352,8 +364,9 @@ class LifecycleTests(InstallerCase):
             self.assertFalse(self.shim(shim).exists(), shim)
         self.assertEqual(self.manifest()["components"], {})
 
+    @pytest.mark.spec("Rerun, upgrade and uninstall")
     def test_an_upgrade_that_would_leave_a_component_behind_is_refused(self):
-        """installer-contract/R7: an upgrade that would strand a component at another release is refused."""
+        """Rerun, upgrade and uninstall: an upgrade that would strand a component at another release is refused."""
         installed = self.run_installer("--components", "runtime,pi")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         newer = self.checkout("newer", version="0.2.0")
@@ -370,8 +383,9 @@ class LifecycleTests(InstallerCase):
 class EnvironmentTests(InstallerCase):
     """The environment: a clean home, an existing home, and no network, no credentials."""
 
+    @pytest.mark.spec("Hermetic installer tests")
     def test_s8_the_installer_needs_no_network_no_credentials_and_no_real_tools(self):
-        """installer-contract/R8: fake binaries stand in for the tools; nothing reaches the network."""
+        """Hermetic installer tests: fake binaries stand in for the tools; nothing reaches the network."""
         calls = self.root / "calls.log"
         fake = self.root / "fake-bin"
         fake.mkdir()
@@ -409,8 +423,9 @@ class EnvironmentTests(InstallerCase):
         for name in (".claude/settings.json", ".codex/config.toml", ".pi/agent/mcp.json"):
             self.assertEqual((self.home / name).read_text(encoding="utf-8"), "mine\n")
 
+    @pytest.mark.spec("Hermetic installer tests")
     def test_s8_the_failure_paths_are_refused_with_a_reason(self):
-        """installer-contract/R8: every failure path names the reason and the way out."""
+        """Hermetic installer tests: every failure path names the reason and the way out."""
         unknown = self.run_installer("--components", "runtime,nope")
         self.assertEqual(unknown.returncode, 2)
         self.assertIn("unknown component: nope", unknown.stderr)
@@ -540,8 +555,9 @@ class StreamedInstallCase(InstallerCase):
 class ComponentMenuTests(StreamedInstallCase):
     """The streamed bootstrap: a menu on the terminal, or an explicit component list."""
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_without_a_terminal_a_streamed_bootstrap_needs_components(self):
-        """installer-contract/R2: no terminal, no list: the bootstrap exits with usage, and never reads stdin."""
+        """Piped bootstrap: no terminal, no list: the bootstrap exits with usage, and never reads stdin."""
         before = snapshot(self.home)
         for arguments in ((), ("--yes",), ("--dry-run",)):
             result = self.stream(*arguments)
@@ -552,8 +568,9 @@ class ComponentMenuTests(StreamedInstallCase):
             self.assertEqual(result.stdout, "")
         self.assertEqual(snapshot(self.home), before)
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_the_default_terminal_is_dev_tty(self):
-        """installer-contract/R2: with no controlling terminal /dev/tty does not open, and the answer is the usage."""
+        """Piped bootstrap: with no controlling terminal /dev/tty does not open, and the answer is the usage."""
         environment = {"HOME": str(self.home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         result = subprocess.run(
             [SHELL, "-s", "--"],
@@ -567,8 +584,9 @@ class ComponentMenuTests(StreamedInstallCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn(b"--components", result.stderr)
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_with_a_terminal_the_menu_is_asked_there_and_not_on_stdin(self):
-        """installer-contract/R2: the menu and its answer are on the terminal; the piped script bytes are no answer."""
+        """Piped bootstrap: the menu and its answer are on the terminal; the piped script bytes are no answer."""
         result = self.stream("--dry-run", answers=["pi"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("1) runtime", result.terminal)
@@ -578,8 +596,9 @@ class ComponentMenuTests(StreamedInstallCase):
         self.assertIn("runtime: required by pi", result.stdout)
         self.assertEqual(snapshot(self.home), {})
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_the_menu_takes_numbers_and_all(self):
-        """installer-contract/R2: numbers and `all` name components too, and the closure is still resolved."""
+        """Piped bootstrap: numbers and `all` name components too, and the closure is still resolved."""
         numbers = self.stream("--dry-run", answers=["2, 5"])
         self.assertEqual(numbers.returncode, 0, numbers.stderr)
         self.assertIn("components: runtime, orchestrator, pi", numbers.stdout)
@@ -587,8 +606,9 @@ class ComponentMenuTests(StreamedInstallCase):
         self.assertEqual(everything.returncode, 0, everything.stderr)
         self.assertIn("components: runtime, orchestrator, claude, codex, pi", everything.stdout)
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_the_menu_can_be_declined_and_a_bad_answer_is_refused(self):
-        """installer-contract/R2: quitting changes nothing, and an answer that is no component is a usage error."""
+        """Piped bootstrap: quitting changes nothing, and an answer that is no component is a usage error."""
         quit_ = self.stream("--dry-run", answers=["q"])
         self.assertEqual(quit_.returncode, 1)
         self.assertIn("nothing was changed", quit_.stderr)
@@ -599,23 +619,26 @@ class ComponentMenuTests(StreamedInstallCase):
         self.assertEqual(empty.returncode, 1)
         self.assertEqual(snapshot(self.home), {})
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_an_explicit_list_never_asks_even_with_a_terminal(self):
-        """installer-contract/R2: --components is the answer: the terminal is left alone."""
+        """Piped bootstrap: --components is the answer: the terminal is left alone."""
         result = self.stream("--components", "runtime,pi", "--dry-run", answers=["all"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("components: runtime, pi", result.stdout)
         self.assertNotIn("1) runtime", result.terminal)
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_a_streamed_bootstrap_without_a_release_is_refused_as_a_usage_error(self):
-        """installer-contract/R2: a stream names no checkout and no release: the way out is to pin one."""
+        """Piped bootstrap: a stream names no checkout and no release: the way out is to pin one."""
         result = self.stream("--components", "runtime", "--yes")
         self.assertEqual(result.returncode, 2)
         self.assertIn("names no release", result.stderr)
         self.assertIn("--release vX.Y.Z", result.stderr)
         self.assertEqual(snapshot(self.home), {})
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_a_local_checkout_run_without_components_never_asks(self):
-        """installer-contract/R2: the original run keeps its output even when a terminal is there to ask on."""
+        """Piped bootstrap: the original run keeps its output even when a terminal is there to ask on."""
         master, slave = pty.openpty()
         try:
             os.write(master, b"pi\n")
@@ -631,8 +654,9 @@ class ComponentMenuTests(StreamedInstallCase):
             os.close(master)
             os.close(slave)
 
+    @pytest.mark.spec("Piped bootstrap")
     def test_s2_what_the_menu_chose_is_confirmed_unless_yes_is_given(self):
-        """installer-contract/R2: the menu path asks before it acts; declining changes nothing, --yes skips the ask."""
+        """Piped bootstrap: the menu path asks before it acts; declining changes nothing, --yes skips the ask."""
         installed = self.run_installer("--components", "runtime,pi")
         self.assertEqual(installed.returncode, 0, installed.stderr)
 
@@ -652,8 +676,9 @@ class ComponentMenuTests(StreamedInstallCase):
         self.assertNotIn("Proceed?", skipped.terminal)
         self.assertNotIn("pi", self.manifest()["components"])
 
+    @pytest.mark.spec("Selective install")
     def test_s1_yes_is_accepted_on_the_headless_path(self):
-        """installer-contract/R1: --yes names the headless run; the result is the same install."""
+        """Selective install: --yes names the headless run; the result is the same install."""
         result = self.run_installer("--yes", "--components", "runtime,pi")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(sorted(self.manifest()["components"]), ["pi", "runtime"])
@@ -664,8 +689,9 @@ class ComponentMenuTests(StreamedInstallCase):
 class DryRunTests(StreamedInstallCase):
     """--dry-run: the plan, and not one change."""
 
+    @pytest.mark.spec("Installer dry run")
     def test_s5_a_dry_run_prints_the_plan_and_changes_nothing(self):
-        """installer-contract/R5: actions, dependencies, versions and paths are printed; the home is untouched."""
+        """Installer dry run: actions, dependencies, versions and paths are printed; the home is untouched."""
         path = self.fake_tools()
         before = snapshot(self.home)
         result = self.run_installer("--components", "pi", "--dry-run", path=path)
@@ -688,8 +714,9 @@ class DryRunTests(StreamedInstallCase):
         self.assertEqual(snapshot(self.home), before)
         self.assertFalse(self.calls.exists())
 
+    @pytest.mark.spec("Installer dry run")
     def test_s5_a_dry_run_leaves_an_existing_home_and_manifest_as_they_were(self):
-        """installer-contract/R5: an existing install and the user's dotfiles are exactly as they were."""
+        """Installer dry run: an existing install and the user's dotfiles are exactly as they were."""
         installed = self.run_installer("--components", "runtime,claude")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         for name in (".claude/settings.json", ".codex/config.toml", ".pi/agent/mcp.json"):
@@ -708,8 +735,9 @@ class DryRunTests(StreamedInstallCase):
             self.assertIn("dry run", result.stdout)
         self.assertEqual(snapshot(self.home), before)
 
+    @pytest.mark.spec("Installer dry run")
     def test_s5_a_dry_run_uninstall_says_what_it_would_remove(self):
-        """installer-contract/R5: the uninstall plan names the recorded files, and removes none of them."""
+        """Installer dry run: the uninstall plan names the recorded files, and removes none of them."""
         self.run_installer("--components", "runtime")
         result = self.run_installer("uninstall", "--components", "runtime", "--dry-run")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -718,8 +746,9 @@ class DryRunTests(StreamedInstallCase):
             self.assertTrue(self.shim(shim).is_symlink(), shim)
         self.assertIn("runtime", self.manifest()["components"])
 
+    @pytest.mark.spec("Installer dry run")
     def test_s5_a_dry_run_refuses_what_the_install_would_refuse(self):
-        """installer-contract/R5: the preview is truthful: a conflict is refused with its reason, and nothing moves."""
+        """Installer dry run: the preview is truthful: a conflict is refused with its reason, and nothing moves."""
         bin_dir = self.home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
         (bin_dir / "agent-runtime").write_text("mine\n", encoding="utf-8")
@@ -732,8 +761,9 @@ class DryRunTests(StreamedInstallCase):
         self.assertEqual(unknown.returncode, 2)
         self.assertEqual(snapshot(self.home), before)
 
+    @pytest.mark.spec("Installer dry run")
     def test_s5_a_streamed_dry_run_has_no_release_yet_and_says_so(self):
-        """installer-contract/R5: a stream carries no payload, so its plan names the release as still to be pinned."""
+        """Installer dry run: a stream carries no payload, so its plan names the release as still to be pinned."""
         result = self.stream("--components", "runtime,orchestrator", "--dry-run")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("components: runtime, orchestrator", result.stdout)
@@ -758,8 +788,9 @@ class MatrixTests(StreamedInstallCase):
             target.write_text("export KEY=the-user-key\n", encoding="utf-8")
         return {"clean": clean, "existing": existing}
 
+    @pytest.mark.spec("Hermetic installer tests")
     def test_s8_every_environment_runs_without_network_credentials_or_a_terminal(self):
-        """installer-contract/R8: clean and existing homes, no terminal, fake tools: install, dry run, usage error."""
+        """Hermetic installer tests: clean and existing homes, no terminal, fake tools: install, dry run, usage error."""
         path = self.fake_tools()
         for kind, home in self.homes().items():
             before = snapshot(home)
@@ -778,8 +809,9 @@ class MatrixTests(StreamedInstallCase):
             self.assertFalse(self.calls.exists(), kind)
             self.assertTrue((home / ".local" / "bin" / "agent-runtime").is_symlink(), kind)
 
+    @pytest.mark.spec("Hermetic installer tests")
     def test_s8_the_failure_paths_of_the_menu_and_the_flags_name_the_way_out(self):
-        """installer-contract/R8: a stream with no terminal, a hostile list, and a flag without its value."""
+        """Hermetic installer tests: a stream with no terminal, a hostile list, and a flag without its value."""
         no_terminal = self.stream("--yes")
         self.assertEqual(no_terminal.returncode, 2)
         self.assertIn("--components", no_terminal.stderr)

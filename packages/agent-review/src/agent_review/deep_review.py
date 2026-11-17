@@ -88,7 +88,7 @@ class ReviewerStopped(Exception):
     what cannot be read cannot be trusted, and both leave an incomplete execution.
 
     A stop is the reviewer's own, so the review records it and the screening it was asked about survives
-    (D20, R10). A caller's input that the invocation cannot use - a fixture directory it cannot write, or an
+    (D20). A caller's input that the invocation cannot use - a fixture directory it cannot write, or an
     answer file it does not hold - is not a stop: it is a `ReviewError` refusal, raised where it happens and
     never recorded as a review that ran.
     """
@@ -335,7 +335,7 @@ class Review:
     # The fired signals nobody disposed of, which leave the review unresolved (D17, P2-D6).
     unresolved: tuple[EscalationReason, ...] = ()
     spawns: int = 1
-    # Why the reviewer never finished, when it did not: the review records its own stop (D20, R10).
+    # Why the reviewer never finished, when it did not: the review records its own stop (D20).
     failure: str | None = None
 
     @property
@@ -435,7 +435,7 @@ class HarnessReviewer:
 
         The prompt never travels as a positional: a family's options can be variadic, and a prompt after them
         is read as another value of theirs. A harness that cannot start, times out or exits nonzero stops the
-        review, and the report records the stop rather than throwing the screening away (D20, R10). The
+        review, and the report records the stop rather than throwing the screening away (D20). The
         answer on stdout is read as JSON here and judged by `review`: output that is not JSON is one more way
         a reviewer fails to answer (D20, S5).
         """
@@ -526,7 +526,7 @@ def review(
     reviewer's choice; the reviewer is spawned once, with the frozen change in hand (D18, D19). A reviewer
     that cannot start, times out, exits nonzero or answers something no review can accept is recorded here
     as the review's own stop and not raised: the screening it was asked about already happened, and what the
-    execution then is belongs to the report that keeps it (D20, R10). A caller's input that cannot be used is
+    execution then is belongs to the report that keeps it (D20). A caller's input that cannot be used is
     refused instead - a `ReviewError` from the seam propagates, so a broken fixture never becomes a review
     that is recorded as having happened.
 
@@ -571,7 +571,7 @@ def _judged(
         return judged(signals, answer_of(reviewer.spawn(request)), bank), None
     except ReviewerStopped as ended:
         # The screening already answered: the review records what stopped it, and the report keeps the
-        # judgments and usage it paid for instead of the invocation refusing with no report (D20, R10).
+        # judgments and usage it paid for instead of the invocation refusing with no report (D20).
         # A caller's broken fixture is not a stop: it raises `ReviewError` and refuses the run untouched.
         # Nothing it answered is kept - what cannot be read is not evidence - and every signal it left is
         # unresolved, so no signal is silently read as dismissed (D15, D17).

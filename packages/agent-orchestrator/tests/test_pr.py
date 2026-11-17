@@ -45,7 +45,7 @@ class PrFixture(GateFixture):
 
 class DraftTests(PrFixture, unittest.TestCase):
     def test_S20_the_first_report_leaves_a_draft_pr_and_its_checks_are_polled_during_review(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S20"""
+        """orchestrate-lean-loop/S20"""
         self.born_ready()  # the worker opened it ready for review: the driver turns it back into a draft
         self.prs(["OPEN", "MERGED"])
         self.waits(
@@ -63,13 +63,13 @@ class DraftTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.task()["status"], "COMPLETE")
 
     def test_S20_a_pr_that_is_already_a_draft_is_left_alone(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S20"""
+        """orchestrate-lean-loop/S20"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertNotIn(["pr", "ready", PR, "--undo"], self.gh_calls("pr", "ready"))
 
     def test_S20_gh_pr_ready_runs_after_the_last_review_passes_with_green_checks(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S20"""
+        """orchestrate-lean-loop/S20"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -91,7 +91,7 @@ class DraftTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
     def test_S20_a_unit_that_never_passes_review_is_never_marked_ready(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S20"""
+        """orchestrate-lean-loop/S20"""
         block = self.review(verdict="block", major=[MAJOR])
         self.waits(
             [
@@ -118,7 +118,7 @@ class DraftTests(PrFixture, unittest.TestCase):
 
 class ChecksTests(PrFixture, unittest.TestCase):
     def test_S21_no_checks_yet_and_running_checks_are_polled_again_without_a_fix_round(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S21"""
+        """orchestrate-lean-loop/S21"""
         self.checks(["none", "pending", "none", "pending", "green"])
         self.waits(
             [self.worker_done(tests=True), self.reviewer_done(), self.working(), self.working()]
@@ -135,7 +135,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.task()["status"], "COMPLETE")
 
     def test_S21_a_failed_check_after_the_review_is_a_ci_fix_round_with_the_failed_log(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S21"""
+        """orchestrate-lean-loop/S21"""
         self.checks([("fail", "unit tests"), "green"])
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
@@ -150,6 +150,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertIn("FAILED STEP LOG TAIL for run 77", item["excerpt"])
         self.assertEqual(self.gh_calls("run", "view")[0], ["run", "view", "77", "--log-failed"])
 
+    @pytest.mark.spec("A pending CI log is not a finding")
     def test_S4_a_failing_check_whose_run_is_in_progress_stays_pending_until_its_log_is_readable(
         self,
     ):
@@ -190,6 +191,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
         self.assertNotIn("still in progress", excerpt)
         self.assertNotIn("still in progress", json.dumps(findings))
 
+    @pytest.mark.spec("A pending CI log is not a finding")
     def test_S4_a_readable_failed_log_that_quotes_the_placeholder_is_not_a_placeholder(self):
         """driver-invariants/S4"""
         # A readable log that merely mentions the sentence must escalate: only the answer itself is the placeholder.
@@ -210,9 +212,8 @@ class ChecksTests(PrFixture, unittest.TestCase):
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
         self.assertIn("assert 1 == 2", findings["items"][0]["excerpt"])
 
+    @pytest.mark.spec("CI findings are capped per job")
     def test_S10_several_failing_checks_with_long_logs_carry_only_their_own_capped_excerpt(self):
-        """orchestrator-engine/R37"""
-
         def job(name, marker):
             return "\n".join(
                 "%s\tRun step\t2026-11-10T10:00:00Z %s line %d" % (name, marker, number)
@@ -255,7 +256,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
             self.assertNotIn(other, full)
 
     def test_S21_a_second_unit_goes_on_while_the_first_waits_for_its_checks(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S21"""
+        """orchestrate-lean-loop/S21"""
         self.set_plan(("T1", "T3"))
         self.checks(["pending"], pr=7)
         self.checks(["green"], pr=9)
@@ -283,7 +284,7 @@ class ChecksTests(PrFixture, unittest.TestCase):
 
 class SlotTests(PrFixture, unittest.TestCase):
     def test_S22_a_unit_waiting_for_merge_does_not_count_toward_max_workers(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S22"""
+        """orchestrate-lean-loop/S22"""
         self.set_plan(("T1", "T3"))
         self.prs(["OPEN"])
         blocked = report_wait("demo-t3", "blocked", text="stop here")
@@ -316,7 +317,7 @@ class SlotTests(PrFixture, unittest.TestCase):
         )
 
     def test_S22_a_unit_still_in_review_holds_its_slot(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S22"""
+        """orchestrate-lean-loop/S22"""
         self.set_plan(("T1", "T3"))
         self.waits(
             [
@@ -332,8 +333,9 @@ class BranchTests(PrFixture, unittest.TestCase):
     BEHIND = {"state": "OPEN", "mergeStateStatus": "BEHIND", "mergeable": "MERGEABLE"}
     DIRTY = {"state": "OPEN", "mergeStateStatus": "DIRTY", "mergeable": "CONFLICTING"}
 
+    @pytest.mark.spec("A pull request that is behind is updated")
     def test_S23_a_pr_behind_base_is_updated_and_needs_no_review(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S23"""
+        """orchestrate-lean-loop/S23"""
         self.prs([self.BEHIND, "OPEN", "MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
@@ -344,8 +346,9 @@ class BranchTests(PrFixture, unittest.TestCase):
         self.assertEqual([e["outcome"] for e in self.run_events("update-branch")], ["updated"])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S23_a_conflict_gives_a_fresh_worker_a_rebase_task_then_a_delta_re_review(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S23"""
+        """orchestrate-lean-loop/S23"""
         self.updates(
             [[1, "GraphQL: Cannot update PR branch due to conflicts (updatePullRequestBranch)"]]
         )
@@ -375,8 +378,9 @@ class BranchTests(PrFixture, unittest.TestCase):
         self.assertIn("This is a re-review", re_review)
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S23_a_conflict_past_the_fix_round_cap_goes_to_the_lead(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S23"""
+        """orchestrate-lean-loop/S23"""
         self.updates([[1, "Cannot update PR branch due to conflicts"]])
         self.prs([self.BEHIND, self.DIRTY])
         self.waits([self.worker_done(tests=True), self.reviewer_done(), self.skipped()])
@@ -413,10 +417,11 @@ class MergeStateTests(PrFixture, unittest.TestCase):
     def ready_calls(self):
         return [argv[3:] for argv in self.gh_calls("pr", "ready")]
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S1_a_pr_that_conflicts_while_it_waits_for_its_merge_goes_back_to_draft_and_is_rebased(
         self,
     ):
-        """orchestrator-engine/R23: orchestrator-pr-merge-state/S1"""
+        """orchestrator-pr-merge-state/S1"""
         self.prs([self.DIRTY, "MERGED"])  # main moved once the PR was ready
         self.waits([self.worker_done(tests=True), self.reviewer_done(), *self.rebased()])
         self.run_driver()
@@ -439,8 +444,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual([e["source"] for e in self.run_events("round")], ["conflict"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S2_a_conflicting_draft_at_ready_for_ci_is_never_readied_before_its_rebase(self):
-        """orchestrator-engine/R24: orchestrator-pr-merge-state/S2"""
+        """orchestrator-pr-merge-state/S2"""
         self.prs(["MERGED"])
         rebased, again = self.rebased()
         self.flip(rebased, "view-draft.json", ["OPEN"])  # the rebase cleared the conflict
@@ -460,10 +466,11 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual([e["source"] for e in self.run_events("round")], ["conflict"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
+    @pytest.mark.spec("A pull request that is behind is updated")
     def test_S3_a_pr_behind_while_it_waits_is_updated_stays_ready_and_wakes_again_on_its_new_head(
         self,
     ):
-        """orchestrator-engine/R25: orchestrator-pr-merge-state/S3"""
+        """orchestrator-pr-merge-state/S3"""
         self.prs(
             [
                 self.at(self.OPEN, "a"),
@@ -484,8 +491,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(keys, ["t1:abc1234", "t1:" + "b" * 40])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
+    @pytest.mark.spec("A pull request that is behind is updated")
     def test_S4_an_unknown_merge_state_is_polled_again_with_no_action(self):
-        """orchestrator-engine/R26: orchestrator-pr-merge-state/S4"""
+        """orchestrator-pr-merge-state/S4"""
         self.prs([self.UNKNOWN, self.UNKNOWN, "MERGED"])
         self.waits(
             [
@@ -500,8 +508,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(len([w for w in self.wakes() if w["kind"] == "pr-ready"]), 1)
         self.assertEqual(self.task()["status"], "COMPLETE")
 
+    @pytest.mark.spec("Red checks while waiting for the merge")
     def test_S5_red_checks_while_it_waits_are_a_ci_fix_round_on_a_draft(self):
-        """orchestrator-engine/R27: orchestrator-pr-merge-state/S5"""
+        """orchestrator-pr-merge-state/S5"""
         self.prs([self.OPEN])  # the last repeats: the merge waits for the second readiness below
         self.checks([("fail", "unit tests"), "green"], ready=True)
         fixed = self.worker_done("t1r1")
@@ -522,8 +531,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(findings["items"][0]["check"], "unit tests")
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
+    @pytest.mark.spec("Red checks while waiting for the merge")
     def test_S6_a_blocked_unstable_or_hooked_pr_keeps_waiting_with_no_gh_change(self):
-        """orchestrator-engine/R28: orchestrator-pr-merge-state/S6"""
+        """orchestrator-pr-merge-state/S6"""
         waiting = [
             dict(self.OPEN, mergeStateStatus=s) for s in ("BLOCKED", "UNSTABLE", "HAS_HOOKS")
         ]
@@ -537,8 +547,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual([e for e in self.run_events("idle") if e.get("unit") == "t1"], [])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
+    @pytest.mark.spec("Red checks while waiting for the merge")
     def test_S7_a_merge_wins_over_a_conflict_and_red_checks(self):
-        """orchestrator-engine/R29: orchestrator-pr-merge-state/S7"""
+        """orchestrator-pr-merge-state/S7"""
         self.prs([dict(self.DIRTY, state="MERGED", mergeCommit={"oid": "f" * 40})])
         self.checks(["fail"], ready=True)
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
@@ -547,8 +558,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.ready_calls(), [[]])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S9_a_failed_draft_undo_holds_the_fix_worker_until_it_succeeds(self):
-        """orchestrator-engine/R31: orchestrator-pr-merge-state/S9"""
+        """orchestrator-pr-merge-state/S9"""
         self.prs([self.DIRTY])  # merged only after the re-review below
         self.undos([[1, "HTTP 502"], [1, "HTTP 502"], [0, ""]])
         rebased, again = self.rebased()
@@ -566,8 +578,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.unit_spawned(), ["demo-t1", "demo-t1-review", "demo-t1"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S10_an_update_branch_failure_that_is_no_conflict_goes_to_the_lead(self):
-        """orchestrator-engine/R32: orchestrator-pr-merge-state/S10"""
+        """orchestrator-pr-merge-state/S10"""
         self.updates([[1, "HTTP 403: Resource not accessible by integration"]])
         self.prs([self.BEHIND, self.OPEN])
         self.waits([self.worker_done(tests=True), self.reviewer_done(), self.skipped()])
@@ -579,8 +592,9 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.run_events("round"), [])
         self.assertEqual([e["outcome"] for e in self.run_events("update-branch")], ["failed"])
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S11_a_conflict_past_the_cap_goes_to_the_lead_and_leaves_the_pr_a_draft(self):
-        """orchestrator-engine/R33: orchestrator-pr-merge-state/S11"""
+        """orchestrator-pr-merge-state/S11"""
         self.prs([self.DIRTY])
         self.waits([self.worker_done(tests=True), self.reviewer_done(), self.skipped()])
         self.run_driver("--max-fix-rounds", "0")
@@ -590,8 +604,8 @@ class MergeStateTests(PrFixture, unittest.TestCase):
 
 
 class EarlyMergeTests(PrFixture, unittest.TestCase):
+    @pytest.mark.spec("A merged unit completes")
     def test_S7a_a_merged_early_ledger_task_keeps_the_checks_of_the_stored_report(self):
-        """orchestrator-engine/R33"""
         check = {"command": "pytest", "outcome": "passed"}
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
         self.waits(
@@ -608,7 +622,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["report"]["checks"], [check])
 
     def test_S24_a_merge_during_a_fix_round_completes_the_unit_and_defers_its_open_findings(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S24"""
+        """orchestrate-lean-loop/S24"""
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
         self.waits(
             [
@@ -630,7 +644,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.gh_calls("pr", "ready"), [])
 
     def test_S24_a_merge_while_the_reviewer_works_completes_the_unit_and_stops_both_panes(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S24"""
+        """orchestrate-lean-loop/S24"""
         merged = self.flip(
             self.working("demo-t1-review", id=spawn_id("demo-t1-review")),
             "view-early.json",
@@ -645,10 +659,10 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         self.assertFalse((self.run_dir / "deferred.md").exists())  # nothing was open
         self.assertEqual(self.gh_calls("pr", "update-branch"), [])
 
+    @pytest.mark.spec("A merged unit completes")
     def test_S7_a_merge_on_a_drive_with_a_named_gate_completes_the_unit_as_a_merged_unverified_one(
         self,
     ):
-        """orchestrator-engine/R32"""
         self.set_plan(("T1", "T2"))
         # The report omits the gate, so the report-time refusal sends t1 into a fix round before the merge.
         merged = self.flip(self.working(id=resume_id("demo-t1")), "view-early.json", ["MERGED"])
@@ -668,7 +682,7 @@ class EarlyMergeTests(PrFixture, unittest.TestCase):
         self.assertIn("demo-t2", self.spawned())
 
     def test_S24_a_merge_while_a_request_is_open_resolves_it_and_completes_the_unit(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S24"""
+        """orchestrate-lean-loop/S24"""
         merged = self.flip(self.working(), "view-early.json", ["MERGED"])
         self.waits(
             [
@@ -693,16 +707,18 @@ class IdleTests(PrFixture, unittest.TestCase):
     def idle_events(self):
         return [e for e in self.run_events("idle") if e.get("unit")]
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S6_a_unit_whose_agent_shows_nothing_new_since_the_last_tick_is_logged_idle(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S6"""
+        """orchestrate-lean-loop/S6"""
         self.waits([self.working(), self.working()])
         self.run_driver("--idle-minutes", "0")
         rows = self.idle_events()
         self.assertEqual([(e["unit"], e["waiting"]) for e in rows], [("t1", "agent")])
         self.assertEqual(self.wake_lines("decision"), [])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S6_the_same_unit_idle_at_two_consecutive_ticks_writes_a_decision_wake(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S6"""
+        """orchestrate-lean-loop/S6"""
         self.waits([self.working(), self.working(), self.working(), self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0")
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
@@ -712,22 +728,22 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertIn("idle", lines[0])
         self.assertEqual(self.request()["event"], "idle")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S8_a_unit_whose_agent_the_runtime_reports_working_is_left_alone(self):
-        """orchestrator-engine/R32"""
         self.waits([self.working(runtime_state="working")] * 5)
         self.run_driver("--idle-minutes", "0")
         self.assertEqual(self.idle_events(), [])
         self.assertEqual(self.wake_lines("decision"), [])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S8_a_unit_working_past_working_minutes_is_asked_with_how_long(self):
-        """orchestrator-engine/R32"""
         self.waits([self.working(runtime_state="working")] * 4 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0", "--working-minutes", "0")
         self.assertEqual(self.request()["event"], "idle")
         self.assertIn("working for", self.wake_lines("decision")[0])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S8_a_working_agent_is_left_alone_until_working_minutes_have_passed(self):
-        """orchestrator-engine/R32"""
         spec = load_script()
         moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
         self.waits([self.working(runtime_state="working")] * 6 + [self.decide_step("t1", "skip")])
@@ -738,8 +754,9 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertIn("working for 50 minutes", text)
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window(self):
-        """orchestrator-engine/R60, orchestrator-engine/R68"""
+        ""","""
         spec = load_script()
         moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
         self.waits(
@@ -762,8 +779,9 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual(len(idle), 1, idle)
         self.assertIn("working for 50 minutes", idle[0])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it(self):
-        """orchestrator-engine/R60, orchestrator-engine/R69"""
+        ""","""
         spec = load_script()
         args = argparse.Namespace(
             plan=str(self.plan),
@@ -777,15 +795,16 @@ class IdleTests(PrFixture, unittest.TestCase):
         restarted = spec.Driver(args)
         self.assertEqual(restarted.working_since, {}, "a restarted drive kept the old window")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S8a_an_agent_not_reported_working_is_asked_at_two_ticks_as_today(self):
-        """orchestrator-engine/R33"""
         self.waits([self.working()] * 3 + [self.decide_step("t1", "skip")])
         self.run_driver("--idle-minutes", "0")
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 2])
         self.assertEqual(self.request()["event"], "idle")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S6_a_new_state_between_ticks_resets_the_count(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S6"""
+        """orchestrate-lean-loop/S6"""
         self.waits(
             [
                 self.working(),
@@ -798,8 +817,9 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([e["ticks"] for e in self.idle_events()], [1, 1])
         self.assertEqual(self.wake_lines("decision"), [])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S6_ci_that_shows_no_progress_is_idle_and_wakes_the_lead_at_two_ticks(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S6"""
+        """orchestrate-lean-loop/S6"""
         self.checks(["pending"])
         self.waits(
             [
@@ -816,8 +836,9 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual([(e["waiting"], e["ticks"]) for e in rows], [("ci", 1), ("ci", 2)])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S14_a_unit_waiting_for_its_merge_is_never_idle(self):
-        """orchestrator-engine/R15: orchestrator-lead-alerts/S8 — and R62: orchestrator-silent-idle/S14"""
+        """orchestrator-lead-alerts/S8 — and One idle watchdog: orchestrator-silent-idle/S14"""
         self.prs(["OPEN"])
         self.waits(
             [
@@ -836,8 +857,9 @@ class IdleTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.wake_lines("decision"), [])
         self.assertEqual(self.task("t1")["status"], "COMPLETE")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S6_the_default_tick_is_ten_minutes(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S6"""
+        """orchestrate-lean-loop/S6"""
         self.waits([self.working(), self.working(), self.working()])
         self.run_driver()
         self.assertEqual(self.idle_events(), [])

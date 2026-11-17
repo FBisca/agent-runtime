@@ -118,6 +118,7 @@ class InvariantFixture(GateFixture):
 
 
 class S1PayloadTests(InvariantFixture, unittest.TestCase):
+    @pytest.mark.spec("A refused report goes back to its sender")
     def test_S1_a_malformed_report_is_refused_and_the_drive_reaches_finish(self):
         """A prose check outcome is refused to the sender: the drive keeps its errors empty and finishes."""
         # The refusal goes back to the sender, which writes a report the driver accepts; the unit then converges,
@@ -143,6 +144,7 @@ class S1PayloadTests(InvariantFixture, unittest.TestCase):
 
 
 class S1ControlTests(InvariantFixture, unittest.TestCase):
+    @pytest.mark.spec("A refused report goes back to its sender")
     def test_S1_control_a_well_formed_report_is_gated_as_before(self):
         """A report that meets the COMPLETE rules still converges and reaches its review."""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
@@ -153,6 +155,7 @@ class S1ControlTests(InvariantFixture, unittest.TestCase):
 
 
 class S2LedgerTests(InvariantFixture, unittest.TestCase):
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_the_ledger_refuses_the_states_that_stalled_the_run(self):
         """Two attempts naming one review file, and an unknown gate, are each refused by name."""
         shared = {
@@ -178,6 +181,7 @@ class S2LedgerTests(InvariantFixture, unittest.TestCase):
                 self.assertIn(invariant, result.stderr)
                 self.assertIn("way_out", result.stderr)
 
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_control_a_finished_run_leaves_a_coherent_ledger(self):
         """What the driver itself writes is coherent: one file per open review."""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
@@ -224,6 +228,7 @@ class S3ReviewWriteOnceTests(InvariantFixture, unittest.TestCase):
             }
         )
 
+    @pytest.mark.spec("A reworked unit writes a new review")
     def test_S3_a_rework_writes_the_next_review_and_the_earlier_review_keeps_its_id(self):
         """After an answer the drive allocates the next review file; the first review and U1 stay readable."""
         self.run_driver("--max-fix-rounds", "0")
@@ -236,6 +241,7 @@ class S3ReviewWriteOnceTests(InvariantFixture, unittest.TestCase):
 
 
 class S4CiPendingTests(InvariantFixture, unittest.TestCase):
+    @pytest.mark.spec("A pending CI log is not a finding")
     def test_S4_a_failing_check_whose_run_still_runs_stays_pending_and_quotes_the_real_log(self):
         """The placeholder is not evidence: the drive polls until the failing step's log is readable."""
         (self.home / "run-view.json").write_text(
@@ -258,6 +264,7 @@ class S4CiPendingTests(InvariantFixture, unittest.TestCase):
 
 
 class S4ControlTests(InvariantFixture, unittest.TestCase):
+    @pytest.mark.spec("A pending CI log is not a finding")
     def test_S4_control_a_readable_failed_log_escalates_at_once(self):
         """A failure whose log is readable is asked immediately, as it is today."""
         self.checks(["fail"], ready=True)

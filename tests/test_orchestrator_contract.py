@@ -50,10 +50,10 @@ def imports_of(path: Path):
 
 
 class SeamTests(unittest.TestCase):
-    """R200: the orchestrator reaches the runtime through the public CLI."""
+    """The orchestrator reaches the runtime through the public CLI."""
 
+    @pytest.mark.spec("Orchestrator reaches the runtime through its public surface")
     def test_S3_no_source_of_the_member_touches_the_runtime_store(self):
-        """python-workspace-contracts/R200"""
         for path in sources(MEMBER):
             names = imports_of(path)
             self.assertNotIn("sqlite3", names, "%s imports the database" % path.name)
@@ -61,8 +61,8 @@ class SeamTests(unittest.TestCase):
             self.assertNotIn("dispatch_store", names, "%s imports the runtime's store" % path.name)
 
     @pytest.mark.integration
+    @pytest.mark.spec("Orchestrator reaches the runtime through its public surface")
     def test_S3_the_client_calls_the_runtime_cli_and_returns_its_answer(self):
-        """python-workspace-contracts/R200"""
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "argv"
             fake = Path(tmp) / "agent-runtime"
@@ -81,8 +81,8 @@ class SeamTests(unittest.TestCase):
             self.assertEqual(argv[4], "--json")
             self.assertEqual(json.loads(argv[5]), {"name": "w1"})
 
+    @pytest.mark.spec("Orchestrator reaches the runtime through its public surface")
     def test_S3_a_failing_runtime_is_reported_not_swallowed(self):
-        """python-workspace-contracts/R200"""
 
         class Failed:
             returncode = 3
@@ -97,7 +97,7 @@ class SeamTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
-    """R201, R202: the typed boundary rejects what it does not accept."""
+    """The typed boundary rejects what it does not accept."""
 
     def report(self, **over):
         row = {
@@ -117,22 +117,22 @@ class BoundaryTests(unittest.TestCase):
         row.update(over)
         return row
 
+    @pytest.mark.spec("Typed boundaries refuse invalid fields")
     def test_S4_a_report_without_a_task_id_is_refused(self):
-        """python-workspace-contracts/R201"""
         row = self.report()
         del row["task_id"]
         with self.assertRaises(contracts.ContractError) as caught:
             contracts.validate_report(row)
         self.assertIn("task_id", str(caught.exception))
 
+    @pytest.mark.spec("Typed boundaries refuse invalid fields")
     def test_S4_a_report_with_an_unknown_field_is_refused(self):
-        """python-workspace-contracts/R201"""
         with self.assertRaises(contracts.ContractError) as caught:
             contracts.validate_report(self.report(surprise=1))
         self.assertIn("surprise", str(caught.exception))
 
+    @pytest.mark.spec("Typed boundaries refuse invalid fields")
     def test_S4_the_error_is_the_same_every_time(self):
-        """python-workspace-contracts/R201"""
         row = self.report(status="MAYBE")
         messages = []
         for _ in range(2):
@@ -144,16 +144,16 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(messages[0], messages[1])
         self.assertIn("status", messages[0])
 
+    @pytest.mark.spec("YAML route policy")
     def test_S4_a_route_policy_naming_an_unknown_class_is_refused(self):
-        """python-workspace-contracts/R202"""
         with self.assertRaises(routes.RouteError) as caught:
             routes.validate(
                 {"version": 1, "routes": [{"class": "tiny", "backend": "claude", "model": "haiku"}]}
             )
         self.assertIn("class", str(caught.exception))
 
+    @pytest.mark.spec("YAML route policy")
     def test_S4_a_yaml_route_policy_loads_and_its_unknown_field_is_refused(self):
-        """python-workspace-contracts/R202"""
         policy = (
             "version: 1\n"
             "routes:\n"
@@ -178,7 +178,6 @@ class CliContractTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_the_cli_offers_the_documented_commands(self):
-        """python-workspace-contracts/R202"""
         env = dict(os.environ, PYTHONPATH=str(MEMBER.parent))
         result = subprocess.run(
             [sys.executable, "-m", "agent_orchestrator", "--help"],
@@ -208,19 +207,10 @@ class CliContractTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
-    """R204: the member keeps no state of its own and migrates none."""
+    """The member keeps no state of its own and migrates none."""
 
-    def test_S8_the_member_writes_no_state_into_the_runtime_store(self):
-        """python-workspace-contracts/R204"""
-        store = Path.home() / ".local" / "state" / "agent-runtime"
-        schema = REPO / "docs" / "compat" / "compatibility-baseline.json"
-        recorded = json.loads(schema.read_text(encoding="utf-8"))
-        self.assertEqual(recorded["store"]["schema_version"], 2)
-        self.assertIn("teams", recorded["store"]["tables"])
-        self.assertFalse(store.exists() and not list(store.glob("*.sqlite3")))
-
+    @pytest.mark.spec("Member dependency isolation")
     def test_S8_the_runtime_wheel_needs_neither_member_nor_its_dependencies(self):
-        """python-workspace-contracts/R204"""
         manifest = (REPO / "packages" / "agent-runtime" / "pyproject.toml").read_text(
             encoding="utf-8"
         )

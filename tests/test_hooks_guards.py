@@ -48,22 +48,22 @@ def run(script, payload, *args):
 
 
 class SubagentToolTests(unittest.TestCase):
+    @pytest.mark.spec("Subagent runtime limits")
     def test_S16_subagent_is_denied_the_five_mutating_tools(self):
-        """agent-runtime-tools/S16"""
         for name in ("spawn", "message", "resume", "stop", "report"):
             out = run(PRE, {"tool_name": TOOL + name, "tool_input": {}, "agent_id": "sub-1"})
             self.assertTrue(denied(out), name)
 
+    @pytest.mark.spec("Subagent runtime limits")
     def test_S16_main_agent_may_call_mutating_tools_and_subagent_may_read(self):
-        """agent-runtime-tools/S16"""
         self.assertIsNone(run(PRE, {"tool_name": TOOL + "spawn", "tool_input": {}}))
         for name in ("status", "list", "collect"):
             self.assertIsNone(
                 run(PRE, {"tool_name": TOOL + name, "tool_input": {}, "agent_id": "sub-1"}), name
             )
 
+    @pytest.mark.spec("Subagent runtime limits")
     def test_S16_subagent_start_notice_names_the_rule(self):
-        """agent-runtime-tools/S16"""
         out = run(START, {})
         ctx = out["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SubagentStart")
@@ -75,9 +75,8 @@ CODEX = "mcp__agent-runtime__"
 
 
 class NativeChildGuardTests(unittest.TestCase):
+    @pytest.mark.spec("Subagent runtime limits")
     def test_native_children_cannot_mutate_tasks_or_ack_receipts_on_either_client(self):
-        """agent-runtime/R48
-        agent-runtime-dispatch/S15"""
         for prefix, extra in ((TOOL, ()), (CODEX, ("--cli", "codex"))):
 
             def child(name, arguments=None):
@@ -109,8 +108,8 @@ class NativeChildGuardTests(unittest.TestCase):
                 prefix,
             )
 
+    @pytest.mark.spec("Subagent runtime limits")
     def test_native_children_cannot_wait_or_address_an_assignment(self):
-        """agent-runtime/R74"""
         for prefix, extra in ((TOOL, ()), (CODEX, ("--cli", "codex"))):
 
             def child(name, arguments=None):
@@ -146,8 +145,8 @@ class NativeChildGuardTests(unittest.TestCase):
                 prefix,
             )
 
+    @pytest.mark.spec("Subagent runtime limits")
     def test_string_tool_input_is_parsed_and_unparseable_input_is_denied_for_children(self):
-        """agent-runtime/R74"""
         for prefix, extra in ((CODEX, ("--cli", "codex")), (TOOL, ())):
 
             def child(raw):
@@ -171,8 +170,8 @@ class NativeChildGuardTests(unittest.TestCase):
             main = {"tool_name": prefix + "status", "tool_input": "not json"}
             self.assertIsNone(run(PRE, main, *extra), prefix)
 
+    @pytest.mark.spec("Subagent runtime limits")
     def test_subagent_string_input_that_is_not_an_object_is_denied_but_a_lead_passes(self):
-        """agent-runtime/R89"""
         for prefix, extra in ((CODEX, ("--cli", "codex")), (TOOL, ())):
             for raw in ("not json", "[1]", '"text"', "42", "null", ""):
                 sub = {
@@ -191,23 +190,22 @@ class NativeChildGuardTests(unittest.TestCase):
                     (prefix, raw),
                 )
 
+    @pytest.mark.spec("Hook input errors allow")
     def test_stdin_that_is_not_json_emits_no_decision_and_exits_zero(self):
-        """agent-runtime/R90"""
         for extra in ((), ("--cli", "codex")):
             for raw in ("not json", "", "{", "[]", "null", "42"):
                 code, out = run_pre_raw(raw, extra)
                 self.assertEqual((code, out.strip()), (0, ""), (extra, raw))
 
+    @pytest.mark.spec("Subagent runtime limits")
     def test_subagent_start_notice_names_allowed_reads(self):
-        """agent-runtime/R74"""
         ctx = run(START, {})["hookSpecificOutput"]["additionalContext"]
         self.assertIn("wait", ctx)
         self.assertIn("assignment_id", ctx)
         self.assertIn("task list", ctx)
 
+    @pytest.mark.spec("Subagent runtime limits")
     def test_codex_bash_guard_remains_and_unrelated_mcp_servers_are_ignored(self):
-        """agent-runtime/R48
-        agent-runtime-dispatch/S15"""
         self.assertTrue(denied(run(PRE, bash("hc kill w", agent_id="sub-1"), "--cli", "codex")))
         other = {
             "tool_name": "mcp__other__task",
@@ -218,16 +216,16 @@ class NativeChildGuardTests(unittest.TestCase):
 
 
 class RawHcTests(unittest.TestCase):
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_mutating_hc_is_denied_for_every_caller(self):
-        """agent-runtime-tools/S17"""
         for sub in ("run --bg x", "send w hi", "kill w", "rm w", "file write f", "file edit f"):
             for extra in ({}, {"agent_id": "sub-1"}):
                 out = run(PRE, bash("hc " + sub, **extra))
                 self.assertTrue(denied(out), (sub, extra))
                 self.assertIn(DENY_TEXT, out["hookSpecificOutput"]["permissionDecisionReason"])
 
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_keys_and_interrupt_ask_the_main_agent_and_deny_subagents(self):
-        """agent-runtime-tools/S17"""
         for sub in ("keys w enter", "interrupt w"):
             out = run(PRE, bash("hc " + sub))["hookSpecificOutput"]
             self.assertEqual(out["permissionDecision"], "ask", sub)
@@ -238,8 +236,8 @@ class RawHcTests(unittest.TestCase):
         )
         self.assertTrue(denied(run(PRE, bash("hc keys w enter; hc kill w"))))
 
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_command_substitutions_are_inspected(self):
-        """agent-runtime-tools/S17"""
         for command in (
             "echo `hc kill w`",
             'echo "$(hc send w hi)"',
@@ -250,15 +248,15 @@ class RawHcTests(unittest.TestCase):
             self.assertTrue(denied(run(PRE, bash(command))), command)
         self.assertIsNone(run(PRE, bash("echo $(hc get w) `hc ls`")))
 
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_unparseable_or_non_string_commands_mentioning_hc_are_denied(self):
-        """agent-runtime-tools/S17"""
         for command in ("hc send w 'unterminated", ["hc", "kill", "w"], {"cmd": "hc kill w"}):
             self.assertTrue(denied(run(PRE, bash(command))), command)
         self.assertIsNone(run(PRE, bash("echo 'unterminated")))
         self.assertIsNone(run(PRE, bash(["ls"])))
 
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_reads_stay_allowed(self):
-        """agent-runtime-tools/S17"""
         for command in (
             "hc get w",
             "hc ls",
@@ -271,8 +269,8 @@ class RawHcTests(unittest.TestCase):
         ):
             self.assertIsNone(run(PRE, bash(command)), command)
 
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_wrapped_and_nested_forms_are_denied(self):
-        """agent-runtime-tools/S17"""
         for command in (
             "FOO=1 hc send w hi",
             "timeout 5 hc kill w",
@@ -291,8 +289,8 @@ class RawHcTests(unittest.TestCase):
         ):
             self.assertTrue(denied(run(PRE, bash(command))), command)
 
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_codex_payload_is_supported_and_ignores_other_tools(self):
-        """agent-runtime-tools/S17"""
         self.assertTrue(denied(run(PRE, bash("hc send w hi"), "--cli", "codex")))
         self.assertIsNone(
             run(
@@ -304,8 +302,9 @@ class RawHcTests(unittest.TestCase):
         )
         self.assertIsNone(run(PRE, bash("hc get w"), "--cli", "codex"))
 
+    @pytest.mark.spec("Raw hc guard")
     def test_S17_garbage_input_does_not_deny(self):
-        """agent-runtime-tools/S17; S13: the hook's one process boundary for its input handling"""
+        """S13: the hook's one process boundary for its input handling"""
         done = subprocess.run(
             [sys.executable, "-B", str(PRE)], input="not json", capture_output=True, text=True
         )
@@ -313,8 +312,8 @@ class RawHcTests(unittest.TestCase):
 
 
 class CallCliTests(unittest.TestCase):
+    @pytest.mark.spec("Call guard")
     def test_S6_subagent_is_denied_agent_runtime_call_through_bash(self):
-        """agent-runtime/R155"""
         for command in (
             'agent-runtime call wait --json \'{"target":"all"}\'',
             "agent-runtime call spawn --lead L1 --json '{}'",
@@ -330,8 +329,8 @@ class CallCliTests(unittest.TestCase):
         ):
             self.assertTrue(denied(run(PRE, bash(command, agent_id="sub-1"))), command)
 
+    @pytest.mark.spec("Call guard")
     def test_S6_subagent_is_denied_the_entrypoint_run_by_path_or_python(self):
-        """agent-runtime/R155"""
         for command in (
             "python3 server/agent_runtime.py call wait --json '{}'",
             "python3 -B /x/server/agent_runtime.py call spawn --json '{}'",
@@ -340,8 +339,8 @@ class CallCliTests(unittest.TestCase):
             self.assertTrue(denied(run(PRE, bash(command, agent_id="sub-1"))), command)
         self.assertIsNone(run(PRE, bash("python3 other.py call wait", agent_id="sub-1")))
 
+    @pytest.mark.spec("Call guard")
     def test_S6_hook_reads_call_arguments_the_way_the_cli_parser_does(self):
-        """agent-runtime/R155"""
         sys.path.insert(0, str(HOOKS))
         import pre_tool_use
 
@@ -368,8 +367,8 @@ class CallCliTests(unittest.TestCase):
                         (hook.tool, hook.lead, hook.json), (cli.tool, cli.lead, cli.json)
                     )
 
+    @pytest.mark.spec("Call guard")
     def test_S6_non_subagent_is_asked_on_mutating_tools_only(self):
-        """agent-runtime/R155"""
         for tool in ("spawn", "message", "resume", "stop", "report"):
             out = run(PRE, bash("agent-runtime call %s --lead L1 --json '{}'" % tool))
             self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "ask", tool)
@@ -398,7 +397,6 @@ class CallCliTests(unittest.TestCase):
 
 class WiringTests(unittest.TestCase):
     def test_S18_hooks_json_registers_both_hooks_through_plugin_root(self):
-        """agent-runtime-tools/S18"""
         hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
         pre = hooks["PreToolUse"]
         matchers = {entry["matcher"] for entry in pre}

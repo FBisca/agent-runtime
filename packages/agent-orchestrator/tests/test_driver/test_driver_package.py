@@ -64,6 +64,7 @@ def defined_names(source):
 class FacadeTests(unittest.TestCase):
     """S22: every name the package's modules define is still reachable as `driver.<name>`."""
 
+    @pytest.mark.spec("Driver facade and entry points")
     def test_S22_every_public_name_the_package_modules_define_is_reachable_on_the_package(self):
         from agent_orchestrator import driver
 
@@ -90,6 +91,7 @@ class FacadeTests(unittest.TestCase):
             "the facade does not publish names the modules define: %s" % where(unpublished),
         )
 
+    @pytest.mark.spec("Driver facade and entry points")
     def test_S22_no_module_of_the_package_takes_the_name_of_a_published_one(self):
         from agent_orchestrator import driver
 
@@ -104,6 +106,7 @@ class RecordTests(unittest.TestCase):
     """S13: a ledger written before the split is read after it, with no migration."""
 
     @pytest.mark.integration
+    @pytest.mark.spec("Pre-split ledgers open")
     def test_S13_a_ledger_written_before_the_split_keeps_its_shape_through_the_facade(self):
         from agent_orchestrator import driver
 

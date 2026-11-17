@@ -29,6 +29,7 @@ def c():
     case.doCleanups()
 
 
+@pytest.mark.spec("Pure logic is tested in process")
 def test_S13_an_unknown_ref_is_refused_in_process_without_spawning_a_cli(c):
     with mock.patch("subprocess.run", side_effect=no_cli_spawn):
         result = c.capture("--session", UNKNOWN)
@@ -37,6 +38,7 @@ def test_S13_an_unknown_ref_is_refused_in_process_without_spawning_a_cli(c):
     assert str(c.tmp / "codex") in result.stderr
 
 
+@pytest.mark.spec("Pure logic is tested in process")
 def test_S13_the_capture_help_is_printed_in_process(c):
     with mock.patch("subprocess.run", side_effect=no_cli_spawn):
         result = c.run_cli("capture", "--help")
@@ -44,6 +46,7 @@ def test_S13_the_capture_help_is_printed_in_process(c):
     assert "--session" in result.stdout
 
 
+@pytest.mark.spec("Pure logic is tested in process")
 def test_S13_a_refusal_crosses_the_subprocess_boundary_with_exit_2(c):
     result = c.run_cli_subprocess("capture", "--session", UNKNOWN)
     assert result.returncode == 2

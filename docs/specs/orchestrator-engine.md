@@ -1,521 +1,763 @@
 # Orchestrator engine
 
-Paths: packages/agent-orchestrator/, packages/agent-orchestrator/tests/, pyproject.toml, .github/workflows/ci.yml, docs/specs/orchestrator-engine.md
-
-The engine is the orchestrator's driver: it reads a plan, dispatches tickets, gates their reports,
-and writes the plan's Status cells back. This repository owns the engine and its suite; the copy that
-used to live in the `agent-skills` repository is the one that goes away.
-
-The behaviours the engine pins are the source plans' scenarios, and each ported test keeps the id of
-the scenario it came from. What this file states is what this repository guarantees about them: the
-suite runs here, against the member, and the member answers the way the engine always answered.
+The engine is the orchestrator's driver: it reads a plan, dispatches tickets, gates their reports, and writes the ledger the Lead reads. `packages/agent-orchestrator/` owns the engine and its suite. This capability covers how the driver routes, briefs, gates, recovers and narrates a run; the plan format, approval, lifecycle and archive are in [plan-contract.md](plan-contract.md).
 
 ## Requirements
 
-- **R1** WHEN the engine's own test suite runs, THEN it exercises the member's driver, and the repository holds exactly one copy of the engine. (from orchestrator-engine-suite/S1)
-- **R2** WHEN the member's driver is exercised by the ported suite, THEN the suite's behaviour is the member's behaviour: a test that would pass only against the old copy fails here. (from orchestrator-engine-suite/S2)
-- **R3** WHEN the repository's CI runs, THEN it resolves the workspace, runs the whole suite — the member's own suite included — and fails the build when the tracked lint or type diagnostics grow. (from orchestrator-engine-suite/S3)
-- **R4** WHEN a route names a class, a backend or an effort the driver cannot run, THEN the refusal names the value it named and the way out, and no worker is spawned. (from orchestrator-engine-suite/S4, orchestrator-routing-decoupling/S3)
-- **R5** WHEN the runtime refuses a call, THEN the driver sees a `ValueError` and the run reports the refusal instead of crashing. (from orchestrator-engine-suite/S5)
-- **R6** WHEN `launch` starts a run, THEN the pane runs the member's CLI. (from orchestrator-engine-suite/S6)
-- **R7** WHEN a run is terminated for exceeding its budget, THEN the harness waits, within a bounded window, for the tree it killed to stop running before it decides the tree survived — a process the system has not reaped yet has exited — and a tree that really outlived the run still fails the check. (from orchestrator-engine-suite/S7)
-- **R8** WHEN a route names the backend `pi` or the effort `xhigh` or `max`, THEN the worker's spawn carries that backend and that effort, and a route that names no effort still leaves the size/difficulty matrix in charge. (from orchestrator-routing-effort-role/S1, S4)
-- **R9** WHEN a step route names a step — `implementer` or `reviewer` — THEN that step's spawn carries the step's backend, model and effort; `--brain-cli` still names one backend for every gate step, and a step route overrides it. a route config or `--step` override naming `archive` is refused before any spawn, naming the fix: the archive has no agent, remove the `archive` route; one naming `gaps` is refused the same way, since the gaps reviewer was removed. (from orchestrator-routing-effort-role/S8, S9, deterministic-archive/S7)
-- **R10** WHEN a step route names an unknown step, backend, model or effort, THEN the run fails before any worker is spawned, naming the value. (from orchestrator-routing-effort-role/S10)
-- **R11** WHEN no step route names a gate, THEN the gate keeps the effort it has always had: the reviewer `high`; the archive has no agent and no effort. (from orchestrator-routing-effort-role/S3)
-- **R12** WHEN a worker writes the report the driver's `CONTRACT` describes, `"context"` included, THEN `Report` accepts it: every top-level key the contract's example names is a `Report` field. (from orchestrator-lead-alerts/S1, S2)
-- **R13** WHEN the driver runs a git call that walks or writes the whole tree (`worktree add`, `status`), THEN that call's timeout is sized for a large repository, not `run()`'s 15-second default. (from orchestrator-lead-alerts/S3)
-- **R14** WHEN `launch` runs inside an hc terminal, THEN the run is given that terminal, and each new wake is sent to it once with `hc send` (never `--force` or `interrupt`) — the wakes the Lead acts on are `stranded` (a task the loop cannot settle; the run exits non-zero), `not-dispatched` (a dispatch that failed, with the way out), `person` (a person-owned ticket became ready, once per ticket, with what it needs) and the idle request, which `wait --working-minutes N` delays for an agent reported `working`; an orphaned task is logged as an `orphaned` event naming the task and the status answer; a send that fails is logged as `notify-failed` and the run goes on; a run launched outside a terminal sends nothing. (from orchestrator-lead-alerts/S4–S7)
-- **R15** WHEN a unit is at `awaiting-merge`, THEN the idle ticks skip it: no idle event, no `idle` request. The merge is a person's step, and the `pr-ready` wake already asked for it. (from orchestrator-lead-alerts/S8)
-- **R16** WHEN a unit's brief is written, THEN it names the `task_id` its report must carry, so a worker that reads the brief writes the id the driver checks. (from orchestrator-report-task-id/S1)
-- **R17** WHEN a `run` starts on a plan another live driver is running in the same repository, whatever `--state-dir` either names, THEN it is refused before any worker is spawned, naming the holder's pid and start time and the way out (`await` the plan, or stop that driver); a run of another plan in the same repository is not held up, and a run that ends — or crashes — leaves no lock behind. (from orchestrator-run-lock/S1, S2)
-- **R18** WHEN a worker's report reaches the driver before the file it names is usable — absent, half written, or
-  breaking its contract — THEN the driver waits a bounded grace for the file and reads it; a payload it still cannot
-  read is the sending agent's news before it is the Lead's: that agent is told what the driver needs, twice at most,
-  with the gate kept open, and only then is the Lead asked, naming the warnings. An agent that is gone is not
-  warned. (from orchestrator-payload-race/S1, S2, S3)
-- **R19** WHEN a new run has no applicable typed route config, THEN it stops before any worker is spawned and says how to supply one (`--routes-file FILE`, or the repository's `.orchestrate/routes.json`, or the user's profile for its backend); the driver reads no model table: neither the 'Model classes' table of `~/.claude/CLAUDE.md` nor a table of its own, and `--models-file` is refused with the same way out. (from orchestrator-routing-decoupling/S1, remove-legacy-routing/S1, S4)
-- **R20** WHEN a route names a backend, model and effort the driver can run, THEN dispatch chooses that combination — a command-line `--route` or `--step` override first, then the file named by `--routes-file`, the repository's `.orchestrate/routes.*`, and last the user's profile for the run's backend (`~/.config/orchestrate/routes.json` for Claude, the default; `routes-codex.json` for `--cli codex`; `routes-pi.json` for `--cli pi`) — and logs the chosen route in the route ledger and the event log; the first file found is the only one read, so an invalid one stops the run and a missing profile stops it naming the expected file, never falling back to another file. (from orchestrator-routing-decoupling/S2, remove-legacy-routing/S2, S6)
-- **R21** WHEN the provider or step routing changes, THEN the plan schema and the gate, review and pull-request state machine stay as they were. (from orchestrator-routing-decoupling/S4)
-- **R22** WHEN the packet requires `scripts/checks.sh` and the report's passed check spells the same command, whitespace apart, THEN `checkpoint()` accepts COMPLETE (from merged-unit-completes/S1)
-- **R23** WHEN the report's passed check wraps the required command in a launcher (`bash scripts/checks.sh`, `./scripts/checks.sh`, `uv run python -m pytest` for `pytest`, a shell proxy), THEN `checkpoint()` refuses COMPLETE and names the required check: the driver works in any repository behind any shell, so it strips no launcher (from merged-unit-completes/S1a)
-- **R24** WHEN a required check is reported as another command (e.g. `echo scripts/checks.sh`) or is absent, THEN `checkpoint()` refuses COMPLETE and names the missing check (from merged-unit-completes/S2)
-- **R25** WHEN a COMPLETE report carries a non-required check with `not_run` and a reason, THEN `checkpoint()` accepts it (from merged-unit-completes/S3)
-- **R26** WHEN a COMPLETE report carries a `not_run` check with no reason, THEN `checkpoint()` refuses it (from merged-unit-completes/S3a)
-- **R27** WHEN a required check is reported `not_run`, THEN `checkpoint()` refuses COMPLETE (from merged-unit-completes/S3b)
-- **R28** WHEN a COMPLETE report carries any `failed` check, THEN `checkpoint()` refuses COMPLETE (from merged-unit-completes/S4)
-- **R29** WHEN a worker reports its unit ready and the report fails the COMPLETE rules, THEN the driver messages that worker with the refusal reason, the ticket keeps its gate, one fix round is counted, and no Lead request is written (from merged-unit-completes/S5)
-- **R30** WHEN report-time refusals reach the fix-round cap, THEN the Lead is asked, as for any capped unit (from merged-unit-completes/S5a)
-- **R31** WHEN a PR is merged and its stored report fails the COMPLETE rules, THEN the ledger task is COMPLETE with its original checks, the plan cell is COMPLETE, deferred.md has a `[merged-unverified] <task>: <reason>` line, no Lead request is written, and the dependents become dispatchable (from merged-unit-completes/S6)
-- **R32** WHEN a PR merges early (`merged_early`) on a drive with a named `--gate`, THEN the unit completes as in S6 (from merged-unit-completes/S7)
-- **R33** WHEN a PR merges early, THEN the ledger task keeps the checks of the worker's stored report, not an empty list (from merged-unit-completes/S7a)
-- **R34** WHEN a PR is merged and `packet.checkout` no longer exists, THEN the task is COMPLETE with `checkout_at_checkpoint: null`, a log line names the missing path, and `(task, "awaiting-merge")` is not in the stuck set (from merged-unit-completes/S8)
-- **R35** WHEN a PARTIAL checkpoint runs and `packet.checkout` does not exist, THEN `checkpoint()` raises (from merged-unit-completes/S8a)
-- **R36** WHEN cleanup runs for a COMPLETE task whose checkout is also used by a non-closed task under a different worker name, THEN the worktree is kept (from merged-unit-completes/S9)
-- **R37** WHEN several CI checks fail with long logs, THEN each CI finding carries only its own job's capped excerpt, the full log is at `log_path`, and the fix-round findings file stays under 64 KiB (from merged-unit-completes/S10)
-- **R38** WHEN a unit is at `awaiting-merge` and its pull request turns `DIRTY` or `CONFLICTING`, THEN the PR goes back to draft and a conflict fix round gives a fresh worker a rebase brief quoting the merge state; the rebase goes through a delta re-review and CI, and `gh pr ready` runs again before the unit waits for its merge again. (from orchestrator-pr-merge-state/S1)
-- **R39** WHEN a unit at `ready-for-ci` has a `DIRTY` or `CONFLICTING` pull request, THEN neither `gh pr ready` nor `gh pr update-branch` runs: the PR stays a draft and the conflict fix round is raised directly. (from orchestrator-pr-merge-state/S2)
-- **R40** WHEN a unit's pull request is `BEHIND` its base at `ready-for-ci` or `awaiting-merge`, THEN `gh pr update-branch` runs, the unit goes back to `ready-for-ci` with its checks cleared and its PR still ready (no draft, no fix round), and only checks read on the moved head count as green; the new `pr-ready` wake is keyed on the PR's live `headRefOid`. (from orchestrator-pr-merge-state/S3)
-- **R41** WHEN the merge state is `UNKNOWN`, or `gh pr view` fails, at `ready-for-ci` or `awaiting-merge`, THEN no `gh pr ready`, no wake and no fix round: the unit is polled again. (from orchestrator-pr-merge-state/S4)
-- **R42** WHEN a unit is at `awaiting-merge` and its checks turn red, THEN the PR goes back to draft and a CI fix round is raised with the failed check's log. (from orchestrator-pr-merge-state/S5)
-- **R43** WHEN a unit at `awaiting-merge` has merge state `CLEAN`, `BLOCKED`, `UNSTABLE` or `HAS_HOOKS` and checks green or pending, THEN it keeps waiting with no mutating `gh` call, and R15 still holds. (from orchestrator-pr-merge-state/S6)
-- **R44** WHEN a pull request is `MERGED` or `CLOSED` while it also conflicts, is behind or has red checks, THEN the merge or close handling wins and no fix round is raised. (from orchestrator-pr-merge-state/S7)
-- **R45** WHEN a disputed answer with `changes_code` sends a unit back from `ready-for-ci` or `awaiting-merge`, THEN the unit's readiness is forgotten across its attempts and its checks cleared: the PR is a draft through the delta re-review and `gh pr ready` runs again on its return. (from orchestrator-pr-merge-state/S8)
-- **R46** WHEN `gh pr ready --undo` fails as a unit leaves for a fix round, THEN no fix worker is dispatched; the undo is logged and tried again on a later round. (from orchestrator-pr-merge-state/S9)
-- **R47** WHEN `gh pr update-branch` fails and a fresh `gh pr view` shows no conflict, THEN no conflict round is raised: the Lead is asked with the `gh` error and the way out. (from orchestrator-pr-merge-state/S10)
-- **R48** WHEN a unit's pull request conflicts after its fix rounds hit the cap, THEN it escalates to the Lead as other capped rounds do, and the PR is left a draft. (from orchestrator-pr-merge-state/S11)
-- **R49** WHEN the archive unit's pull request conflicts, THEN the driver rebuilds the branch from the current base and pushes it again before anyone is asked, twice per unit, so the spec section and its number are derived from the base the plan now sits on; past those rebuilds the Lead is asked with `retry` and `skip`, `retry` rebuilds again, and no worker is spawned for either. (from orchestrator-pr-merge-state/S12)
-- **R50** WHEN a drive starts and an open, unparked ledger task's assignment is not in `wait`'s `unfinished`, and `status` for its agent answers `exited`, or `unknown` with hc's `not_found`, THEN the task is orphaned and an `orphaned` event names the task and the status answer. (from drive-restart-recovery/S2)
-- **R51** WHEN the loop would finish while an open, unparked ledger task's assignment is not in `wait`'s `unfinished`, THEN it reconciles that task first; a task it cannot settle raises a `stranded` wake, and the run exits non-zero instead of logging `finish`. A task held by a live terminal this drive did not bind is stranded the same way: the `stranded` wake names the task and the runtime's answer. A task whose agent has ended its turn (`idle` or `done`) and whose report has landed for that attempt goes to the gates (`reported`): nothing is spawned and the run does not finish over it. (from drive-restart-recovery/S2a; the two clauses from drive-restart-recovery-gaps/S10 and S11)
-- **R52** WHEN `status` for an open task's agent fails (the call raises, or answers `unknown` with any error other than `not_found`), THEN nothing is released or spawned, and a `stranded` wake names the unit and the error. (from drive-restart-recovery/S2b)
-- **R53** WHEN the orphaned agent is a reviewer or an answerer, THEN it takes the `exited` path it takes today when the runtime reports the exit. (from drive-restart-recovery/S2c)
-- **R54** WHEN an orphaned implementer attempt's report has not landed, THEN the attempt is RELEASED with reason `orphaned: <answer>`, the unit is dispatched again as `t<N>o<k>` on the same worktree and branch under the same worker name, and the plan cell reads `IN PROGRESS`; WHEN its report has landed for that attempt, THEN the gate moves to `reported` and nothing is spawned. (from drive-restart-recovery/S3)
-- **R55** WHEN `dispatch` is given a task id the ledger holds as COMPLETE or RELEASED, THEN it refuses before any `spawn` or `resume` call. (from drive-restart-recovery/S3a)
-- **R56** WHEN a ticket's cell reads `IN PROGRESS`, the ledger holds at least one attempt of its unit, every attempt is RELEASED, and `status` for its worker answers definitively not live, THEN the ticket is dispatchable again; WHEN the ledger holds no attempt of the unit, THEN it is not dispatched. (from drive-restart-recovery/S4)
-- **R57** WHEN a dispatch or re-dispatch fails for any reason, THEN a `not-dispatched` wake names the ticket, the reason and the way out, once per ticket and reason; WHEN the Lead then sets that ticket's cell back to exactly `TO-DO`, THEN the next round tries it again. The way out in the wake says exactly that: "set the ticket's Status cell back to exactly TO-DO". Any other value (for example `TO-DO · retry`) does not retry within the run; the ticket stays out until the run ends, and a new drive reads a cell that starts with `TO-DO` as TO-DO. The Lead hears it on the same wake channel as R14. (from drive-restart-recovery/S5; S12, S12a)
-- **R58** WHEN the Lead answers a unit's request with `answer`, THEN the worker is resumed on the same task id with the answer, no new attempt is created, and a report written after the answer under that id passes the gate. (from drive-restart-recovery/S6)
-- **R59** WHEN `decide … answer` is given text naming an attempt id of the unit other than the request's `task` (the unit followed by a round letter — fix `r`, retry `d`, orphan `o`, reopen `p`, answer `a` — and a number, in any case, so `T1R1` names `t1r1`; R81), THEN it exits 2, writes no decision, and names the id it expects. (from drive-restart-recovery/S7)
-- **R60** WHEN `wait` reports a unit's agent with `runtime_state: working`, THEN the idle tick does not count it and no request is raised, until it has been `working` for `--working-minutes`, when the request says how long. (from drive-restart-recovery/S8)
-  The working window is in memory and starts empty at each drive start, so a restart resets it. An idle tick that skips a unit (its gate is `requested`, `awaiting-merge` or parked) clears that unit's window, so a unit that returns to `working` starts a fresh one and is not asked again until another `--working-minutes` have passed. (amended by drive-restart-recovery-gaps/S13, S13a)
-- **R61** WHEN a unit's signature is unchanged for two ticks and its agent is not reported `working` (CI waiting, or no runtime observation), THEN the Lead is asked, as today. (from drive-restart-recovery/S8a)
-
-- **R62** WHEN an agent's turn ends while the runtime still lists its assignment as working (`runtime_state` idle or
-  done), THEN it is a live agent, not an exit: a reviewer advances only on its own `complete`, even with a valid
-  review file on disk; a worker stays pending, except that a valid report for its task already on disk advances it as
-  before; an answerer stays working. None is resumed, and none replaces its assignment. Only the timed idle watchdog
-  (baseline, then two unchanged ticks) asks the Lead: one `idle` request and one decision wake, naming the agent, the
-  file it owes, how long it has been quiet and `decide <plan> <unit> retry | answer | skip`. A failed, exited or
-  gone agent, a restart orphan, `unreported`/`error`, and a `blocked` or `decision` report are still handled at once.
-  The Lead's decision on such a unit (other than skip or mark blocked) fails an answers record still `working`, since the hand-over replaces that assignment. A `complete` that announces a file the driver cannot read keeps the R18 grace and capped recovery, and each
-  recovery message names the file to write or repair and says to report complete under the current assignment. The
-  reviewer brief says the reviewer may wait on background jobs, that ending a turn does not finish the review, and
-  that it writes the review after those jobs finish and then reports complete with the brief's assignment id. A
-  reviewer `complete` after its unit's request is open leaves the request open until R84 says otherwise. The answers
-  record a decision may fail is amended by R82. (from orchestrator-silent-idle/S1–S14)
-- **R63** WHEN `decide … answer` is given text naming an attempt id of the unit other than the request's `task` — including a reopen attempt `t<N>p<n>`, and any uppercase form such as `T1` or `T1R1` — THEN it exits 2, writes no decision, and names the id it expects. An uppercase form of the expected id is accepted. (from drive-restart-recovery-gaps/S9)
-- **R64** WHEN the loop would finish while an open, unparked task is held by a live terminal this drive did not bind, THEN a `stranded` wake names the task and the runtime's answer, and the run exits non-zero instead of logging `finish`. (from drive-restart-recovery-gaps/S10)
-- **R65** WHEN the loop would finish while an open task's agent has ended its turn (`idle` or `done`) and its report has landed for that attempt, THEN the gate moves to `reported`, nothing is spawned, and the run does not finish over it. (from drive-restart-recovery-gaps/S11)
-- **R66** WHEN a ticket is in the not-dispatched state and the Lead edits its cell to anything other than exactly `TO-DO` (for example `TO-DO · retry`), THEN the same run does not dispatch it again. (from drive-restart-recovery-gaps/S12)
-- **R67** WHEN a dispatch fails, THEN the `not-dispatched` wake names the ticket, the reason, and the way out "set the ticket's Status cell back to exactly `TO-DO`". (from drive-restart-recovery-gaps/S12a)
-- **R68** WHEN a unit the idle tick skipped (its gate was `requested`, `awaiting-merge` or parked) returns to `working`, THEN its working window starts again at that tick, and the idle tick does not count it until another `--working-minutes` have passed. (from drive-restart-recovery-gaps/S13)
-- **R69** WHEN a drive starts, THEN the working window starts empty: `--working-minutes` is measured from the first tick that sees the agent `working`, and a restart resets it. (from drive-restart-recovery-gaps/S13a)
-- **R70** WHEN the driver writes the archive's spec section for a YAML plan, THEN every scenario the plan's spec already carries in a requirement's provenance is kept as it is and the section appends none of them again: a requirement that names several scenarios at once (`(from <slug>/S1, S2, S3)`) holds every one of them, not only the first. (from yaml-eec/S29)
-- **R71** WHEN the driver books a change while a Lead command holds the ledger lock, THEN it waits with jittered backoff (0.2 s growing to 5 s) under one monotonic deadline of 60 s that counts the lock waits and the sleeps alike, then books the change; a busy ledger is not an error of the step that met it, and the drive does not exit. (from orchestrator-audit-fixes/S1)
-- **R72** WHEN the ledger stays busy past that deadline, or any other exception escapes the driver during startup, the loop or the finalization, THEN the driver logs `crashed <reason>` (`crashed ledger busy >60s` for the ledger), writes a `crash` wake without taking the ledger lock, and exits non-zero; a `run` refused because another driver holds the run lock logs no crash. (from orchestrator-audit-fixes/S2, S3)
-- **R73** WHEN the driver and a Lead command both write the ledger, THEN they take the same lock through one shared helper (`ledger.locked`) and the same deadline rule. (from orchestrator-audit-fixes/S6)
-- **R74** WHEN the orchestrator creates a ledger, or makes its next locked write to a ledger that lacks the marker, THEN the ledger carries `"kind": "agent-orchestrator/ledger"` beside its existing `version: 1`, on disk before any file a worker reads (the contract, a brief) exists; a ledger of another kind is refused. (from orchestrator-audit-fixes/S7)
-- **R75** WHEN a Lead read command (`show`, the read half of `complete`, and `evidence`) runs during a drive, THEN it reads an unlocked snapshot of the ledger; any write it then makes takes the lock and revalidates against the current ledger, refusing with a reason (`the ledger changed since it was read`) when the keys it decided on moved, and writes nothing. (from orchestrator-audit-fixes/S5)
-- **R76** WHEN `await` runs while no driver holds the run lock and the run has not finished, THEN it returns `crashed -> <log line>` when the run's driver logged a crash, and `driver gone without a crash log` when a driver started for the run (a `start` line with a pid) and died without one; a wake the Lead has not seen is printed first; a run whose driver has not started yet, or whose driver holds the run lock, is still awaited. (from orchestrator-audit-fixes/S4)
-- **R80** WHEN the driver narrates a run on stderr, THEN each line carries the time, the unit, the step (one of `narrate.STEPS`), a kind symbol and the text, the attempt last; colour is used only on a terminal with `NO_COLOR` unset; a `wait` the unit already said is repeated only every 5 minutes, as `(still, Nm)`, and any other line of the unit resets it; run-dir paths are relative, the home is `~`, a GitHub PR URL is `#N`, and the text is cut at 200 characters. (from orchestrator-narration, small fix)
-- **R82** WHEN `events.rollup` totals a ticket whose assignments reported usage dicts with different keys, or one of whose assignments (any `agent` event of the unit) never reported usage, THEN each key is the sum over the ticket's assignments when every assignment reported it, and `null` when any did not; an assignment that never reported counts as reporting no figure; a ticket none of whose assignments reported usage stays `unknown` (from worker-usage/S10, small fix)
-- **R83** WHEN the driver writes `attempts.jsonl`, THEN each record is schema 3: `tokens` carries `input`, `output`, `cached`, `cache_write` and `reasoning`; the record carries `cost_usd`; `counters.model_calls` and `counters.tool_calls` are summed from usage; every one of these is `null` when any of the attempt's assignments lacks it; `evidence-manifest.json` names the new fields (from worker-usage/S11)
-- **R84** WHEN an orchestrated ticket's worker reports usage with `cost_usd` and its reviewer reports usage without it, THEN metrics.json sums the ticket's tokens and calls with `cost_usd` null, and attempts.jsonl (schema 3) carries the summed tokens, model and tool calls with `cost_usd` null; when both report `cost_usd`, both files sum it (from worker-usage/S13)
-- **R86** WHEN the idle request names the file a worker owes, THEN it names the next write-once path of its task directory (`report.2.json` on a second try), never the newest file already on disk. (from orchestrator-audit-fixes/S11)
-- **R87** WHEN a reviewer whose idle request is still undecided reports `complete`, THEN the review is taken as for any reviewer (the unit goes on to `reviewed`) and the request closes as resolved by the worker, with a decision that says so; WHEN the Lead has decided, THEN a late `complete` is ignored. This supersedes orchestrator-silent-idle/S13. (from orchestrator-audit-fixes/S10)
-- **R88** WHEN the Lead decides a request that did not name a busy answerer (a `ci` request answered `fresh worker`), THEN the answers record is not failed and the answerer's later `complete` is received; WHEN a decision does fail the record because the request named the answerer, THEN an `answers-dropped` event says why pr-ready stopped waiting on the answers. (from orchestrator-audit-fixes/S12)
-- **R89** WHEN a worker names an attempt id with any round suffix (`r`, `d`, `o`, `p` or `a`), THEN the driver recognizes it as an attempt id through one shared pattern (`attempt_pattern`), so `use t1a1` in an answer for `t1a2` is refused as foreign. (from orchestrator-audit-fixes/S13)
-- **R90** WHEN a unit's request file is missing or does not validate (a crash left it empty), THEN the driver writes it again from the ledger before it waits on the Lead, so `decide` can still answer it; a readable request is never rewritten. (small fix: a 0-byte `request.2.json` stalled a live run)
-- **R91** WHEN a drive starts, THEN before any worker line the driver writes the banner on stderr: the `narrate.LOGO` wordmark, then the plan's slug and goal, its ticket count by status, the repository and base, `--max-workers`, the `--gate` commands when any, the route source (the config path and where it came from, or `recorded in the ledger (legacy table)` for a resumed run whose ledger recorded routes from the old model table), one line per class route (`backend · model · effort`, `effort by matrix` when the matrix decides) and one per step route; colour only where R80 allows it. (from orchestrator-banner, small fix)
-- **R92** WHEN `plan approve` runs, THEN it always asks the runtime who the caller is; WHEN the runtime reports the caller as a worker (by role or caller kind, markers or not), or as unknown (or a Lead it does not verify) inside an hc or managed host, or the lookup fails while agent markers are present, THEN it refuses with the reason and the way out (a worker asks the Lead; a Lead runs it from a terminal with no agent host or its hc Lead terminal), and writes no approval. (from orchestrator-audit-fixes/S20)
-- **R93** WHEN `plan approve` runs from a plain terminal or CI with no host markers and the runtime fails or cannot place the caller, or the runtime verifies the caller as the Lead, THEN it approves as it does today; a marker never grants anything. (from orchestrator-audit-fixes/S21)
-- **R94** WHEN an existing run resumes with recorded routes, including legacy routes, THEN it keeps every recorded class and step backend, model and effort, and the recorded `--cli` and `--brain-cli`, whatever the policy now says or lacks; an explicit `--route`, `--step`, `--routes-file` or `--cli` that says otherwise fails before any worker is spawned or resumed, naming the argument and the recorded value, and leaves the ledger unchanged; a missing or incomplete route record needs an explicit `--routes-file`, which migrates the run and records the complete resolved routes before it resumes; an argument that matches the record is accepted and an omitted one is not a conflict; a record whose gates cannot be routed takes the `--step` routes the command line gives them. A restart never reads a route file the ledger did not record: policy changes reach a run only through an explicit `--routes-file` migration. (from remove-legacy-routing/S3)
-- **R103** WHEN the driver is about to spawn or resume an agent (a first spawn, an attach to a live pane, a fix round's, an answers round's or a chase's hand-over, a payload repair), THEN it books an intent in the ledger's `intents` with a fresh UUID `operation_id` (the readable `unit/attempt/operation` path is metadata) before it calls the runtime with that `operation_id`, and binds the intent to the assignment the runtime answers; a runtime that refuses operation ids gets no unkeyed send, and the Lead gets a request (`retry` or `skip`; a first spawn gets the ticket's `not-dispatched` wake). (from orchestrator-audit-fixes/S14)
-- **R104** WHEN the driver restarts and an agent's intent is still open, THEN it looks the `operation_id` up through `agent-runtime call operation`: `absent` and it acts again under a new intent; `bound`, `working`, `blocked`, `decision`, `complete` or `failed` and it adopts that assignment without sending; `pending`, `unknown`, an answer it does not know or a failed lookup and it raises a Lead request ("the resume may or may not have reached <worker>: retry or skip") and sends nothing on its own, looking the key up once and not again on each round. The Lead's `retry` runs the held step again under a new intent; any decision settles the held intent. (from orchestrator-audit-fixes/S15)
-- **R105** WHEN a gate fails, THEN the round increment, the report's checkpoint, the next phase (a fix round, or the Lead's request past the cap) and the draft the pull request still owes (`fix.draft`) are booked in one ledger write before any git or gh call, and a restart after a crash anywhere later counts the round once. (from orchestrator-audit-fixes/S16)
-- **R106** WHEN the plan-level test drives fixture plans through the real driver with a fake runtime and gh, one drive per case (a Lead command holds the ledger lock across a booking, the driver is killed, the driver restarts with a resume intent whose assignment is pending, a worker runs `plan approve`), THEN the drive survives the held lock, `await` returns the crash instead of polling, the restart raises a Lead request and the fake runtime saw no second send, and the worker's approve is refused and the plan stays unapproved. (from orchestrator-audit-fixes/S22)
-- **R107** WHEN a new run names a brain backend with `--brain-cli` and its medium route does not run on that backend, THEN the review gate (`reviewer`) needs a step route, from `--step reviewer=BACKEND/MODEL[@EFFORT]` or a `steps` entry of the route file; without them the run stops before any worker is spawned, naming the `--step` argument and the medium route on the brain backend that would also answer, and explicit step routes keep a brain on another backend usable. (from remove-legacy-routing/S7)
-- **R172** WHEN `wait` reports an assignment with an `attention` verdict, THEN the drive acts on the verdict on the wait that delivers it, never on the idle tick's own screen reading: an attempt the runtime decided produced nothing since it was resumed (`not_started`) is a Lead request naming the agent, the attempt, the runtime's own `next` sentence and the driver's way out (look at its terminal, and if it has finished, stop it and put a fresh worker on the round), and the unit is never logged `waiting` on that agent, whatever its gate and however few ticks it has shown. A resumed attempt that advances its turn and reports raises no request, and a verdict on an assignment no step of the drive owns ends nothing. The verdict is the runtime's (its 60-second resume grace), so the drive does not re-derive it from screen or output freshness. (small fix, 2026-11-16: a resumed fix round was bound and its prompt never landed, so the drive logged `waiting: agent` for the worker and would have asked two ticks later)
-
-## Coverage
-
-| Scenario | Requirement | Test |
-|---|---|---|
-| S1 | R1 | `packages/agent-orchestrator/tests/test_engine_home.py`: `test_S1_the_suite_drives_the_member_driver`, `test_S1_the_repository_holds_one_copy_of_the_engine` |
-| S2 | R2 | `packages/agent-orchestrator/tests/`: the ported suite, file by file, below |
-| S3 | R3 | `packages/agent-orchestrator/tests/test_engine_home.py`: `test_S3_ci_runs_the_member_suite_and_the_plain_gates` |
-| S4 | R4 | the route refusal tests, listed under R4 below |
-| S5 | R5 | `packages/agent-orchestrator/tests/test_agents.py`: `test_S33_a_refused_spawn_leaves_no_open_intent`; `packages/agent-orchestrator/tests/test_run.py`: `test_a_refused_spawn_keeps_the_reservation_and_exits_1` |
-| S6 | R6 | `packages/agent-orchestrator/tests/test_launch.py`: `test_S17_starts_run_in_a_named_pane` |
-| S7 | R7 | `packages/agent-orchestrator/tests/test_baselines.py`: `test_S3_a_run_that_stalls_is_terminated_and_recorded_as_a_failure` |
-| S1 | R15 | `packages/agent-orchestrator/tests/test_run.py`: `test_S1_the_unit_brief_names_the_task_id_the_report_must_carry` |
-| S1, S2 | R17 | `packages/agent-orchestrator/tests/test_run_lock.py`: `test_S1_a_second_driver_of_the_same_plan_is_refused`, `test_S1_the_lock_holds_whatever_the_state_dir`, `test_S2_another_plan_in_the_same_repository_runs`, `test_S2_a_finished_run_releases_the_lock_and_names_itself` |
-| S1, S2, S3 | R18 | `packages/agent-orchestrator/tests/test_payload.py`: `test_S1_a_file_that_lands_inside_the_grace_is_read`, `test_S1_a_file_that_never_lands_ends_the_wait_at_the_deadline`; `packages/agent-orchestrator/tests/test_gates.py`: `test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead`, `test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead` |
-| S1–S14 | R62 | `packages/agent-orchestrator/tests/test_gates.py`: `SilentReviewerTests` (S1–S4, S9–S13); `packages/agent-orchestrator/tests/test_report_timing.py`: `test_S5_*`, `test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today`; `packages/agent-orchestrator/tests/test_decider.py`: `test_S5_a_worker_whose_turn_ended_idle_or_done_is_one_idle_request_from_the_watchdog`, `test_S11_blocked_and_decision_reports_are_handled_at_once`; `packages/agent-orchestrator/tests/test_envelope.py`: `test_S7_*`, `test_S8_*` (including the Lead's `answer` after an idle answerer); `packages/agent-orchestrator/tests/test_pr.py`: `test_S14_a_unit_waiting_for_its_merge_is_never_idle` |
-| S1 | R19 | `packages/agent-orchestrator/tests/test_routes.py`: `test_S1_no_config_is_refused_naming_the_backend_profile_and_the_way_out`; `packages/agent-orchestrator/tests/test_routes_typed_selection.py`: `test_S1_a_run_without_a_typed_config_stops_before_any_worker_and_names_the_way_out`, `test_S4_models_file_is_refused_even_beside_a_valid_config`, `test_S4_the_model_table_is_never_read` |
-| S2 | R20 | `packages/agent-orchestrator/tests/test_route_selection_run.py`: `test_S2_the_configured_backend_model_and_effort_are_chosen`, `test_S2_the_selected_route_is_logged_in_the_route_ledger`, `test_S2_the_selected_route_is_logged_in_the_event_log`, `test_S2_the_repository_policy_config_answers_when_no_file_is_named`, `test_S2_the_user_default_config_answers_when_no_other_config_is_named`, `test_S2_the_named_config_wins_over_the_repository_policy`, `test_S2_an_explicit_override_wins_over_the_config`; `packages/agent-orchestrator/tests/test_routes.py`: `test_S2_each_backend_reads_only_its_own_profile`, `test_S6_the_order_is_explicit_then_repository_then_profile`; `packages/agent-orchestrator/tests/test_routes_typed_selection.py`: `test_S2_*`, `test_S6_*` |
-| S3 | R4 | the route refusal tests, listed under R4 below |
-| S4 | R21 | `packages/agent-orchestrator/tests/test_route_selection_run.py`: `test_S4_the_gate_review_and_pr_state_machine_stays_stable_under_a_new_provider_route`, `test_S4_the_routed_run_really_dispatched_on_the_new_provider` |
-| S1 | R23 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S1_a_pr_that_conflicts_while_it_waits_for_its_merge_goes_back_to_draft_and_is_rebased` |
-| S2 | R24 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S2_a_conflicting_draft_at_ready_for_ci_is_never_readied_before_its_rebase` |
-| S3 | R25 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S3_a_pr_behind_while_it_waits_is_updated_stays_ready_and_wakes_again_on_its_new_head` |
-| S4 | R26 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S4_an_unknown_merge_state_is_polled_again_with_no_action` |
-| S5 | R27 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S5_red_checks_while_it_waits_are_a_ci_fix_round_on_a_draft` |
-| S6 | R28 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S6_a_blocked_unstable_or_hooked_pr_keeps_waiting_with_no_gh_change` |
-| S7 | R29 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S7_a_merge_wins_over_a_conflict_and_red_checks` |
-| S8 | R30 | `packages/agent-orchestrator/tests/test_envelope.py`: `test_S8_a_disputed_change_drafts_the_pr_again_and_readies_it_after_the_re_review` |
-| S9 | R31 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S9_a_failed_draft_undo_holds_the_fix_worker_until_it_succeeds` |
-| S10 | R32 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S10_an_update_branch_failure_that_is_no_conflict_goes_to_the_lead` |
-| S11 | R33 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S11_a_conflict_past_the_cap_goes_to_the_lead_and_leaves_the_pr_a_draft` |
-| S12 | R49 | `packages/agent-orchestrator/tests/test_archive.py`: `ArchiveMergeStateTests.test_S12_a_conflicting_archive_pr_is_rebuilt_from_the_current_base_first`, `ArchiveMergeStateTests.test_S5_a_conflicting_archive_pr_past_the_rebuilds_asks_the_lead_and_spawns_no_worker` |
-| drive-restart-recovery-gaps/S10 | R51 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished` |
-| drive-restart-recovery-gaps/S11 | R51 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish` |
-| drive-restart-recovery-gaps/S9 | R63 | `packages/agent-orchestrator/tests/test_wake.py`: `test_S7_an_answer_naming_another_attempt_exits_2_writes_nothing_and_names_the_expected_id` |
-| drive-restart-recovery-gaps/S10 | R64 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished` |
-| drive-restart-recovery-gaps/S11 | R65 | `packages/agent-orchestrator/tests/test_run.py`: `RecoveryTests.test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish` |
-| drive-restart-recovery-gaps/S12 | R66 | `packages/agent-orchestrator/tests/test_run.py`: `test_S12_a_not_dispatched_ticket_whose_cell_is_not_exactly_TO_DO_is_not_tried_again_in_the_run` |
-| drive-restart-recovery-gaps/S12a | R67 | `packages/agent-orchestrator/tests/test_run.py`: `test_S12a_the_not_dispatched_wake_names_the_ticket_the_reason_and_the_exact_TO_DO_way_out` |
-| drive-restart-recovery-gaps/S13 | R68 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13_a_unit_the_idle_tick_skipped_while_requested_starts_a_fresh_working_window` |
-| drive-restart-recovery-gaps/S13a | R69 | `packages/agent-orchestrator/tests/test_pr.py`: `test_S13a_a_drive_starts_with_an_empty_working_window_and_a_restart_resets_it` |
-| yaml-eec/S29 | R70 | `packages/agent-orchestrator/tests/test_archive_driver.py`: `SpecSectionUnit.test_S2_a_held_scenario_keeps_its_number_and_adds_no_requirement` |
-| orchestrator-audit-fixes/S1 | R71 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S1_a_held_ledger_is_waited_out_with_jittered_backoff_and_then_booked`, `test_S1_the_backoff_grows_to_5_seconds_and_no_further`, `test_S1_the_driver_waits_for_a_ledger_a_lead_command_holds_and_books_the_change` |
-| orchestrator-audit-fixes/S2 | R72 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S2_*`; `packages/agent-orchestrator/tests/test_await.py`: `CrashGuardTests.test_S2_*` |
-| orchestrator-audit-fixes/S3 | R72 | `packages/agent-orchestrator/tests/test_await.py`: `CrashGuardTests.test_S3_*` |
-| orchestrator-audit-fixes/S4 | R76 | `packages/agent-orchestrator/tests/test_await.py`: `AwaitTests.test_S4_*` |
-| orchestrator-audit-fixes/S5 | R75 | `packages/agent-orchestrator/tests/test_ledger.py`: `SnapshotTests.test_S5_*`,  |
-| orchestrator-audit-fixes/S6 | R73 | `packages/agent-orchestrator/tests/test_ledger.py`: `BoundedLockTests.test_S6_*` |
-| orchestrator-audit-fixes/S7 | R74 | `packages/agent-orchestrator/tests/test_ledger.py`: `KindMarkerTests.test_S7_*`, `RunMarkerTests.test_S7_a_run_creates_its_ledger_with_the_marker_before_any_file_a_worker_reads` |
-| orchestrator-narration | R80 | `packages/agent-orchestrator/tests/test_narrate.py`: `NarrateTests.test_*`; `packages/agent-orchestrator/tests/test_run.py`: `test_a_refused_spawn_keeps_the_reservation_and_exits_1` |
-| orchestrator-banner | R90 | `packages/agent-orchestrator/tests/test_narrate.py`: `BannerTests.test_*`; `packages/agent-orchestrator/tests/test_routes_driver.py`: `RouteDriverTests.test_a_run_opens_with_its_banner_naming_each_class_route` |
-| worker-usage/S10 | R82 | `packages/agent-orchestrator/tests/test_events.py`: `RollupTests.test_S10_a_key_is_summed_when_every_assignment_reports_it_else_null`, `RollupTests.test_S10_an_assignment_that_reported_no_usage_nulls_every_figure`, `RollupTests.test_S10_the_metrics_table_shows_each_usage_figure_in_its_column_and_null_as_null` |
-| worker-usage/S11 | R83 | `packages/agent-orchestrator/tests/test_evidence.py`: `EvidenceTests.test_S11_a_record_sums_usage_and_nulls_what_any_assignment_lacks` |
-| worker-usage/S13 | R84 | `packages/agent-orchestrator/tests/test_usage_metrics_outcome.py`: `UsageMetricsOutcome.test_S13_a_figure_one_assignment_lacks_totals_to_null`, `UsageMetricsOutcome.test_S13_a_figure_every_assignment_reports_is_summed`, `UsageMetricsOutcome.test_S13_a_count_one_assignment_lacks_totals_to_null`; `packages/agent-orchestrator/tests/test_evidence.py`: `EvidenceTests.test_S13_metrics_and_attempts_sum_what_both_report_and_null_what_one_lacks` |
-| deterministic-archive/S7 | R9 | `packages/agent-orchestrator/tests/test_archive_driver.py`: `ArchiveRouteRefusal.test_S7_*` |
-| orchestrator-audit-fixes/S10 | R84 | `packages/agent-orchestrator/tests/test_silent_idle.py`: `LateReviewerComplete.test_S10_*` |
-| orchestrator-audit-fixes/S11 | R83 | `packages/agent-orchestrator/tests/test_silent_idle.py`: `SilentWorker.test_S11_*` |
-| orchestrator-audit-fixes/S13 | R86 | `packages/agent-orchestrator/tests/test_answers.py`: `AttemptIds.test_S13_*`, `AnswerRefusal.test_S13_*` |
-| orchestrator-audit-fixes/S20 | R92 | `packages/agent-orchestrator/tests/test_plan.py`: `PlanTests.test_S20_*` |
-| orchestrator-audit-fixes/S21 | R93 | `packages/agent-orchestrator/tests/test_plan.py`: `PlanTests.test_S21_*` |
-| remove-legacy-routing/S3 | R94 | `packages/agent-orchestrator/tests/test_routes_resume.py`: `RouteResumeTests.test_S3_*` |
-| orchestrator-audit-fixes/S14 | R103 | `packages/agent-orchestrator/tests/test_intents.py`: `IntentBooking.test_S14_*`, `ChaseAndAnswersKeys.test_S14_*` |
-| orchestrator-audit-fixes/S15 | R104 | `packages/agent-orchestrator/tests/test_intents.py`: `IntentRestart.test_S15_*` |
-| orchestrator-audit-fixes/S16 | R105 | `packages/agent-orchestrator/tests/test_intents.py`: `FailGateBooking.test_S16_*` |
-| orchestrator-audit-fixes/S22 | R106 | `packages/agent-orchestrator/tests/test_intents.py`: `IntentRestart.test_S15_a_pending_or_unknown_intent_asks_the_lead_and_never_resends`, `IntentRestart.test_S15_an_intent_the_runtime_never_saw_is_acted_on_again`; the driver-placed `packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py`: `LedgerContentionOutcome`, `ForeignAnswerOutcome`, `IntentRestartOutcome.test_a_restart_over_a_pending_resume_asks_the_lead_and_sends_nothing_again`, `ApproveGateOutcome` |
-| remove-legacy-routing/S7 | R107 | `packages/agent-orchestrator/tests/test_routes_typed_selection.py`: `test_S7_*` |
-| drive-reads-delivery-verdict | R172 | `packages/agent-orchestrator/tests/test_driver_not_started.py`: `NotStartedTests.test_*`; `packages/agent-orchestrator/tests/test_driver/test_driver_verdict.py`: `VerdictTests.test_*` |
-| remove-legacy-routing/S8 | R19, R20, R94 | `packages/agent-orchestrator/tests/test_routes_docs.py`: `RoutingDocsTests.test_S8_*` |
-
-### R4 — the route refusals
-
-- `packages/agent-orchestrator/tests/test_routes.py`: `test_S3_a_route_for_an_unknown_class_is_refused`,
-  `test_S3_a_route_with_an_unknown_effort_is_refused`,
-  `test_S2_an_unsupported_backend_is_refused_with_an_explanation`
-- `packages/agent-orchestrator/tests/test_routes_driver.py`:
-  `test_S3_a_route_for_an_unknown_class_fails_the_run_before_any_worker_is_spawned`,
-  `test_S2_an_invalid_route_config_fails_the_run_before_any_worker_is_spawned`
-
-### R8, R9, R10, R11 — the routing and the steps
-
-- `packages/agent-orchestrator/tests/test_routes.py`: `test_S1_a_route_may_name_the_pi_backend`,
-  `test_S1_the_efforts_above_high_are_valid_efforts`,
-  `test_S8_a_step_route_answers_its_own_step`,
-  `test_S10_a_step_route_naming_an_unknown_step_is_refused_by_name`,
-  `test_S10_a_step_route_naming_an_unknown_backend_is_refused_by_name`,
-  `test_S10_a_step_route_naming_no_model_is_refused`
-- `packages/agent-orchestrator/tests/test_route_selection.py`: `test_S1_an_override_may_name_the_pi_backend`,
-  `test_S9_a_step_override_names_the_backend_model_and_effort`,
-  `test_S10_a_step_override_for_an_unknown_step_is_refused`,
-  `test_S10_a_step_override_on_an_unknown_backend_is_refused`
-- `packages/agent-orchestrator/tests/test_route_selection_run.py`:
-  `test_S1_a_route_naming_pi_and_the_top_effort_reaches_the_worker_spawn`,
-  `test_S1_an_override_naming_pi_dispatches_a_pi_worker`,
-  `test_S4_the_matrix_answers_the_effort_when_no_route_names_one`
-- `packages/agent-orchestrator/tests/test_step_routes.py`: `test_S8_each_step_names_its_own_backend_model_and_effort`,
-  `test_S8_a_step_route_for_the_implementer_overrides_the_class_route`,
-  `test_S9_the_brain_names_one_backend_for_every_gate_step`,
-  `test_S9_a_step_route_overrides_the_brain`,
-  `test_S10_a_step_route_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned`,
-  `test_S10_a_step_route_naming_an_unknown_backend_fails_the_run_before_any_worker_is_spawned`,
-  `test_S10_a_step_override_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned`,
-  `test_S3_a_gate_without_a_step_route_keeps_todays_effort`,
-  `test_S3_a_step_route_names_the_gates_effort`
-
-### R12, R13, R14, R15 — the report the contract asks for, the tree-sized calls, the Lead's alert, the merge wait
-
-- `packages/agent-orchestrator/tests/test_contracts.py`: `test_S1_report_accepts_the_context_object_workers_write`,
-  `test_S2_every_key_the_contract_example_names_is_a_report_field`
-- `packages/agent-orchestrator/tests/test_gates.py`: `test_S3_worktree_add_gets_a_checkout_sized_timeout`
-- `packages/agent-orchestrator/tests/test_wake.py`: `test_S4_S5_a_new_wake_is_sent_once_to_the_launching_terminal`,
-  `test_S4_a_run_without_a_notify_terminal_sends_nothing`, `test_S6_a_failed_send_is_logged_and_the_run_goes_on`
-- `packages/agent-orchestrator/tests/test_launch.py`: `test_S7_the_run_is_told_the_launching_terminal_to_alert`,
-  `test_S7_a_run_launched_outside_a_terminal_alerts_no_one`
-- `packages/agent-orchestrator/tests/test_pr.py`: `test_S14_a_unit_waiting_for_its_merge_is_never_idle`
-
-### R22–R37 — a merged unit always completes
-
-- `packages/agent-orchestrator/tests/test_checkpoint_rules.py`: `test_S1_…`, `test_S1a_…`, `test_S2_…`, `test_S3_…`, `test_S3a_…`, `test_S3b_…`, `test_S4_…`, `test_S8a_…` — the pure COMPLETE rules (R22–R28, R35)
-- `packages/agent-orchestrator/tests/test_gates.py`: `test_S5_a_ready_report_that_fails…`, `test_S5a_report_refusals…` — the report-time refusal (R29, R30)
-- `packages/agent-orchestrator/tests/test_report_gate.py`: `test_S1_a_report_the_ledger_cannot_read…`, `test_S1_a_refusal_the_sender_repeats…` — a payload the ledger cannot read (R159)
-- `packages/agent-orchestrator/tests/test_merge.py`: `test_S6_…`, `test_S8_…` (two), `test_S9_cleanup_keeps…` — the merge wins, the missing checkout, the busy check (R31, R34, R36)
-- `packages/agent-orchestrator/tests/test_pr.py`: `test_S7_…`, `test_S7a_…`, `test_S10_several_failing_checks…` — the early merge and the CI excerpt (R32, R33, R37)
-
-## The ported suite
-
-The suite arrived with the engine. Each file keeps the scenario ids it was written against, so a
-failure names the behaviour it broke and not a line number in a file that moved.
-
-| File | Requirement | Scenarios it answers |
-|---|---|---|
-| `test_agents.py` | R2, R5 | `orchestrate-lean-loop/S33` — a spawn that is refused or re-attached |
-| `test_archive.py` | R2, R34 | `code-driven-orchestrator/S15`, `code-driven-orchestrator/S16`, `orchestrator-pr-merge-state/S12` — the driver-built archive, the metrics, the archive PR's conflict asks the Lead |
-| `test_baselines.py` | R2 | `orchestration-baselines/S0`, `orchestration-baselines/S3` — the repaired vertical slice, the bounded benchmark |
-| `test_compat.py` | R2 | `orchestrate-lean-loop/S34` — a run directory written by the previous version |
-| `test_contracts.py` | R2 | `code-driven-orchestrator/S6a`, `code-driven-orchestrator/S11`, `orchestrate-lean-loop/S1`, `orchestrate-lean-loop/S12`–`S17`, `orchestrate-lean-loop/S26` — the report, review and findings contracts |
-| `test_decider.py` | R2 | `code-driven-orchestrator/S11`–`S13` — the decider and the pause it causes |
-| `test_envelope.py` | R2, R30 | `orchestrate-lean-loop/S10`, `orchestrate-lean-loop/S12`–`S17`, `orchestrate-lean-loop/S26`, `orchestrator-pr-merge-state/S8` — the review envelope |
-| `test_events.py` | R2 | `orchestrate-lean-loop/S27` — the event log |
-| `test_evidence.py` | R2 | `orchestration-baselines/S2` — the per-attempt evidence |
-| `test_fake_gh.py` | R2 | the fake `gh` — a draft PR that never goes ready; scripted draft views, checks while ready and a failing draft undo |
-| `test_gates.py` | R2, R90 | `code-driven-orchestrator/S5`–`S7` — the report, the review, the fix round |
-| `test_ledger.py` | R71–R75 | `orchestrator-audit-fixes/S1`, `S2`, `S5`–`S7` — the shared ledger lock, its deadline, the snapshot and the kind marker |
-| `test_silent_idle.py` | R62 | `orchestrator-audit-fixes/S8`–`S11` — the one idle watchdog over a reviewer, and the file a worker owes |
-| `test_answers.py` | R80 | `orchestrator-audit-fixes/S12`, `S13` — the answers a decision leaves alone and the attempt ids an answer may name |
-| `test_await.py` | R72, R76 | `orchestrator-audit-fixes/S2`–`S4` — the crash guard and what `await` says of a run whose driver died |
-| `test_launch.py` | R2, R6 | `code-driven-orchestrator/S17`, `orchestrate-lean-loop/S49`, `orchestrate-lean-loop/S50` — the pane the run starts in |
-| `test_merge.py` | R2 | `code-driven-orchestrator/S6`, `code-driven-orchestrator/S6a`, `code-driven-orchestrator/S8`–`S10` — the merge and the cleanup |
-| `test_narrate.py` | R80, R90 | `orchestrator-narration`, `orchestrator-banner` — the driver's narration and its opening banner on stderr |
-| `test_orchestrate.py` | R2 | the ledger: `claim`, `bind`, `checkpoint`, `release`, `show`, `context`, `metrics` |
-| `test_payload.py` | R18 | `orchestrator-payload-race/S1` — the bounded wait for a report's payload |
-| `test_pi_backend.py` | R2 | `pi-worker-driver/S1`–`S6` — the Pi worker backend |
-| `test_pr.py` | R2, R23–R29, R31–R33 | `orchestrate-lean-loop/S6`, `orchestrate-lean-loop/S20`–`S24`, `orchestrator-pr-merge-state/S1`–`S7`, `S9`–`S11` — the pull request, its checks and its merge state |
-| `test_reopen.py` | R2 | `code-driven-orchestrator/S4` — a ticket the plan sets back to TO-DO |
-| `test_report_timing.py` | R2 | `orchestration-baselines/S0` — the report that lands as the turn ends |
-| `test_reuse.py` | R2 | `orchestrate-lean-loop/S8`, `orchestrate-lean-loop/S9`, `orchestrate-lean-loop/S11` — the re-review and the panes it stops |
-| `test_rounds.py` | R2 | `orchestrate-lean-loop/S18`, `orchestrate-lean-loop/S32` — the fix-round cap |
-| `test_route_selection.py` | R2, R4 | `orchestrator-routing-decoupling/S2`, `orchestrator-routing-decoupling/S3` — the route override |
-| `test_route_selection_run.py` | R2, R4 | `orchestrator-routing-decoupling/S2`–`S4` — the route a run resolves |
-| `test_routes.py` | R2, R4 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3` — the typed route schema |
-| `test_routes_driver.py` | R2, R4, R90 | `orchestrator-routing-decoupling/S1`, `orchestrator-routing-decoupling/S3`, `orchestrator-banner` — the route config a run reads and the banner that names it |
-| `test_routes_typed_selection.py` | R19, R20, R107 | `remove-legacy-routing/S1`, `S2`, `S4`, `S6`, `S7` — the typed route file a new run is routed by |
-| `test_routes_docs.py` | R19, R20, R94 | `remove-legacy-routing/S8` — the routing documents describe typed routes and no table |
-| `test_routes_resume.py` | R92 | `remove-legacy-routing/S3` — the routes a resumed run keeps |
-| `test_step_routes.py` | R2, R8–R11 | `orchestrator-routing-effort-role/S3`, `S8`–`S10` — the step routes |
-| `test_run_lock.py` | R17 | `orchestrator-run-lock/S1`, `S2` — one driver per plan and repository |
-| `test_run.py` | R2, R5 | `code-driven-orchestrator/S1`–`S4`, `code-driven-orchestrator/S14` — the dispatch loop and its restart |
-| `test_swap.py` | R2 | `orchestrate-lean-loop/S19` — the agent below the context reserve |
-| `test_wait_checks.py` | R2 | the CI gate's wait |
-| `test_wake.py` | R2, R59 | `orchestrate-lean-loop/S1`–`S5`, `orchestrate-lean-loop/S7`, `orchestrate-lean-loop/S31`, `drive-restart-recovery/S7` — the requests, the wakes and the decisions |
-
-## Requirements: check-tiers
-
-- **R169** WHEN `.orchestrate/config.yaml` carries a `checks` node, THEN `checks.fast`, `checks.affected`, and `checks.full.run` (strings) are read, each optional; an unknown key under `checks`, or a placeholder in `affected` other than `{base}` and `{paths}`, is refused naming its dotted path and the fix (from check-tiers/S1)
-- **R170** WHEN `plan check` runs in a repo whose config declares no `checks` node, THEN it prints one warning on stderr naming `.orchestrate/config.yaml` and the fields `checks.fast`, `checks.affected`, `checks.full`, exits 0, and workers are briefed with `--gate`, or the full-CI-gate default, as today (from check-tiers/S4)
-- **R95** WHEN a ticket worker is briefed in a repo whose config declares check tiers and the run names no `--gate`, THEN its required checks are `checks.fast` and `checks.affected` with `{base}` rendered as the run's `--base` ref as given and `{paths}` as the ticket's paths, each shell-quoted, space-joined; the brief's "Before you report COMPLETE, run:" line lists exactly those, one other line names `checks.full` as the check the worker does not run because CI runs it, and the brief no longer asks for the repository's full CI gate (from check-tiers/S2)
-- **R96** WHEN a run names `--gate` in a repo whose config declares check tiers, THEN the worker's required checks are the named gate commands alone; the tiers are not applied (from check-tiers/S3)
-- **R97** WHEN a COMPLETE report gives the rendered `affected` check `not_run` with a non-blank reason (the selection found no test), THEN the report is accepted; a `fast` check, or any other required check, reported `not_run` is still refused as today (from check-tiers/S5)
-- **R100** WHEN an orchestrate run starts in agent-runtime, THEN its config declares the tiers: `fast` is the unit suite, `affected` selects through pytest-impacted from `{base}`, `full` is the whole suite in parallel; `plan check` prints no tiers warning (from check-tiers/S8)
-- **R101** WHEN an orchestrate run starts in agent-skills, THEN its config declares the tiers, with `affected` through pytest-impacted (from check-tiers/S9)
-- **R102** WHEN an orchestrate run starts in rastro-ai, THEN its config declares the tiers, with `affected` a repo script that runs `cargo test -p` for each crate under `{paths}` and every crate that depends on it, directly or transitively (from check-tiers/S10)
-- **R134** WHEN `checks.fast`, the rendered `checks.affected` and `checks.full.run` render the same command, whitespace apart, THEN the worker's required checks list it once, the brief neither lists it twice nor tells the worker not to run it, and COMPLETE validation is decided by that same set: the `affected` `not_run` allowance never waives a command another tier also requires (from review-gate-integrity/S1)
-- **R135** WHEN `checks.fast` and the rendered `checks.affected` are distinct from `checks.full.run`, or a `--gate` names the checks instead, THEN the worker's assignment keeps `fast` and the rendered `affected`, or the named gate, as its required checks; a distinct `full` is named only as the whole suite CI runs (from review-gate-integrity/S2)
-
-## Coverage: check-tiers
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R169 | S1 | `packages/agent-orchestrator/tests/test_config.py::ConfigTests::test_S1_checks_node_reads_each_optional_key`<br>`packages/agent-orchestrator/tests/test_config.py::ConfigTests::test_S1_unknown_checks_key_is_refused_naming_its_dotted_path` |
-| R170 | S4 | `packages/agent-orchestrator/tests/test_check_tiers_config.py::ChecksWarningTests::test_S4_no_checks_node_prints_one_warning_naming_the_fields_and_exits_zero` |
-| R95 | S2 | `packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S2_the_brief_lists_fast_and_the_rendered_affected_and_names_full_as_not_run`<br>`packages/agent-orchestrator/tests/test_check_tiers.py` |
-| R96 | S3 | `packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S3_a_named_gate_is_the_required_checks_alone_and_the_tiers_are_not_applied` |
-| R97 | S5 | `packages/agent-orchestrator/tests/test_contracts.py::AffectedNotRunTests::test_S5_affected_not_run_with_a_reason_is_accepted` |
-| R100 | S8 | `packages/agent-orchestrator/tests/test_check_tiers_repo.py::AgentRuntimeTiersTests::test_S8_the_repo_config_declares_fast_affected_through_pytest_impacted_and_a_parallel_full`, `tests/test_default_selection.py::DefaultSelectionTests` (`fast` stays the unit suite when an option such as `-p no:warnings` carries a value) |
-| R101 | S9 | human: Felippe confirms agent-skills' config declares `fast`, `affected` through pytest-impacted and `full`, and a run there briefs its worker with `fast` and the rendered `affected` |
-| R102 | S10 | human: Felippe confirms rastro-ai's config declares `fast`, `affected` and `full`, a run there briefs its worker with `fast` and the rendered `affected`, and the script tests only the touched crates and their dependents |
-| R134 | S1 | `packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S1_overlapping_tiers_require_the_command_once_and_never_forbid_it`<br>`packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S1_whitespace_spellings_of_one_command_are_one_required_assignment`<br>`packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S1_overlapping_tiers_require_one_command_and_never_forbid_it`<br>`packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S1_whitespace_spellings_of_one_command_are_required_once`<br>`packages/agent-orchestrator/tests/test_contracts.py::AffectedNotRunTests::test_S1_an_affected_command_another_tier_also_requires_is_never_waived_not_run` |
-| R135 | S2 | `packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S2_fast_and_affected_are_kept_when_only_full_is_distinct` |
-
-## Coverage: orchestrator-audit-fixes
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R71 | S1 | `packages/agent-orchestrator/tests/test_ledger.py::test_S1_a_held_ledger_is_waited_out_with_jittered_backoff_and_then_booked`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S1_the_backoff_grows_to_5_seconds_and_no_further`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S1_the_driver_waits_for_a_ledger_a_lead_command_holds_and_books_the_change` |
-| R72 | S2 | `packages/agent-orchestrator/tests/test_ledger.py::test_S2_a_ledger_busy_past_the_deadline_raises_ledger_busy_after_exactly_60_seconds`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S2_a_busy_ledger_is_not_a_value_error_the_loop_could_swallow`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S2_a_lead_command_that_meets_a_busy_ledger_exits_1_with_the_reason`<br>`packages/agent-orchestrator/tests/test_await.py::test_S2_a_ledger_busy_past_the_deadline_logs_the_crash_wakes_the_lead_and_exits_1`<br>`packages/agent-orchestrator/tests/test_await.py::test_S2_a_driver_that_cannot_take_the_run_lock_logs_no_crash_into_the_run_that_holds_it`<br>`packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py` |
-| R72 | S3 | `packages/agent-orchestrator/tests/test_await.py::test_S3_an_exception_escaping_the_loop_logs_a_crash_wakes_the_lead_and_exits_non_zero`<br>`packages/agent-orchestrator/tests/test_await.py::test_S3_an_exception_during_startup_logs_a_crash_wakes_the_lead_and_exits_non_zero`<br>`packages/agent-orchestrator/tests/test_await.py::test_S3_an_exception_during_finalization_logs_a_crash`<br>`packages/agent-orchestrator/tests/test_await.py::test_S3_the_crash_is_written_while_another_command_holds_the_ledger_lock`<br>`packages/agent-orchestrator/tests/test_await.py::test_S3_a_run_that_ends_well_logs_no_crash` |
-| R76 | S4 | `packages/agent-orchestrator/tests/test_await.py::test_S4_await_returns_the_crash_of_a_driver_that_crashed`<br>`packages/agent-orchestrator/tests/test_await.py::test_S4_await_says_the_driver_is_gone_when_it_started_and_left_no_crash_log`<br>`packages/agent-orchestrator/tests/test_await.py::test_S4_await_keeps_waiting_for_a_run_whose_driver_has_not_started_yet`<br>`packages/agent-orchestrator/tests/test_await.py::test_S4_await_keeps_waiting_while_a_driver_holds_the_run_lock`<br>`packages/agent-orchestrator/tests/test_await.py::test_S4_the_newest_start_or_crash_decides_not_the_oldest`<br>`packages/agent-orchestrator/tests/test_await.py::test_S4_a_wake_the_lead_has_not_seen_is_printed_before_the_crash`<br>`packages/agent-orchestrator/tests/test_await.py::test_S4_a_start_without_a_pid_is_a_run_the_check_cannot_judge_and_await_waits`<br>`packages/agent-orchestrator/tests/test_await.py::test_S4_await_returns_the_crash_of_a_driver_that_really_crashed` |
-| R75 | S5 | `packages/agent-orchestrator/tests/test_ledger.py::test_S5_a_snapshot_read_takes_no_lock_and_waits_for_none`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S5_show_reads_a_snapshot_while_a_lead_command_holds_the_lock`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S5_show_of_a_ledger_that_does_not_exist_yet_is_empty_and_creates_nothing`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S5_a_write_after_the_ledger_moved_since_the_snapshot_is_refused_with_a_reason`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S5_a_write_on_a_snapshot_that_is_still_current_goes_through`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S5_a_change_to_a_key_the_write_does_not_depend_on_is_not_stale`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S5_evidence_rebuilds_from_a_snapshot_while_the_lock_is_held` |
-| R73 | S6 | `packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S1_the_driver_waits_for_a_ledger_a_lead_command_holds_and_books_the_change`<br>`packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S2_a_lead_command_that_meets_a_busy_ledger_exits_1_with_the_reason` |
-| R74 | S7 | `packages/agent-orchestrator/tests/test_ledger.py::test_S7_a_ledger_the_orchestrator_creates_carries_the_marker_beside_version_1`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S7_the_next_locked_write_to_a_ledger_without_the_marker_adds_it`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S7_the_marker_is_on_disk_before_the_locked_block_runs`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S7_a_ledger_that_has_the_marker_is_not_rewritten_by_a_block_that_changes_nothing`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S7_a_ledger_of_another_kind_is_refused`<br>`packages/agent-orchestrator/tests/test_ledger.py::test_S7_a_run_creates_its_ledger_with_the_marker_before_any_file_a_worker_reads` |
-| R87 | S10 | `packages/agent-orchestrator/tests/test_silent_idle.py::test_S10_a_complete_before_the_lead_decides_finishes_the_review_and_closes_the_request`<br>`packages/agent-orchestrator/tests/test_silent_idle.py::test_S10_a_complete_after_the_lead_decided_is_ignored` |
-| R86 | S11 | `packages/agent-orchestrator/tests/test_silent_idle.py::test_S11_the_idle_request_names_the_next_write_once_report_not_the_newest`<br>`packages/agent-orchestrator/tests/test_silent_idle.py::test_S11_a_first_try_is_asked_for_report_json` |
-| R88 | S12 | `packages/agent-orchestrator/tests/test_answers.py::test_S12_a_fresh_worker_on_a_ci_request_does_not_fail_the_answerer_record`<br>`packages/agent-orchestrator/tests/test_answers.py::test_S12_an_answerer_complete_after_a_decision_that_did_not_name_it_is_received`<br>`packages/agent-orchestrator/tests/test_answers.py::test_S12_a_decision_on_a_request_that_named_the_answerer_drops_it_and_says_why` |
-| R89 | S13 | `packages/agent-orchestrator/tests/test_answers.py::test_S13_every_round_suffix_names_an_attempt_id`<br>`packages/agent-orchestrator/tests/test_answers.py::test_S13_the_expected_id_the_unit_and_other_words_are_not_foreign`<br>`packages/agent-orchestrator/tests/test_answers.py::test_S13_the_pattern_is_the_one_the_driver_builds_ids_from`<br>`packages/agent-orchestrator/tests/test_answers.py::test_S13_an_answer_naming_t1a1_for_t1a2_is_refused_as_foreign` |
-| R103 | S14 | `packages/agent-orchestrator/tests/test_intents.py::IntentBooking::test_S14_every_spawn_and_resume_is_booked_with_a_fresh_uuid_before_the_call`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentBooking::test_S14_a_runtime_that_does_not_take_operation_ids_gets_no_unkeyed_resume_and_the_lead_is_asked`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentBooking::test_S14_a_runtime_that_does_not_take_operation_ids_gets_no_unkeyed_spawn_and_the_lead_is_woken`<br>`packages/agent-orchestrator/tests/test_intents.py::ChaseAndAnswersKeys::test_S14_a_chase_for_missing_responses_resumes_under_its_own_key`<br>`packages/agent-orchestrator/tests/test_intents.py::ChaseAndAnswersKeys::test_S14_the_answers_resume_carries_a_key_too` |
-| R104 | S15 | `packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_an_intent_the_runtime_never_saw_is_acted_on_again`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_an_intent_the_runtime_holds_as_working_is_adopted_and_not_sent_again`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_every_state_the_runtime_has_bound_is_adopted`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_a_pending_or_unknown_intent_asks_the_lead_and_never_resends`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_the_lead_deciding_retry_sends_once_under_a_new_key`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_a_held_intent_is_not_looked_up_again_each_round`<br>`packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py` |
-| R105 | S16 | `packages/agent-orchestrator/tests/test_intents.py::FailGateBooking::test_S16_the_round_the_next_phase_and_the_draft_are_booked_before_any_gh_call`<br>`packages/agent-orchestrator/tests/test_intents.py::FailGateBooking::test_S16_a_crash_between_the_booking_and_the_draft_counts_the_round_once`<br>`packages/agent-orchestrator/tests/test_intents.py::FailGateBooking::test_S16_a_gate_past_the_cap_is_booked_with_its_request_before_any_gh_call` |
-| R92 | S20 | `packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S20_a_worker_the_runtime_names_is_refused_and_nothing_is_written`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S20_an_unverified_or_unknown_caller_inside_a_host_is_refused`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S20_a_failed_lookup_with_agent_markers_is_refused`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S20_a_worker_the_runtime_verifies_by_ancestry_is_refused_with_no_host_markers`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S20_plan_amend_refuses_a_worker_the_runtime_verifies_by_ancestry_too`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S20_the_way_out_names_both_a_worker_and_a_lead`<br>`packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py` |
-| R93 | S21 | `packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S21_a_plain_terminal_or_ci_with_no_host_markers_approves_when_the_runtime_cannot_place_it`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S21_a_lead_the_runtime_verifies_approves` |
-| R106 | S22 | `packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py::LedgerContentionOutcome::test_a_lead_command_holding_the_ledger_across_a_booking_is_waited_out`<br>`packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py::LedgerContentionOutcome::test_await_returns_the_crash_of_a_driver_that_crashed`<br>`packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py::IntentRestartOutcome::test_a_restart_over_a_pending_resume_asks_the_lead_and_sends_nothing_again`<br>`packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py::ApproveGateOutcome::test_a_caller_the_runtime_verifies_as_a_worker_by_ancestry_is_refused`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_a_pending_or_unknown_intent_asks_the_lead_and_never_resends`<br>`packages/agent-orchestrator/tests/test_intents.py::IntentRestart::test_S15_an_intent_the_runtime_never_saw_is_acted_on_again`<br>`packages/agent-orchestrator/tests/test_orchestrator_audit_outcome.py` |
-
-## Requirements: remove-legacy-routing
-
-- **R108** WHEN A new run starts without an applicable typed route configuration, THEN It stops before spawning workers and explains how to supply a typed routes file. (from remove-legacy-routing/S1)
-- **R109** WHEN A new run selects Claude, Codex or Pi using --cli without an explicit or repository route policy, THEN It selects ~/.config/orchestrate/routes.json for Claude, routes-codex.json for Codex, or routes-pi.json for Pi; if missing or invalid it stops before spawning and names the expected file, without falling back. (from remove-legacy-routing/S2)
-- **R110** WHEN An operator passes --models-file or a fresh run has no typed configuration, THEN No model table is read and the refusal directs the operator to typed routing. (from remove-legacy-routing/S4)
-- **R111** WHEN The existing named route profiles are migrated, THEN The six files routes.json, routes-codex.json, routes-pi.json, routes-claude-haiku.json, routes-ollama-minimax.json and routes-pi-minimax.json validate, preserve their pre-migration class model choices, and contain no archive step. (from remove-legacy-routing/S5)
-- **R112** WHEN A route file or repository policy is specified, THEN The explicit file wins over repository policy, which wins over backend user profile; class and step overrides win over files; invalid selected files fail without falling back. (from remove-legacy-routing/S6)
-- **R113** WHEN The orchestrator documentation and living spec describe routing, THEN They describe typed configuration, precedence, migration and restart behavior without relying on the model table; the skills model table remains intact. (from remove-legacy-routing/S8)
-
-## Coverage: remove-legacy-routing
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R108 | S1 | `packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S1_a_run_without_a_typed_config_stops_before_any_worker_and_names_the_way_out`<br>`packages/agent-orchestrator/tests/test_routes.py::RouteSchemaTests::test_S1_no_config_is_refused_naming_the_backend_profile_and_the_way_out`<br>`packages/agent-orchestrator/tests/test_routing_migration.py` |
-| R109 | S2 | `packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S2_codex_selects_its_own_profile_over_the_claude_one`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S2_pi_selects_its_own_profile`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S2_claude_is_the_default_backend_and_reads_routes_json`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S2_a_missing_profile_names_the_expected_file_and_does_not_fall_back`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S2_an_invalid_profile_stops_the_run_and_does_not_fall_back`<br>`packages/agent-orchestrator/tests/test_routing_migration.py` |
-| R94 | S3 | `packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_resume_keeps_the_recorded_routes_over_a_changed_policy`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_resume_keeps_the_recorded_routes_over_a_changed_route_file`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_resume_keeps_the_recorded_routes_when_the_policy_is_missing`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_resume_keeps_legacy_recorded_routes_over_a_changed_table`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_resume_keeps_the_recorded_step_routes`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_resume_leaves_the_recorded_routes_in_the_ledger_as_they_were`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_conflicting_route_argument_fails_before_any_spawn`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_conflicting_step_argument_fails_before_any_spawn`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_step_argument_that_differs_from_the_recorded_step_fails`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_conflicting_routes_file_fails_before_any_spawn`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_conflicting_cli_argument_fails_before_any_spawn`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_route_argument_that_matches_the_ledger_is_accepted`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_routes_file_that_resolves_to_the_recorded_routes_is_accepted`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_cli_argument_that_matches_the_ledger_is_accepted`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_missing_route_record_needs_a_routes_file`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_an_incomplete_route_record_needs_a_routes_file`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_route_record_that_lacks_the_steps_is_incomplete`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_routes_file_migrates_a_missing_record_and_records_the_complete_routes`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_routes_file_completes_an_incomplete_record`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_an_invalid_routes_file_does_not_migrate_a_missing_record`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_record_that_cannot_route_its_gates_takes_the_steps_the_argument_adds`<br>`packages/agent-orchestrator/tests/test_routes_resume.py::RouteResumeTests::test_S3_a_step_argument_may_not_replace_a_step_while_adding_the_missing_ones`<br>`packages/agent-orchestrator/tests/test_routing_migration.py` |
-| R110 | S4 | `packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S4_models_file_is_refused_even_beside_a_valid_config`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S4_the_model_table_is_never_read`<br>`packages/agent-orchestrator/tests/test_routing_migration.py` |
-| R111 | S5 | human: Record a before/after snapshot of backend, model and effort for each class and step in all six files under ~/.config/orchestrate; confirm only archive steps were removed, validate and resolve every profile, and retain the comparison as the migration record. |
-| R112 | S6 | `packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S6_the_explicit_file_beats_the_repository_policy_and_the_profile`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S6_the_repository_policy_beats_the_backend_profile`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S6_a_class_override_beats_the_selected_profile`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S6_an_invalid_explicit_file_does_not_fall_back_to_the_profile`<br>`packages/agent-orchestrator/tests/test_routing_migration.py` |
-| R107 | S7 | `packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S7_a_brain_the_medium_route_does_not_run_on_stops_before_any_worker`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S7_explicit_gate_steps_keep_a_brain_on_another_backend_usable`<br>`packages/agent-orchestrator/tests/test_routes_typed_selection.py::TypedSelectionTests::test_S7_a_medium_route_on_the_brain_backend_needs_no_step_routes`<br>`packages/agent-orchestrator/tests/test_routing_migration.py` |
-| R113 | S8 | human: Inspect CLI help, routes.py, packaged models.md, docs/pi.md and spec R19/R20 for typed routing and migration; compare ~/.claude/CLAUDE.md Model classes table against its pre-change snapshot. |
-
-## Requirements: review-gate-integrity
-
-- **R136** WHEN a contract-2 review item asserts a structured requirement violation, `requirement_violation` carrying `source`, `id`, `expected` and `observed` (each nonempty text), THEN its `kind` must be blocking with the blocking item's existing `file`, `line`, `fix` and `evidence`, so a rare post-launch failure cannot pass as an optional observation; an item that is not blocking, whose metadata is missing, blank or not text, or whose present `requirement_violation` is neither an object nor `null` is refused by both `validate_review` and `ReviewV2` with a message naming the item, before the reviewer's repair or escalation lets the unit advance to CI; an explicit `null` asserts nothing, so both readers read it as absent and a producer that serialises the optional field as null is not sent to repair; the reviewer brief asks for that blocking item and its metadata. (from review-gate-integrity/S3)
-- **R137** WHEN a review item carries no `requirement_violation`, or a clean contract-2 review or a contract-1 review is read, THEN the behaviour stands as before: a `concern`, `question`, `nit` or `deferred` item does not block, the unit goes on to CI, and both readers still read the older contract unchanged. (from review-gate-integrity/S4)
-- **R138** WHEN an earlier blocking finding is omitted, downgraded, or lies outside a later fix delta without an explicit supported resolution, THEN its stable id stays open with the payload it was first raised with, exposed at `<run>/<unit>/open-findings.json` as `{contract: 1, unit, items[]}`; a review that passes while one is open is refused before CI with a message naming the ids, the record and the way out, a blocking review hands every open item to the fix round with the new ones, and neither an unrelated delta, a generic worker answer nor a downgraded copy closes it; the record is rebuilt from the unit's reviews when a ledger written before it is resumed, since replay is idempotent and scoped to the unit; a legacy `major` item that an open set carries into a contract-2 round keeps its payload there, and that findings file is written as contract 2 so the round reads instead of becoming a Lead request. (from review-gate-integrity/S5)
-- **R139** WHEN a reviewer tries to close a previously open blocking finding, THEN only a top-level `resolutions` entry for that id closes it: `status` fixed or disproven, the reviewed commit, a nonempty note, and evidence whose command ran with exit 0 and appears in `checks_run` with that command, that exit and the reviewed commit; a bare acknowledgment, an unsupported status, a blank note, an unknown, duplicate or conflicting id, a resolution that also raises the id blocking, a commit other than the one reviewed, and failed or unmatched evidence are refused by both `validate_review` and `ReviewV2` naming the resolution, and the finding stays open; a contract-1 review that carries `resolutions` is refused rather than closing anything, and resolutions are only honoured from a review the contract-2 reader validated. (from review-gate-integrity/S6)
-- **R140** WHEN the driver restarts after recording a blocking finding and processes a passing re-review that omits it, THEN the persisted open finding still holds the unit before CI or delivery: the record, not process memory, decides, and a missing record is rebuilt from the unit's own reviews. (from review-gate-integrity/S7)
-
-## Coverage: review-gate-integrity
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R134 | S1 | `packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S1_overlapping_tiers_require_the_command_once_and_never_forbid_it`<br>`packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S1_whitespace_spellings_of_one_command_are_one_required_assignment`<br>`packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S1_overlapping_tiers_require_one_command_and_never_forbid_it`<br>`packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S1_whitespace_spellings_of_one_command_are_required_once`<br>`packages/agent-orchestrator/tests/test_contracts.py::AffectedNotRunTests::test_S1_an_affected_command_another_tier_also_requires_is_never_waived_not_run`<br>`packages/agent-orchestrator/tests/test_review_required_checks.py` |
-| R135 | S2 | `packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S2_fast_and_affected_are_kept_when_only_full_is_distinct` |
-| R136 | S3 | `packages/agent-orchestrator/tests/test_contracts.py::RequirementViolationTests::test_S3_an_asserted_requirement_violation_must_be_a_blocking_item`<br>`packages/agent-orchestrator/tests/test_contracts.py::RequirementViolationTests::test_S3_a_requirement_violation_names_its_source_requirement_expected_and_observed`<br>`packages/agent-orchestrator/tests/test_envelope.py::RequirementViolationTests::test_S3_a_concern_asserting_a_requirement_violation_is_refused_before_ci`<br>`packages/agent-orchestrator/tests/test_envelope.py::RequirementViolationTests::test_S3_a_requirement_violation_missing_its_observed_behavior_is_refused`<br>`packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S3_the_brief_asks_a_requirement_violation_to_be_blocking_with_its_metadata`<br>`packages/agent-orchestrator/tests/test_review_violation_contract.py`<br>`packages/agent-orchestrator/tests/test_review_finding_closure.py` |
-| R137 | S4 | `packages/agent-orchestrator/tests/test_contracts.py::RequirementViolationTests::test_S4_a_concern_without_a_violation_and_a_legacy_review_still_read`<br>`packages/agent-orchestrator/tests/test_envelope.py::RequirementViolationTests::test_S4_a_concern_without_a_requirement_violation_still_reaches_ci`<br>`packages/agent-orchestrator/tests/test_review_violation_contract.py`<br>`packages/agent-orchestrator/tests/test_review_finding_closure.py` |
-| R138 | S5 | `packages/agent-orchestrator/tests/test_contracts.py::OpenFindingsRecordTests::test_S5_a_blocking_and_a_legacy_major_payload_are_kept_as_they_were_raised`<br>`packages/agent-orchestrator/tests/test_contracts.py::OpenFindingsRecordTests::test_S5_a_record_names_its_unit_and_lists_each_open_id_once`<br>`packages/agent-orchestrator/tests/test_contracts.py::OpenFindingsRecordTests::test_S5_applying_a_review_twice_keeps_one_payload_and_a_resolution_closes`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S5_a_passing_rereview_that_omits_an_open_blocker_holds_the_unit`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S5_a_previous_blocker_cannot_be_downgraded_to_a_concern`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S5_a_legacy_major_finding_is_open_until_it_is_resolved`<br>`packages/agent-orchestrator/tests/test_reuse.py::OpenBlockerTests::test_S5_an_open_blocker_outside_the_new_delta_stays_open`<br>`packages/agent-orchestrator/tests/test_reuse.py::ScopeFilterTests::test_S9_a_blocking_item_outside_the_delta_with_no_earlier_finding_is_deferred`<br>`packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S5_an_open_blocker_holds_only_the_unit_that_has_it`<br>`packages/agent-orchestrator/tests/test_answers.py::OpenBlockerAnswers::test_S5_a_generic_worker_answer_does_not_close_an_open_blocker`<br>`packages/agent-orchestrator/tests/test_decide_contract.py::AmendmentKeepsOpenBlockers::test_S5_an_adopted_amendment_leaves_the_open_blocker_open_until_it_is_resolved`<br>`packages/agent-orchestrator/tests/test_contracts.py::MixedFindingsTests::test_S5_a_legacy_major_and_a_blocking_item_share_one_fix_round`<br>`packages/agent-orchestrator/tests/test_reuse.py::OpenBlockerTests::test_S5_a_legacy_major_and_a_new_blocker_reach_one_fix_round`<br>`packages/agent-orchestrator/tests/test_pr.py::DraftTests::test_S20_gh_pr_ready_runs_after_the_last_review_passes_with_green_checks`<br>`packages/agent-orchestrator/tests/test_swap.py::SwapTests::test_S19_a_reviewer_below_the_reserve_is_swapped_before_the_re_review`<br>`packages/agent-orchestrator/tests/test_events.py::EventTests::test_S27_metrics_are_rebuilt_from_events_after_a_crash`<br>`packages/agent-orchestrator/tests/test_review_finding_closure.py` |
-| R139 | S6 | `packages/agent-orchestrator/tests/test_contracts.py::ResolutionTests::test_S6_a_fixed_or_disproven_resolution_with_current_commit_evidence_reads`<br>`packages/agent-orchestrator/tests/test_contracts.py::ResolutionTests::test_S6_an_unsupported_status_or_a_blank_note_is_refused`<br>`packages/agent-orchestrator/tests/test_contracts.py::ResolutionTests::test_S6_closure_evidence_must_pass_and_match_a_current_commit_checks_run_entry`<br>`packages/agent-orchestrator/tests/test_contracts.py::ResolutionTests::test_S6_one_resolution_per_open_finding`<br>`packages/agent-orchestrator/tests/test_contracts.py::ResolutionTests::test_S6_a_resolution_and_a_blocking_item_naming_the_same_id_are_refused`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S6_a_bare_acknowledgment_is_not_closure`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S6_failing_evidence_is_not_closure`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S6_a_resolution_naming_no_open_finding_is_refused`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S6_a_fixed_resolution_with_current_commit_evidence_closes_the_blocker`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S6_a_disproven_resolution_with_current_commit_evidence_closes_the_blocker`<br>`packages/agent-orchestrator/tests/test_contracts.py::ResolutionTests::test_S6_a_contract_1_review_cannot_carry_resolutions`<br>`packages/agent-orchestrator/tests/test_envelope.py::FindingClosureTests::test_S6_a_contract_1_review_with_resolutions_is_refused`<br>`packages/agent-orchestrator/tests/test_review_finding_closure.py` |
-| R140 | S7 | `packages/agent-orchestrator/tests/test_reuse.py::OpenBlockerTests::test_S7_a_restart_holds_the_unit_on_the_persisted_record`<br>`packages/agent-orchestrator/tests/test_reuse.py::OpenBlockerTests::test_S7_a_missing_record_is_rebuilt_from_the_units_reviews`<br>`packages/agent-orchestrator/tests/test_review_finding_closure.py` |
-
-## Requirements: orchestrator-rtk-proxy-check
-
-- **R141** WHEN a worker reads the contract the run wrote, THEN the contract says a required check is matched by its spelling, whitespace apart, and names no launcher, proxy or test runner flag. (from orchestrator-rtk-proxy-check/S4)
-- **R142** WHEN a worker receives a brief that carries its required checks (the task, an answer, a redo, a fix or a rebase), THEN the brief tells it to report each required check exactly as written, whatever its shell runs the command through, and the brief's required-check line is unchanged. (from orchestrator-rtk-proxy-check/S3)
-- **R143** WHEN a worker receives a brief that carries its required checks, THEN the brief tells it to run those checks and only the test files it wrote or changed, each in the foreground under a timeout, to read failures from that run and to re-run only the tests that failed, naming no runner, flag or file of any one repository. (from orchestrator-rtk-proxy-check/S1)
-- **R144** WHEN a worker's report names a required check through a shell proxy or launcher (`rtk proxy uv run pytest -q` for `uv run pytest -q`), THEN the report is refused and the refusal names the required check. (from orchestrator-rtk-proxy-check/S2)
-
-## Coverage: orchestrator-rtk-proxy-check
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R143 | S1 | `packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_every_brief_keeps_the_worker_on_targeted_tests_run_in_the_foreground`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py` |
-| R144 | S2 | `packages/agent-orchestrator/tests/test_checkpoint_rules.py::CheckpointRulesTests::test_S1a_a_launcher_around_the_required_check_is_another_command` |
-| R142 | S3 | `packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled`<br>`packages/agent-orchestrator/tests/test_check_tiers.py::CheckTiersBrief::test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled` |
-| R141 | S4 | `packages/agent-orchestrator/tests/test_checkpoint_rules.py::CheckpointRulesTests::test_S4_the_contract_states_the_spelling_rule_and_names_no_launcher` |
-
-## Requirements: reviewer-brief
-
-- **R145** WHEN a reviewer receives the brief for a unit's first review, THEN the brief gives the pass as numbered steps in one order — read the whole diff first, the ticket delivers what the task file's `What it delivers` says with each satisfied scenario proved by a test the diff adds or changes, each test proves its scenario (it asserts the THEN's behaviour on the real code path, names its scenario id, and fails when the change is reverted; a test that would pass without the change is the scenario not really tested and therefore `blocking`), the implementer's report matches the code at the reviewed commit (`covers` nodes that exist, `checks` outcomes the log shows, `head`, `files`), the numbered requirements the change touches still hold, and the repository's rules hold — and only after that does the brief judge severity; the steps are printed after the paths they work from, and those paths name the implementer's task file, the report path the ledger recorded for the attempt under review — its exact path, that file's mtime and the head it claims — with no glob over the unit's run directory and no file written under another name read as a fallback for it, the run's `contract.md`, the plan, and the repository's own rules files, so no step sends the reviewer looking for a file the brief never named. (small fix, 2026-11-14: the brief stated its constraints and the review schema but no pass, so each reviewer improvised one; amended 2026-11-16: a re-dispatched unit's second review was handed a glob that the first attempt's stale report answered, so the paths name the attempt under review's own report)
-- **R146** WHEN the brief is for a re-review, THEN it prints the same numbered pass, and its first step reads the delta `<from>..HEAD` first with the whole change beside it, checks each earlier finding (resolved or not, with evidence), raises new blocking items only inside the delta, defers a blocking item outside the changed files unless it is about an earlier finding, and keeps the rule that such an item reuses that finding's `id` or sets `finding` to it; the rule is stated in that step and not also in the path list, so the brief gives it once. (small fix, 2026-11-14: the delta rules were the only instructions in the path list, read before the pass)
-
-## Coverage: reviewer-brief
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R145 | S1 | `packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S1_the_brief_gives_a_numbered_pass_from_the_diff_to_the_verdict`<br>`packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S1_the_brief_names_the_report_whose_claims_the_pass_checks`<br>`packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S1_the_brief_says_what_makes_a_test_prove_its_scenario`<br>`packages/agent-orchestrator/tests/test_driver_review_packet.py::ReviewPacketTests::test_S1_redispatch_brief_names_the_ledger_report_and_its_metadata` |
-| R146 | S2 | `packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S2_a_re_review_reads_the_delta_first_and_keeps_the_same_pass` |
-
-## Requirements: lead-decision-gates
-
-- **R147** WHEN the Lead answers an open request, THEN the decision is written in the contract version of the request it answers, so the driver that wrote the request reads it (from lead-decision-gates/S1)
-- **R148** WHEN the Lead answers with `decide --json` and the decision names a contract version the request does not carry, THEN the decision is refused naming both versions and the way out, and nothing is written (from lead-decision-gates/S2)
-- **R149** WHEN the driver reads a decision whose contract version it does not read, THEN it asks the Lead again naming the reason and the way out (restart the driver on the current code), and applies no decision (from lead-decision-gates/S3)
-- **R152** WHEN the Lead answers the archive unit with `retry` while the plan's state is not ACCEPTED, THEN the decision is refused naming the state and the way out, the request stays open and no decision is written (from lead-decision-gates/S6)
-- **R153** WHEN the driver applies a `retry` for the archive unit while the plan's state is not ACCEPTED, THEN it builds no archive for that retry, opens no pull request for it, and books a request for the Lead naming the state and the way out (from lead-decision-gates/S7)
-
-## Coverage: lead-decision-gates
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R147 | S1 | `packages/agent-orchestrator/tests/test_decide_contract.py::DecideJson::test_S1_a_decision_is_written_in_the_contract_version_of_the_request_it_answers`<br>`packages/agent-orchestrator/tests/test_decision_gates.py` |
-| R148 | S2 | `packages/agent-orchestrator/tests/test_decide_json.py::DecideJson::test_S2_a_json_decision_naming_another_contract_is_refused_with_both_versions`<br>`packages/agent-orchestrator/tests/test_decision_gates.py` |
-| R149 | S3 | `packages/agent-orchestrator/tests/test_decider.py::RequestPauseTests::test_S3_a_decision_the_driver_cannot_read_asks_the_lead_again_with_the_way_out`<br>`packages/agent-orchestrator/tests/test_decision_gates.py` |
-| R152 | S6 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_lead_s_retry_for_the_archive_is_refused_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S6_the_json_form_refuses_the_archive_retry_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/tests/test_decision_gates.py` |
-| R153 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRetryRefusal::test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted`<br>`packages/agent-orchestrator/tests/test_decision_gates.py` |
-
-## Requirements: review-payload-path
-
-- **R154** WHEN the driver starts the reviewer of a unit, THEN the reviewer's assignment names the absolute path of the review file it must write, beside the brief it must read, so the reviewer never has to infer where the file goes. (from review-payload-path/S1)
-
-## Coverage: review-payload-path
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R154 | S1 | `packages/agent-orchestrator/tests/test_gates.py::GateTests::test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only`<br>`packages/agent-orchestrator/tests/test_review_payload_path.py` |
-
-## Requirements: suite-cost
-
-- **R157** WHEN a YAML plan's worker changes a test it covers in `covers`, THEN its packet names the `tdd` skill and inlines that skill's admission and cost rules for a backend with no skill loader, its report carries test_cost with the command that timed the touched tests (any runner's), each touched test file's seconds and each covered node's seconds, and verify refuses the report without those rows. (from suite-cost/S2)
-- **R158** WHEN a reviewer reviews a diff that adds or changes tests, THEN its brief runs the test_cost command or times the diff's test files itself and treats a new or changed test over two seconds, or a module that grew materially without a new boundary, as a blocking defect naming the node, its seconds and the cheaper level that keeps the guarantee. (from suite-cost/S3)
-
-## Coverage: suite-cost
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R157 | S2 | `packages/agent-orchestrator/tests/test_contracts.py::TierBriefTests::test_S4_the_brief_names_the_tdd_skill_and_the_test_cost_report`<br>`packages/agent-orchestrator/tests/test_verify.py::TestCostTests::test_S1_a_changed_test_without_test_cost_is_refused_naming_the_file_and_the_fix`<br>`packages/agent-orchestrator/tests/test_verify.py::TestCostTests::test_S1_a_test_cost_without_a_command_is_refused` |
-| R158 | S3 | `packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S4_the_brief_measures_a_tests_cost_and_blocks_a_material_slowdown` |
-
-
-## Requirements: driver-invariants
-
-- **R159** WHEN a worker reports COMPLETE with a report that fails a COMPLETE rule and carries a check outcome the driver cannot read (prose instead of `passed`, `failed` or `not_run`), THEN the refusal goes back to the sender as a resume naming the report and the unreadable field, the drive books no error and reaches `finish`, and the corrected report is gated as usual (from driver-invariants/S1)
-- **R160** WHEN a ledger is written (or captured and read with `ledger check`) in which two open attempts name one review file, a park carries no release key, or a gate is not one the driver knows, THEN the write is refused by name (the invariant, the task and the way out) and `agent-orchestrator ledger check` reports the same on a captured ledger with exit 2, while a ledger the driver itself finishes on passes (from driver-invariants/S2)
-- **R161** WHEN a unit that was already reviewed is worked again after the Lead answers its request (the same task id), THEN the next review is written to the next write-once review file, the ledger's review names it, and the earlier review stays on disk with the blocker ids it named (from driver-invariants/S3)
-- **R162** WHEN a check fails while its workflow run is still in progress, so `gh run view --log-failed` answers `run N is still in progress; logs will be available when it is complete`, THEN the CI state stays pending and the unit is not asked while only the placeholder is readable; once the failing step's log is readable the gate fails and the request quotes that log, never the placeholder (from driver-invariants/S4)
-
-## Coverage: driver-invariants
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R159 | S1 | `packages/agent-orchestrator/tests/test_report_gate.py::ReportGateTests::test_S1_a_report_the_ledger_cannot_read_is_refused_to_its_sender`<br>`packages/agent-orchestrator/tests/test_report_gate.py::ReportGateTests::test_S1_a_refusal_the_sender_repeats_asks_the_lead`<br>`packages/agent-orchestrator/tests/test_driver_invariants.py` |
-| R160 | S2 | `packages/agent-orchestrator/tests/test_invariants.py::LedgerInvariantTests::test_S2_a_write_that_breaks_an_invariant_is_refused_by_name_and_nothing_lands`<br>`packages/agent-orchestrator/tests/test_invariants.py::LedgerInvariantTests::test_S2_a_read_of_a_broken_ledger_is_not_refused`<br>`packages/agent-orchestrator/tests/test_invariants.py::LedgerInvariantTests::test_S2_ledger_check_names_the_state_that_stalled_the_run`<br>`packages/agent-orchestrator/tests/test_invariants.py::LedgerInvariantTests::test_S2_control_a_coherent_ledger_passes`<br>`packages/agent-orchestrator/tests/test_invariants.py::LedgerRefusedAtAStepTests::test_S2_a_refused_step_write_asks_the_lead_instead_of_ending_the_run`<br>`packages/agent-orchestrator/tests/test_invariants.py::LedgerRefusedAtAStepTests::test_S2_a_ledger_that_cannot_hold_the_request_stops_the_run_by_name`<br>`packages/agent-orchestrator/tests/test_driver_invariants.py` |
-| R161 | S3 | `packages/agent-orchestrator/tests/test_invariants.py::ReviewWriteOnceTests::test_S3_a_rework_after_an_answer_writes_the_next_review_file`<br>`packages/agent-orchestrator/tests/test_invariants.py::ReviewWriteOnceTests::test_S3_a_rework_resolution_closes_the_blocker_the_first_review_raised`<br>`packages/agent-orchestrator/tests/test_invariants.py::ReviewWriteOnceTests::test_S3_the_delta_rereview_of_a_disputed_answer_still_names_the_earlier_blocker`<br>`packages/agent-orchestrator/tests/test_driver_invariants.py` |
-| R162 | S4 | `packages/agent-orchestrator/tests/test_pr.py::ChecksTests::test_S4_a_failing_check_whose_run_is_in_progress_stays_pending_until_its_log_is_readable`<br>`packages/agent-orchestrator/tests/test_pr.py::ChecksTests::test_S4_a_readable_failed_log_that_quotes_the_placeholder_is_not_a_placeholder`<br>`packages/agent-orchestrator/tests/test_driver_invariants.py` |
-
-## Requirements: parked-drive-release
-
-- **R164** WHEN a live drive reads a plan it cannot use (its bytes changed, it does not load, or it lost its `approval` span) and nothing is in flight, THEN the drive records the park in its ledger under `park` (its `cause`, its `error`, the `digest` of the approval it holds and the `since` of the park), shows it in `attention.md`, and wakes the Lead naming a way out that works (`plan approve --base` at the approval's own base, or the snapshot to restore from); it starts no new work while it is parked (from parked-drive-release/S2)
-- **R165** WHEN a drive has been parked for 15 minutes with nothing in flight, THEN it wakes the Lead again naming the way out, and does so every 30 minutes until the park ends; the drive never gives up the plan and never starts a worker while it is parked (from parked-drive-release/S3)
-- **R166** WHEN a live drive reads a plan that carries no `approval` span but is the plan the drive holds, THEN the drive recovers the approval from the snapshot it holds and keeps running (it does not drain), and the plan it reads is the approved one (from parked-drive-release/S4)
-- **R167** WHEN the Lead runs `plan approve` on a plan whose `approval` span was lost while a drive held it, THEN the re-approval succeeds at the approval's own base, and the plan file carries its `approval` span again (from parked-drive-release/S5)
-- **R168** WHEN a run ends while units are parked, THEN the ledger and `attention.md` name the park, its cause and the way out; the run's exit says the units are parked rather than reporting that it had nothing to do (from parked-drive-release/S6)
-
-## Coverage: parked-drive-release
-
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R164 | S2 | `packages/agent-orchestrator/tests/test_drain.py::ParkedDrive::test_S2_a_parked_drive_records_the_park_and_names_a_way_out_that_works`<br>`packages/agent-orchestrator/tests/test_parked_release.py` |
-| R165 | S3 | `packages/agent-orchestrator/tests/test_drain.py::ParkedDrive::test_S3_a_parked_drive_asks_again_after_fifteen_minutes_and_then_every_thirty`<br>`packages/agent-orchestrator/tests/test_drain.py::ParkedDrive::test_S3_a_park_asks_again_while_its_own_parked_unit_lists_open` |
-| R166 | S4 | `packages/agent-orchestrator/tests/test_drain.py::RecoveredSpan::test_S4_a_plan_that_lost_its_approval_span_is_recovered_and_the_drive_keeps_running`<br>`packages/agent-orchestrator/tests/test_drain.py::RecoveredSpan::test_S4_a_restarted_drive_recovers_the_approval_its_ledger_holds`<br>`packages/agent-orchestrator/tests/test_parked_release.py` |
-| R167 | S5 | `packages/agent-orchestrator/tests/test_plan_amend.py::LostSpanTests::test_S5_an_amendment_succeeds_on_a_plan_whose_approval_span_was_lost`<br>`packages/agent-orchestrator/tests/test_plan_amend.py::LostSpanTests::test_S5_the_amendment_publishes_the_spans_back_when_the_span_is_all_that_was_lost`<br>`packages/agent-orchestrator/tests/test_plan_amend.py::LostSpanTests::test_S5_control_a_lost_span_no_ledger_holds_is_refused_naming_plan_approve` |
-| R168 | S6 | `packages/agent-orchestrator/tests/test_decide_contract.py::OnlyParked::test_S6_a_run_that_ends_with_parked_units_says_why_it_ended` |
-
-## Idle partial handoff
-
-- **R171** WHEN a worker's turn ends and its valid report belongs to the current task attempt, THEN a PARTIAL or BLOCKED report opens a blocked request for the Lead containing its summary and remaining work; COMPLETE recovery keeps its existing acceptance checks. Progress message text alone is never a handoff. The same rule applies when reconciling an idle or lost worker (from idle-partial-handoff/S1–S3).
-
-| Requirement | Scenario | Coverage |
-|---|---|---|
-| R171 | S1 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_partial_after_progress_requests_a_decision`<br>`packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S1_idle_blocked_report_requests_a_decision` |
-| R171 | S2 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S2_progress_text_and_wrong_task_report_do_not_open_a_blocker` |
-| R171 | S3 | `packages/agent-orchestrator/tests/test_report_timing.py::ReportTimingTests::test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today` |
-
-## Requirements: locator-invariants
-
-- **R173** WHEN the engine renders an instruction for an agent or a person, THEN each pointer names a file that exists, the file the reader is asked to write, or a collection with its number of files; no pointer is a glob, a bare directory to search, or a request for the newest file, and a pointer resolving to zero or several files is refused naming the pointer, the expected file and the way out (from locator-invariants/S3, S7, S8, S9)
-
-## Coverage: locator-invariants
-
-| Requirement | Scenario | Tests |
-|---|---|---|
-| R173 | S3, S7, S8, S9 | `packages/agent-orchestrator/tests/test_driver_pointers.py::TestRenderedPointers::test_S3_rendered_instructions_name_their_files`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S7_unresolvable_pointers_are_refused`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S8_spec_names_the_pointer_rule_and_its_guard`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S9_repository_instructions_name_the_rule` |
-
-## Requirements: launch-environment
-
-- **R174** WHEN launch starts the driver THEN the driver runs with the Lead's environment, minus the pane and session variables (the terminal id, `CLAUDECODE`, `CLAUDE_CODE_*`), and no value is written to argv or logs (the environment travels in a mode 0600 file the pane deletes at start)
-
-## Coverage: launch-environment
-
-| Requirement | Scenario | Tests |
-|---|---|---|
-| R174 | - | `packages/agent-orchestrator/tests/test_launch_env.py::LaunchEnvTests::test_R_the_lead_environment_reaches_the_driver_but_not_argv`<br>`packages/agent-orchestrator/tests/test_launch_env.py::LaunchEnvTests::test_R_the_pane_bootstrap_applies_the_file_deletes_it_and_runs_the_driver` |
+### Requirement: One engine, one suite
+The repository SHALL hold exactly one copy of the engine, its suite SHALL exercise that copy, and CI SHALL run the whole suite and the plain gates.
+
+#### Scenario: the suite drives the member's driver
+- WHEN the engine's own suite runs
+- THEN it imports the driver from `packages/agent-orchestrator`, and no other source tree holds an engine copy
+
+#### Scenario: CI runs the member's suite
+- WHEN the repository's CI workflow runs
+- THEN it resolves the workspace and runs the whole suite, the member's own suite included, and the plain gates
+
+### Requirement: Runtime refusals are reported
+The driver SHALL report a runtime refusal as a refusal, not crash on it.
+
+#### Scenario: a refused spawn
+- WHEN the runtime refuses a spawn
+- THEN the driver sees a `ValueError`, leaves no open intent, keeps the reservation and exits 1 with the refusal
+
+### Requirement: Launch runs the member's CLI
+`launch` SHALL start the run in a pane that runs the member's own CLI.
+
+#### Scenario: a named pane
+- WHEN `launch` starts a run
+- THEN the pane runs the member's CLI
+
+### Requirement: Budgeted runs are terminated for good
+A run terminated for exceeding its budget SHALL be recorded as a failure only after the tree it killed has stopped.
+
+#### Scenario: a stalled run
+- WHEN a run is terminated for exceeding its budget
+- THEN the harness waits, within a bounded window, for the killed tree to stop before it decides the tree survived, and a tree that really outlived the run still fails the check
+
+### Requirement: Route refusals name the value
+The driver SHALL refuse a route it cannot run before any worker is spawned, naming the value the route gave and the way out.
+
+#### Scenario: an unknown class, backend, effort or step
+- WHEN a route or a `--route` or `--step` override names a class, backend, model, effort or step the driver cannot run, or a step route names no model
+- THEN the run fails before any worker is spawned, naming the value it found and the way out
+
+#### Scenario: an invalid route config
+- WHEN the selected route config is invalid
+- THEN the run fails before any worker is spawned, naming the file and the defect
+
+### Requirement: Backend and effort routes
+A route SHALL be able to name the backend `pi` and the efforts `xhigh` and `max`, and the worker's spawn SHALL carry what the route names.
+
+#### Scenario: pi and the top efforts
+- WHEN a route or an override names `pi`, or the effort `xhigh` or `max`
+- THEN the worker's spawn carries that backend and that effort
+
+#### Scenario: no effort named
+- WHEN a route names no effort
+- THEN the size and difficulty matrix still decides the effort
+
+### Requirement: Step routes
+A step route SHALL set the backend, model and effort of the `implementer` or `reviewer` step, and a gate without one SHALL keep its default effort.
+
+#### Scenario: a step answers for itself
+- WHEN a step route names `implementer` or `reviewer`
+- THEN that step's spawn carries the step's backend, model and effort, and an `implementer` route overrides the class route
+
+#### Scenario: the brain backend
+- WHEN `--brain-cli` names a backend
+- THEN every gate step runs there, and a step route overrides it
+
+#### Scenario: the default effort
+- WHEN no step route names a gate
+- THEN the reviewer keeps the effort `high`
+
+#### Scenario: a brain without a reviewer route
+- WHEN a new run names `--brain-cli` and its medium route does not run on that backend
+- THEN the run stops before any worker is spawned, naming the `--step reviewer=BACKEND/MODEL[@EFFORT]` argument and the medium route on the brain backend that would also answer, and explicit step routes keep a brain on another backend usable
+
+### Requirement: A typed route config is required
+A new run SHALL be routed by a typed route config, and the driver SHALL read no model table.
+
+#### Scenario: no config
+- WHEN a new run has no applicable typed route config
+- THEN it stops before any worker is spawned and says how to supply one: `--routes-file FILE`, the repository's `.orchestrate/routes.json`, or the user's profile for its backend
+
+#### Scenario: no model table
+- WHEN a run starts, or an operator passes `--models-file`
+- THEN no model table is read, neither the 'Model classes' table of `~/.claude/CLAUDE.md` nor one of the driver's own, and `--models-file` is refused with the same way out
+
+#### Scenario: the docs say so
+- WHEN the orchestrator documents and this spec describe routing
+- THEN they describe typed configuration, precedence, migration and restart behaviour, and no model table
+
+### Requirement: Route precedence
+Dispatch SHALL choose the route by one precedence and log the route it chose.
+
+#### Scenario: the order
+- WHEN routes are given in several places
+- THEN a command-line `--route` or `--step` override wins, then the file named by `--routes-file`, then the repository's `.orchestrate/routes.*`, then the user's profile for the run's backend (`~/.config/orchestrate/routes.json` for Claude, `routes-codex.json` for `--cli codex`, `routes-pi.json` for `--cli pi`)
+
+#### Scenario: the first file is the only one
+- WHEN the first file found is invalid, or the profile is missing
+- THEN the run stops, naming the expected file, and never falls back to another file
+
+#### Scenario: the choice is logged
+- WHEN dispatch chooses a route
+- THEN it logs the route in the route ledger and the event log
+
+### Requirement: Routing leaves the state machine alone
+A change of provider or step routing SHALL NOT change the plan schema or the gate, review and pull-request state machine.
+
+#### Scenario: a new provider
+- WHEN a run is routed to a different provider
+- THEN the gate, review and pull-request states behave as before and the worker really runs on that provider
+
+### Requirement: A resumed run keeps its routes
+An existing run SHALL resume with the routes, `--cli` and `--brain-cli` its ledger recorded, whatever the policy now says.
+
+#### Scenario: a conflicting argument
+- WHEN a resumed run is given a `--route`, `--step`, `--routes-file` or `--cli` that differs from the record
+- THEN it fails before any worker is spawned or resumed, naming the argument and the recorded value, and the ledger is unchanged; an argument that matches the record is accepted and an omitted one is no conflict
+
+#### Scenario: a missing or incomplete record
+- WHEN the ledger holds no complete route record
+- THEN the run needs an explicit `--routes-file`, which records the complete resolved routes before the run resumes; a restart never reads a route file the ledger did not record
+
+### Requirement: The report contract matches Report
+The contract the run writes SHALL describe a report that `Report` accepts, and each unit brief SHALL name the task id the report carries.
+
+#### Scenario: the contract example
+- WHEN a worker writes the report the contract describes, `context` included
+- THEN `Report` accepts it, and every top-level key of the contract's example is a `Report` field
+
+#### Scenario: the task id
+- WHEN a unit's brief is written
+- THEN it names the `task_id` its report must carry
+
+### Requirement: Whole-tree git calls get a large timeout
+The driver SHALL size the timeout of a git call that walks or writes the whole tree for a large repository.
+
+#### Scenario: worktree add
+- WHEN the driver runs `git worktree add` or `status`
+- THEN the call's timeout is sized for a large repository, not `run()`'s 15-second default
+
+### Requirement: Lead wakes
+A run launched inside an hc terminal SHALL send each new wake to that terminal once, and a run launched outside a terminal SHALL send nothing.
+
+#### Scenario: a wake is sent once
+- WHEN `launch` runs inside an hc terminal
+- THEN the run is given that terminal, and each new wake (`stranded`, `not-dispatched`, `person`, `idle`, `crash`) is sent to it once with `hc send`, never with `--force` or `interrupt`
+
+#### Scenario: a failed send
+- WHEN a send fails
+- THEN the driver logs `notify-failed` and the run goes on
+
+#### Scenario: no terminal
+- WHEN a run is launched outside a terminal
+- THEN it sends nothing
+
+### Requirement: One driver per plan
+A second driver SHALL NOT run a plan another live driver runs in the same repository.
+
+#### Scenario: a second driver
+- WHEN a `run` starts on a plan another live driver runs, whatever `--state-dir` either names
+- THEN it is refused before any worker is spawned, naming the holder's pid and start time and the way out (`await` the plan, or stop that driver)
+
+#### Scenario: other plans and finished runs
+- WHEN a run of another plan in the same repository starts, or a run ended or crashed
+- THEN it is not held up, and no lock stays behind
+
+### Requirement: A report is read after a bounded grace
+The driver SHALL wait a bounded grace for a report's payload and tell the sender before it asks the Lead.
+
+#### Scenario: a file that lands late
+- WHEN a report reaches the driver before the file it names is usable (absent, half written, or breaking its contract)
+- THEN the driver waits a bounded grace and reads the file when it lands, and ends the wait at the deadline when it never does
+
+#### Scenario: a payload that stays unreadable
+- WHEN the payload is still unreadable after the grace
+- THEN the sending agent is told what the driver needs, twice at most, with the gate kept open, and only then is the Lead asked, naming the warnings; an agent that is gone is not warned
+
+### Requirement: COMPLETE needs the required checks
+`checkpoint()` SHALL accept COMPLETE only when every required check is reported passed, spelled as required, whitespace apart.
+
+#### Scenario: the same command
+- WHEN the packet requires a check and the report's passed check spells the same command, whitespace apart
+- THEN `checkpoint()` accepts COMPLETE
+
+#### Scenario: a launcher, another command or none
+- WHEN the report's passed check wraps the required command in a launcher (`bash scripts/checks.sh`, `uv run python -m pytest` for `pytest`, a shell proxy), reports another command, or omits it
+- THEN `checkpoint()` refuses COMPLETE naming the required check, and the driver strips no launcher
+
+#### Scenario: not_run and failed
+- WHEN a COMPLETE report carries a `failed` check, a required check `not_run`, or a `not_run` check with no reason
+- THEN `checkpoint()` refuses it; a non-required `not_run` with a reason is accepted
+
+#### Scenario: a PARTIAL checkpoint without a checkout
+- WHEN a PARTIAL checkpoint runs and `packet.checkout` does not exist
+- THEN `checkpoint()` raises
+
+### Requirement: A refused report goes back to its sender
+The driver SHALL return a report that fails the COMPLETE rules to the worker that wrote it, and ask the Lead only at the fix-round cap.
+
+#### Scenario: a fix round
+- WHEN a worker reports its unit ready and the report fails the COMPLETE rules
+- THEN the driver messages that worker with the refusal reason, the ticket keeps its gate, one fix round is counted, and no Lead request is written
+
+#### Scenario: the cap
+- WHEN report-time refusals reach the fix-round cap
+- THEN the Lead is asked, as for any capped unit
+
+#### Scenario: an unreadable check outcome
+- WHEN a COMPLETE report fails a rule and carries a check outcome the driver cannot read (prose instead of `passed`, `failed` or `not_run`)
+- THEN the refusal goes back to the sender as a resume naming the report and the field, the drive books no error and reaches `finish`, and the corrected report is gated as usual
+
+### Requirement: A merged unit completes
+A unit whose pull request merged SHALL complete even when its stored report fails the COMPLETE rules.
+
+#### Scenario: merged with a failing report
+- WHEN a PR is merged and its stored report fails the COMPLETE rules
+- THEN the ledger task is COMPLETE with its original checks, the plan cell is COMPLETE, `deferred.md` has a `[merged-unverified] <task>: <reason>` line, no Lead request is written, and the dependents become dispatchable
+
+#### Scenario: an early merge
+- WHEN a PR merges early (`merged_early`), including on a drive with a named `--gate`
+- THEN the unit completes the same way and the ledger task keeps the checks of the worker's stored report
+
+#### Scenario: a missing checkout
+- WHEN a PR is merged and `packet.checkout` no longer exists
+- THEN the task is COMPLETE with `checkout_at_checkpoint: null`, a log line names the missing path, and `(task, "awaiting-merge")` is not in the stuck set
+
+#### Scenario: a shared checkout
+- WHEN cleanup runs for a COMPLETE task whose checkout a non-closed task under another worker name also uses
+- THEN the worktree is kept
+
+### Requirement: CI findings are capped per job
+A CI fix round SHALL carry each failing job's own capped excerpt and stay small.
+
+#### Scenario: several long logs
+- WHEN several CI checks fail with long logs
+- THEN each CI finding carries only its own job's capped excerpt, the full log is at `log_path`, and the fix-round findings file stays under 64 KiB
+
+### Requirement: A pending CI log is not a finding
+The driver SHALL wait on a failing check whose workflow run is still in progress.
+
+#### Scenario: the placeholder log
+- WHEN a check fails while its workflow run is in progress, so `gh run view --log-failed` answers that logs will be available when it is complete
+- THEN the CI state stays pending and the unit is not asked; once the failing step's log is readable the gate fails and the request quotes that log, never the placeholder
+
+### Requirement: A conflicting pull request is rebased
+A unit whose pull request conflicts SHALL go back to draft and be rebased by a fresh worker, and no ready or update call SHALL run on it meanwhile.
+
+#### Scenario: a conflict while waiting for the merge
+- WHEN a unit at `awaiting-merge` has a pull request that turns `DIRTY` or `CONFLICTING`
+- THEN the PR goes back to draft and a conflict fix round gives a fresh worker a rebase brief quoting the merge state; the rebase goes through a delta re-review and CI, and `gh pr ready` runs again before the unit waits again
+
+#### Scenario: a conflict at ready-for-ci
+- WHEN a unit at `ready-for-ci` has a `DIRTY` or `CONFLICTING` pull request
+- THEN neither `gh pr ready` nor `gh pr update-branch` runs, the PR stays a draft and the conflict fix round is raised directly
+
+#### Scenario: a conflict past the cap
+- WHEN the pull request conflicts after the fix rounds hit the cap
+- THEN the unit escalates to the Lead as other capped rounds do and the PR is left a draft
+
+#### Scenario: the draft undo fails
+- WHEN `gh pr ready --undo` fails as a unit leaves for a fix round
+- THEN no fix worker is dispatched, the undo is logged and tried again on a later round
+
+#### Scenario: an update-branch failure without a conflict
+- WHEN `gh pr update-branch` fails and a fresh `gh pr view` shows no conflict
+- THEN no conflict round is raised and the Lead is asked with the `gh` error and the way out
+
+#### Scenario: a disputed change
+- WHEN a disputed answer with `changes_code` sends a unit back from `ready-for-ci` or `awaiting-merge`
+- THEN the unit's readiness is forgotten across its attempts and its checks cleared, the PR is a draft through the delta re-review, and `gh pr ready` runs again on its return
+
+### Requirement: A pull request that is behind is updated
+A unit whose pull request is behind its base SHALL be updated without a fix round.
+
+#### Scenario: behind
+- WHEN a unit's PR is `BEHIND` its base at `ready-for-ci` or `awaiting-merge`
+- THEN `gh pr update-branch` runs, the unit goes back to `ready-for-ci` with its checks cleared and its PR still ready, only checks read on the moved head count as green, and the new `pr-ready` wake is keyed on the PR's live `headRefOid`
+
+#### Scenario: an unknown state
+- WHEN the merge state is `UNKNOWN`, or `gh pr view` fails, at `ready-for-ci` or `awaiting-merge`
+- THEN no `gh pr ready`, no wake and no fix round happen, and the unit is polled again
+
+### Requirement: Red checks while waiting for the merge
+A unit at `awaiting-merge` SHALL go back to a CI fix round when its checks turn red, and keep waiting otherwise.
+
+#### Scenario: red checks
+- WHEN a unit at `awaiting-merge` has red checks
+- THEN the PR goes back to draft and a CI fix round is raised with the failed check's log
+
+#### Scenario: a quiet wait
+- WHEN a unit at `awaiting-merge` has merge state `CLEAN`, `BLOCKED`, `UNSTABLE` or `HAS_HOOKS` and checks green or pending
+- THEN it keeps waiting with no mutating `gh` call and no idle request
+
+#### Scenario: a merge wins
+- WHEN a pull request is `MERGED` or `CLOSED` while it also conflicts, is behind or has red checks
+- THEN the merge or close handling wins and no fix round is raised
+
+### Requirement: A conflicting archive pull request is rebuilt
+The driver SHALL rebuild the archive branch from the current base before it asks anyone about a conflicting archive pull request.
+
+#### Scenario: a conflict
+- WHEN the archive unit's pull request conflicts
+- THEN the driver rebuilds the branch from the current base and pushes it again, twice per unit, spawning no worker
+
+#### Scenario: past the rebuilds
+- WHEN the conflict remains after those rebuilds
+- THEN the Lead is asked with `retry` and `skip`, and `retry` rebuilds again
+
+### Requirement: Orphaned tasks are recovered
+A drive SHALL settle an open task whose agent the runtime no longer holds.
+
+#### Scenario: an orphan
+- WHEN a drive starts and an open, unparked ledger task's assignment is not in `wait`'s `unfinished`, and `status` for its agent answers `exited`, or `unknown` with hc's `not_found`
+- THEN an `orphaned` event names the task and the status answer
+
+#### Scenario: an implementer whose report has not landed
+- WHEN an orphaned implementer attempt's report has not landed
+- THEN the attempt is RELEASED with reason `orphaned: <answer>`, the unit is dispatched again as `t<N>o<k>` on the same worktree and branch under the same worker name, and the plan cell reads `IN PROGRESS`
+
+#### Scenario: a report that has landed
+- WHEN the orphaned attempt's report has landed
+- THEN the gate moves to `reported` and nothing is spawned
+
+#### Scenario: a reviewer or an answerer
+- WHEN the orphaned agent is a reviewer or an answerer
+- THEN it takes the `exited` path
+
+#### Scenario: a failing status
+- WHEN `status` for an open task's agent raises or answers `unknown` with an error other than `not_found`
+- THEN nothing is released or spawned, and a `stranded` wake names the unit and the error
+
+#### Scenario: a settled task is not dispatched again
+- WHEN `dispatch` is given a task id the ledger holds as COMPLETE or RELEASED
+- THEN it refuses before any `spawn` or `resume`
+
+#### Scenario: a released ticket
+- WHEN a ticket's cell reads `IN PROGRESS`, the ledger holds at least one attempt of its unit, every attempt is RELEASED, and `status` for its worker answers definitively not live
+- THEN the ticket is dispatchable again; a ticket whose unit has no attempt in the ledger is not dispatched
+
+### Requirement: A run does not finish over open work
+The loop SHALL NOT log `finish` while an open task is unsettled.
+
+#### Scenario: a task the loop cannot settle
+- WHEN the loop would finish while an open, unparked task's assignment is not in `wait`'s `unfinished` and the loop cannot settle it, including a task held by a live terminal this drive did not bind
+- THEN a `stranded` wake names the task and the runtime's answer, and the run exits non-zero instead of logging `finish`
+
+#### Scenario: a finished turn with its report
+- WHEN the loop would finish while an open task's agent has ended its turn (`idle` or `done`) and its report has landed for that attempt
+- THEN the gate moves to `reported`, nothing is spawned, and the run does not finish over it
+
+### Requirement: Not-dispatched tickets
+A failed dispatch SHALL wake the Lead once per ticket and reason, and only the exact cell `TO-DO` retries it.
+
+#### Scenario: the wake
+- WHEN a dispatch or re-dispatch fails for any reason
+- THEN a `not-dispatched` wake names the ticket, the reason and the way out, "set the ticket's Status cell back to exactly `TO-DO`", once per ticket and reason
+
+#### Scenario: the retry
+- WHEN the Lead sets the ticket's cell back to exactly `TO-DO`
+- THEN the next round tries it again; any other value (for example `TO-DO · retry`) does not retry within the run, and a new drive reads a cell that starts with `TO-DO` as TO-DO
+
+### Requirement: An answer resumes the same attempt
+`answer` SHALL resume the worker on the same task id, and an answer SHALL name no other attempt of the unit.
+
+#### Scenario: the resume
+- WHEN the Lead answers a unit's request with `answer`
+- THEN the worker is resumed on the same task id with the answer, no new attempt is created, and a report written after the answer under that id passes the gate
+
+#### Scenario: a foreign attempt id
+- WHEN `decide … answer` names an attempt id of the unit other than the request's `task` (the unit followed by a round letter `r`, `d`, `o`, `p` or `a` and a number, in any case, so `T1R1` names `t1r1`)
+- THEN it exits 2, writes no decision, and names the id it expects; an uppercase form of the expected id is accepted, and one shared `attempt_pattern` recognises every suffix
+
+### Requirement: One idle watchdog
+A quiet agent SHALL cost the Lead one idle request, never an early or repeated one.
+
+#### Scenario: a turn that ended while the runtime lists the assignment as working
+- WHEN an agent's turn ends while the runtime still lists its assignment as working (`idle` or `done`)
+- THEN it is a live agent, not an exit: a reviewer advances only on its own `complete`, a worker stays pending unless a valid report for its task is already on disk, an answerer stays working, none is resumed or replaced, and only the timed idle watchdog (a baseline, then two unchanged ticks) asks the Lead, with one `idle` request and one decision wake naming the agent, the file it owes, how long it has been quiet and `decide <plan> <unit> retry | answer | skip`
+
+#### Scenario: failures are handled at once
+- WHEN an agent has failed, exited or gone, is a restart orphan, reports `unreported` or `error`, or a worker reports `blocked` or `decision`
+- THEN the driver handles it at once, not through the watchdog
+
+#### Scenario: the reviewer brief
+- WHEN a reviewer is briefed
+- THEN the brief says the reviewer may wait on background jobs, that ending a turn does not finish the review, and that it writes the review after those jobs finish and then reports `complete` with the brief's assignment id
+
+#### Scenario: a complete that cannot be read
+- WHEN a `complete` announces a file the driver cannot read
+- THEN the grace and capped recovery apply, and each recovery message names the file to write or repair and says to report complete under the current assignment
+
+#### Scenario: a working agent
+- WHEN `wait` reports a unit's agent with `runtime_state: working`
+- THEN the idle tick does not count it until it has been `working` for `--working-minutes`, when the request says how long; the window is in memory and starts empty at each drive start
+
+#### Scenario: a skipped unit
+- WHEN the idle tick skips a unit (its gate is `requested`, `awaiting-merge` or parked)
+- THEN that unit's working window is cleared, so a unit that returns to `working` starts a fresh one and is not asked until another `--working-minutes` have passed
+
+#### Scenario: an unchanged signature that is not working
+- WHEN a unit's signature is unchanged for two ticks and its agent is not reported `working` (CI waiting, or no runtime observation)
+- THEN the Lead is asked
+
+#### Scenario: the file a worker owes
+- WHEN the idle request names the file a worker owes
+- THEN it names the next write-once path of its task directory (`report.2.json` on a second try), never the newest file already on disk
+
+#### Scenario: a late reviewer complete
+- WHEN a reviewer whose idle request is still undecided reports `complete`
+- THEN the review is taken as for any reviewer (the unit goes on to `reviewed`) and the request closes as resolved by the worker with a decision that says so; once the Lead has decided, a late `complete` is ignored
+
+#### Scenario: the answers record
+- WHEN the Lead decides a request that did not name a busy answerer, such as a `ci` request answered `fresh worker`
+- THEN the answers record is not failed and the answerer's later `complete` is received; when a decision does fail the record because the request named the answerer, an `answers-dropped` event says why `pr-ready` stopped waiting on the answers
+
+### Requirement: Not-started attempts reach the Lead
+The drive SHALL act on the runtime's `not_started` attention verdict on the wait that delivers it.
+
+#### Scenario: a resumed attempt that produced nothing
+- WHEN `wait` reports an assignment with an `attention` verdict `not_started`
+- THEN the Lead is asked naming the agent, the attempt, the runtime's own `next` sentence and the driver's way out (look at its terminal and, if it has finished, stop it and put a fresh worker on the round), and the unit is never logged `waiting` on that agent
+
+#### Scenario: an attempt that advances
+- WHEN a resumed attempt advances its turn and reports
+- THEN no request is raised; a verdict on an assignment no step of the drive owns ends nothing, and the drive does not re-derive the verdict from screen or output freshness
+
+### Requirement: Partial and blocked reports reach the Lead
+A PARTIAL or BLOCKED report from an ended turn SHALL open a blocked request for the Lead.
+
+#### Scenario: an ended turn with a valid report
+- WHEN a worker's turn ends and its valid report belongs to the current task attempt
+- THEN a PARTIAL or BLOCKED report opens a blocked request containing its summary and remaining work, COMPLETE recovery keeps its acceptance checks, progress message text alone is never a handoff, and the same holds when reconciling an idle or lost worker
+
+### Requirement: The ledger lock is bounded
+The driver and every Lead command SHALL take the ledger lock through one helper and one deadline rule.
+
+#### Scenario: a held lock
+- WHEN the driver books a change while a Lead command holds the ledger lock
+- THEN it waits with jittered backoff (0.2 s growing to 5 s) under one monotonic 60 s deadline that counts the lock waits and the sleeps alike, then books the change, and the drive does not exit
+
+#### Scenario: one helper
+- WHEN the driver and a Lead command both write the ledger
+- THEN they take the lock through `ledger.locked` under the same deadline rule
+
+### Requirement: Ledger kind marker
+A ledger SHALL carry its kind before any file a worker reads exists.
+
+#### Scenario: a new or unmarked ledger
+- WHEN the orchestrator creates a ledger, or makes its next locked write to a ledger that lacks the marker
+- THEN the ledger carries `"kind": "agent-orchestrator/ledger"` beside `version: 1`, on disk before the contract or a brief exists
+
+#### Scenario: another kind
+- WHEN the ledger is of another kind
+- THEN it is refused
+
+### Requirement: Lead reads are snapshots
+A Lead read command SHALL read an unlocked snapshot, and any write it makes SHALL revalidate under the lock.
+
+#### Scenario: a read that then writes
+- WHEN `show`, the read half of `complete`, or `evidence` runs during a drive and then writes
+- THEN the write takes the lock and revalidates against the current ledger, refusing with `the ledger changed since it was read` when the keys it decided on moved, and writes nothing
+
+### Requirement: A crashed driver is visible
+A driver that fails SHALL log the crash, wake the Lead and exit non-zero, and `await` SHALL say so.
+
+#### Scenario: a crash
+- WHEN the ledger stays busy past the deadline, or any other exception escapes the driver during startup, the loop or the finalization
+- THEN the driver logs `crashed <reason>` (`crashed ledger busy >60s` for the ledger), writes a `crash` wake without taking the ledger lock, and exits non-zero; a `run` refused because another driver holds the run lock logs no crash
+
+#### Scenario: await on a dead driver
+- WHEN `await` runs while no driver holds the run lock and the run has not finished
+- THEN it returns `crashed -> <log line>` when the driver logged a crash, and `driver gone without a crash log` when a driver started for the run and died without one; a wake the Lead has not seen is printed first, and a run whose driver has not started or holds the run lock is still awaited
+
+### Requirement: Intents before sends
+The driver SHALL book an intent before it spawns or resumes an agent.
+
+#### Scenario: booking
+- WHEN the driver is about to spawn or resume an agent (a first spawn, an attach to a live pane, a fix round's, an answers round's or a chase's hand-over, a payload repair)
+- THEN it books an intent in the ledger's `intents` with a fresh UUID `operation_id` before it calls the runtime with it, and binds the intent to the assignment the runtime answers
+
+#### Scenario: a runtime that refuses operation ids
+- WHEN the runtime refuses operation ids
+- THEN no unkeyed send is made, and the Lead gets a request (`retry` or `skip`); a first spawn gets the ticket's `not-dispatched` wake
+
+### Requirement: A restart resolves open intents
+A restarted driver SHALL look up an open intent before it acts on it.
+
+#### Scenario: a known operation
+- WHEN the driver restarts and an agent's intent is open, and `agent-runtime call operation` answers `absent`
+- THEN it acts again under a new intent
+
+#### Scenario: an adopted assignment
+- WHEN the lookup answers `bound`, `working`, `blocked`, `decision`, `complete` or `failed`
+- THEN the driver adopts that assignment without sending
+
+#### Scenario: an unknown operation
+- WHEN the lookup answers `pending`, `unknown`, an answer the driver does not know, or fails
+- THEN it raises a Lead request ("the resume may or may not have reached <worker>: retry or skip") and sends nothing on its own, looking the key up once; the Lead's `retry` runs the held step again under a new intent, and any decision settles the held intent
+
+### Requirement: A failed gate is booked once
+A gate failure SHALL be booked in one ledger write before any git or gh call.
+
+#### Scenario: a failing gate
+- WHEN a gate fails
+- THEN the round increment, the report's checkpoint, the next phase (a fix round, or the Lead's request past the cap) and the draft the pull request still owes (`fix.draft`) are booked in one ledger write, and a restart after a crash anywhere later counts the round once
+
+### Requirement: Ledger invariants
+A ledger write SHALL refuse a state that breaks an invariant.
+
+#### Scenario: a broken ledger
+- WHEN a ledger is written, or captured and read with `ledger check`, with two open attempts naming one review file, a park carrying no release key, or a gate the driver does not know
+- THEN the write is refused naming the invariant, the task and the way out, `agent-orchestrator ledger check` reports the same on a captured ledger with exit 2, and a ledger the driver itself finishes on passes
+
+### Requirement: A reworked unit writes a new review
+A unit reviewed before and worked again SHALL write its next review to the next write-once file.
+
+#### Scenario: a second review
+- WHEN a unit that was already reviewed is worked again after the Lead answers its request (the same task id)
+- THEN the next review is written to the next write-once review file, the ledger's review names it, and the earlier review stays on disk with the blocker ids it named
+
+### Requirement: Request files are repaired
+The driver SHALL rewrite an unusable request file from the ledger before it waits on the Lead.
+
+#### Scenario: an empty request
+- WHEN a unit's request file is missing or does not validate (a crash left it empty)
+- THEN the driver writes it again from the ledger before it waits, so `decide` can still answer it; a readable request is never rewritten
+
+### Requirement: Decisions match the request's contract
+A decision SHALL be written in the contract version of the request it answers, and the driver SHALL refuse one it cannot read.
+
+#### Scenario: the version follows the request
+- WHEN the Lead answers an open request
+- THEN the decision is written in the contract version of that request
+
+#### Scenario: a mismatched decide --json
+- WHEN `decide --json` names a contract version the request does not carry
+- THEN the decision is refused naming both versions and the way out, and nothing is written
+
+#### Scenario: an unreadable version
+- WHEN the driver reads a decision whose contract version it does not read
+- THEN it asks the Lead again naming the reason and the way out (restart the driver on the current code), and applies no decision
+
+### Requirement: Archive retry needs ACCEPTED
+A `retry` for the archive unit SHALL wait for the plan to be ACCEPTED.
+
+#### Scenario: decide
+- WHEN the Lead answers the archive unit with `retry` while the plan's state is not ACCEPTED
+- THEN the decision is refused naming the state and the way out, the request stays open and no decision is written
+
+#### Scenario: the driver
+- WHEN the driver applies a `retry` for the archive unit while the plan's state is not ACCEPTED
+- THEN it builds no archive and opens no pull request for that retry, and books a request for the Lead naming the state and the way out
+
+### Requirement: Check tiers are read from the config
+`.orchestrate/config.yaml` SHALL be able to declare `checks.fast`, `checks.affected` and `checks.full.run`.
+
+#### Scenario: the keys
+- WHEN the config carries a `checks` node
+- THEN `checks.fast`, `checks.affected` and `checks.full.run` (strings) are read, each optional; an unknown key, or a placeholder in `affected` other than `{base}` and `{paths}`, is refused naming its dotted path and the fix
+
+#### Scenario: no tiers
+- WHEN `plan check` runs in a repo whose config declares no `checks` node
+- THEN it prints one warning on stderr naming `.orchestrate/config.yaml` and the fields, exits 0, and workers are briefed with `--gate`, or the full-CI-gate default
+
+### Requirement: Check tiers brief the worker
+A ticket worker's required checks SHALL be the repository's check tiers, or the named gate alone.
+
+#### Scenario: tiers
+- WHEN a ticket worker is briefed in a repo whose config declares check tiers and the run names no `--gate`
+- THEN its required checks are `checks.fast` and `checks.affected` with `{base}` rendered as the run's `--base` ref as given and `{paths}` as the ticket's paths, each shell-quoted and space-joined; the "Before you report COMPLETE, run:" line lists exactly those, one other line names `checks.full` as the check CI runs, and the brief no longer asks for the repository's full CI gate
+
+#### Scenario: a named gate
+- WHEN a run names `--gate` in a repo whose config declares check tiers
+- THEN the required checks are the named gate commands alone and the tiers are not applied
+
+#### Scenario: overlapping tiers
+- WHEN `checks.fast`, the rendered `checks.affected` and `checks.full.run` render the same command, whitespace apart
+- THEN the required checks list it once, the brief neither lists it twice nor tells the worker not to run it, and COMPLETE validation is decided by that same set
+
+#### Scenario: a distinct full
+- WHEN `checks.fast` and the rendered `checks.affected` differ from `checks.full.run`
+- THEN the assignment keeps `fast` and the rendered `affected` as its required checks, and a distinct `full` is named only as the whole suite CI runs
+
+### Requirement: An affected check may find no test
+A COMPLETE report SHALL be accepted with the rendered `affected` check `not_run` and a reason.
+
+#### Scenario: no test selected
+- WHEN a COMPLETE report gives the rendered `affected` check `not_run` with a non-blank reason
+- THEN the report is accepted; a `fast` check or any other required check reported `not_run` is still refused, and the allowance never waives a command another tier also requires
+
+### Requirement: This repository declares check tiers
+An orchestrate run in this repository SHALL be briefed with check tiers.
+
+#### Scenario: the repo config
+- WHEN an orchestrate run starts in this repository
+- THEN its config declares `fast` as the unit suite, `affected` selecting through pytest-impacted from `{base}`, and `full` as the whole suite in parallel, and `plan check` prints no tiers warning
+
+### Requirement: Required checks are matched by spelling
+The contract and every brief SHALL tell a worker to report each required check as written.
+
+#### Scenario: the contract
+- WHEN a worker reads the contract the run wrote
+- THEN it says a required check is matched by its spelling, whitespace apart, and names no launcher, proxy or test runner flag
+
+#### Scenario: the brief
+- WHEN a worker receives a brief that carries its required checks (the task, an answer, a redo, a fix or a rebase)
+- THEN it tells the worker to report each required check exactly as written, whatever its shell runs the command through, and the required-check line is unchanged
+
+#### Scenario: a proxied check
+- WHEN a worker's report names a required check through a shell proxy or launcher (`rtk proxy uv run pytest -q` for `uv run pytest -q`)
+- THEN the report is refused naming the required check
+
+### Requirement: Workers run tests in the foreground
+A brief that carries required checks SHALL say how to run them.
+
+#### Scenario: the run discipline
+- WHEN a worker receives a brief that carries its required checks
+- THEN it tells the worker to run those checks and only the test files it wrote or changed, each in the foreground under a timeout, to read failures from that run and to re-run only the tests that failed, naming no runner, flag or file of any one repository
+
+### Requirement: Review items assert violations as blocking
+A contract-2 review item that asserts a requirement violation SHALL be blocking, and older contracts SHALL read as before.
+
+#### Scenario: a violation item
+- WHEN a contract-2 review item carries `requirement_violation` with `source`, `id`, `expected` and `observed` (each nonempty text)
+- THEN its `kind` must be blocking with the item's `file`, `line`, `fix` and `evidence`; an item that is not blocking, whose metadata is missing, blank or not text, or whose `requirement_violation` is neither an object nor `null` is refused by `validate_review` and `ReviewV2` naming the item, before the unit can advance to CI; an explicit `null` reads as absent; the reviewer brief asks for the blocking item and its metadata
+
+#### Scenario: no violation
+- WHEN a review item carries no `requirement_violation`, or a clean contract-2 or a contract-1 review is read
+- THEN a `concern`, `question`, `nit` or `deferred` item does not block, the unit goes on to CI, and both readers still read the older contract unchanged
+
+### Requirement: Open blocking findings persist
+An earlier blocking finding SHALL stay open until a supported resolution closes it, held by a record and not by process memory.
+
+#### Scenario: an omitted finding
+- WHEN an earlier blocking finding is omitted, downgraded, or lies outside a later fix delta without an explicit supported resolution
+- THEN its stable id stays open with its first payload at `<run>/<unit>/open-findings.json` as `{contract: 1, unit, items[]}`; a review that passes while one is open is refused before CI naming the ids, the record and the way out, and a blocking review hands every open item to the fix round with the new ones
+
+#### Scenario: a restart
+- WHEN the driver restarts after recording a blocking finding and processes a passing re-review that omits it
+- THEN the persisted open finding still holds the unit before CI or delivery, and a missing record is rebuilt from the unit's own reviews
+
+#### Scenario: a legacy item
+- WHEN a legacy `major` item is carried by an open set into a contract-2 round
+- THEN it keeps its payload there and the findings file is written as contract 2, so the round reads instead of becoming a Lead request
+
+### Requirement: Only a supported resolution closes a finding
+A reviewer SHALL close an open blocking finding only with a top-level `resolutions` entry backed by evidence.
+
+#### Scenario: a valid resolution
+- WHEN a contract-2 review has a `resolutions` entry for the id with `status` fixed or disproven, the reviewed commit, a nonempty note, and evidence whose command ran with exit 0 and appears in `checks_run` with that command, that exit and the reviewed commit
+- THEN the finding closes
+
+#### Scenario: an invalid resolution
+- WHEN a resolution is a bare acknowledgment, has an unsupported status or a blank note, names an unknown, duplicate or conflicting id, also raises the id blocking, names a commit other than the one reviewed, or has failed or unmatched evidence, or a contract-1 review carries `resolutions`
+- THEN `validate_review` and `ReviewV2` refuse it naming the resolution and the finding stays open
+
+### Requirement: The reviewer brief gives one pass
+The first-review brief SHALL give the reviewer's pass as numbered steps in one order, with every path it works from named.
+
+#### Scenario: the pass
+- WHEN a reviewer receives the brief for a unit's first review
+- THEN the brief gives the pass as numbered steps — read the whole diff first; the ticket delivers what the task file's `What it delivers` says, each satisfied scenario proved by a test the diff adds or changes that asserts the THEN's behaviour on the real code path, names its scenario and fails when the change is reverted (a test that would pass without the change is blocking); the implementer's report matches the code at the reviewed commit (`covers` nodes that exist, `checks` outcomes the log shows, `head`, `files`); the requirements the change touches still hold; the repository's rules hold — and only after that judges severity
+
+#### Scenario: the paths
+- WHEN the steps are printed
+- THEN they follow the paths they work from: the implementer's task file, the report path the ledger recorded for the attempt under review (its exact path, mtime and claimed head), the run's `contract.md`, the plan and the repository's own rules files, with no glob over the unit's run directory and no fallback file read under another name
+
+### Requirement: The re-review brief starts at the delta
+A re-review brief SHALL print the same pass starting at the delta.
+
+#### Scenario: a re-review
+- WHEN the brief is for a re-review
+- THEN its first step reads the delta `<from>..HEAD` with the whole change beside it, checks each earlier finding (resolved or not, with evidence), raises new blocking items only inside the delta, defers a blocking item outside the changed files unless it is about an earlier finding (reusing that finding's `id` or setting `finding` to it), and states that rule once, in that step
+
+### Requirement: The review file path is named
+The reviewer's assignment SHALL name the absolute path of the review file it writes.
+
+#### Scenario: the assignment
+- WHEN the driver starts the reviewer of a unit
+- THEN the assignment names the absolute path of the review file, beside the brief it must read
+
+### Requirement: Test changes carry their cost
+A worker that changes a covered test SHALL report its cost, and a reviewer SHALL judge it.
+
+#### Scenario: the worker
+- WHEN a YAML plan's worker changes a test it covers in `covers`
+- THEN its packet names the `tdd` skill and inlines that skill's admission and cost rules for a backend with no skill loader, its report carries `test_cost` with the command that timed the touched tests, each touched test file's seconds and each covered node's seconds, and verify refuses the report without those rows
+
+#### Scenario: the reviewer
+- WHEN a reviewer reviews a diff that adds or changes tests
+- THEN its brief runs the `test_cost` command or times the diff's test files itself and treats a new or changed test over two seconds, or a module that grew materially without a new boundary, as a blocking defect naming the node, its seconds and the cheaper level that keeps the guarantee
+
+### Requirement: A drive parks on a plan it cannot use
+A live drive SHALL park, not give up the plan, when it reads a plan it cannot use.
+
+#### Scenario: the park
+- WHEN a live drive reads a plan it cannot use (its bytes changed, it does not load, or it lost its `approval` span) and nothing is in flight
+- THEN it records the park in its ledger under `park` (`cause`, `error`, the `digest` of the approval it holds and the `since` of the park), shows it in `attention.md`, wakes the Lead naming a way out that works (`plan approve --base` at the approval's own base, or the snapshot to restore from), and starts no new work while parked
+
+#### Scenario: a repeated wake
+- WHEN a drive has been parked for 15 minutes with nothing in flight
+- THEN it wakes the Lead again naming the way out, and every 30 minutes until the park ends
+
+#### Scenario: a lost approval span
+- WHEN a live drive reads the plan it holds with no `approval` span
+- THEN it recovers the approval from the snapshot it holds and keeps running, and the plan it reads is the approved one
+
+#### Scenario: a re-approval
+- WHEN the Lead runs `plan approve` on a plan whose `approval` span was lost while a drive held it
+- THEN the re-approval succeeds at the approval's own base and the plan file carries its `approval` span again
+
+#### Scenario: a run that ends parked
+- WHEN a run ends while units are parked
+- THEN the ledger and `attention.md` name the park, its cause and the way out, and the run's exit says the units are parked rather than that it had nothing to do
+
+### Requirement: Pointers name one file
+Every instruction the engine renders SHALL point at a file that exists, the file the reader writes, or a collection with its number of files.
+
+#### Scenario: a pointer
+- WHEN the engine renders an instruction for an agent or a person
+- THEN each pointer names a file that exists, the file the reader is asked to write, or a collection with its number of files; no pointer is a glob, a bare directory to search, or a request for the newest file
+
+#### Scenario: a pointer that resolves to nothing or several
+- WHEN a pointer resolves to zero or several files
+- THEN it is refused naming the pointer, the expected file and the way out
+
+### Requirement: Launch hands over the Lead's environment
+`launch` SHALL start the driver with the Lead's environment and leak no value.
+
+#### Scenario: the environment
+- WHEN `launch` starts the driver
+- THEN the driver runs with the Lead's environment minus the pane and session variables (the terminal id, `CLAUDECODE`, `CLAUDE_CODE_*`), and no value is written to argv or logs: the environment travels in a mode 0600 file the pane deletes at start
+
+### Requirement: Narration
+The driver SHALL narrate a run on stderr, opening with a banner.
+
+#### Scenario: a line
+- WHEN the driver narrates a run
+- THEN each line carries the time, the unit, the step (one of `narrate.STEPS`), a kind symbol and the text, the attempt last; colour is used only on a terminal with `NO_COLOR` unset; a `wait` the unit already said is repeated only every 5 minutes as `(still, Nm)`, and any other line of the unit resets it; run-dir paths are relative, the home is `~`, a GitHub PR URL is `#N`, and the text is cut at 200 characters
+
+#### Scenario: the banner
+- WHEN a drive starts
+- THEN before any worker line the driver writes the `narrate.LOGO` wordmark, then the plan's slug and goal, its ticket count by status, the repository and base, `--max-workers`, the `--gate` commands when any, the route source and one line per class route (`backend · model · effort`, `effort by matrix` when the matrix decides) and one per step route
+
+### Requirement: Usage rolls up
+Usage figures SHALL be summed over a ticket's assignments and `null` when any assignment lacks them.
+
+#### Scenario: the rollup
+- WHEN `events.rollup` totals a ticket whose assignments reported usage dicts with different keys, or one of whose assignments never reported usage
+- THEN each key is the sum over the ticket's assignments when every assignment reported it, and `null` when any did not; a ticket none of whose assignments reported usage stays `unknown`
+
+#### Scenario: attempts
+- WHEN the driver writes `attempts.jsonl`
+- THEN each record is schema 3: `tokens` carries `input`, `output`, `cached`, `cache_write` and `reasoning`, the record carries `cost_usd`, and `counters.model_calls` and `counters.tool_calls` are summed from usage, each `null` when any of the attempt's assignments lacks it; `evidence-manifest.json` names the new fields
+
+#### Scenario: a missing cost
+- WHEN a ticket's worker reports usage with `cost_usd` and its reviewer reports usage without it
+- THEN `metrics.json` and `attempts.jsonl` sum the tokens and calls with `cost_usd` null; when both report `cost_usd`, both files sum it

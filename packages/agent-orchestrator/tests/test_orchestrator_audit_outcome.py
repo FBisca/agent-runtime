@@ -223,6 +223,7 @@ class LedgerContentionOutcome(Drives, GateFixture, unittest.TestCase):
             "more": False,
         }
 
+    @pytest.mark.spec("The ledger lock is bounded")
     def test_a_lead_command_holding_the_ledger_across_a_booking_is_waited_out(self):
         """orchestrator-audit-fixes/S1: the drive waits for the lock and books the change; it does not exit."""
         held, flag = self.hold(3)
@@ -237,6 +238,7 @@ class LedgerContentionOutcome(Drives, GateFixture, unittest.TestCase):
         self.assertEqual(busy, [], "a busy ledger was an error, not a wait")
         self.assertEqual((self.task()["status"], self.task()["gate"]), ("COMPLETE", "done"))
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_a_ledger_busy_past_the_deadline_logs_a_crash_and_writes_a_wake(self):
         """orchestrator-audit-fixes/S2: past the deadline the driver logs `crashed ledger busy ><deadline>`,
         wakes the Lead without the lock and exits non-zero.
@@ -264,6 +266,7 @@ class LedgerContentionOutcome(Drives, GateFixture, unittest.TestCase):
             "no wake told the Lead about the crash",
         )
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_an_exception_escaping_the_loop_logs_a_crash_and_writes_a_wake(self):
         """orchestrator-audit-fixes/S3"""
         code, out, err = self.drive_process([self.crashed_step()], 30)
@@ -276,6 +279,7 @@ class LedgerContentionOutcome(Drives, GateFixture, unittest.TestCase):
             "no wake told the Lead about the crash",
         )
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_await_returns_the_crash_of_a_driver_that_crashed(self):
         """orchestrator-audit-fixes/S4: `crashed -> <log line>`, never a poll that lasts forever."""
         code, _, _ = self.drive_process([self.crashed_step()], 30)
@@ -283,6 +287,7 @@ class LedgerContentionOutcome(Drives, GateFixture, unittest.TestCase):
         lines = self.awaited("crashed -> ")
         self.assertGreater(len(lines[-1]), len("crashed -> "), "the crash names no log line")
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_await_says_the_driver_is_gone_when_it_was_killed_without_a_crash_log(self):
         """orchestrator-audit-fixes/S4: a SIGKILL leaves no crash log: `driver gone without a crash log`."""
         marker = self.root / "in-wait"
@@ -324,6 +329,7 @@ class ForeignAnswerOutcome(Drives, AcceptanceFixture, unittest.TestCase):
         )
         return path
 
+    @pytest.mark.spec("An answer resumes the same attempt")
     def test_an_answer_naming_t1a1_for_t1a2_is_refused_as_foreign(self):
         """orchestrator-audit-fixes/S13: the `a` round suffix is an attempt id like the others."""
         path = self.open_request("t1a2")
@@ -335,6 +341,7 @@ class ForeignAnswerOutcome(Drives, AcceptanceFixture, unittest.TestCase):
         self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
         self.assertEqual(path.read_text(encoding="utf-8"), before)
 
+    @pytest.mark.spec("An answer resumes the same attempt")
     def test_control_an_answer_naming_t1r1_for_t1r2_is_refused(self):
         """Holds today: the round suffixes the pattern knows are refused."""
         self.open_request("t1r2")
@@ -368,6 +375,7 @@ class IntentRestartOutcome(Drives, GateFixture, unittest.TestCase):
                 pass
         return found
 
+    @pytest.mark.spec("A restart resolves open intents")
     def test_a_restart_over_a_pending_resume_asks_the_lead_and_sends_nothing_again(self):
         """orchestrator-audit-fixes/S15: pending -> a Lead request naming the worker; the runtime sees no second send."""
         (self.home / "die-on-send.json").write_text(
@@ -393,6 +401,7 @@ class IntentRestartOutcome(Drives, GateFixture, unittest.TestCase):
         self.assertIn("demo-t1", opened[-1]["reason"])
         self.assertTrue(self.wake_lines("decision"), "the Lead was not woken")
 
+    @pytest.mark.spec("A restart resolves open intents")
     def test_control_a_fix_round_without_a_restart_resumes_the_worker_once(self):
         """Holds today: the wrapped runtime answers as the fake does, and the fix round completes the unit."""
         code, _, err = self.drive_process(
@@ -485,6 +494,7 @@ class ApproveGateOutcome(RunFixture, unittest.TestCase):
         self.assertEqual(self.plan.read_text(encoding="utf-8"), before)
         self.assertIn("Lead", result.stderr, "the refusal does not name the way out")
 
+    @pytest.mark.spec("Only the Lead approves")
     def test_a_caller_the_runtime_verifies_as_a_worker_by_ancestry_is_refused(self):
         """orchestrator-audit-fixes/S20: no host markers, but the runtime saw worker ancestry."""
         self.runtime_answers(
@@ -497,6 +507,7 @@ class ApproveGateOutcome(RunFixture, unittest.TestCase):
         )
         self.assert_refused(*self.approve())
 
+    @pytest.mark.spec("Only the Lead approves")
     def test_an_unknown_caller_inside_an_hc_host_is_refused(self):
         """orchestrator-audit-fixes/S20"""
         self.runtime_answers(
@@ -509,11 +520,13 @@ class ApproveGateOutcome(RunFixture, unittest.TestCase):
         )
         self.assert_refused(*self.approve({"HC_TERMINAL_ID": "term-worker-7"}))
 
+    @pytest.mark.spec("Only the Lead approves")
     def test_a_failed_runtime_lookup_with_agent_markers_is_refused(self):
         """orchestrator-audit-fixes/S20: the lookup failing never overrides the markers."""
         self.runtime_answers(None)
         self.assert_refused(*self.approve({"HC_TERMINAL_ID": "term-worker-7"}))
 
+    @pytest.mark.spec("Only the Lead approves")
     def test_control_a_plain_terminal_approves(self):
         """orchestrator-audit-fixes/S21: holds today."""
         self.runtime_answers(
@@ -528,6 +541,7 @@ class ApproveGateOutcome(RunFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(approved)
 
+    @pytest.mark.spec("Only the Lead approves")
     def test_control_the_lead_verified_inside_hc_approves(self):
         """orchestrator-audit-fixes/S21: holds today."""
         self.runtime_answers(
@@ -542,6 +556,7 @@ class ApproveGateOutcome(RunFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(approved)
 
+    @pytest.mark.spec("Only the Lead approves")
     def test_control_a_worker_the_runtime_names_is_refused(self):
         """Holds today: the runtime's `role: worker` is refused at the CLI."""
         self.runtime_answers(

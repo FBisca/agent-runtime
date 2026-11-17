@@ -27,9 +27,9 @@ pytestmark = pytest.mark.integration
 
 
 class EventBatchTests(EventRig):
+    @pytest.mark.spec("Wait all")
     def test_all_buffers_progress_and_partial_completion_with_fixed_membership(self):
-        """agent-runtime/R38
-        S1: wait(all) returns the first undelivered report, keeps its frozen membership and the caller
+        """S1: wait(all) returns the first undelivered report, keeps its frozen membership and the caller
         continues from the receipt the batch carried."""
         self.prepare()
         request_id = self.begin()
@@ -81,9 +81,9 @@ class EventBatchTests(EventRig):
             ]
         self.assertEqual(json.loads(ids), [report["message_id"]])
 
+    @pytest.mark.spec("Wait all")
     def test_one_wait_returns_all_completed_reports_without_collect(self):
-        """agent-runtime/R39
-        S4: both completions published before the wait still yield one completed batch (the early-delivery
+        """S4: both completions published before the wait still yield one completed batch (the early-delivery
         case is test_S1_wait_all_returns_the_first_undelivered_report)."""
         self.prepare()
         messages = [self.publish(i) for i in (0, 1)]
@@ -167,8 +167,8 @@ class EventBatchTests(EventRig):
         self.assertEqual(batch["messages"], [])
         self.assertEqual(batch["unfinished"], [assignment])
 
+    @pytest.mark.spec("Wait any and named")
     def test_any_batches_eligible_events_and_named_wait_excludes_old_assignment(self):
-        """agent-runtime/R41"""
         self.prepare()
         old = self.publish(0)
         # The wait page delivers the report, so the server lets the lead reuse the name; the report stays
@@ -188,9 +188,9 @@ class EventBatchTests(EventRig):
         self.assertEqual(any_batch["messages"], [old, first, second])
         self.assertEqual(any_batch["reason"], "messages")
 
+    @pytest.mark.spec("Wait deadline and cancellation")
     def test_deadline_empty_and_cancel_preserve_replay_and_workers(self):
-        """agent-runtime/R42
-        S6: a queued report returns at once; a genuinely empty queue waits for the deadline."""
+        """S6: a queued report returns at once; a genuinely empty queue waits for the deadline."""
         self.prepare()
         progress = self.publish(0, "progress")
         started = time.monotonic()
@@ -229,8 +229,8 @@ class EventBatchTests(EventRig):
         self.assertEqual(replay["messages"], [progress])
         self.assertEqual(self.runs("kill") + self.runs("rm"), [])
 
+    @pytest.mark.spec("Wait recovers missed events")
     def test_commit_then_process_exit_without_hint_recovers_within_bound(self):
-        """agent-runtime/R43"""
         self.prepare()
         request_id = self.begin(target="w1")
         assignment = self.assignments[0]
@@ -272,8 +272,8 @@ os._exit(0)
         self.assertEqual(batch["reason"], "completed")
         self.assertEqual(batch["messages"], [envelope])
 
+    @pytest.mark.spec("Wait recovers missed events")
     def test_publication_between_snapshot_and_listener_is_rechecked(self):
-        """agent-runtime/R43"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")
@@ -296,8 +296,8 @@ os._exit(0)
             )
         self.assertEqual(result["structuredContent"]["reason"], "completed")
 
+    @pytest.mark.spec("Wait recovers missed events")
     def test_cross_process_ipc_wakes_without_waiting_for_recovery_timer(self):
-        """agent-runtime/R43"""
         self.prepare()
         store = Store(self.env)
         observed = threading.Event()
@@ -327,8 +327,8 @@ os._exit(0)
         self.assertEqual(batch["messages"], [message])
         self.assertEqual(batch["reason"], "completed")
 
+    @pytest.mark.spec("Responsive MCP calls")
     def test_wait_keeps_same_process_ping_report_and_cancellation_responsive(self):
-        """agent-runtime/R44"""
         self.prepare()
         child = self.spawn(
             self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"]

@@ -1,4 +1,4 @@
-"""`agent-eval list`: the cases on this machine and the label beside each (agent-eval-list/R234-R236).
+"""`agent-eval list`: the cases on this machine and the label beside each.
 
 The index is a read of `manifest.json` and `labels/`, never of a transcript: a case is listed from its
 own record, so listing is as cheap for a 5 MB case as for an empty one.
@@ -80,7 +80,8 @@ def rows(out: str) -> list[list[str]]:
     ]
 
 
-def test_R234_two_cases_are_listed_newest_first_with_their_verdict_and_score(home, capsys):
+@pytest.mark.spec("Case listing")
+def test_two_cases_are_listed_newest_first_with_their_verdict_and_score(home, capsys):
     case(home, "a-older", "2026-11-10T09:00:00+00:00", 1)
     case(home, "b-newer", "2026-11-11T10:00:00+00:00", 3, label("PASS", 0.85, "glm-5.3"))
     case(home, "c-newest", "2026-11-11T12:00:00+00:00", 2, label("FAIL", 0.4, "gpt-6.1-terra"))
@@ -95,7 +96,8 @@ def test_R234_two_cases_are_listed_newest_first_with_their_verdict_and_score(hom
     assert ["2026-11-10", "1", "-", "-", "-"] == a_older[1:]
 
 
-def test_R234_an_unlabelled_case_is_listed_with_a_dash_not_hidden(home, capsys):
+@pytest.mark.spec("Case listing")
+def test_an_unlabelled_case_is_listed_with_a_dash_not_hidden(home, capsys):
     case(home, "unjudged", "2026-11-11T10:00:00+00:00", 2)
 
     assert main(["list"]) == 0
@@ -105,7 +107,8 @@ def test_R234_an_unlabelled_case_is_listed_with_a_dash_not_hidden(home, capsys):
     assert row[-2:] == ["-", "-"], f"verdict and score should read '-': {row}"
 
 
-def test_R234_a_directory_that_is_not_a_case_is_not_listed(home, capsys):
+@pytest.mark.spec("Case listing")
+def test_a_directory_that_is_not_a_case_is_not_listed(home, capsys):
     case(home, "a-case", "2026-11-11T10:00:00+00:00", 1)
     (home / "cases" / "stray").mkdir()
     (home / "cases" / "stray" / "notes.txt").write_text("not a case", encoding="utf-8")
@@ -118,7 +121,8 @@ def test_R234_a_directory_that_is_not_a_case_is_not_listed(home, capsys):
     assert [row[0] for row in rows(capsys.readouterr().out)] == ["a-case"]
 
 
-def test_R235_json_prints_one_array_with_nulls_for_an_unlabelled_case(home, capsys):
+@pytest.mark.spec("Case listing as JSON")
+def test_json_prints_one_array_with_nulls_for_an_unlabelled_case(home, capsys):
     case(home, "judged", "2026-11-11T10:00:00+00:00", 2, label("BLOCKED", 0.33, "gpt-6.1-terra"))
     case(home, "open", "2026-11-11T11:00:00+00:00", 1)
 
@@ -141,7 +145,8 @@ def test_R235_json_prints_one_array_with_nulls_for_an_unlabelled_case(home, caps
     )
 
 
-def test_R235_listing_reads_no_transcript(home, capsys):
+@pytest.mark.spec("Case listing as JSON")
+def test_listing_reads_no_transcript(home, capsys):
     """The manifest's transcript is absent from the case: a listing that opened it would fail."""
     case(home, "big", "2026-11-11T10:00:00+00:00", 2, label("PASS", 0.9, "glm-5.3"))
     assert not (home / "cases" / "big" / "transcripts").exists()
@@ -152,7 +157,8 @@ def test_R235_listing_reads_no_transcript(home, capsys):
 
 
 @pytest.mark.parametrize("json_flag", [[], ["--json"]], ids=["text", "json"])
-def test_R236_an_empty_or_missing_home_prints_nothing_and_creates_nothing(
+@pytest.mark.spec("Empty home listing")
+def test_an_empty_or_missing_home_prints_nothing_and_creates_nothing(
     tmp_path, monkeypatch, capsys, json_flag
 ):
     for evals in (tmp_path / "evals", tmp_path / "absent"):

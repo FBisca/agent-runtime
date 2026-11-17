@@ -144,6 +144,7 @@ class TotalsFixture(MetricsFixture):
 
 
 class TotalsTests(TotalsFixture):
+    @pytest.mark.spec("Weekly totals")
     def test_S5_the_cards_sum_the_last_seven_days(self):
         self.drive()
         shown = self.totals()
@@ -156,6 +157,7 @@ class TotalsTests(TotalsFixture):
         # Dispatch to merge: 20, 30, 40 and 60 minutes; the median of an even count is the mean of the middle two.
         self.assertAlmostEqual(cards["median_ticket_seconds"], 35 * 60, delta=1)
 
+    @pytest.mark.spec("Weekly totals")
     def test_S5_the_median_of_an_odd_count_is_the_middle_one(self):
         self.approved("alpha", [], [], [])
         self.write_ledger("alpha", {"T1": "COMPLETE"}, plan_state="RUNNING")
@@ -170,6 +172,7 @@ class TotalsTests(TotalsFixture):
         )
         self.assertAlmostEqual(self.totals()["cards"]["median_ticket_seconds"], 30 * 60, delta=1)
 
+    @pytest.mark.spec("Weekly totals")
     def test_S5_nothing_in_the_window_is_zero_and_unknown_never_a_guess(self):
         self.approved("idle")
         cards = self.totals()["cards"]
@@ -180,6 +183,7 @@ class TotalsTests(TotalsFixture):
             cards["tokens"], {"input": None, "output": None, "measured": 0, "tickets": 0}
         )
 
+    @pytest.mark.spec("Weekly totals")
     def test_S5_a_plan_whose_file_no_longer_loads_still_counts_what_it_merged(self):
         path = self.approved("gone")
         self.write_ledger("gone", {"T1": "COMPLETE"}, plan_state="ARCHIVED")
@@ -195,6 +199,7 @@ class TotalsTests(TotalsFixture):
         self.edit(path, lambda data: data["tickets"][0].update(blocked_by=["T9"]))
         self.assertEqual(self.totals()["cards"]["merged"], 1)
 
+    @pytest.mark.spec("Totals dashboards")
     def test_S6_each_card_has_its_dashboard(self):
         self.drive()
         shown = self.totals()
@@ -235,6 +240,7 @@ class TotalsTests(TotalsFixture):
         self.assertEqual(tokens["by_plan"]["alpha"]["output"], 40)
         self.assertEqual([(t["plan"], t["ticket"]) for t in tokens["top"]], [("alpha", "T1")])
 
+    @pytest.mark.spec("Totals dashboards")
     def test_S6_the_lists_are_cut_to_five_slowest_and_ten_latest_escalations(self):
         self.approved("alpha", *([[]] * 7))
         self.write_ledger("alpha", {}, plan_state="RUNNING")
@@ -249,6 +255,7 @@ class TotalsTests(TotalsFixture):
         self.assertEqual(len(shown["escalations"]["latest"]), 10)
         self.assertEqual(shown["escalations"]["by_cause"], {"gate": 12})
 
+    @pytest.mark.spec("Totals dashboards")
     def test_S6_totals_print_no_escalation_text_and_write_nothing(self):
         self.drive()
         before = tree_digest(self.state_dir, self.repo)

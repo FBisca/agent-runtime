@@ -33,6 +33,7 @@ class NeedsMeTests(WorkbenchFixture):
         self.write_ledger(slug, statuses or {"T1": "IN PROGRESS"}, plan_state="RUNNING")
         self.log_events(slug, rows)
 
+    @pytest.mark.spec("Needs me list")
     def test_S28_needs_me_lists_what_waits_on_the_person_in_active_plans_only(self):
         self.running(
             "live",
@@ -62,6 +63,7 @@ class NeedsMeTests(WorkbenchFixture):
         for item in shown["needs_me"]:
             self.assertEqual(set(item), {"plan", "ticket", "kind"})
 
+    @pytest.mark.spec("Needs me list")
     def test_S28_a_plan_that_is_not_running_or_has_a_live_driver_is_not_driver_gone(self):
         self.running("alive", [start()])
         self.running("finished", [start(0, dead_pid()), {"at": at(5), "kind": "finish"}])
@@ -70,16 +72,19 @@ class NeedsMeTests(WorkbenchFixture):
         self.log_events("delivered", [start(0, dead_pid())])
         self.assertEqual(self.kinds(self.listing()), set())
 
+    @pytest.mark.spec("Needs me list")
     def test_S28_the_last_start_decides_the_driver(self):
         self.running("restarted", [start(0, dead_pid()), start(10), state_event(11, "t1")])
         self.assertEqual(self.kinds(self.listing()), set())
 
+    @pytest.mark.spec("Needs me list")
     def test_S28_an_error_since_the_last_start_is_an_error(self):
         error = {"at": at(5), "kind": "error", "unit": "t1", "gate": "poll", "error": "boom"}
         self.running("old", [start(0), error, start(10)])
         self.running("new", [start(0), error])
         self.assertEqual(self.kinds(self.listing()), {("new", None, "error")})
 
+    @pytest.mark.spec("Needs me list")
     def test_S28_the_last_escalation_of_a_unit_with_no_later_decision_or_merge_is_lead_pending(
         self,
     ):
@@ -118,6 +123,7 @@ class NeedsMeTests(WorkbenchFixture):
             },
         )
 
+    @pytest.mark.spec("Needs me list")
     def test_S28_needs_me_prints_no_escalation_or_report_text(self):
         self.running("live", [start(), escalation(1, reason="REPORT-BODY-MARKER the worker wrote")])
         code, out, err = self.workbench("plans")
@@ -125,11 +131,13 @@ class NeedsMeTests(WorkbenchFixture):
         self.assertNotIn("REPORT-BODY-MARKER", out)
         self.assertIn("lead_pending", out)
 
+    @pytest.mark.spec("Needs me list")
     def test_S28_needs_me_is_an_empty_list_when_nothing_waits(self):
         self.approved("done")
         self.write_ledger("done", {"T1": "COMPLETE"}, plan_state="ARCHIVED")
         self.assertEqual(self.listing()["needs_me"], [])
 
+    @pytest.mark.spec("Needs me list")
     def test_S3_a_gone_driver_keeps_driver_gone_and_needs_you_and_drops_what_only_a_driver_clears(
         self,
     ):

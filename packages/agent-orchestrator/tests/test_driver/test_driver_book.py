@@ -69,6 +69,7 @@ class PreSplitLedgerTests(unittest.TestCase):
     """S13: a ledger written before the split is read after it, with no migration."""
 
     @pytest.mark.integration
+    @pytest.mark.spec("Pre-split ledgers open")
     def test_S13_a_ledger_written_before_the_split_opens_under_the_book(self):
         from agent_orchestrator.driver import book as spine
 

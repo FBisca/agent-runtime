@@ -38,8 +38,9 @@ class OpenAnswers(EnvelopeFixture, unittest.TestCase):
         rows = [[2, "", "gh is down"]] + ([[0, json.dumps(self.GREEN), ""]] if then_green else [])
         (self.home / "checks.json").write_text(json.dumps(rows), encoding="utf-8")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S12_a_fresh_worker_on_a_ci_request_does_not_fail_the_answerer_record(self):
-        """orchestrator-engine/R85: orchestrator-audit-fixes/S12"""
+        """orchestrator-audit-fixes/S12"""
         self.broken_checks()
         self.waits(self.passing_with_question() + [self.decide_step("t1", "fresh worker")])
         self.run_driver("--idle-minutes", "0")
@@ -47,8 +48,9 @@ class OpenAnswers(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["answers"]["state"], "working", "the record was failed")
         self.assertEqual(self.run_events("answers-dropped"), [])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S12_an_answerer_complete_after_a_decision_that_did_not_name_it_is_received(self):
-        """orchestrator-engine/R85: orchestrator-audit-fixes/S12"""
+        """orchestrator-audit-fixes/S12"""
         self.broken_checks(then_green=True)
         worker = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 2))
         worker["write"] = [[str(self.run_dir / "t1" / "report.2.json"), self.report("t1")]]
@@ -68,8 +70,9 @@ class OpenAnswers(EnvelopeFixture, unittest.TestCase):
             self.task()["answers"]["state"], "done", "the answerer's complete was not received"
         )
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S12_a_decision_on_a_request_that_named_the_answerer_drops_it_and_says_why(self):
-        """orchestrator-engine/R85: orchestrator-audit-fixes/S12 — the event is why pr-ready stopped waiting."""
+        """orchestrator-audit-fixes/S12 — the event is why pr-ready stopped waiting."""
         self.waits(
             self.passing_with_question() + [self.answerer()] * 5 + [self.decide_step("t1", "retry")]
         )
@@ -85,8 +88,9 @@ class OpenAnswers(EnvelopeFixture, unittest.TestCase):
 class AttemptIds(unittest.TestCase):
     """One pattern says what an attempt id of a unit looks like."""
 
+    @pytest.mark.spec("An answer resumes the same attempt")
     def test_S13_every_round_suffix_names_an_attempt_id(self):
-        """orchestrator-engine/R86: orchestrator-audit-fixes/S13"""
+        """orchestrator-audit-fixes/S13"""
         foreign = load_script().foreign_attempt
         for suffix in "rdopa":
             with self.subTest(suffix=suffix):
@@ -97,14 +101,16 @@ class AttemptIds(unittest.TestCase):
                     foreign("USE T1%s1" % suffix.upper(), "t1", "t1"), "T1%s1" % suffix.upper()
                 )
 
+    @pytest.mark.spec("An answer resumes the same attempt")
     def test_S13_the_expected_id_the_unit_and_other_words_are_not_foreign(self):
-        """orchestrator-engine/R86: orchestrator-audit-fixes/S13"""
+        """orchestrator-audit-fixes/S13"""
         foreign = load_script().foreign_attempt
         self.assertIsNone(foreign("t1a2 is the one", "t1", "t1a2"))
         self.assertIsNone(foreign("see demo-t1a1 and t1apple", "t1", "t1a2"))
 
+    @pytest.mark.spec("An answer resumes the same attempt")
     def test_S13_the_pattern_is_the_one_the_driver_builds_ids_from(self):
-        """orchestrator-engine/R86: orchestrator-audit-fixes/S13 — a letter the driver issues is a letter the
+        """orchestrator-audit-fixes/S13 — a letter the driver issues is a letter the
         pattern knows."""
         spec = load_script()
         pattern = spec.attempt_pattern("t1")
@@ -137,8 +143,9 @@ class AnswerRefusal(EnvelopeFixture, unittest.TestCase):
             str(self.state_dir),
         )
 
+    @pytest.mark.spec("An answer resumes the same attempt")
     def test_S13_an_answer_naming_t1a1_for_t1a2_is_refused_as_foreign(self):
-        """orchestrator-engine/R86: orchestrator-audit-fixes/S13"""
+        """orchestrator-audit-fixes/S13"""
         path = self.open_request("t1a2")
         before = path.read_text(encoding="utf-8")
         result = self.decide("use t1a1")
@@ -152,6 +159,7 @@ class AnswerRefusal(EnvelopeFixture, unittest.TestCase):
 class OpenBlockerAnswers(EnvelopeFixture, unittest.TestCase):
     """A blocker outlives a passing review that only asks a question: no answers round closes it."""
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_generic_worker_answer_does_not_close_an_open_blocker(self):
         from test_gates import BLOCKING, QUESTION
 

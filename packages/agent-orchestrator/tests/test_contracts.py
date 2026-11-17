@@ -84,7 +84,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.assertIn(needle, str(caught.exception))
 
     def test_S6a_report_accepts_the_checkpoint_shape_with_head_and_pr(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
+        """code-driven-orchestrator/S6a"""
         self.assertEqual(
             contracts.validate_report(report(pr="https://example.invalid/pr/1"))["head"], "abc1234"
         )
@@ -145,7 +145,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(contracts.make_findings("verify", 1, [item])["items"], [item])
 
     def test_S6a_report_rejects_a_missing_version_head_or_bad_pr(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
+        """code-driven-orchestrator/S6a"""
         bare = report()
         del bare["contract"]
         self.rejects(contracts.validate_report, bare, "contract")
@@ -160,7 +160,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_report, [], "object")
 
     def test_S6a_review_block_holds_exactly_when_major_is_not_empty(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
+        """code-driven-orchestrator/S6a"""
         contracts.validate_review(review())
         contracts.validate_review(
             review(verdict="block", major=[MAJOR], deferred=[{"id": "D1", "note": "n"}])
@@ -170,7 +170,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_review, review(verdict="maybe"), "verdict")
 
     def test_S6a_review_items_need_every_field(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
+        """code-driven-orchestrator/S6a"""
         for key in MAJOR:
             item = {k: v for k, v in MAJOR.items() if k != key}
             self.rejects(contracts.validate_review, review(verdict="block", major=[item]), key)
@@ -178,7 +178,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_review, review(commit=""), "commit")
 
     def test_S6a_findings_carry_a_source_an_attempt_and_the_blocking_items(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
+        """code-driven-orchestrator/S6a"""
         good = contracts.make_findings("converge", 1, ["FAIL coverage: S1"], version=1)
         self.assertEqual(
             good,
@@ -200,7 +200,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(lambda v: contracts.make_findings(*v), ("review", 1, [BLOCKING, NIT]), "N1")
 
     def test_S6a_load_names_a_missing_unparseable_or_oversized_file(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
+        """code-driven-orchestrator/S6a"""
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "review.json"
             self.rejects(
@@ -216,7 +216,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
             self.rejects(lambda p: contracts.load(p, contracts.validate_review), path, "64 KiB")
 
     def test_S12_a_review_item_needs_id_kind_summary_and_answer_required(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S12"""
+        """orchestrate-lean-loop/S12"""
         contracts.validate_review(review2(verdict="block", items=[BLOCKING, QUESTION, NIT]))
         for key in ("id", "kind", "summary", "answer_required"):
             item = {k: v for k, v in QUESTION.items() if k != key}
@@ -238,7 +238,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         )
 
     def test_S12_a_blocking_item_needs_file_line_fix_and_evidence_and_names_the_item(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S12"""
+        """orchestrate-lean-loop/S12"""
         for key in ("file", "line", "fix", "evidence"):
             item = {k: v for k, v in BLOCKING.items() if k != key}
             self.rejects(
@@ -258,7 +258,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         )
 
     def test_S12_fields_outside_the_core_are_kept_verbatim(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S12"""
+        """orchestrate-lean-loop/S12"""
         item = dict(
             BLOCKING,
             severity="high",
@@ -274,7 +274,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.assertEqual((blocking, rest), ([item], [dict(NIT, anything="goes")]))
 
     def test_S13_the_verdict_and_the_items_must_agree(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S13"""
+        """orchestrate-lean-loop/S13"""
         contracts.validate_review(review2(items=[QUESTION, NIT]))
         self.rejects(
             contracts.validate_review, review2(verdict="block", items=[QUESTION, NIT]), "block"
@@ -282,7 +282,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_review, review2(verdict="pass", items=[BLOCKING]), "pass")
 
     def test_S17_responses_are_fixed_or_disputed_with_a_note(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S17"""
+        """orchestrate-lean-loop/S17"""
         response = {"id": "Q1", "status": "fixed", "commit": "abc1234", "note": "done"}
         contracts.validate_report(report(responses=[response]))
         contracts.validate_report(
@@ -300,7 +300,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         )
 
     def test_S26_clarifications_name_the_finding_who_asked_and_the_note(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S26"""
+        """orchestrate-lean-loop/S26"""
         clarification = {
             "finding": "Q1",
             "asked_by": "implementer",
@@ -316,7 +316,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_review, review2(clarifications="x"), "clarifications")
 
     def test_S15_checks_run_name_the_command_the_exit_and_the_commit(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S15"""
+        """orchestrate-lean-loop/S15"""
         run = {"command": "pytest", "exit": 0, "at_commit": "abc1234"}
         contracts.validate_review(review2(checks_run=[run]))
         for key in run:
@@ -329,7 +329,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.assertEqual((finding["contract"], finding["checks_run"]), (2, [run]))
 
     def test_S14_converge_and_ci_items_carry_the_evidence_the_driver_filled(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S14"""
+        """orchestrate-lean-loop/S14"""
         item = {
             "id": "C1",
             "kind": "blocking",
@@ -350,7 +350,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(lambda v: contracts.make_findings(*v), ("ci", 1, [item]), "source")
 
     def test_S11_a_decision_names_one_action_from_the_menu(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         for action in ("retry", "retry one class up", "fresh worker", "mark blocked", "skip"):
             decision = {"contract": 1, "action": action, "reason": "because"}
             self.assertEqual(contracts.validate_decision(decision)["action"], action)
@@ -390,7 +390,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_decision, ["skip"], "object")
 
     def test_S1_a_request_names_the_unit_the_event_the_evidence_and_the_menu(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S1"""
+        """orchestrate-lean-loop/S1"""
         request = contracts.make_request(
             "t1", "t1", "blocked", "cannot reach the database", ["/run/t1/task.md"]
         )
@@ -509,12 +509,14 @@ class RequirementViolationTests(unittest.TestCase):
     def item(self, **over):
         return dict(BLOCKING, **dict({"requirement_violation": VIOLATION}, **over))
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_an_asserted_requirement_violation_must_be_a_blocking_item(self):
         for kind in ("concern", "question", "nit", "deferred"):
             self.rejects(review2(items=[self.item(kind=kind)]), "B1")
         validated = contracts.validate_review(review2(verdict="block", items=[self.item()]))
         self.assertEqual(validated, review2(verdict="block", items=[self.item()]))
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_a_requirement_violation_names_its_source_requirement_expected_and_observed(self):
         for field in ("source", "id", "expected", "observed"):
             for bad in (None, "", " ", 7):
@@ -541,6 +543,7 @@ class RequirementViolationTests(unittest.TestCase):
                 contracts.ReviewV2.model_validate(review).model_dump(exclude_unset=True), review
             )
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S4_a_concern_without_a_violation_and_a_legacy_review_still_read(self):
         concern = dict(NIT, kind="concern", summary="optional refactor")
         self.assertEqual(contracts.validate_review(review2(items=[concern]))["items"], [concern])
@@ -577,7 +580,7 @@ def resolution(**over):
 
 
 class ResolutionTests(unittest.TestCase):
-    """R139: only a fixed or disproven resolution for an open id, with a nonempty note and passing current-commit
+    """Only a supported resolution closes a finding: only a fixed or disproven resolution for an open id, with a nonempty note and passing current-commit
     evidence that a checks_run entry agrees with, is a closure."""
 
     def rejects(self, value, *needles):
@@ -594,6 +597,7 @@ class ResolutionTests(unittest.TestCase):
             resolutions=list(resolutions), checks_run=[CHECK_RUN] if checks is None else checks
         )
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_fixed_or_disproven_resolution_with_current_commit_evidence_reads(self):
         for status in ("fixed", "disproven"):
             review = self.closing(resolution(status=status))
@@ -605,11 +609,13 @@ class ResolutionTests(unittest.TestCase):
             )
         self.assertEqual(contracts.validate_review(review2()), review2())
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_an_unsupported_status_or_a_blank_note_is_refused(self):
         self.rejects(self.closing(resolution(status="acknowledged")), "B1", "status")
         for note in (None, "", "   "):
             self.rejects(self.closing(resolution(note=note)), "B1", "note")
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_closure_evidence_must_pass_and_match_a_current_commit_checks_run_entry(self):
         self.rejects(
             self.closing(
@@ -633,13 +639,15 @@ class ResolutionTests(unittest.TestCase):
         missing = {"id": "B1", "status": "fixed", "commit": "abc1234", "note": "done"}
         self.rejects(self.closing(missing), "B1", "evidence")
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_one_resolution_per_open_finding(self):
         self.rejects(self.closing(resolution(), resolution()), "B1", "twice")
         self.rejects(self.closing(resolution(), resolution(status="disproven")), "B1", "twice")
         self.rejects(self.closing(resolution(id="")), "id")
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_contract_1_review_cannot_carry_resolutions(self):
-        """R139: the closure rule has no bypass through the older contract."""
+        """Only a supported resolution closes a finding: the closure rule has no bypass through the older contract."""
         legacy = review(verdict="pass", resolutions=[{"id": "B1"}])
         with self.assertRaises(contracts.ContractError) as caught:
             contracts.validate_review(legacy)
@@ -651,6 +659,7 @@ class ResolutionTests(unittest.TestCase):
                 dict({"contract": 1, "verdict": "pass", "commit": "abc1234"}, resolutions=[])
             )
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_resolution_and_a_blocking_item_naming_the_same_id_are_refused(self):
         review = review2(
             verdict="block",
@@ -662,8 +671,9 @@ class ResolutionTests(unittest.TestCase):
 
 
 class MixedFindingsTests(unittest.TestCase):
-    """R138: an open legacy major item and a new blocking item reach one fix round, which writes and reads."""
+    """Open blocking findings persist: an open legacy major item and a new blocking item reach one fix round, which writes and reads."""
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_legacy_major_and_a_blocking_item_share_one_fix_round(self):
         findings = contracts.make_findings("review", 2, [MAJOR, BLOCKING], [])
         self.assertEqual(findings["contract"], 2)
@@ -675,8 +685,9 @@ class MixedFindingsTests(unittest.TestCase):
 
 
 class OpenFindingsRecordTests(unittest.TestCase):
-    """R138: the record is `{contract, unit, items}` of the original blocking payloads, one per id."""
+    """Open blocking findings persist: the record is `{contract, unit, items}` of the original blocking payloads, one per id."""
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_blocking_and_a_legacy_major_payload_are_kept_as_they_were_raised(self):
         record = contracts.make_open_findings("t1", [MAJOR, BLOCKING])
         self.assertEqual(record, {"contract": 1, "unit": "t1", "items": [MAJOR, BLOCKING]})
@@ -685,6 +696,7 @@ class OpenFindingsRecordTests(unittest.TestCase):
             contracts.make_open_findings("t1", []), {"contract": 1, "unit": "t1", "items": []}
         )
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_record_names_its_unit_and_lists_each_open_id_once(self):
         for bad in (
             {"contract": 1, "unit": "", "items": []},
@@ -697,8 +709,9 @@ class OpenFindingsRecordTests(unittest.TestCase):
                 contracts.validate_open_findings(bad)
             self.assertIn("open-findings", str(caught.exception))
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_applying_a_review_twice_keeps_one_payload_and_a_resolution_closes(self):
-        """R138: replaying a review is idempotent; the payload it was first raised with survives a re-raise."""
+        """Open blocking findings persist: replaying a review is idempotent; the payload it was first raised with survives a re-raise."""
         once = driver.Driver.folded_findings([], [BLOCKING], None)
         self.assertEqual(once, [BLOCKING])
         self.assertEqual(driver.Driver.folded_findings(once, [BLOCKING], None), [BLOCKING])
@@ -732,13 +745,15 @@ def contract_report_keys(text):
 
 
 class ContractParityTests(unittest.TestCase):
+    @pytest.mark.spec("The report contract matches Report")
     def test_S1_report_accepts_the_context_object_workers_write(self):
-        """orchestrator-engine/R12: orchestrator-lead-alerts/S1"""
+        """orchestrator-lead-alerts/S1"""
         validated = contracts.validate_report(report(context={"status": "unknown"}))
         self.assertEqual(validated["context"], {"status": "unknown"})
 
+    @pytest.mark.spec("The report contract matches Report")
     def test_S2_every_key_the_contract_example_names_is_a_report_field(self):
-        """orchestrator-engine/R12: orchestrator-lead-alerts/S2"""
+        """orchestrator-lead-alerts/S2"""
         from agent_orchestrator import driver
 
         keys = contract_report_keys(driver.CONTRACT)
@@ -782,21 +797,25 @@ class AffectedNotRunTests(unittest.TestCase):
             ]
         )
 
+    @pytest.mark.spec("An affected check may find no test")
     def test_S5_affected_not_run_with_a_reason_is_accepted(self):
         driver.require_completable(
             self.task(), self.report({"outcome": "not_run", "reason": "no test selected"})
         )
 
+    @pytest.mark.spec("An affected check may find no test")
     def test_S5_affected_not_run_without_a_reason_is_refused(self):
         for affected in ({"outcome": "not_run"}, {"outcome": "not_run", "reason": "  "}):
             with self.assertRaises(ValueError):
                 driver.require_completable(self.task(), self.report(affected))
 
+    @pytest.mark.spec("An affected check may find no test")
     def test_S5_fast_not_run_is_still_refused(self):
         fast = {"command": "ruff check", "outcome": "not_run", "reason": "skipped"}
         with self.assertRaises(ValueError):
             driver.require_completable(self.task(), self.report({"outcome": "passed"}, fast=fast))
 
+    @pytest.mark.spec("An affected check may find no test")
     def test_S1_an_affected_command_another_tier_also_requires_is_never_waived_not_run(self):
         # A packet written before equivalent tiers were folded together: the same command twice, a launcher
         # spelling apart, so the `not_run` allowance would waive a required `fast` check.
@@ -852,6 +871,7 @@ class TierBriefTests(unittest.TestCase):
         ticket = {"#": "T1", "What it delivers": "x"}
         return packet, run.task_text(None, ticket, packet, [], repo / "run" / "t1")
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S2_the_brief_lists_fast_and_the_rendered_affected_and_names_full_as_not_run(self):
         packet, text = self.drive()
         self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])
@@ -863,6 +883,7 @@ class TierBriefTests(unittest.TestCase):
         self.assertIn("do not run", others[0])
         self.assertNotIn("full CI gate", text)
 
+    @pytest.mark.spec("Required checks are matched by spelling")
     def test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled(self):
         packet, text = self.drive()
         # The required-check line is the ticket's own: it stays as it is.
@@ -877,6 +898,7 @@ class TierBriefTests(unittest.TestCase):
         self.assertIn(SPELLING_INSTRUCTION, text.splitlines())
         self.assertNotIn("rtk", text)
 
+    @pytest.mark.spec("Workers run tests in the foreground")
     def test_every_brief_keeps_the_worker_on_targeted_tests_run_in_the_foreground(self):
         """A worker that runs a whole test directory, or backgrounds a run and polls its log, stalls the drive."""
         for gate in ((), ["scripts/checks.sh"]):
@@ -889,6 +911,7 @@ class TierBriefTests(unittest.TestCase):
         for runner_word in ("pytest", "node id", "--lf", ".pytest"):
             self.assertNotIn(runner_word, rule)
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S3_a_named_gate_is_the_required_checks_alone_and_the_tiers_are_not_applied(self):
         packet, text = self.drive(gate=["scripts/checks.sh"])
         self.assertEqual(packet["checks"], ["scripts/checks.sh"])
@@ -896,6 +919,7 @@ class TierBriefTests(unittest.TestCase):
         self.assertNotIn("uv run ruff check", text)
         self.assertNotIn("uv run pytest -n auto", text)
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S1_overlapping_tiers_require_one_command_and_never_forbid_it(self):
         config = "checks:\n  fast: uv run pytest -q\n  affected: uv run pytest -q\n  full:\n    run: uv run pytest -q\n"
         packet, text = self.drive(config=config)
@@ -911,6 +935,7 @@ class TierBriefTests(unittest.TestCase):
         )
         self.assertNotIn("do not run", text)
 
+    @pytest.mark.spec("Test changes carry their cost")
     def test_S4_the_brief_names_the_tdd_skill_and_the_test_cost_report(self):
         packet, text = self.drive()
         self.assertIn("Read the `tdd` skill first", text)
@@ -918,10 +943,12 @@ class TierBriefTests(unittest.TestCase):
         self.assertIn("test_cost", driver.CONTRACT)
         self.assertIn("the command that timed the touched tests", driver.CONTRACT)
 
+    @pytest.mark.spec("Test changes carry their cost")
     def test_S4_the_tdd_path_is_the_environment_then_the_hosts_place(self):
         with mock.patch.dict(os.environ, {driver.TDD_SKILL_ENV: "/tmp/tdd/SKILL.md"}):
             self.assertEqual(driver.tdd_skill_path(), "/tmp/tdd/SKILL.md")
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S1_whitespace_spellings_of_one_command_are_required_once(self):
         config = (
             'checks:\n  fast: uv run pytest -q\n  affected: "uv run  pytest -q"\n'
@@ -936,6 +963,7 @@ class TierBriefTests(unittest.TestCase):
             report(checks=[{"command": "uv run pytest  -q", "outcome": "passed"}]),
         )
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S2_a_distinct_full_is_ci_owned_while_fast_and_affected_are_kept(self):
         packet, text = self.drive()
         self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])

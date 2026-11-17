@@ -34,6 +34,7 @@ def decided(text, declaration=DECLARATION):
     return safeguards.decide(read(text), declaration)
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_declared_member_that_imports_outside_the_standard_library_escalates():
     reasons = decided(diff("hooks/pre_tool_use.py", "import requests\n"))
     assert [reason.rule for reason in reasons] == ["stdlib-only"]
@@ -44,6 +45,7 @@ def test_S6_a_declared_member_that_imports_outside_the_standard_library_escalate
     assert reason.source == "diff", "the import is read from the change, not from a list"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_the_reason_reads_as_the_report_contract_holds_it_with_the_module_beside_the_rule():
     reason = decided(diff("hooks/pre_tool_use.py", "import requests\n"))[0]
     assert reason.as_dict() == {
@@ -55,22 +57,26 @@ def test_S6_the_reason_reads_as_the_report_contract_holds_it_with_the_module_bes
     }, "a `stdlib-only` reason adds `module` to the reason's fields (SG-D3)"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_from_import_outside_the_standard_library_names_the_module_not_the_name():
     reason = decided(diff("hooks/lead_context.py", "from yaml import safe_load\n"))[0]
     assert reason.module == "yaml"
     assert reason.pattern == "from yaml import safe_load"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_the_module_is_the_top_level_name_a_dotted_import_reaches_beside():
     reason = decided(diff("hooks/lead_context.py", "import yaml.parser\n"))[0]
     assert reason.module == "yaml", "a dotted import is a dependency on its top-level distribution"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_one_line_naming_several_modules_names_the_first_outside_the_standard_library():
     reason = decided(diff("hooks/lead_context.py", "import json, requests\n"))[0]
     assert reason.module == "requests", "a module the standard library ships is not the reason"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_every_outside_module_the_member_adds_is_its_own_reason():
     text = diff(
         "hooks/pre_tool_use.py",
@@ -88,6 +94,7 @@ def test_S6_every_outside_module_the_member_adds_is_its_own_reason():
     ], "each reason carries the statement that named its module"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_one_module_the_member_imports_twice_is_one_reason():
     assert [
         reason.module
@@ -95,6 +102,7 @@ def test_S6_one_module_the_member_imports_twice_is_one_reason():
     ] == ["yaml"], "a reason names a module the member must not have, once"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_member_declared_as_a_file_covers_that_file_and_no_sibling():
     declaration = {"stdlib_only": ["hooks/pre_tool_use.py"]}
     assert decided(diff("hooks/pre_tool_use.py", "import requests\n"), declaration)[0].module == (
@@ -103,6 +111,7 @@ def test_S6_a_member_declared_as_a_file_covers_that_file_and_no_sibling():
     assert decided(diff("hooks/lead_context.py", "import requests\n"), declaration) == ()
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_declared_directory_covers_what_lies_below_it_and_no_near_name():
     assert (
         decided(diff("hooks/nested/tool.py", "import requests\n"))[0].path == "hooks/nested/tool.py"
@@ -112,6 +121,7 @@ def test_S6_a_declared_directory_covers_what_lies_below_it_and_no_near_name():
     )
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_member_written_without_its_trailing_slash_is_the_same_member():
     declaration = {"stdlib_only": ["hooks"]}
     assert decided(diff("hooks/pre_tool_use.py", "import requests\n"), declaration)[0].module == (
@@ -119,16 +129,19 @@ def test_S6_a_member_written_without_its_trailing_slash_is_the_same_member():
     )
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_declared_member_that_adds_a_standard_library_import_is_not_escalated():
     assert decided(diff("hooks/pre_tool_use.py", "import json\nfrom pathlib import Path\n")) == ()
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_an_undeclared_member_that_adds_a_third_party_import_is_not_escalated():
     assert decided(diff("lib/tool.py", "import requests\n")) == (), (
         "a member no declaration covers may import what it likes"
     )
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_rule_set_carries_the_declared_members_and_decides_with_them():
     rules = safeguards.rule_set(stdlib_only_paths=["hooks/", "hooks", "hooks/**"])
     assert rules.stdlib_only == ("hooks",), (
@@ -140,6 +153,7 @@ def test_S7_a_rule_set_carries_the_declared_members_and_decides_with_them():
     )
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_trailing_comment_on_an_import_line_cannot_hide_the_module():
     for line in (
         "import requests  # HTTP client\n",
@@ -152,6 +166,7 @@ def test_S6_a_trailing_comment_on_an_import_line_cannot_hide_the_module():
         assert [reason.module for reason in reasons] == ["requests"], line
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_second_statement_on_the_added_line_is_read_as_an_import_too():
     reasons = decided(diff("hooks/pre_tool_use.py", "import requests; import yaml\n"))
     assert [reason.module for reason in reasons] == ["requests", "yaml"], (
@@ -159,6 +174,7 @@ def test_S6_a_second_statement_on_the_added_line_is_read_as_an_import_too():
     )
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_an_import_quoted_in_a_docstring_is_not_a_dependency_the_member_adds():
     text = diff("hooks/pre_tool_use.py", 'def load(path):\n    return """\nimport requests\n"""\n')
     assert decided(text) == (), (
@@ -166,36 +182,43 @@ def test_S6_an_import_quoted_in_a_docstring_is_not_a_dependency_the_member_adds(
     )
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_declaration_that_covers_no_member_escalates_nothing():
     assert decided(diff("hooks/pre_tool_use.py", "import requests\n"), {}) == ()
     assert decided(diff("hooks/pre_tool_use.py", "import requests\n"), None) == ()
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_relative_import_is_the_members_own_module_rather_than_a_dependency():
     assert decided(diff("hooks/pre_tool_use.py", "from . import hook_lib\n")) == ()
     assert decided(diff("hooks/pre_tool_use.py", "from ..tools import helper\n")) == ()
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_member_that_only_removes_a_third_party_import_is_not_escalated():
     assert decided(diff("hooks/pre_tool_use.py", "", removed="import requests\n")) == (), (
         "the rule reads what the change adds: dropping a dependency is the change to want"
     )
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_an_added_file_in_a_declared_member_is_read_for_its_imports():
     reason = decided(diff("hooks/guard.py", "import requests\n", status="added"))[0]
     assert reason.module == "requests"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_deleted_file_in_a_declared_member_escalates_nothing():
     assert decided(diff("hooks/guard.py", "", removed="import requests\n", status="deleted")) == ()
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_an_import_inside_a_function_of_a_declared_member_is_still_read():
     text = diff("hooks/pre_tool_use.py", "def send():\n    import http.client\n    return None\n")
     assert decided(text) == (), "`http` is in the standard library however deep the import sits"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_line_that_mentions_an_import_without_being_one_is_not_read():
     assert (
         decided(diff("hooks/pre_tool_use.py", "# import requests\nnote = 'import requests'\n"))

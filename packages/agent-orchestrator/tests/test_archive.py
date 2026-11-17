@@ -44,7 +44,7 @@ class ArchiveFixture(SnapshotFixture, GateFixture):
 
 class ArchiveTests(ArchiveFixture, unittest.TestCase):
     def test_S15_nothing_archives_while_an_agent_ticket_is_unfinished(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S15"""
+        """code-driven-orchestrator/S15"""
         self.waits(
             [self.worker_done(tests=True), self.reviewer_done(), self.decide_step("t1", "skip")]
         )
@@ -53,7 +53,7 @@ class ArchiveTests(ArchiveFixture, unittest.TestCase):
         self.assertNotIn(ARCHIVE, self.spawned())
 
     def test_S15_a_passing_archive_goes_to_ci_and_merge(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S15"""
+        """code-driven-orchestrator/S15"""
         self.waits(self.ticket_merged())
         self.run_driver()
         task = self.task("archive")
@@ -83,8 +83,9 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
 
         self.gh_process = conflicting
 
+    @pytest.mark.spec("A conflicting archive pull request is rebuilt")
     def test_S12_a_conflicting_archive_pr_is_rebuilt_from_the_current_base_first(self):
-        """orchestrator-engine/R49: a conflict is a base that moved. The branch is built again from it, the change
+        """a conflict is a base that moved. The branch is built again from it, the change
         set applied there again, and nobody is asked; past the rebuilds the Lead is, as before."""
         self.conflict_once()
         self.waits(self.ticket_merged() + [{}])
@@ -96,8 +97,9 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
         self.assertEqual(spec.count("### Requirement: Demo"), 1)
         self.assertEqual(self.task("archive")["status"], "COMPLETE")
 
+    @pytest.mark.spec("A conflicting archive pull request is rebuilt")
     def test_S5_a_conflicting_archive_pr_past_the_rebuilds_asks_the_lead_and_spawns_no_worker(self):
-        """orchestrator-engine/R34: the archive has no worker to rebase it."""
+        """the archive has no worker to rebase it."""
         real = self.gh_process
 
         def conflicting(argv, timeout=None, cwd=None):
@@ -125,7 +127,7 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
         return step
 
     def test_S16_a_finished_run_reports_route_rounds_escalations_and_usage(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S16"""
+        """code-driven-orchestrator/S16"""
         worker = self.with_usage(
             self.worker_done(tests=True), {"input_tokens": 100, "output_tokens": 20}
         )
@@ -147,7 +149,7 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
         self.assertIn("lead model turns: 0", result.stderr)
 
     def test_S16_a_run_with_a_request_counts_the_escalation_and_no_decider_calls(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S16"""
+        """code-driven-orchestrator/S16"""
         blocked = report_wait("demo-t1", "blocked", "cannot reach the database")
         self.waits([blocked, self.decide_step("t1", "skip")])
         self.run_driver()

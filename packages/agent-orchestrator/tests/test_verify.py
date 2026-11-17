@@ -220,12 +220,14 @@ class TestCostTests(VerifyFixture):
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
         return {"S1": ["tests/test_a.py::test_new"], "S2": ["tests/test_a.py::test_new"]}
 
+    @pytest.mark.spec("Test changes carry their cost")
     def test_S1_a_changed_test_without_test_cost_is_refused_naming_the_file_and_the_fix(self):
         findings = self.gate(self.changed_test(), test_cost=None)
         (finding,) = [f for f in self.found(findings) if f[0] == "test_cost"]
         self.assertIn("no test_cost", finding[1])
         self.assertIn("the command that timed the touched tests", finding[1])
 
+    @pytest.mark.spec("Test changes carry their cost")
     def test_S1_a_test_cost_without_a_command_is_refused(self):
         covers = self.changed_test()
         cost = self.measured(covers)
@@ -277,6 +279,7 @@ class TestCostTests(VerifyFixture):
             findings = self.gate(covers, test_cost=cost)
             self.assertTrue([f for f in self.found(findings) if f[0] == "test_cost"], value)
 
+    @pytest.mark.spec("Test changes carry their cost")
     def test_S1_a_change_with_no_test_needs_no_test_cost(self):
         self.write("src/a/x.py", "x = 1\n")
         files, added = verify.changed(self.repo, "main")

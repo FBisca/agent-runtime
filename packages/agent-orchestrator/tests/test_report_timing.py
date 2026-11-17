@@ -4,7 +4,7 @@ S0: WHEN a known orchestration failure is reproduced on an isolated fixture, THE
 passes afterwards under the same fixed acceptance criteria. The failure is the report timing one: the report is on
 disk, the runtime says the turn ended (`runtime state idle`), and the driver parks the ticket as `ended without a
 report` and asks a human about a report it already has. After the repair the driver reads the report and moves on;
-a turn that ended with no report at all is a live worker: only its complete or the idle watchdog moves it (R62).
+a turn that ended with no report at all is a live worker: only its complete or the idle watchdog moves it (One idle watchdog).
 """
 
 import shlex
@@ -44,8 +44,9 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         """The unit's request, or None: the driver asked nobody anything."""
         return (self.run_dir / "t1" / "request.json").exists()
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S6 — the report_landed shortcut is kept."""
+        """orchestrator-silent-idle/S6 — the report_landed shortcut is kept."""
         self.waits([self.turn_ended(), self.answer(), self.worker_done()])
         self.run_driver()
         self.assertFalse(self.asked())
@@ -53,7 +54,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertEqual((self.task().get("report") or {}).get("task_id"), "t1")
 
     def test_S0_a_report_on_disk_is_not_a_reason_to_ask_a_human(self):
-        """orchestrator-engine/R2: P3.T2/S0 — the report landed and the turn ended; nobody is asked about it."""
+        """P3.T2/S0 — the report landed and the turn ended; nobody is asked about it."""
         self.waits([self.turn_ended(), self.answer(), self.worker_done()])
         self.run_driver()
         self.assertFalse(self.asked(), "the driver asked a human about a report it already had")
@@ -63,6 +64,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
             (task.get("report") or {}).get("task_id"), "t1", "the driver did not read the report"
         )
 
+    @pytest.mark.spec("Partial and blocked reports reach the Lead")
     def test_S1_idle_partial_after_progress_requests_a_decision(self):
         """idle-partial-handoff/S1: the file, not progress text, supplies the blocker."""
         worker = assignment("demo-t1", "working", "idle")
@@ -91,6 +93,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertIn("Commit and push", request["reason"])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
+    @pytest.mark.spec("Partial and blocked reports reach the Lead")
     def test_S2_progress_text_and_wrong_task_report_do_not_open_a_blocker(self):
         """idle-partial-handoff/S2: neither progress text nor another task's file is a handoff."""
         worker = assignment("demo-t1", "working", "idle")
@@ -113,6 +116,7 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertNotIn("arbitrary text", request["reason"])
         self.assertNotIn("unrelated blocker", request["reason"])
 
+    @pytest.mark.spec("Partial and blocked reports reach the Lead")
     def test_S1_idle_blocked_report_requests_a_decision(self):
         """idle-partial-handoff/S1: BLOCKED files take the same recovery path."""
         report = self.report(
@@ -131,8 +135,9 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.request()["event"], "blocked")
         self.assertIn("Grant access", self.request()["reason"])
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S5_a_worker_whose_turn_ended_without_a_report_stays_pending_until_its_complete(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S5 — idle and done are a live worker, not an exit."""
+        """orchestrator-silent-idle/S5 — idle and done are a live worker, not an exit."""
         spec = load_script()
         done = GateFixture.worker_done(self, tests=True)
         self.waits(
@@ -150,8 +155,9 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.run_events("escalation"), [])
         self.assertEqual(self.task()["gate"], "done")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S5_a_worker_that_never_reports_is_asked_about_by_the_idle_watchdog(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S5"""
+        """orchestrator-silent-idle/S5"""
         self.waits([self.turn_ended(report=False)] * 4 + [self.skipped()])
         self.run_driver("--idle-minutes", "0")
         request = self.request()

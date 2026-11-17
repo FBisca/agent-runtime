@@ -124,6 +124,7 @@ class ExtensionCase(unittest.TestCase):
         return script
 
 
+@pytest.mark.spec("Pi lead stop continuation")
 class StopDecisionTests(ExtensionCase):
     """S3: the lead's stop-guard answer becomes one more provider request, or nothing."""
 
@@ -194,6 +195,7 @@ class WorkerStopTests(ExtensionCase):
     stand in for a hook that refuses nothing (an allowed stop adds nothing, as S3 shows).
     """
 
+    @pytest.mark.spec("Pi worker stop continuation")
     def test_S4_an_unreported_assignment_asks_for_one_more_request_naming_both_ways_out(self):
         self.with_hook({"block": True, "reason": WORKER_REASON})
         answer = session(TURN_END, self.env)
@@ -207,6 +209,7 @@ class WorkerStopTests(ExtensionCase):
         self.assertEqual(content, WORKER_REASON)
 
 
+@pytest.mark.spec("Pi wake push")
 class WakePushTests(ExtensionCase):
     """S7: an unseen wake is pushed with its text, in order, into the session that leads the run."""
 
@@ -401,6 +404,7 @@ class WakePushTests(ExtensionCase):
         self.assertEqual(answer["sent"], [])
 
 
+@pytest.mark.spec("Pi long sleep refused")
 class LongSleepTests(unittest.TestCase):
     """S8: a sleep of 60 seconds or more is refused naming `wait(all)`; anything shorter is untouched."""
 

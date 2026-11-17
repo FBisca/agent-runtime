@@ -89,6 +89,7 @@ def test_a_question_the_screening_could_not_assess_is_simply_absent():
     assert attributed(QUESTIONS, [], base=BASE, head=HEAD) == ()
 
 
+@pytest.mark.spec("Score ladder bounds")
 def test_S3_a_score_judgment_keeps_its_confidence_beside_the_value():
     (judgment,) = attributed(
         QUESTIONS,
@@ -104,6 +105,7 @@ def test_S3_a_score_judgment_keeps_its_confidence_beside_the_value():
     )
 
 
+@pytest.mark.spec("Score ladder bounds")
 def test_S1_a_score_between_two_rungs_is_the_providers_own_number():
     (judgment,) = attributed(
         QUESTIONS,
@@ -142,6 +144,7 @@ def test_S1_a_score_between_two_rungs_is_the_providers_own_number():
         "boolean",
     ],
 )
+@pytest.mark.spec("Score ladder bounds")
 def test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range(value):
     with pytest.raises(ScreeningError) as refused:
         attributed(
@@ -161,6 +164,7 @@ def test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_ra
     [1.4, -0.1, "0.8", True],
     ids=["above-one", "below-zero", "text", "boolean"],
 )
+@pytest.mark.spec("Score ladder bounds")
 def test_S3_a_confidence_outside_zero_and_one_is_refused_naming_the_question(confidence):
     with pytest.raises(ScreeningError) as refused:
         attributed(
@@ -173,6 +177,7 @@ def test_S3_a_confidence_outside_zero_and_one_is_refused_naming_the_question(con
     assert "confidence" in str(refused.value).lower(), "a refusal names the way out"
 
 
+@pytest.mark.spec("Score ladder bounds")
 def test_S3_a_score_with_no_confidence_is_refused_naming_the_question():
     with pytest.raises(ScreeningError) as refused:
         attributed(

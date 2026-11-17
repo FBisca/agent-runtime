@@ -80,6 +80,7 @@ def group_help(parser, group):
 class CliSurfaceTests(unittest.TestCase):
     """S14: the decomposition keeps every command name, every group's subcommands and its help."""
 
+    @pytest.mark.spec("Driver facade and entry points")
     def test_S14_the_parser_still_offers_its_commands(self):
         from agent_orchestrator import driver
 
@@ -88,6 +89,7 @@ class CliSurfaceTests(unittest.TestCase):
         # not disturb that list, a dropped or renamed one does.
         self.assertEqual(tuple(name for name in offered if name in COMMANDS), COMMANDS)
 
+    @pytest.mark.spec("Driver facade and entry points")
     def test_S14_each_command_group_still_offers_its_subcommands(self):
         from agent_orchestrator import driver
 
@@ -100,6 +102,7 @@ class CliSurfaceTests(unittest.TestCase):
 class CliHomeTests(unittest.TestCase):
     """S10/S14: the entries and the published names reach the one `run_cli` in `driver/cli.py`."""
 
+    @pytest.mark.spec("Driver facade and entry points")
     def test_S14_the_package_entry_and_the_module_entry_reach_the_same_run_cli(self):
         import agent_orchestrator
         from agent_orchestrator import __main__ as module_entry
@@ -121,6 +124,7 @@ class CliHomeTests(unittest.TestCase):
             out.getvalue(), help_of(cli.build_parser()), "the package entry drives the same parser"
         )
 
+    @pytest.mark.spec("Driver facade and entry points")
     def test_S10_the_names_the_package_publishes_are_the_cli_modules_own(self):
         from agent_orchestrator import driver
         from agent_orchestrator.driver import cli

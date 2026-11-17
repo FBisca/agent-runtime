@@ -5,9 +5,9 @@ in the repo also follow [`AGENTS.md`](AGENTS.md).
 
 ## How it is built
 
-Spec- and plan-driven. [`docs/specs/agent-runtime.md`](docs/specs/agent-runtime.md) is the living contract: numbered WHEN/THEN requirements, each traced to a scenario and a test (requirements about a consuming repo's config are marked as moved there). [`docs/specs/harness-adapters.md`](docs/specs/harness-adapters.md) covers the harnesses, [`docs/specs/orchestrator-engine.md`](docs/specs/orchestrator-engine.md) the orchestrator, and [`docs/specs/python-workspace-contracts.md`](docs/specs/python-workspace-contracts.md) the workspace packaging. [`docs/plans/`](docs/plans/) holds the archived plans that produced them, with their decisions and scenarios.
+Spec- and plan-driven. Each spec in [`docs/specs/`](docs/specs/) is the current state of one capability: `### Requirement: <Title>` blocks, each one SHALL sentence with its WHEN/THEN scenarios ([`plan-contract.md`](docs/specs/plan-contract.md) is the model). [`docs/plans/`](docs/plans/) holds the plans: the requirements each adds, modifies or removes, with their scenarios, applied to the spec when the plan archives.
 
-Every behavior change starts as a scenario, is written red first, and lands with its requirement.
+Every behavior change starts as a scenario in a plan and is written red first. A test that proves a requirement carries `@pytest.mark.spec("<Title>")` (Vitest: `describe("spec: <Title>")`; elsewhere a `// spec: <Title>` comment); `python3 scripts/spec_coverage.py` fails on an untested title or a tag naming no title.
 
 The code is one uv workspace with two installable members and one lockfile: `packages/agent-runtime` (the standard-library-only runtime) and `packages/agent-orchestrator` (the typed engine, with Pydantic and PyYAML). The documented commands still live in `server/` and `bin/`, so the plugin, the installer's shims and the hooks are unchanged; `uv sync --frozen --all-packages` installs both members.
 

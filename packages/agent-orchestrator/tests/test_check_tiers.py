@@ -67,6 +67,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
     def required(self):
         return self.ledger()["tasks"]["t1"]["packet"]["checks"]
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S2_a_worker_is_required_to_pass_fast_and_its_rendered_affected_check(self):
         self.declare_tiers()
         self.run_driver()
@@ -78,6 +79,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
             ],
         )
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S2_the_brief_names_the_tiers_and_leaves_the_whole_suite_to_verify_and_ci(self):
         self.declare_tiers()
         self.run_driver()
@@ -91,6 +93,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.assertIn("do not run", full)
         self.assertIn("CI", full)
 
+    @pytest.mark.spec("Required checks are matched by spelling")
     def test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled(self):
         self.declare_tiers()
         self.run_driver()
@@ -103,11 +106,13 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.assertIn(SPELLING_INSTRUCTION, brief.splitlines())
         self.assertNotIn("rtk", brief)
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S3_a_named_gate_overrides_the_declared_tiers(self):
         self.declare_tiers()
         self.run_driver("--gate", "scripts/checks.sh")
         self.assertEqual(self.required(), ["scripts/checks.sh"])
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S1_overlapping_tiers_require_the_command_once_and_never_forbid_it(self):
         self.declare(OVERLAPPING)
         self.run_driver()
@@ -127,6 +132,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "required checks"):
             load_script().require_completable(task, report([]))
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S1_whitespace_spellings_of_one_command_are_one_required_assignment(self):
         self.declare(ONE_COMMAND)
         self.run_driver()
@@ -137,6 +143,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
             report([{"command": "uv run pytest  -q", "outcome": "passed"}]),
         )
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_S2_fast_and_affected_are_kept_when_only_full_is_distinct(self):
         self.declare(CONFIG)
         self.run_driver()
@@ -145,6 +152,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.assertEqual(packet["affected"], AFFECTED_ONE_PATH)
         self.assertEqual(packet["full"], "uv run pytest -n 4")
 
+    @pytest.mark.spec("Check tiers brief the worker")
     def test_control_a_named_gate_without_a_config_is_the_required_check(self):
         self.set_plan(("T1",))
         self.run_driver("--gate", "scripts/checks.sh")

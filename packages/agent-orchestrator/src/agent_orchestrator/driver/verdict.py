@@ -3,7 +3,7 @@
 `wait` answers an assignment with `attention` and `next` once it has decided the attempt needs a person: a resume
 whose worker produced nothing (`not_started`), or a turn with no progress for 15 minutes (`stalled`). The idle tick
 asks the same question from screen freshness and answers it two ticks (20 minutes) later, so the drive reads the
-verdict here instead of asking a slower question of its own. Only `not_started` is acted on: R60 keeps a running
+verdict here instead of asking a slower question of its own. Only `not_started` is acted on: One idle watchdog keeps a running
 turn waiting `--working-minutes` however quiet the runtime finds it, so `stalled` is not the tick's to defer to;
 a resume that never started has no turn to wait on.
 """

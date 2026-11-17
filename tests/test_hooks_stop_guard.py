@@ -97,6 +97,7 @@ class StopGuardCase(HookStoreCase):
 
 
 class StopGuardTests(StopGuardCase):
+    @pytest.mark.spec("Hooks read terminal ownership")
     def test_S7_the_lead_liveness_hooks_read_the_same_ownership_rule(self):
         """The context reminder and the Stop guard read the same rule as the server: a newer row that is
         dead and empty does not hide the lead's own team, and a newer row that owns the terminal does."""
@@ -113,6 +114,7 @@ class StopGuardTests(StopGuardCase):
         self.assertIsNone(self.prompt())
         self.assertIsNone(self.stop()[0])
 
+    @pytest.mark.spec("Hooks read terminal ownership")
     def test_S7_a_lead_behind_a_dead_empty_team_may_end_its_turn_once_it_has_seen_the_result(self):
         """The ownership rule does not change when the lead stops: a lead whose wait result it has seen
         may end its turn, while the reminder still points at its own team."""
@@ -124,8 +126,8 @@ class StopGuardTests(StopGuardCase):
         self.assertIn("workers need you", self.line(self.prompt()))
         self.assertIsNone(self.stop()[0])
 
+    @pytest.mark.spec("Stop guard")
     def test_blocks_with_the_wait_reason_when_work_is_unseen(self):
-        """agent-runtime/R119"""
         ident = self.unseen()
         self.message(self.store, self.team_id, assignment=ident["assignment_id"])
         out, _ = self.stop()
@@ -176,14 +178,14 @@ class StopGuardTests(StopGuardCase):
         out, _ = self.stop()
         self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 0)})
 
+    @pytest.mark.spec("Stop guard")
     def test_unseen_working_assignment_alone_blocks(self):
-        """agent-runtime/R119"""
         self.unseen()
         out, _ = self.stop()
         self.assertEqual(out, {"decision": "block", "reason": self.REASON % (1, 0)})
 
+    @pytest.mark.spec("Stop guard")
     def test_allows_blocked_decision_failed_seen_and_resets_the_budget(self):
-        """agent-runtime/R120"""
         ident = self.unseen()
         self.stop()
         self.assertEqual(self.budget(), 2)
@@ -206,8 +208,8 @@ class StopGuardTests(StopGuardCase):
         )
         self.assertIsNone(self.stop()[0])  # fingerprint changed but nothing left working
 
+    @pytest.mark.spec("Backgrounded wait exemption")
     def test_running_wait_task_allows_without_spending_or_resetting_budget(self):
-        """agent-runtime/R121"""
         self.unseen()
         self.stop()
         self.assertEqual(self.budget(), 2)
@@ -236,8 +238,8 @@ class StopGuardTests(StopGuardCase):
             self.assertIsNotNone(out, other)  # unknown or other work: no exemption
             self.assertEqual(self.budget(), 2)
 
+    @pytest.mark.spec("Hook input errors allow")
     def test_stop_allows_silently_on_bad_stdin_no_identity_and_broken_import(self):
-        """agent-runtime/R114"""
         self.unseen()
         for raw in ("not json", "[1]", ""):
             out, err, code = self.cli.run(STOP, raw=raw)
@@ -257,8 +259,8 @@ class StopGuardTests(StopGuardCase):
         )
         self.assertIsNone(self.budget())  # none of those touched the budget
 
+    @pytest.mark.spec("Hooks never write the store")
     def test_stop_never_writes_the_dispatch_store(self):
-        """agent-runtime/R115"""
         self.unseen()
 
         def snapshot():
@@ -273,8 +275,8 @@ class StopGuardTests(StopGuardCase):
         self.assertEqual(snapshot(), before)
         self.assertEqual(self.budget(), 2)
 
+    @pytest.mark.spec("Stop guard budget")
     def test_reset_prunes_stale_budget_files_only(self):
-        """agent-runtime/R123"""
         self.unseen()
         self.stop()
         folder = self.state / "agent-runtime" / "stop-guard"
@@ -287,8 +289,8 @@ class StopGuardTests(StopGuardCase):
         self.assertFalse(stale.exists())
         self.assertTrue(fresh.exists())
 
+    @pytest.mark.spec("Stop guard budget")
     def test_blocks_three_times_then_allows_with_one_stderr_note(self):
-        """agent-runtime/R122"""
         self.unseen()
         for _ in range(3):
             self.assertIsNotNone(self.stop()[0])
@@ -300,8 +302,8 @@ class StopGuardTests(StopGuardCase):
         self.prompt()  # UserPromptSubmit resets
         self.assertIsNotNone(self.stop()[0])
 
+    @pytest.mark.spec("Stop guard budget")
     def test_exemption_budget_spent_and_errors_do_not_reset_but_prompt_does(self):
-        """agent-runtime/R123"""
         self.unseen()
         self.stop()
         self.stop(dict(self.STOP, background_tasks=[self.MCP_WAIT]))
@@ -324,8 +326,8 @@ class StopGuardTests(StopGuardCase):
         self.prompt()
         self.assertEqual(self.budget(), 3)
 
+    @pytest.mark.spec("Stop guard budget")
     def test_prompt_resets_even_when_the_context_hook_has_nothing_to_say(self):
-        """agent-runtime/R123"""
         ident = self.unseen()
         self.stop()
         self.sql(
@@ -335,8 +337,8 @@ class StopGuardTests(StopGuardCase):
         self.assertIsNone(self.prompt())
         self.assertEqual(self.budget(), 3)
 
+    @pytest.mark.spec("Stop guard")
     def test_worker_leading_children_blocks_and_dead_or_superseded_teams_allow(self):
-        """agent-runtime/R124"""
         worker_env = dict(self.env, HC_TERMINAL_ID="t5")
         child = (
             FakeCliProcess(worker_env, self.root / "w")
@@ -386,8 +388,8 @@ class StopGuardTests(StopGuardCase):
         self.addCleanup(nobody.close)
         self.assertIsNone(nobody.run(STOP, self.STOP)[0])  # dead team generation: allowed
 
+    @pytest.mark.spec("Stop guard")
     def test_reported_unchanged_stall_counts_as_seen_until_progress(self):
-        """agent-runtime/R128"""
         ident = self.unseen()
         self.sql(
             self.store,
@@ -410,8 +412,8 @@ class StopGuardTests(StopGuardCase):
         self.sql(self.store, "DROP TABLE stall_progress")  # older store: no reported stalls
         self.assertEqual(self.stop()[0]["decision"], "block")
 
+    @pytest.mark.spec("Stop guard")
     def test_recovery_after_a_stall_batch_that_was_the_last_wait_is_unseen(self):
-        """agent-runtime/R128"""
         ident = self.unseen()
         self.sql(
             self.store,
@@ -433,8 +435,8 @@ class StopGuardTests(StopGuardCase):
         self.assertEqual(self.stop()[0]["decision"], "block")
         self.assertIn("call wait(all)", self.line(self.prompt()))
 
+    @pytest.mark.spec("Stop guard")
     def test_turns_after_a_following_wait_do_not_flip_seen(self):
-        """agent-runtime/R128"""
         ident = self.unseen()
         self.sql(
             self.store,
@@ -464,10 +466,10 @@ class StopGuardTests(StopGuardCase):
             self.assertIsNone(self.stop()[0])
             self.assertIsNone(self.prompt())
 
+    @pytest.mark.spec("Stop guard")
     def test_fingerprint_is_identical_for_server_and_readonly_connection_with_or_without_stall_progress(
         self,
     ):
-        """agent-runtime/R128"""
         ident = self.unseen()
         self.sql(
             self.store,
@@ -505,8 +507,10 @@ class StopGuardTests(StopGuardCase):
         self.assertEqual(absent[0], absent[1])
         self.assertEqual(absent[0], recovered[0])  # absent behaves as "not reported"
 
+    @pytest.mark.spec("Worker stop guard")
+    @pytest.mark.spec("Stop guard")
     def test_S5_a_worker_with_its_own_unreported_assignment_is_blocked_until_it_reports(self):
-        """pi-lead-rhythm/S5: a worker's own assignment, not a lead's team, keeps its Stop open on
+        """a worker's own assignment, not a lead's team, keeps its Stop open on
         Claude, Codex and Pi with the lead guard's reason shape, and `report blocked` is the way out."""
         worker_env = dict(self.env, HC_TERMINAL_ID="wt0")
         (self.root / "wrk").mkdir()  # the worker session is its own terminal, leading no team
@@ -527,8 +531,10 @@ class StopGuardTests(StopGuardCase):
         self.assertIsNone(worker.run(STOP, self.STOP)[0])  # reporting blocked is the way out
         self.assertEqual(self.budget(), 3)  # and the work period starts over
 
+    @pytest.mark.spec("Worker stop guard")
+    @pytest.mark.spec("Stop guard")
     def test_S5_a_workers_parked_wait_does_not_exempt_its_own_assignment(self):
-        """pi-lead-rhythm/S5: parking a wait is the lead's way out; a worker's own unreported
+        """parking a wait is the lead's way out; a worker's own unreported
         assignment still keeps its turn open, and only a report ends it."""
         (self.root / "wp").mkdir()
         worker = FakeCliProcess(dict(self.env, HC_TERMINAL_ID="wt1"), self.root / "wp")
@@ -541,8 +547,9 @@ class StopGuardTests(StopGuardCase):
             {"decision": "block", "reason": self.WORKER_REASON % ident["assignment_id"]},
         )
 
+    @pytest.mark.spec("Stop guards agree across harnesses")
     def test_S1_the_claude_codex_and_pi_stops_refuse_one_state_with_one_reason(self):
-        """pi-lead-rhythm/S1: one predicate, three dialects, one reason."""
+        """one predicate, three dialects, one reason."""
         ident = self.unseen()
         self.message(self.store, self.team_id, assignment=ident["assignment_id"])
         reason = self.REASON % (1, 1)
@@ -557,8 +564,10 @@ class StopGuardTests(StopGuardCase):
             {"block": True, "reason": reason},
         )
 
+    @pytest.mark.spec("Stop guards agree across harnesses")
+    @pytest.mark.spec("Stop guard budget")
     def test_S2_the_pi_dialect_prints_a_neutral_answer_and_the_claude_shape_is_unchanged(self):
-        """pi-lead-rhythm/S2: `agent-runtime-hook stop --cli pi --dialect json` answers `{block, reason}`."""
+        """`agent-runtime-hook stop --cli pi --dialect json` answers `{block, reason}`."""
         shim = ["/bin/sh", str(SHIM)]
         ident = self.unseen()
         reason = self.REASON % (1, 0)
@@ -584,8 +593,9 @@ class StopGuardTests(StopGuardCase):
         )
         self.assertEqual((code, out), (0, {"block": False, "reason": ""}), err)
 
+    @pytest.mark.spec("Stop budget shared across hosts")
     def test_S10_a_spent_budget_is_spent_for_every_host_of_one_terminal(self):
-        """pi-lead-rhythm/S10: switching host grants no fresh blocks; one budget per work period."""
+        """switching host grants no fresh blocks; one budget per work period."""
         spent = (
             "agent-runtime: stop guard budget spent; allowing the stop (resets on your next prompt)"
         )
@@ -660,8 +670,8 @@ class CodexHookTests(HookStoreCase):
         files = list((self.state / "agent-runtime" / "stop-guard").glob("*"))
         return int(files[0].read_text()) if files else None
 
+    @pytest.mark.spec("Stop guard")
     def test_codex_stop_blocks_with_the_wait_reason_and_allows_with_empty_output(self):
-        """agent-runtime/R125"""
         ident = self.worker(self.store, self.team_id)
         out, _ = self.stop()
         self.assertEqual(
@@ -679,8 +689,8 @@ class CodexHookTests(HookStoreCase):
             self.cli.run(self.SHIM_CMD, self.STOP, args=("stop", "--cli", "codex")), (None, "", 0)
         )
 
+    @pytest.mark.spec("Stop guard")
     def test_codex_budget_ignores_stop_hook_active_and_background_tasks_then_resets_on_prompt(self):
-        """agent-runtime/R125"""
         self.worker(self.store, self.team_id)
         mcp = [
             {
@@ -701,8 +711,8 @@ class CodexHookTests(HookStoreCase):
         self.assertEqual(self.budget(), 3)
         self.assertIsNotNone(self.stop()[0])
 
+    @pytest.mark.spec("Lead reminder context")
     def test_codex_session_start_and_prompt_carry_the_context_line(self):
-        """agent-runtime/R126"""
         self.worker(self.store, self.team_id)
         line = "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)"
         base = {
@@ -738,8 +748,8 @@ class CodexHookTests(HookStoreCase):
             },
         )
 
+    @pytest.mark.spec("Stop guard")
     def test_install_prints_the_codex_lead_hooks_only_on_request(self):
-        """agent-runtime/R125"""
         base = {
             "PATH": os.environ["PATH"],
             "HOME": str(self.root / "home"),
@@ -774,8 +784,8 @@ class CodexHookTests(HookStoreCase):
         self.assertIn("PreToolUse", hooks)  # the existing guard blocks stay
         self.assertNotIn("Stop", toml(plain.stdout).get("hooks", {}))
 
+    @pytest.mark.spec("Stop guard")
     def test_shim_exits_zero_when_its_script_is_missing(self):
-        """agent-runtime/R125"""
         (self.root / "bin").mkdir()
         (self.root / "hooks").mkdir()
         shim = self.root / "bin" / "agent-runtime-hook"
@@ -789,8 +799,8 @@ class CodexHookTests(HookStoreCase):
         )
         self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
 
+    @pytest.mark.spec("Lead reminder context")
     def test_attention_line_and_default_subcommand_is_still_the_pre_tool_use_guard(self):
-        """agent-runtime/R126"""
         self.worker(self.store, self.team_id)
         self.last_wait(self.store, self.team_id, "attention", 1)
         self.assertEqual(

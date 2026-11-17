@@ -146,6 +146,7 @@ def request() -> ScreeningRequest:
     )
 
 
+@pytest.mark.spec("System One transport")
 def test_S1_the_transport_posts_the_typed_request_and_reads_the_answers(serve):
     base_url, canned = serve()
     port = SystemOneScreenings(
@@ -193,6 +194,7 @@ def test_S1_each_answer_type_keeps_the_provider_its_native_value(serve):
     ), "a noul keeps its probability, a score its level and the confidence beside it (D44)"
 
 
+@pytest.mark.spec("System One transport")
 def test_S1_the_typesafe_credential_is_sent_when_a_fallback_is_also_present(serve, monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-key")
     monkeypatch.setenv("AGENT_REVIEW_API_KEY", "fallback-key")
@@ -201,6 +203,7 @@ def test_S1_the_typesafe_credential_is_sent_when_a_fallback_is_also_present(serv
     assert header(canned.headers, "Authorization") == "Bearer typesafe-key"
 
 
+@pytest.mark.spec("System One transport")
 def test_S1_the_fallback_credential_is_sent_only_when_typesafe_is_absent(serve, monkeypatch):
     monkeypatch.setenv("AGENT_REVIEW_API_KEY", "fallback-key")
     base_url, canned = serve()
@@ -208,6 +211,7 @@ def test_S1_the_fallback_credential_is_sent_only_when_typesafe_is_absent(serve, 
     assert header(canned.headers, "Authorization") == "Bearer fallback-key"
 
 
+@pytest.mark.spec("System One transport")
 def test_S1_a_missing_credential_names_typesafe_api_key():
     port = SystemOneScreenings(model="jev-latest", base_url="http://127.0.0.1:1/v1", timeout=2)
     with pytest.raises(ScreeningError) as failed:
@@ -217,6 +221,7 @@ def test_S1_a_missing_credential_names_typesafe_api_key():
     assert "fixture" in reason, "the refusal names the way out"
 
 
+@pytest.mark.spec("Provider input limit")
 def test_S5_a_long_context_request_carries_the_danger_zone_header(serve):
     base_url, canned = serve()
     SystemOneScreenings(
@@ -229,6 +234,7 @@ def test_S5_a_long_context_request_carries_the_danger_zone_header(serve):
     assert header(canned.headers, "TypeSafe-Danger-Zone-Long-Context") == "true"
 
 
+@pytest.mark.spec("Provider input limit")
 def test_S5_the_default_request_carries_no_long_context_header(serve):
     base_url, canned = serve()
     SystemOneScreenings(
@@ -237,6 +243,7 @@ def test_S5_the_default_request_carries_no_long_context_header(serve):
     assert header(canned.headers, "TypeSafe-Danger-Zone-Long-Context") is None
 
 
+@pytest.mark.spec("Provider input limit")
 def test_S5_an_oversized_request_keeps_the_provider_reason(serve):
     base_url, _ = serve(400, {"detail": {"error_type": "max_tokens_exceeded"}})
     port = SystemOneScreenings(
@@ -292,6 +299,7 @@ def canned(tmp_path, *responses):
     return path
 
 
+@pytest.mark.spec("Offline canned provider")
 def test_S7_the_canned_provider_answers_the_canned_responses_in_order(tmp_path):
     port = FixtureScreenings(canned(tmp_path, ANSWER))
     reply = port.screen(request())
@@ -306,6 +314,7 @@ def test_S7_a_canned_provider_error_is_a_screening_failure_with_its_reason(tmp_p
         FixtureScreenings(canned(tmp_path, {"error": "provider answered 500"})).screen(request())
 
 
+@pytest.mark.spec("Offline canned provider")
 def test_S7_a_fixture_answer_in_another_shape_is_refused(tmp_path):
     with pytest.raises(ScreeningError, match="answers"):
         FixtureScreenings(
@@ -313,6 +322,7 @@ def test_S7_a_fixture_answer_in_another_shape_is_refused(tmp_path):
         ).screen(request())
 
 
+@pytest.mark.spec("Offline canned provider")
 def test_S7_a_malformed_fixture_is_refused_naming_the_file(tmp_path):
     path = tmp_path / "screening.json"
     path.write_text(json.dumps({"answers": []}), encoding="utf-8")
@@ -343,6 +353,7 @@ def test_S1_a_graded_question_carries_its_levels_to_the_provider(serve):
     assert "criteria" not in asked["contract.error-handling"], "a noul needs none declared"
 
 
+@pytest.mark.spec("Report provenance")
 def test_S4_the_reply_carries_the_model_the_provider_served(serve):
     base_url, _ = serve()
     reply = SystemOneScreenings(
@@ -353,6 +364,7 @@ def test_S4_the_reply_carries_the_model_the_provider_served(serve):
     )
 
 
+@pytest.mark.spec("Report provenance")
 def test_S4_the_transport_names_the_endpoint_it_posts_to(serve):
     base_url, _ = serve()
     port = SystemOneScreenings(
@@ -361,6 +373,7 @@ def test_S4_the_transport_names_the_endpoint_it_posts_to(serve):
     assert port.provider == base_url, "the report names the endpoint it called, not a default"
 
 
+@pytest.mark.spec("Report provenance")
 def test_S4_the_canned_provider_names_the_fixture_it_answers_from(tmp_path):
     path = canned(tmp_path, ANSWER)
     assert FixtureScreenings(path).provider == f"fixture:{path}", (

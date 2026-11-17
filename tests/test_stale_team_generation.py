@@ -136,8 +136,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
         self.assertIsNone(lib.lstart(proc.pid), "harness: the fixture's process is still running")
         return "%d:%s" % (proc.pid, stamp)
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S1_the_other_session_is_refused_and_registers_no_team(self):
-        """stale-team-generation/S1: a session that inherits the terminal never owns it."""
+        """a session that inherits the terminal never owns it."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
@@ -156,8 +157,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
             "the refusal does not name the way out: %s" % text,
         )
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S2_the_live_lead_keeps_its_team_after_the_other_session_called(self):
-        """stale-team-generation/S2: the lead reaches its own workers after the other session called."""
+        """the lead reaches its own workers after the other session called."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
@@ -168,8 +170,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
         self.assertEqual(len(self.messages()), 1, "the lead's message never reached its worker")
         self.assertEqual(len(self.teams()), 1, "the terminal carries more than one team")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S3_a_dead_and_empty_newer_team_no_longer_fences_the_lead(self):
-        """stale-team-generation/S3: the lead takes its terminal back from a session that is gone."""
+        """the lead takes its terminal back from a session that is gone."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
@@ -178,8 +181,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
         self.assertFalse(result["isError"], "the lead was fenced by a dead, empty team: %s" % text)
         self.assertEqual(len(self.messages()), 1, "the lead's message never reached its worker")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S4_a_newer_team_that_is_still_running_fences_the_lead(self):
-        """stale-team-generation/S4: a live session keeps the terminal until it is gone."""
+        """a live session keeps the terminal until it is gone."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
@@ -192,8 +196,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
         self.assertIn(LEAD, text, "the fence does not name the terminal: %s" % text)
         self.assertEqual(len(self.messages()), 0, "the fenced lead reached its worker")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S5_a_newer_team_that_holds_work_fences_the_lead(self):
-        """stale-team-generation/S5: a team that still holds work keeps the terminal."""
+        """a team that still holds work keeps the terminal."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
@@ -207,8 +212,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
         self.assertIn(owner, text, "the fence does not name the owning generation: %s" % text)
         self.assertEqual(len(self.messages()), 0, "the fenced lead reached its worker")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out(self):
-        """stale-team-generation/S6: a refusal names the reason and the way out."""
+        """a refusal names the reason and the way out."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
@@ -231,8 +237,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
         self.assertIn(LEAD, text, "the fence does not name the terminal: %s" % text)
         self.assertIn(newer, text, "the fence does not name the owning generation: %s" % text)
 
+    @pytest.mark.spec("Hooks read terminal ownership")
     def test_S7_the_lead_liveness_hooks_find_the_lead_behind_a_dead_empty_team(self):
-        """stale-team-generation/S7: the hooks read the same rule as the server."""
+        """the hooks read the same rule as the server."""
         line = self.context_line(stray=self.dead_generation())
         self.assertIsNotNone(line, "the hook printed nothing for a lead behind a dead, empty team")
         self.assertIn("workers need you", line)
@@ -249,8 +256,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
             "the hook followed a newer team that holds work away from the lead",
         )
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S8_a_spawn_binds_to_the_leads_own_team_behind_a_dead_empty_team(self):
-        """stale-team-generation/S8: the bind and the authorization agree on who owns the terminal."""
+        """the bind and the authorization agree on who owns the terminal."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
@@ -263,8 +271,9 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
             teams = {row[0] for row in db.execute("SELECT DISTINCT team FROM workers")}
         self.assertEqual(len(teams), 1, "the worker was bound to another team: %s" % teams)
 
+    @pytest.mark.spec("Diagnostic fallback")
     def test_S9_a_refused_session_gets_the_diagnostic_view_with_a_delivery_error(self):
-        """stale-team-generation/S9: a diagnostic call never fails the session that asks."""
+        """a diagnostic call never fails the session that asks."""
         lead = self.lead()
         spawned, text = self.spawn(lead)
         self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)

@@ -241,6 +241,7 @@ class FixtureControlTests(ProviderContractFixture):
 class TransportTests(ProviderContractFixture):
     """S1: one System One request, typed, authenticated by TYPESAFE_API_KEY."""
 
+    @pytest.mark.spec("System One transport")
     def test_S1_the_tool_posts_the_typed_request_to_systemone(self):
         self.write_config()
         body = answer(
@@ -304,6 +305,7 @@ class TransportTests(ProviderContractFixture):
             "the provider's own variable wins over the tool's fallback",
         )
 
+    @pytest.mark.spec("System One transport")
     def test_S1_a_missing_credential_is_incomplete_naming_the_variable(self):
         self.write_config()
         with SystemOneServer(answer()) as server:
@@ -368,6 +370,7 @@ class NativeAnswerTests(ProviderContractFixture):
         self.assertEqual(report["status"], "incomplete")
         self.assertIn("repo.error-handling", report["failure"]["reason"])
 
+    @pytest.mark.spec("Score ladder bounds")
     def test_S3_a_score_between_the_declared_levels_is_carried_as_answered(self):
         self.write_config()
         self.write_fixture(
@@ -454,6 +457,7 @@ class ProvenanceTests(ProviderContractFixture):
 class BudgetTests(ProviderContractFixture):
     """S5: over the limit is incomplete with the provider's reason; long context completes and sends the header."""
 
+    @pytest.mark.spec("Provider input limit")
     def test_S5_an_oversized_request_is_incomplete_with_the_provider_reason(self):
         self.write_config()
         with SystemOneServer(
@@ -474,6 +478,7 @@ class BudgetTests(ProviderContractFixture):
             "the change is sent whole: what overflows the limit is the provider's to refuse, never a local cut",
         )
 
+    @pytest.mark.spec("Provider input limit")
     def test_S5_long_context_completes_and_sends_the_header(self):
         self.write_config()
         body = answer(
@@ -550,6 +555,7 @@ class RefusalTests(ProviderContractFixture):
 class OfflineTests(ProviderContractFixture):
     """S7: the canned provider carries every offline check, so no run needs a socket."""
 
+    @pytest.mark.spec("Offline canned provider")
     def test_S7_a_screening_through_the_canned_provider_opens_no_socket(self):
         self.write_config()
         self.write_fixture(

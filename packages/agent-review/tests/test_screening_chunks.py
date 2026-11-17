@@ -61,6 +61,7 @@ def _hunks(change):
     return [(file.path, hunk.new_start) for file in change.files for hunk in file.hunks]
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_a_change_larger_than_the_budget_is_split_with_every_region_carried_once():
     change, text = _change(_file("alpha.py", 3), _file("beta.py", 3), _file("gamma.py", 3))
 
@@ -78,6 +79,7 @@ def test_S3_a_change_larger_than_the_budget_is_split_with_every_region_carried_o
         )
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_the_same_frozen_change_chunks_the_same_way():
     change, text = _change(_file("alpha.py", 3), _file("beta.py", 3))
     other, other_text = _change(_file("alpha.py", 3), _file("beta.py", 3))
@@ -88,6 +90,7 @@ def test_S3_the_same_frozen_change_chunks_the_same_way():
     )
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_a_change_that_fits_the_budget_is_one_chunk_carrying_all_of_it():
     change, text = _change(_file("alpha.py", 3), _file("beta.py", 3))
 
@@ -99,6 +102,7 @@ def test_S3_a_change_that_fits_the_budget_is_one_chunk_carrying_all_of_it():
     assert chunks[0].text == text, "the whole diff travels whole when it fits (D41)"
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_a_budget_too_small_for_any_region_gives_each_region_its_own_chunk():
     change, text = _change(_file("alpha.py", 8), _file("beta.py", 8))
 
@@ -108,6 +112,7 @@ def test_S3_a_budget_too_small_for_any_region_gives_each_region_its_own_chunk():
     assert [chunk.files for chunk in chunks] == [("alpha.py",), ("beta.py",)]
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_a_hunk_larger_than_the_budget_is_carried_whole_and_says_so():
     change, text = _change(_file("pipeline.py", 40))
 
@@ -118,6 +123,7 @@ def test_S3_a_hunk_larger_than_the_budget_is_carried_whole_and_says_so():
     assert "line 39 of pipeline.py" in chunks[0].text, "the oversized hunk travels whole"
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_a_rename_without_a_hunk_is_carried_so_the_change_is_read_as_a_rename():
     text = textwrap.dedent(
         """\
@@ -136,6 +142,7 @@ def test_S3_a_rename_without_a_hunk_is_carried_so_the_change_is_read_as_a_rename
     assert "rename to server/guide.md" in chunks[0].text
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_the_budget_in_force_is_the_declaration_or_the_providers_own_limit():
     assert budget(_bank(), long_context=False) == 32_000, (
         "the measured binding default is 32k tokens"
@@ -148,6 +155,7 @@ def test_S3_the_budget_in_force_is_the_declaration_or_the_providers_own_limit():
     )
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_coverage_counts_each_changed_region_once_inside_the_cross_file_limit():
     change, text = _change(_file("alpha.py", 3), _file("beta.py", 3))
     chunks = split(change, text, budget=1)
@@ -158,6 +166,7 @@ def test_S3_coverage_counts_each_changed_region_once_inside_the_cross_file_limit
     assert covered.gap is None, "two files are inside the cross-file limit the baseline sets"
 
 
+@pytest.mark.spec("Cross-file coverage gap")
 def test_S4_a_change_wider_than_the_cross_file_limit_records_the_gap_as_a_full_review_reason():
     change, text = _change(_file("alpha.py", 1), _file("beta.py", 1))
     chunks = split(change, text, budget=100_000)
@@ -177,6 +186,7 @@ def test_S4_a_change_wider_than_the_cross_file_limit_records_the_gap_as_a_full_r
     assert cross_file_limit(_bank()) == 40, "the packaged default reads a wide but ordinary change"
 
 
+@pytest.mark.spec("Cross-file coverage gap")
 def test_S4_a_change_inside_the_cross_file_limit_records_no_gap():
     change, text = _change(_file("alpha.py", 1), _file("beta.py", 1))
     chunks = split(change, text, budget=100_000)

@@ -125,6 +125,7 @@ def report(revisions):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_the_cli_screens_the_frozen_diff_between_two_revisions(revisions):
     assert main(revisions.args()) == 0
     screened = report(revisions)
@@ -154,6 +155,7 @@ def test_S1_the_packaged_baseline_bank_is_evaluated_without_a_configuration(revi
     assert screened["model"] == questions.baseline().model
 
 
+@pytest.mark.spec("Additive repository configuration")
 def test_S1_a_configuration_that_adds_no_question_screens_the_baseline_alone(revisions):
     revisions.config.write_text("model: test-model-v1\nquestions: []\n", encoding="utf-8")
     revisions.fixture.write_text(json.dumps({"responses": [{"answers": {}}]}), encoding="utf-8")

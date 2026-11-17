@@ -14,7 +14,7 @@ pytestmark = pytest.mark.integration
 
 class RunTests(RunFixture, unittest.TestCase):
     def test_named_agent_reaches_every_spawn(self):
-        """orchestrator-engine/R2 — The role the run names reaches every worker it spawns."""
+        """— The role the run names reaches every worker it spawns."""
         self.run_driver("--agent", "none")
         spawns = self.calls("spawn")
         self.assertTrue(spawns)
@@ -22,7 +22,7 @@ class RunTests(RunFixture, unittest.TestCase):
             self.assertEqual(spawn["args"]["agent"], "none")
 
     def test_default_run_names_implementer_only_for_workers(self):
-        """orchestrator-engine/R2 — Implementation workers select their role; review gates stay roleless."""
+        """— Implementation workers select their role; review gates stay roleless."""
         self.run_driver()
         spawns = self.calls("spawn")
         self.assertTrue(spawns)
@@ -35,7 +35,7 @@ class RunTests(RunFixture, unittest.TestCase):
             self.assertNotIn("agent", spawn)
 
     def test_named_profile_reaches_every_spawn(self):
-        """orchestrator-engine/R2 — The profile the run names reaches every worker it spawns."""
+        """— The profile the run names reaches every worker it spawns."""
         self.run_driver("--profile", "minimax")
         spawns = self.calls("spawn")
         self.assertTrue(spawns)
@@ -43,21 +43,22 @@ class RunTests(RunFixture, unittest.TestCase):
             self.assertEqual(spawn["args"]["cli"], "minimax")
 
     def test_default_run_names_the_cli_family(self):
-        """orchestrator-engine/R2 — Without a named profile, the spawn names the CLI family it runs."""
+        """— Without a named profile, the spawn names the CLI family it runs."""
         self.run_driver()
         spawns = self.calls("spawn")
         self.assertTrue(spawns)
         for spawn in spawns:
             self.assertEqual(spawn["args"]["cli"], "claude")
 
+    @pytest.mark.spec("The report contract matches Report")
     def test_S1_the_unit_brief_names_the_task_id_the_report_must_carry(self):
-        """orchestrator-engine/R15: orchestrator-report-task-id/S1"""
+        """orchestrator-report-task-id/S1"""
         self.run_driver()
         brief = (self.run_dir_of("demo") / "t1" / "task.md").read_text(encoding="utf-8")
         self.assertIn("task_id `t1`", brief)
 
     def test_S1_dispatches_ready_agent_tickets_up_to_the_cap(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S1"""
+        """code-driven-orchestrator/S1"""
         self.run_driver("--max-workers", "2")
         spawns = self.calls("spawn")
         self.assertEqual([c["args"]["name"] for c in spawns], ["demo-t1", "demo-t3"])
@@ -96,7 +97,7 @@ class RunTests(RunFixture, unittest.TestCase):
         self.assertEqual(tasks["t1"]["packet"]["owns"], ["src/a/"])
 
     def test_S1_worktree_branches_from_the_fetched_origin_main(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S1"""
+        """code-driven-orchestrator/S1"""
         other = self.root / "other"
         self.git(self.root, "clone", "-q", str(self.origin), str(other))
         (other / "new.txt").write_text("remote\n", encoding="utf-8")
@@ -136,7 +137,7 @@ class RunTests(RunFixture, unittest.TestCase):
         self.assertFalse((worktree / "local.txt").exists())
 
     def test_S1_long_slug_gets_a_valid_worker_name_ending_in_the_ticket(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S1"""
+        """code-driven-orchestrator/S1"""
         slug = "parallel-wait-and-cli-profiles"
         self.assertEqual(len(slug), 30)
         self.set_plan(("T1", "T3"), mutate=lambda data: data.update(slug=slug))
@@ -150,20 +151,20 @@ class RunTests(RunFixture, unittest.TestCase):
         self.assertEqual(load_script().worker_name("a" * 27 + "-bcd", 12), "a" * 27 + "-t12")
 
     def test_S1_default_cap_is_three(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S1"""
+        """code-driven-orchestrator/S1"""
         self.run_driver()
         self.assertEqual(
             [c["args"]["name"] for c in self.calls("spawn")], ["demo-t1", "demo-t3", "demo-t5"]
         )
 
     def test_S1_codex_backend_picks_the_codex_model(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S1"""
+        """code-driven-orchestrator/S1"""
         self.run_driver("--cli", "codex")
         first = self.calls("spawn")[0]["args"]
         self.assertEqual((first["cli"], first["model"]), ("codex", "gpt-s"))
 
     def test_S2_unapproved_plan_exits_2_and_spawns_nothing(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S2"""
+        """code-driven-orchestrator/S2"""
         data = plan_data(("T1",))
         self.plan.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         result = self.run_driver(expect=2)
@@ -172,7 +173,7 @@ class RunTests(RunFixture, unittest.TestCase):
         self.assertFalse((self.state_dir / "demo.json").exists())
 
     def test_S3_dispatch_writes_the_ledger_and_leaves_the_plan_untouched(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S3"""
+        """code-driven-orchestrator/S3"""
         before = self.plan.read_bytes()
         self.run_driver("--max-workers", "2")
         self.assertEqual(self.plan.read_bytes(), before)
@@ -182,7 +183,7 @@ class RunTests(RunFixture, unittest.TestCase):
         )
 
     def test_S14_restart_reuses_the_lead_and_spawns_nothing_bound(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S14"""
+        """code-driven-orchestrator/S14"""
         self.run_driver()
         first_calls = len(self.calls("spawn"))
         self.assertEqual(self.ledger()["lead"], "orchestrate:demo")
@@ -201,15 +202,16 @@ class RunTests(RunFixture, unittest.TestCase):
         self.assertIn("wait", [c["tool"] for c in later])
 
     def test_S14_restart_with_status_reset_to_todo_does_not_respawn_a_bound_ticket(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S14"""
+        """code-driven-orchestrator/S14"""
         self.run_driver("--max-workers", "1")
         self.reset_status("IN PROGRESS", "TO-DO")
         self.run_driver("--max-workers", "1", expect=1)  # stranded: see above
         names = [c["args"]["name"] for c in self.calls("spawn")]
         self.assertEqual(names.count("demo-t1"), 1)
 
+    @pytest.mark.spec("Runtime refusals are reported")
     def test_a_refused_spawn_keeps_the_reservation_and_exits_1(self):
-        """orchestrator-engine/R5: code-driven-orchestrator/S14"""
+        """code-driven-orchestrator/S14"""
         self.refuse(["demo-t1"])
         self.set_plan(("T1",))
         result = self.run_driver(expect=1)
@@ -234,8 +236,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
     def wakes_of(self, kind):
         return [w for w in self.wakes() if w["kind"] == kind]
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S2_a_definite_answer_from_the_runtime_orphans_the_attempt(self):
-        """orchestrator-engine/R22"""
         for state, answer in (("exited", "exited"), ("not_found", "unknown: not_found")):
             with self.subTest(state=state):
                 self.setUp()
@@ -247,16 +249,17 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
                 )
                 self.assertEqual(self.task()["release_reason"], "orphaned: " + answer)
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S2_a_live_terminal_is_not_released_or_spawned_over(self):
-        """orchestrator-engine/R22"""
         self.crashed("working")
         self.run_driver(expect=1)
         self.assertEqual(self.run_events("orphaned"), [])
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.task()["status"], "ACTIVE")
 
+    @pytest.mark.spec("A run does not finish over open work")
     def test_S2a_a_terminal_at_work_that_wait_does_not_list_is_stranded_not_finished(self):
-        """orchestrator-engine/R51, orchestrator-engine/R64"""
+        ""","""
         self.crashed("working")
         self.run_driver(expect=1)
         self.assertEqual(
@@ -266,8 +269,9 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertIn("t1", stranded["text"])
         self.assertIn("working", stranded["text"])
 
+    @pytest.mark.spec("A run does not finish over open work")
     def test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish(self):
-        """orchestrator-engine/R51, orchestrator-engine/R65"""
+        ""","""
         for state in ("idle", "done"):
             with self.subTest(state=state):
                 self.setUp()
@@ -285,8 +289,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
                 self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
                 self.assertEqual(self.task()["status"], "COMPLETE")
 
+    @pytest.mark.spec("A run does not finish over open work")
     def test_S2a_a_finished_turn_with_no_landed_report_is_stranded_not_finished(self):
-        """orchestrator-engine/R23"""
         for state in ("idle", "done"):
             with self.subTest(state=state):
                 self.setUp()
@@ -298,8 +302,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
                 self.assertIn("no report", stranded["text"])
                 self.assertEqual(self.task()["status"], "ACTIVE")
 
+    @pytest.mark.spec("A run does not finish over open work")
     def test_S2a_a_second_restart_over_the_same_stranded_task_exits_non_zero_too(self):
-        """orchestrator-engine/R23"""
         self.crashed("unreadable")
         self.run_driver(expect=1)
         self.run_driver(expect=1)
@@ -308,8 +312,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         )
         self.assertEqual(len(self.wakes_of("stranded")), 1, "the Lead is told once")
 
+    @pytest.mark.spec("A run does not finish over open work")
     def test_S2a_a_loss_the_loop_meets_before_it_would_finish_is_reconciled_first(self):
-        """orchestrator-engine/R23"""
         self.waits(
             [
                 wait_result([assignment("demo-t1")], write=self.goes("demo-t1")),
@@ -322,8 +326,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.task("t1o1")["status"], "ACTIVE")
         self.assertEqual(self.run_events("finish")[-1]["kind"], "finish")
 
+    @pytest.mark.spec("A run does not finish over open work")
     def test_S2a_a_task_it_cannot_settle_raises_stranded_and_the_run_does_not_finish(self):
-        """orchestrator-engine/R23"""
         self.waits(
             [
                 wait_result([assignment("demo-t1")], write=self.goes("demo-t1", "unreadable")),
@@ -337,8 +341,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.task()["status"], "ACTIVE")
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S2b_a_status_that_cannot_be_read_releases_and_spawns_nothing(self):
-        """orchestrator-engine/R24"""
         for state, error in (
             ("unreadable", "hc get timed out"),
             ("error", "the runtime does not know this agent"),
@@ -354,8 +358,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
                 self.assertIn("t1", stranded["text"])
                 self.assertIn(error, stranded["text"])
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S2c_an_orphaned_reviewer_takes_the_path_of_a_reviewer_that_exited(self):
-        """orchestrator-engine/R25"""
         self.waits([self.worker_done(tests=True)])
         self.run_driver()
         self.assertEqual(self.task()["gate"], "reviewing")
@@ -368,8 +372,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review"])
         self.assertNotIn("t1o1", self.ledger()["tasks"])
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S2c_an_orphaned_answerer_takes_the_path_of_an_answerer_that_exited(self):
-        """orchestrator-engine/R25"""
         self.run_driver()
         data = self.ledger()
         data["tasks"]["t1"].update(
@@ -392,8 +396,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.request()["event"], "answers")
         self.assertEqual(self.spawned(), ["demo-t1"])
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S3_an_orphaned_attempt_without_a_report_is_dispatched_again_as_a_new_attempt(self):
-        """orchestrator-engine/R26"""
         self.crashed()
         self.run_driver()
         tasks = self.ledger()["tasks"]
@@ -410,8 +414,9 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.calls("resume"), [])
         self.assertEqual(self.ticket_status("T1"), "IN PROGRESS")
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S3_the_attempt_dispatched_again_is_waited_on_before_the_run_may_finish(self):
-        """orchestrator-engine/R2: drive-restart-recovery/S3
+        """drive-restart-recovery/S3
 
         The wait that came before the re-dispatch cannot list the new attempt. Judging the run idle on it sent the
         loop to its finishing check, which asked `status` of a terminal the runtime had not settled yet: the real
@@ -424,8 +429,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertTrue(after, "the run ended without asking the runtime about the new attempt")
         self.assertEqual(after[0], "wait", "the new attempt was judged by status before any wait")
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S3_a_second_loss_is_dispatched_again_as_the_next_attempt(self):
-        """orchestrator-engine/R26"""
         self.crashed()
         self.run_driver()
         self.gone("demo-t1")
@@ -433,8 +438,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         tasks = self.ledger()["tasks"]
         self.assertEqual((tasks["t1o1"]["status"], tasks["t1o2"]["status"]), ("RELEASED", "ACTIVE"))
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S3_an_orphaned_attempt_whose_report_landed_goes_to_the_gates_and_spawns_nothing(self):
-        """orchestrator-engine/R26"""
         self.crashed()
         (self.run_dir / "t1" / "report.json").write_text(self.report("t1"), encoding="utf-8")
         (self.worktree / "src" / "a").mkdir(parents=True)
@@ -448,8 +453,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertNotIn("t1o1", self.ledger()["tasks"])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S3a_dispatch_refuses_a_closed_task_id_before_it_spawns_or_resumes(self):
-        """orchestrator-engine/R27"""
         from unittest import mock
 
         spec = load_script()
@@ -478,8 +483,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         data["tasks"][task_id]["status"] = "RELEASED"
         (self.state_dir / "demo.json").write_text(json.dumps(data), encoding="utf-8")
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S4_a_released_unit_whose_worker_is_gone_is_dispatchable_from_in_progress(self):
-        """orchestrator-engine/R28"""
         self.crashed()
         self.release()
         self.assertEqual(self.ticket_status("T1"), "IN PROGRESS")
@@ -489,15 +494,15 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual((tasks["t1"]["status"], tasks["t1r1"]["status"]), ("RELEASED", "ACTIVE"))
         self.assertEqual(tasks["t1r1"]["packet"]["unit"], "t1")
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S4_a_released_unit_whose_worker_is_still_live_is_not_dispatched(self):
-        """orchestrator-engine/R28"""
         self.crashed("working")
         self.release()
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1"])
 
+    @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S4_a_cell_with_no_attempt_in_the_ledger_stays_a_lock(self):
-        """orchestrator-engine/R28"""
         self.seed_status(**{t: "IN PROGRESS" for t in ("T1", "T2", "T3", "T4", "T5")})
         self.run_driver()
         self.assertEqual(self.spawned(), [])
@@ -506,10 +511,10 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         """A wait step during which the cause is fixed and the Lead sets the ticket's cell back to TO-DO."""
         return self.lead_sets(T1="TO-DO")
 
+    @pytest.mark.spec("Not-dispatched tickets")
     def test_S5_a_failed_dispatch_raises_one_wake_and_the_lead_s_todo_retries_it_in_the_same_run(
         self,
     ):
-        """orchestrator-engine/R29"""
         self.refuse(["demo-t1"])
         self.waits([self.lead_answers()])
         self.run_driver()
@@ -522,8 +527,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.task()["status"], "ACTIVE")
         self.assertEqual(len(self.run_events("start")), 1)
 
+    @pytest.mark.spec("Not-dispatched tickets")
     def test_S5_without_the_lead_s_todo_the_same_run_does_not_try_again(self):
-        """orchestrator-engine/R29"""
         self.refuse(["demo-t1"])
         self.waits([wait_result(write=[[str(self.home / "refuse.json"), "[]"]])])
         self.run_driver(expect=1)
@@ -532,10 +537,11 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertIn("not dispatched", self.ticket_status("T1"))
         self.assertEqual(len(self.wakes_of("not-dispatched")), 1)  # once per ticket and reason
 
+    @pytest.mark.spec("Not-dispatched tickets")
     def test_S12_a_not_dispatched_ticket_whose_cell_is_not_exactly_TO_DO_is_not_tried_again_in_the_run(
         self,
     ):
-        """orchestrator-engine/R57, orchestrator-engine/R66"""
+        ""","""
         self.refuse(["demo-t1"])
         self.waits([self.lead_sets(T1="TO-DO · retry")])
         self.run_driver(expect=1)
@@ -543,10 +549,11 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(len(self.wakes_of("not-dispatched")), 1)
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "RESERVED")
 
+    @pytest.mark.spec("Not-dispatched tickets")
     def test_S12a_the_not_dispatched_wake_names_the_ticket_the_reason_and_the_exact_TO_DO_way_out(
         self,
     ):
-        """orchestrator-engine/R57, orchestrator-engine/R67"""
+        ""","""
         self.refuse(["demo-t1"])
         self.waits([wait_result(write=[[str(self.home / "refuse.json"), "[]"]])])
         self.run_driver(expect=1)
@@ -556,8 +563,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertIn("name_taken", wake["text"])
         self.assertIn("set the ticket's Status cell back to exactly TO-DO", wake["text"])
 
+    @pytest.mark.spec("Not-dispatched tickets")
     def test_S5_a_refused_restart_attempt_is_dispatched_again_after_the_lead_s_todo(self):
-        """orchestrator-engine/R29"""
         self.crashed()
         self.release()
         self.refuse(["demo-t1"])
@@ -574,10 +581,10 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         )  # the first, the refused, its restart-time retry, the Lead's retry
         self.assertNotIn("t1r2", tasks)
 
+    @pytest.mark.spec("Not-dispatched tickets")
     def test_S5_a_refused_orphan_redispatch_raises_not_dispatched_and_retries_after_the_lead_s_todo(
         self,
     ):
-        """orchestrator-engine/R29"""
         self.crashed()
         self.refuse(["demo-t1"])
         self.run_driver(expect=1)
@@ -592,8 +599,8 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(tasks["t1o1"]["status"], "ACTIVE")
         self.assertNotIn("t1o2", tasks)
 
+    @pytest.mark.spec("A run does not finish over open work")
     def test_S4_a_worker_that_status_cannot_read_strands_the_unit_and_spawns_nothing(self):
-        """orchestrator-engine/R28"""
         self.crashed("unreadable")
         self.release()
         self.run_driver(expect=1)

@@ -62,8 +62,8 @@ class LedgerCase(unittest.TestCase):
 
 
 class BoundedLockTests(LedgerCase):
+    @pytest.mark.spec("The ledger lock is bounded")
     def test_S1_a_held_ledger_is_waited_out_with_jittered_backoff_and_then_booked(self):
-        """orchestrator-engine/R71"""
         lock = self.hold()
         clock = Clock(on_sleep=lambda n: lock.close() if n == 4 else None)
         with ledgers.locked(self.path, clock=clock, sleep=clock.sleep) as data:
@@ -77,8 +77,8 @@ class BoundedLockTests(LedgerCase):
             )
         self.assertEqual(self.read()["tasks"], {"t1": {"status": "ACTIVE"}})
 
+    @pytest.mark.spec("The ledger lock is bounded")
     def test_S1_the_backoff_grows_to_5_seconds_and_no_further(self):
-        """orchestrator-engine/R71"""
         self.hold()
         clock = Clock()
         with self.assertRaises(ledgers.LedgerBusy):
@@ -87,8 +87,8 @@ class BoundedLockTests(LedgerCase):
         self.assertLessEqual(max(clock.slept), 5.0)
         self.assertGreaterEqual(max(clock.slept), 2.5, "the backoff never reached its cap")
 
+    @pytest.mark.spec("The ledger lock is bounded")
     def test_S1_the_driver_waits_for_a_ledger_a_lead_command_holds_and_books_the_change(self):
-        """orchestrator-engine/R71"""
         lock = self.hold()
         threading.Timer(0.5, lock.close).start()
         started = time.monotonic()
@@ -97,8 +97,8 @@ class BoundedLockTests(LedgerCase):
         self.assertGreaterEqual(time.monotonic() - started, 0.4)
         self.assertEqual(self.read()["tasks"], {"t1": {"status": "ACTIVE"}})
 
+    @pytest.mark.spec("The ledger lock is bounded")
     def test_S2_a_ledger_busy_past_the_deadline_raises_ledger_busy_after_exactly_60_seconds(self):
-        """orchestrator-engine/R72"""
         self.hold()
         clock = Clock()
         with self.assertRaises(ledgers.LedgerBusy) as caught:
@@ -110,15 +110,18 @@ class BoundedLockTests(LedgerCase):
             sum(clock.slept), 60.0, places=6, msg="the sleeps are in the deadline"
         )
 
+    @pytest.mark.spec("The ledger lock is bounded")
+    @pytest.mark.spec("Ledger busy deadline is configurable")
     def test_S2_the_deadline_reads_the_test_seam_and_an_unusable_value_keeps_sixty(self):
-        """orchestrator-engine/R72: a test that asserts the deadline pays the injected one, not 60 s."""
+        """a test that asserts the deadline pays the injected one, not 60 s."""
         self.assertEqual(ledgers.deadline({}), ledgers.DEADLINE)
         self.assertEqual(ledgers.deadline({ledgers.DEADLINE_ENV: "0.25"}), 0.25)
         for bad in ("", "soon", "0", "-1"):
             self.assertEqual(ledgers.deadline({ledgers.DEADLINE_ENV: bad}), ledgers.DEADLINE)
 
+    @pytest.mark.spec("The ledger lock is bounded")
+    @pytest.mark.spec("Ledger busy deadline is configurable")
     def test_S2_the_injected_deadline_reaches_the_lock_so_the_test_need_not_wait_a_minute(self):
-        """orchestrator-engine/R72"""
         self.hold()
         started = time.monotonic()
         with mock.patch.dict(os.environ, {ledgers.DEADLINE_ENV: "0.2"}):
@@ -128,14 +131,15 @@ class BoundedLockTests(LedgerCase):
         self.assertLess(time.monotonic() - started, 3.0)
         self.assertEqual(str(caught.exception), "ledger busy >0.2s")
 
+    @pytest.mark.spec("The ledger lock is bounded")
     def test_S2_a_busy_ledger_is_not_a_value_error_the_loop_could_swallow(self):
-        """orchestrator-engine/R72: the loop's step handlers catch `ValueError` and go on; a busy ledger must reach the
+        """the loop's step handlers catch `ValueError` and go on; a busy ledger must reach the
         crash guard instead."""
         self.assertFalse(issubclass(ledgers.LedgerBusy, ValueError))
         self.assertFalse(issubclass(ledgers.LedgerBusy, OSError))
 
+    @pytest.mark.spec("The ledger lock is bounded")
     def test_S2_a_lead_command_that_meets_a_busy_ledger_exits_1_with_the_reason(self):
-        """orchestrator-engine/R72"""
         self.hold()
         self.write({"version": 1, "tasks": {}})
         err = io.StringIO()
@@ -152,15 +156,15 @@ class BoundedLockTests(LedgerCase):
 
 
 class KindMarkerTests(LedgerCase):
+    @pytest.mark.spec("Ledger kind marker")
     def test_S7_a_ledger_the_orchestrator_creates_carries_the_marker_beside_version_1(self):
-        """orchestrator-engine/R74"""
         with ledgers.locked(self.path) as data:
             data["tasks"]["t1"] = {}
         self.assertEqual(list(self.read())[:2], ["version", "kind"])
         self.assertEqual((self.read()["version"], self.read()["kind"]), (1, MARKER))
 
+    @pytest.mark.spec("Ledger kind marker")
     def test_S7_the_next_locked_write_to_a_ledger_without_the_marker_adds_it(self):
-        """orchestrator-engine/R74"""
         self.write(
             {"version": 1, "tasks": {"t1": {"status": "ACTIVE"}}, "lead": "orchestrate:demo"}
         )
@@ -171,22 +175,23 @@ class KindMarkerTests(LedgerCase):
         self.assertEqual(sorted(written["tasks"]), ["t1", "t2"])
         self.assertEqual(written["lead"], "orchestrate:demo")
 
+    @pytest.mark.spec("Ledger kind marker")
     def test_S7_the_marker_is_on_disk_before_the_locked_block_runs(self):
-        """orchestrator-engine/R74: before any worker-visible output exists."""
+        """before any worker-visible output exists."""
         self.write({"version": 1, "tasks": {}})
         with ledgers.locked(self.path):
             self.assertEqual(self.read()["kind"], MARKER)
 
+    @pytest.mark.spec("Ledger kind marker")
     def test_S7_a_ledger_that_has_the_marker_is_not_rewritten_by_a_block_that_changes_nothing(self):
-        """orchestrator-engine/R74"""
         self.write({"version": 1, "kind": MARKER, "tasks": {}})
         before = self.path.stat().st_mtime_ns
         with ledgers.locked(self.path):
             pass
         self.assertEqual(self.path.stat().st_mtime_ns, before)
 
+    @pytest.mark.spec("Ledger kind marker")
     def test_S7_a_ledger_of_another_kind_is_refused(self):
-        """orchestrator-engine/R74"""
         self.write({"version": 1, "kind": "something/else", "tasks": {}})
         with self.assertRaises(ValueError) as caught:
             with ledgers.locked(self.path):
@@ -195,8 +200,8 @@ class KindMarkerTests(LedgerCase):
 
 
 class RunMarkerTests(GateFixture, unittest.TestCase):
+    @pytest.mark.spec("Ledger kind marker")
     def test_S7_a_run_creates_its_ledger_with_the_marker_before_any_file_a_worker_reads(self):
-        """orchestrator-engine/R74"""
         seen = []
         original = Path.write_text
         ledger_file = self.run_dir.parent / "demo.json"
@@ -221,15 +226,15 @@ class RunMarkerTests(GateFixture, unittest.TestCase):
 
 
 class SnapshotTests(LedgerCase):
+    @pytest.mark.spec("Lead reads are snapshots")
     def test_S5_a_snapshot_read_takes_no_lock_and_waits_for_none(self):
-        """orchestrator-engine/R75"""
         self.write({"version": 1, "tasks": {"t1": {}}})
         self.hold()
         with mock.patch.object(ledgers, "DEADLINE", 0.2):
             self.assertEqual(ledgers.snapshot(self.path)["tasks"], {"t1": {}})
 
+    @pytest.mark.spec("Lead reads are snapshots")
     def test_S5_show_reads_a_snapshot_while_a_lead_command_holds_the_lock(self):
-        """orchestrator-engine/R75"""
         self.write({"version": 1, "kind": MARKER, "tasks": {}})
         self.hold()
         out = io.StringIO()
@@ -237,16 +242,16 @@ class SnapshotTests(LedgerCase):
             code = app.run_cli(["show", "--state", str(self.path)])
         self.assertEqual((code, json.loads(out.getvalue())), (0, []))
 
+    @pytest.mark.spec("Lead reads are snapshots")
     def test_S5_show_of_a_ledger_that_does_not_exist_yet_is_empty_and_creates_nothing(self):
-        """orchestrator-engine/R75"""
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = app.run_cli(["show", "--state", str(self.path)])
         self.assertEqual((code, json.loads(out.getvalue())), (0, []))
         self.assertEqual(os.listdir(self.temp.name), [])
 
+    @pytest.mark.spec("Lead reads are snapshots")
     def test_S5_a_write_after_the_ledger_moved_since_the_snapshot_is_refused_with_a_reason(self):
-        """orchestrator-engine/R75"""
         self.write({"version": 1, "kind": MARKER, "tasks": {}, "integration": {"sha": "a"}})
         snapshot = ledgers.snapshot(self.path)
         with ledgers.locked(self.path) as data:  # another writer
@@ -259,16 +264,17 @@ class SnapshotTests(LedgerCase):
         self.assertIn("read it again", str(caught.exception))
         self.assertEqual(self.path.read_bytes(), before)
 
+    @pytest.mark.spec("Lead reads are snapshots")
     def test_S5_a_write_on_a_snapshot_that_is_still_current_goes_through(self):
-        """orchestrator-engine/R75"""
         self.write({"version": 1, "kind": MARKER, "tasks": {}, "integration": {"sha": "a"}})
         snapshot = ledgers.snapshot(self.path)
         with ledgers.locked(self.path, snapshot=snapshot, keys=("integration",)) as data:
             data["acceptance"] = {"S1": {}}
         self.assertEqual(self.read()["acceptance"], {"S1": {}})
 
+    @pytest.mark.spec("Lead reads are snapshots")
     def test_S5_a_change_to_a_key_the_write_does_not_depend_on_is_not_stale(self):
-        """orchestrator-engine/R75: the driver books tasks all the time; a snapshot only watches what it decided on."""
+        """the driver books tasks all the time; a snapshot only watches what it decided on."""
         self.write({"version": 1, "kind": MARKER, "tasks": {}, "integration": {"sha": "a"}})
         snapshot = ledgers.snapshot(self.path)
         with ledgers.locked(self.path) as data:
@@ -278,8 +284,8 @@ class SnapshotTests(LedgerCase):
         self.assertEqual(sorted(self.read()["tasks"]), ["t1"])
         self.assertEqual(self.read()["acceptance"], {"S1": {}})
 
+    @pytest.mark.spec("Lead reads are snapshots")
     def test_S5_evidence_rebuilds_from_a_snapshot_while_the_lock_is_held(self):
-        """orchestrator-engine/R75"""
         runs = Path(self.temp.name)
         plan = runs / "p.plan.yaml"
         self.write({"version": 1, "kind": MARKER, "tasks": {}})

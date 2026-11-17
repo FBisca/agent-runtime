@@ -110,7 +110,7 @@ def noul(value):
 class SmartScreeningFixture(unittest.TestCase):
     """A repository whose head edit adds a migration and a big module, and by default renames a doc into `server/`."""
 
-    # A protected path answers before a request is made (R15-R17, R20), so only the scenarios about that
+    # A protected path answers before a request is made ("Protected path safeguard", "Safeguard escalation report"), so only the scenarios about that
     # answer keep the rename; the screening scenarios need a change that reaches a request at all.
     protected_path = True
 

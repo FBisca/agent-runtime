@@ -36,6 +36,7 @@ class NarrateTests(unittest.TestCase):
     def lines(self):
         return self.out.getvalue().splitlines()
 
+    @pytest.mark.spec("Narration")
     def test_a_line_carries_unit_step_symbol_text_and_the_attempt_last(self):
         n = self.narrator()
         n.say(
@@ -53,6 +54,7 @@ class NarrateTests(unittest.TestCase):
             self.lines()[3], "^%s  plan  setup     ! legacy routing config in use$" % CLOCK
         )
 
+    @pytest.mark.spec("Narration")
     def test_an_unknown_kind_or_step_is_refused(self):
         n = self.narrator()
         with self.assertRaisesRegex(ValueError, "kind 'loud'"):
@@ -60,6 +62,7 @@ class NarrateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "step 'converged'"):
             n.say("info", "converged", "x", task="t1")
 
+    @pytest.mark.spec("Narration")
     def test_colour_only_on_a_terminal_without_NO_COLOR(self):
         n = self.narrator(stream=Tty(), color=None)
         n.say("ask", "decide", "Lead decision needed", task="t5r2")
@@ -72,6 +75,7 @@ class NarrateTests(unittest.TestCase):
             n.say("ask", "decide", "Lead decision needed", task="t5r2")
             self.assertNotIn("\x1b", self.out.getvalue())
 
+    @pytest.mark.spec("Narration")
     def test_a_repeated_wait_prints_once_then_every_five_minutes_until_the_unit_moves(self):
         n = self.narrator()
         ci, merge = "waiting for CI on #208", "waiting for GitHub to compute whether #208 can merge"
@@ -103,6 +107,7 @@ class NarrateTests(unittest.TestCase):
             ],
         )
 
+    @pytest.mark.spec("Narration")
     def test_paths_urls_and_whitespace_are_shortened(self):
         n = self.narrator(roots=["/x/state/run"], home="/Users/me")
         n.say(
@@ -129,7 +134,7 @@ class NarrateTests(unittest.TestCase):
 
 
 class BannerTests(unittest.TestCase):
-    """orchestrator-engine/R90: the run's banner, written once when a drive starts."""
+    """the run's banner, written once when a drive starts."""
 
     ROUTES: dict[str, Any] = {
         "source": "user",
@@ -161,6 +166,7 @@ class BannerTests(unittest.TestCase):
         n.banner(**run)
         return self.out.getvalue().split("\n")
 
+    @pytest.mark.spec("Narration")
     def test_the_banner_is_the_logo_then_the_run_and_its_routes(self):
         lines = self.banner()
         self.assertEqual(lines[: len(narrate.LOGO)], list(narrate.LOGO))
@@ -184,6 +190,7 @@ class BannerTests(unittest.TestCase):
             ],
         )
 
+    @pytest.mark.spec("Narration")
     def test_a_legacy_run_without_gates_or_steps_says_so(self):
         legacy = {
             "source": "legacy",
@@ -195,6 +202,7 @@ class BannerTests(unittest.TestCase):
         self.assertIn("  routes   recorded in the ledger (legacy table)", lines)
         self.assertFalse([line for line in lines if line.lstrip().startswith(("gates", "steps"))])
 
+    @pytest.mark.spec("Narration")
     def test_the_logo_is_coloured_only_on_a_terminal(self):
         lines = self.banner(stream=Tty(), color=None)
         self.assertTrue(lines[0].startswith("\x1b[36m"), repr(lines[0]))

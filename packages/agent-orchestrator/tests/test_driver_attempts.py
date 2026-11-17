@@ -1,4 +1,4 @@
-"""R173/S5: one order for a unit's attempts, and a question answered by the newest attempt that has the thing.
+"""one order for a unit's attempts, and a question answered by the newest attempt that has the thing.
 
 The unit's readers ask three questions — the newest report, the newest findings, and the attempt still open —
 and each answer comes from the record's own order (the attempt's `started_at`, then its place in the ledger),

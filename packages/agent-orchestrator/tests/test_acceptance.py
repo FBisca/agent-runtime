@@ -196,10 +196,11 @@ class AcceptanceFixture(SnapshotFixture, GateFixture):
 
 
 class DeliveredSnapshotTests(unittest.TestCase):
+    @pytest.mark.spec("Test fixtures are built once")
     def test_S12_a_delivered_plan_is_driven_once_per_class_and_a_test_that_changes_it_takes_a_copy(
         self,
     ):
-        """orchestrator-engine/R2: test-cost/S12 — the tests that only read a delivered plan share one drive."""
+        """test-cost/S12 — the tests that only read a delivered plan share one drive."""
         seen = []
 
         class Readers(AcceptanceFixture, unittest.TestCase):

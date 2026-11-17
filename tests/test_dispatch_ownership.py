@@ -54,6 +54,7 @@ class TeamOwnershipTests(ToolCase):
             )
         return "stray"
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S3_a_dead_and_empty_newer_row_does_not_fence_the_live_lead(self):
         """A session that left nothing behind never fences the terminal."""
         live = self.live_generation()
@@ -63,6 +64,7 @@ class TeamOwnershipTests(ToolCase):
         actor = self.store.actor(self.scope, self.terminal, None, generation=live)
         self.assertEqual(actor["team_id"], team)
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S4_a_live_newer_row_owns_the_terminal_and_fences_the_live_lead(self):
         """The live lead is fenced with 'stale team generation' and the message names the owner."""
         live = self.live_generation()
@@ -77,6 +79,7 @@ class TeamOwnershipTests(ToolCase):
         self.assertIn(self.terminal, message)
         self.assertIn(owner, message)
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S5_a_dead_newer_row_that_holds_work_keeps_the_terminal(self):
         """A generation that is gone but still holds work keeps the terminal."""
         live = self.live_generation()
@@ -147,8 +150,9 @@ class TerminalRefusalTests(ToolCase):
                 dict(row) for row in db.execute("SELECT id,generation FROM teams ORDER BY rowid")
             ]
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S1_a_session_that_descends_from_the_owner_is_refused(self):
-        """stale-team-generation/S1: the session that descends from the owner never takes the terminal."""
+        """the session that descends from the owner never takes the terminal."""
         owner = self.live_generation()
         team = self.store.team(self.scope, self.terminal, owner)
         self.store.register(team, "w1")  # the owner's team holds work
@@ -163,8 +167,9 @@ class TerminalRefusalTests(ToolCase):
         self.assertEqual(actor["team_id"], team, "the owner lost its terminal")
         self.assertEqual(len(self.teams()), 1, "the descendant registered a team")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S1_a_descendant_is_refused_even_when_the_owners_team_is_idle(self):
-        """stale-team-generation/S1: the owner's own session tree never takes the terminal, idle or not."""
+        """the owner's own session tree never takes the terminal, idle or not."""
         owner = self.live_generation()
         self.store.team(self.scope, self.terminal, owner)  # the owner's team holds nothing
         owner_pid = int(owner.split(":")[0])
@@ -173,8 +178,9 @@ class TerminalRefusalTests(ToolCase):
             descendant.team(self.scope, self.terminal, "4242:descendant")
         self.assertEqual(len(self.teams()), 1, "the descendant registered a team")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S1_an_unrelated_session_is_refused_while_the_owner_is_alive_and_holds_work(self):
-        """stale-team-generation/S1: a session that inherits a live lead's terminal is refused."""
+        """a session that inherits a live lead's terminal is refused."""
         owner = self.live_generation()
         team = self.store.team(self.scope, self.terminal, owner)
         self.hold_work(team)  # the owner's team holds work
@@ -190,8 +196,9 @@ class TerminalRefusalTests(ToolCase):
         self.assertNotEqual(team, None)
         self.assertEqual(len(self.teams()), 2, "the next session did not register a team")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S1_an_unrelated_session_takes_a_terminal_whose_owner_is_gone(self):
-        """stale-team-generation/S3: a session that left nothing behind never keeps the terminal."""
+        """a session that left nothing behind never keeps the terminal."""
         self.stray_team(self.dead_generation())  # a newer row whose process is gone
         team = self.store.team(self.scope, self.terminal, "4242:unrelated")
         self.assertIsNotNone(team)
@@ -207,13 +214,13 @@ class TerminalRefusalTests(ToolCase):
             alive.team(self.scope, self.terminal, "4243:unrelated")
         self.assertEqual(len(self.teams()), 1, "the refused session registered a team")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S6_a_session_that_registers_in_the_evidence_window_is_refused_not_a_crash(self):
-        """stale-team-generation/S6: a row that lands between the two reads is a refusal, not a crash.
+        """a row that lands between the two reads is a refusal, not a crash.
 
         The evidence for the terminal's teams is gathered outside the transaction, so another session can
         register a row in that window: the owner the second read meets is a generation the evidence does
-        not know yet, and the caller is refused with the message that names the terminal and the owner.
-        """
+        not know yet, and the caller is refused with the message that names the terminal and the owner."""
         owner = self.live_generation()
         team = self.store.team(self.scope, self.terminal, owner)
         self.hold_work(team)
@@ -241,8 +248,9 @@ class TerminalRefusalTests(ToolCase):
         self.assertIn(rogue, message, "the refusal does not name the generation that owns it")
         self.assertEqual(len(self.teams()), 2, "the refused session registered a team")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out(self):
-        """stale-team-generation/S6: a refusal names the reason and the way out."""
+        """a refusal names the reason and the way out."""
         owner = self.live_generation()
         team = self.store.team(self.scope, self.terminal, owner)
         self.hold_work(team)  # the owner's team holds work

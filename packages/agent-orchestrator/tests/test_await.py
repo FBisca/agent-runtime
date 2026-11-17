@@ -141,8 +141,8 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
     def crash_wakes(self):
         return [w for w in self.wakes() if "crashed" in w.get("text", "")]
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S3_an_exception_escaping_the_loop_logs_a_crash_wakes_the_lead_and_exits_non_zero(self):
-        """orchestrator-engine/R72"""
         self.waits([self.crashing_step()])
         code, err = self.finish(self.start_driver())
         self.assertNotEqual(code, 0)
@@ -151,15 +151,15 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
         self.assertIn(crash["text"], err)
         self.assertEqual(len(self.crash_wakes()), 1)
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S3_an_exception_during_startup_logs_a_crash_wakes_the_lead_and_exits_non_zero(self):
-        """orchestrator-engine/R72"""
         code, err = self.finish(self.start_driver("--routes-file", str(self.root / "missing.json")))
         self.assertNotEqual(code, 0)
         self.assertEqual(len(self.crash_events()), 1, err)
         self.assertEqual(len(self.crash_wakes()), 1)
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S3_an_exception_during_finalization_logs_a_crash(self):
-        """orchestrator-engine/R72"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         spec = load_script()
         with mock.patch.object(spec.Driver, "report_metrics", side_effect=RuntimeError("no disk")):
@@ -178,8 +178,9 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
         except RuntimeError:
             return 1
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S3_the_crash_is_written_while_another_command_holds_the_ledger_lock(self):
-        """orchestrator-engine/R72: a crash must not depend on the resource that may have caused it."""
+        """a crash must not depend on the resource that may have caused it."""
         spec = load_script()
         self.run_dir.mkdir(parents=True, exist_ok=True)
         driver = spec.Driver(
@@ -199,8 +200,8 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
         self.assertEqual([c["text"] for c in self.crash_events()], ["crashed RuntimeError: boom"])
         self.assertEqual(len(self.crash_wakes()), 1)
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S2_a_ledger_busy_past_the_deadline_logs_the_crash_wakes_the_lead_and_exits_1(self):
-        """orchestrator-engine/R72"""
         self.alias_state(self.plan)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         lock = open(self.run_dir.parent / "demo.json.lock", "w")
@@ -213,17 +214,18 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
         self.assertEqual(crash["text"], "crashed ledger busy >0.5s")
         self.assertEqual(len(self.crash_wakes()), 1)
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S2_a_driver_that_cannot_take_the_run_lock_logs_no_crash_into_the_run_that_holds_it(
         self,
     ):
-        """orchestrator-engine/R72: a second `run` is refused; it is not a crash of the first."""
+        """a second `run` is refused; it is not a crash of the first."""
         self.hold_run_lock()
         self.run_driver(expect=2)
         self.assertEqual(self.crash_events(), [])
         self.assertEqual(self.crash_wakes(), [])
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S3_a_run_that_ends_well_logs_no_crash(self):
-        """orchestrator-engine/R72"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(self.crash_events(), [])
@@ -232,8 +234,8 @@ class CrashGuardTests(AwaitFixture, unittest.TestCase):
 class AwaitTests(AwaitFixture, unittest.TestCase):
     START = {"kind": "start", "pid": 4242}
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_await_returns_the_crash_of_a_driver_that_crashed(self):
-        """orchestrator-engine/R76"""
         self.log(self.START, {"kind": "crash", "reason": "boom", "text": "crashed boom"})
         result = self.await_once()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -242,30 +244,32 @@ class AwaitTests(AwaitFixture, unittest.TestCase):
         self.assertIn("crashed boom", line)
         self.assertIn(str(self.run_dir / "events.jsonl"), line)
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_await_says_the_driver_is_gone_when_it_started_and_left_no_crash_log(self):
-        """orchestrator-engine/R76"""
         self.log(self.START)
         result = self.await_once()
         self.assertEqual(
             (result.returncode, result.stdout.strip()), (0, "driver gone without a crash log")
         )
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_await_keeps_waiting_for_a_run_whose_driver_has_not_started_yet(self):
-        """orchestrator-engine/R76"""
         self.assert_await_polls()
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.assert_await_polls()
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_await_keeps_waiting_while_a_driver_holds_the_run_lock(self):
-        """orchestrator-engine/R76: a driver that is alive is neither crashed nor gone, whatever the log says."""
+        """a driver that is alive is neither crashed nor gone, whatever the log says."""
         self.log(self.START)
         self.hold_run_lock()
         self.assert_await_polls()
         self.log({"kind": "crash", "reason": "old", "text": "crashed old"}, self.START)
         self.assert_await_polls()
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_the_newest_start_or_crash_decides_not_the_oldest(self):
-        """orchestrator-engine/R76: a restarted run that finished is finished, whatever an earlier drive did."""
+        """a restarted run that finished is finished, whatever an earlier drive did."""
         self.log(
             self.START,
             {"kind": "crash", "reason": "old", "text": "crashed old"},
@@ -276,8 +280,8 @@ class AwaitTests(AwaitFixture, unittest.TestCase):
             self.await_once().stdout.strip(), "finished -> %s" % (self.run_dir / "retro.md")
         )
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_a_wake_the_lead_has_not_seen_is_printed_before_the_crash(self):
-        """orchestrator-engine/R76"""
         self.log(self.START, {"kind": "crash", "reason": "boom", "text": "crashed boom"})
         (self.run_dir / "wakes.jsonl").write_text(
             json.dumps({"kind": "decision", "unit": "t1", "text": "decision t1: x -> /p"}) + "\n"
@@ -285,13 +289,14 @@ class AwaitTests(AwaitFixture, unittest.TestCase):
         self.assertEqual(self.await_once().stdout.strip(), "decision t1: x -> /p")
         self.assertTrue(self.await_once().stdout.startswith("crashed -> "))
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_a_start_without_a_pid_is_a_run_the_check_cannot_judge_and_await_waits(self):
-        """orchestrator-engine/R76: a run directory the previous version wrote has no pid in its start line."""
+        """a run directory the previous version wrote has no pid in its start line."""
         self.log({"kind": "start"})
         self.assert_await_polls()
 
+    @pytest.mark.spec("A crashed driver is visible")
     def test_S4_await_returns_the_crash_of_a_driver_that_really_crashed(self):
-        """orchestrator-engine/R76"""
         self.waits([self.crashing_step()])
         self.finish(self.start_driver())
         self.awaited("crashed -> ")

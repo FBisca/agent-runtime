@@ -10,7 +10,7 @@ import pytest
 from fixtures import load_script, wait_result
 from test_acceptance import SnapshotFixture
 from test_archive import ARCHIVE, ArchiveFixture
-from test_complete import NODE, PersonFixture
+from test_complete import PersonFixture
 
 pytestmark = pytest.mark.integration
 
@@ -305,7 +305,7 @@ class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
     @pytest.mark.spec("Person tickets")
     def test_S7_after_complete_the_next_run_archives_with_the_person_tickets_requirement(self):
         self.first_drive()
-        code, said = self.complete("T2", "S2=" + NODE)
+        code, said = self.complete("T2")
         self.assertEqual(code, 0, said)
         self.drive_once([])
         self.assertEqual(self.history()[-1], "ARCHIVED")

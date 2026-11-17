@@ -122,6 +122,7 @@ class MetricsTests(MetricsFixture):
         path = self.approved("bench")
         self.assertEqual([t["id"] for t in self.view(path)["tickets"]], ["T1"])
 
+    @pytest.mark.spec("Run metrics")
     def test_S29_a_plan_carries_its_run_dir_and_metrics_from_the_events(self):
         path, run = self.drive()
         shown = self.view(path)
@@ -146,6 +147,7 @@ class MetricsTests(MetricsFixture):
         self.assertEqual(datetime.fromisoformat(lane[0]["start"]), T0)
         self.assertEqual(datetime.fromisoformat(lane[2]["end"]), T0 + timedelta(minutes=31))
 
+    @pytest.mark.spec("Run metrics")
     def test_S29_an_open_phase_has_no_end_and_no_duration(self):
         path, _ = self.drive()
         t2 = self.view(path)["metrics"]["tickets"]["T2"]
@@ -154,6 +156,7 @@ class MetricsTests(MetricsFixture):
         lane = self.view(path)["metrics"]["timeline"]["T2"]
         self.assertEqual([(s["phase"], s["end"]) for s in lane], [("work", None)])
 
+    @pytest.mark.spec("Run metrics")
     def test_S29_a_drive_without_a_finish_ends_at_its_last_event(self):
         path = self.approved("bench")
         self.write_ledger("bench", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
@@ -167,6 +170,7 @@ class MetricsTests(MetricsFixture):
         )
         self.assertAlmostEqual(self.view(path)["metrics"]["wall_seconds"], 9 * 60, delta=1)
 
+    @pytest.mark.spec("Run metrics")
     def test_S29_errors_and_escalations_are_counted_and_the_last_error_is_cut(self):
         path = self.approved("bench")
         self.write_ledger("bench", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
@@ -191,6 +195,7 @@ class MetricsTests(MetricsFixture):
         self.assertEqual(t1["escalations"], {"ci": 2, "stuck": 1})
         self.assertEqual(t1["findings"], 2)
 
+    @pytest.mark.spec("Run metrics")
     def test_S3_findings_are_counted_by_their_source_and_kind(self):
         path = self.approved("bench")
         self.write_ledger("bench", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
@@ -211,6 +216,7 @@ class MetricsTests(MetricsFixture):
             t1["reasons"], {"review/concern": 2, "unknown/unknown": 1, "verify/blocking": 1}
         )
 
+    @pytest.mark.spec("Run metrics")
     def test_S29_tokens_and_model_come_from_the_attempts_and_the_route_and_are_null_when_unmeasured(
         self,
     ):
@@ -241,11 +247,13 @@ class MetricsTests(MetricsFixture):
         self.assertIsNone(tickets["T2"]["tokens"])
         self.assertIsNone(tickets["T2"]["model"])
 
+    @pytest.mark.spec("Run metrics")
     def test_S29_a_plan_never_driven_has_no_run_dir_and_no_metrics(self):
         shown = self.view(self.approved("idle"))
         self.assertIsNone(shown["run_dir"])
         self.assertIsNone(shown["metrics"])
 
+    @pytest.mark.spec("Run metrics")
     def test_S29_reading_metrics_writes_nothing(self):
         path, run = self.drive()
         self.attempts("bench", [{"unit": "t1", "tokens": {"input": 1}}])
@@ -253,6 +261,7 @@ class MetricsTests(MetricsFixture):
         self.assertIsNotNone(self.view(path)["metrics"])
         self.assertEqual(tree_digest(self.state_dir), before)
 
+    @pytest.mark.spec("Run metrics")
     def test_S4_the_wait_at_awaiting_merge_is_a_merge_phase_that_ends_at_the_merge(self):
         path = self.approved("bench")
         self.write_ledger("bench", {"T1": "COMPLETE"}, plan_state="RUNNING")
@@ -279,6 +288,7 @@ class MetricsTests(MetricsFixture):
         self.assertEqual(lane[-2]["end"], lane[-1]["start"])
         self.assertEqual(datetime.fromisoformat(lane[-1]["end"]), T0 + timedelta(minutes=30))
 
+    @pytest.mark.spec("Run metrics")
     def test_S4_a_merge_wait_still_open_has_no_end_and_no_duration(self):
         path = self.approved("bench")
         self.write_ledger("bench", {"T1": "IN PROGRESS"}, plan_state="RUNNING")

@@ -49,8 +49,8 @@ class StoreLinkTests(unittest.TestCase):
         self.store = Store({"HOME": self.temp.name})
         self.team = self.store.team("test", "t0", "lead")
 
+    @pytest.mark.spec("Spawn with a task")
     def test_register_links_a_ready_task_to_the_new_worker_and_assignment(self):
-        """agent-runtime/R78"""
         add_task(self.store, self.team, "dep", "complete")
         add_task(self.store, self.team, deps=["dep"])
         identity = self.store.register(self.team, "w1", "t1")
@@ -69,8 +69,8 @@ class StoreLinkTests(unittest.TestCase):
         )
         self.assertEqual(task_row(self.store)["status"], "complete")
 
+    @pytest.mark.spec("Spawn with a task")
     def test_invalid_tasks_are_refused_and_register_nothing(self):
-        """agent-runtime/R79"""
         other = self.store.team("test", "t7", "other-lead")
         add_task(self.store, other, "foreign")
         add_task(self.store, self.team, "dep")
@@ -85,8 +85,8 @@ class StoreLinkTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workers").fetchone()[0], 0)
         self.assertEqual(task_row(self.store, "foreign")["status"], "pending")
 
+    @pytest.mark.spec("Spawn with a task")
     def test_concurrent_claims_have_exactly_one_owner(self):
-        """agent-runtime/R79"""
         add_task(self.store, self.team)
         outcomes = []
 
@@ -105,8 +105,8 @@ class StoreLinkTests(unittest.TestCase):
         self.assertEqual(len(winners), 1)
         self.assertEqual(task_row(self.store)["owner"], winners[0]["worker_id"])
 
+    @pytest.mark.spec("Resume with a task")
     def test_resume_moves_an_owned_task_to_the_fresh_assignment(self):
-        """agent-runtime/R80"""
         first = self.store.register(self.team, "w1")
         self.store.bind(first["assignment_id"], "t1", "test")
         for status in ("in_progress", "blocked"):
@@ -132,8 +132,8 @@ class StoreLinkTests(unittest.TestCase):
         third = self.store.register(self.team, "w1", "ready", transfer=True)
         self.assertEqual(task_row(self.store, "ready")["assignment"], third["assignment_id"])
 
+    @pytest.mark.spec("Resume with a task")
     def test_resume_refuses_another_workers_task_and_unmet_dependencies(self):
-        """agent-runtime/R80"""
         add_task(self.store, self.team, "dep")
         add_task(self.store, self.team, "gated", deps=["dep"])
         add_task(
@@ -148,8 +148,8 @@ class StoreLinkTests(unittest.TestCase):
             with self.assertRaises(StoreError):
                 self.store.register(self.team, "w1", task_id, transfer=True)
 
+    @pytest.mark.spec("Resume with a task")
     def test_resume_without_task_id_leaves_links_unchanged(self):
-        """agent-runtime/R80"""
         first = self.store.register(self.team, "w1", None)
         add_task(
             self.store,
@@ -179,8 +179,8 @@ class ToolLinkTests(ToolCase):
     def store(self):
         return Store({"HOME": str(self.dir / "home")})
 
+    @pytest.mark.spec("Spawn with a task")
     def test_spawn_with_task_id_returns_it_and_the_complete_report_finishes_the_task(self):
-        """agent-runtime/R78"""
         lead = self.lead()
         task_id = self.make_task(lead)
         result, text = self.call(lead, "spawn", dict(SPAWN, task_id=task_id))
@@ -194,8 +194,8 @@ class ToolLinkTests(ToolCase):
         )
         self.assertEqual(task_row(store, task_id)["status"], "complete")
 
+    @pytest.mark.spec("Spawn with a task")
     def test_spawn_with_an_unready_task_starts_no_terminal(self):
-        """agent-runtime/R79"""
         lead = self.lead()
         dep = self.make_task(lead)
         gated = self.make_task(lead, depends_on=[dep])
@@ -205,8 +205,8 @@ class ToolLinkTests(ToolCase):
         self.assertEqual(self.runs("run"), [])
         self.assertEqual(task_row(self.store(), gated)["status"], "pending")
 
+    @pytest.mark.spec("Spawn with a task")
     def test_failed_spawn_releases_the_linked_task(self):
-        """agent-runtime/R79"""
         lead = self.lead({"run": {"out": json.dumps({"first_message": {"sent": False}})}})
         task_id = self.make_task(lead)
         result, _ = self.call(lead, "spawn", dict(SPAWN, task_id=task_id))
@@ -216,8 +216,8 @@ class ToolLinkTests(ToolCase):
             {"status": "pending", "owner": None, "assignment": None},
         )
 
+    @pytest.mark.spec("Resume with a task")
     def test_resume_with_task_id_moves_the_task_and_returns_it(self):
-        """agent-runtime/R80"""
         lead = self.lead()
         task_id = self.make_task(lead)
         result, text = self.call(lead, "spawn", dict(SPAWN, task_id=task_id))
@@ -236,8 +236,8 @@ class ToolLinkTests(ToolCase):
         self.assertEqual(task_row(store, task_id)["status"], "complete")
         self.assertNotEqual(first["assignment_id"], second["assignment_id"])
 
+    @pytest.mark.spec("Resume with a task")
     def test_failed_resume_restores_the_task_to_the_live_assignment(self):
-        """agent-runtime/R80"""
         lead = self.lead()
         task_id = self.make_task(lead)
         first = self.call(lead, "spawn", dict(SPAWN, task_id=task_id))[0]["structuredContent"]
@@ -260,8 +260,8 @@ class ToolLinkTests(ToolCase):
         )
         self.assertEqual(task_row(store, task_id)["status"], "complete")
 
+    @pytest.mark.spec("Resume with a task")
     def test_refused_resume_sends_nothing(self):
-        """agent-runtime/R80"""
         lead = self.lead()
         dep = self.make_task(lead)
         gated = self.make_task(lead, depends_on=[dep])
@@ -273,8 +273,8 @@ class ToolLinkTests(ToolCase):
             self.assertTrue(result["isError"], task_id)
         self.assertEqual(self.runs("send"), [])
 
+    @pytest.mark.spec("Resume with a task")
     def test_resume_without_task_id_keeps_the_task_on_the_earlier_assignment(self):
-        """agent-runtime/R80"""
         lead = self.lead()
         task_id = self.make_task(lead)
         first = self.call(lead, "spawn", dict(SPAWN, task_id=task_id))[0]["structuredContent"]

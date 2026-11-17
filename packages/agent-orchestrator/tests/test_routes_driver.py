@@ -31,23 +31,26 @@ class RouteDriverTests(RoutedRunFixture, unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         return str(path)
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S2_an_invalid_route_config_fails_the_run_before_any_worker_is_spawned(self):
-        """orchestrator-engine/R4: orchestrator-routing-effort-role/S2 — the run stops with an explanation, and nothing is spawned."""
+        """— the run stops with an explanation, and nothing is spawned."""
         path = self.routes_file(config(route(backend="gemini")))
         result = self.run_driver("--routes-file", path, expect=2)
         self.assertIn("route config", result.stderr)
         self.assertIn("gemini", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S3_a_route_for_an_unknown_class_fails_the_run_before_any_worker_is_spawned(self):
-        """orchestrator-engine/R4: P4/S3 — the same for a class the driver does not know."""
+        """P4/S3 — the same for a class the driver does not know."""
         path = self.routes_file(config(route(klass="tiny")))
         result = self.run_driver("--routes-file", path, expect=2)
         self.assertIn("tiny", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Narration")
     def test_a_run_opens_with_its_banner_naming_each_class_route(self):
-        """orchestrator-engine/R90: the drive's first lines are the banner: the plan, its tickets and its routes."""
+        """the drive's first lines are the banner: the plan, its tickets and its routes."""
         path = self.routes_file(
             config(
                 route(klass="small", backend="claude", model="haiku"),
@@ -62,7 +65,7 @@ class RouteDriverTests(RoutedRunFixture, unittest.TestCase):
         self.assertIn("routes.json (explicit)", head)
 
     def test_S1_a_typed_route_config_answers_a_brain_backend_the_table_lacks(self):
-        """orchestrator-engine/R2: P4/S1 — with a route config the brain model comes from the config, not from the legacy table."""
+        """P4/S1 — with a route config the brain model comes from the config, not from the legacy table."""
         self.models.write_text(
             "## Model classes\n\n| Class | Claude |\n|---|---|\n"
             '| small | `model: "haiku"` |\n| medium | `model: "sonnet"` |\n'
@@ -82,7 +85,7 @@ class RouteDriverTests(RoutedRunFixture, unittest.TestCase):
         self.assertEqual(self.gate("reviewer", "large", "high")[:2], ("codex", "gpt-m"))
 
     def test_S3_a_typed_route_config_answers_the_run_without_the_legacy_table(self):
-        """orchestrator-engine/R2: P4/S3 — the route config is self-sufficient; the legacy table is a fallback, not a prerequisite."""
+        """P4/S3 — the route config is self-sufficient; the legacy table is a fallback, not a prerequisite."""
         self.models.unlink()
         path = self.routes_file(
             config(

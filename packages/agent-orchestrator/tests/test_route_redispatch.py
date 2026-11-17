@@ -28,7 +28,7 @@ class RedispatchRouteTests(DeciderFixture, unittest.TestCase):
 
     @pytest.mark.spec("A new attempt keeps the higher class")
     def test_S19_an_orphan_redispatch_keeps_the_higher_last_class(self):
-        """orchestrator-engine/R2: plan-amend/S19 — T1 is small, its last attempt ran large: the new attempt is large."""
+        """plan-amend/S19 — T1 is small, its last attempt ran large: the new attempt is large."""
         self.run_driver()
         self.set_last_class("t1", "large")
         self.gone("demo-t1", "exited")
@@ -40,7 +40,7 @@ class RedispatchRouteTests(DeciderFixture, unittest.TestCase):
 
     @pytest.mark.spec("A new attempt keeps the higher class")
     def test_S19_a_reopened_parked_unit_keeps_the_higher_last_class(self):
-        """orchestrator-engine/R2: plan-amend/S19 — a parked unit reopened to TO-DO keeps its last attempt's larger class."""
+        """plan-amend/S19 — a parked unit reopened to TO-DO keeps its last attempt's larger class."""
         self.pause()
         self.set_last_class("t1", "large")
         self.set_ticket_status("T1", "TO-DO")
@@ -52,7 +52,7 @@ class RedispatchRouteTests(DeciderFixture, unittest.TestCase):
 
     @pytest.mark.spec("A new attempt keeps the higher class")
     def test_S19_a_reserved_attempt_keeps_the_higher_last_class(self):
-        """orchestrator-engine/R2: plan-amend/S19 — a reservation made for a reopened unit carries the higher class."""
+        """plan-amend/S19 — a reservation made for a reopened unit carries the higher class."""
         self.pause()
         self.set_last_class("t1", "large")
         self.set_ticket_status("T1", "TO-DO")

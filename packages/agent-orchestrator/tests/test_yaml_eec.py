@@ -2,7 +2,7 @@
 and gh answering in process (`YamlPlanFixture`, on `GateFixture`).
 
 Its lifecycle and rejection cases are kept by `test_acceptance.py`, `test_archive.py`, `test_plan.py` and
-`test_status_json.py` (plan-contract R22, R23)."""
+`test_status_json.py` (the Plan lifecycle and Ledger and status requirements)."""
 
 import json
 import subprocess

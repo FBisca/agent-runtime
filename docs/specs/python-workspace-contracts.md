@@ -1,122 +1,153 @@
 # Python workspace contracts
 
-Paths: pyproject.toml, uv.lock, packages/agent-runtime/pyproject.toml, packages/agent-orchestrator/pyproject.toml, .github/workflows/ci.yml, tests/test_workspace_isolation.py, tests/test_orchestrator_contract.py, tests/test_rollback_contract.py
-
-The runtime and the orchestrator are two installable members of one uv workspace. The runtime stays
-standard-library only in production; the orchestrator owns the typed, Pydantic-backed contracts and the
-YAML route policy. The runtime's behaviour itself lives in [agent-runtime.md](agent-runtime.md), and the
-harnesses in [harness-adapters.md](harness-adapters.md); this spec covers the packaging that carries them.
-
-The runtime's own modules carry its contracts and stay inside its member, on the standard library alone:
-`hc_tools.py` is the spawn and delegation surface, `pi_mcp.py` owns the registration a Pi worker needs to
-reach the parent. A module added for one backend's wiring never pulls a dependency into the runtime
-wheel.
-
-The workspace is a packaging change, not a rewrite: the entrypoints, the CLI subcommands, the MCP tool
-surface, the durable store format and the permissions of every harness are unchanged. The requirements
-below are what the packaging must keep.
-
-The compatibility baseline that pins the pre-workspace inventory is
-`docs/compat/compatibility-baseline.json`; the contract tests assert on it, so a drift in the tree fails
-the suite before a reviewer notices it in a diff.
+The runtime and the orchestrator are two installable members of one uv workspace. The runtime stays standard-library only in production; the orchestrator owns the typed, Pydantic-backed contracts and the YAML route policy. The runtime's behaviour lives in [agent-runtime.md](agent-runtime.md) and the harnesses in [harness-adapters.md](harness-adapters.md); this capability covers the packaging that carries them, the toolchain gates that guard it, how the test suite stays cheap, and the orchestrator driver's module layout.
 
 ## Requirements
 
-- **R192** WHEN a developer runs `uv sync --locked`, THEN both workspace members resolve from the committed lockfile and install reproducibly under the declared Python range. (from uv-workspace-python-standards/S1)
-- **R193** WHEN `uv lock --check` runs, THEN the lockfile is current and names both members, so a stale resolution fails loudly instead of silently drifting. (from uv-workspace-python-standards/S1)
-- **R194** WHEN the runtime wheel is installed on its own, THEN its CLI and its MCP server work without the orchestrator's Pydantic or PyYAML, and neither dependency leaks into that environment. (from uv-workspace-python-standards/S5)
-- **R195** WHEN each member's manifest is read, THEN it declares only its own dependencies: the runtime declares none and the orchestrator declares Pydantic and PyYAML. (from uv-workspace-python-standards/S5)
-- **R196** WHEN CI runs on Linux or macOS across the supported Python versions, THEN the workspace resolves, the whole suite runs, `ruff check .`, `ruff format --check .` and `ty check` run, both member wheels build, and the runtime wheel installs in isolation. (from uv-workspace-python-standards/S6)
-- **R197** WHEN CI checks formatting or types, THEN each is one plain command (`ruff format --check .`, `ty check packages/ ...`) that fails the build on its own exit code, with no stored count or budget. (from uv-workspace-python-standards/S6)
-- **R198** WHEN the new modules are type-checked, THEN `ty` reports no diagnostic in either member, and the legacy diagnostics stay within their own budget. (from uv-workspace-python-standards/S6)
-- **R199** WHEN a Claude, Codex or Pi session runs `agent-runtime`, `agent-runtime-mcp`, `agent-runtime-hook` or a known orchestration invocation, THEN the documented behaviour and the permissions of that harness are unchanged by the move. (from uv-workspace-python-standards/S2)
-- **R200** WHEN the orchestrator dispatches, resumes, collects or cancels a worker, THEN it reaches the runtime only through the public CLI or API, and no member source imports a runtime module or opens the store's tables. (from uv-workspace-python-standards/S3)
-- **R201** WHEN a task packet, a worker report or a route policy carries an unknown or invalid field, THEN the typed boundary refuses it with a deterministic error naming the field, and the same input always produces the same message. (from uv-workspace-python-standards/S4)
-- **R202** WHEN the orchestrator's route policy is read, THEN it is YAML, an unknown model class is an error rather than a silent fall back to another backend, and the machine-facing messages stay JSON. (from uv-workspace-python-standards/S4)
-- **R203** WHEN the workspace change is rolled back, THEN the legacy CLI shims and the legacy MCP server still answer, and the durable store opens in both the old and the new tree with the same schema version, the same tables and its rows intact: no state migration ever runs. (from uv-workspace-python-standards/S8)
-- **R204** WHEN the orchestrator member runs, THEN it keeps no state of its own: it writes nothing into the runtime's store and its wheel needs neither the runtime member nor the orchestrator's dependencies. (from uv-workspace-python-standards/S8)
-- **R205** WHEN the PRs that carry the session, resume and usage semantics merge or change, THEN those semantics stay pinned to their commits and keep their own regression tests, and the workspace contract does not duplicate them. (from uv-workspace-python-standards/S7)
-- **R206** WHEN the orchestrator member's own suite runs, THEN the workspace's pytest run collects it, the member's tests and sources stay type-clean by contract, and the suite's own harness measures the behaviour it stands for and not the machine's speed: a terminated run's tree counts as gone when nothing in it is still running. (from orchestrator-engine-suite/S3)
-- **R207** WHEN the orchestrator member's tests cite the orchestrator-engine requirement each scenario stands for, including the drive-restart recovery scenarios, THEN each test's docstring first line carries that `orchestrator-engine/R<m>` id, and the member's tests and sources stay type-clean under `ty`. (from drive-restart-recovery/S3)
+### Requirement: Reproducible workspace lock
+The workspace SHALL resolve both members from the committed lockfile and fail loudly when the lockfile is stale.
 
-## Coverage
+#### Scenario: sync and check
+- WHEN a developer runs `uv sync --locked` or `uv lock --check`
+- THEN both members install reproducibly under the declared Python range and the lockfile is current and names both members
 
-| Scenario | Requirement | Test |
-|---|---|---|
-| S1 | R192, R193 | `tests/test_workspace_isolation.py`: `test_S1_uv_lock_is_current_for_both_members`, `test_S1_uv_sync_frozen_installs_both_members` |
-| S2 | R199 | `tests/test_compatibility_contract.py`: `test_S2_entrypoint_shims_are_present_and_executable`, `test_S2_entrypoint_shims_resolve_to_their_python_entrypoints`, `test_S2_recorded_entrypoints_match_the_bin_directory`, `test_S2_the_installer_links_every_entrypoint_and_wires_the_hooks`, `test_S2_the_cli_keeps_its_subcommands`; `tests/test_compatibility_contract_integration.py`: `test_S2_the_hook_shim_still_fails_open`, `test_S2_the_cli_bridge_reaches_the_public_tools`, `test_S2_the_installer_links_every_shim`, `test_S2_the_installer_takes_the_documented_bin_dir`, `test_S2_the_installer_refuses_to_overwrite_a_non_symlink` |
-| S3 | R200 | `tests/test_compatibility_contract.py`: `test_S3_the_public_tool_surface_covers_the_orchestration_verbs`, `test_S3_direct_sqlite_access_stays_inside_the_runtime_store_layer`; `tests/test_orchestrator_contract.py`: `test_S3_no_source_of_the_member_touches_the_runtime_store`, `test_S3_the_client_calls_the_runtime_cli_and_returns_its_answer`, `test_S3_a_failing_runtime_is_reported_not_swallowed` |
-| S3 | R206 | `packages/agent-orchestrator/tests/test_engine_home.py`: `test_S3_ci_runs_the_member_suite_and_the_plain_gates` |
-| S4 | R201, R202 | `tests/test_orchestrator_contract.py`: `test_S4_a_report_without_a_task_id_is_refused`, `test_S4_a_report_with_an_unknown_field_is_refused`, `test_S4_the_error_is_the_same_every_time`, `test_S4_a_route_policy_naming_an_unknown_class_is_refused`, `test_S4_a_yaml_route_policy_loads_and_its_unknown_field_is_refused` |
-| S5 | R194, R195 | `tests/test_workspace_isolation.py`: `test_S5_runtime_wheel_works_without_orchestrator_dependencies`, `test_S5_member_manifests_declare_their_own_dependencies` |
-| S6 | R196, R197, R198 | `tests/test_workspace_isolation.py`: `test_S6_workflow_runs_the_toolchain_on_the_matrix`, `test_S6_the_format_and_type_gates_are_plain_commands_that_fail_on_their_own` |
-| S7 | R205 | `tests/test_compatibility_contract.py`: `test_S7_the_pr_commits_are_pinned_in_the_baseline`, `test_S7_resume_and_usage_semantics_keep_their_own_regression_tests`, `test_S7_the_baseline_pins_the_semantics_the_plan_describes_for_each_pr`, `test_S7_each_pr_pins_the_regression_tests_that_own_its_semantics`, `test_S7_this_contract_does_not_duplicate_the_existing_test_names`; `tests/test_compatibility_contract_integration.py`: `test_S7_the_pinned_pr_commits_are_ancestors_of_this_branch`, `test_S7_the_pinned_commits_carry_the_semantics_the_baseline_records` |
-| S8 | R203, R204 | `tests/test_rollback_contract.py`: `test_S8_the_legacy_tree_still_answers_through_its_shims`, `test_S8_a_store_written_by_the_new_tree_opens_in_the_legacy_tree_without_a_migration`, `test_S8_a_store_written_by_the_legacy_tree_opens_in_the_new_tree_without_a_migration`; `tests/test_orchestrator_contract.py`: `test_S8_the_member_writes_no_state_into_the_runtime_store`, `test_S8_the_runtime_wheel_needs_neither_member_nor_its_dependencies` |
+### Requirement: Member dependency isolation
+Each member SHALL declare only its own dependencies, so the runtime wheel works on its own.
 
-## Requirements: test-cost
+#### Scenario: the runtime alone
+- WHEN the runtime wheel is installed on its own
+- THEN its CLI and MCP server work without Pydantic or PyYAML, neither leaks into that environment, and the wheel needs neither the orchestrator member nor its dependencies
 
-- **R208** WHEN `uv run pytest -n auto` runs the whole suite on an idle machine with Defender's real-time scanner off, THEN it passes in at least 30% less wall time than on main before T0, and in 5 minutes or less; `uv run pytest` (the fast suite) finishes in under 3 seconds (from test-cost/S1)
-- **R210** WHEN the tests marked `unit` run, THEN no test starts a process (git included) or opens a network socket (from test-cost/S3)
-- **R212** WHEN `uv run pytest` is given only options, including an option's value such as `-p no:cacheprovider`, THEN it selects the same tests as `uv run pytest`; naming a path or a node id still runs exactly what was named (from test-cost/S5)
-- **R213** WHEN a ticket deletes, merges or moves a test, THEN its PR lists each such test with the test that keeps its guarantee (or the new level it moved to), and the seconds of each module it touched before and after, measured back to back on the same machine (from test-cost/S6)
-- **R214** WHEN a ticket replaces a test's real wait, THEN the test waits on an injected clock or a barrier, and asserts a signal the code produced; a real wait remains only where the assertion is about elapsed time (from test-cost/S7)
-- **R215** WHEN an orchestrator test class needs a run driven through the plan lifecycle, THEN the plan is approved once per class, not once per test; the per-test HOME does not change PATH, so every test of a class sees one PATH (from test-cost/S8)
-- **R216** WHEN an installer test needs the v0.1.0 release, THEN the release is built once per session; a test that only reads it shares it, a test that changes it takes a copy (from test-cost/S9)
-- **R217** WHEN a runtime test needs a state it does not exercise (a full team, a long-lived lead, a spent budget), THEN the state is seeded through the store or a fixture, and only the step under test drives the public path (from test-cost/S10)
-- **R218** WHEN a runtime test talks to no worker session or no server, THEN none is started for it; the worker sessions and servers start only for the tests that talk to them (from test-cost/S11)
-- **R219** WHEN an orchestrator test only reads a delivered or archived plan, THEN it reads a snapshot built once per class; a test that changes the plan takes a copy (from test-cost/S12)
-- **R220** WHEN a test proves pure logic (validation, precedence, parsing, classification) through a subprocess or a server, THEN it runs that logic in process; it keeps the `integration` marker while it writes the filesystem, and one test per boundary still shows the refusal or the result crossing it (from test-cost/S13)
-- **R221** WHEN a ticket of this plan that owns orchestrator lifecycle fixtures or route tests starts, THEN no other plan's open ticket changes those files: remove-legacy-routing's tickets (#266 and the one after it) have merged (from test-cost/S14)
+#### Scenario: manifests
+- WHEN each member's manifest is read
+- THEN the runtime declares none and the orchestrator declares Pydantic and PyYAML
 
-## Coverage: test-cost
+### Requirement: Workspace CI gates
+CI SHALL run the workspace's toolchain as plain commands that fail the build on their own exit codes, with no stored count or budget.
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R208 | S1 | human: Felippe times `uv run pytest -n auto` and `uv run pytest` on the same machine, idle, scanner off, once on main before T0 and once after the last ticket merges, and confirms the whole suite is at least 30% faster and at most 5 minutes, the fast suite under 3 seconds, and the drop in collected tests equals the deletions the PRs list, with no test newly skipped or marked `live` |
-| R210 | S3 | `tests/test_fast_suite.py` |
-| R212 | S5 | `tests/test_fast_suite.py` |
-| R213 | S6 | human: the PR body lists each deleted, merged or moved test with its keeper (or new level), one row per test, and the module seconds before and after; checked before merge, with no test written to stand in for it |
-| R214 | S7 | `tests/installer/test_shared_release.py::NoClockTests::test_S7_the_fakes_signal_the_installer_and_return_without_a_sleep`<br>`tests/test_dispatch_clocked_wait.py::ClockedWaitTests::test_S7_a_wait_with_nothing_to_report_answers_timeout_when_the_injected_clock_reaches_it`<br>`packages/agent-orchestrator/tests/test_wake.py::AwaitTests::test_S2_await_waits_for_a_wake_that_arrives_later`<br>`packages/agent-orchestrator/tests/test_wake.py::AwaitTests::test_S2_an_unfinished_run_with_nothing_to_print_does_not_say_finished` |
-| R215 | S8 | `packages/agent-orchestrator/tests/test_fixtures.py::FixtureCostTests::test_S8_a_class_approves_its_plan_once`<br>`packages/agent-orchestrator/tests/test_fixtures.py::FixtureCostTests::test_S8_path_stays_put_across_the_class`<br>`packages/agent-orchestrator/tests/test_fixtures.py::FixtureCostTests::test_S8_each_test_of_a_class_starts_from_the_same_fresh_world` |
-| R216 | S9 | `tests/installer/test_shared_release.py::SharedReleaseTests::test_S9_the_release_is_built_once_and_a_reader_shares_it`<br>`tests/installer/test_shared_release.py::SharedReleaseTests::test_S9_a_test_that_changes_the_release_takes_a_copy` |
-| R217 | S10 | `tests/test_team_limit.py::SeededTeamTests::test_S10_a_seeded_full_team_refuses_the_33rd_active_worker`<br>`tests/test_runtime_audit_outcome.py::TeamLimitOutcome::test_S10_a_full_team_is_seeded_and_only_the_step_under_test_launches`<br>`tests/test_operations.py::OutcomeScenario::test_S10_the_long_lived_lead_is_seeded_and_only_the_step_under_test_launches`<br>`tests/test_dispatch.py::DispatchTests::test_S10_seeded_reports_reach_the_lead_as_a_worker_session_would_publish_them`<br>`tests/test_budgets.py::BudgetTests::test_S10_a_seeded_backlog_is_read_back_as_the_lead_would_have_created_it` |
-| R218 | S11 | `tests/test_event_wait_harness.py::EventHarnessTests::test_S11_a_test_starts_only_the_sessions_it_talks_to`<br>`tests/test_stop_failures.py::StopFailureTests::test_S11_a_stop_test_that_talks_to_the_lead_alone_starts_no_worker_session`<br>`tests/test_stop_failures.py::StopStoreFailureTests::test_S11_a_stop_driven_in_process_starts_no_server`<br>`tests/test_peer_dispatch.py::PeerDispatchTests::test_S11_a_dispatch_test_that_talks_to_no_worker_starts_none`<br>`tests/test_spawn_cleanup.py::FastReportTests::test_S11_a_spawn_driven_in_process_starts_no_server`<br>`tests/test_store_failures.py::StoreFailureTests::test_S11_a_store_failure_driven_in_process_starts_no_server` |
-| R219 | S12 | `packages/agent-orchestrator/tests/test_acceptance.py::DeliveredSnapshotTests::test_S12_a_delivered_plan_is_driven_once_per_class_and_a_test_that_changes_it_takes_a_copy` |
-| R220 | S13 | `packages/agent-eval/tests/test_capture_in_process.py::test_S13_an_unknown_ref_is_refused_in_process_without_spawning_a_cli`<br>`packages/agent-eval/tests/test_capture_in_process.py::test_S13_the_capture_help_is_printed_in_process`<br>`packages/agent-eval/tests/test_capture_in_process.py::test_S13_a_refusal_crosses_the_subprocess_boundary_with_exit_2`<br>`tests/test_tools.py::SpawnTests::test_S13_a_refusal_still_crosses_the_server_process`<br>`tests/test_hooks_guards.py::RawHcTests::test_S17_garbage_input_does_not_deny`<br>`tests/test_agent_runtime.py::CallTests::test_S1_hc_terminal_runs_the_tool_and_prints_its_json`<br>`tests/test_agent_runtime_resolve.py::CliTests::test_missing_hc_is_unknown`<br>`tests/test_diagnostics.py::DiagnosticTests::test_hc_role_lookup_failure_degrades_status_collect_and_list`<br>`tests/test_agent_runtime_resolve.py::CliTests::test_null_parent_through_symlink_is_lead`<br>`tests/test_pi_lead.py::PiPolicyTests::test_policy_limits_the_directory_a_worker_may_run_in`<br>`packages/agent-orchestrator/tests/test_step_routes.py::StepRouteTests::test_S9_a_step_route_overrides_the_brain`<br>`packages/agent-orchestrator/tests/test_rounds.py::CapPrecedenceTests::test_S32_a_ticket_field_sets_the_cap_of_one_ticket`<br>`packages/agent-orchestrator/tests/test_swap.py::ContextReserveTests::test_S19_the_reserve_is_set_by_a_flag`<br>`packages/agent-orchestrator/tests/test_route_selection_run.py::RouteSettlementTests::test_S2_an_explicit_override_wins_over_the_config`<br>`packages/agent-orchestrator/tests/test_step_routes.py::StepRouteBoundaryTests::test_S3_a_gate_without_a_step_route_spawns_on_todays_effort` |
-| R221 | S14 | human: remove-legacy-routing's tickets merged before T1 started (recorded when person ticket T9 was marked COMPLETE) |
+#### Scenario: the matrix
+- WHEN CI runs on Linux or macOS across the supported Python versions
+- THEN the workspace resolves, the whole suite runs (the orchestrator member's own suite included), `ruff check .`, `ruff format --check .` and `ty check packages/ ...` run, both member wheels build, and the runtime wheel installs in isolation
 
-## Requirements: suite-cost
+### Requirement: Orchestrator reaches the runtime through its public surface
+The orchestrator SHALL reach the runtime only through its public CLI or API.
 
-- **R222** WHEN the fast suite runs, THEN the sum of its tests' call time is under three seconds and no unit test costs half a second or more, measured once per run and failing the build only at half again those numbers, so a shared runner is not the gate. (from suite-cost/S4)
-- **R224** WHEN a test starts a child process and another test asserts the ledger's busy deadline, THEN the child is killed and reaped in one cleanup so the test pays no sleep, and the deadline is read from `AGENT_ORCHESTRATOR_LEDGER_DEADLINE` while an unset, unreadable or non-positive value keeps sixty seconds. (from suite-cost/S1)
-- **R249** WHEN a single test runs past 18 seconds THEN pytest fails it, by the `timeout = 18` of the pytest configuration, so no per-module row and no stored ceiling exists. (from suite-cost/S6)
+#### Scenario: no private access
+- WHEN the orchestrator dispatches, resumes, collects or cancels a worker
+- THEN no member source imports a runtime module or opens the store's tables, the client returns the runtime CLI's answer, and a failing runtime is reported rather than swallowed
 
-## Coverage: suite-cost
+### Requirement: Typed boundaries refuse invalid fields
+A task packet or worker report with an unknown or invalid field SHALL be refused with a deterministic error naming the field.
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R222 | S4 | `tests/test_fast_suite.py::FastSuiteTests::test_S1_the_fast_suite_reports_under_three_seconds`<br>`tests/test_fast_suite.py::FastSuiteTests::test_S1_no_unit_test_costs_more_than_half_a_second` |
-| R224 | S1 | `packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S2_the_deadline_reads_the_test_seam_and_an_unusable_value_keeps_sixty`<br>`packages/agent-orchestrator/tests/test_ledger.py::BoundedLockTests::test_S2_the_injected_deadline_reaches_the_lock_so_the_test_need_not_wait_a_minute`<br>`tests/test_dispatch_ownership.py::TeamOwnershipTests::test_S4_a_live_newer_row_owns_the_terminal_and_fences_the_live_lead` |
-| R249 | S6 | `tests/test_pytest_timeout.py::PytestTimeoutTests::test_S6_a_test_past_the_timeout_fails_naming_the_timeout`<br>`tests/test_pytest_timeout.py::PytestTimeoutTests::test_S6_the_configured_timeout_is_eighteen_seconds` |
+#### Scenario: an invalid report
+- WHEN a report lacks its task id or carries an unknown field
+- THEN the typed boundary refuses it naming the field, and the same input always produces the same message
 
-## Requirements: driver-split
+### Requirement: YAML route policy
+The orchestrator's route policy SHALL be YAML, and an unknown model class or field SHALL be an error rather than a silent fall back to another backend.
 
-- **R235** WHEN a published name of agent_orchestrator.driver is used by the package, the suite or an entry point, THEN it resolves, `python -m agent_orchestrator` drives the same CLI commands with the same arguments, and the suite's assertion that the engine has one home still names the member's source directory (from driver-split/S10)
-- **R237** WHEN the orchestrator package's modules are read for a current UTC timestamp, THEN the definition exists once, in timeutil.py, and every former call site keeps the type it had: an ISO string where it had one and a datetime where it had one (from driver-split/S12)
-- **R238** WHEN the driver package is split and a ledger written before the split is read after it, THEN the record keeps its version, its kind marker and its tasks, so a ledger the old engine wrote opens in the new one without a migration (from driver-split/S13)
-- **R239** WHEN the CLI is asked for its subcommands after the argument parser is decomposed, THEN it still offers the command names it offered before (less `accept`, removed with the evidence items it accepted), each command group still offers its subcommands, and the package entry and `python -m agent_orchestrator` reach the same `run_cli` (from driver-split/S14)
-- **R246** WHEN the driver package is split into modules behind its facade, THEN every public name the package's modules define is still reachable as driver.<name>, asserted by a test that compares the two sets rather than by a reading, so a split cannot drop a name and still pass because nothing happened to import it yet (from driver-split/S22)
-- **R247** WHEN a unit is re-dispatched and its second attempt is reviewed, THEN the reviewer's packet names the exact report of the attempt under review, with its mtime and the head it claims, rather than a glob over the unit directory, and the trail's newest report is chosen by an order the record holds rather than by dictionary order, so a stale file cannot be read as the change under review (from driver-split/S24)
-- **R248** WHEN a function or class exceeds a ruff PLR09 limit (12 branches, 7 arguments, 50 statements, 25 public methods) THEN CI fails naming it, by running `uv run ruff check .`, and each existing offender carries its own `# noqa: PLR09xx` at its def or class line, so no number is stored
+#### Scenario: an unknown class or field
+- WHEN a route policy names an unknown class or carries an unknown field
+- THEN it is refused, while a valid YAML policy loads
 
-## Coverage: driver-split
+### Requirement: Unit tests start no process
+A test marked `unit` SHALL start no process (git included) and open no network socket.
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R235 | S10 | `packages/agent-orchestrator/tests/test_driver/test_driver_cli.py::CliHomeTests::test_S10_the_names_the_package_publishes_are_the_cli_modules_own`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_pull.py::PullHomeTests::test_S10_the_pull_members_live_in_one_module`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_pull.py::PullHomeTests::test_S10_the_driver_reaches_every_moved_member_through_the_collaborator`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_spawn.py::SpawnHomeTests::test_S10_the_spawn_members_live_in_one_module`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_spawn.py::SpawnHomeTests::test_S10_the_driver_reaches_every_moved_member_through_the_collaborator`<br>`packages/agent-orchestrator/tests/test_driver_runtime.py::RuntimeHomeTests::test_S10_the_runtime_helpers_resolve_from_the_driver_package`<br>`packages/agent-orchestrator/tests/test_driver_report.py::ReportHomeTests::test_S10_the_report_helpers_resolve_from_the_driver_package`<br>`packages/agent-orchestrator/tests/test_driver_records.py::RecordHomeTests::test_S10_the_record_helpers_resolve_from_the_driver_package`<br>`packages/agent-orchestrator/tests/test_engine_home.py::EngineHomeTests::test_S10_the_driver_is_a_package_every_entry_point_still_reaches` |
-| R237 | S12 | `packages/agent-orchestrator/tests/test_timeutil.py::TimestampDefinitionTests::test_s12_the_utc_timestamp_is_defined_once_and_each_call_site_keeps_its_type` |
-| R238 | S13 | `packages/agent-orchestrator/tests/test_driver/test_driver_package.py::RecordTests::test_S13_a_ledger_written_before_the_split_keeps_its_shape_through_the_facade`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_archive.py::PreSplitLedgerTests::test_S13_a_ledger_written_before_the_split_still_parks_under_the_archive`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_archive.py::ArchiveHomeTests::test_S13_the_lane_members_live_in_one_module`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_archive.py::ArchiveHomeTests::test_S13_the_driver_reaches_every_moved_member_through_the_collaborator`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_gates.py::PreSplitLedgerTests::test_S13_a_ledger_written_before_the_split_moves_on_under_the_gates`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_gates.py::GateHomeTests::test_S13_the_steps_live_in_one_module_with_the_table_that_drives_them`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_gates.py::GateHomeTests::test_S13_the_driver_advances_through_the_collaborator`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_book.py::PreSplitLedgerTests::test_S13_a_ledger_written_before_the_split_opens_under_the_book`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_book.py::BookHomeTests::test_S13_the_book_is_the_one_owner_of_the_record` |
-| R239 | S14 | `packages/agent-orchestrator/tests/test_driver/test_driver_cli.py::CliSurfaceTests::test_S14_the_parser_still_offers_its_commands`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_cli.py::CliSurfaceTests::test_S14_each_command_group_still_offers_its_subcommands`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_cli.py::CliHomeTests::test_S14_the_package_entry_and_the_module_entry_reach_the_same_run_cli` |
-| R246 | S22 | `packages/agent-orchestrator/tests/test_driver/test_driver_package.py::FacadeTests::test_S22_every_public_name_the_package_modules_define_is_reachable_on_the_package`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_package.py::FacadeTests::test_S22_no_module_of_the_package_takes_the_name_of_a_published_one` |
-| R247 | S24 | `packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_S1_the_brief_names_the_report_whose_claims_the_pass_checks`<br>`packages/agent-orchestrator/tests/test_driver/test_driver_review.py::TrailOrderTests::test_S24_the_trail_answers_the_newest_attempt_by_the_order_the_record_holds` |
-| R248 | S1 | `tests/test_ruff_size_limits.py::RuffSizeLimitTests::test_S1_a_function_or_class_over_a_pylint_limit_fails_ruff_naming_its_rule_code` |
+#### Scenario: the unit tier
+- WHEN the tests marked `unit` run
+- THEN none starts a process or opens a socket
+
+### Requirement: Fast suite cost
+The fast suite SHALL cost under three seconds of test call time with no unit test at half a second or more.
+
+#### Scenario: the fast suite
+- WHEN `uv run pytest` runs the fast suite
+- THEN its summed call time is under three seconds and no unit test costs half a second or more, the build failing only at half again those numbers so a shared runner is not the gate
+
+### Requirement: Option-only pytest runs the fast suite
+`uv run pytest` given only options SHALL select the same tests as bare `uv run pytest`.
+
+#### Scenario: an option value
+- WHEN pytest gets options only, including an option's value such as `-p no:cacheprovider`
+- THEN it selects the fast suite, and naming a path or a node id still runs exactly what was named
+
+### Requirement: Per-test timeout
+A single test running past the configured timeout SHALL fail, naming the timeout.
+
+#### Scenario: a slow test
+- WHEN a single test runs past 18 seconds
+- THEN pytest fails it by the `timeout = 18` of its configuration, so no per-module row and no stored ceiling exists
+
+### Requirement: Tests wait on signals, not clocks
+A test SHALL wait on an injected clock or a barrier and assert a signal the code produced; a real wait remains only where the assertion is about elapsed time.
+
+#### Scenario: no real wait
+- WHEN a test would wait for a deadline, a wake or an installer fake
+- THEN it advances an injected clock or waits on a signal the code produced
+
+### Requirement: Test fixtures are built once
+Expensive read-only fixtures SHALL be built once per class or session, and a test that changes one SHALL take a copy.
+
+#### Scenario: shared fixtures
+- WHEN orchestrator tests need an approved plan, a delivered plan, or installer tests need the v0.1.0 release
+- THEN the plan is approved and the snapshot or release built once, readers share it, every test still starts from the same fresh world and one PATH, and a test that changes it takes a copy
+
+### Requirement: Tests start only what they exercise
+A test SHALL seed the state it does not exercise through the store or a fixture and start a worker session or a server only when it talks to one.
+
+#### Scenario: seeded state, lazy sessions
+- WHEN a runtime test needs a full team, a long-lived lead, a spent budget or a backlog, or talks to no worker or server
+- THEN the state is seeded, only the step under test drives the public path, and no session or server is started for it
+
+### Requirement: Pure logic is tested in process
+A test of pure logic (validation, precedence, parsing, classification) SHALL run it in process, with one test per boundary showing the result crossing it.
+
+#### Scenario: a refusal in process and across the boundary
+- WHEN logic such as an unknown capture ref or a spawn refusal is proved
+- THEN it runs in process without a subprocess, and one test still shows the refusal crossing the subprocess or server boundary
+
+### Requirement: Ledger busy deadline is configurable
+The ledger's busy deadline SHALL be read from `AGENT_ORCHESTRATOR_LEDGER_DEADLINE`, so a test need not wait a minute.
+
+#### Scenario: the deadline seam
+- WHEN the variable is set to a usable value it reaches the lock; unset, unreadable or non-positive
+- THEN the deadline stays sixty seconds
+
+### Requirement: Driver facade and entry points
+The `agent_orchestrator.driver` package SHALL expose every public name its modules define and reach the same CLI from every entry point.
+
+#### Scenario: names resolve
+- WHEN a published name of the package is used by the package, the suite or an entry point
+- THEN it resolves, and a test comparing the sets of defined and reachable public names fails if a split drops one
+
+#### Scenario: one CLI
+- WHEN the CLI is asked for its subcommands, or the package entry and `python -m agent_orchestrator` run
+- THEN they offer the same commands and subcommands and reach the same `run_cli`
+
+### Requirement: One UTC timestamp definition
+The orchestrator package SHALL define the current UTC timestamp once, in `timeutil.py`.
+
+#### Scenario: call sites keep their type
+- WHEN the package's modules are read for a current UTC timestamp
+- THEN the definition exists once and every call site keeps the type it had: an ISO string or a datetime
+
+### Requirement: Pre-split ledgers open
+A ledger written before the driver was split SHALL open in the split engine without a migration.
+
+#### Scenario: an old ledger
+- WHEN a ledger written before the split is read after it
+- THEN the record keeps its version, kind marker and tasks, and the archive, gates and book each continue from it
+
+### Requirement: Reviewer packet names the attempt under review
+The reviewer's packet SHALL name the exact report of the attempt under review.
+
+#### Scenario: a re-dispatched unit
+- WHEN a unit is re-dispatched and its second attempt is reviewed
+- THEN the packet names that attempt's report with its mtime and claimed head rather than a glob over the unit directory, and the trail's newest report is chosen by the order the record holds, so a stale file is never read as the change under review
+
+### Requirement: Ruff size limits
+CI SHALL fail a function or class that exceeds a ruff PLR09 limit, with each existing offender carrying its own `# noqa`.
+
+#### Scenario: over a limit
+- WHEN a function or class exceeds 12 branches, 7 arguments, 50 statements or 25 public methods
+- THEN `uv run ruff check .` fails naming its rule code, so no number is stored

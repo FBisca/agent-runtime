@@ -84,8 +84,9 @@ class DeciderFixture(RunFixture):
 
 
 class DeciderTests(DeciderFixture, unittest.TestCase):
+    @pytest.mark.spec("One idle watchdog")
     def test_S11_a_working_assignment_without_an_ended_turn_is_not_an_event(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits([wait_result([assignment("demo-t1", "working")], reason="timeout")])
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1"])
@@ -93,15 +94,16 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.wakes(), [])
 
     def test_S11_a_superseded_assignment_reported_failed_is_not_an_event(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits([self.failing_report("t1"), wait_result([assignment("demo-t1", "failed")])])
         self.run_driver()
         self.assertEqual(self.spawned(), ["demo-t1"])
         self.assertEqual(self.task("t1r1")["assignment_id"], resume_id("demo-t1", 1))
         self.assertEqual(self.task("t1r1").get("gate"), None)
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S11_a_worker_the_runtime_reports_unreported_or_error_is_one_request_at_once(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11 — R62: only idle and done wait for the watchdog."""
+        """code-driven-orchestrator/S11 — One idle watchdog: only idle and done wait for the watchdog."""
         for runtime_state in ("unreported", "error"):
             with self.subTest(runtime_state=runtime_state):
                 self.setUp()
@@ -116,8 +118,9 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 self.assertIn("runtime state " + runtime_state, self.wake_lines()[0])
                 self.assertEqual(len(self.wakes()), 1)
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S5_a_worker_whose_turn_ended_idle_or_done_is_one_idle_request_from_the_watchdog(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S5"""
+        """orchestrator-silent-idle/S5"""
         for runtime_state in ("idle", "done"):
             with self.subTest(runtime_state=runtime_state):
                 self.setUp()
@@ -132,8 +135,9 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 request = json.loads((self.run_dir / "t1" / "request.json").read_text())
                 self.assertEqual(request["event"], "idle")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S11_blocked_and_decision_reports_are_handled_at_once(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S11"""
+        """orchestrator-silent-idle/S11"""
         for kind in ("blocked", "decision"):
             with self.subTest(kind=kind):
                 self.setUp()
@@ -143,7 +147,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 self.assertIn("cannot reach the database", self.wake_lines()[0])
 
     def test_S11_a_failed_worker_is_one_request_by_state_and_message(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits(
             [
                 report_wait("demo-t1", "failed", "worker terminal exited before completion"),
@@ -155,7 +159,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertIn("terminal exited", self.wake_lines()[0])
 
     def test_S11_retry_after_a_failed_gate_runs_one_more_fix_round(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits(
             [
                 self.failing_report("t1"),
@@ -177,7 +181,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         )
 
     def test_S11_retry_resumes_a_live_worker_in_a_new_task_directory(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits([self.blocked(), self.decided("retry", reason="the database is back")])
         self.run_driver()
         resumes = self.calls("resume")
@@ -201,7 +205,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1"])
 
     def test_S11_retry_for_an_exited_worker_spawns_a_fresh_one(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.states({"demo-t1": "exited"})
         self.waits([self.blocked(), self.decided("retry")])
         self.run_driver()
@@ -209,7 +213,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])
 
     def test_S11_fresh_worker_replaces_a_live_pane_with_the_same_class(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits([self.blocked(), self.decided("fresh worker")])
         self.run_driver()
         self.assertEqual(self.calls("resume"), [])
@@ -223,7 +227,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.task("t1d1")["status"], "ACTIVE")
 
     def test_S11_retry_one_class_up_spawns_a_fresh_worker_on_the_next_class(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits([self.blocked(), self.decided("retry one class up")])
         self.run_driver()
         first, fresh = self.calls("spawn")[0]["args"], self.calls("spawn")[1]["args"]
@@ -232,7 +236,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.task("t1d1")["packet"]["model"], "sonnet")
 
     def test_S11_mark_blocked_and_skip_close_the_unit_in_ledger_and_plan(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         for action, status in (("mark blocked", "BLOCKED"), ("skip", "SKIPPED")):
             with self.subTest(action=action):
                 self.setUp()
@@ -245,7 +249,7 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 self.assertEqual(self.task()["gate"], status.lower())
 
     def test_S11_the_lead_may_decide_one_unit_as_often_as_it_needs(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S11"""
+        """code-driven-orchestrator/S11"""
         self.waits(
             [
                 self.blocked(),
@@ -272,7 +276,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertIn(needle, self.wake_lines("decision")[0])
 
     def test_S12_a_waiting_unit_reads_decision_pending_while_the_others_keep_running(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S12"""
+        """code-driven-orchestrator/S12"""
         probe = wait_result(
             run=[
                 [
@@ -292,7 +296,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.task("t3")["status"], "ACTIVE")
 
     def test_S12_a_decision_that_breaks_its_contract_raises_a_new_request(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S12"""
+        """code-driven-orchestrator/S12"""
         bad = self.run_dir / "t1" / "decision.json"
         resolve = wait_result(
             write=[
@@ -317,6 +321,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(len(self.wake_lines("decision")), 2)
         self.assertIn("decision.json", self.wake_lines("decision")[1])
 
+    @pytest.mark.spec("Decisions match the request's contract")
     def test_S3_a_decision_the_driver_cannot_read_asks_the_lead_again_with_the_way_out(self):
         """A decision in a contract version this driver does not read: the Lead is asked again, naming the reason
         and the way out (restart the driver on the current code), and no decision is applied."""
@@ -342,9 +347,9 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(len(self.wake_lines("decision")), 2)
 
     def test_S12_a_contract_error_raises_a_request_too(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S12
+        """code-driven-orchestrator/S12
 
-        R18: a report that names a file nobody wrote is warned about twice before the Lead is asked."""
+        A report is read after a bounded grace: a report that names a file nobody wrote is warned about twice before the Lead is asked."""
         self.waits(
             [
                 *self.repeated(report_wait("demo-t1", "complete")),
@@ -355,7 +360,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assert_requested("report.json")
 
     def test_S12_a_request_status_stays_one_line(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S12"""
+        """code-driven-orchestrator/S12"""
         self.waits([self.blocked(text="a | b\nc " + "x" * 400), self.decided("skip")])
         self.run_driver()
         self.assertEqual(len(self.wake_lines("decision")), 1)
@@ -363,7 +368,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertNotIn("\n", self.ticket_status("T1"))
 
     def test_S12_a_waiting_unit_neither_spins_the_loop_nor_gets_a_second_request(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S12"""
+        """code-driven-orchestrator/S12"""
         parked = wait_result([assignment("demo-t1", "blocked")])
         again = report_wait("demo-t1", "blocked", "still blocked")
         self.set_plan(("T1",))
@@ -374,7 +379,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "skipped")
 
     def test_S12_a_waiting_unit_counts_as_no_progress_so_the_loop_backs_off(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S12"""
+        """code-driven-orchestrator/S12"""
         spec = load_script()
         busy = wait_result(
             [assignment("demo-t1", "blocked"), assignment("demo-t3")], reason="timeout"
@@ -403,7 +408,7 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.set_plan(("T1", "T4"))
 
     def test_S13_a_ready_person_owned_ticket_reads_needs_you_and_is_logged(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S13"""
+        """code-driven-orchestrator/S13"""
         self.run_driver()
         self.assertEqual(self.plan_status("T4"), "needs you: sign-off")
         self.assertIn("T4", self.attention_md())
@@ -412,7 +417,7 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.plan_status("T1"), "IN PROGRESS")
 
     def test_S13_a_ready_person_owned_ticket_wakes_the_lead_once(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S13"""
+        """code-driven-orchestrator/S13"""
         # exit 1 on the restart: T1's worker was left idle with no report, so the drive strands that unit
         self.run_driver()
         self.run_driver(expect=1)
@@ -421,7 +426,7 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.assertIn("sign-off", person[0]["text"])
 
     def test_S13_it_waits_until_the_user_sets_it_complete(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S13"""
+        """code-driven-orchestrator/S13"""
         # exit 1 on every restart: T1's worker was left idle with no report, so each drive strands that unit; the
         # point here is T4, which waits for the person
         self.run_driver()
@@ -447,7 +452,7 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.assertEqual([x for x in text.splitlines() if x.startswith("- ")], [])
 
     def test_S13_a_person_ticket_with_open_blockers_stays_to_do(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S13"""
+        """code-driven-orchestrator/S13"""
         self.set_plan(
             ("T1", "T4"), mutate=lambda data: data["tickets"][1].update(blocked_by=["T1"])
         )

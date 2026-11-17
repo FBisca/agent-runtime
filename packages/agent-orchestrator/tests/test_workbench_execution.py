@@ -48,6 +48,7 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
 
         self.from_snapshot(self.snapshot_key("hand_merged_failure"), build)
 
+    @pytest.mark.spec("Attempt history")
     def test_S7_a_fix_round_keeps_the_earlier_attempt_and_the_newest_is_latest(self):
         self.hand_merged_failure()
         attempts = self.t1(self.view())["attempts"]
@@ -62,12 +63,14 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
         ledger_tasks = [k for k, v in self.ledger()["tasks"].items() if v["packet"]["unit"] == "t1"]
         self.assertEqual([a["task_id"] for a in attempts], ledger_tasks, "no attempt dropped")
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_the_attempt_maps_to_the_address_the_runtime_returned(self):
         self.delivered()
         (attempt,) = self.t1(self.view())["attempts"]
         self.assertEqual(attempt["address"], "term-demo-t1")
         self.assertEqual(attempt["assignment_id"], spawn_id("demo-t1"))
 
+    @pytest.mark.spec("Claimed versus verified")
     def test_S9_a_completed_ticket_is_verified(self):
         """A ticket completes only through verify's invariants and its pull request's CI: complete is verified."""
         self.delivered()

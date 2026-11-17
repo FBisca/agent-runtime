@@ -67,7 +67,7 @@ def payload_waits(paths, grace=None, clock=time.monotonic, sleep=time.sleep):
 
     `paths` is one path, or the paths the agent named: the first one that is there ends the wait. The
     clock and the sleep are seams: a test that asserts the bound moves the injected clock instead of
-    paying the grace on every run (R214)."""
+    paying the grace on every run."""
     candidates = [paths] if isinstance(paths, (str, Path)) else list(paths)
     deadline = clock() + (_engine().PAYLOAD_GRACE if grace is None else grace)
     while not any(Path(p).exists() for p in candidates):
@@ -341,7 +341,7 @@ class Attention:  # noqa: PLR0904
     def escalated_reviewer(self, task, assignment_id):
         """True when `assignment_id` is the unit's reviewer, the unit's open request is the idle request raised while
         that reviewer was working, and the Lead has not decided it: the review the reviewer finished still counts.
-        Once the Lead decides, the unit has moved on and a late `complete` is not acted on (R79)."""
+        Once the Lead decides, the unit has moved on and a late `complete` is not acted on (One idle watchdog)."""
         request = task.get("request") or {}
         review = task.get("review") or {}
         if not (
@@ -373,7 +373,7 @@ class Attention:  # noqa: PLR0904
 
         `silent` is a live agent whose turn ended (runtime idle or done): it may be waiting on a background job, so
         it is not an exit. A worker whose report is already on disk advances; every other role keeps waiting for its
-        own `complete`, and only the idle watchdog asks the Lead (R62)."""
+        own `complete`, and only the idle watchdog asks the Lead (One idle watchdog)."""
         hit = self.attention_hit(assignment_id)
         if not hit:
             return self.unclaimed_attention(assignment_id, kind, text, quiet=quiet, silent=silent)

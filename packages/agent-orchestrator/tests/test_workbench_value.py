@@ -295,6 +295,7 @@ class MetricsTests(ValueFixture):
 
 
 class LayoutTests(ValueFixture):
+    @pytest.mark.spec("Panel size")
     def test_S34_the_shipped_layout_lets_the_panel_take_the_whole_work_area(self):
         layout = json.loads(
             (REPO_ROOT / "herdr" / "layouts" / "workbench.json").read_text(encoding="utf-8")

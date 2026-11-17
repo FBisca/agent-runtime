@@ -7,10 +7,8 @@ shadow reviews.
 
 <!--
 TODO(agent-review): delete "## Decision register" (and the engineering principles section, once they are questions)
-when every D<n> below is expressed as a requirement in this file. Each phase's plan appends its own
-`## Requirements: <slug>` and `## Coverage: <slug>` section at archive; when the last decision is covered by a
-requirement, remove the register and this note. Until then the register is the record of what was agreed, and a
-requirement that contradicts it is a defect.
+when every D<n> below is expressed as a requirement in this file. Until then the register is the record of what was
+agreed, and a requirement that contradicts it is a defect.
 -->
 
 ## Decision register
@@ -107,18 +105,6 @@ Blocking conclusions still require evidence.
 15. A one-liner is a consequence, not an achievement.
 16. Better is a direction; good is a threshold.
 
-### Delivery stages
-
-| Plan | Outcome | Explicit deferrals |
-|---|---|---|
-| P0 `00-agent-review-screening-cli` | Testable basic CLI and report using direct screening API | Deep review, repository additions, RPC, historical benchmark |
-| P1 `01-agent-review-smart-screening` | Applicability, additive configuration, safeguards, per-file and cross-file screening | Agent spawning |
-| P2 `02-agent-review-deep-review` | Read-only risk-adaptive deep review with structured evidence | Live orchestrator integration |
-| P3 `03-agent-review-protocol-reliability` | JSON-RPC, progress milestones, and durable results | Evaluation, live driver integration |
-| P4 `04-agent-review-evaluation` | Frozen, stratified historical evaluation and safety-first result | Plan review, production rollout |
-
-Evaluation is **P4**, separate from P3 protocol/reliability. Implement and evaluate each stage before authorizing the
-next.
 
 ### Open questions
 
@@ -139,96 +125,165 @@ next.
   API exception contract. They are useful frozen historical cases; keep their labels out of model inputs.
 - Passing 20–30 stratified examples cannot prove no future false negatives or general production reliability.
 
-## Requirements: 00-agent-review-screening-cli
+## Requirements
 
-- **R1** WHEN a caller invokes `agent-review code` on two Git revisions, THEN the tool evaluates a curated global engineering and contract question bank through a direct screening API (from 00-agent-review-screening-cli/S1)
-- **R2** WHEN the screening completes without requiring deep review, THEN the tool emits a `screened` verdict, preserves native judgments with deterministic question/revision provenance, and writes `report.json` (from 00-agent-review-screening-cli/S2)
-- **R3** WHEN the provider fails or returns an invalid judgment, THEN the execution is incomplete rather than passed, with an observable failure reason (from 00-agent-review-screening-cli/S3)
-- **R4** WHEN the same frozen input and model configuration are evaluated, THEN the report identifies the exact revision, question configuration, model and usage measurements (from 00-agent-review-screening-cli/S4)
+### Requirement: Screened verdict and report
+`agent-review code` SHALL screen two Git revisions against the curated question bank through a direct screening API, emit the verdict `screened` when nothing escalates, and write `report.json`.
 
-## Coverage: 00-agent-review-screening-cli
+#### Scenario: a completed screening
+- WHEN a caller invokes `agent-review code` on two Git revisions and the screening completes without requiring deep review
+- THEN the tool evaluates the question bank over the frozen diff between the revisions, emits a `screened` verdict, preserves each native judgment with deterministic question and revision provenance, and writes `report.json`; the terminal summary reads the judgments without the report
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R1 | S1 | human: Run a Git revision review using a configured real screening API; confirm the expected flags and reproducible `report.json`. Then deliberately break credentials and confirm an incomplete execution, not a clean verdict. |
-| R2 | S2 | `packages/agent-review/tests/test_screening_report.py::test_S2_a_completed_screening_is_screened_with_native_attributed_judgments`<br>`packages/agent-review/tests/test_screening_report.py::test_S2_the_terminal_summary_reads_the_judgments_without_the_report`<br>`packages/agent-review/tests/test_screening_cli.py` |
-| R3 | S3 | `packages/agent-review/tests/test_screening_report.py::test_S3_a_provider_error_is_incomplete_with_an_observable_reason`<br>`packages/agent-review/tests/test_screening_report.py::test_S3_an_invalid_judgment_is_incomplete_naming_the_question`<br>`packages/agent-review/tests/test_screening_report.py::test_S3_a_judgment_on_a_question_the_run_did_not_ask_is_incomplete`<br>`packages/agent-review/tests/test_screening_cli.py` |
-| R4 | S4 | `packages/agent-review/tests/test_screening_report.py::test_S4_the_report_names_revisions_questions_model_and_usage`<br>`packages/agent-review/tests/test_screening_report.py::test_S4_the_same_frozen_input_and_configuration_produce_the_same_report`<br>`packages/agent-review/tests/test_screening_cli.py` |
+### Requirement: Incomplete on screening failure
+The execution SHALL be incomplete, never passed, when the provider fails or answers with an invalid judgment.
 
-## Requirements: 00b-agent-review-provider-contract
+#### Scenario: a provider failure or an invalid judgment
+- WHEN the provider fails, returns an invalid judgment, or judges a question the run did not ask
+- THEN the execution is incomplete with an observable failure reason naming the question where there is one
 
-- **R5** WHEN a caller screens two revisions without a fixture, THEN the tool posts one System One request to the provider it is configured with, authenticated by TYPESAFE_API_KEY - which is the credential it sends when a fallback is also present - carrying the state and the questions as System One's typed request, and a missing credential stops the run incomplete naming TYPESAFE_API_KEY (from 00b-agent-review-provider-contract/S1)
-- **R6** WHEN a configured score question has no levels, or a noul question carries a level list, THEN the configuration is refused before any request is made, naming the question and the field by path (from 00b-agent-review-provider-contract/S2)
-- **R7** WHEN the provider answers a score below its ladder's first rung or above its last, or a confidence outside zero and one, THEN the judgment is refused naming the question and the range the ladder allows, and the execution is incomplete rather than screened (from 00b-agent-review-provider-contract/S3)
-- **R8** WHEN a screening completes, THEN the report names the provider endpoint, the model the provider served, the input limit in force, whether long context was requested, and a digest of the bank it screened (from 00b-agent-review-provider-contract/S4)
-- **R9** WHEN the state and its questions exceed the limit in force, THEN the execution is incomplete with the provider's own reason (`max_tokens_exceeded`), the change is never truncated to fit, and the same change completes when long context is requested (from 00b-agent-review-provider-contract/S5)
-- **R10** WHEN an execution is refused, or stops after the provider answered, THEN a refusal writes no report and names any report already standing in the output directory, while an incomplete run keeps the usage and the judgments it already learned (from 00b-agent-review-provider-contract/S6)
-- **R11** WHEN a screening runs against the canned provider with no credential and every socket refused, THEN the run completes and writes its report, so every offline check is carried by the fixture and no check needs the network (from 00b-agent-review-provider-contract/S7)
+### Requirement: Report provenance
+A completed report SHALL identify the exact input, configuration, provider and usage so the same frozen input and configuration reproduce the same report.
 
-## Coverage: 00b-agent-review-provider-contract
+#### Scenario: what the report names
+- WHEN a screening completes
+- THEN the report names the revisions, the question configuration, the model the provider served, the provider endpoint, the input limit in force, whether long context was requested, a digest of the bank screened (which follows the bank, not the run) and the usage measurements, and the same frozen input and configuration produce the same report
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R5 | S1 | `packages/agent-review/tests/test_provider_contract.py::TransportTests::test_S1_the_tool_posts_the_typed_request_to_systemone`<br>`packages/agent-review/tests/test_provider_contract.py::TransportTests::test_S1_a_missing_credential_is_incomplete_naming_the_variable`<br>`packages/agent-review/tests/test_screening_transport.py::test_S1_the_transport_posts_the_typed_request_and_reads_the_answers`<br>`packages/agent-review/tests/test_screening_transport.py::test_S1_the_typesafe_credential_is_sent_when_a_fallback_is_also_present`<br>`packages/agent-review/tests/test_screening_transport.py::test_S1_the_fallback_credential_is_sent_only_when_typesafe_is_absent`<br>`packages/agent-review/tests/test_screening_transport.py::test_S1_a_missing_credential_names_typesafe_api_key`<br>`packages/agent-review/tests/test_provider_contract.py` |
-| R6 | S2 | `packages/agent-review/tests/test_question_bank.py::test_S2_a_score_question_without_levels_is_refused_by_path`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_noul_that_carries_a_level_list_is_refused_by_path`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_score_criteria_that_is_not_a_ladder_of_levels_is_refused_by_path[mapping]`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_score_criteria_that_is_not_a_ladder_of_levels_is_refused_by_path[empty]`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_score_criteria_that_is_not_a_ladder_of_levels_is_refused_by_path[one-level]`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_score_criteria_that_is_not_a_ladder_of_levels_is_refused_by_path[blank-level]`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_noul_may_declare_criteria_as_a_mapping`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_choice_question_carries_its_options_as_criteria`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_choice_without_its_options_is_refused_by_path[missing]`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_choice_without_its_options_is_refused_by_path[level-list]`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_choice_without_its_options_is_refused_by_path[one-option]`<br>`packages/agent-review/tests/test_question_bank.py::test_S2_a_refused_bank_never_reaches_a_provider`<br>`packages/agent-review/tests/test_provider_contract.py` |
-| R7 | S3 | `packages/agent-review/tests/test_screening_judgments.py::test_S3_a_score_judgment_keeps_its_confidence_beside_the_value`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S3_a_confidence_outside_zero_and_one_is_refused_naming_the_question[above-one]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S3_a_confidence_outside_zero_and_one_is_refused_naming_the_question[below-zero]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S3_a_confidence_outside_zero_and_one_is_refused_naming_the_question[text]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S3_a_confidence_outside_zero_and_one_is_refused_naming_the_question[boolean]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S3_a_score_with_no_confidence_is_refused_naming_the_question`<br>`packages/agent-review/tests/test_screening_report.py::test_S3_a_score_outside_its_declared_levels_is_incomplete_naming_the_question`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_between_two_rungs_is_the_providers_own_number`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range[past-the-last]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range[far-below-the-first]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range[integer-too-large-for-a-float]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range[infinite]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range[not-a-number]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range[text]`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range[boolean]`<br>`packages/agent-review/tests/test_provider_contract.py` |
-| R8 | S4 | `packages/agent-review/tests/test_screening_report.py::test_S4_the_report_names_the_provider_served_model_limits_and_bank_digest`<br>`packages/agent-review/tests/test_screening_report.py::test_S4_the_bank_digest_follows_the_bank_and_not_the_run`<br>`packages/agent-review/tests/test_screening_transport.py::test_S4_the_reply_carries_the_model_the_provider_served`<br>`packages/agent-review/tests/test_screening_transport.py::test_S4_the_transport_names_the_endpoint_it_posts_to`<br>`packages/agent-review/tests/test_screening_transport.py::test_S4_the_canned_provider_names_the_fixture_it_answers_from`<br>`packages/agent-review/tests/test_provider_contract.py` |
-| R9 | S5 | `packages/agent-review/tests/test_provider_contract.py::BudgetTests::test_S5_an_oversized_request_is_incomplete_with_the_provider_reason`<br>`packages/agent-review/tests/test_provider_contract.py::BudgetTests::test_S5_long_context_completes_and_sends_the_header`<br>`packages/agent-review/tests/test_screening_transport.py::test_S5_a_long_context_request_carries_the_danger_zone_header`<br>`packages/agent-review/tests/test_screening_transport.py::test_S5_the_default_request_carries_no_long_context_header`<br>`packages/agent-review/tests/test_screening_transport.py::test_S5_an_oversized_request_keeps_the_provider_reason`<br>`packages/agent-review/tests/test_provider_contract.py` |
-| R10 | S6 | `packages/agent-review/tests/test_screening_report.py::test_S6_an_incomplete_run_keeps_the_usage_and_the_judgments_it_learned`<br>`packages/agent-review/tests/test_screening_report.py::test_S6_a_refusal_names_the_report_it_leaves_standing`<br>`packages/agent-review/tests/test_screening_report.py::test_S6_an_output_that_is_not_a_directory_is_a_refusal_naming_the_path`<br>`packages/agent-review/tests/test_screening_report.py::test_S6_an_existing_output_that_denies_writing_is_refused_before_the_provider_is_asked`<br>`packages/agent-review/tests/test_screening_report.py::test_S6_a_report_that_cannot_be_written_is_a_refusal_that_keeps_what_was_screened`<br>`packages/agent-review/tests/test_provider_contract.py` |
-| R11 | S7 | `packages/agent-review/tests/test_provider_contract.py::OfflineTests::test_S7_a_screening_through_the_canned_provider_opens_no_socket`<br>`packages/agent-review/tests/test_screening_transport.py::test_S7_the_canned_provider_answers_the_canned_responses_in_order`<br>`packages/agent-review/tests/test_screening_transport.py::test_S7_a_fixture_answer_in_another_shape_is_refused`<br>`packages/agent-review/tests/test_screening_transport.py::test_S7_a_malformed_fixture_is_refused_naming_the_file`<br>`packages/agent-review/tests/test_provider_contract.py` |
+### Requirement: System One transport
+The tool SHALL screen through one System One request to the provider it is configured with, authenticated by `TYPESAFE_API_KEY`.
 
-## Requirements: 01-score-levels-are-bands
+#### Scenario: the typed request
+- WHEN a caller screens two revisions without a fixture
+- THEN the tool posts the state and the questions as System One's typed request and reads the answers, sending `TYPESAFE_API_KEY` when a fallback credential is also present (the fallback only when it is absent)
 
-- **R12** WHEN a score question declares a ladder of levels and the provider answers a number between its first and last rung, THEN the judgment carries that number as the provider answered it and the screening completes, while an answer below the first rung or above the last is refused naming the question and the range the ladder allows, so the ladder bounds the answer without snapping it to a rung (from 01-score-levels-are-bands/S1)
+#### Scenario: a missing credential
+- WHEN no credential is configured
+- THEN the run stops incomplete naming `TYPESAFE_API_KEY`
 
-## Coverage: 01-score-levels-are-bands
+### Requirement: Question configuration validation
+The tool SHALL refuse a question configuration the provider contract cannot carry before any request is made.
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R12 | S1 | `packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_between_two_rungs_is_the_providers_own_number`<br>`packages/agent-review/tests/test_screening_judgments.py::test_S1_a_score_outside_its_ladder_is_refused_naming_the_question_and_the_range`<br>`packages/agent-review/tests/test_screening_report.py::test_S1_a_score_between_two_rungs_completes_with_the_providers_own_number`<br>`packages/agent-review/tests/test_score_ladder.py`<br>`packages/agent-review/tests/test_provider_contract.py::NativeAnswerTests::test_S3_a_score_between_the_declared_levels_is_carried_as_answered` |
+#### Scenario: a malformed question
+- WHEN a score question has no ladder of levels (a mapping, an empty list, one level or a blank level), a noul question carries a level list, or a choice question lacks its options
+- THEN the configuration is refused before any request is made, naming the question and the field by path
 
-## Requirements: 00c-agent-review-safeguards
+### Requirement: Score ladder bounds
+A score question's ladder SHALL bound the provider's answer without snapping it to a rung.
 
-- **R13** WHEN a change adds a destructive call - a delete or an overwrite - on a target the change computes rather than spells out, and adds no containment test for it (the archive driver's unguarded `shutil.rmtree(self.plan_path.parent)`, `429625b`), THEN the execution completes with the verdict `escalated`, exactly one escalation reason names the rule `target-outside-root` and the changed path, `judgments` is empty, and `usage.requests` is zero because the provider was never asked (from 00c-agent-review-safeguards/S1)
-- **R14** WHEN a change adds a destructive call on a computed target and confines it with a containment test in the same change, or adds no destructive call at all (the fix `109c98b`), THEN no `target-outside-root` reason appears and the screening proceeds through the canned provider (from 00c-agent-review-safeguards/S2)
-- **R15** WHEN a changed path matches a mandatory baseline pattern, as an added, modified or deleted file, or on either side of a rename, THEN the report carries one `protected-path` reason per matched change, naming the changed path, the pattern it matched and `source: baseline` (from 00c-agent-review-safeguards/S3)
-- **R16** WHEN a change touches only paths that match no baseline or repository pattern, including a near miss under a matching directory, THEN no `protected-path` reason appears and the report is written with the verdict `screened` (from 00c-agent-review-safeguards/S4)
-- **R17** WHEN a repository ships `.agent-review.yaml` naming its own sensitive paths, discovered without a flag, THEN the run is `escalated` with `usage.requests: 0`, a change to a matching path carries `source: repository` while a baseline path still carries `source: baseline`: the repository's list extends the mandatory baseline instead of replacing it (from 00c-agent-review-safeguards/S5)
-- **R18** WHEN a member the rule set declares standard-library-only adds an import outside the standard library, THEN the report carries a `stdlib-only` reason naming the member's path and the imported module, and no request is made (from 00c-agent-review-safeguards/S6)
-- **R19** WHEN a declared standard-library-only member adds a standard-library import, or a member no declaration covers adds a third-party one, THEN no `stdlib-only` reason appears and the screening proceeds (from 00c-agent-review-safeguards/S7)
-- **R20** WHEN a safeguard fires, THEN report.json is written with `status: completed`, `verdict: escalated` and no judgments, the command exits 0, and the terminal summary names the rule, the path it matched and what a person should do about it (from 00c-agent-review-safeguards/S8)
-- **R21** WHEN a configuration's `sensitive_paths` is not a list of patterns, or `safeguards.stdlib_only` is not a list of paths, THEN the configuration is refused before any change is read, naming the field by its path, writing no report and exiting 2 (from 00c-agent-review-safeguards/S9)
+#### Scenario: an answer on the ladder
+- WHEN a score question declares a ladder of levels and the provider answers a number between its first and last rung
+- THEN the judgment carries that number as the provider answered it, with its confidence, and the screening completes
 
-## Coverage: 00c-agent-review-safeguards
+#### Scenario: an answer outside the ladder
+- WHEN the provider answers a score below the first rung or above the last, a non-finite or non-numeric score, or a confidence outside zero and one
+- THEN the judgment is refused naming the question and the range the ladder allows, and the execution is incomplete rather than screened
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R13 | S1 | `packages/agent-review/tests/test_safeguards.py::test_S1_a_computed_delete_with_no_confinement_escalates_as_target_outside_root`<br>`packages/agent-review/tests/test_safeguards.py::test_S1_the_defect_as_it_shipped_escalates_once_for_its_path`<br>`packages/agent-review/tests/test_safeguards.py::test_S1_the_defect_escalates_once_for_its_path_in_a_change_that_also_has_a_test_helper`<br>`packages/agent-review/tests/test_safeguards_report.py::test_S1_the_report_carries_one_reason_naming_the_rule_the_path_and_where_it_came_from`<br>`packages/agent-review/tests/test_safeguards.py::test_S1_confinement_over_another_relationship_leaves_the_delete_unconfined`<br>`packages/agent-review/tests/test_safeguards.py::test_S1_one_confinement_test_confines_only_the_target_it_names`<br>`packages/agent-review/tests/test_safeguards.py::test_S1_a_guard_confines_only_the_target_it_is_handed`<br>`packages/agent-review/tests/test_safeguards.py::test_S1_a_delete_of_the_root_a_target_is_confined_into_is_not_confined_by_it`<br>`packages/agent-review/tests/test_safeguards.py::test_a_guards_confinement_of_an_attribute_does_not_answer_for_a_callers_local`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R14 | S2 | `packages/agent-review/tests/test_safeguards.py::test_S2_a_computed_delete_confined_in_the_same_change_is_not_escalated`<br>`packages/agent-review/tests/test_safeguards.py::test_S2_a_confinement_factored_into_a_guard_the_change_adds_is_not_escalated`<br>`packages/agent-review/tests/test_safeguards.py::test_S2_a_change_with_no_destructive_call_is_not_escalated`<br>`packages/agent-review/tests/test_safeguards.py::test_S2_a_containment_test_on_the_resolved_target_is_not_escalated`<br>`packages/agent-review/tests/test_safeguards.py::test_S2_a_target_handed_to_a_guard_binds_to_its_parameter_by_position`<br>`packages/agent-review/tests/test_safeguards.py::test_S2_a_local_handed_to_a_guard_binds_to_its_parameter_by_position`<br>`packages/agent-review/tests/test_safeguards.py::test_S2_a_guard_that_confines_with_commonpath_confines_the_target_it_is_handed`<br>`packages/agent-review/tests/test_safeguards.py::test_S2_a_guard_that_tests_an_attribute_confines_that_attribute_in_its_caller`<br>`packages/agent-review/tests/test_safeguards.py::test_a_commonpath_test_in_an_added_function_is_decided_rather_than_raising`<br>`packages/agent-review/tests/test_safeguards_path_join.py::test_S2_a_change_that_joins_paths_is_screened_rather_than_crashing`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R15 | S3 | `packages/agent-review/tests/test_safeguards_protected_path.py::test_S3_a_baseline_path_matched_as_added_modified_deleted_or_renamed_carries_one_reason_per_path`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R16 | S4 | `packages/agent-review/tests/test_safeguards_protected_path.py::test_S4_a_near_miss_under_a_matching_directory_matches_no_pattern`<br>`packages/agent-review/tests/test_safeguards_discovery.py::test_S4_a_change_that_matches_no_pattern_is_screened`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R17 | S5 | `packages/agent-review/tests/test_safeguards_protected_path.py::test_S5_a_repository_pattern_extends_the_baseline_instead_of_replacing_it`<br>`packages/agent-review/tests/test_safeguards_discovery.py::test_S5_a_discovered_configuration_extends_the_baseline_without_a_flag`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R18 | S6 | `packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_a_declared_member_that_imports_outside_the_standard_library_escalates`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_the_reason_reads_as_the_report_contract_holds_it_with_the_module_beside_the_rule`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_a_from_import_outside_the_standard_library_names_the_module_not_the_name`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_the_module_is_the_top_level_name_a_dotted_import_reaches_beside`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_one_line_naming_several_modules_names_the_first_outside_the_standard_library`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_a_member_declared_as_a_file_covers_that_file_and_no_sibling`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_a_declared_directory_covers_what_lies_below_it_and_no_near_name`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_a_member_written_without_its_trailing_slash_is_the_same_member`<br>`packages/agent-review/tests/test_safeguards_stdlib_report.py::test_S6_a_declared_member_that_imports_outside_the_standard_library_escalates_without_a_request`<br>`packages/agent-review/tests/test_safeguards_stdlib_report.py::test_S6_the_summary_names_the_member_the_module_and_the_way_out`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_every_outside_module_the_member_adds_is_its_own_reason`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_one_module_the_member_imports_twice_is_one_reason`<br>`packages/agent-review/tests/test_safeguards_stdlib_report.py::test_S6_each_package_the_member_adds_is_its_own_reason_in_the_report`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_a_trailing_comment_on_an_import_line_cannot_hide_the_module`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_a_second_statement_on_the_added_line_is_read_as_an_import_too`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S6_an_import_quoted_in_a_docstring_is_not_a_dependency_the_member_adds`<br>`packages/agent-review/tests/test_safeguards_stdlib_report.py::test_S6_a_commented_import_line_escalates_without_a_request`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R19 | S7 | `packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_a_declared_member_that_adds_a_standard_library_import_is_not_escalated`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_an_undeclared_member_that_adds_a_third_party_import_is_not_escalated`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_a_declaration_that_covers_no_member_escalates_nothing`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_a_relative_import_is_the_members_own_module_rather_than_a_dependency`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_a_member_that_only_removes_a_third_party_import_is_not_escalated`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_an_added_file_in_a_declared_member_is_read_for_its_imports`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_a_deleted_file_in_a_declared_member_escalates_nothing`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_an_import_inside_a_function_of_a_declared_member_is_still_read`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_a_line_that_mentions_an_import_without_being_one_is_not_read`<br>`packages/agent-review/tests/test_safeguards_stdlib_report.py::test_S7_a_declared_member_that_adds_a_standard_library_import_is_screened`<br>`packages/agent-review/tests/test_safeguards_stdlib_report.py::test_S7_an_undeclared_member_that_adds_a_third_party_import_is_screened`<br>`packages/agent-review/tests/test_safeguards_stdlib.py::test_S7_a_rule_set_carries_the_declared_members_and_decides_with_them`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R20 | S8 | `packages/agent-review/tests/test_safeguards_report.py::test_S1_the_report_carries_one_reason_naming_the_rule_the_path_and_where_it_came_from`<br>`packages/agent-review/tests/test_safeguards_report.py::test_the_summary_names_the_rule_the_path_and_the_way_out`<br>`packages/agent-review/tests/test_safeguards_discovery.py::test_S8_a_hit_writes_completed_escalated_and_names_what_a_person_should_do`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
-| R21 | S9 | `packages/agent-review/tests/test_safeguards_protected_path.py::test_S9_sensitive_paths_that_is_not_a_list_is_refused_by_path`<br>`packages/agent-review/tests/test_safeguards_protected_path.py::test_S9_sensitive_paths_that_holds_something_else_than_patterns_is_refused_by_path`<br>`packages/agent-review/tests/test_safeguards_protected_path.py::test_S9_a_stdlib_only_declaration_that_is_not_a_list_of_paths_is_refused_by_path`<br>`packages/agent-review/tests/test_safeguards_protected_path.py::test_S9_a_stdlib_only_entry_that_is_not_a_path_is_refused_by_path`<br>`packages/agent-review/tests/test_safeguards_discovery.py::test_S9_a_malformed_rule_configuration_is_refused_before_any_change_is_read`<br>`packages/agent-review/tests/test_safeguards_discovery.py::test_S9_a_malformed_stdlib_only_declaration_is_refused_by_field_path`<br>`packages/agent-review/tests/test_safeguards_cli.py` |
+### Requirement: Provider input limit
+The tool SHALL never truncate a change to fit the provider's input limit.
 
-## Requirements: 01-agent-review-smart-screening
+#### Scenario: a request over the limit
+- WHEN the state and its questions exceed the limit in force
+- THEN the execution is incomplete with the provider's own reason (`max_tokens_exceeded`), and the same change completes when long context is requested
 
-- **R22** WHEN a repository provides `.agent-review.yaml` or a caller specifies `--config`, THEN its questions extend the mandatory baseline without replacing it, a score question carries its levels, and the screening's weights, per-question thresholds and calibration are declared in configuration rather than chosen by the model (from 01-agent-review-smart-screening/S1)
-- **R23** WHEN a changed file, directory, or either side of a rename matches a global or repository sensitive path, THEN the outcome recommends full deep review with a reason naming the pattern and whether it came from the baseline or the repository (from 01-agent-review-smart-screening/S2)
-- **R24** WHEN a change is larger than one request's token budget, THEN deterministic file and hunk chunks are built within the budget in force, each chunk is screened once with the whole bank, every changed region is carried by exactly one chunk, and the report counts the requests actually made (from 01-agent-review-smart-screening/S3)
-- **R25** WHEN a question needs a file the chunk does not carry, and the change is wider than the cross-file limit, THEN the report records the coverage gap with its reason and recommends full deep review rather than reading the screen as complete (from 01-agent-review-smart-screening/S4)
-- **R26** WHEN a critical or high judgment falls below its question's calibrated threshold, or its confidence falls below that question's declared band, THEN the tool records an escalation signal with the question, the scope, the value, the confidence and the rule that fired, and never converts a raw probability into a calibrated confidence (from 01-agent-review-smart-screening/S5)
-- **R27** WHEN a screening completes and a price table names the model the provider served, THEN the report carries the cost from that table with its basis, and an unlisted model is unknown rather than zero (from 01-agent-review-smart-screening/S6)
+### Requirement: Refusal and incomplete report
+A refused execution SHALL write no report, and an incomplete one SHALL keep what the provider already answered.
 
-## Coverage: 01-agent-review-smart-screening
+#### Scenario: a refusal
+- WHEN an execution is refused, such as an output that is not a directory, one that denies writing, or a report that cannot be written
+- THEN no report is written and the refusal names any report already standing in the output directory, before the provider is asked where it can be
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R22 | S1 | `packages/agent-review/tests/test_question_bank.py::test_S1_a_configured_bank_is_read_from_yaml_with_its_model_and_questions`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_repository_question_that_repeats_a_baseline_id_is_refused_by_name`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_an_empty_additions_list_asks_the_baseline_alone`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_configuration_that_names_no_questions_asks_the_baseline_alone`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_the_baseline_declares_the_thresholds_it_is_decided_with`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_repository_lays_its_weights_and_thresholds_over_the_baseline`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_threshold_may_name_a_question_that_this_run_does_not_ask`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_calibration_no_rule_can_read_is_refused_by_path[not-a-mapping]`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_calibration_no_rule_can_read_is_refused_by_path[negative-value]`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_calibration_no_rule_can_read_is_refused_by_path[band-above-one]`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_the_loaded_bank_carries_the_weights_and_thresholds_it_declares`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_recalibrated_threshold_is_a_different_bank`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_budget_no_stage_can_read_is_refused_by_path[a-name-not-a-budget]`<br>`packages/agent-review/tests/test_question_bank.py::test_S1_a_declared_chunk_budget_is_carried_beside_the_bank`<br>`packages/agent-review/tests/test_screening_revisions.py::test_S1_the_cli_screens_the_frozen_diff_between_two_revisions`<br>`packages/agent-review/tests/test_screening_revisions.py::test_S1_a_configuration_that_adds_no_question_screens_the_baseline_alone`<br>`packages/agent-review/tests/test_smart_screening_cli.py` |
-| R23 | S2 | `packages/agent-review/tests/test_safeguards_report.py::test_S2_a_sensitive_path_recommends_a_full_deep_review`<br>`packages/agent-review/tests/test_safeguards_report.py::test_S2_a_rule_that_only_records_a_signal_does_not_recommend_a_deep_review`<br>`packages/agent-review/tests/test_safeguards_protected_path.py::test_S3_a_baseline_path_matched_as_added_modified_deleted_or_renamed_carries_one_reason_per_path`<br>`packages/agent-review/tests/test_safeguards_protected_path.py::test_S5_a_repository_pattern_extends_the_baseline_instead_of_replacing_it`<br>`packages/agent-review/tests/test_safeguards_protected_path.py::test_S4_a_near_miss_under_a_matching_directory_matches_no_pattern`<br>`packages/agent-review/tests/test_smart_screening_cli.py` |
-| R24 | S3 | `packages/agent-review/tests/test_screening_chunks.py::test_S3_a_change_larger_than_the_budget_is_split_with_every_region_carried_once`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S3_the_same_frozen_change_chunks_the_same_way`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S3_a_change_that_fits_the_budget_is_one_chunk_carrying_all_of_it`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S3_a_budget_too_small_for_any_region_gives_each_region_its_own_chunk`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S3_a_hunk_larger_than_the_budget_is_carried_whole_and_says_so`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S3_a_rename_without_a_hunk_is_carried_so_the_change_is_read_as_a_rename`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S3_the_budget_in_force_is_the_declaration_or_the_providers_own_limit`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S3_coverage_counts_each_changed_region_once_inside_the_cross_file_limit`<br>`packages/agent-review/tests/test_screening_chunking.py::test_S3_a_change_larger_than_the_budget_is_screened_once_per_chunk_with_the_whole_bank`<br>`packages/agent-review/tests/test_screening_chunking.py::test_S3_a_missing_chunk_answer_is_incomplete_rather_than_a_short_request_count`<br>`packages/agent-review/tests/test_smart_screening_cli.py` |
-| R25 | S4 | `packages/agent-review/tests/test_screening_chunks.py::test_S4_a_change_wider_than_the_cross_file_limit_records_the_gap_as_a_full_review_reason`<br>`packages/agent-review/tests/test_screening_chunks.py::test_S4_a_change_inside_the_cross_file_limit_records_no_gap`<br>`packages/agent-review/tests/test_screening_chunking.py::test_S4_a_change_wider_than_the_cross_file_limit_records_the_gap`<br>`packages/agent-review/tests/test_screening_chunking.py::test_S4_a_change_inside_the_cross_file_limit_records_no_gap`<br>`packages/agent-review/tests/test_smart_screening_cli.py` |
-| R26 | S5 | `packages/agent-review/tests/test_screening_calibration.py::test_S5_a_noul_below_its_threshold_escalates_with_its_question_scope_value_and_confidence`<br>`packages/agent-review/tests/test_screening_calibration.py::test_S5_a_score_escalates_only_above_its_threshold[above]`<br>`packages/agent-review/tests/test_screening_calibration.py::test_S5_a_score_escalates_only_above_its_threshold[at-the-threshold]`<br>`packages/agent-review/tests/test_screening_calibration.py::test_S5_a_score_escalates_only_above_its_threshold[below]`<br>`packages/agent-review/tests/test_screening_calibration.py::test_S5_a_confidence_below_the_band_escalates_even_when_the_value_passes`<br>`packages/agent-review/tests/test_screening_calibration.py::test_S5_advisory_uncertainty_is_recorded_without_escalating`<br>`packages/agent-review/tests/test_screening_calibration.py::test_S5_a_raw_probability_is_never_read_as_a_calibrated_confidence`<br>`packages/agent-review/tests/test_screening_calibration.py::test_S5_a_question_with_no_declared_calibration_escalates_on_nothing`<br>`packages/agent-review/tests/test_screening_report.py::test_S5_a_critical_judgment_below_its_calibrated_threshold_escalates_in_the_report`<br>`packages/agent-review/tests/test_smart_screening_cli.py` |
-| R27 | S6 | `packages/agent-review/tests/test_screening_cost.py::test_S6_the_cost_is_the_declared_tables_rate_for_the_model_the_provider_served`<br>`packages/agent-review/tests/test_screening_cost.py::test_S6_an_unlisted_served_model_is_unknown_never_zero`<br>`packages/agent-review/tests/test_screening_cost.py::test_S6_no_declared_table_leaves_the_cost_unknown_never_zero`<br>`packages/agent-review/tests/test_screening_cost.py::test_S6_a_table_a_rule_cannot_read_is_refused_by_its_field_path[negative-rate]`<br>`packages/agent-review/tests/test_screening_cost.py::test_S6_a_table_a_rule_cannot_read_is_refused_by_its_field_path[missing-output-rate]`<br>`packages/agent-review/tests/test_screening_cost.py::test_S6_a_table_a_rule_cannot_read_is_refused_by_its_field_path[models-not-a-mapping]`<br>`packages/agent-review/tests/test_screening_cost.py::test_S6_a_table_a_rule_cannot_read_is_refused_by_its_field_path[no-version]`<br>`packages/agent-review/tests/test_screening_report.py::test_S6_the_report_prices_the_screening_from_the_declared_table`<br>`packages/agent-review/tests/test_smart_screening_cli.py` |
+#### Scenario: an incomplete run
+- WHEN an execution stops after the provider answered
+- THEN the report keeps the usage and the judgments it already learned
+
+### Requirement: Offline canned provider
+Every offline check SHALL be carried by the canned provider, with no credential and no network.
+
+#### Scenario: a fixture run
+- WHEN a screening runs against the canned provider with no credential and every socket refused
+- THEN the run completes and writes its report, the provider answers the canned responses in order, and a fixture in another shape or a malformed one is refused naming the file
+
+### Requirement: Computed destructive target safeguard
+The tool SHALL escalate a change that adds a destructive call on a computed target without a containment test.
+
+#### Scenario: an unguarded destructive call
+- WHEN a change adds a destructive call (a delete or an overwrite) on a target the change computes rather than spells out, and adds no containment test for that target
+- THEN the execution completes with the verdict `escalated`, exactly one escalation reason names the rule `target-outside-root` and the changed path, `judgments` is empty, and `usage.requests` is zero because the provider was never asked
+
+#### Scenario: a confined or absent destructive call
+- WHEN the change confines the target with a containment test in the same change (directly or through a guard it adds, bound to its parameter by position), or adds no destructive call
+- THEN no `target-outside-root` reason appears and the screening proceeds
+
+### Requirement: Protected path safeguard
+The tool SHALL escalate a change to a path the baseline or the repository marks sensitive, recommending a full deep review.
+
+#### Scenario: a matched path
+- WHEN a changed path matches a mandatory baseline pattern, as an added, modified or deleted file, or on either side of a rename
+- THEN the report carries one `protected-path` reason per matched change, naming the changed path, the pattern and `source: baseline`, and recommends full deep review
+
+#### Scenario: a repository extends the baseline
+- WHEN a repository ships `.agent-review.yaml` naming its own sensitive paths, discovered without a flag
+- THEN the run is `escalated` with `usage.requests: 0`, a change to a matching path carries `source: repository` and a baseline path still carries `source: baseline`: the repository's list extends the baseline instead of replacing it
+
+#### Scenario: no match
+- WHEN a change touches only paths that match no pattern, including a near miss under a matching directory
+- THEN no `protected-path` reason appears and the report is written with the verdict `screened`
+
+### Requirement: Standard-library-only safeguard
+The tool SHALL escalate a change that adds a non-standard-library import to a member the rule set declares standard-library-only.
+
+#### Scenario: an outside import
+- WHEN a declared member adds an import outside the standard library
+- THEN the report carries one `stdlib-only` reason per outside module naming the member's path and the module, and no request is made
+
+#### Scenario: no outside import
+- WHEN a declared member adds a standard-library import, or a member no declaration covers adds a third-party one
+- THEN no `stdlib-only` reason appears and the screening proceeds
+
+### Requirement: Safeguard escalation report
+A fired safeguard SHALL complete the run as `escalated` and tell a person what to do.
+
+#### Scenario: a safeguard fires
+- WHEN a safeguard fires
+- THEN `report.json` is written with `status: completed`, `verdict: escalated` and no judgments, the command exits 0, and the terminal summary names the rule, the path it matched and what a person should do about it
+
+### Requirement: Safeguard configuration validation
+The tool SHALL refuse a malformed safeguard configuration before any change is read.
+
+#### Scenario: a malformed list
+- WHEN a configuration's `sensitive_paths` is not a list of patterns, or `safeguards.stdlib_only` is not a list of paths
+- THEN the configuration is refused naming the field by its path, no report is written and the command exits 2
+
+### Requirement: Additive repository configuration
+A repository's configuration SHALL extend the mandatory baseline without replacing it, and the screening's numbers SHALL be declared in configuration, not chosen by the model.
+
+#### Scenario: a configured bank
+- WHEN a repository provides `.agent-review.yaml` or a caller specifies `--config`
+- THEN its questions extend the baseline (a repeated baseline id is refused by name, an empty list asks the baseline alone), a score question carries its levels, and the weights, per-question thresholds, calibration and chunk budget are declared in configuration and carried with the loaded bank, so a recalibrated threshold is a different bank
+
+### Requirement: Deterministic chunking
+The tool SHALL split a change larger than one request's token budget into deterministic file and hunk chunks, each screened once with the whole bank.
+
+#### Scenario: an oversized change
+- WHEN a change is larger than the budget in force (the declaration or the provider's own limit)
+- THEN chunks are built within it, every changed region is carried by exactly one chunk (a hunk larger than the budget whole and said so, a rename without a hunk as a rename), the same frozen change chunks the same way, each chunk is screened once, a missing chunk answer is incomplete, and the report counts the requests actually made
+
+### Requirement: Cross-file coverage gap
+The tool SHALL record a coverage gap rather than read a screen as complete when the change is wider than the cross-file limit.
+
+#### Scenario: a change wider than the limit
+- WHEN a question needs a file the chunk does not carry and the change is wider than the cross-file limit
+- THEN the report records the gap with its reason and recommends full deep review; a change inside the limit records no gap
+
+### Requirement: Calibrated escalation signals
+The tool SHALL record an escalation signal when a critical or high judgment falls short of its question's declared calibration.
+
+#### Scenario: a judgment below threshold or confidence
+- WHEN a critical or high judgment falls below its question's calibrated threshold (a score escalates only above it), or its confidence falls below the question's declared band
+- THEN the tool records a signal with the question, the scope, the value, the confidence and the rule that fired, advisory uncertainty is recorded without escalating, and a raw probability is never read as a calibrated confidence
+
+### Requirement: Screening cost
+The report SHALL carry the cost of a screening from a declared price table, and an unpriced model SHALL be unknown, not zero.
+
+#### Scenario: a price table
+- WHEN a screening completes and a price table names the model the provider served
+- THEN the report carries the cost from that table with its basis; an unlisted model or no table leaves the cost unknown, and a table a rule cannot read is refused by its field path

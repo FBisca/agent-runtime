@@ -81,6 +81,7 @@ class DecideJson(WakeFixture, unittest.TestCase):
         self.assertEqual(self.decide_flags("skip", "--reason", "x").returncode, 0)
         self.assertEqual(self.decision()["contract"], 3)
 
+    @pytest.mark.spec("Decisions match the request's contract")
     def test_S1_a_decision_is_written_in_the_contract_version_of_the_request_it_answers(self):
         """The decision answers the request it was asked in: a contract-2 request gets a contract-2 decision, so the
         driver that wrote the request reads it."""
@@ -209,7 +210,7 @@ class OnlyParked(WakeFixture, unittest.TestCase):
 
 
 class ReapprovalKeepsOpenBlockers(DrainFixture, unittest.TestCase):
-    """R140: adopting a re-approval does not clear a blocker; the same reviewer must close it with evidence."""
+    """Open blocking findings persist: adopting a re-approval does not clear a blocker; the same reviewer must close it with evidence."""
 
     def idle(self, **extra):
         """A wait step with both workers running and their turns unbroken."""

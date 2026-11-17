@@ -112,8 +112,9 @@ class CodexProfileTests(ToolCase):
         self.assertFalse(result["isError"], text)
         return unwrap(self.runs("run")[-1][10:])
 
+    @pytest.mark.spec("Spawn model")
     def test_S1_codex_worker_launches_under_the_worker_profile(self):
-        """worker-token-metrics/S1: the launch argv carries -p worker between codex --no-daemon and the prompt."""
+        """the launch argv carries -p worker between codex --no-daemon and the prompt."""
         home = self.codex_home("usable")
         program = self.spawn_codex(home=home)
         self.assertEqual(program[:4], ["codex", "--no-daemon", "-p", "worker"])
@@ -140,7 +141,7 @@ class CodexProfileTests(ToolCase):
         self.assertEqual(self.metadata("w3")["profile_name"], "custom")
 
     def test_S2_unusable_worker_profile_starts_the_worker_without_the_flag(self):
-        """worker-token-metrics/S2: a missing profile file or a legacy [profiles.worker] table starts the
+        """a missing profile file or a legacy [profiles.worker] table starts the
         worker without -p worker, and the metadata records profile_applied=false with the reason."""
         cases = (
             ("missing", False, None, "missing_file", "w1"),
@@ -163,15 +164,16 @@ class CodexProfileTests(ToolCase):
         self.assertFalse(meta["profile_applied"])
         self.assertEqual(meta["profile_reason"], "disabled_by_env")
 
+    @pytest.mark.spec("Dispatch activation")
     def test_legacy_mode_writes_no_state(self):
-        """agent-runtime/R58: without dispatch the runtime writes nothing and creates no state directory."""
+        """without dispatch the runtime writes nothing and creates no state directory."""
         home = self.codex_home("legacy")
         result, text = self.spawn(home=home, dispatch=False)
         self.assertFalse(result["isError"], text)
         self.assertFalse(self.state().exists())
 
     def test_refused_spawn_writes_no_metadata(self):
-        """worker-token-metrics/S2a: a spawn hc refuses, or a worker whose task was not sent, leaves no record."""
+        """a spawn hc refuses, or a worker whose task was not sent, leaves no record."""
         home = self.codex_home("refused")
         result, text = self.spawn(home=home, replies={"run": {"rc": 1, "err": "name w1 is taken"}})
         self.assertTrue(result["isError"])
@@ -188,7 +190,7 @@ class CodexProfileTests(ToolCase):
         self.assertFalse(self.metadata_path("w2").exists())
 
     def test_cancelled_spawn_records_a_worker_that_may_survive(self):
-        """worker-token-metrics/S2e: a cancelled spawn whose terminal was not discarded still records it."""
+        """a cancelled spawn whose terminal was not discarded still records it."""
         home = self.codex_home("cancelled")
         env = dict(self.LEAD, CODEX_HOME=str(home), XDG_STATE_HOME=str(self.state()))
         lead = self.start({"run": {"sleep": 30}, "get:w1": {"rc": 1, "err": "boom"}}, env)
@@ -214,7 +216,7 @@ class CodexProfileTests(ToolCase):
         self.assertTrue(self.metadata_path("w1").exists())
 
     def test_claude_worker_has_no_codex_profile(self):
-        """worker-token-metrics/S2b: the Codex worker profile does not apply to a claude worker."""
+        """the Codex worker profile does not apply to a claude worker."""
         program = self.spawn_codex(cli="claude")
         self.assertNotIn("-p", program)
         meta = self.metadata("w1")
@@ -223,7 +225,7 @@ class CodexProfileTests(ToolCase):
         self.assertIsNone(meta["profile_name"])
 
     def test_profile_override_missing_file_and_unsafe_name(self):
-        """worker-token-metrics/S2c: an override without its file is missing_file; an unsafe name is refused."""
+        """an override without its file is missing_file; an unsafe name is refused."""
         home = self.codex_home("override")
         program = self.spawn_codex(home=home, name="w1", override="custom")
         self.assertNotIn("-p", program)
@@ -239,7 +241,7 @@ class CodexProfileTests(ToolCase):
         self.assertFalse((self.dir / "evil.json").exists())
 
     def test_metadata_records_cwd_base_commit_and_spawn_time(self):
-        """worker-token-metrics/S1a: base commit and spawn time are captured before the worker starts."""
+        """base commit and spawn time are captured before the worker starts."""
         home = self.codex_home("record")
         self.spawn_codex(home=home, cwd="/tmp/c")  # not a repository
         meta = self.metadata("w1")
@@ -331,7 +333,7 @@ class CodexProfileTests(ToolCase):
         self.assertEqual(self.metadata("timed")["base_commit"], head)
 
     def test_read_worker_metadata_returns_the_record_or_nothing(self):
-        """worker-token-metrics/S1b: the reader returns the record that was written, and nothing else."""
+        """the reader returns the record that was written, and nothing else."""
         env = {"XDG_STATE_HOME": str(self.state()), "HOME": str(self.dir / "home")}
         self.assertIsNotNone(
             usage.write_worker_metadata(env, "w1", cli="codex", profile_applied=True)
@@ -344,13 +346,13 @@ class CodexProfileTests(ToolCase):
         self.assertIsNone(usage.read_worker_metadata(env, "../evil"))
 
     def test_unserializable_metadata_is_dropped_not_raised(self):
-        """worker-token-metrics/S1d: a field that cannot be serialized drops the record, it does not fail the spawn."""
+        """a field that cannot be serialized drops the record, it does not fail the spawn."""
         env = {"XDG_STATE_HOME": str(self.state()), "HOME": str(self.dir / "home")}
         self.assertIsNone(usage.write_worker_metadata(env, "w1", cli="codex", broken=object()))
         self.assertIsNone(usage.read_worker_metadata(env, "w1"))
 
     def test_symlinked_worktrees_directory_is_refused(self):
-        """worker-token-metrics/S1c: a worktrees directory that is a link is refused, never followed."""
+        """a worktrees directory that is a link is refused, never followed."""
         target = self.dir / "elsewhere"
         target.mkdir()
         root = self.state() / "agent-runtime"
@@ -404,7 +406,7 @@ class SessionBindingTests(unittest.TestCase):
         return path
 
     def test_S4a_binding_skips_injected_context_and_stops_before_report_echoes(self):
-        """worker-token-metrics/S4a: injected context and placeholders precede the real prompt."""
+        """injected context and placeholders precede the real prompt."""
         for cli in ("codex", "claude"):
             with self.subTest(cli=cli):
                 path = self.log(cli, "context-session", fixture_name=cli + "-context-head.jsonl")
@@ -427,7 +429,7 @@ class SessionBindingTests(unittest.TestCase):
                 self.assertIsNone(usage.resolve_session_log(self.env, "context"))
 
     def test_S4_codex_binds_only_the_assignments_first_prompt(self):
-        """worker-token-metrics/S4: same cwd, distinct assignments, creation bound and first prompt."""
+        """same cwd, distinct assignments, creation bound and first prompt."""
         alpha = self.log("codex", "thread-alpha")
         beta = self.log("codex", "thread-beta", "beta")
         for worker, assignment, path in (("w1", "alpha", alpha), ("w2", "beta", beta)):
@@ -492,7 +494,7 @@ class SessionBindingTests(unittest.TestCase):
                 self.assertEqual(usage.read_worker_metadata(self.env, "uuid")["session_id"], uuid)
 
     def test_S5_claude_binds_transcript_and_uses_current_session_directly(self):
-        """worker-token-metrics/S5: Claude first-user binding, slug and direct environment lookup."""
+        """Claude first-user binding, slug and direct environment lookup."""
         alpha = self.log("claude", "claude-alpha")
         beta = self.log("claude", "claude-beta", "beta")
         self.metadata("w1", "alpha", "claude")
@@ -519,7 +521,7 @@ class SessionBindingTests(unittest.TestCase):
         self.assertIsNone(usage.resolve_session_log(self.env, "old"))
 
     def test_S5a_identity_fallback_reads_claude_code_session_id(self):
-        """worker-token-metrics/S5a: identity fallback uses the actual Claude session variable."""
+        """identity fallback uses the actual Claude session variable."""
         env = dict(
             self.env,
             HC_SCOPE="scope",
@@ -530,7 +532,7 @@ class SessionBindingTests(unittest.TestCase):
             self.assertEqual(hc_tools.dispatch_identity(env), ("scope", "current"))
 
     def test_S16_session_resolution_fails_open(self):
-        """worker-token-metrics/S16: missing, unreadable, malformed or truncated logs are absent."""
+        """missing, unreadable, malformed or truncated logs are absent."""
         for cli in ("codex", "claude"):
             with self.subTest(cli=cli, failure="missing"):
                 self.metadata("missing", "alpha", cli)
@@ -569,8 +571,9 @@ class SessionBindingTests(unittest.TestCase):
             path.unlink()
         self.assertIsNone(usage.resolve_session_log(self.env, "unknown-worker"))
 
+    @pytest.mark.spec("Claude worker usage")
     def test_S1_claude_project_directory_replaces_every_non_alphanumeric_character(self):
-        """worker-usage/S1: a cwd with `_`, a space, `+` or `~` binds under its dashed directory."""
+        """a cwd with `_`, a space, `+` or `~` binds under its dashed directory."""
         for index, cwd in enumerate(("/tmp/my_work tree", "/tmp/a+b~c@d", "/tmp/plain-dir_1")):
             with self.subTest(cwd=cwd):
                 self.cwd = cwd
@@ -585,8 +588,9 @@ class SessionBindingTests(unittest.TestCase):
                 )
                 self.assertEqual(usage.resolve_session_log(self.env, worker), path)
 
+    @pytest.mark.spec("Codex worker usage")
     def test_S2_codex_binding_never_picks_a_child_thread_that_quotes_the_markers(self):
-        """worker-usage/S2: a guardian child's prompt quotes the parent's markers; only the root binds."""
+        """a guardian child's prompt quotes the parent's markers; only the root binds."""
         root_id, child_id = "root-thread", "child-thread"
         day = Path(self.env["CODEX_HOME"]) / "sessions/2026/11/12"
         day.mkdir(parents=True)

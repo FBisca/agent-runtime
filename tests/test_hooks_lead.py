@@ -263,16 +263,16 @@ class PlanContractTests(unittest.TestCase):
         (root / "k/demo.json").write_text(json.dumps(ledger))
         return root
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S6_a_fifo_candidate_never_blocks_lead_or_worker(self):
-        """agent-runtime/R259"""
         fifo = Path(self.temp.name) / "candidate.json"
         os.mkfifo(fifo)
         for role in ("lead", "worker"):
             self.assertIsNone(self.hook(bash("jq . " + str(fifo)), role=role, timeout=2))
             self.assertIsNone(self.hook(self.as_worker(bash("rm " + str(fifo))), timeout=2))
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S6_a_large_ledger_is_identified_from_its_prefix(self):
-        """agent-runtime/R259"""
         ledger = Path(self.temp.name) / "large.json"
         with ledger.open("wb") as handle:
             handle.write(b'{"kind": "agent-orchestrator/ledger", "data": "')
@@ -280,8 +280,8 @@ class PlanContractTests(unittest.TestCase):
             handle.write(b'"}')
         self.assertTrue(denied(self.hook(self.as_worker(bash("rm " + str(ledger))), timeout=2)))
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S6_the_lead_does_not_read_a_candidate_ledger(self):
-        """agent-runtime/R259"""
         ledger = Path(self.temp.name) / "candidate.json"
         ledger.write_text('{"kind": "agent-orchestrator/ledger"}')
         log = Path(self.temp.name) / "reads"
@@ -305,8 +305,8 @@ class PlanContractTests(unittest.TestCase):
     def as_worker(self, payload):
         return {**payload, "agent_id": "sub-1", "agent_type": "worker"}
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S4_a_state_receipts_path_without_a_ledger_is_not_guarded(self):
-        """runtime-audit-fixes/S4"""
         for path in ("src/state/receipts/slice.ts", "/repo/state/receipts/a.json"):
             for command in ("echo x > %s" % path, "rm -f %s" % path, "cp a %s" % path):
                 self.assertIsNone(self.hook(self.as_worker(bash(command))), command)
@@ -318,8 +318,8 @@ class PlanContractTests(unittest.TestCase):
             )
         )
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S5_a_receipts_subtree_under_the_default_root_is_denied_and_readable(self):
-        """runtime-audit-fixes/S5"""
         default = Path(self.temp.name) / ".local/state/orchestrate/k/demo/receipts/S1.json"
         for command in (
             "echo x > %s" % default,
@@ -334,8 +334,8 @@ class PlanContractTests(unittest.TestCase):
         self.assertIsNone(self.hook(self.as_worker(bash("cat %s" % default))))
         self.assertIsNone(self.hook(self.as_worker(bash("ls %s" % default.parent))))
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S5_home_spellings_guard_shell_and_file_edits(self):
-        """agent-runtime/R258"""
         for home in ("$HOME", "${HOME}", "~"):
             path = home + "/.local/state/orchestrate/k/demo/receipts/S1.json"
             for payload in (
@@ -344,8 +344,8 @@ class PlanContractTests(unittest.TestCase):
             ):
                 self.assertTrue(denied(self.hook(self.as_worker(payload))), (home, payload))
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S6_a_marked_ledgers_receipts_ledger_and_lock_are_denied_under_any_root(self):
-        """runtime-audit-fixes/S6"""
         root = self.ledger_root()
         alias = Path(self.temp.name) / "alias"
         alias.symlink_to(root)
@@ -370,8 +370,9 @@ class PlanContractTests(unittest.TestCase):
             self.assertTrue(denied(self.hook(self.as_worker(relative))), name)
         self.assertIsNone(self.hook(self.as_worker(bash("cat %s/k/demo.json" % alias))))
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S5_S6_the_file_tools_are_denied_when_a_directory_name_has_a_space(self):
-        """runtime-audit-fixes/S5, S6: a path is one path, whatever characters its directories carry"""
+        """S6: a path is one path, whatever characters its directories carry"""
         spaced = Path(self.temp.name) / "my home (x)"
         default = spaced / ".local/state/orchestrate/k/demo/receipts"
         default.mkdir(parents=True)
@@ -391,8 +392,9 @@ class PlanContractTests(unittest.TestCase):
             patch = self.patch("*** Add File: %s\n+x" % target)
             self.assertTrue(denied(self.hook(patch, role="worker", home=str(spaced))), str(target))
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S6_an_unmarked_ledger_outside_the_default_root_is_not_protected(self):
-        """runtime-audit-fixes/S6: the documented gap until the orchestrator writes the marker"""
+        """the documented gap until the orchestrator writes the marker"""
         root = self.ledger_root("other", marked=False)
         for target in ("k/demo/receipts/S1.json", "k/demo.json", "k/demo.json.lock"):
             command = "echo x > %s/%s" % (root, target)
@@ -400,8 +402,8 @@ class PlanContractTests(unittest.TestCase):
 
 
 class LeadContextTests(HookStoreCase):
+    @pytest.mark.spec("Lead reminder context")
     def test_unseen_work_prints_the_wait_reminder_for_all_three_events(self):
-        """agent-runtime/R116"""
 
         def seed(generation):
             store, team = self.team(generation)
@@ -424,8 +426,8 @@ class LeadContextTests(HookStoreCase):
                 self.line(out), "agent-runtime: 2 unfinished, 1 undelivered — call wait(all)"
             )
 
+    @pytest.mark.spec("Lead reminder context")
     def test_working_assignment_the_lead_has_not_seen_is_enough(self):
-        """agent-runtime/R116"""
 
         def seed(generation):
             store, team = self.team(generation)
@@ -437,8 +439,8 @@ class LeadContextTests(HookStoreCase):
             "agent-runtime: 1 unfinished, 0 undelivered — call wait(all)",
         )
 
+    @pytest.mark.spec("Lead reminder context")
     def test_attention_already_delivered_and_unchanged_points_at_status(self):
-        """agent-runtime/R117"""
 
         def seed(generation):
             store, team = self.team(generation)
@@ -451,8 +453,8 @@ class LeadContextTests(HookStoreCase):
             "agent-runtime: 2 workers need you — check status",
         )
 
+    @pytest.mark.spec("Lead reminder context")
     def test_prints_nothing_without_needs_or_with_the_wrong_team(self):
-        """agent-runtime/R118"""
 
         def delivered(generation):  # blocked work, one message already named by a receipt
             store, team = self.team(generation)
@@ -485,8 +487,8 @@ class LeadContextTests(HookStoreCase):
                 self.in_process(self.PROMPT, seed), getattr(seed, "__name__", "no store")
             )
 
+    @pytest.mark.spec("Lead reminder context")
     def test_session_start_sources_other_than_compact_and_clear_print_nothing(self):
-        """agent-runtime/R118"""
 
         def seed(generation):
             store, team = self.team(generation)
@@ -497,8 +499,8 @@ class LeadContextTests(HookStoreCase):
                 self.in_process({"hook_event_name": "SessionStart", "source": source}, seed), source
             )
 
+    @pytest.mark.spec("Hook input errors allow")
     def test_every_failure_allows_silently(self):
-        """agent-runtime/R114"""
 
         def seed(generation):
             store, team = self.team(generation)
@@ -555,8 +557,8 @@ class LeadContextTests(HookStoreCase):
         self.assertEqual(proc.returncode, 0, err)
         return [json.loads(line) for line in out.splitlines()]
 
+    @pytest.mark.spec("Hooks never write the store")
     def test_hook_never_writes_the_store_and_honours_xdg_state_home(self):
-        """agent-runtime/R115"""
 
         def seed(generation):
             store, team = self.team(generation)
@@ -585,8 +587,8 @@ class LeadContextTests(HookStoreCase):
         self.in_process(self.PROMPT, env=missing)
         self.assertFalse((self.root / "absent").exists())
 
+    @pytest.mark.spec("Hook input errors allow")
     def test_broken_import_exits_zero_silently(self):
-        """agent-runtime/R114"""
         broken = self.root / "broken"
         broken.mkdir()
         (broken / "lead_context.py").write_text((HOOKS / "lead_context.py").read_text())
@@ -601,8 +603,8 @@ class LeadContextTests(HookStoreCase):
         )
         self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
 
+    @pytest.mark.spec("Hook input errors allow")
     def test_claude_hook_commands_allow_silently_without_python3(self):
-        """agent-runtime/R114"""
         hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
         for event in ("SessionStart", "UserPromptSubmit", "Stop"):
             command = hooks[event][0]["hooks"][0]["command"]
@@ -617,8 +619,8 @@ class LeadContextTests(HookStoreCase):
             )
             self.assertEqual((done.returncode, done.stdout), (0, ""), event)
 
+    @pytest.mark.spec("Session generation")
     def test_hook_shaped_process_computes_the_servers_generation(self):
-        """agent-runtime/R107"""
         code = (
             "import sys; sys.path.insert(0, %r); sys.path.insert(0, %r); import hook_lib; "
             "from agent_runtime import hc_tools; "

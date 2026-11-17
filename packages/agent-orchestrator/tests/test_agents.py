@@ -39,7 +39,7 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
                 spec.main()
 
     def test_S33_a_restart_after_a_crash_before_the_bind_re_attaches_instead_of_spawning(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S33"""
+        """orchestrate-lean-loop/S33"""
         for point in ("assignment_of", "bind"):
             with self.subTest(crash_at=point):
                 self.setUp()
@@ -68,7 +68,7 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
         self.assertTrue(self.run_events("intent")[-1].get("recovering") or point == "bind")
 
     def test_S33_it_spawns_only_when_no_such_agent_exists(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S33"""
+        """orchestrate-lean-loop/S33"""
         self.crash_after_spawn("assignment_of")
         self.states({"demo-t1": "exited"})
         self.run_driver()
@@ -77,7 +77,7 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
         self.assertEqual(self.ledger()["tasks"]["t1"]["assignment_id"], spawn_id("demo-t1", 2))
 
     def test_S33_a_run_that_finished_binding_never_spawns_a_second_agent_with_the_name(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S33"""
+        """orchestrate-lean-loop/S33"""
         self.run_driver()
         self.reset_status("IN PROGRESS", "TO-DO")
         # exit 1: the first drive left the worker idle with no report, and the restart strands that unit
@@ -86,8 +86,9 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
         self.assertEqual([c["args"]["name"] for c in self.calls("spawn")], ["demo-t1"])
         self.assertEqual(self.ledger()["agents"]["demo-t1"]["assignment_id"], spawn_id("demo-t1"))
 
+    @pytest.mark.spec("Runtime refusals are reported")
     def test_S33_a_refused_spawn_leaves_no_open_intent(self):
-        """orchestrator-engine/R5: orchestrate-lean-loop/S33"""
+        """orchestrate-lean-loop/S33"""
         self.refuse(["demo-t1"])
         self.run_driver(expect=1)
         self.assertNotIn("demo-t1", self.ledger().get("agents", {}))
@@ -96,8 +97,9 @@ class EnsureAgentTests(RunFixture, unittest.TestCase):
         self.assertEqual([c["args"]["name"] for c in self.calls("spawn")], ["demo-t1", "demo-t1"])
         self.assertEqual(self.calls("resume"), [])
 
+    @pytest.mark.spec("Intents before sends")
     def test_S33_the_fresh_worker_spawn_after_a_decision_records_an_intent_first(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S33"""
+        """orchestrate-lean-loop/S33"""
         from test_decider import DeciderFixture
 
         fixture = type("F", (DeciderFixture, unittest.TestCase), {"runTest": lambda self: None})()
@@ -131,12 +133,14 @@ class AddressRecordTests(RunFixture, unittest.TestCase):
 
         self.runtime_process = answer
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_the_address_the_runtime_returned_is_recorded_on_the_agent_and_its_task(self):
         self.run_driver()
         data = self.ledger()
         self.assertEqual(data["agents"]["demo-t1"]["address"], "term-demo-t1")
         self.assertEqual(data["tasks"]["t1"]["address"], "term-demo-t1")
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_a_runtime_that_returned_no_address_leaves_none_not_the_assignment_or_the_name(self):
         self.runtime_returns_no_address()
         self.run_driver()

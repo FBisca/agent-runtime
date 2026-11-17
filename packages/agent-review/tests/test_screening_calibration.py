@@ -55,6 +55,7 @@ def judged(question, value, *, confidence=None, scope="whole-diff"):
     return judgment
 
 
+@pytest.mark.spec("Calibrated escalation signals")
 def test_S5_a_noul_below_its_threshold_escalates_with_its_question_scope_value_and_confidence():
     reasons = calibration.escalation((judged("contract.test-evidence", 0.2),), BANK)
 
@@ -75,6 +76,7 @@ def test_S5_a_noul_below_its_threshold_escalates_with_its_question_scope_value_a
     [(2.0, "value-above-threshold"), (1.5, None), (0.0, None)],
     ids=["above", "at-the-threshold", "below"],
 )
+@pytest.mark.spec("Calibrated escalation signals")
 def test_S5_a_score_escalates_only_above_its_threshold(value, rule):
     reasons = calibration.escalation(
         (judged("contract.error-handling", value, confidence=0.9),), BANK
@@ -85,6 +87,7 @@ def test_S5_a_score_escalates_only_above_its_threshold(value, rule):
     )
 
 
+@pytest.mark.spec("Calibrated escalation signals")
 def test_S5_a_confidence_below_the_band_escalates_even_when_the_value_passes():
     reasons = calibration.escalation(
         (judged("contract.error-handling", 0.5, confidence=0.4),), BANK
@@ -98,12 +101,14 @@ def test_S5_a_confidence_below_the_band_escalates_even_when_the_value_passes():
     assert "0.6" in reason["pattern"], "the pattern names the band that fired"
 
 
+@pytest.mark.spec("Calibrated escalation signals")
 def test_S5_advisory_uncertainty_is_recorded_without_escalating():
     assert calibration.escalation((judged("repo.style", 9.0, confidence=0.0),), BANK) == (), (
         "an advisory judgment's uncertainty is recorded in its judgment, never escalated alone (D08)"
     )
 
 
+@pytest.mark.spec("Calibrated escalation signals")
 def test_S5_a_raw_probability_is_never_read_as_a_calibrated_confidence():
     # 0.65 clears the 0.6 value and sits below the 0.7 band, so only a confidence could fire it; a noul
     # answer carries no confidence and the probability is not one.
@@ -112,6 +117,7 @@ def test_S5_a_raw_probability_is_never_read_as_a_calibrated_confidence():
     )
 
 
+@pytest.mark.spec("Calibrated escalation signals")
 def test_S5_a_question_with_no_declared_calibration_escalates_on_nothing():
     assert calibration.escalation((judged("repo.uncalibrated", 0.01),), BANK) == (), (
         "a threshold nobody declared would escalate on a number the model chose (D07, D48)"

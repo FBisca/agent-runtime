@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 
 
 class ClockedWaitTests(FakeHc):
-    """agent-runtime/R63: how a lead's `wait` reads a worker's turns, with the wait's clock injected.
+    """how a lead's `wait` reads a worker's turns, with the wait's clock injected.
 
     The server's call path runs in this process with the fake hc answered in process, and the wait's monotonic clock
     and listener are replaced: the seconds a wait would sit in its listener pass on the injected clock at once, so a
@@ -97,10 +97,11 @@ class ClockedWaitTests(FakeHc):
         row["turn"] = turn
         return {"out": json.dumps(row)}
 
+    @pytest.mark.spec("Tests wait on signals, not clocks")
+    @pytest.mark.spec("Wait attention and failure")
     def test_S7_a_wait_with_nothing_to_report_answers_timeout_when_the_injected_clock_reaches_it(
         self,
     ):
-        """agent-runtime/R63"""
         real = time.monotonic()
         self.lead({"get:w1": self.worker(0), "ls": self.terminals(0, "idle")})
         batch, elapsed = self.wait(30)
@@ -113,8 +114,8 @@ class ClockedWaitTests(FakeHc):
         )
         self.assertLess(time.monotonic() - real, 10, "the 30 seconds were waited in real time")
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_fresh_spawn_idle_before_first_turn_is_not_attention(self):
-        """agent-runtime/R63"""
         self.lead({"get:w1": self.worker(0), "ls": self.terminals(0, "idle")})
         batch, _ = self.wait(1)
         self.assertEqual(batch["reason"], "timeout")  # CLI still starting up
@@ -123,8 +124,8 @@ class ClockedWaitTests(FakeHc):
         batch, _ = self.wait(2)
         self.assertEqual(batch["reason"], "attention")  # first turn ended, no report
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_resume_then_immediate_wait_ignores_the_old_done_turn(self):
-        """agent-runtime/R63"""
         self.lead({"get:w1": self.worker(1, "idle"), "ls": self.terminals(1)})
         result, text = self.call_tool("resume", {"name": "w1", "task": "again"})
         self.assertFalse(result["isError"], text)
@@ -136,8 +137,8 @@ class ClockedWaitTests(FakeHc):
         self.assertEqual(batch["reason"], "attention")
         self.assertEqual(len(batch["unfinished"]), 1)
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_resume_of_a_mid_turn_worker_ignores_the_old_turn_ending(self):
-        """agent-runtime/R63"""
         self.lead({"get:w1": self.worker(3, "working"), "ls": self.terminals(3)})
         result, text = self.call_tool(
             "resume", {"name": "w1", "task": "again"}

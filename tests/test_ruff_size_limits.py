@@ -1,4 +1,4 @@
-"""R248: the ruff PLR09 limits are the one structure gate, and a function over one fails the check."""
+"""The ruff PLR09 limits are the one structure gate, and a function over one fails the check."""
 
 import json
 import subprocess
@@ -25,6 +25,7 @@ OVER_THE_LIMITS = (
 
 
 class RuffSizeLimitTests(unittest.TestCase):
+    @pytest.mark.spec("Ruff size limits")
     def test_S1_a_function_or_class_over_a_pylint_limit_fails_ruff_naming_its_rule_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "over_the_limits.py"

@@ -5,10 +5,10 @@ COMPLETE.
 It drives `run`, `plan check` and the new `complete` command through the archive fixture of the folder-plan tests
 (fake runtime, fake gh, a real git origin). The contract it pins (plan Decisions D4, D5):
 
-  complete <plan> <T#> --note TEXT [--cover S<n>=<node>]... --repo R --state-dir D
+  complete <plan> <T#> --note TEXT --repo R --state-dir D
 
-  - the ticket's status becomes `COMPLETE <date> · <note>`; a spawned worker, an agent ticket, an unknown ticket and
-    a `--cover` for a scenario the ticket does not satisfy are each refused (non-zero exit)
+  - the ticket's status becomes `COMPLETE <date> · <note>`; a spawned worker, an agent ticket, and an unknown ticket
+    are each refused (non-zero exit)
   - the archive's spec holds the requirement the person ticket's scenario sits under
   - the plan is accepted once every agent ticket is COMPLETE; the archive starts only once every ticket is
 
@@ -33,7 +33,6 @@ pytestmark = [
     pytest.mark.spec("Person tickets"),
 ]
 
-NODE = "other-repo/tests/test_manual.py::test_the_runbook_step"
 NOTE = "ran the runbook step in other-repo"
 
 # The Lead skips an archive request only once one is open: a `decide` with nothing to answer would fail the step.
@@ -92,10 +91,8 @@ class PersonFixture(FolderArchiveFixture):
             result = self.in_process(load_script(), list(args))
         return result.returncode, result.stdout + result.stderr
 
-    def complete(self, ticket, *covers, note=NOTE, role="lead"):
+    def complete(self, ticket, note=NOTE, role="lead"):
         argv = ["complete", str(self.plan), ticket, "--note", note]
-        for cover in covers:
-            argv += ["--cover", cover]
         argv += ["--repo", str(self.repo), "--state-dir", str(self.state_dir)]
         return self.as_caller(role, *argv)
 
@@ -141,28 +138,27 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
 
     def test_complete_records_the_person_ticket_done_with_its_note(self):
         self.first_drive()
-        code, said = self.complete("T2", "S2=" + NODE)
+        code, said = self.complete("T2")
         self.assertEqual(code, 0, said)
         status = self.ticket_status("T2")
         self.assertTrue(status.startswith("COMPLETE "), status)
         self.assertIn(NOTE, status)
 
-    def test_complete_refuses_a_worker_an_agent_ticket_an_unknown_ticket_and_a_foreign_scenario(
+    def test_complete_refuses_a_worker_an_agent_ticket_and_an_unknown_ticket(
         self,
     ):
         self.first_drive()
         refusals = {
-            "a spawned worker": self.complete("T2", "S2=" + NODE, role="worker"),
+            "a spawned worker": self.complete("T2", role="worker"),
             "an agent ticket": self.complete("T1"),
             "an unknown ticket": self.complete("T9"),
-            "a scenario T2 does not satisfy": self.complete("T2", "S1=" + NODE),
         }
         for what, (code, said) in refusals.items():
             self.assertNotEqual(code, 0, "complete accepted %s: %s" % (what, said))
         self.assertFalse(
             self.ticket_status("T2").startswith("COMPLETE"), "a refused complete was recorded"
         )
-        code, said = self.complete("T2", "S2=" + NODE)
+        code, said = self.complete("T2")
         self.assertEqual(code, 0, "after the refusals, a valid complete failed: %s" % said)
 
 
@@ -179,7 +175,7 @@ class PersonTicketArchive(PersonFixture, unittest.TestCase):
         )
         self.assertEqual(self.archive_branch(), "", "the archive started with a person ticket open")
         self.assertNotIn("ARCHIVED", self.history())
-        code, said = self.complete("T2", "S2=" + NODE)
+        code, said = self.complete("T2")
         self.assertEqual(code, 0, said)
         self.drive_once([])
         self.assertEqual(self.history()[-1], "ARCHIVED")

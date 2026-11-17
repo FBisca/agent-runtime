@@ -429,6 +429,7 @@ class RecoveredSpan(DrainFixture, unittest.TestCase):
         data.pop("approval", None)
         return yaml.safe_dump(data, sort_keys=False)
 
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S4_a_plan_that_lost_its_approval_span_is_recovered_and_the_drive_keeps_running(self):
         approval = yaml.safe_load(self.approved)["approval"]
         self.waits(
@@ -461,6 +462,7 @@ class RecoveredSpan(DrainFixture, unittest.TestCase):
             {"base": approval["base"], "digest": approval["digest"]},
         )
 
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S4_a_restarted_drive_recovers_the_approval_its_ledger_holds(self):
         approval = yaml.safe_load(self.approved)["approval"]
         # the drive held the plan, so its ledger keeps the approval the file is about to lose
@@ -555,6 +557,7 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
             base,
         ]
 
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S2_a_parked_drive_records_the_park_and_names_a_way_out_that_works(self):
         edit = self.widened_t1()
         self.waits(
@@ -601,6 +604,7 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
         reapproved = self.approval(self.plan.read_text(encoding="utf-8"))
         self.assertEqual(reapproved["base"], park["base"], "the way out left the approval's base")
 
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S3_a_parked_drive_asks_again_after_fifteen_minutes_and_then_every_thirty(self):
         # a person's ticket: no worker is in flight, so only the park is left
         self.set_plan(("T4",))
@@ -634,6 +638,7 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
         self.assertTrue(self.plan.exists(), "the drive gave up the plan")
         self.assertEqual([e["kind"] for e in self.run_events("finish", "crash")], ["finish"])
 
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S3_a_park_asks_again_while_its_own_parked_unit_lists_open(self):
         """A parked unit's assignment stays open in the runtime but is not work: it must not silence the park."""
         self.set_plan(("T1",))

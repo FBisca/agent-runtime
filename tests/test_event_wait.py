@@ -374,9 +374,9 @@ class EventRig(HcCase):
 
 
 class WaitRecordTests(EventRig):
+    @pytest.mark.spec("Lead wait record")
     def test_S3_final_wait_records_reason_and_fingerprint_atomically(self):  # noqa: PLR0915
-        """agent-runtime/R109
-        S3: a partial "messages" result leaves the last-wait row untouched."""
+        """S3: a partial "messages" result leaves the last-wait row untouched."""
         store = Store({"HOME": str(self.dir / "home")})
         cases = (
             ("timeout", None, {}, 0),
@@ -514,8 +514,8 @@ class WaitRecordTests(EventRig):
                 original,
             )
 
+    @pytest.mark.spec("Lead wait record")
     def test_S4_read_only_fingerprint_changes_with_messages_states_and_turns(self):
-        """agent-runtime/R110"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -619,9 +619,9 @@ class WaitRecordTests(EventRig):
         with other.transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], 0)
 
+    @pytest.mark.spec("Wait attention and failure")
+    @pytest.mark.spec("Wait all")
     def test_attention_cleared_during_finalization_cannot_become_early_timeout(self):
-        """agent-runtime/R38 agent-runtime/R40
-        agent-runtime-dispatch/S5; agent-runtime-dispatch/S7"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -657,9 +657,8 @@ class WaitRecordTests(EventRig):
         self.assertEqual(len(receipts), 1)
         self.assertEqual(json.loads(receipts[0][0]), [m["message_id"] for m in batch["messages"]])
 
+    @pytest.mark.spec("Wait any and named")
     def test_concurrent_ack_during_finalization_keeps_batch_and_receipt_consistent(self):
-        """agent-runtime/R41
-        agent-runtime-dispatch/S8"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -744,9 +743,9 @@ class ReasonPrecedenceTests(EventRig):
         self.assertEqual(batch["reason"], "attention")
         self.assertEqual([a["assignment_id"] for a in self.stalled(batch)], [assignment])
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_reports_and_runtime_failures_need_attention_and_ended_turns_need_attention(self):
-        """agent-runtime/R40
-        S1: an undelivered progress report returns at once; the attention report still wins over it."""
+        """S1: an undelivered progress report returns at once; the attention report still wins over it."""
         self.prepare()
         for state in ("idle", "done", "blocked", "interrupted", "exited", "removed"):
             with self.subTest(runtime_state=state):
@@ -802,9 +801,8 @@ class ReasonPrecedenceTests(EventRig):
             self.batch(self.rpc, self.rpc.tool("wait", {"target": "all"}))["reason"], "completed"
         )
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_queued_progress_and_replay_surface_exited_or_interrupted_worker(self):
-        """agent-runtime/R60
-        agent-runtime-dispatch/S27"""
         self.prepare()
         for state in ("exited", "interrupted"):
             progress = self.publish(0, "progress")

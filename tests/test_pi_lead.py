@@ -36,6 +36,7 @@ RULES = {"mutations": True, "backends": ["claude", "codex"], "paths": ["/tmp"]}
 class PiIdentityTests(unittest.TestCase):
     """T1: Pi is a harness of its own, never a silent Claude."""
 
+    @pytest.mark.spec("Pi session identity")
     def test_pi_argv_is_a_harness_and_other_programs_are_not(self):
         """agent-runtime/P2-S1"""
         self.assertEqual(lib.cli_of_args("pi "), "pi")
@@ -47,6 +48,7 @@ class PiIdentityTests(unittest.TestCase):
         for other in ("pip install", "/usr/bin/pip3", "pixel --version", "node /x/pi.js"):
             self.assertIsNone(lib.cli_of_args(other), other)
 
+    @pytest.mark.spec("Pi session identity")
     def test_pi_marker_never_resolves_to_claude(self):
         """agent-runtime/P2-S1: the env marker alone decides, so no real process ancestry is read (a test run
         from inside a Claude session would otherwise find that session above it)"""
@@ -59,6 +61,7 @@ class PiIdentityTests(unittest.TestCase):
             )
         self.assertEqual((info["cli"], info["role"]), ("pi", "lead"))
 
+    @pytest.mark.spec("Pi session identity")
     def test_pi_generation_is_the_pi_process_pid_and_start_time(self):
         """agent-runtime/P2-S1"""
         procs = {100: (90, "/bin/zsh -l"), 90: (80, "pi "), 80: (1, "launchd")}
@@ -70,6 +73,7 @@ class PiIdentityTests(unittest.TestCase):
             self.assertEqual(lib.cli_generation(), "90:Fri Nov  7 09:00:00 2026")
             self.assertIsNone(lib.parent_cli())  # the direct parent is a shell, not the harness
 
+    @pytest.mark.spec("Claude and Codex identity unchanged")
     def test_claude_and_codex_keep_their_own_identity(self):
         """agent-runtime/P2-S5"""
         procs = {100: (90, "/bin/zsh"), 90: (80, "codex exec"), 80: (1, "launchd")}
@@ -85,6 +89,7 @@ class PiIdentityTests(unittest.TestCase):
             self.assertEqual(lib.detect_cli({"PI_CODING_AGENT": "true"}), "pi")
             self.assertIsNone(lib.detect_cli({}))
 
+    @pytest.mark.spec("Unidentifiable harness refused")
     def test_a_pi_session_without_a_pi_process_is_refused(self):
         """agent-runtime/P2-S4: an environment variable alone is not a session."""
         with mock.patch.object(lib, "cli_generation", return_value=None):
@@ -92,6 +97,7 @@ class PiIdentityTests(unittest.TestCase):
                 hc_tools.dispatch_identity({"PI_CODING_AGENT": "true", "HC_SCOPE": "pi"})
         self.assertIn("cannot establish a Pi lead session", str(error.exception))
 
+    @pytest.mark.spec("Unidentifiable harness refused")
     def test_an_ambiguous_pi_session_is_refused(self):
         """agent-runtime/P2-S4: two hosts claiming one session are ambiguous, not Claude."""
         with mock.patch.object(lib, "cli_generation", return_value=None):
@@ -101,6 +107,7 @@ class PiIdentityTests(unittest.TestCase):
                 )
         self.assertIn("ambiguous", str(error.exception))
 
+    @pytest.mark.spec("Claude and Codex identity unchanged")
     def test_claude_and_codex_keep_their_session_id_fallback(self):
         """agent-runtime/P2-S5: the Claude/Codex identity behaviour is unchanged.
 
@@ -120,6 +127,7 @@ class PiIdentityTests(unittest.TestCase):
             self.assertEqual(found[0], ("s", "session"))
 
 
+@pytest.mark.spec("Pi host policy")
 class PiPolicyTests(unittest.TestCase):
     """T2: the server, not the client, decides what a Pi lead may do."""
 
@@ -211,6 +219,7 @@ class PiPolicyTests(unittest.TestCase):
                     None,
                 )
 
+    @pytest.mark.spec("Claude and Codex identity unchanged")
     def test_claude_and_codex_hosts_keep_their_unrestricted_behaviour(self):
         """agent-runtime/P2-S5"""
         for host in ("claude", "codex"):
@@ -294,6 +303,7 @@ class PiLeadTests(ToolCase):
 
     # --- S1: identity and generation -------------------------------------------------------
 
+    @pytest.mark.spec("Pi session identity")
     def test_S1_pi_lead_is_identified_as_pi_with_a_stable_generation(self):
         """agent-runtime/P2-S1: the lead is Pi, not Claude, and a reconnect keeps the same team."""
         session = self.pi_session(self.lead_replies())
@@ -309,6 +319,7 @@ class PiLeadTests(ToolCase):
         self.assertFalse(result["isError"], text)
         self.assertEqual(self.teams(), teams)
 
+    @pytest.mark.spec("Pi session identity")
     def test_S1_a_new_pi_process_is_a_new_generation_and_the_old_one_goes_stale(self):
         """agent-runtime/P2-S3: a restart never inherits another generation's assignments."""
         first = self.pi_session(self.lead_replies())
@@ -328,6 +339,7 @@ class PiLeadTests(ToolCase):
 
     # --- S2: delegation ----------------------------------------------------------------------
 
+    @pytest.mark.spec("Pi lead delegation")
     def test_S2_pi_lead_delegates_to_a_claude_worker_and_collects_one_result(self):
         """agent-runtime/P2-S2: spawn, message, wait and collect over the durable store."""
         self.policy(**RULES)
@@ -363,6 +375,7 @@ class PiLeadTests(ToolCase):
         self.assertFalse(collected["isError"], text)
         self.assertIn("the worker's answer", collected["content"][0]["text"])
 
+    @pytest.mark.spec("Pi lead delegation")
     def test_S2_pi_lead_delegates_to_a_codex_worker(self):
         """agent-runtime/P2-S2: the same path with the other backend."""
         self.policy(**RULES)
@@ -375,6 +388,7 @@ class PiLeadTests(ToolCase):
         self.assertFalse(spawned["isError"], text)
         self.assertIn("codex", self.runs("run")[-1])
 
+    @pytest.mark.spec("Pi lead delivery is exactly once")
     def test_S2_a_repeated_report_is_delivered_once(self):
         """agent-runtime/P2-S2: at-least-once delivery, one report."""
         self.policy(**RULES)
@@ -402,6 +416,7 @@ class PiLeadTests(ToolCase):
         self.assertFalse(waited["isError"], text)
         self.assertEqual(len(waited["structuredContent"]["messages"]), 1)
 
+    @pytest.mark.spec("Pi lead delivery is exactly once")
     def test_S2_a_duplicate_spawn_does_not_start_a_second_worker(self):
         """agent-runtime/P2-S2: one task, one worker, one report."""
         self.policy(**RULES)
@@ -420,6 +435,7 @@ class PiLeadTests(ToolCase):
         self.assertTrue(again["isError"], text)
         self.assertIn("name_taken", text)  # the live name was refused, nothing was started
 
+    @pytest.mark.spec("Pi lead delivery is exactly once")
     def test_S2_a_report_wakes_the_wait_while_another_worker_still_works(self):
         """agent-runtime/P2-S2 (#31): wait(all) returns the first undelivered report."""
         self.policy(**RULES)
@@ -472,6 +488,7 @@ class PiLeadTests(ToolCase):
 
     # --- S3: recovery and isolation ---------------------------------------------------------
 
+    @pytest.mark.spec("Pi lead delivery is exactly once")
     def test_S3_a_disconnected_pi_lead_reconnects_to_its_own_team(self):
         """agent-runtime/P2-S3: the MCP connection dropped after the spawn; the work is not repeated."""
         self.policy(**RULES)
@@ -496,6 +513,7 @@ class PiLeadTests(ToolCase):
         self.assertEqual([m["assignment_id"] for m in batch["messages"]], [assignment])
         self.assertEqual(len(self.runs("run")), 1)  # the task was not dispatched twice
 
+    @pytest.mark.spec("Pi lead team scope")
     def test_S3_a_pi_lead_cannot_reach_another_leads_worker(self):
         """agent-runtime/P2-S3: no cross-lead read, mutation or result collection."""
         self.policy(**RULES)
@@ -509,6 +527,7 @@ class PiLeadTests(ToolCase):
 
     # --- S4: the mutation guard ---------------------------------------------------------------
 
+    @pytest.mark.spec("Pi host policy")
     def test_S4_a_pi_lead_may_not_mutate_without_a_policy(self):
         """agent-runtime/P2-S4: mutations are denied by default."""
         session = self.pi_session(self.lead_replies())
@@ -521,6 +540,7 @@ class PiLeadTests(ToolCase):
         self.assertIn("not authorized to mutate", text)
         self.assertEqual(self.runs("run"), [])  # nothing was started
 
+    @pytest.mark.spec("Pi host policy")
     def test_S4_a_pi_lead_may_not_choose_a_backend_the_operator_did_not_authorize(self):
         """agent-runtime/P2-S4: an explicit, authorized backend; never a silent provider choice."""
         self.policy(mutations=True, backends=["codex"], paths=["/tmp"])
@@ -550,6 +570,7 @@ class PiLeadTests(ToolCase):
                 )
         self.assertIn("ambiguous", str(error.exception))
 
+    @pytest.mark.spec("Pi lead needs the dispatch store")
     def test_S4_a_pi_lead_needs_the_durable_store(self):
         """agent-runtime/P2-S2: without dispatch there is no identity, attribution or scope."""
         env = {
@@ -568,6 +589,7 @@ class PiLeadTests(ToolCase):
 
     # --- cancellation --------------------------------------------------------------------------
 
+    @pytest.mark.spec("Pi lead delivery is exactly once")
     def test_a_cancelled_wait_leaves_the_worker_running(self):
         """agent-runtime/P2-S2: an interrupted wait never stops or duplicates the worker."""
         self.policy(**RULES)

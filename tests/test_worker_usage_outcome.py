@@ -1,10 +1,9 @@
-"""worker-usage/S12: a Claude, a Codex and a Pi worker, each on two assignments, measured from their own session logs.
+"""a Claude, a Codex and a Pi worker, each on two assignments, measured from their own session logs.
 
 Each worker's log is written under a temporary HOME the way its CLI writes it; the runtime finds it from the worker's
 metadata alone and returns one numeric dict per assignment. A resume is a prompt sent into the live session, so the
 second assignment continues the same log; Claude subagents and Codex guardian-review threads write their own files
-and are credited by time.
-"""
+and are credited by time."""
 
 import json
 import os
@@ -393,8 +392,8 @@ class WorkerUsageOutcome(unittest.TestCase):
             self.assertIsInstance(value, (int, float), key)
             self.assertNotIsInstance(value, bool, key)
 
+    @pytest.mark.spec("Assignment usage slices")
     def test_S12_each_assignment_gets_its_own_slice_for_all_three_harnesses(self):
-        """agent-runtime: worker-usage/S12"""
         self.register("cw", "claude", "CA1")
         self.register("xw", "codex", "XA1")
         self.register("pw", "pi", "PA1")
@@ -489,8 +488,8 @@ class WorkerUsageOutcome(unittest.TestCase):
             },
         )
 
+    @pytest.mark.spec("Assignment usage slices")
     def test_S12_a_second_measurement_after_the_log_grew_matches_a_fresh_one(self):
-        """agent-runtime: worker-usage/S12"""
         self.register("pw", "pi", "PA1")
         self.pi_log()
         first = self.measure(self.env, "pw")
@@ -555,8 +554,8 @@ class WorkerUsageOutcome(unittest.TestCase):
         meta = self.usage.read_worker_metadata(self.env, "xw")
         self.assertEqual((meta["cli"], meta["assignment_id"]), ("codex", "XA1"))
 
+    @pytest.mark.spec("Assignment usage slices")
     def test_S12_a_worker_without_a_log_or_metadata_measures_nothing(self):
-        """agent-runtime: worker-usage/S12"""
         for worker, cli in (("nc", "claude"), ("nx", "codex"), ("np", "pi")):
             with self.subTest(cli):
                 self.register(worker, cli, "N-" + cli)

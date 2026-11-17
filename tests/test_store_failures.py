@@ -69,6 +69,7 @@ class StoreFailureTests(event_helpers.HcCase):
         with self.store.transaction() as db:
             return dict(db.execute("SELECT status,owner,assignment FROM tasks").fetchone())
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S11_a_store_failure_driven_in_process_starts_no_server(self):
         """S11: the tool handler reads the fake binary and the store; no server answers for it."""
         started = self.count_sessions()
@@ -76,8 +77,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.call_tool("message", {"to": "w1", "text": "hi"})
         self.assertEqual(started, [])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S7_resume_store_failure_before_the_send_fails_the_pending_assignment(self):
-        """agent-runtime/R246"""
         self.lead(task=True)
         with mock.patch.object(Store, "mark_resume", side_effect=LOCKED):
             result, text = self.call_tool(
@@ -98,8 +99,8 @@ class StoreFailureTests(event_helpers.HcCase):
             },
         )
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_resume_store_failure_registering_sends_nothing_and_names_the_way_out(self):
-        """agent-runtime/R247"""
         self.lead()
         with mock.patch.object(Store, "register", side_effect=LOCKED):
             result, text = self.call_tool("resume", {"name": "w1", "task": "again"})
@@ -110,8 +111,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.states(), ["working"])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_resume_store_failure_after_the_send_names_the_send_and_the_pending_assignment(self):
-        """agent-runtime/R247"""
         self.lead()
         with mock.patch.object(Store, "bind", side_effect=LOCKED):
             result, text = self.call_tool("resume", {"name": "w1", "task": "again"})
@@ -125,8 +126,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertIn(newest["id"], text)
         self.assertIn("pending", text)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_resume_store_failure_after_the_send_keeps_a_report_that_landed(self):
-        """agent-runtime/R247"""
         self.lead()
         real_bind = Store.bind
 
@@ -139,8 +140,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertFalse(result["isError"], text)
         self.assertEqual(self.states(), ["working", "complete"])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_resume_rollback_that_also_fails_names_the_assignment_left_pending(self):
-        """agent-runtime/R247"""
         self.lead()
         with (
             mock.patch.object(Store, "mark_resume", side_effect=LOCKED),
@@ -156,8 +157,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertIn("nothing was sent", text)
         self.assertEqual(self.runs("send"), [])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_spawn_store_failure_registering_starts_nothing(self):
-        """agent-runtime/R247"""
         self.lead()
         with mock.patch.object(Store, "register", side_effect=LOCKED):
             result, text = self.call_tool("spawn", dict(ARGS, name="w2"))
@@ -167,8 +168,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertIn("retry the spawn", text)
         self.assertEqual(self.runs("run"), [])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_spawn_bind_store_failure_names_the_removed_terminal(self):
-        """agent-runtime/R247"""
         self.lead({"get:w2": {"out": raw("w2", "t0")}})
         with mock.patch.object(Store, "bind", side_effect=LOCKED):
             result, text = self.call_tool("spawn", dict(ARGS, name="w2"))
@@ -181,8 +182,8 @@ class StoreFailureTests(event_helpers.HcCase):
         )
         self.assertEqual(self.states(), ["working", "failed"])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_spawn_rollback_that_also_fails_removes_the_terminal_and_names_the_assignment(self):
-        """agent-runtime/R247"""
         self.lead({"get:w2": {"out": raw("w2", "t0")}})
         with (
             mock.patch.object(Store, "bind", side_effect=LOCKED),
@@ -200,8 +201,8 @@ class StoreFailureTests(event_helpers.HcCase):
             [c[:2] for c in self.runs() if c[0] in ("kill", "rm")], [["kill", "w2"], ["rm", "w2"]]
         )
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_spawn_refusal_keeps_its_reason_when_the_rollback_fails(self):
-        """agent-runtime/R247"""
         self.lead({"run": {"rc": 1, "err": "name taken by another terminal"}})
         with mock.patch.object(
             Store, "fail", side_effect=sqlite3.OperationalError("disk I/O error")
@@ -212,8 +213,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertIn("disk I/O error", text)
         self.assertIn("pending", text)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_message_store_failure_says_nothing_was_delivered(self):
-        """agent-runtime/R247"""
         self.lead()
         with mock.patch.object(Store, "peer", side_effect=LOCKED):
             result, text = self.call_tool("message", {"to": "w1", "text": "hi"})
@@ -222,8 +223,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertIn("not delivered", text)
         self.assertIn("retry the message", text)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_task_store_failure_says_nothing_changed(self):
-        """agent-runtime/R247"""
         self.lead()
         with mock.patch.object(Store, "task", side_effect=LOCKED):
             result, text = self.call_tool("task", {"action": "create", "subject": "s"})
@@ -232,8 +233,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertIn("not changed", text)
         self.assertIn("retry the task", text)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_report_store_failure_says_the_report_was_not_recorded(self):
-        """agent-runtime/R247"""
         self.lead({"get:t9": {"out": raw("w1", "t0")}})
         env = dict(self.env, HC_TERMINAL_ID="t9")
         with mock.patch.object(Store, "publish", side_effect=LOCKED):
@@ -257,20 +258,21 @@ class StoreFailureTests(event_helpers.HcCase):
         with self.store.transaction() as db:
             return db.execute("SELECT COUNT(*) FROM %s WHERE %s" % (table, where)).fetchone()[0]
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_a_committed_task_survives_an_inbox_read_failure(self):
-        """agent-runtime/R247"""
         self.lead()
         self.inbox_read_fails("task", {"action": "create", "subject": "s"})
         self.assertEqual(self.count("tasks"), 1)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_a_committed_message_survives_an_inbox_read_failure(self):
-        """agent-runtime/R247"""
         self.lead()
         self.inbox_read_fails("message", {"to": "w1", "text": "hi"})
         self.assertEqual(self.count("messages", "assignment IS NULL"), 1)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_a_committed_report_survives_an_inbox_read_failure(self):
-        """agent-runtime/R247: a committed report is never discarded."""
+        """a committed report is never discarded."""
         self.lead({"get:t9": {"out": raw("w1", "t0")}})
         self.inbox_read_fails(
             "report",
@@ -280,8 +282,8 @@ class StoreFailureTests(event_helpers.HcCase):
         self.assertEqual(self.count("messages", "assignment IS NOT NULL"), 1)
         self.assertEqual(self.states(), ["complete"])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_a_started_worker_survives_an_inbox_read_failure(self):
-        """agent-runtime/R247"""
         other = json.dumps({"address": "t8", "name": "w2", "parent": "t0", "status": "idle"})
         self.lead({"get:w2": {"out": other}})
         self.inbox_read_fails("spawn", dict(ARGS, name="w2"))

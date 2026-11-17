@@ -151,8 +151,8 @@ class Operations(FakeHc):
 
 
 class OperationRowTests(Operations):
+    @pytest.mark.spec("Operation keys")
     def test_S12_a_new_operation_id_writes_one_row_with_the_assignment_before_the_launch(self):
-        """agent-runtime/R251"""
         seen = []
         real_run = hc_tools.run
 
@@ -173,8 +173,9 @@ class OperationRowTests(Operations):
         self.assertTrue(fingerprint)
         self.assertEqual(self.rows(), before)
 
+    @pytest.mark.spec("Operation keys")
     def test_S12_the_row_is_written_in_the_transaction_that_registers_the_assignment(self):
-        """agent-runtime/R251: a registration the store refuses leaves neither an assignment nor a row."""
+        """a registration the store refuses leaves neither an assignment nor a row."""
         store = self.store()
         team = store.team("scope", "t0", "gen")
         store.register(team, "w", operation=("owner", "k", "fp"))
@@ -186,8 +187,8 @@ class OperationRowTests(Operations):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM operations").fetchone()[0], 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_S12_a_resume_with_an_operation_id_writes_a_row_for_its_assignment(self):
-        """agent-runtime/R251"""
         self.spawned("spawn-op")
         out, text = self.call_tool(
             "resume", {"name": name(0), "task": "again", "operation_id": "resume-op"}
@@ -197,16 +198,16 @@ class OperationRowTests(Operations):
         self.assertEqual(rows["resume-op"][4], out["structuredContent"]["assignment_id"])
         self.assertNotEqual(rows["resume-op"][4], rows["spawn-op"][4])
 
+    @pytest.mark.spec("Operation keys")
     def test_S12_no_operation_id_writes_no_row(self):
-        """agent-runtime/R251"""
         out, text = self.call_tool("spawn", SPAWN)
         self.assertFalse(out["isError"], text)
         self.assertEqual(self.rows(), [])
 
+    @pytest.mark.spec("Operation keys")
     def test_S12_an_operation_id_that_is_not_a_short_plain_string_is_refused_before_anything_starts(
         self,
     ):
-        """agent-runtime/R251"""
         for bad in ("", "  ", "x" * 129, "has space", 7, ["a"], {"k": 1}, True):
             out, text = self.call_tool("spawn", dict(SPAWN, operation_id=bad))
             self.assertTrue(out["isError"], repr(bad))
@@ -214,8 +215,8 @@ class OperationRowTests(Operations):
         self.assertEqual(self.runs("run"), [])
         self.assertEqual(self.rows(), [])
 
+    @pytest.mark.spec("Operation keys")
     def test_S12_an_operation_id_needs_the_durable_store(self):
-        """agent-runtime/R251"""
         self.env.pop("AGENT_RUNTIME_DISPATCH")
         out, text = self.call_tool("spawn", dict(SPAWN, operation_id="op-1"))
         self.assertTrue(out["isError"])
@@ -224,8 +225,9 @@ class OperationRowTests(Operations):
 
 
 class OperationReplayTests(Operations):
+    @pytest.mark.spec("Operation keys")
     def test_hc_restart_makes_old_spawn_and_resume_keys_unknown_and_never_replays(self):
-        """agent-runtime/R263: replacing the hc listener retires both kinds of operation keys."""
+        """replacing the hc listener retires both kinds of operation keys."""
         self.spawned("old-spawn")
         resume = {"name": name(0), "task": "again", "operation_id": "old-resume"}
         self.assertFalse(self.call_tool("resume", resume)[0]["isError"])
@@ -249,8 +251,9 @@ class OperationReplayTests(Operations):
         self.assertEqual(len(self.rows("assignments")), 2)
         self.assertEqual(self.lookup("unused")["state"], "absent")
 
+    @pytest.mark.spec("Operation keys")
     def test_orchestrator_restart_on_the_same_hc_instance_keeps_keys(self):
-        """agent-runtime/R263: owner generation excludes the orchestrator process/session."""
+        """owner generation excludes the orchestrator process/session."""
         first = self.spawned()
         owner = self.owner()
         self.session = dict(self.session)
@@ -260,8 +263,9 @@ class OperationReplayTests(Operations):
             self.assertEqual(self.spawned()["assignment_id"], first["assignment_id"])
         self.assertEqual(len(self.runs("run")), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_legacy_owner_keys_are_unknown_instead_of_absent_or_replayed(self):
-        """agent-runtime/R263: pre-instance keys have no safe provenance."""
+        """pre-instance keys have no safe provenance."""
         self.spawned()
         with self.store().transaction() as db:
             db.execute("UPDATE operations SET owner=?", (hc_tools.hc_server(self.env) + "\nt0",))
@@ -272,8 +276,9 @@ class OperationReplayTests(Operations):
         self.assertTrue(out["isError"], text)
         self.assertEqual(len(self.runs("run")), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_unavailable_hc_instance_never_falls_back_to_replaying_or_absent(self):
-        """agent-runtime/R263: missing instance evidence fails closed with recovery guidance."""
+        """missing instance evidence fails closed with recovery guidance."""
         self.spawned()
         self.socket_path.unlink()
         for key in ("op-1", "never"):
@@ -284,8 +289,8 @@ class OperationReplayTests(Operations):
         self.assertTrue(out["isError"], text)
         self.assertEqual(len(self.runs("run")), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_S13_a_repeated_spawn_returns_the_first_assignment_and_sends_nothing(self):
-        """agent-runtime/R252"""
         first = self.spawned()
         again = self.spawned()
         self.assertEqual(again["assignment_id"], first["assignment_id"])
@@ -298,8 +303,8 @@ class OperationReplayTests(Operations):
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(len(self.rows("assignments")), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_S13_a_repeated_resume_returns_the_first_assignment_and_sends_once(self):
-        """agent-runtime/R252"""
         self.spawned("spawn-op")
         arguments = {"name": name(0), "task": "again", "operation_id": "resume-op"}
         first, text = self.call_tool("resume", arguments)
@@ -313,8 +318,8 @@ class OperationReplayTests(Operations):
         self.assertEqual(len(self.sent_to(name(0))), 1)
         self.assertEqual(len(self.rows("assignments")), 2)
 
+    @pytest.mark.spec("Operation keys")
     def test_S13_the_replay_reports_the_assignments_current_state(self):
-        """agent-runtime/R252"""
         first = self.spawned()
         store = self.store()
         store.publish(
@@ -325,8 +330,8 @@ class OperationReplayTests(Operations):
         self.assertFalse(delivered["isError"], text)
         self.assertEqual(self.spawned()["state"], "complete")
 
+    @pytest.mark.spec("Operation keys")
     def test_S13_a_replay_takes_no_team_slot_and_is_not_refused_by_the_limit(self):
-        """agent-runtime/R252"""
         first = self.spawned()
         store = self.store()
         team = first["team_id"]
@@ -335,8 +340,9 @@ class OperationReplayTests(Operations):
         again = self.spawned()
         self.assertEqual(again["assignment_id"], first["assignment_id"])
 
+    @pytest.mark.spec("Operation keys")
     def test_S13_an_operation_id_belongs_to_its_owner(self):
-        """agent-runtime/R252: another lead's identical operation_id is a new operation."""
+        """another lead's identical operation_id is a new operation."""
         first = self.spawned()
         other = dict(self.env, HC_TERMINAL_ID="t9")
         self.install(dict(worker_rows(4), **{"get:t9": {"out": hc_tools_raw("lead2", None)}}))
@@ -369,8 +375,8 @@ class OperationConflictTests(Operations):
         ("agent", {"agent": "implementer"}),
     )
 
+    @pytest.mark.spec("Operation keys")
     def test_S14_every_argument_that_changes_behaviour_is_in_the_fingerprint(self):
-        """agent-runtime/R253"""
         self.spawned()
         refused = {}
         for label, change in self.CHANGES:
@@ -385,8 +391,8 @@ class OperationConflictTests(Operations):
         self.assertEqual(len(self.rows("assignments")), 1)
         self.assertEqual(len(self.rows()), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_S14_the_task_link_and_the_instructions_are_in_the_fingerprint(self):
-        """agent-runtime/R253"""
         created, text = self.call_tool("task", {"action": "create", "subject": "do it"})
         task_id = created["structuredContent"]["task_id"]
         instructions = self.dir / "role.md"
@@ -405,8 +411,9 @@ class OperationConflictTests(Operations):
             self.assertFalse(same["isError"], text)
         self.assertEqual(len(self.runs("run")), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_S14_the_verb_is_in_the_fingerprint(self):
-        """agent-runtime/R253: a resume cannot reuse a spawn's operation_id."""
+        """a resume cannot reuse a spawn's operation_id."""
         self.spawned()
         out, text = self.call_tool(
             "resume", {"name": name(0), "task": "work", "operation_id": "op-1"}
@@ -415,8 +422,8 @@ class OperationConflictTests(Operations):
         self.assertEqual(self.sent_to(name(0)), [])
         self.assertEqual(len(self.rows("assignments")), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_S14_a_resume_with_a_changed_task_conflicts_and_sends_nothing(self):
-        """agent-runtime/R253"""
         self.spawned("spawn-op")
         arguments = {"name": name(0), "task": "again", "operation_id": "resume-op"}
         self.assertFalse(self.call_tool("resume", arguments)[0]["isError"])
@@ -427,16 +434,17 @@ class OperationConflictTests(Operations):
         self.assertEqual(len(self.sent_to(name(0))), 1)
         self.assertEqual(len(self.rows("assignments")), 2)
 
+    @pytest.mark.spec("Operation keys")
     def test_S14_the_conflict_names_the_operation_id(self):
-        """agent-runtime/R253"""
         self.spawned("named-op")
         out, text = self.call_tool("spawn", dict(SPAWN, task="x", operation_id="named-op"))
         self.assertIn("named-op", text)
 
 
 class OperationLookupTests(Operations):
+    @pytest.mark.spec("Operation lookup")
     def test_store_construction_failures_are_unknown_with_recovery(self):
-        """agent-runtime/R261: real Store initialization failures stay lookup results."""
+        """real Store initialization failures stay lookup results."""
         for defect in ("corrupt", "wrong-owner", "unopenable", "schema", "store-error"):
             with self.subTest(defect=defect):
                 env = dict(self.env, XDG_STATE_HOME=str(self.dir / defect))
@@ -474,13 +482,13 @@ class OperationLookupTests(Operations):
             for column, value in changes.items():
                 db.execute("UPDATE assignments SET %s=? WHERE id=?" % column, (value, assignment))
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_an_unseen_operation_id_is_absent(self):
-        """agent-runtime/R254"""
         self.assertEqual(self.lookup("never")["state"], "absent")
         self.assertIsNone(self.lookup("never")["assignment_id"])
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_the_state_follows_the_assignment_with_its_id(self):
-        """agent-runtime/R254"""
         first = self.spawned()
         found = self.lookup()
         self.assertEqual(found["state"], "bound")
@@ -497,8 +505,8 @@ class OperationLookupTests(Operations):
         store.publish(scope, "t100", "t0", first["assignment_id"], "done", "complete")
         self.assertEqual(self.lookup()["state"], "complete")
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_a_registered_assignment_that_never_bound_is_pending(self):
-        """agent-runtime/R254"""
         store = self.store()
         team = store.team("scope", "t0", "gen")
         identity = store.register(team, "w", operation=(self.owner(), "op-1", "fp"))
@@ -507,14 +515,14 @@ class OperationLookupTests(Operations):
             (found["state"], found["assignment_id"]), ("pending", identity["assignment_id"])
         )
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_a_failed_assignment_is_failed(self):
-        """agent-runtime/R254"""
         first = self.spawned()
         self.force(first["assignment_id"], "failed")
         self.assertEqual(self.lookup()["state"], "failed")
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_a_row_whose_assignment_is_gone_is_unknown_with_a_reason_to_act_on(self):
-        """agent-runtime/R254"""
         first = self.spawned()
         with self.store().transaction() as db:
             db.execute("DELETE FROM assignments WHERE id=?", (first["assignment_id"],))
@@ -523,8 +531,8 @@ class OperationLookupTests(Operations):
         self.assertEqual(found["assignment_id"], first["assignment_id"])
         self.assertIn("new operation_id", found["reason"])
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_a_store_that_cannot_be_read_is_unknown_not_an_error(self):
-        """agent-runtime/R254"""
         self.spawned()
         with mock.patch.object(
             Store, "operation", side_effect=sqlite3.OperationalError("disk I/O error")
@@ -534,8 +542,8 @@ class OperationLookupTests(Operations):
         self.assertIn("disk I/O error", found["reason"])
         self.assertIn("retry", found["reason"])
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_the_lookup_is_scoped_to_its_owner(self):
-        """agent-runtime/R254"""
         self.spawned()
         self.install(dict(worker_rows(4), **{"get:t9": {"out": hc_tools_raw("lead2", None)}}))
         other = dict(self.env, HC_TERMINAL_ID="t9")
@@ -545,8 +553,9 @@ class OperationLookupTests(Operations):
             )
         self.assertEqual(json.loads(out["content"][0]["text"])["state"], "absent")
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_the_lookup_never_acknowledges_a_report(self):
-        """agent-runtime/R254: even when it carries a receipt, a lookup leaves the lead's inbox as it was."""
+        """even when it carries a receipt, a lookup leaves the lead's inbox as it was."""
         first = self.spawned()
         store = self.store()
         store.publish(
@@ -566,8 +575,8 @@ class OperationLookupTests(Operations):
         self.assertEqual(unacked(), 1)
         self.assertNotIn("inbox", json.loads(text))
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_the_lookup_needs_an_operation_id(self):
-        """agent-runtime/R254"""
         for arguments in ({}, {"operation_id": ""}, {"operation_id": 3}):
             out, text = self.call_tool("operation", arguments)
             self.assertTrue(out["isError"], arguments)
@@ -575,8 +584,9 @@ class OperationLookupTests(Operations):
 
 
 class OperationStoreTests(unittest.TestCase):
+    @pytest.mark.spec("Operation lookup")
     def test_S15_the_table_is_additive_and_the_schema_version_stays_2(self):
-        """agent-runtime/R254: a version 2 store written before the table existed opens, keeps its data and
+        """a version 2 store written before the table existed opens, keeps its data and
         its version, and a server that never uses operation_id keeps working on it."""
         import tempfile
 
@@ -618,8 +628,8 @@ class OperationStoreTests(unittest.TestCase):
 
 
 class DescriptionTests(unittest.TestCase):
+    @pytest.mark.spec("Operation keys")
     def test_S12_spawn_and_resume_take_an_operation_id_within_the_word_cap(self):
-        """agent-runtime/R251"""
         tools = {n: s["properties"] for n, _, s in mcp_server.TOOLS}
         self.assertIn("operation_id", tools["spawn"])
         self.assertIn("operation_id", tools["resume"])
@@ -631,8 +641,9 @@ class DescriptionTests(unittest.TestCase):
         )
         self.assertLessEqual(words, 400)
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_the_lookup_is_a_call_verb_not_an_mcp_tool(self):
-        """agent-runtime/R254: the public tool surface stays the ten tools."""
+        """the public tool surface stays the ten tools."""
         self.assertNotIn("operation", mcp_server.TOOL_NAMES)
         self.assertIn("operation", hc_tools.HANDLERS)
 
@@ -651,7 +662,7 @@ awk -v pid="$4" '$1 == pid { found = 1; $1 = ""; sub(/^ /, ""); print } END { ex
 
 
 class OperationOutcomeTests(FakeHc):
-    """runtime-audit-fixes/S13-S15: spawn with an operation_id over MCP, and the owner-scoped `call operation`."""
+    """-S15: spawn with an operation_id over MCP, and the owner-scoped `call operation`."""
 
     SPAWN = {"kind": "worker", "name": "w00", "task": "work", "cwd": "/tmp"}
 
@@ -662,8 +673,9 @@ class OperationOutcomeTests(FakeHc):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             return [r[0] for r in db.execute("SELECT id FROM assignments ORDER BY rowid")]
 
+    @pytest.mark.spec("Operation keys")
     def test_S13_a_repeated_operation_id_returns_the_first_assignment_and_launches_once(self):
-        """runtime-audit-fixes/S13, S17"""
+        """S17"""
         session = self.lead()
         first, text = self.call(session, "spawn", dict(self.SPAWN, operation_id="op-13"))
         self.assertFalse(first["isError"], text)
@@ -676,10 +688,10 @@ class OperationOutcomeTests(FakeHc):
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(len(self.assignments()), 1)
 
+    @pytest.mark.spec("Operation keys")
     def test_S14_a_changed_fingerprint_is_refused_naming_the_conflict_and_nothing_is_registered(
         self,
     ):
-        """runtime-audit-fixes/S14"""
         session = self.lead()
         first, text = self.call(session, "spawn", dict(self.SPAWN, operation_id="op-14"))
         self.assertFalse(first["isError"], text)
@@ -756,8 +768,9 @@ class OperationOutcomeTests(FakeHc):
         )
         return done.returncode, done.stdout, done.stderr
 
+    @pytest.mark.spec("Operation lookup")
     def test_lookup_survives_a_new_lead_while_writing_verbs_keep_the_live_lead_gate(self):
-        """agent-runtime/R260: a terminal's keys outlive its orchestrator generation."""
+        """a terminal's keys outlive its orchestrator generation."""
         self.cli_hc()
         code, out, err = self.run_call(
             "spawn", dict(self.SPAWN, cwd=str(self.dir), operation_id="restart-key")
@@ -775,8 +788,8 @@ class OperationOutcomeTests(FakeHc):
                 self.assertEqual(code, 2, (out, err))
                 self.assertIn("live lead generation is L1", err)
 
+    @pytest.mark.spec("Operation lookup")
     def test_S15_call_operation_prints_the_owner_scoped_state_and_assignment(self):
-        """runtime-audit-fixes/S15"""
         self.cli_hc()
         code, out, err = self.run_call(
             "spawn", dict(self.SPAWN, cwd=str(self.dir), operation_id="op-15")
@@ -813,7 +826,7 @@ class OperationOutcomeTests(FakeHc):
 
 
 class OutcomeScenario(FakeHc):
-    """runtime-audit-fixes/S17: one lead session over stdio, one fake hc, every fixed defect in the same run. The
+    """one lead session over stdio, one fake hc, every fixed defect in the same run. The
     team the lead has built up is seeded through the store; each step the scenario is about drives the server."""
 
     def seed(self, active=(), stopped=()):
@@ -838,6 +851,7 @@ class OutcomeScenario(FakeHc):
         out = json.loads(done.stdout) if done.stdout.strip() else None
         return out["hookSpecificOutput"]["permissionDecision"] if out else "allow"
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S10_the_long_lived_lead_is_seeded_and_only_the_step_under_test_launches(self):
         """A team of 32 registered workers with 31 stopped comes from the store: the fake hc sees one launch for
         it, and the next spawn is the one under test."""
@@ -851,7 +865,6 @@ class OutcomeScenario(FakeHc):
         self.assertEqual(len(self.runs("run")), 2)
 
     def test_S17_the_fixed_runtime_serves_a_long_lived_lead(self):
-        """runtime-audit-fixes/S17"""
         session = self.start(worker_rows(), dict(ENV, HC_TERMINAL_SOCKET=str(self.socket_path)))
         spawn = {"kind": "worker", "task": "work", "cwd": "/tmp"}
         # A team of 32 registered workers, 31 of them stopped: the server's first call creates the team.

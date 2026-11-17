@@ -51,16 +51,17 @@ class CheckpointRulesTests(unittest.TestCase):
     def passed(self, command):
         return {"command": command, "outcome": "passed"}
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
     def test_S1_the_required_spelling_matches_whitespace_apart(self):
-        """orchestrator-engine/R22"""
         for command in ("scripts/checks.sh", "  scripts/checks.sh ", "scripts/checks.sh\t"):
             with self.subTest(command=command):
                 done = app.checkpoint(self.data, "validation", self.report([self.passed(command)]))
                 self.assertEqual(done["status"], "COMPLETE")
                 self.data["tasks"]["validation"]["status"] = "ACTIVE"
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
+    @pytest.mark.spec("Required checks are matched by spelling")
     def test_S1a_a_launcher_around_the_required_check_is_another_command(self):
-        """orchestrator-engine/R23"""
         # The driver works in any repository behind any shell: it strips no launcher it would have to know.
         for required, reported in (
             ("scripts/checks.sh", "bash scripts/checks.sh"),
@@ -75,15 +76,15 @@ class CheckpointRulesTests(unittest.TestCase):
                 self.assertIn(required, str(caught.exception))
                 self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
+    @pytest.mark.spec("Required checks are matched by spelling")
     def test_S4_the_contract_states_the_spelling_rule_and_names_no_launcher(self):
-        """orchestrator-engine/R141"""
         self.assertIn("spelled as the task gives it", app.CONTRACT)
         for launcher in ("rtk", "uv run", "python -m", "`bash`", "--durations"):
             with self.subTest(launcher=launcher):
                 self.assertNotIn(launcher, app.CONTRACT)
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
     def test_S2_another_or_an_absent_check_is_refused(self):
-        """orchestrator-engine/R24"""
         for checks in (
             [self.passed("echo scripts/checks.sh")],
             [self.passed("scripts/checks.sh --fast")],
@@ -95,8 +96,8 @@ class CheckpointRulesTests(unittest.TestCase):
                 self.assertIn("scripts/checks.sh", str(caught.exception))
                 self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
     def test_S3_not_run_with_reason_on_a_non_required_check_is_accepted(self):
-        """orchestrator-engine/R25"""
         checks = [
             self.passed("scripts/checks.sh"),
             {"command": "slow-benchmark", "outcome": "not_run", "reason": "no GPU here"},
@@ -104,8 +105,8 @@ class CheckpointRulesTests(unittest.TestCase):
         done = app.checkpoint(self.data, "validation", self.report(checks))
         self.assertEqual(done["status"], "COMPLETE")
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
     def test_S3a_not_run_without_reason_is_refused(self):
-        """orchestrator-engine/R26"""
         checks = [
             self.passed("scripts/checks.sh"),
             {"command": "slow-benchmark", "outcome": "not_run"},
@@ -114,8 +115,8 @@ class CheckpointRulesTests(unittest.TestCase):
             app.checkpoint(self.data, "validation", self.report(checks))
         self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
     def test_S3b_required_check_reported_not_run_is_refused(self):
-        """orchestrator-engine/R27"""
         checks = [
             {"command": "scripts/checks.sh", "outcome": "not_run", "reason": "skipped"},
         ]
@@ -123,8 +124,8 @@ class CheckpointRulesTests(unittest.TestCase):
             app.checkpoint(self.data, "validation", self.report(checks))
         self.assertIn("scripts/checks.sh", str(caught.exception))
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
     def test_S4_any_failed_check_refuses_complete(self):
-        """orchestrator-engine/R28"""
         checks = [
             self.passed("scripts/checks.sh"),
             {"command": "slow-benchmark", "outcome": "failed", "reason": "timeout"},
@@ -133,8 +134,8 @@ class CheckpointRulesTests(unittest.TestCase):
             app.checkpoint(self.data, "validation", self.report(checks))
         self.assertEqual(self.data["tasks"]["validation"]["status"], "ACTIVE")
 
+    @pytest.mark.spec("COMPLETE needs the required checks")
     def test_S8a_a_partial_checkpoint_raises_when_the_checkout_is_missing(self):
-        """orchestrator-engine/R35"""
         self.snapshot.side_effect = FileNotFoundError("/nonexistent")
         with self.assertRaises(FileNotFoundError):
             app.checkpoint(
@@ -143,8 +144,8 @@ class CheckpointRulesTests(unittest.TestCase):
                 self.report([], status="PARTIAL", remaining=["more work"]),
             )
 
+    @pytest.mark.spec("Required checks are matched by spelling")
     def test_contract_states_the_check_rules_and_normalisation(self):
-        """orchestrator-engine/R2"""
         self.assertIn("not_run", app.CONTRACT)
         self.assertIn("reason", app.CONTRACT)
         self.assertIn("required", app.CONTRACT)

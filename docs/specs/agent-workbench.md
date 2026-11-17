@@ -1,178 +1,293 @@
 # Agent workbench
 
-Paths: packages/agent-orchestrator/src/agent_orchestrator/workbench.py, packages/agent-orchestrator/src/agent_orchestrator/driver.py, packages/agent-orchestrator/tests/test_workbench.py, packages/agent-orchestrator/tests/test_workbench_plan.py, packages/agent-orchestrator/tests/test_workbench_execution.py, packages/agent-orchestrator/tests/test_agents.py, packages/agent-orchestrator/tests/test_discovery.py, herdr/agent-workbench/, tests/test_workbench_mod.py, docs/specs/agent-workbench.md
-
-The workbench is a person's view of a plan from one Herdr pane: the plan's ticket graph, its attempts, its
-evidence and the live workers. The view reads the orchestrator's own plan loader and ledger through read-only
-JSON commands, writes nothing and guesses no join. This file states what the read commands guarantee; the
-Herdr mod that draws them is specified beside them as it lands.
+The workbench is a person's view of the orchestrator from one Herdr pane: the plans, each plan's ticket graph, attempts, evidence and live workers, and the week's totals. It has two halves. The read commands (`agent-orchestrator plans list`, `workbench plans`, `workbench plan`, `workbench totals`, all `--json`) read the orchestrator's own plan loader and ledger, write nothing and guess no join. The Herdr mod in `herdr/agent-workbench/` draws their answers; its logic is in pure modules (`model.js`, `data.js` and the views) that the repository suite runs under `node --test`. The only commands the mod gives Herdr beyond the two read verbs are Open and the panel button's layout commands; they change no file and no ledger. The installer side of the mod is in [installer-contract.md](installer-contract.md).
 
 ## Requirements
 
-- **R1** WHEN `agent-orchestrator plans list --json` discovers a YAML plan whose file is `<date>-<name>.plan.yaml`, THEN its `slug` is the plan's `slug:` field (the ledger key), not the date-prefixed file name; a Markdown plan keeps its file-derived slug. (from agent-workbench/S1)
-- **R2** WHEN `agent-orchestrator workbench plans [path] [--repo R] --json` runs in a repository holding YAML and Markdown plans, THEN stdout is one JSON object with `schema_version` and one entry per plan: slug, format, path, state (from the ledger, else APPROVED or DRAFT from the approval block) and ticket counts by state; a Markdown plan carries `legacy: true` and no graph (and no counts when its table lists no ticket). A plan that does not load is an entry with an `error` and null state and counts, and the other plans are still listed. (from agent-workbench/S2)
-- **R3** WHEN the workbench commands run outside a repository, in one with no plan directory, or in one with several and no `.orchestrate/config.yaml` naming one of them as `plans.dir`, THEN each case is a distinct JSON error kind (`not_a_repo`, `no_plans`, `ambiguous` naming every directory) with the way out (an explicit path or `--repo`), printed as one JSON object on stderr with stdout empty, exit status 2, never a crash and never an empty list standing in for an error. (from agent-workbench/S3)
-- **R4** WHEN `agent-orchestrator workbench plan <plan> --json` runs on an approved YAML plan, THEN every ticket carries exactly its `blocked_by` edges and a topological layer (0 for no blockers, else one more than its deepest blocker), tickets are ordered by layer then plan order, and two runs over the same inputs print byte-identical stdout. (from agent-workbench/S4)
-- **R5** WHEN the plan file has a cycle, a duplicate ticket id, a reference to a missing ticket, or malformed YAML, THEN the command exits non-zero with the loader's error naming the YAML path and the offending ids (`error.kind` is `invalid_plan`, `error.path` the file), prints no partial view model (the error is one JSON object on stderr; stdout is empty), and writes nothing. (from agent-workbench/S5)
-- **R6** WHEN the authored plan file changed after approval, THEN the view model shows the approved snapshot's tickets with `revision.drift: true` and both digests (`approved_digest`, `current_digest`), instead of failing or presenting the edited file as approved; the ledger is read under the approved snapshot's slug and ticket ids, so a plan's state and ticket states survive an edit of its slug or its tickets, in `workbench plan` and in the `workbench plans` listing. (from agent-workbench/S6)
-- **R7** WHEN any workbench command runs, THEN it writes nothing under the repository or the state directory (no ledger import, no lock, no file), its output holds no report or message bodies and no environment values, and an unmeasured count, token or duration is null, never 0. (from agent-workbench/S11)
-- **R8** WHEN a ticket has several attempts (fix rounds, retries, orphans, reopens) and a review, THEN `tickets[].attempts` lists each ledger task of the ticket once, oldest first (start time, then ledger order), with `task_id`, `kind` (`worker` for the unit's own id, else `fix`, `retry`, `orphan`, `reopen` or `answer` from the letter after it), `status`, `started_at`, `finished_at`, `assignment_id`, `address`, `claimed` and `latest`; the newest is marked `latest` and no earlier attempt is dropped or overwritten. An unmeasured time is null. (from agent-workbench/S7)
-- **R9** WHEN an attempt's ledger task holds no runtime address, or holds the fallback the driver wrote when the runtime returned none (the assignment id or the agent name), THEN its `address` is null; the address is never taken from a terminal name, another attempt or a timestamp; and the driver records an address (`agents[name].address` and the task's `address`) only when the runtime returned one, leaving it null otherwise. The task's `runtime_id` stays the key the task binds under and may hold the fallback; it is not an address, and a ledger written before this holds the fallback there, which the reader maps to null. (from agent-workbench/S8)
-- **R10** WHEN a worker reported complete but its ticket is not COMPLETE, THEN the ticket shows `verified: false` and the attempt still shows `claimed: true`, read from the worker's own report: a claim is the worker's word. A ticket is `verified` only when it is COMPLETE, which it reaches only through verify's gate and its pull request's CI. (from agent-workbench/S9)
+### Requirement: Workbench plan slugs
+`plans list` and `workbench plans` SHALL list a YAML plan under its `slug:` field, and a Markdown plan beside a YAML twin of the same stem SHALL NOT be listed.
 
-### The Herdr mod
+#### Scenario: a dated file name
+- WHEN a YAML plan file is `<date>-<name>.plan.yaml`
+- THEN its `slug` is the plan's `slug:` field (the ledger key), not the file name; a YAML plan that does not parse keeps its file-derived slug
 
-`herdr/agent-workbench/` draws the read commands. Its logic is in two pure modules the repository suite runs under
-`node --test`: `model.js` (what an answer, or the lack of one, reads as) and `data.js` (the fetch).
+#### Scenario: a Markdown twin
+- WHEN a `.plan.md` has a `.plan.yaml` of the same stem
+- THEN only the YAML plan is listed; a Markdown plan with no twin is listed as legacy
 
-- **R12** WHEN the agent-workbench mod is shown for a space whose folder is a repository with plans, THEN it lists the plans (YAML with state and progress, Markdown marked legacy); selecting a YAML plan shows its tickets as a layered list, in the layer and plan order the command printed, with blocked-by chips that carry each blocker's state, and one inspector for the selected ticket: delivers, blockers, state, verified, attempts and gates. A value the answer does not carry (verified, attempts, gates — the orchestrator no longer reports gates) is shown as unknown or as not reported, never filled in. (from agent-workbench/S12)
-- **R13** WHEN the workbench command fails, times out, prints no JSON, returns a scoped plan error, or finds no plans, THEN the mod shows that state scoped to the plan or project with the way out (and for no plans, `/start-planning`), other plans stay usable, and no placeholder data is drawn. A plan that does not load is a row with its error and no progress; a failed plan fetch is that plan's error and leaves the list and the other plans as they were. (from agent-workbench/S13)
-- **R14** WHEN the mod is narrower than its layout threshold (720 logical pixels; before the first measurement it is full width), THEN it shows a compact single-column ticket list, one line per ticket, and the inspector as a drill-in with a way back; at full width it shows layers and the inspector side by side. (from agent-workbench/S14)
-- **R15** WHEN the selected plan's ledger or run directory changes (the watcher marks the view dirty and a 2-second flush turns any number of changes into one fetch), or the 30-second fallback timer fires, THEN the mod refreshes with at most one fetch in flight, drops any answer older than the latest request (a different space or plan was asked for meanwhile), runs the workbench command with a fixed argv (no shell, the plan path one argument) in the space folder, and writes nothing: the only commands it runs are `workbench plans` and `workbench plan`. (from agent-workbench/S15)
-- **R16** WHEN the repository suite runs the mod's pure modules, THEN `node --test` runs them from a pytest integration test, each scenario's test requiring that its S-ID's node tests ran and none failed, and a missing `node` fails that test naming node instead of skipping. (from agent-workbench/S18)
+### Requirement: Workbench plan list
+`workbench plans --json` SHALL print one JSON object with `schema_version` and one entry per plan, grouped, ordered and counted from the ledger and the plan file.
 
-- **R17** WHEN the inspector shows an attempt, THEN it is joined to Herdr's live `terminals()` by its exact address only (never by name, by position or by another attempt): an attempt whose address is a live terminal shows `live` and offers Open, which runs `agent.focus` for that terminal; a null address, or no `terminals()` to ask, or a space on another machine (the runtime records no machine, so no join is safe) shows `unknown`; a local address that is no longer a live terminal shows `not live`; the last three offer no Open. (from agent-workbench/S16)
-- **R18** WHEN live agent terminals exist that no attempt of the loaded plans names, THEN a Runtime section lists them in tree order from `terminals()` (each under the terminal that started it, the first of each tree showing its parent), on this computer only (in a space on another machine no attempt address can be told from its terminals, so the section lists none and says it cannot tell), each offering Open; no plan or ticket is made up for them, nothing is drawn when there are none, and the mod reads `terminals()` live without a timer. (from agent-workbench/S17)
-- **R19** WHEN the workbench layout is shown, THEN its tab bar has a Workbench button beside Herdr's Files and Changes, drawn by the mod (props `{ toggle: true }`) because Herdr's tabs mod draws only those two: a click opens the side panel on the workbench, or closes it when the workbench is what it shows, with the same `layout.select`, `layout.show` and `layout.hide` commands theirs run; a layout whose side panel holds no workbench gets no button. The button adds `workbench` once to Herdr's `workspace.panels`, after the person's own choices, since Herdr's tabs mod hides a panel that list does not name on every launch and space switch. (from agent-workbench/S24)
-- **R20** WHEN `sh install.sh --components herdr` runs, THEN from a checkout it symlinks herdr/agent-workbench into ~/.config/herdr-app/mods/agent-workbench (a release copies it) and adds the opt-in `workbench` layout without switching to it; `--dry-run` changes nothing; a rerun is idempotent; an existing mod of that name that it did not install is refused with a preview; uninstall removes only what it installed (from agent-workbench/S19)
-- **R21** WHEN a prototype mod draws dependency edges between positioned ticket nodes with PathBuilder and paint_path in a real Herdr window, THEN the finding (edges drawable and positionable, or not, and why) is recorded with a `herdr-app shot` screenshot, and decides whether a drawn-graph view gets a plan of its own (from agent-workbench/S20)
-- **R22** WHEN the plan-level test drives a fixture plan through the real driver with fake runtime and gh (a ticket accepted end to end, a cycle, a ledger holding the address fallback) and reads it with the workbench commands, THEN the YAML slug is the plan field, the edges and layers are exactly `blocked_by`, the output is stable, a cycle is a scoped error, the attempt maps to its assignment and real address, the fallback maps to null, no report body appears, and the repository and state directory are byte-identical before and after (from agent-workbench/S21)
-- **R23** WHEN the installed mod is opened in a real Herdr window on this repository at full-tab and narrow widths, THEN `herdr-app check` passes and the screenshots show this repository's plans, a YAML plan's layered tickets, the inspector with attempts and evidence, an Open that lands on the right terminal, and the empty and error states (from agent-workbench/S22)
-- **R24** WHEN the workbench is accepted, THEN the plans, plans-files and plans-tabs mods and the plans layout are gone from ~/.config/herdr-app, Herdr runs on the workbench layout or its default, and the herdr-app-mods repository is archived (from agent-workbench/S23)
+#### Scenario: an entry per plan
+- WHEN it runs in a repository holding YAML and Markdown plans
+- THEN each entry carries slug, format, path, state (the ledger's, else APPROVED or DRAFT from the approval block) and ticket counts by state; a Markdown plan carries `legacy: true` and no graph; a plan that does not load is an entry with an `error` and null state and counts, and the other plans are still listed
 
-Open and the panel button's three layout commands are the only commands the mod gives Herdr beyond the two `workbench`
-reads (R15 limits what it `exec`s, not these); they change no file and no ledger.
+#### Scenario: groups and order
+- WHEN plans are in every state
+- THEN each entry's `group` is `active` (RUNNING, APPROVED never driven, DRAFT, or a plan that fails to load with no final ledger state) or `older` (ARCHIVED, ACCEPTED, a Markdown-only plan, or a plan that fails to load with a final ledger state); `last_activity` is the newest `at` in `events.jsonl`, else the plan file's mtime, else null; entries order active before older, newest activity first, null last
 
-## Coverage
+### Requirement: Workbench errors
+The workbench commands SHALL report a missing repository, a missing plan directory and an ambiguous one as distinct JSON errors with the way out.
 
-| Scenario | Requirement | Test |
-|---|---|---|
-| S1 | R1 | `packages/agent-orchestrator/tests/test_discovery.py`: `test_S1_a_yaml_plan_is_listed_under_its_slug_field_not_its_dated_file_name`, `test_S1_a_yaml_plan_that_does_not_parse_keeps_its_file_derived_slug` |
-| S2 | R2 | `packages/agent-orchestrator/tests/test_workbench.py`: `test_S2_one_json_object_lists_every_plan_with_its_state_and_ticket_counts`, `test_S2_an_approved_plan_without_a_ledger_is_approved`, `test_S2_a_path_names_the_plan_directory_without_a_repo_flag` |
-| S3 | R3 | `packages/agent-orchestrator/tests/test_workbench.py`: `test_S3_outside_a_repository_is_not_a_repo_with_the_way_out`, `test_S3_a_repository_without_plans_is_no_plans_never_an_empty_list`, `test_S3_several_plan_directories_are_ambiguous_and_all_named`, `test_S3_several_plan_directories_with_a_repo_config_naming_one_list_that_one`, `test_S3_a_plan_that_does_not_exist_is_a_named_error` |
-| S4 | R4 | `packages/agent-orchestrator/tests/test_workbench_plan.py`: `test_S4_every_ticket_has_its_blocked_by_edges_and_a_layer_ordered_by_layer_then_plan`, `test_S4_a_ticket_carries_its_state_and_reason_from_the_ledger` |
-| S5 | R5 | `packages/agent-orchestrator/tests/test_workbench_plan.py`: `test_S5_a_cycle_is_the_loaders_error_naming_the_tickets_and_no_view`, `test_S5_a_duplicate_ticket_id_is_named`, `test_S5_a_reference_to_a_missing_ticket_is_named`, `test_S5_malformed_yaml_names_the_file` |
-| S6 | R6 | `packages/agent-orchestrator/tests/test_workbench_plan.py`: `test_S6_an_edited_plan_shows_the_approved_snapshot_with_drift_and_both_digests`, , `test_S6_a_slug_edited_after_approval_keeps_the_ledger_state_of_the_approved_plan`, `test_S6_a_ticket_removed_after_approval_keeps_its_ledger_state`, `test_S6_a_draft_plan_has_no_approval_to_drift_from` |
-| S7 | R8 | `packages/agent-orchestrator/tests/test_workbench_plan.py`: `test_S7_every_ledger_task_of_a_ticket_appears_once_and_the_newest_is_latest`, `test_S7_the_other_tickets_attempts_are_not_mixed_in_and_a_ticket_without_one_has_none`, `test_S7_attempts_keep_the_ledger_order_when_two_start_at_the_same_time`; `packages/agent-orchestrator/tests/test_workbench_execution.py`: `test_S7_a_fix_round_keeps_the_earlier_attempt_and_the_newest_is_latest` |
-| S8 | R9 | `packages/agent-orchestrator/tests/test_workbench_plan.py`: `test_S8_the_address_is_the_one_the_runtime_returned`, `test_S8_a_ledger_without_an_address_field_reads_the_runtime_id_unless_it_is_the_fallback`, `test_S8_the_agent_name_or_assignment_of_another_attempt_is_the_fallback_too`, `test_S8_a_recorded_null_address_is_null_whatever_the_runtime_id_holds`, `test_S8_an_address_is_never_taken_from_another_attempt`; `packages/agent-orchestrator/tests/test_agents.py`: `test_S8_the_address_the_runtime_returned_is_recorded_on_the_agent_and_its_task`, `test_S8_a_runtime_that_returned_no_address_leaves_none_not_the_assignment_or_the_name`; `packages/agent-orchestrator/tests/test_workbench_execution.py`: `test_S8_the_attempt_maps_to_the_address_the_runtime_returned` |
-| S9 | R10 | `packages/agent-orchestrator/tests/test_workbench_plan.py`: `test_S9_a_worker_that_reported_complete_on_a_ticket_still_in_progress_is_claimed_not_verified`, `test_S9_a_completed_ticket_is_verified`, `test_S9_an_attempt_still_running_claims_nothing_yet`, `test_S9_an_attempt_that_ended_without_a_complete_report_claims_nothing`; `packages/agent-orchestrator/tests/test_workbench_execution.py`: , `test_S9_a_completed_ticket_is_verified` |
-| S11 | R7 | `packages/agent-orchestrator/tests/test_workbench.py`: `test_S11_no_workbench_command_writes_under_the_repository_or_the_state_directory`, `test_S11_output_holds_no_report_or_message_bodies_and_no_environment_values`, `test_S11_a_plan_that_does_not_load_is_an_error_entry_with_null_counts_not_zero` |
-| S12 | R12 | `tests/test_workbench_mod.py`: `test_S12_the_mod_lists_plans_and_shows_layered_tickets_with_one_inspector` (the `S12` tests of `herdr/agent-workbench/test/model.test.js`) |
-| S13 | R13 | `tests/test_workbench_mod.py`: `test_S13_a_failure_is_shown_in_its_scope_with_the_way_out_and_no_placeholder_data` (the `S13` tests of `model.test.js` and `data.test.js`) |
-| S14 | R14 | `tests/test_workbench_mod.py`: `test_S14_a_narrow_mod_shows_one_column_and_a_drill_in_inspector` (the `S14` tests of `model.test.js`) |
-| S15 | R15 | `tests/test_workbench_mod.py`: `test_S15_a_refresh_runs_one_fixed_argv_fetch_in_flight_and_drops_stale_answers` (the `S15` tests of `data.test.js`), `test_S15_the_mod_runs_no_shell_and_writes_nothing` |
-| S16 | R17 | `tests/test_workbench_mod.py`: `test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address` (the `S16` tests of `herdr/agent-workbench/test/execution.test.js`), `test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling` |
-| S17 | R18 | none: no test keeps this guarantee yet (known gap) |
-| S18 | R16 | `tests/test_workbench_mod.py`: `test_S18_node_test_runs_the_mods_pure_modules_from_pytest`, `test_S18_a_missing_node_fails_naming_node_instead_of_skipping` |
-| S24 | R19 | `tests/test_workbench_mod.py`: `test_S24_the_tab_bar_opens_and_closes_the_workbench_panel` (the `S24` tests of `herdr/agent-workbench/test/toggle.test.js`), `test_S24_the_workbench_layout_puts_the_button_beside_herdrs_tabs` |
-| S19 | R20 | `tests/installer/test_herdr.py`: `HerdrComponentTests::test_s13_a_checkout_links_the_mod_and_the_layout_without_switching`, `test_s19_a_release_copies_the_mod`, `test_s19_dry_run_changes_nothing`, `test_s19_a_rerun_is_idempotent`, `test_s19_a_mod_it_did_not_install_is_refused_with_a_preview`, `test_s19_uninstall_removes_only_what_it_installed`, `test_s19_a_rerun_keeps_an_edited_layout_and_copy_aside`, `test_s19_an_edited_release_copy_is_kept_aside_and_uninstall_follows_the_digest` |
-| S20 | R21 | none: human evidence, `docs/plans/2026-11-11-agent-workbench.spike.md` and its `herdr-app shot` screenshot `docs/plans/2026-11-11-agent-workbench.spike.png` |
-| S21 | R22 | `packages/agent-orchestrator/tests/test_workbench_outcome.py`: `WorkbenchOutcomeTests::test_the_plan_list_names_the_plan_by_its_slug_and_marks_markdown_legacy`, `test_the_graph_is_exactly_blocked_by_layered_and_stable_and_reading_writes_nothing`, `test_a_cycle_is_a_scoped_error_and_no_view`, `test_an_accepted_plan_maps_its_attempt_to_the_runtime_address`, `test_the_driver_fallback_address_is_unknown_not_a_terminal`, `test_control_the_delivered_fixture_is_accepted`, ,  |
-| S22 | R23 | none: human evidence, Felippe's `herdr-app check` and full and narrow screenshots |
-| S23 | R24 | none: owner action on `herdr-app-mods` and `~/.config/herdr-app` |
+#### Scenario: no repository, no plans or several directories
+- WHEN the commands run outside a repository, in one with no plan directory, or in one with several and no `.orchestrate/config.yaml` naming one as `plans.dir`
+- THEN each is an error of its own kind (`not_a_repo`, `no_plans`, `ambiguous` naming every directory) with the way out (an explicit path or `--repo`), printed as one JSON object on stderr with stdout empty and exit status 2, never a crash and never an empty list standing in for an error
 
-## Requirements: workbench-value
+### Requirement: Ticket graph
+`workbench plan <plan> --json` SHALL print every ticket with exactly its `blocked_by` edges and a topological layer, deterministically.
 
-- **R25** WHEN `workbench plans --json` lists a directory where a `.plan.md` has a `.plan.yaml` of the same stem, THEN only the YAML plan is listed; a Markdown plan without a YAML twin is still listed as legacy (from workbench-value/S25)
-- **R26** WHEN `workbench plans --json` lists plans in every state, THEN each entry has `group`: `active` for RUNNING, APPROVED never driven, DRAFT, and a plan that fails to load with no ledger or a non-final ledger state; `older` for ARCHIVED, ACCEPTED, a plan that fails to load whose ledger is final, and every Markdown-only plan (from workbench-value/S26)
-- **R27** WHEN `workbench plans --json` lists plans with run events, THEN each entry has `last_activity` (the newest `at` in its `events.jsonl`, else the plan file's mtime, else null, ISO 8601), and entries are ordered active before older, newest activity first, null last (from workbench-value/S27)
-- **R28** WHEN `workbench plans --json` runs while active plans wait on a person, THEN a top-level `needs_me` list holds `{plan, ticket, kind}` items for active plans only: `needs_you` (a ticket in state needs you), `driver_gone` (RUNNING, last `start` pid not alive, no later `finish`), `error` (an error event since the last start), `ready_to_approve` (a DRAFT that loads), `ready_to_drive` (APPROVED never driven), `fix_plan` (fails to load), and `lead_pending` (last escalation of a unit with no later decision or merged stop); no escalation reason, report or message text is printed (from workbench-value/S28)
-- **R29** WHEN `workbench plan <plan> --json` runs on a plan with a run directory, THEN the view carries `run_dir` and a `metrics` block computed read-only from `events.jsonl` (and `attempts.jsonl` when present): `wall_seconds` (the sum of each drive from `start` to its `finish` or last event), `first_pass_rate`, `errors.by_gate` and `errors.last` (at most 120 characters), per ticket `elapsed_seconds`, `phases.work|review|ci`, `fix_rounds`, `review_rounds`, `findings`, `ci_failures` (distinct task, PR and gate), `escalations` by cause, `model` and `tokens` (null when unmeasured), and `timeline` segments per ticket; a plan never driven has null `run_dir` and `metrics`; nothing is written (from workbench-value/S29)
-- **R30** WHEN the workbench mod opens on a repository with plans, THEN a Needs me section on top lists the `needs_me` items with the way to act on each, then the active plans in the order the command printed, then one collapsed "N older" line that expands to the older plans (from workbench-value/S30)
-- **R31** WHEN a plan with metrics is selected, THEN the plan header shows wall time, first-pass rate and driver errors, and the inspector shows the ticket's phase times, rounds, findings, CI failures, escalations and model; unmeasured values read as unknown, never 0 (from workbench-value/S31)
-- **R32** WHEN a plan with metrics is selected and the mod is at least the wide-layout width, THEN a timeline shows one lane per ticket with a segment per phase, in ticket order, scaled to the run's span (from workbench-value/S32)
-- **R33** WHEN the workbench panel is showing and the person presses expand, then collapse, or closes the panel while expanded, THEN expand hides `main` and resizes the panel to weight 1; collapse shows `main` and restores the width it had (520 when unknown); closing while expanded shows `main` and restores the width before hiding the panel; no expand is offered when the panel does not show the workbench or has no terminals beside it (from workbench-value/S33)
-- **R34** WHEN the shipped workbench layout is installed, THEN its panel keeps `size.px` 520 and `min` 280 and has no `max`, so a weight-1 panel fills the work area (from workbench-value/S34)
+#### Scenario: layers and order
+- WHEN it runs on an approved YAML plan
+- THEN each ticket carries its `blocked_by` edges and a layer (0 for no blockers, else one more than its deepest blocker), tickets are ordered by layer then plan order, each carries its ledger state and reason, and two runs over the same inputs print byte-identical stdout
 
-## Coverage: workbench-value
+### Requirement: Invalid plan refused
+`workbench plan` SHALL refuse a plan the loader rejects, print no partial view and write nothing.
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R25 | S25 | `packages/agent-orchestrator/tests/test_workbench.py::PlanListTests::test_S25_a_markdown_twin_of_a_yaml_plan_is_not_listed_and_a_lone_markdown_plan_is_legacy`<br>`packages/agent-orchestrator/tests/test_workbench_value.py` |
-| R26 | S26 | `packages/agent-orchestrator/tests/test_workbench.py::PlanListTests::test_S26_each_plan_is_grouped_active_or_older`<br>`packages/agent-orchestrator/tests/test_workbench_value.py` |
-| R27 | S27 | `packages/agent-orchestrator/tests/test_workbench.py::PlanListTests::test_S27_plans_carry_their_last_activity_and_are_ordered_active_first_newest_first`<br>`packages/agent-orchestrator/tests/test_workbench.py::PlanListTests::test_S27_without_events_the_plan_files_mtime_is_the_last_activity`<br>`packages/agent-orchestrator/tests/test_workbench.py::PlanListTests::test_S27_a_torn_last_line_does_not_hide_the_newest_event`<br>`packages/agent-orchestrator/tests/test_workbench.py::PlanListTests::test_S27_a_plan_with_no_event_and_no_file_has_null_last_activity_and_sorts_last`<br>`packages/agent-orchestrator/tests/test_workbench_value.py` |
-| R28 | S28 | `packages/agent-orchestrator/tests/test_workbench_needs.py::NeedsMeTests::test_S28_needs_me_lists_what_waits_on_the_person_in_active_plans_only`<br>`packages/agent-orchestrator/tests/test_workbench_needs.py::NeedsMeTests::test_S28_needs_me_prints_no_escalation_or_report_text`<br>`packages/agent-orchestrator/tests/test_workbench_needs.py::NeedsMeTests::test_S28_the_last_escalation_of_a_unit_with_no_later_decision_or_merge_is_lead_pending`<br>`packages/agent-orchestrator/tests/test_workbench_needs.py::NeedsMeTests::test_S28_an_error_since_the_last_start_is_an_error`<br>`packages/agent-orchestrator/tests/test_workbench_value.py` |
-| R29 | S29 | `packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S29_a_plan_carries_its_run_dir_and_metrics_from_the_events`<br>`packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S29_a_plan_never_driven_has_no_run_dir_and_no_metrics`<br>`packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S29_reading_metrics_writes_nothing`<br>`packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S29_an_open_phase_has_no_end_and_no_duration`<br>`packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S29_a_drive_without_a_finish_ends_at_its_last_event`<br>`packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S29_errors_and_escalations_are_counted_and_the_last_error_is_cut`<br>`packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S29_tokens_and_model_come_from_the_attempts_and_the_route_and_are_null_when_unmeasured`<br>`packages/agent-orchestrator/tests/test_workbench_value.py` |
-| R30 | S30 | `tests/test_workbench_mod.py::test_S30_the_mod_opens_on_needs_me_the_active_plans_and_a_collapsed_older_line` |
-| R31 | S31 | `tests/test_workbench_mod.py::test_S31_the_header_and_inspector_show_a_plans_measures_unknown_never_zero` |
-| R32 | S32 | `tests/test_workbench_mod.py::test_S32_a_timeline_shows_one_lane_per_ticket_when_wide` |
-| R33 | S33 | `tests/test_workbench_mod.py::test_S33_the_header_expands_the_panel_over_the_terminals_and_collapses_it_back`<br>`herdr/agent-workbench/test/expand.test.js` |
-| R34 | S34 | `tests/test_workbench_mod.py::test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight_one_fills_the_area`<br>`packages/agent-orchestrator/tests/test_workbench_value.py` |
+#### Scenario: a defective plan
+- WHEN the plan file has a cycle, a duplicate ticket id, a reference to a missing ticket or malformed YAML
+- THEN it exits non-zero with the loader's error naming the YAML path and the offending ids (`error.kind` is `invalid_plan`, `error.path` the file), as one JSON object on stderr with stdout empty
 
-## Requirements: workbench-control
+### Requirement: Approved snapshot drift
+`workbench plan` SHALL show the approved snapshot of a plan edited after approval, with the drift marked.
 
-- **R35** WHEN `workbench plan --json` shows a plan whose ledger records the agents the driver started, THEN each ticket carries `agents`: one `{name, role, address}` per ledger agent whose unit is the ticket's (never matched by name), worker and reviewer alike, `address` null when the runtime never bound one; a ticket with none has `[]`, and an agent of no ticket (the archive) is on no ticket (from workbench-control/S1)
-- **R36** WHEN `workbench plans --json` lists active and older plans, THEN each plan carries `agents` (`{name, role, ticket, address}`, one per ledger agent of a ticket; an agent of no ticket is not listed) and `awaiting_merge` (`{ticket, pr}` for each task the driver holds at the awaiting-merge gate); an older plan carries both empty (from workbench-control/S2)
-- **R37** WHEN a running plan's driver is gone and its log holds an unanswered escalation and an error, THEN Needs me lists that plan's `driver_gone` and drops its `lead_pending` and `error` items, which only a driver can clear, while its other items (`needs_you`) stay; a plan whose driver is alive keeps all of them (from workbench-control/S3)
-- **R38** WHEN a ticket's task waits at the awaiting-merge gate until the driver sees its merge, THEN its metrics carry a `merge` phase for that wait, `ci` ends where it starts, and its timeline lane ends with a `merge` segment that ends at the merge, when the driver leaves awaiting-merge for cleanup (from workbench-control/S4)
-- **R39** WHEN `workbench totals --json` runs over a repository's plans, THEN `window.days` is 7 and `cards` sums the tickets merged in the window: `merged`, `first_pass_rate` (merged with no fix round), `escalations` (escalation events in the window), `tokens` `{input, output, measured, tickets}` over the merged tickets that were measured, and `median_ticket_seconds` (dispatch to merge, the median of an even count the mean of the middle two); an archived plan counts what it merged in the window; a plan never driven, an unmerged ticket and anything before the window count for nothing; with nothing merged the rate and median are null and tokens is `{null, null, 0, 0}`, never a guess (from workbench-control/S5)
-- **R40** WHEN `workbench totals --json` carries each card's dashboard, THEN `time` holds `steps` (work, review, ci, merge: each `{median, max}`) and the five `slowest` tickets; `merged` holds `by_day` and its `tickets` `{plan, ticket, pr, merged_at}`; `first_pass` holds `by_plan` and the `fixed` tickets `{plan, ticket, fix_rounds, findings}`; `escalations` holds `by_cause` and `by_plan` (counts above zero only) and the ten `latest`, newest first, with no reason text; `tokens` holds `by_plan`, `by_model` and the ten `top` merged tickets; the command writes nothing (from workbench-control/S6)
-- **R41** WHEN the mod builds its home from the plans and totals answers and Herdr's live terminals, THEN `homeView` gives the five cards (merged, first_pass, escalations, tokens, ticket_time; an unmeasured value reads unknown, tokens notes its coverage; no totals answer means no cards), Needs me as one row per plan holding its items, the active plans with their workers live only at their exact address, the PRs awaiting merge and the older count (from workbench-control/S7)
-- **R42** WHEN the person opens the mod, a plan, a card, and goes back, THEN the mod opens on home; a plan or a card opens over it; back from either returns home; there is no plan picker (from workbench-control/S8)
-- **R43** WHEN a plan is open, THEN its header is a way back, the plan's name as the title and its whole goal, wrapping fully when wide and in at most three lines when narrow; the repository's name is not shown (from workbench-control/S9)
-- **R44** WHEN a ticket row is drawn while its agents' terminals are live, gone or never bound, THEN it names each agent by its ledger name with its role, live with Herdr's status and an Open that focuses it only at its exact address, `not live` when no live terminal has that address (a terminal with the same name elsewhere is never used), `unknown` when it has no address (from workbench-control/S10)
-- **R45** WHEN any screen of the mod is drawn, THEN there is no Runtime section listing terminals that no attempt names (from workbench-control/S11)
-- **R46** WHEN the person opens a card's dashboard, THEN it draws that card's detail from the totals answer (time per step and the slowest tickets; merged per day and the list; first pass per plan and the fixed tickets; escalations per cause and plan and the latest; tokens per plan and model and the top tickets); a narrow panel shows the lists only, bars only when wide; home's cards wrap two per row when narrow (from workbench-control/S12)
-- **R47** WHEN the herdr component is installed from a checkout, then reinstalled or uninstalled, THEN the workbench layout is a link into the checkout like the mod, so a pull updates it; a layout the install did not put there is still refused with its way out; uninstall removes the link; a release install still copies; the install prints how to make Herdr reload the mod after a pull (from workbench-control/S13)
+#### Scenario: an edited plan
+- WHEN the authored plan file changed after approval
+- THEN the view shows the approved snapshot's tickets with `revision.drift: true` and both digests (`approved_digest`, `current_digest`); the ledger is read under the snapshot's slug and ticket ids, so plan and ticket states survive an edit of the slug or the tickets, in `workbench plan` and in the `workbench plans` listing; a draft has no approval to drift from
 
-## Coverage: workbench-control
+### Requirement: Attempt history
+`tickets[].attempts` SHALL list every ledger task of a ticket once, oldest first, and overwrite none.
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R35 | S1 | `packages/agent-orchestrator/tests/test_workbench.py::AgentsTests::test_S1_each_ticket_carries_the_ledger_agents_of_its_unit`<br>`packages/agent-orchestrator/tests/test_workbench_control.py` |
-| R36 | S2 | `packages/agent-orchestrator/tests/test_workbench.py::AgentsTests::test_S2_each_plan_lists_its_ticket_agents_and_the_prs_awaiting_merge`<br>`packages/agent-orchestrator/tests/test_workbench_control.py` |
-| R37 | S3 | `packages/agent-orchestrator/tests/test_workbench_needs.py::NeedsMeTests::test_S3_a_gone_driver_keeps_driver_gone_and_needs_you_and_drops_what_only_a_driver_clears`<br>`packages/agent-orchestrator/tests/test_workbench_control.py` |
-| R38 | S4 | `packages/agent-orchestrator/tests/test_workbench_metrics.py::MetricsTests::test_S4_the_wait_at_awaiting_merge_is_a_merge_phase_that_ends_at_the_merge`<br>`packages/agent-orchestrator/tests/test_workbench_control.py` |
-| R39 | S5 | `packages/agent-orchestrator/tests/test_workbench_totals.py::TotalsTests::test_S5_the_cards_sum_the_last_seven_days`<br>`packages/agent-orchestrator/tests/test_workbench_control.py` |
-| R40 | S6 | `packages/agent-orchestrator/tests/test_workbench_totals.py::TotalsTests::test_S6_each_card_has_its_dashboard`<br>`packages/agent-orchestrator/tests/test_workbench_control.py` |
-| R41 | S7 | `herdr/agent-workbench/test/home.test.js::S7 home gives the five cards, Needs me one row per plan, the active plans with their workers, the PRs to merge and the older count`<br>`herdr/agent-workbench/test/home.test.js::S7 a card the window did not measure says unknown, and no totals answer means no cards`<br>`herdr/agent-workbench/acceptance/workbench/workbench-control.test.js` |
-| R42 | S8 | `herdr/agent-workbench/test/home.test.js::S8 the mod opens on home, a plan or a card opens over it, and back returns home`<br>`herdr/agent-workbench/test/data.test.js::S8 home fetches the plans and the week's totals, and no plan: the cards come from one fixed totals call`<br>`herdr/agent-workbench/acceptance/workbench/workbench-control.test.js` |
-| R43 | S9 | `herdr/agent-workbench/test/control.test.js::S9 the plan header is the plan's name with its whole goal and a way back, without the repository`<br>`herdr/agent-workbench/acceptance/workbench/workbench-control.test.js` |
-| R44 | S10 | `herdr/agent-workbench/test/control.test.js::S10 a ticket names its worker and reviewer by the ledger's name, live only at their exact address, Open when live`<br>`herdr/agent-workbench/acceptance/workbench/workbench-control.test.js` |
-| R45 | S11 | `herdr/agent-workbench/test/control.test.js::S11 the Runtime section is gone from the mod`<br>`herdr/agent-workbench/acceptance/workbench/workbench-control.test.js` |
-| R46 | S12 | `herdr/agent-workbench/test/dashboard.test.js::S12 a card's dashboard draws that card's detail from the totals answer`<br>`herdr/agent-workbench/test/dashboard.test.js::S12 a narrow panel shows the lists only, bars only when wide`<br>`herdr/agent-workbench/test/dashboard.test.js::S12 home's cards wrap two per row when narrow` |
-| R47 | S13 | `tests/installer/test_herdr.py::HerdrComponentTests::test_s13_a_checkout_links_the_mod_and_the_layout_without_switching`<br>`tests/installer/test_herdr.py::HerdrComponentTests::test_s13_a_pull_in_the_checkout_reaches_the_layout`<br>`tests/installer/test_herdr.py::HerdrComponentTests::test_s13_a_reinstall_keeps_the_layout_link`<br>`tests/installer/test_herdr.py::HerdrComponentTests::test_s13_uninstall_removes_the_layout_link_and_keeps_the_checkout`<br>`tests/installer/test_herdr.py::HerdrComponentTests::test_s13_a_layout_symlink_it_did_not_make_is_refused_with_a_way_out`<br>`tests/installer/test_herdr.py::HerdrComponentTests::test_s13_a_release_copies_the_layout`<br>`tests/installer/test_herdr.py::HerdrComponentTests::test_s13_the_install_prints_how_to_reload_the_mod_after_a_pull` |
+#### Scenario: fix rounds and retries
+- WHEN a ticket has several attempts (fix rounds, retries, orphans, reopens) and a review
+- THEN the list carries `task_id`, `kind` (`worker` for the unit's own id, else `fix`, `retry`, `orphan`, `reopen` or `answer`), `status`, `started_at`, `finished_at`, `assignment_id`, `address`, `claimed` and `latest`, ordered by start time then ledger order; the newest is `latest`, no earlier attempt is dropped, another ticket's attempts are not mixed in, and an unmeasured time is null
 
-## Requirements: rich-workbench
+### Requirement: Attempt addresses
+An attempt's `address` SHALL be the runtime address the runtime returned, and null otherwise.
 
-- **R48** WHEN `workbench totals --json` sums a week with merges, escalations and quiet days, THEN `merged`, `first_pass`, `escalations`, `tokens` and `time` each carry `by_day`: every UTC date the window touches (eight when it starts mid-day), oldest first, every date present, so the days sum to the card; merged days carry `count` and `by_plan`, escalation days `count` and `by_cause`, and a day with nothing merged has `rate`, `output` and `median` null, never 0 (from rich-workbench/S1)
-- **R49** WHEN `workbench totals --json` runs, THEN it carries `previous` (the five cards over the seven days before the window, `window.previous` naming them, the upper bound excluded, a plan's log read even when last written before this window) and `change` per card, `(now - previous) / previous` (tokens over output), null when last week's value is null or 0; a repository's first week has every change null (from rich-workbench/S2)
-- **R50** WHEN merged tickets went through fix rounds that raised findings, THEN each `first_pass.fixed` row carries `reasons` (`"<source>/<finding_kind>": count` from the ticket's finding events), `first_pass.by_reason` sums them over the week and `first_pass.rounds` counts every merged ticket by its fix rounds (`"0"`, `"1"`, `"2"`, `"3+"`) (from rich-workbench/S3)
-- **R51** WHEN escalations were raised by tickets and by units of no ticket (the archive), THEN each escalation row carries `unit` (the ticket id, or the unit's own name with `ticket` null) and `escalations.by_plan_cause` counts them by plan, then cause (from rich-workbench/S4)
-- **R52** WHEN tickets merged in the window, THEN `time.tickets` lists them slowest first, at most twelve, each with `plan`, `ticket`, `pr`, `seconds` and `phases` (`work`, `review`, `ci`, `merge`; an unmeasured phase null), and every `time.steps` entry carries `p90` (from rich-workbench/S5)
-- **R53** WHEN the totals answer gains its new fields, THEN `schema_version` stays 1 and every field it carried before keeps its name, shape and value, but `merged.by_day`, which now lists every date with its `by_plan` (from rich-workbench/S6)
-- **R54** WHEN the person opens a card's dashboard, THEN it opens on the card's value, its change against last week (`▲ n% vs last week` or `▼`, and `first week measured` when the change is null or absent) and the week's sparkline; it is two columns when wide and one when narrow; every scaled chart (columns, stacked columns, bars, stack in percent, coverage, swimlanes, spread) carries its axis, ticks 0, half and a round top (1, 2 or 5 times a power of ten) that covers its data (from rich-workbench/S7)
-- **R55** WHEN each card's dashboard is drawn, THEN merged draws day columns split by plan; first pass a ring, the fix-round histogram and the findings by reason in a fixed reason order; escalations a plan × cause heatmap when wide and bars by cause when narrow; tokens each plan's measured and unmeasured tickets; ticket time a swimlane per slow ticket (an unmeasured phase is no segment) and each step's median and p90; an answer without a new section draws no chart for it, never a zero one (from rich-workbench/S8)
-- **R56** WHEN the person clicks a day, a reason or a heatmap cell, THEN the dashboard's list keeps only that day's, reason's or plan and cause's rows, says so when none is left, the same click clears it, and going back home clears it (from rich-workbench/S9)
-- **R57** WHEN a dashboard lists escalations and merged tickets, THEN a plan-level row names its unit (`alpha archive`), never `null`; times read relative to the window's end (`5m ago`, `3h ago`, then the day); a PR reads `#n` and opens only when it is an https GitHub pull request URL (from rich-workbench/S10)
-- **R58** WHEN any chart is coloured, THEN its data colours come from the mod's fixed data palette (aqua, violet, magenta, green, in that order) and each reason and step keeps the same colour whatever order it arrives in; the state colours (working, done, blocked) colour states only (from rich-workbench/S11)
-- **R59** WHEN home is drawn with a totals answer, THEN each card carries a picture of its dashboard (merged the week's columns, first pass its ring, escalations its causes, tokens its measured and unmeasured tickets, ticket time its median steps); a picture with no data is none (from rich-workbench/S12)
-- **R60** WHEN home is drawn, THEN it carries the header with Expand and refresh, as a plan and a dashboard do (from rich-workbench/S13)
-- **R61** WHEN home lists Needs me and the active plans, THEN each Needs me item carries a glyph and an action for its kind (lead_pending ⚑ Answer, needs_you ? Answer, fix_plan ⚠ Fix plan, ready_to_drive ▶ Drive, any other • Open); each plan carries how recently it moved, its live agents, the count of the others and its PRs to merge as `#n` links (from rich-workbench/S14)
-- **R62** WHEN the panel is narrow (under 720px), THEN home's cards are two per row and its plans one per row; dashboards are one column with shorter charts; an open plan's timeline becomes each ticket's phase split (from rich-workbench/S15)
-- **R63** WHEN a plan is open, THEN five cards come from its own answer: progress (done of total), first pass, wall time, escalations and tokens with its coverage; a value its metrics do not carry reads unknown (from rich-workbench/S16)
-- **R64** WHEN a plan is open with metrics, THEN each ticket is a card of its measures (rounds or first pass, findings, time, tokens, model), its phase split, its dependencies, its live agents and the count of the others, and its PR; a ticket with no metrics shows none; the timeline lanes run on the plan's clock with each merge marked, and a narrow panel gets the phase split instead (from rich-workbench/S17)
-- **R65** WHEN the person opens the workbench, a card's dashboard and a plan, wide and narrow, THEN they look as the accepted prototype drew them: equal-height cards with their pictures, charts with axes, hatched unmeasured coverage, the heatmap, the swimlanes and the timeline, filters that dim what they leave out, PR chips that open GitHub, and Expand on home (from rich-workbench/S18)
+#### Scenario: a fallback is no address
+- WHEN a ledger task holds no runtime address, or the fallback the driver wrote when the runtime returned none (the assignment id or the agent name)
+- THEN `address` is null; it is never taken from a terminal name, another attempt or a timestamp, and a ledger written before the `address` field maps the fallback in `runtime_id` to null
 
-## Coverage: rich-workbench
+#### Scenario: the driver records only what it got
+- WHEN the runtime returns an address, or none
+- THEN the driver records it on `agents[name].address` and on the task, or leaves both null, never the assignment id or the name
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R48 | S1 | `packages/agent-orchestrator/tests/test_workbench_totals_series.py::SeriesTests::test_S1_every_card_has_a_seven_day_series_ending_today_with_empty_days_present`<br>`packages/agent-orchestrator/tests/test_workbench_totals_series.py::SeriesTests::test_S1_the_busy_day_carries_its_rate_tokens_and_median`<br>`packages/agent-orchestrator/tests/test_workbench_rich.py` |
-| R49 | S2 | `packages/agent-orchestrator/tests/test_workbench_totals_series.py::PreviousWeekTests::test_S2_last_weeks_cards_come_from_the_seven_days_before_the_window_with_the_change`<br>`packages/agent-orchestrator/tests/test_workbench_totals_series.py::PreviousWeekTests::test_S2_a_first_week_has_no_previous_value_and_no_change`<br>`packages/agent-orchestrator/tests/test_workbench_rich.py` |
-| R50 | S3 | `packages/agent-orchestrator/tests/test_workbench_totals_series.py::ReasonTests::test_S3_fixed_tickets_carry_their_findings_by_reason_and_the_week_sums_them`<br>`packages/agent-orchestrator/tests/test_workbench_totals_series.py::ReasonTests::test_S3_the_fix_round_histogram_counts_every_merged_ticket`<br>`packages/agent-orchestrator/tests/test_workbench_rich.py` |
-| R51 | S4 | `packages/agent-orchestrator/tests/test_workbench_totals_series.py::EscalationTests::test_S4_each_escalation_names_its_unit_and_a_plan_level_one_has_no_ticket`<br>`packages/agent-orchestrator/tests/test_workbench_totals_series.py::EscalationTests::test_S4_escalations_are_counted_by_plan_and_cause`<br>`packages/agent-orchestrator/tests/test_workbench_rich.py` |
-| R52 | S5 | `packages/agent-orchestrator/tests/test_workbench_totals_series.py::PhaseTests::test_S5_merged_tickets_carry_their_phase_times_slowest_first`<br>`packages/agent-orchestrator/tests/test_workbench_totals_series.py::PhaseTests::test_S5_each_step_carries_its_ninetieth_percentile`<br>`packages/agent-orchestrator/tests/test_workbench_rich.py` |
-| R53 | S6 | `packages/agent-orchestrator/tests/test_workbench_totals_series.py::KeptTests::test_S6_the_answer_keeps_its_version_and_every_field_it_had`<br>`packages/agent-orchestrator/tests/test_workbench_rich.py` |
-| R54 | S7 | `tests/test_workbench_mod.py::test_S7_a_dashboard_opens_on_its_value_its_change_against_last_week_and_its_sparkline_with_axes_on_every_scaled_chart`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R55 | S8 | `tests/test_workbench_mod.py::test_S8_each_cards_dashboard_draws_its_charts_and_no_chart_for_a_section_the_answer_lacks`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R56 | S9 | `tests/test_workbench_mod.py::test_S9_a_click_filters_the_dashboards_rows_the_same_click_clears_it_and_back_clears_it`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R57 | S10 | `tests/test_workbench_mod.py::test_S10_rows_name_their_unit_read_relative_time_and_open_only_a_github_pull_request`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R58 | S11 | `tests/test_workbench_mod.py::test_S11_data_colours_are_the_fixed_palette_by_slot_and_no_chart_is_coloured_with_a_state_colour` |
-| R59 | S12 | `herdr/agent-workbench/test/home.test.js::S12 home's cards each carry a picture of their dashboard, and a card with no data has none`<br>`herdr/agent-workbench/test/home.test.js::S12 home draws no picture for a card with no data: a calm week, an unmeasured rate, no week of days, no tickets`<br>`herdr/agent-workbench/test/home.test.js::S12 home folds the causes beyond the palette into one neutral part`<br>`tests/test_workbench_mod.py::test_S12_each_home_card_carries_a_picture_of_its_dashboard_and_a_card_with_no_data_has_none`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R60 | S13 | `tests/test_workbench_mod.py::test_S13_home_draws_the_header_with_expand_and_refresh_as_a_plan_and_a_dashboard_do` |
-| R61 | S14 | `herdr/agent-workbench/test/home.test.js::S14 home's Needs me items carry a glyph and an action for their kind`<br>`herdr/agent-workbench/test/home.test.js::S14 home's plans carry how recently they moved, their live agents, the count of the others and their PRs to merge`<br>`herdr/agent-workbench/test/home.test.js::S14 home's plan with no activity time, no agents and no PR has no recency, none live and nothing to merge`<br>`tests/test_workbench_mod.py::test_S14_home_lists_needs_me_with_a_glyph_and_an_action_and_each_plan_with_recency_live_agents_and_prs`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R62 | S15 | `tests/test_workbench_mod.py::test_S15_a_narrow_dashboard_is_one_column_of_shorter_charts_and_home_has_two_cards_to_a_row` |
-| R63 | S16 | `herdr/agent-workbench/test/plan.test.js::S16 plan has five cards from its own metrics: progress, first pass, wall time, escalations and tokens with coverage`<br>`herdr/agent-workbench/test/plan.test.js::S16 plan reads a value its metrics do not carry as unknown, never 0`<br>`herdr/agent-workbench/test/plan.test.js::S16 plan's cards picture themselves from the same metrics`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R64 | S17 | `herdr/agent-workbench/test/plan.test.js::S17 plan's ticket is a card of its measures, phase split, dependencies, agents and PR`<br>`herdr/agent-workbench/test/plan.test.js::S17 plan's ticket with no metrics shows none, and a PR that is not GitHub's reads #n without a link`<br>`herdr/agent-workbench/test/plan.test.js::S17 plan's ticket cards come by layer with each layer's done count`<br>`herdr/agent-workbench/test/plan.test.js::S17 plan's timeline runs on the plan's clock and marks each merge, and a narrow panel gets the phase split`<br>`herdr/agent-workbench/test/plan.test.js::S17 plan draws no timeline for a plan with no metrics or no span`<br>`herdr/agent-workbench/test/plan.test.js::S17 plan lays its cards and tickets out by the width the inspector leaves`<br>`herdr/agent-workbench/acceptance/workbench/workbench-rich.test.js` |
-| R65 | S18 | human: Compare home, each of the five dashboards and an open plan against the prototype branch prototype/workbench-dashboards (variant E, home Rich, plan Rich), wide and narrow, with `herdr-app shot` |
+### Requirement: Claimed versus verified
+A ticket SHALL be `verified` only when it is COMPLETE; an attempt's `claimed` is the worker's own report.
+
+#### Scenario: a worker says complete
+- WHEN a worker reported complete but its ticket is not COMPLETE
+- THEN the ticket shows `verified: false` and the attempt `claimed: true`; an attempt still running, or one that ended with no complete report, claims nothing
+
+### Requirement: Workbench output is read-only
+The workbench commands SHALL write nothing and print no report or message body or environment value.
+
+#### Scenario: reading a repository
+- WHEN any workbench command runs
+- THEN nothing under the repository or the state directory is written, and the output holds no report or message bodies and no environment values
+
+### Requirement: Needs me list
+`workbench plans --json` SHALL carry a top-level `needs_me` list of what waits on a person in active plans.
+
+#### Scenario: the kinds
+- WHEN active plans wait on a person
+- THEN `needs_me` holds `{plan, ticket, kind}` items for active plans only: `needs_you`, `driver_gone` (RUNNING, last `start` pid not alive, no later `finish`), `error` (an error event since the last start), `ready_to_approve` (a DRAFT that loads), `ready_to_drive` (APPROVED never driven), `fix_plan` (fails to load) and `lead_pending` (last escalation of a unit with no later decision or merged stop); no escalation reason, report or message text is printed
+
+#### Scenario: a gone driver
+- WHEN a running plan's driver is gone and its log holds an unanswered escalation and an error
+- THEN `driver_gone` is listed and its `lead_pending` and `error` items are dropped, while `needs_you` stays; a plan whose driver is alive keeps all of them
+
+### Requirement: Run metrics
+`workbench plan --json` SHALL carry `run_dir` and a `metrics` block computed read-only from the run's event log.
+
+#### Scenario: a driven plan
+- WHEN the plan has a run directory
+- THEN `metrics` carries `wall_seconds` (each drive from `start` to its `finish` or last event), `first_pass_rate`, `errors.by_gate` and `errors.last` (at most 120 characters), per ticket `elapsed_seconds`, `phases.work|review|ci|merge`, `fix_rounds`, `review_rounds`, `findings` (by source and kind), `ci_failures`, `escalations` by cause, `model` and `tokens` (null when unmeasured), and `timeline` segments; a plan never driven has null `run_dir` and `metrics`; an open phase has no end and no duration
+
+#### Scenario: the merge wait
+- WHEN a ticket's task waits at the awaiting-merge gate until the driver sees its merge
+- THEN its metrics carry a `merge` phase for that wait, `ci` ends where it starts, and the timeline lane ends with a `merge` segment at the merge
+
+### Requirement: Ticket agents
+`workbench plan` and `workbench plans` SHALL list the agents the driver started, joined to tickets by the ledger's unit, never by name.
+
+#### Scenario: agents on tickets and plans
+- WHEN the ledger records agents for a ticket's unit
+- THEN each ticket carries `agents` (`{name, role, address}`, `address` null when never bound, `[]` for none, an agent of no ticket on no ticket), and each plan in the listing carries `agents` (`{name, role, ticket, address}`) and `awaiting_merge` (`{ticket, pr}`); an older plan carries both empty
+
+### Requirement: Weekly totals
+`workbench totals --json` SHALL sum the tickets merged in the last seven days into five cards, with last week's cards and the change.
+
+#### Scenario: the cards
+- WHEN it runs over a repository's plans
+- THEN `window.days` is 7 and `cards` carries `merged`, `first_pass_rate` (merged with no fix round), `escalations`, `tokens` `{input, output, measured, tickets}` over the measured merged tickets and `median_ticket_seconds` (dispatch to merge); an archived plan counts what it merged in the window; a plan never driven, an unmerged ticket and anything before the window count for nothing; with nothing merged the rate and median are null and tokens is `{null, null, 0, 0}`, never a guess
+
+#### Scenario: last week
+- WHEN it runs
+- THEN `previous` holds the five cards over the seven days before the window (`window.previous` names them; a plan's log is read even when last written before this window) and `change` per card is `(now - previous) / previous` (tokens over output), null when last week's value is null or 0, so a first week has every change null
+
+#### Scenario: a stable answer
+- WHEN the answer gains fields
+- THEN `schema_version` stays 1 and every field it carried keeps its name, shape and value, but `merged.by_day`, which lists every date with its `by_plan`; it writes nothing and prints no escalation text
+
+### Requirement: Totals dashboards
+`workbench totals --json` SHALL carry each card's dashboard detail.
+
+#### Scenario: the detail
+- WHEN it runs
+- THEN `time` holds `steps` (work, review, ci, merge: each `{median, max, p90}`) and the five slowest tickets (`time.tickets`, at most twelve, each with `plan`, `ticket`, `pr`, `seconds` and `phases`, an unmeasured phase null); `merged` holds `by_day` and its tickets `{plan, ticket, pr, merged_at}`; `first_pass` holds `by_plan`, the `fixed` tickets `{plan, ticket, fix_rounds, findings, reasons}`, `by_reason` and `rounds` (merged tickets by fix rounds `"0"`, `"1"`, `"2"`, `"3+"`); `escalations` holds `by_cause`, `by_plan`, `by_plan_cause` and the ten `latest`, newest first, each with `unit` (the ticket id, or the unit's own name with `ticket` null) and no reason text; `tokens` holds `by_plan`, `by_model` and the ten `top` merged tickets
+
+### Requirement: Totals series
+`workbench totals --json` SHALL carry a per-day series for every card.
+
+#### Scenario: a week with quiet days
+- WHEN it sums a week with merges, escalations and quiet days
+- THEN `merged`, `first_pass`, `escalations`, `tokens` and `time` each carry `by_day`: every UTC date the window touches (eight when it starts mid-day), oldest first, every date present, so the days sum to the card; merged days carry `count` and `by_plan`, escalation days `count` and `by_cause`, and a day with nothing merged has `rate`, `output` and `median` null, never 0
+
+### Requirement: Driven plan outcome
+The workbench commands SHALL read a plan driven by the real driver exactly, and write nothing.
+
+#### Scenario: a fixture plan through the driver
+- WHEN a fixture plan is driven with a fake runtime and `gh` (a ticket accepted end to end, a cycle, a ledger holding the address fallback) and read with the workbench commands
+- THEN the slug is the plan field, the edges and layers are exactly `blocked_by`, the output is stable, a cycle is a scoped error, the attempt maps to its assignment and real address, the fallback maps to null, no report body appears, and the repository and state directory are byte-identical before and after
+
+### Requirement: Mod plans and tickets
+The mod SHALL list the repository's plans and show a selected plan's tickets as a layered list with one inspector.
+
+#### Scenario: a repository with plans
+- WHEN the mod is shown for a space whose folder is a repository with plans
+- THEN it lists the plans (YAML with state and progress, Markdown marked legacy), and selecting a YAML plan shows its tickets in the layer and plan order the command printed, with blocked-by chips that carry each blocker's state and one inspector for the selected ticket (delivers, blockers, state, verified, attempts); a value the answer does not carry is shown as unknown or not reported, never filled in
+
+### Requirement: Mod failure states
+The mod SHALL show a failure in its scope with the way out and draw no placeholder data.
+
+#### Scenario: a command fails
+- WHEN the workbench command fails, times out, prints no JSON, returns a scoped plan error, or finds no plans
+- THEN the mod shows that state scoped to the plan or project with the way out (for no plans, `/start-planning`) and other plans stay usable; a plan that does not load is a row with its error and no progress, and a failed plan fetch is that plan's error and leaves the list and the other plans as they were
+
+### Requirement: Mod narrow layout
+The mod SHALL fit a panel narrower than 720 logical pixels.
+
+#### Scenario: narrow and wide
+- WHEN the mod is narrower than 720 logical pixels (before the first measurement it is full width)
+- THEN a plan is one compact column with one line per ticket and the inspector as a drill-in with a way back, home's cards are two per row and its plans one per row, dashboards are one column of shorter charts, and an open plan's timeline becomes each ticket's phase split; at full width layers and the inspector sit side by side
+
+### Requirement: Mod refresh
+The mod SHALL refresh with at most one fetch in flight, drop stale answers and write nothing.
+
+#### Scenario: changes and the fallback timer
+- WHEN the selected plan's ledger or run directory changes (the watcher marks the view dirty and a 2-second flush turns any number of changes into one fetch) or the 30-second fallback timer fires
+- THEN the mod fetches with a fixed argv (no shell, the plan path one argument) in the space folder, at most one fetch in flight, drops any answer older than the latest request, and runs only `workbench plans`, `workbench plan` and `workbench totals`
+
+### Requirement: Mod tests run under node
+The repository suite SHALL run the mod's pure modules under `node --test` and fail when a scenario's node tests did not run.
+
+#### Scenario: node tests from pytest
+- WHEN the suite runs
+- THEN each scenario's test requires that its node tests ran and none failed, and a missing `node` fails the test naming node instead of skipping
+
+### Requirement: Live terminal join
+The mod SHALL join an attempt or agent to Herdr's live terminals by its exact address only.
+
+#### Scenario: live, not live and unknown
+- WHEN the inspector or a ticket row shows an attempt or agent
+- THEN an address that is a live terminal shows `live` with Herdr's status and an Open that runs `agent.focus` for that terminal; a local address that is no longer live shows `not live`; a null address, no `terminals()` to ask, or a space on another machine shows `unknown`; the last two and `not live` offer no Open, and a terminal with the same name elsewhere is never used
+
+### Requirement: Panel button
+The workbench layout's tab bar SHALL have a Workbench button that opens and closes the side panel on the workbench.
+
+#### Scenario: the button
+- WHEN the workbench layout is shown
+- THEN its tab bar has a Workbench button beside Herdr's Files and Changes (drawn by the mod, props `{ toggle: true }`): a click opens the panel on the workbench or closes it when it shows the workbench, with `layout.select`, `layout.show` and `layout.hide`; a layout whose side panel holds no workbench gets no button, and the button adds `workbench` once to `workspace.panels`, after the person's own choices
+
+### Requirement: Panel expand
+The workbench header SHALL expand the panel over the terminals and collapse it back.
+
+#### Scenario: expand, collapse and close
+- WHEN the workbench panel is showing and the person presses expand, then collapse, or closes the panel while expanded
+- THEN expand hides `main` and resizes the panel to weight 1; collapse shows `main` and restores the width it had (520 when unknown); closing while expanded shows `main` and restores the width before hiding the panel; no expand is offered when the panel does not show the workbench or has no terminals beside it
+
+### Requirement: Panel size
+The shipped workbench layout SHALL let a weight-1 panel fill the work area.
+
+#### Scenario: the layout
+- WHEN the shipped workbench layout is installed
+- THEN its panel keeps `size.px` 520 and `min` 280 and has no `max`
+
+### Requirement: No Runtime section
+The mod SHALL NOT list terminals that no attempt names.
+
+#### Scenario: any screen
+- WHEN any screen of the mod is drawn
+- THEN there is no Runtime section
+
+### Requirement: Workbench home
+The mod SHALL open on a home of weekly cards, Needs me, the active plans and the older plans.
+
+#### Scenario: the home screen
+- WHEN the mod opens on a repository with plans and a totals answer
+- THEN home draws the header with Expand and refresh, the five cards (merged, first_pass, escalations, tokens, ticket_time; an unmeasured value reads unknown, tokens notes its coverage, no totals answer means no cards), Needs me as one row per plan holding its items (each with a glyph and an action for its kind: lead_pending Answer, needs_you Answer, fix_plan Fix plan, ready_to_drive Drive, any other Open), the active plans in the command's order (each with how recently it moved, its live agents, the count of the others and its PRs to merge as `#n` links), and one collapsed "N older" line that expands to the older plans
+
+#### Scenario: navigation
+- WHEN the person opens the mod, a plan, a card, and goes back
+- THEN the mod opens on home, a plan or a card opens over it, back from either returns home, and there is no plan picker
+
+### Requirement: Plan header
+An open plan's header SHALL be a way back, the plan's name and its whole goal.
+
+#### Scenario: the header
+- WHEN a plan is open
+- THEN its header is a way back with the plan's name as the title and its whole goal (wrapping fully when wide and in at most three lines when narrow), and the repository's name is not shown
+
+### Requirement: Plan cards
+An open plan SHALL show five cards and a card per ticket drawn from its own metrics.
+
+#### Scenario: cards and ticket cards
+- WHEN a plan is open with metrics
+- THEN five cards show progress (done of total), first pass, wall time, escalations and tokens with coverage, and a value its metrics do not carry reads unknown; each ticket is a card of its measures (rounds or first pass, findings, time, tokens, model), phase split, dependencies, live agents with the count of the others and its PR, a ticket with no metrics shows none, and the timeline lanes run on the plan's clock with each merge marked
+
+### Requirement: Plan measures
+The mod SHALL show a plan's measures in its header, inspector and timeline, and never read an unmeasured value as 0.
+
+#### Scenario: a plan with metrics
+- WHEN a plan with metrics is selected
+- THEN the header shows wall time, first-pass rate and driver errors, the inspector shows the ticket's phase times, rounds, findings, CI failures, escalations and model, unmeasured values read unknown, and when the mod is at least the wide-layout width a timeline shows one lane per ticket with a segment per phase, in ticket order, scaled to the run's span
+
+### Requirement: Card dashboard
+A card's dashboard SHALL draw that card's detail from the totals answer.
+
+#### Scenario: opening a card
+- WHEN the person opens a card's dashboard
+- THEN it opens on the card's value, its change against last week (`▲ n% vs last week`, `▼`, or `first week measured` when the change is null or absent) and the week's sparkline, in two columns when wide and one when narrow, and every scaled chart carries its axis with ticks 0, half and a round top (1, 2 or 5 times a power of ten) that covers its data
+
+#### Scenario: the charts
+- WHEN each card's dashboard is drawn
+- THEN merged draws day columns split by plan; first pass a ring, the fix-round histogram and the findings by reason in a fixed order; escalations a plan by cause heatmap when wide and bars by cause when narrow; tokens each plan's measured and unmeasured tickets; ticket time a swimlane per slow ticket (an unmeasured phase is no segment) and each step's median and p90; an answer without a section draws no chart for it, never a zero one
+
+### Requirement: Dashboard filters
+A dashboard's lists SHALL filter by a clicked day, reason or heatmap cell.
+
+#### Scenario: a click
+- WHEN the person clicks a day, a reason or a heatmap cell
+- THEN the list keeps only that day's, reason's or plan and cause's rows and says so when none is left, what the filter leaves out is dimmed, the same click clears it, and going back home clears it
+
+### Requirement: Dashboard rows
+A dashboard's rows SHALL name their unit, read times relative to the window and open only GitHub pull requests.
+
+#### Scenario: escalation and merged rows
+- WHEN a dashboard lists escalations and merged tickets
+- THEN a plan-level row names its unit (`alpha archive`), never `null`; times read relative to the window's end (`5m ago`, `3h ago`, then the day); a PR reads `#n` and opens only when it is an https GitHub pull request URL
+
+### Requirement: Dashboard colours
+The mod's data colours SHALL come from one fixed palette.
+
+#### Scenario: coloured charts
+- WHEN any chart is coloured
+- THEN its data colours are the mod's data palette (aqua, violet, magenta, green, in that order), each reason and step keeps the same colour whatever order it arrives in, and the state colours (working, done, blocked) colour states only
+
+### Requirement: Home card pictures
+Each home card SHALL carry a picture of its dashboard.
+
+#### Scenario: with and without data
+- WHEN home is drawn with a totals answer
+- THEN merged shows the week's columns, first pass its ring, escalations its causes (the causes beyond the palette folded into one neutral part), tokens its measured and unmeasured tickets and ticket time its median steps; a card with no data has no picture

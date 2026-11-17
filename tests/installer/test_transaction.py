@@ -122,8 +122,9 @@ class TransactionCase(release.ReleaseCase):
 class ActivationRollbackTests(TransactionCase):
     """A failure after the payload verified: the activation is undone, whole."""
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_failure_while_activating_restores_the_prior_version(self):
-        """installer-contract/R6: the second component fails to record: shims, manifest and staging are as they were."""
+        """Verified atomic install: the second component fails to record: shims, manifest and staging are as they were."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -137,8 +138,9 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(self.manifest()["components"]["orchestrator"]["release"], "v0.0.9")
         self.assertIn("previous installation is as it was", result.stderr)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_failure_while_linking_leaves_no_mixture_of_old_and_new_shims(self):
-        """installer-contract/R6: the third shim cannot be swapped: the two already swapped go back to the prior ones."""
+        """Verified atomic install: the third shim cannot be swapped: the two already swapped go back to the prior ones."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -149,22 +151,25 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_failed_first_install_leaves_a_clean_home(self):
-        """installer-contract/R6: nothing was installed before: nothing is left, not even the directories made for it."""
+        """Verified atomic install: nothing was installed before: nothing is left, not even the directories made for it."""
         self.release("0.1.0")
         result = self.move_to_release(env=self.fault("add:runtime"))
         self.assertEqual(result.returncode, 1, result.stderr)
         self.clean(result)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_failure_after_the_shims_were_linked_leaves_a_clean_home(self):
-        """installer-contract/R6: the shims go in before the manifest: when the manifest fails they go out again."""
+        """Verified atomic install: the shims go in before the manifest: when the manifest fails they go out again."""
         self.release("0.1.0")
         result = self.move_to_release(components="runtime", env=self.fault("add:runtime"))
         self.assertEqual(result.returncode, 1, result.stderr)
         self.clean(result)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_signal_while_activating_restores_the_prior_version(self):
-        """installer-contract/R6: the installer is killed after the shims moved: the prior version is back."""
+        """Verified atomic install: the installer is killed after the shims moved: the prior version is back."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -175,8 +180,9 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_signal_to_the_bootstrap_is_passed_on_and_the_prior_version_is_kept(self):
-        """installer-contract/R6: the bootstrap is killed while the installer inside it works: that one rolls back too."""
+        """Verified atomic install: the bootstrap is killed while the installer inside it works: that one rolls back too."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -187,8 +193,9 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_second_signal_during_the_rollback_does_not_interrupt_it(self):
-        """installer-contract/R6: the rollback runs to the end: a signal that arrives in it leaves no mixture of shims."""
+        """Verified atomic install: the rollback runs to the end: a signal that arrives in it leaves no mixture of shims."""
         prior = self.install_prior()
         self.release("0.1.0")
         before = shared.snapshot(self.home)
@@ -201,8 +208,9 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_staged_release_that_was_already_there_is_kept_when_the_install_fails(self):
-        """installer-contract/R6: only what this run staged is removed: a release staged earlier stays staged."""
+        """Verified atomic install: only what this run staged is removed: a release staged earlier stays staged."""
         self.release("0.1.0")
         staged = self.move_to_release(components="runtime")
         self.assertEqual(staged.returncode, 0, staged.stderr)
@@ -214,8 +222,9 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.install_home() / "releases"), before)
         self.assertEqual(self.manifest()["components"]["runtime"]["release"], "v0.1.0")
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_manifest_that_cannot_be_written_leaves_the_user_state_and_no_temporary_file(self):
-        """installer-contract/R6: a manifest path that is a directory is the user's: it stays, and nothing is left."""
+        """Verified atomic install: a manifest path that is a directory is the user's: it stays, and nothing is left."""
         self.release("0.1.0")
         directory = self.install_home() / "install-manifest.json"
         directory.mkdir(parents=True)
@@ -227,8 +236,9 @@ class ActivationRollbackTests(TransactionCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(shared.snapshot(self.home), before)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_successful_activation_replaces_every_shim_and_leaves_no_temporary_link(self):
-        """installer-contract/R6: the swap is a rename: the new shims are in, and no half-made link is left beside them."""
+        """Verified atomic install: the swap is a rename: the new shims are in, and no half-made link is left beside them."""
         self.install_prior()
         self.release("0.1.0")
         result = self.move_to_release()
@@ -244,8 +254,9 @@ class ActivationRollbackTests(TransactionCase):
 class CheckoutTransactionTests(TransactionCase):
     """A local checkout install is activated the same way: whole, or not at all."""
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_failed_checkout_upgrade_restores_the_prior_version(self):
-        """installer-contract/R6: a checkout install that fails after linking puts the prior one back."""
+        """Verified atomic install: a checkout install that fails after linking puts the prior one back."""
         prior = self.install_prior()
         newer = self.checkout("newer", version="0.2.0")
         before = shared.snapshot(self.home)
@@ -266,8 +277,9 @@ class CheckoutTransactionTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_second_signal_during_a_checkout_rollback_does_not_interrupt_it(self):
-        """installer-contract/R6: the same for a checkout install: the prior shims all come back, none dangles."""
+        """Verified atomic install: the same for a checkout install: the prior shims all come back, none dangles."""
         prior = self.install_prior()
         newer = self.checkout("newer", version="0.2.0")
         before = shared.snapshot(self.home)
@@ -289,8 +301,9 @@ class CheckoutTransactionTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_failed_legacy_install_restores_the_shims_it_replaced(self):
-        """installer-contract/R6: the original no-argument install is activated whole too."""
+        """Verified atomic install: the original no-argument install is activated whole too."""
         prior = self.install_prior(components="runtime")
         newer = self.checkout("newer", version="0.2.0")
         before = shared.snapshot(self.home)
@@ -305,8 +318,9 @@ class CheckoutTransactionTests(TransactionCase):
         self.assertEqual(shared.snapshot(self.home), before)
         self.assert_prior_usable(prior)
 
+    @pytest.mark.spec("Verified atomic install")
     def test_s6_a_refused_conflict_changes_nothing(self):
-        """installer-contract/R6: a refusal is a rolled-back run: nothing moved, and the user's file is where it was."""
+        """Verified atomic install: a refusal is a rolled-back run: nothing moved, and the user's file is where it was."""
         bin_dir = self.home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
         (bin_dir / "agent-runtime-profile").write_text("mine\n", encoding="utf-8")
@@ -319,7 +333,7 @@ class CheckoutTransactionTests(TransactionCase):
 
 
 class FailurePathMatrixTests(TransactionCase):
-    """installer-contract/R8: the failure paths under clean and existing HOME values, no network, no credentials."""
+    """Hermetic installer tests: the failure paths under clean and existing HOME values, no network, no credentials."""
 
     def dotfiles(self, home):
         for name in (".claude/settings.json", ".codex/config.toml", ".pi/agent/mcp.json", ".zshrc"):
@@ -327,8 +341,9 @@ class FailurePathMatrixTests(TransactionCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("export KEY=the-user-key\n", encoding="utf-8")
 
+    @pytest.mark.spec("Hermetic installer tests")
     def test_s8_a_failed_install_changes_nothing_in_a_clean_and_an_existing_home(self):
-        """installer-contract/R8: every injected fault is rolled back, in both homes, and nothing reaches out."""
+        """Hermetic installer tests: every injected fault is rolled back, in both homes, and nothing reaches out."""
         self.release("0.1.0")
         clean = self.root / "clean home"
         clean.mkdir()
@@ -350,8 +365,9 @@ class FailurePathMatrixTests(TransactionCase):
                 self.assertNotIn("the-user-key", shared.result_text(result), (label, step, mode))
         self.assert_no_network_or_provider()
 
+    @pytest.mark.spec("Hermetic installer tests")
     def test_s8_a_rolled_back_install_can_be_run_again(self):
-        """installer-contract/R8: the rollback leaves a state the next run installs from, and it succeeds."""
+        """Hermetic installer tests: the rollback leaves a state the next run installs from, and it succeeds."""
         self.release("0.1.0")
         failed = self.move_to_release(components="runtime", env=self.fault("add:runtime"))
         self.assertEqual(failed.returncode, 1, failed.stderr)

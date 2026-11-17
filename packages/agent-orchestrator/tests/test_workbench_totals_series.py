@@ -79,6 +79,7 @@ class BaselineTests(RichFixture):
 
 
 class SeriesTests(RichFixture):
+    @pytest.mark.spec("Totals series")
     def test_S1_every_card_has_a_seven_day_series_ending_today_with_empty_days_present(self):
         self.drive()
         answer = self.totals()
@@ -102,6 +103,7 @@ class SeriesTests(RichFixture):
         for d in escalations:
             self.assertEqual(sum(d["by_cause"].values()), d["count"], d)
 
+    @pytest.mark.spec("Totals series")
     def test_S1_the_busy_day_carries_its_rate_tokens_and_median(self):
         self.drive()
         answer = self.totals()
@@ -116,6 +118,7 @@ class SeriesTests(RichFixture):
 
 
 class PreviousWeekTests(RichFixture):
+    @pytest.mark.spec("Weekly totals")
     def test_S2_last_weeks_cards_come_from_the_seven_days_before_the_window_with_the_change(self):
         self.drive()
         # Delta's log was last written eight days ago, as a plan last driven then: last week must still read it.
@@ -140,6 +143,7 @@ class PreviousWeekTests(RichFixture):
         self.assertIsNone(previous["tokens"]["output"])
         self.assertIsNone(change["tokens"])
 
+    @pytest.mark.spec("Weekly totals")
     def test_S2_a_first_week_has_no_previous_value_and_no_change(self):
         self.approved("solo")
         self.write_ledger("solo", {"T1": "COMPLETE"}, plan_state="RUNNING")
@@ -154,6 +158,7 @@ class PreviousWeekTests(RichFixture):
 
 
 class ReasonTests(RichFixture):
+    @pytest.mark.spec("Totals dashboards")
     def test_S3_fixed_tickets_carry_their_findings_by_reason_and_the_week_sums_them(self):
         self.drive()
         answer = self.totals()["first_pass"]
@@ -162,6 +167,7 @@ class ReasonTests(RichFixture):
         self.assertEqual(fixed["findings"], 3)
         self.assertEqual(answer["by_reason"], {"review/concern": 2, "verify/blocking": 1})
 
+    @pytest.mark.spec("Totals dashboards")
     def test_S3_the_fix_round_histogram_counts_every_merged_ticket(self):
         self.drive()
         rounds = self.totals()["first_pass"]["rounds"]
@@ -169,6 +175,7 @@ class ReasonTests(RichFixture):
 
 
 class EscalationTests(RichFixture):
+    @pytest.mark.spec("Totals dashboards")
     def test_S4_each_escalation_names_its_unit_and_a_plan_level_one_has_no_ticket(self):
         self.drive()
         latest = self.totals()["escalations"]["latest"]
@@ -179,6 +186,7 @@ class EscalationTests(RichFixture):
         gate = next(e for e in latest if e["cause"] == "gate")
         self.assertEqual((gate["unit"], gate["ticket"]), ("T2", "T2"))
 
+    @pytest.mark.spec("Totals dashboards")
     def test_S4_escalations_are_counted_by_plan_and_cause(self):
         self.drive()
         matrix = self.totals()["escalations"]["by_plan_cause"]
@@ -186,6 +194,7 @@ class EscalationTests(RichFixture):
 
 
 class PhaseTests(RichFixture):
+    @pytest.mark.spec("Totals dashboards")
     def test_S5_merged_tickets_carry_their_phase_times_slowest_first(self):
         self.drive()
         time = self.totals()["time"]
@@ -201,6 +210,7 @@ class PhaseTests(RichFixture):
         # Awaiting merge from minute 6 to the merge at minute 60.
         self.assertAlmostEqual(slowest["phases"]["merge"], 54 * 60, delta=90)
 
+    @pytest.mark.spec("Totals dashboards")
     def test_S5_each_step_carries_its_ninetieth_percentile(self):
         self.drive()
         steps = self.totals()["time"]["steps"]
@@ -210,6 +220,7 @@ class PhaseTests(RichFixture):
 
 
 class KeptTests(RichFixture):
+    @pytest.mark.spec("Weekly totals")
     def test_S6_the_answer_keeps_its_version_and_every_field_it_had(self):
         self.drive()
         answer = self.totals()

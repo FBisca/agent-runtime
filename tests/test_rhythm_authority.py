@@ -28,6 +28,7 @@ class RhythmAuthorityTests(event_helpers.EventRig):
         self.assertTrue(result["isError"], result)
         return result["content"][0]["text"]
 
+    @pytest.mark.spec("Undelivered reports block mutation")
     def test_S6_lead_with_undelivered_reports_is_refused_every_mutating_verb(self):
         self.prepare()
         self.publish(0)  # one report the lead has not read
@@ -40,6 +41,7 @@ class RhythmAuthorityTests(event_helpers.EventRig):
         self.assertEqual(self.runs("run"), started)  # no worker starts
         self.assertEqual(self.runs("kill") + self.runs("rm"), [])  # nor is one stopped
 
+    @pytest.mark.spec("Undelivered reports block mutation")
     def test_S6_wait_all_delivers_and_the_verbs_are_allowed_again(self):
         self.prepare()
         self.publish(0)
@@ -85,6 +87,7 @@ class ForcedLeadTests(event_helpers.HcCase):
         out = hc_tools.call("message", {"to": "w1", "text": "hi"}, self.env, hc_tools.Context())
         return out, out["content"][0]["text"]
 
+    @pytest.mark.spec("Undelivered reports block mutation")
     def test_S6_the_dispatch_loops_forced_lead_call_is_not_refused_and_the_report_is_kept(self):
         """S6: the driver's `agent-runtime call --lead` path is not a nudge's target; its loop wait reads the
         report, so the server must not turn its routine race into a parked unit. An in-host lead cannot take

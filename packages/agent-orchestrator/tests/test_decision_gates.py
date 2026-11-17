@@ -109,12 +109,14 @@ class DecisionContract(WakeFixture, unittest.TestCase):
         name = "request.json" if nth == 1 else "request.%d.json" % nth
         return json.loads((self.run_dir / unit / name).read_text(encoding="utf-8"))
 
+    @pytest.mark.spec("Decisions match the request's contract")
     def test_control_a_contract_3_request_is_answered_with_a_contract_3_decision(self):
         self.open_request()
         result = self.decide("skip", "--reason", "x")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.decision()["contract"], 3)
 
+    @pytest.mark.spec("Decisions match the request's contract")
     def test_S1_a_request_of_an_older_contract_is_answered_with_that_contract(self):
         """Both forms write it: the flag form and the JSON form answer in the request's version."""
         for form in ("flags", "json"):
@@ -128,6 +130,7 @@ class DecisionContract(WakeFixture, unittest.TestCase):
                 self.assertEqual(self.decision()["contract"], 2)
                 (self.run_dir / "t1" / "decision.json").unlink()
 
+    @pytest.mark.spec("Decisions match the request's contract")
     def test_S2_a_json_decision_naming_another_contract_is_refused(self):
         self.open_request(version=2)
         result = self.decide_json({"contract": 3, "action": "skip", "reason": "x"})
@@ -141,6 +144,7 @@ class DecisionContract(WakeFixture, unittest.TestCase):
         self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
         self.assertEqual(self.the_request()["status"], "open")
 
+    @pytest.mark.spec("Decisions match the request's contract")
     def test_S3_a_driver_that_meets_a_decision_it_cannot_read_asks_the_lead_naming_the_way_out(
         self,
     ):
@@ -212,6 +216,7 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
             str(self.state_dir),
         )
 
+    @pytest.mark.spec("Archive retry needs ACCEPTED")
     def test_control_an_accepted_plan_answers_the_archive_retry(self):
         self.open_archive_request()
         self.write_ledger("ACCEPTED")
@@ -219,6 +224,7 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.run_dir / ARCHIVE / "decision.json").exists())
 
+    @pytest.mark.spec("Archive retry needs ACCEPTED")
     def test_S6_the_leads_retry_is_refused_while_the_plan_is_not_accepted(self):
         request = self.open_archive_request()
         self.write_ledger("RUNNING")
@@ -229,6 +235,7 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         self.assertFalse((self.run_dir / ARCHIVE / "decision.json").exists())
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
 
+    @pytest.mark.spec("Archive retry needs ACCEPTED")
     def test_control_the_driver_rebuilds_the_archive_while_the_plan_is_accepted(self):
         """The Lead's retry, answered while the plan is accepted: the archive is built again."""
         self.waits(self.ticket_merged() + [{}, self.decide_step(ARCHIVE, "retry")])
@@ -241,6 +248,7 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         states = [row["state"] for row in self.ledger()["plan"]["history"]]
         self.assertEqual(states[-1], "ARCHIVED", states)
 
+    @pytest.mark.spec("Archive retry needs ACCEPTED")
     def test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted(self):
         """The Lead's retry is on disk, as an older CLI wrote it, and the plan left ACCEPTED before the driver read
         it."""

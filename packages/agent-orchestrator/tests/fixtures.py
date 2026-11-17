@@ -573,7 +573,7 @@ class RunFixture(_Case):  # noqa: PLR0904
     def repeated(self, step, times=3):
         """The same agent reporting again, `times` times, each under the assignment the previous warning resumed.
 
-        R16 asks the sender before the Lead, so a bad payload is read twice; the agent it warns comes back as a new
+        A report is read after a bounded grace asks the sender before the Lead, so a bad payload is read twice; the agent it warns comes back as a new
         assignment, and a report under the old one would land on no gate at all.
         """
         steps = []

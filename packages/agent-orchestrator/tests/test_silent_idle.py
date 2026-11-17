@@ -15,8 +15,9 @@ class SilentWorker(GateFixture, unittest.TestCase):
     def silent_worker(self, write=()):
         return wait_result([assignment("demo-t1", "working", "idle")], write=write)
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S11_the_idle_request_names_the_next_write_once_report_not_the_newest(self):
-        """orchestrator-engine/R83: orchestrator-audit-fixes/S11"""
+        """orchestrator-audit-fixes/S11"""
         unfinished = self.report("t1", acceptance_met=False)
         self.waits(
             [self.silent_worker(write=[[str(self.run_dir / "t1" / "report.json"), unfinished]])]
@@ -29,8 +30,9 @@ class SilentWorker(GateFixture, unittest.TestCase):
         self.assertIn(str(self.run_dir / "t1" / "report.2.json"), reason)
         self.assertNotIn(str(self.run_dir / "t1" / "report.json"), reason)
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S11_a_first_try_is_asked_for_report_json(self):
-        """orchestrator-engine/R83: orchestrator-audit-fixes/S11"""
+        """orchestrator-audit-fixes/S11"""
         self.waits([self.silent_worker()] * 5 + [self.skipped()])
         self.run_driver("--idle-minutes", "0")
         self.assertIn(str(self.run_dir / "t1" / "report.json"), self.request()["reason"])
@@ -45,10 +47,11 @@ class LateReviewerComplete(GateFixture, unittest.TestCase):
     def gates(self):
         return [e["gate"][1] for e in self.run_events("state") if e["task"] == "t1"]
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S10_a_complete_before_the_lead_decides_finishes_the_review_and_closes_the_request(
         self,
     ):
-        """orchestrator-engine/R84: orchestrator-audit-fixes/S10"""
+        """orchestrator-audit-fixes/S10"""
         self.waits([self.worker_done(tests=True)] + [self.silent()] * 4 + [self.reviewer_done()])
         self.run_driver("--idle-minutes", "0")
         self.assertEqual(self.run_events("escalation")[0]["cause"], "idle")
@@ -62,8 +65,9 @@ class LateReviewerComplete(GateFixture, unittest.TestCase):
         self.assertIn("worker", decision["reason"])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S10_a_complete_after_the_lead_decided_is_ignored(self):
-        """orchestrator-engine/R84: orchestrator-audit-fixes/S10 — the decision and the complete reach the driver in
+        """orchestrator-audit-fixes/S10 — the decision and the complete reach the driver in
         one wait, the decision first: the request is no longer undecided."""
         entry = assignment(REVIEWER, "complete")
         late = self.decide_step("t1", "mark blocked", messages=[envelope(entry, "complete")])

@@ -51,7 +51,7 @@ def wait_fingerprint(db, team):
     message high-water mark in one SQLite snapshot. IDs and current flags include pending
     registrations and assignment replacement; acknowledgements never change it.
     """
-    # "Stall reported and unchanged" (R128) is part of the digest so a worker's recovery reads as new work;
+    # "Stall reported and unchanged" (see "Stop guard") is part of the digest so a worker's recovery reads as new work;
     # raw progress times and turns stay out, or every turn would flip "seen". Older stores lack stall_progress.
     has_stall = db.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_progress'"

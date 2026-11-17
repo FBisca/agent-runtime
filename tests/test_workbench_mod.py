@@ -121,22 +121,27 @@ def source(name):
     return (MOD / name).read_text()
 
 
+@pytest.mark.spec("Mod plans and tickets")
 def test_S12_the_mod_lists_plans_and_shows_layered_tickets_with_one_inspector():
     scenario("S12", 4)
 
 
+@pytest.mark.spec("Mod failure states")
 def test_S13_a_failure_is_shown_in_its_scope_with_the_way_out_and_no_placeholder_data():
     scenario("S13", 6)
 
 
+@pytest.mark.spec("Mod narrow layout")
 def test_S14_a_narrow_mod_shows_one_column_and_a_drill_in_inspector():
     scenario("S14", 3)
 
 
+@pytest.mark.spec("Mod refresh")
 def test_S15_a_refresh_runs_one_fixed_argv_fetch_in_flight_and_drops_stale_answers():
     scenario("S15", 6)
 
 
+@pytest.mark.spec("Mod refresh")
 def test_S15_the_mod_runs_no_shell_and_writes_nothing():
     files = [MOD / name for name in ("main.js", "data.js", "model.js", "ui.js")]
     files += sorted((MOD / "views").glob("*.js"))
@@ -151,14 +156,17 @@ def test_S15_the_mod_runs_no_shell_and_writes_nothing():
     assert "FALLBACK_MS" in main
 
 
+@pytest.mark.spec("Live terminal join")
 def test_S16_an_attempt_offers_Open_only_for_a_live_terminal_at_its_address():
     scenario("S16", 6)
 
 
+@pytest.mark.spec("Workbench home")
 def test_S7_home_gives_the_cards_needs_me_per_plan_the_active_plans_with_workers_the_prs_and_the_older_count():
     scenario("S7", 7)
 
 
+@pytest.mark.spec("Workbench home")
 def test_S8_the_mod_opens_on_home_a_plan_or_a_card_opens_over_it_and_back_returns_home():
     scenario("S8", 4)
     assert not (MOD / "views" / "plans.js").exists(), "there is no plan picker"
@@ -166,14 +174,17 @@ def test_S8_the_mod_opens_on_home_a_plan_or_a_card_opens_over_it_and_back_return
     assert "pickerOpen" not in source("main.js")
 
 
+@pytest.mark.spec("Plan header")
 def test_S9_a_plans_header_is_a_way_back_its_name_and_its_whole_goal():
     scenario("S9", 1)
 
 
+@pytest.mark.spec("Live terminal join")
 def test_S10_a_ticket_names_its_agents_live_only_at_their_exact_address_with_Open():
     scenario("S10", 4)
 
 
+@pytest.mark.spec("No Runtime section")
 def test_S11_there_is_no_Runtime_section():
     scenario("S11", 1)
     assert not (MOD / "views" / "runtime.js").exists()
@@ -181,7 +192,7 @@ def test_S11_there_is_no_Runtime_section():
         assert "Runtime" not in file.read_text(), file.name
 
 
-# Open, the tab bar's panel button (R19), and the header's expand over the terminals (S33).
+# Open, the tab bar's panel button, and the header's expand over the terminals (S33).
 ALLOWED_COMMANDS = {
     '"agent.focus"',
     '"layout.select"',
@@ -191,6 +202,7 @@ ALLOWED_COMMANDS = {
 }
 
 
+@pytest.mark.spec("Live terminal join")
 def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_polling():
     files = [MOD / name for name in ("main.js", "data.js", "model.js", "ui.js")]
     files += sorted((MOD / "views").glob("*.js"))
@@ -204,6 +216,7 @@ def test_S16_the_mod_runs_only_the_focus_command_and_reads_terminals_without_pol
     assert "terminals()" in source("main.js")
 
 
+@pytest.mark.spec("Mod tests run under node")
 def test_S18_the_pytest_runner_also_runs_the_node_tests_under_acceptance(tmp_path, monkeypatch):
     # A failing node test under acceptance/ must fail the runner, so the file is part of what `node --test` is given.
     (tmp_path / "acceptance").mkdir()
@@ -216,12 +229,14 @@ def test_S18_the_pytest_runner_also_runs_the_node_tests_under_acceptance(tmp_pat
     assert (passed, failed) == (0, 1)
 
 
+@pytest.mark.spec("Mod tests run under node")
 def test_S18_node_test_runs_the_mods_pure_modules_from_pytest():
     passed, failed, output = node_tests()
     assert failed == 0, output
     assert passed >= 24, output
 
 
+@pytest.mark.spec("Mod tests run under node")
 def test_S18_a_missing_node_fails_naming_node_instead_of_skipping(tmp_path):
     empty = str(tmp_path)
     with pytest.raises(pytest.fail.Exception, match="node"):
@@ -229,10 +244,12 @@ def test_S18_a_missing_node_fails_naming_node_instead_of_skipping(tmp_path):
     assert os.path.isdir(empty)
 
 
+@pytest.mark.spec("Panel button")
 def test_S24_the_tab_bar_opens_and_closes_the_workbench_panel():
     scenario("S24", 4)
 
 
+@pytest.mark.spec("Panel button")
 def test_S24_the_workbench_layout_puts_the_button_beside_herdrs_tabs():
     layout = json.loads((MOD.parent / "layouts" / "workbench.json").read_text())
 
@@ -253,14 +270,17 @@ def test_S24_the_workbench_layout_puts_the_button_beside_herdrs_tabs():
     assert (MOD / "workbench.svg").is_file()
 
 
+@pytest.mark.spec("Panel expand")
 def test_S33_the_header_expands_the_panel_over_the_terminals_and_collapses_it_back():
     scenario("S33", 4)
 
 
+@pytest.mark.spec("Workbench home")
 def test_S30_the_mod_opens_on_needs_me_the_active_plans_and_a_collapsed_older_line():
     scenario("S30", 3)
 
 
+@pytest.mark.spec("Panel size")
 def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight_one_fills_the_area():
     layout = json.loads((MOD.parent / "layouts" / "workbench.json").read_text())
 
@@ -275,26 +295,32 @@ def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight
     assert "max" not in panel
 
 
+@pytest.mark.spec("Plan measures")
 def test_S31_the_header_and_inspector_show_a_plans_measures_unknown_never_zero():
     scenario("S31", 3)
 
 
+@pytest.mark.spec("Plan measures")
 def test_S32_a_timeline_shows_one_lane_per_ticket_when_wide():
     scenario("S32", 2)
 
 
+@pytest.mark.spec("Card dashboard")
 def test_S7_a_dashboard_opens_on_its_value_its_change_against_last_week_and_its_sparkline_with_axes_on_every_scaled_chart():
     dashboard("S7", "headline and axes", 3)
 
 
+@pytest.mark.spec("Card dashboard")
 def test_S8_each_cards_dashboard_draws_its_charts_and_no_chart_for_a_section_the_answer_lacks():
     dashboard("S8", "charts", 7)
 
 
+@pytest.mark.spec("Dashboard filters")
 def test_S9_a_click_filters_the_dashboards_rows_the_same_click_clears_it_and_back_clears_it():
     dashboard("S9", "filters", 3)
 
 
+@pytest.mark.spec("Dashboard rows")
 def test_S10_rows_name_their_unit_read_relative_time_and_open_only_a_github_pull_request():
     dashboard("S10", "rows", 3)
     main = source("main.js")
@@ -303,6 +329,7 @@ def test_S10_rows_name_their_unit_read_relative_time_and_open_only_a_github_pull
     assert re.search(r"if \(prLink\(url\)\) cx\.open_url\(url\)", main)
 
 
+@pytest.mark.spec("Dashboard colours")
 def test_S11_data_colours_are_the_fixed_palette_by_slot_and_no_chart_is_coloured_with_a_state_colour():
     dashboard("S11", "palette", 2)
     ui = source("ui.js")
@@ -314,10 +341,12 @@ def test_S11_data_colours_are_the_fixed_palette_by_slot_and_no_chart_is_coloured
         assert not re.search(r"#[0-9a-fA-F]{6}", text), name
 
 
+@pytest.mark.spec("Mod narrow layout")
 def test_S15_a_narrow_dashboard_is_one_column_of_shorter_charts_and_home_has_two_cards_to_a_row():
     dashboard("S15", "narrow", 1)
 
 
+@pytest.mark.spec("Home card pictures")
 def test_S12_each_home_card_carries_a_picture_of_its_dashboard_and_a_card_with_no_data_has_none():
     home_tests("S12", "pictures", 3)
     # The picture draws the model's slots from the data palette, never a state colour.
@@ -326,6 +355,7 @@ def test_S12_each_home_card_carries_a_picture_of_its_dashboard_and_a_card_with_n
     assert "pictureView" in (MOD / "views" / "home.js").read_text()
 
 
+@pytest.mark.spec("Workbench home")
 def test_S13_home_draws_the_header_with_expand_and_refresh_as_a_plan_and_a_dashboard_do():
     main = source("main.js")
     # The header closure carries both buttons; home's branch adds it before its body, as the plan's and the dashboard's do.
@@ -339,6 +369,7 @@ def test_S13_home_draws_the_header_with_expand_and_refresh_as_a_plan_and_a_dashb
     )
 
 
+@pytest.mark.spec("Workbench home")
 def test_S14_home_lists_needs_me_with_a_glyph_and_an_action_and_each_plan_with_recency_live_agents_and_prs():
     home_tests("S14", "needs me and plans", 3)
     home = (MOD / "views" / "home.js").read_text()
@@ -346,10 +377,12 @@ def test_S14_home_lists_needs_me_with_a_glyph_and_an_action_and_each_plan_with_r
     assert "row.recency" in home and "row.prs" in home and "row.live" in home
 
 
+@pytest.mark.spec("Plan cards")
 def test_S16_an_open_plan_has_five_cards_from_its_own_metrics_and_a_value_it_does_not_carry_reads_unknown():
     plan_tests("S16", "five cards", 3)
 
 
+@pytest.mark.spec("Plan cards")
 def test_S17_each_ticket_is_a_card_of_its_measures_phases_agents_and_pr_and_the_timeline_marks_each_merge():
     plan_tests("S17", "ticket cards and timeline", 5)
 

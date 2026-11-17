@@ -173,6 +173,7 @@ class UsageCase(unittest.TestCase):
 
 
 class ClaudeUsageTests(UsageCase):
+    @pytest.mark.spec("Claude worker usage")
     def test_S1_each_message_counts_once_and_subagents_are_credited_by_time(self):
         self.register("cw", "claude", "CA1")
         self.claude_fixture()
@@ -204,6 +205,7 @@ class ClaudeUsageTests(UsageCase):
             },
         )
 
+    @pytest.mark.spec("Claude worker usage")
     def test_S1_a_subagent_record_before_any_marked_prompt_is_credited_to_nothing(self):
         self.register("cw", "claude", "CA1")
         self.claude_rows(
@@ -217,6 +219,7 @@ class ClaudeUsageTests(UsageCase):
         write_jsonl(side, [claude_assistant("e1", 5, claude_tokens(99, 0, 0, 99))])
         self.assertEqual(self.measure("cw")["CA1"]["input_tokens"], 1)
 
+    @pytest.mark.spec("Claude worker usage")
     def test_S4_a_checkpoints_increase_is_credited_to_the_assignment_active_when_written(self):
         self.register("cw", "claude", "CA1")
         self.claude_rows(
@@ -236,6 +239,7 @@ class ClaudeUsageTests(UsageCase):
             {"CA1": 1.5, "CA2": 0.5, "CA3": 3.0},
         )
 
+    @pytest.mark.spec("Claude worker usage")
     def test_S4_a_slice_without_a_checkpoint_carries_zero_when_a_later_one_exists_else_none(self):
         self.register("cw", "claude", "CA1")
         self.claude_rows(
@@ -251,6 +255,7 @@ class ClaudeUsageTests(UsageCase):
         self.assertEqual(got["CA2"]["cost_usd"], 0.5)
         self.assertNotIn("cost_usd", got["CA3"])
 
+    @pytest.mark.spec("Claude worker usage")
     def test_S4_a_log_without_any_checkpoint_carries_no_cost(self):
         self.register("cw", "claude", "CA1")
         self.claude_rows(
@@ -261,6 +266,7 @@ class ClaudeUsageTests(UsageCase):
         )
         self.assertNotIn("cost_usd", self.measure("cw")["CA1"])
 
+    @pytest.mark.spec("Codex worker usage")
     def test_S5_a_figure_no_record_carries_is_absent_not_zero(self):
         self.register("cw", "claude", "CA1")
         self.claude_rows(
@@ -282,6 +288,7 @@ class ClaudeUsageTests(UsageCase):
         )
         self.assertEqual(got["CA3"], {"model_calls": 0, "tool_calls": 0})
 
+    @pytest.mark.spec("Assignment usage slices")
     def test_S6_each_slice_runs_from_the_prompt_whose_last_marker_is_its_id(self):
         self.register("cw", "claude", "CA1")
         quoted = prompt("fix the findings of assignment_id=CA1 and CA7", "CA2")
@@ -325,6 +332,7 @@ class ClaudeUsageTests(UsageCase):
         # An unmarked prompt starts no slice: its records stay with the assignment before it.
         self.assertEqual(got["CA2"]["input_tokens"], 100 + 1000)
 
+    @pytest.mark.spec("Usage measurement resilience")
     def test_S7_no_metadata_no_log_or_a_foreign_log_measures_nothing(self):
         self.assertEqual(self.measure("ghost"), {})
         self.register("cw", "claude", "CA1")
@@ -333,6 +341,7 @@ class ClaudeUsageTests(UsageCase):
         self.assertEqual(self.measure("cw"), {})  # a transcript that is not this worker's
         self.assertFalse(self.sidecar("cw").exists())
 
+    @pytest.mark.spec("Usage measurement resilience")
     def test_S7_a_truncated_last_line_or_garbage_counts_only_the_complete_lines(self):
         self.register("cw", "claude", "CA1")
         log = self.claude_rows(
@@ -353,6 +362,7 @@ class ClaudeUsageTests(UsageCase):
             stream.write("\n")
         self.assertEqual(self.measure("cw")["CA1"]["input_tokens"], 103)
 
+    @pytest.mark.spec("Usage measurement resilience")
     def test_S7_an_unreadable_or_unwritable_state_never_raises(self):
         self.register("cw", "claude", "CA1")
         log = self.claude_rows(
@@ -375,6 +385,7 @@ class ClaudeUsageTests(UsageCase):
         log.write_bytes(b"\xff\xfe\x00 not utf-8 \xc3\n" + log.read_bytes())
         self.assertIsInstance(self.measure("cw"), dict)
 
+    @pytest.mark.spec("Incremental usage reads")
     def test_S8_a_second_call_reads_only_the_appended_bytes_and_matches_a_fresh_parse(self):
         self.register("cw", "claude", "CA1")
         log = self.claude_fixture()
@@ -410,6 +421,7 @@ class ClaudeUsageTests(UsageCase):
         sidecar.unlink()
         self.assertEqual(self.measure("cw"), grown)
 
+    @pytest.mark.spec("Incremental usage reads")
     def test_S8_a_log_that_shrank_or_was_replaced_is_read_again_from_the_start(self):
         self.register("cw", "claude", "CA1")
         log = self.claude_fixture()
@@ -436,6 +448,7 @@ class ClaudeUsageTests(UsageCase):
         self.sidecar("cw").unlink()
         self.assertEqual(self.measure("cw"), got)
 
+    @pytest.mark.spec("Incremental usage reads")
     def test_S8_the_sidecar_holds_offsets_and_numbers_never_log_text(self):
         self.register("cw", "claude", "CA1")
         log = self.claude_fixture()
@@ -507,6 +520,7 @@ def codex_meta(at, thread, source="user", **extra):
 
 
 class CodexUsageTests(UsageCase):
+    @pytest.mark.spec("Codex worker usage")
     def test_S2_the_root_threads_cumulative_increase_per_slice_and_children_credited_by_time(self):
         self.register("xw", "codex", "XA1")
         self.codex_fixture()
@@ -540,6 +554,7 @@ class CodexUsageTests(UsageCase):
             },
         )
 
+    @pytest.mark.spec("Codex worker usage")
     def test_S2_the_worker_binds_to_the_root_rollout_whichever_file_is_found_first(self):
         self.register("xw", "codex", "XA1")
         root = self.codex_fixture()
@@ -548,6 +563,7 @@ class CodexUsageTests(UsageCase):
         self.assertEqual(usage.resolve_session_log(self.env, "xw"), root)
         self.assertEqual(self.measure("xw")["XA1"]["model_calls"], 2)
 
+    @pytest.mark.spec("Codex worker usage")
     def test_S2_a_child_thread_credits_by_time_across_several_assignments(self):
         self.register("xw", "codex", "XA1")
         day = self.codex_day()
@@ -574,6 +590,7 @@ class CodexUsageTests(UsageCase):
         self.assertEqual((got["XA2"]["input_tokens"], got["XA2"]["model_calls"]), (140, 1))
         self.assertEqual((got["XA1"]["tool_calls"], got["XA2"]["tool_calls"]), (0, 1))
 
+    @pytest.mark.spec("Codex worker usage")
     def test_S5_codex_never_carries_a_dollar_figure(self):
         self.register("xw", "codex", "XA1")
         root = self.codex_fixture()
@@ -587,6 +604,7 @@ class CodexUsageTests(UsageCase):
         for assignment in self.measure("xw").values():
             self.assertNotIn("cost_usd", assignment)
 
+    @pytest.mark.spec("Codex worker usage")
     def test_S5_a_total_without_a_field_leaves_the_figure_out(self):
         self.register("xw", "codex", "XA1")
         write_jsonl(
@@ -609,6 +627,7 @@ class CodexUsageTests(UsageCase):
             {"input_tokens": 10, "output_tokens": 3, "model_calls": 1, "tool_calls": 0},
         )
 
+    @pytest.mark.spec("Assignment usage slices")
     def test_S6_only_root_thread_user_messages_start_slices_and_the_last_marker_wins(self):
         self.register("xw", "codex", "XA1")
         self.codex_fixture()
@@ -637,6 +656,7 @@ class CodexUsageTests(UsageCase):
         self.assertEqual(list(got), ["XA1", "XA2"])
         self.assertEqual(got["XA2"]["model_calls"], 4)
 
+    @pytest.mark.spec("Usage measurement resilience")
     def test_S7_a_codex_log_with_garbage_and_a_truncated_tail_counts_the_complete_lines(self):
         self.register("xw", "codex", "XA1")
         root = self.codex_fixture(child=False)
@@ -647,6 +667,7 @@ class CodexUsageTests(UsageCase):
         self.assertEqual(got["XA2"]["model_calls"], 2)
         self.assertEqual(got["XA2"]["input_tokens"], 500)
 
+    @pytest.mark.spec("Incremental usage reads")
     def test_S8_codex_incremental_equals_fresh_including_children(self):
         self.register("xw", "codex", "XA1")
         root = self.codex_fixture()
@@ -682,6 +703,7 @@ class PiUsageTests(UsageCase):
             write_jsonl(path, rows)
         return path
 
+    @pytest.mark.spec("Pi worker usage")
     def test_S3_each_slice_sums_its_messages_usage_calls_tools_and_cost(self):
         self.register("pw", "pi", "PA1")
         self.pi_log()
@@ -713,6 +735,7 @@ class PiUsageTests(UsageCase):
             },
         )
 
+    @pytest.mark.spec("Pi worker usage")
     def test_S3_the_session_is_bound_by_the_first_prompt_after_spawn_under_the_cwd_slug(self):
         self.register("pw", "pi", "PA1")
         path = self.pi_log()
@@ -724,6 +747,7 @@ class PiUsageTests(UsageCase):
         self.assertIsNone(usage.resolve_session_log(self.env, "pw"))
         self.assertEqual(self.measure("pw"), {})
 
+    @pytest.mark.spec("Pi worker usage")
     def test_S3_the_pi_agent_directory_comes_from_the_environment(self):
         self.register("pw", "pi", "PA1")
         alternative = self.root / "alt-pi"
@@ -735,6 +759,7 @@ class PiUsageTests(UsageCase):
         self.assertEqual(usage.resolve_session_log(self.env, "pw"), path)
         self.assertEqual(self.measure("pw")["PA1"]["model_calls"], 2)
 
+    @pytest.mark.spec("Usage measurement resilience")
     def test_S7_a_truncated_pi_tail_counts_only_the_complete_lines(self):
         self.register("pw", "pi", "PA1")
         rows = self.pi_fixture().splitlines()
@@ -752,6 +777,7 @@ class PiUsageTests(UsageCase):
         completed = self.measure("pw")["PA1"]
         self.assertEqual((completed["input_tokens"], completed["model_calls"]), (350, 2))
 
+    @pytest.mark.spec("Usage measurement resilience")
     def test_S7_a_pi_log_without_a_usage_record_carries_no_figure(self):
         self.register("pw", "pi", "PA1")
         header = {
@@ -770,6 +796,7 @@ class PiUsageTests(UsageCase):
         self.pi_log([header, prompt_row])
         self.assertEqual(self.measure("pw"), {"PA1": {"model_calls": 0, "tool_calls": 0}})
 
+    @pytest.mark.spec("Incremental usage reads")
     def test_S8_a_second_pi_call_reads_only_the_appended_bytes_and_matches_a_fresh_parse(self):
         self.register("pw", "pi", "PA1")
         log = self.pi_log()
@@ -809,6 +836,7 @@ class PiUsageTests(UsageCase):
         self.sidecar("pw").unlink()
         self.assertEqual(self.measure("pw"), grown)
 
+    @pytest.mark.spec("Incremental usage reads")
     def test_S8_a_pi_log_that_shrank_or_was_replaced_is_read_again_from_the_start(self):
         self.register("pw", "pi", "PA1")
         log = self.pi_log()
@@ -841,10 +869,11 @@ class OutcomeTests(UsageCase):
     pi_fixture = PiUsageTests.pi_fixture
     pi_log = PiUsageTests.pi_log
 
+    @pytest.mark.spec("Assignment usage slices")
     def test_S12_each_of_three_workers_gets_exactly_its_own_slices_and_a_worker_without_a_log_gets_nothing(
         self,
     ):
-        """worker-usage/S12: a Claude, a Codex and a Pi worker, each resumed on a second assignment."""
+        """a Claude, a Codex and a Pi worker, each resumed on a second assignment."""
         self.register("cw", "claude", "CA1")
         self.register("xw", "codex", "XA1")
         self.register("pw", "pi", "PA1")

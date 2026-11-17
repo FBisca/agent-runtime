@@ -108,6 +108,7 @@ class ParkFixture(GateFixture):
 
 
 class S2VisibleTests(ParkFixture, unittest.TestCase):
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S2_a_parked_drive_records_the_park_and_names_a_way_out_that_works(self):
         """A drive parked on a plan it cannot read says so, and names a way out that works."""
         self.waits(
@@ -134,6 +135,7 @@ class S2VisibleTests(ParkFixture, unittest.TestCase):
 
 
 class S2ControlTests(ParkFixture, unittest.TestCase):
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S2_control_a_healthy_drive_records_no_park(self):
         """A drive whose plan is its approved one records no park."""
         self.waits([self.worker_done(tests=True), self.reviewer_done(), self.timeout("demo-t1")])
@@ -143,6 +145,7 @@ class S2ControlTests(ParkFixture, unittest.TestCase):
 
 
 class S4RecoveryTests(ParkFixture, unittest.TestCase):
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S4_a_plan_that_lost_its_approval_span_is_recovered(self):
         """A plan that lost its `approval:` span but is the plan the drive holds is recovered, not drained."""
         self.waits(
@@ -166,6 +169,7 @@ class S4RecoveryTests(ParkFixture, unittest.TestCase):
 
 
 class S4ControlTests(ParkFixture, unittest.TestCase):
+    @pytest.mark.spec("A drive parks on a plan it cannot use")
     def test_S4_control_a_genuinely_edited_plan_still_drains(self):
         """A plan whose contract changed is still a drain: the recovery covers the lost span, not the edit."""
         self.waits(

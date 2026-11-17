@@ -132,6 +132,7 @@ def review(tmp_path, monkeypatch):
     return where
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_a_change_larger_than_the_budget_is_screened_once_per_chunk_with_the_whole_bank(
     review, capsys
 ):
@@ -160,6 +161,7 @@ def test_S3_a_change_larger_than_the_budget_is_screened_once_per_chunk_with_the_
     assert report["verdict"] == "screened"
 
 
+@pytest.mark.spec("Deterministic chunking")
 def test_S3_a_missing_chunk_answer_is_incomplete_rather_than_a_short_request_count(review):
     assert review.screen(answer()) != 0, "a chunk the provider never answered is not a clean screen"
     report = review.report()
@@ -171,6 +173,7 @@ def test_S3_a_missing_chunk_answer_is_incomplete_rather_than_a_short_request_cou
     )
 
 
+@pytest.mark.spec("Cross-file coverage gap")
 def test_S4_a_change_wider_than_the_cross_file_limit_records_the_gap(tmp_path, monkeypatch):
     where = Review(tmp_path, max_diff_tokens=200_000, max_files=1)
     monkeypatch.chdir(where.checkout)
@@ -192,6 +195,7 @@ def test_S4_a_change_wider_than_the_cross_file_limit_records_the_gap(tmp_path, m
     assert report["verdict"] == "escalated"
 
 
+@pytest.mark.spec("Cross-file coverage gap")
 def test_S4_a_change_inside_the_cross_file_limit_records_no_gap(tmp_path, monkeypatch):
     where = Review(tmp_path, max_diff_tokens=200_000, max_files=2)
     monkeypatch.chdir(where.checkout)
