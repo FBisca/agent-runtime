@@ -112,7 +112,7 @@ class HandInTests(GateFixture, unittest.TestCase):
 
 
 @pytest.mark.spec("A report is handed in through the runtime")
-def test_the_plan_close_lists_the_notes_and_flaky_ci_the_run_recorded(tmp_path):
+def test_the_plan_close_lists_the_notes_the_run_recorded(tmp_path):
     from types import SimpleNamespace
 
     from agent_orchestrator import events
@@ -121,10 +121,8 @@ def test_the_plan_close_lists_the_notes_and_flaky_ci_the_run_recorded(tmp_path):
     log = tmp_path / "events.jsonl"
     events.append(log, "report", unit="t1", report={"notes": ["the cache is\nnever cleared"]})
     events.append(log, "report", unit="t2", report={"notes": []})
-    events.append(log, "flaky", unit="t2", checks=["test"])
     text = Archive._run_notes(SimpleNamespace(run_dir=tmp_path))  # ty: ignore[invalid-argument-type]
     assert "- t1: the cache is never cleared" in text
-    assert "- flaky CI on t2: ['test'] passed on a re-run" in text
     assert (
         Archive._run_notes(SimpleNamespace(run_dir=tmp_path / "none"))  # ty: ignore[invalid-argument-type]
         == ""

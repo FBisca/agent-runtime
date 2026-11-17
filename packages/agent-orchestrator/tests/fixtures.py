@@ -473,12 +473,6 @@ class RunFixture(_Case):  # noqa: PLR0904
         )
         (self.home / name).write_text(json.dumps(rows), encoding="utf-8")
 
-    def checks_after_rerun(self, answers):
-        """The checks the one automatic re-run answers from then on."""
-        (self.home / "checks-rerun.json").write_text(
-            json.dumps(self.check_rows(answers)), encoding="utf-8"
-        )
-
     def checks_after_fix(self, answers):
         """The checks once the worker has been resumed for a fix round: a fix pushed after a failure turns them green."""
         (self.home / "checks-fixed.json").write_text(

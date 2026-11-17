@@ -292,27 +292,23 @@ A CI fix round SHALL carry, for each failing job, the job name, the run id and t
 - WHEN several CI checks fail with long logs
 - THEN each CI finding carries only its own job's name, its run id and the last lines of each failed step (never the start of the log), the full log is at `log_path`, and the fix-round findings file stays under 64 KiB
 
-### Requirement: A failed check is re-run once
-The driver SHALL re-run the failed jobs of a failing check once before it acts on the failure, treat a failure that then passes as flaky, and ask the Lead when a job fails twice with no step failing.
+### Requirement: A failed check is never re-run by the driver
+The driver SHALL send every CI failure that does not also fail on the base branch to the worker as a fix round, re-run nothing itself, and leave to the worker the decision whether the failure is real or flaky.
 
-#### Scenario: a flaky failure
-- WHEN a unit's checks fail and the one automatic `gh run rerun --failed` of those runs ends green
-- THEN the unit proceeds to merge-ready with no fix round and a `flaky` event names the checks; the events are listed in the archive pull request at plan close
+#### Scenario: a failure goes straight to the worker
+- WHEN a unit's checks fail and the same checks pass on the base branch
+- THEN the worker gets a fix round at once and the driver runs no `gh run rerun`; a check still running is waited for, never treated as a failure
 
-#### Scenario: a failure that stays
-- WHEN the checks fail again after the re-run
-- THEN the failure goes back to the worker as a fix round (the re-run is not repeated on that head); a check still running is waited for, never treated as a failure
-
-#### Scenario: an infrastructure failure
-- WHEN a job fails twice and its log holds no failed step (no test or check step failed)
-- THEN the Lead is asked; when the driver cannot tell the two apart it treats the failure as a test failure
+#### Scenario: the worker re-ran it
+- WHEN the worker re-runs the failed jobs itself and hands in with its head unchanged
+- THEN the driver accepts the hand-in and reads the checks afresh for that head, never the failed result it held before
 
 ### Requirement: A failed check passing on main goes back to the worker
 A CI failure that does not also fail on the base branch SHALL go back to the unit's worker with the evidence and the way to reproduce it.
 
 #### Scenario: the fix round
 - WHEN a check fails that passes on the base branch
-- THEN the worker gets a fix round whose findings carry the failed job names, the run id and the last 50 lines of each failed step, and whose brief tells it to re-run those tests locally to reproduce, fix them and re-run them, and to hand in BLOCKED with an `environment:` blocker when they pass locally and fail in CI
+- THEN the worker gets a fix round whose findings carry the failed job names, the run id and the last 50 lines of each failed step, and whose brief tells it to decide: reproduce a real failure locally, fix it and re-run the tests; re-run the failed jobs with `gh run rerun <run id> --failed` for a failure that looks flaky or like a CI machine problem, and when they go green hand in COMPLETE with a `notes` line naming the flaky check; hand in BLOCKED with an `environment:` blocker when it still fails and cannot be made to pass
 
 #### Scenario: failing three times
 - WHEN the same gate has failed three times
@@ -323,7 +319,7 @@ A check that fails on the base branch as well as in a ticket SHALL cost the Lead
 
 #### Scenario: main is red
 - WHEN a ticket's check fails that fails in the base branch's latest completed run (read once per run with `gh run list` and `gh run view`)
-- THEN one `ci` request says main is red, no worker round and no re-run is spent, and every other ticket failing a check that fails on main waits on that request; when the Lead decides it the waiting tickets look again
+- THEN one `ci` request says main is red, no worker round is spent, and every other ticket failing a check that fails on main waits on that request; when the Lead decides it the waiting tickets look again
 
 ### Requirement: A pending CI log is not a finding
 The driver SHALL wait on a failing check whose workflow run is still in progress.

@@ -12,7 +12,7 @@ Findings, verbatim, also in <ROOT>/run/t1r2/findings.json. Fix only these:
 - R2: src/a/two.py:3 `cache = {}` - the cache is never cleared
 - ci lint: E501 line too long (exit 1 of `ruff check`; full log /logs/ci.log)
 
-These are CI failures; each finding names the failed job, the run id and the last lines of its failed step. Re-run those tests locally to reproduce each failure, fix it, and re-run them. When they pass locally and still fail in CI, hand in BLOCKED with a blocker that starts `environment:` and says what differs.
+These are CI failures; each finding names the failed job, the run id and the last lines of its failed step. Decide what each one is. A real failure: reproduce it locally, fix it, and re-run the tests. A flaky check or a CI machine problem (it passes locally, or its log shows no failing test or check step): re-run the failed jobs with `gh run rerun <run id> --failed`, wait for the run to finish, and when it is green hand in COMPLETE with a `notes` line naming the flaky check. When it still fails and you cannot make it pass, hand in BLOCKED with a blocker that starts `environment:` and says what differs.
 The Lead's answer: keep the public name
 
 Fix each finding you agree with. A finding you disagree with: leave the code and say why in your report's `notes`; the re-review judges it.
