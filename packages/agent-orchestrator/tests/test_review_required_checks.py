@@ -22,9 +22,7 @@ class RequiredChecksAcceptance(RunFixture, unittest.TestCase):
         self.assertEqual(task["packet"]["checks"], ["uv run pytest -q"])
         brief = (self.run_dir_of() / "t1" / "task.md").read_text()
         required = [
-            line
-            for line in brief.splitlines()
-            if line.startswith("Before you report COMPLETE, run:")
+            line for line in brief.splitlines() if line.startswith("Before you hand in, run:")
         ]
         self.assertEqual(len(required), 1)
         self.assertEqual(required[0].count("uv run pytest -q"), 1)
@@ -33,14 +31,11 @@ class RequiredChecksAcceptance(RunFixture, unittest.TestCase):
         )
         report = {
             "acceptance_met": True,
-            "remaining": [],
             "review_rounds": 0,
             "usage": "unknown",
             "checks": [{"command": "uv run pytest -q", "outcome": "passed"}],
         }
         load_script().require_completable(task, report)
-        with self.assertRaisesRegex(ValueError, "required checks"):
-            load_script().require_completable(task, dict(report, checks=[]))
 
     def test_control_named_gate_is_still_required(self):
         self.set_plan(("T1",))
@@ -66,7 +61,6 @@ class RequiredChecksAcceptance(RunFixture, unittest.TestCase):
             task,
             {
                 "acceptance_met": True,
-                "remaining": [],
                 "review_rounds": 0,
                 "usage": "unknown",
                 "checks": [{"command": "uv run pytest  -q", "outcome": "passed"}],

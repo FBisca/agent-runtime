@@ -137,11 +137,6 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
                 "contract": 3,
                 "covers": {"S1": ["src/a/test_a.py::test_a"]},
                 "red": red_of({"S1": ["src/a/test_a.py::test_a"]}),
-                "test_cost": {
-                    "command": "uv run pytest src/a --durations=0 -q",
-                    "modules": {"src/a/test_a.py": 0.2},
-                    "tests": {"src/a/test_a.py::test_a": 0.2},
-                },
                 "task_id": "t1",
                 "status": "COMPLETE",
                 "summary": "done",
@@ -149,11 +144,10 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
                 "files": [],
                 "decisions": [],
                 "interfaces": [],
-                "remaining": [],
                 "checks": [],
                 "review_rounds": 0,
                 "usage": "unknown",
-                "head": "abc1234",
+                "head": "@HEAD",
                 "pr": "https://github.com/o/r/pull/%d" % pr,
             }
         )

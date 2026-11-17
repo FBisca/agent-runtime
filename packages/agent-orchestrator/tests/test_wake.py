@@ -88,7 +88,6 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.run_driver()
         self.assert_request("gate", "failed its gates 3 times")
         self.assertEqual(len(self.calls("resume")), 2)  # two fix rounds, no third
-        self.assertIn(str(self.run_dir / "t1r2" / "report.json"), self.request()["evidence"])
 
     def test_S1_a_worker_that_ends_without_a_valid_report_writes_a_request(self):
         """orchestrate-lean-loop/S1
@@ -104,7 +103,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.assertEqual(
             len(self.calls("resume")), 2, "two warnings to the worker that announced the file"
         )
-        self.assert_request("report", "report.json", whole=False)
+        self.assert_request("report", "refused 3 times", whole=False)
 
     def test_S1_a_worker_whose_turn_ended_without_a_report_writes_an_idle_request(self):
         """orchestrate-lean-loop/S1
@@ -133,7 +132,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.run_driver("--idle-minutes", "0")
         self.assertEqual(self.calls("resume"), [], "no warning resume")
         self.assert_request(
-            "idle", "review.json", spawned=("demo-t1", "demo-t1-review"), whole=False
+            "idle", "demo-t1-review", spawned=("demo-t1", "demo-t1-review"), whole=False
         )
         self.assertIn("demo-t1-review", self.request()["reason"])
 
@@ -390,7 +389,7 @@ class DecideTests(WakeFixture, unittest.TestCase):
         self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
         self.assertIn("use port 5432", resumes[0]["args"]["task"])
         brief = (self.run_dir / "t1" / "answer.md").read_text(encoding="utf-8")
-        for needle in ("use port 5432", "`t1`", str(self.run_dir / "t1" / "report.json")):
+        for needle in ("use port 5432", "`t1`"):
             self.assertIn(needle, brief)
         self.assertEqual(
             [t for t in self.ledger()["tasks"] if t != "archive"], ["t1"]
@@ -606,7 +605,7 @@ class PrReadyTests(WakeFixture, unittest.TestCase):
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(self.wake_lines("pr-ready"), ["pr-ready t1: " + PR])
-        self.assertEqual(self.wakes()[0]["key"], "t1:abc1234")
+        self.assertRegex(self.wakes()[0]["key"], r"^t1:[0-9a-f]{40}$")
 
     def test_S5_a_failing_check_then_a_green_one_still_writes_one_wake(self):
         """orchestrate-lean-loop/S5"""

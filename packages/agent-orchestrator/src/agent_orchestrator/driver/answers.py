@@ -15,7 +15,6 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +22,7 @@ from .. import contracts, narrate
 from ..invariants import next_path
 from ..timeutil import iso as now
 from .book import ARCHIVE, checkpoint
+from .handoff import read_hand_in
 from .prompts import render
 from .report import cell
 from .state import JsonRefusal, Refused, numbered, write_atomic
@@ -458,7 +458,6 @@ class Answers:
         if readable_request(path) is None:
             candidates = [
                 self.run_dir / unit / "task.md",
-                self.run_dir / task_id / "report.json",
                 Path((task.get("review") or {}).get("path") or "/nonexistent"),
                 self.run_dir / task_id / "findings.json",
                 self.run_dir / "events.jsonl",
@@ -547,33 +546,88 @@ class Answers:
 
     def record_report(self, task_id, report, **changes):
         """Checkpoint the worker's report as PARTIAL: the unit is not COMPLETE until CI and the merge."""
-        path = self.report_file(task_id)
         with self.book() as data:
-            self.book_report(data, task_id, report, path, **changes)
+            self.book_report(data, task_id, report, **changes)
 
     @staticmethod
-    def book_report(data, task_id, report, path, **changes):
+    def book_report(data, task_id, report, **changes):
         # review_rounds is the driver's own count: the worker's value is never trusted.
         checkpoint(
             data,
             task_id,
             dict(report, status="PARTIAL", **dict({"review_rounds": 0}, **changes)),
         )
-        data["tasks"][task_id]["report_path"] = str(path)
 
-    def report_file(self, task_id):
-        """The newest report in a task directory. Files are write-once: a later attempt writes report.2.json."""
-        directory, newest = self.run_dir / task_id, "report.json"
-        for index in range(2, 1000):
-            if not (directory / ("report.%d.json" % index)).exists():
-                break
-            newest = "report.%d.json" % index
-        return directory / newest
+    def take_report(self, task_id, text, answerer=False):
+        """The hand-in one agent's `report` call carried, read the moment it arrives: accepted, or refused back to
+        that agent with the exact errors. The Lead is asked only for a BLOCKED report, or when the same agent has
+        been refused `PAYLOAD_WARNINGS` times already."""
+        task = self.task(task_id)
+        answers = task.get("answers") or {}
+        owner = answers["id"] if answerer else task_id
+        report, error = read_hand_in(task, owner, text)
+        unit = self.unit_of(task_id)
+        if error:
+            self.log("report-refused", unit=unit, task=task_id, reason=error, payload=text)
+            return self.refuse_report(task_id, error, answerer)
+        self.log("report", unit=unit, task=task_id, report=report)
+        if report["status"] == "BLOCKED":
+            if answerer:
+                self.mark(task_id, answers=dict(answers, state="failed"))
+            return self.request(
+                task_id, "blocked", "%s: %s" % (report["summary"], report["blocker"])
+            )
+        if answerer:
+            return self.mark(task_id, answers=dict(answers, state="reported", report=report))
+        self.mark(task_id, gate="reported", handed_in=report)
 
-    def next_report(self, task_id):
-        """The file a worker owes next: the first write-once report name the task directory does not hold yet. A
-        worker asked again writes report.2.json; the newest file on disk is one it already wrote."""
-        return next_path(self.run_dir / task_id, "report", ".json")[0]
+    def refuse_report(self, task_id, error, answerer=False):
+        """Tell the agent what its hand-in got wrong, in its own session; a third refusal is the Lead's."""
+        task = self.task(task_id)
+        refused = int(task.get("refused") or 0)
+        if refused >= PAYLOAD_WARNINGS:
+            return self.contract_error(
+                task_id,
+                "report",
+                "refused %d times: %s" % (refused + 1, error),
+            )
+        self.mark(task_id, refused=refused + 1)
+        return self.nudge(
+            task_id,
+            "Your hand-in was refused: %s. Fix it and hand it in again: your agent-runtime `report` call "
+            "carries the whole report JSON as its text." % error,
+            answerer,
+        )
+
+    def nudge(self, task_id, text, answerer=False):
+        """Put `text` to the task's worker in its own session: the live pane is resumed, a gone one replaced. The
+        new assignment is the one whose report the task then waits for."""
+        task = self.task(task_id)
+        sender = _payload_sender(task, "report")
+        answers = task.get("answers") or {}
+        name = sender["worker"]
+        _, assignment_id = self.ensure_agent(
+            name,
+            "worker",
+            self.unit_of(task_id),
+            {
+                "kind": "worker",
+                "name": name,
+                "task": text,
+                "cwd": sender["checkout"],
+                "cli": sender.get("backend") or self.args.cli,
+                "model": sender.get("model"),
+                "effort": sender.get("effort"),
+            },
+            attempt="%s-nudge%d"
+            % (answers["id"] if answerer else task_id, int(task.get("nudges") or 0)),
+        )
+        self.nudged = True
+        self.mark(task_id, nudges=int(task.get("nudges") or 0) + 1)
+        if answerer:
+            self.mark(task_id, answers=dict(answers, state="working", assignment_id=assignment_id))
+        else:
+            self.mark(task_id, assignment_id=assignment_id, gate=None)
 
     def read_payload(self, task_id, where, path, load, alternates=()):
         """The payload a report named, read and validated; None when the agent that sent it still owes it.
@@ -682,7 +736,7 @@ class Answers:
         return True
 
     def _warn_spawn(self, task_id, unit, asked, sender, task):
-        """The warned agent's new assignment, in the checkout and on the route it was already running."""
+        """The warned reviewer's new assignment, in the checkout and on the route it was already running."""
         where, path, name = asked["where"], asked["path"], asked["name"]
         text = (
             "The driver cannot %s %s: %s. Write or repair that file, then report complete under this assignment."
@@ -718,7 +772,7 @@ class Answers:
 
     def log_clarifications(self, task_id, source, document, path):
         """One `clarification` event per entry the agent listed; a file is read once, however often its step runs."""
-        key = str(path)
+        key = str(path) + json.dumps(document.get("clarifications") or [], sort_keys=True)
         if key in (self.task(task_id).get("clarified") or []):
             return
         for entry in document.get("clarifications") or []:
@@ -734,30 +788,23 @@ class Answers:
         with self.book() as data:
             data["tasks"][task_id].setdefault("clarified", []).append(key)
 
-    def resume_for_responses(self, task, directory_id, report_path, missing):
-        """Resume the task's worker once with the ids it left unanswered; the new report goes to the next report file."""
+    def resume_for_responses(self, task, directory_id, missing):
+        """Resume the task's worker once with the ids it left unanswered; it hands in the report again."""
         directory = self.run_dir / directory_id
         brief = next_path(directory, "missing", ".md")[0]
         brief.write_text(
-            render(
-                "missing-responses",
-                directory_id=directory_id,
-                report_path=report_path,
-                missing=", ".join(missing),
-                next_report=next_path(directory, "report", ".json")[0],
-            ),
+            render("missing-responses", directory_id=directory_id, missing=", ".join(missing)),
             encoding="utf-8",
         )
         text = "Read %s and follow it." % brief
         return self.hand_over(task, dict(task["packet"], task_id=directory_id), brief, text)[1]
 
-    def chase_responses(self, task_id, path, missing):
+    def chase_responses(self, task_id, missing):
         """A fix-round report lacks a response the reviewer asked for. The first time, resume the worker with the
         missing ids at no round cost; the next report that still lacks them is a request."""
         task = self.task(task_id)
-        message = "%s has no response for answer_required finding(s) %s" % (
-            path,
-            ", ".join(missing),
+        message = "the report has no response for answer_required finding(s) %s" % ", ".join(
+            missing
         )
         if task.get("chased"):
             return self.contract_error(
@@ -771,47 +818,8 @@ class Answers:
             error=message[:500],
             missing=missing,
         )
-        assignment_id = self.resume_for_responses(task, task_id, path, missing)
+        assignment_id = self.resume_for_responses(task, task_id, missing)
         self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
-
-    def report_landed(self, task_id):
-        """The worker's report is on disk, it names this task, it says it finished and it belongs to this attempt:
-        the turn ended after the report was written, so the driver reads the report instead of asking a human."""
-        task = self.task(task_id)
-        path = self.report_file(task_id)
-        try:
-            report = contracts.load(path, contracts.validate_report)
-        except (contracts.ContractError, OSError, ValueError):
-            return False
-        if report["task_id"] != task_id or report.get("status") != "COMPLETE":
-            return False
-        if report.get("acceptance_met") is not True:  # the same gate the reported path applies
-            return False
-        return self.belongs_to_attempt(task, path)
-
-    def belongs_to_attempt(self, task, path):
-        """The report was written after the task was claimed: a report left over from an earlier attempt is not this
-        worker's news."""
-        claimed = max(filter(None, (task.get("started_at"), task.get("answered_at"))), default=None)
-        if not claimed:
-            return True
-        try:
-            moment = datetime.fromisoformat(claimed)
-        except ValueError:
-            return True
-        if moment.tzinfo is None:
-            moment = moment.replace(tzinfo=timezone.utc)
-        try:
-            return path.stat().st_mtime >= moment.timestamp()
-        except OSError:
-            return False
-
-    def report_is_valid(self, task_id):
-        try:
-            report = contracts.load(self.report_file(task_id), contracts.validate_report)
-        except contracts.ContractError:
-            return False
-        return report["task_id"] == task_id
 
     def start_answers(self, task_id, asks, review):
         task = self.task(task_id)

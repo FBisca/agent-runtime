@@ -44,7 +44,7 @@ class WorkbenchExecutionTests(AcceptanceFixture, unittest.TestCase):
             )
             sha = self.merged_on_main("almost")
             self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
-            self.drive([self.worker("almost", covers={"S1": ["src/a/test_feature.py::test_nope"]})])
+            self.drive([self.worker("almost", covers={"S1": ["src/a/test_gone.py::test_nope"]})])
 
         self.from_snapshot(self.snapshot_key("hand_merged_failure"), build)
 

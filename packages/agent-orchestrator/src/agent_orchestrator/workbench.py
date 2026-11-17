@@ -9,7 +9,6 @@ an `error` that names its kind and the way out. A count, token or duration nothi
 The driver owns the ledger and the state layout, and imports this module; the helpers it owns are imported late.
 """
 
-import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -336,19 +335,10 @@ def address_of(task, fallbacks):
 
 
 def claimed_of(task):
-    """Whether the worker claimed completion: its own report said complete, met its acceptance and passed every
-    check. The ledger keeps the driver's checkpoint of that report (PARTIAL until the merge), so the worker's file is
-    read for the claim and nothing of it is printed; without the file the ledger's copy is the claim.
+    """Whether the worker claimed completion: its report said it finished and met its acceptance. The ledger keeps
+    the driver's checkpoint of that report (PARTIAL until the merge).
 
     A claim is the worker's word, not evidence: `verified` is what says the gates passed."""
-    path = task.get("report_path")
-    if isinstance(path, str):
-        try:
-            report = json.loads(Path(path).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            report = None
-        if isinstance(report, dict) and report.get("status"):
-            return evidence.claimed({"report": report})
     return evidence.claimed(task)
 
 

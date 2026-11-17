@@ -42,7 +42,6 @@ def report(task_id, check):
         "acceptance_met": False,
         "decisions": [],
         "interfaces": [],
-        "remaining": [],
         "checks": [{"command": check, "outcome": "passed"}],
     }
 
@@ -66,7 +65,7 @@ class AttemptReadersTests(unittest.TestCase):
         with driver.book() as data:
             engine.claim(data, packet(root, "t1"))
             engine.checkpoint(data, "t1", report("t1", "old"))
-            data["tasks"]["t1"].update(started_at="2026-01-01", report_path="old.json")
+            data["tasks"]["t1"].update(started_at="2026-01-01")
             engine.release(data, "t1", "retry")
             engine.claim(data, packet(root, "t1o1"))
             data["tasks"]["t1o1"]["started_at"] = "2026-01-02"
@@ -78,7 +77,6 @@ class AttemptReadersTests(unittest.TestCase):
         """The open attempt reports and leaves findings, and the ledger is re-serialised in the other order."""
         with driver.book() as data:
             engine.checkpoint(data, "t1o1", report("t1o1", "new"))
-            data["tasks"]["t1o1"]["report_path"] = "new.json"
             data["tasks"] = dict(reversed(list(data["tasks"].items())))
         (root / "t1o1").mkdir(exist_ok=True)
         (root / "t1o1" / "findings.json").write_text('{"items": [{"id": "new"}]}')
@@ -87,15 +85,13 @@ class AttemptReadersTests(unittest.TestCase):
         driver, root = self.world()
         # The open attempt has reported nothing and left no findings, so the unit's newest report and findings
         # are still the released attempt's — and neither answer is reconstructed by searching the directory.
-        self.assertEqual(
-            driver.unit_trail("t1")[1:], (str(root / "t1" / "findings.json"), "old.json")
-        )
+        self.assertEqual(driver.unit_trail("t1")[1:2], (str(root / "t1" / "findings.json"),))
         self.assertEqual(
             driver.pull._reported_checks("t1o1"), [{"command": "old", "outcome": "passed"}]
         )
         self.assertEqual(driver.pull._open_findings("t1"), [{"id": "old"}])
         self.reported(driver, root)
-        self.assertEqual(driver.unit_trail("t1")[2], "new.json")
+        self.assertEqual(driver.unit_trail("t1")[2]["checks"][0]["command"], "new")
         self.assertEqual(
             driver.pull._reported_checks("t1"), [{"command": "new", "outcome": "passed"}]
         )
@@ -109,5 +105,5 @@ class AttemptReadersTests(unittest.TestCase):
         with driver.book() as data:
             data["tasks"]["t1"]["started_at"] = "2026-01-02"
         # Equal times use ledger position, even when that attempt is closed.
-        self.assertEqual(driver.unit_trail("t1")[2], "old.json")
+        self.assertEqual(driver.unit_trail("t1")[2]["checks"][0]["command"], "old")
         self.assertEqual(driver.pull.units()["t1"]["packet"]["task_id"], "t1o1")

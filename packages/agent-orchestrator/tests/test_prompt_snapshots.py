@@ -232,7 +232,6 @@ def test_answers_only(world, tmp_path):
 def test_missing_responses(world, tmp_path):
     (world.run_dir / "t1r1").mkdir()
     task = {"packet": world.packet()}
-    report = world.run_dir / "t1r1" / "report.json"
-    world.driver.resume_for_responses(task, "t1r1", report, ["B1", "B2"])
+    world.driver.resume_for_responses(task, "t1r1", ["B1", "B2"])
     text = (world.run_dir / "t1r1" / "missing.md").read_text(encoding="utf-8")
     assert_snapshot("missing-responses", text, tmp_path)

@@ -38,16 +38,14 @@ MATRIX = {
 
 CONTRACT = """# Contract for every task in this run
 
-- Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
-  {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"},"test_cost":null}
-  BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
-- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. The implementation provides its evidence: each scenario it satisfies needs a covering test this ticket adds or changes. The report also adds `"red":{"S<n>":"<excerpt>"}`: for each of those scenarios, the failing output of its covering test from before the fix, as the runner printed it, naming the node and its assertion failure. verify refuses a satisfied scenario with no node or no red excerpt, a node that does not exist or that this ticket did not add or change, and an excerpt that names none of the scenario's nodes.
-- COMPLETE checks: every required check must be reported `passed`, its command spelled as the task gives it (whitespace apart). Each required command is required once, and the one `not_run` allowance (`affected` with a `reason`, when no test was selected) never waives a command another tier also requires. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
-- Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
-- Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
-- Red-first: one test per scenario, named with its S-ID, seen failing before the code exists; its failing output goes in the report's `red`.
+- Hand in your result as the text of your agent-runtime `report` call (kind=complete or blocked): the JSON itself, no file. The driver validates it the moment it arrives and, if it is wrong, sends you the exact errors in the same session; fix and hand it in again.
+  {"contract":1,"task_id","status":"COMPLETE|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"notes":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"}}
+  COMPLETE may carry "notes": things the Lead should know; they never block. BLOCKED needs "blocker": why you stopped and what would unblock you; it goes to the Lead. "head" is the commit your branch is at now. In a fix round report "review_rounds":0: the driver counts failed rounds.
+- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. The report also adds `"red":{"S<n>":"<excerpt>"}`: for each of those scenarios, the failing output of its covering test from before the fix, as the runner printed it. Copy each test name from that output. verify counts a node when its file exists, this ticket changed that file and the scenario's red excerpt contains the test's name.
+- Before you hand in, run the repository's fast and affected checks your task names; CI runs the rest.
+- Prose, if any, goes in report.md beside your task.md.
+- Red-first: write the test for each scenario and see it fail before the code exists; its failing output goes in the report's `red`. Tag each test with its spec requirement.
 - TDD: before your first edit read the `tdd` skill's `SKILL.md` and its `rules.md`; your task names the path. Codex has no skill loader, so these rules are the whole skill here: one behaviour per test at the cheapest level that shows it; build expensive setup once per class and let readers share it; wait on an event or an injected clock, never a sleep; admit a test only when it protects a requirement or a credible failure, is not already covered at the same boundary, and would fail on a regression someone could ship. Name the seams and the admission answers in report.md.
-- Test cost: a YAML ticket whose diff adds or changes a test reports `"test_cost": {"command": "<the command that timed the touched tests>", "modules": {"<test file>": <seconds>}, "tests": {"<path::test>": <seconds>}}`. verify refuses the report without a row for every touched test file and every covered node.
 - Fix the class, not the instance: when you fix a defect, search for every other place with the same pattern.
 - Start from the Paths your task lists; edit any other file the change needs, except one another unfinished ticket lists. Never touch other worktrees or the main checkout.
 - Commit with Conventional Commits and push the branch. Describe behaviour, not plan ticket numbers.
@@ -232,43 +230,33 @@ class Dispatch:
         """The packet fields a ticket's contract fixes: what it delivers, the paths it owns, the scenarios it
         satisfies and the checks its worker runs. A dispatch and an adopted re-approval write the same ones."""
         owns = [p.strip() for p in ticket["Paths"].split(",") if p.strip()]
-        checks, affected, full = self.tier_checks(owns)
+        checks, full = self.tier_checks(owns)
         return {
             "objective": ticket["What it delivers"],
             "owns": owns,
             "acceptance": [re.sub(r"^- \*\*(S\d+[a-z]?)\*\*", r"\1:", s) for s in scenarios],
             "checks": checks,
-            **({"affected": affected} if affected else {}),
             **({"full": full} if full else {}),
         }
 
     def tier_checks(self, owns):
         """The checks a worker runs: the named `--gate` alone, else the repo's `fast` and rendered `affected` tiers.
-        Each required command appears once. Returns (checks, the rendered affected command when it is a
-        requirement of its own, the `full` command the worker leaves to CI when it is not one of them)."""
+        Each command appears once. Returns (checks, the `full` command the worker leaves to CI)."""
         if self.args.gate:
-            return unique_checks(self.args.gate), None, None
+            return unique_checks(self.args.gate), None
         tiers = repo_config.load(self.repo).checks
         if tiers is None or not (tiers.fast or tiers.affected):
-            return [], None, None
+            return [], None
         affected = None
         if tiers.affected:
             affected = tiers.affected.replace("{base}", shlex.quote(self.args.base)).replace(
                 "{paths}", " ".join(shlex.quote(p) for p in owns)
             )
         checks = unique_checks([c for c in (tiers.fast, affected) if c])
-        # A rendered `affected` that repeats `fast` adds no requirement, so it keeps no `not_run` allowance of its
-        # own; and a command the worker must pass is never the one it is told not to run.
-        if (
-            affected is not None
-            and tiers.fast
-            and normalise_check(affected) == normalise_check(tiers.fast)
-        ):
-            affected = None
         full = tiers.full_run
         if full and normalise_check(full) in {normalise_check(c) for c in checks}:
             full = None
-        return checks, affected, full
+        return checks, full
 
     def last_attempt(self, unit, task_id):
         """The packet of the unit's most recent other attempt that carries a class, or None."""

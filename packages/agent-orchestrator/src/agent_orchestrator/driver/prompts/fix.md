@@ -1,5 +1,4 @@
 Contract: $contract
-Report: $report
 
 # Fix round $attempt for $unit (task $task_id): $source findings
 
@@ -14,6 +13,6 @@ $items
 $reviewer_checks
 $answer_required
 $lead_answer
-Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: $checks.
+Commit and push to the same branch; open no new pull request. Run before you hand in: $checks.
 $check_instructions
 Report review_rounds 0: the driver counts failed rounds.

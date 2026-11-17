@@ -92,7 +92,6 @@ class Findings:
         finds the gate already failed once, and the draft it owes is in `fix`. `fix_details` is the gate's own word
         for the round: `checks_run`, `answer_ids`, and `rebase` (a conflict re-reads its base)."""
         unit = self.unit_of(task_id)
-        path = self.report_file(task_id)
         owed = None
         if unit != ARCHIVE and self.unit_flag(unit, "pr_ready"):
             owed = self.pr_of(
@@ -122,10 +121,10 @@ class Findings:
             fix["attempt"] = rounds[unit]
             self.log("round", unit=unit, task=task_id, source=source, attempt=rounds[unit])
             if unit == ARCHIVE:
-                self.book_report(data, task_id, report, path, remaining=remaining)
+                self.book_report(data, task_id, report)
                 rebuild, asked = self._archive_failure(data, task_id, source, remaining)
             else:
-                self.book_report(data, task_id, report, path, review_rounds=1, remaining=remaining)
+                self.book_report(data, task_id, report, review_rounds=1)
                 self._gate_findings(unit, task_id, source, items)
                 asked = self._gate_refusal(data, task_id, unit, source, fix)
                 if asked is None:

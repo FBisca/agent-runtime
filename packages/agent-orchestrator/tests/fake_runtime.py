@@ -16,11 +16,16 @@ A wait step may name the agents it reports for: `agents` lists the agents the ru
 lists the agents that finished their turn with a `complete` message, and `runtime_state` is the state the runtime
 observed for them (`idle` when the turn ended without a message). The ids come from the assignments the runtime gave
 out, so a step keeps naming the right agent after a resume.
+
+A worker hands its report in as the text of its `complete` message: a step's `write` of a path named
+`report.json` or `report.<n>.json` is not written to disk, its text becomes the text of the step's `complete`
+messages, with `@HEAD` read as the sha the checkout is at once the step's commands ran.
 """
 
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
@@ -154,6 +159,12 @@ def process(argv, timeout=None):  # noqa: PLR0912, PLR0915
         # A step's files land first and its commands run next; a file naming `@HEAD` is written last, with the sha
         # the checkout is at once those commands ran, as a reviewer who reviewed that commit would record it.
         writes = step.pop("write", [])
+        # A worker hands its report in as the text of its `complete`, so a step that "writes" a task's
+        # `report*.json` has the worker say that text; nothing is written to disk.
+        handed = [
+            w for w in writes if re.fullmatch(r"report(\.\d+)?\.json", os.path.basename(w[0]))
+        ]
+        writes = [w for w in writes if w not in handed]
         for path, text in writes:
             if "@HEAD" not in text:
                 write_text(path, text)
@@ -173,7 +184,21 @@ def process(argv, timeout=None):  # noqa: PLR0912, PLR0915
                     text=True,
                 ).stdout.strip()
                 write_text(path, text.replace("@HEAD", head))
-        return Completed(argv, 0, json.dumps(wait_answer(home, step)))
+        answered = wait_answer(home, step)
+        for message in answered.get("messages") or []:
+            if handed and message["kind"] == "complete":
+                message["text"] = handed[-1][1]
+            if message["kind"] == "complete":
+                if (
+                    "@HEAD" in message["text"]
+                ):  # the sha the checkout is at once the step's commands ran
+                    head = subprocess.run(
+                        ["git", "-C", os.environ["FAKE_CHECKOUT"], "rev-parse", "HEAD"],
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip()
+                    message["text"] = message["text"].replace("@HEAD", head)
+        return Completed(argv, 0, json.dumps(answered))
     if tool == "status":
         states = read_json(os.path.join(home, "states.json"))
         state = states.get(args["name"], "idle")

@@ -4,8 +4,7 @@ rendered for its ticket, never the whole suite (check-tiers/S2, S3)."""
 import unittest
 
 import pytest
-from agent_orchestrator.driver.records import SPELLING_INSTRUCTION
-from fixtures import RunFixture, load_script
+from fixtures import RunFixture
 
 pytestmark = pytest.mark.integration
 
@@ -35,16 +34,6 @@ checks:
   full:
     run: "uv run pytest   -q"
 """
-
-
-def report(checks):
-    return {
-        "acceptance_met": True,
-        "remaining": [],
-        "review_rounds": 0,
-        "usage": "unknown",
-        "checks": checks,
-    }
 
 
 class CheckTiersBrief(RunFixture, unittest.TestCase):
@@ -84,7 +73,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.declare_tiers()
         self.run_driver()
         brief = self.brief()
-        (run,) = [x for x in brief.splitlines() if x.startswith("Before you report COMPLETE, run:")]
+        (run,) = [x for x in brief.splitlines() if x.startswith("Before you hand in, run:")]
         self.assertIn("uv run pytest -q", run)
         self.assertIn(AFFECTED, run)
         self.assertNotIn("pytest -n 4", run)
@@ -92,19 +81,6 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         (full,) = [x for x in brief.splitlines() if "uv run pytest -n 4" in x]
         self.assertIn("do not run", full)
         self.assertIn("CI", full)
-
-    @pytest.mark.spec("Required checks are matched by spelling")
-    def test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled(self):
-        self.declare_tiers()
-        self.run_driver()
-        brief = self.brief()
-        # The required-check line is the ticket's own: it stays as it is.
-        self.assertEqual(
-            [x for x in brief.splitlines() if x.startswith("Before you report COMPLETE, run:")],
-            ["Before you report COMPLETE, run: uv run pytest -q; " + AFFECTED + "."],
-        )
-        self.assertIn(SPELLING_INSTRUCTION, brief.splitlines())
-        self.assertNotIn("rtk", brief)
 
     @pytest.mark.spec("Check tiers brief the worker")
     def test_S3_a_named_gate_overrides_the_declared_tiers(self):
@@ -118,19 +94,12 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.required(), ["uv run pytest -q"])
         brief = self.brief()
-        (run,) = [x for x in brief.splitlines() if x.startswith("Before you report COMPLETE, run:")]
+        (run,) = [x for x in brief.splitlines() if x.startswith("Before you hand in, run:")]
         self.assertEqual(run.count("uv run pytest -q"), 1)
         self.assertEqual(
             [x for x in brief.splitlines() if "do not run" in x],
             [],
         )
-        # The required set and COMPLETE validation are the same set: passed once is enough, absent is not.
-        task = self.ledger()["tasks"]["t1"]
-        load_script().require_completable(
-            task, report([{"command": "uv run pytest -q", "outcome": "passed"}])
-        )
-        with self.assertRaisesRegex(ValueError, "required checks"):
-            load_script().require_completable(task, report([]))
 
     @pytest.mark.spec("Check tiers brief the worker")
     def test_S1_whitespace_spellings_of_one_command_are_one_required_assignment(self):
@@ -138,10 +107,6 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.required(), ["uv run pytest -q"])
         self.assertEqual([x for x in self.brief().splitlines() if "do not run" in x], [])
-        load_script().require_completable(
-            self.ledger()["tasks"]["t1"],
-            report([{"command": "uv run pytest  -q", "outcome": "passed"}]),
-        )
 
     @pytest.mark.spec("Check tiers brief the worker")
     def test_S2_fast_and_affected_are_kept_when_only_full_is_distinct(self):
@@ -149,7 +114,6 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.required(), ["uv run pytest -q", AFFECTED_ONE_PATH])
         packet = self.ledger()["tasks"]["t1"]["packet"]
-        self.assertEqual(packet["affected"], AFFECTED_ONE_PATH)
         self.assertEqual(packet["full"], "uv run pytest -n 4")
 
     @pytest.mark.spec("Check tiers brief the worker")

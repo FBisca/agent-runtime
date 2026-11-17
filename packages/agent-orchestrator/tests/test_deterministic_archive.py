@@ -10,7 +10,6 @@ The contract it pins (plan Decisions D1-D6):
 Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
 
-import json
 import unittest
 
 import pytest
@@ -57,8 +56,8 @@ class NoAgentArchive(DriverArchiveFixture, unittest.TestCase):
         self.assertEqual(history[-2:], ["ACCEPTED", "ARCHIVED"])
         # The url gh printed is the unit's PR: CI is polled on it.
         pr = "https://github.com/o/r/pull/9"
-        report = json.loads((self.run_dir / "archive" / "report.json").read_text(encoding="utf-8"))
-        self.assertEqual(report["pr"], pr)
+        (event,) = [e for e in self.run_events("report") if e["unit"] == "archive"]
+        self.assertEqual(event["report"]["pr"], pr)
         self.assertIn(pr, self.checks_log())
 
     def test_the_archive_branch_carries_the_plan_file_byte_identical(self):

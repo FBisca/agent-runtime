@@ -11,7 +11,6 @@ and no class twenty-five public methods.
 
 from typing import Any
 
-from ..invariants import next_path
 from .pointers import collection, owned_collections, owned_scope
 from .prompts import block, bullets, render
 from .records import CHECK_INSTRUCTIONS
@@ -54,7 +53,6 @@ class Briefs:
         return render(
             "answer",
             **_worker_values(self.run_dir, task),
-            report=next_path(self.run_dir / task_id, "report", ".json")[0],
             task_id=task_id,
             reason=task["event"]["reason"],
             instruction=decision["reason"],
@@ -68,7 +66,6 @@ class Briefs:
         return render(
             "redo",
             **_worker_values(self.run_dir, task),
-            report=new_dir / "report.json",
             task_id=new_id,
             reason=task["event"]["reason"],
             instruction=redo["reason"],
@@ -84,7 +81,6 @@ class Briefs:
         return render(
             "fix",
             **_worker_values(self.run_dir, task),
-            report=new_dir / "report.json",
             task_id=new_id,
             attempt=findings["attempt"],
             source=findings["source"],
@@ -100,7 +96,6 @@ class Briefs:
         return render(
             "answers-only",
             **_worker_values(self.run_dir, task),
-            report=self.run_dir / answer_id / "report.json",
             task_id=answer_id,
             findings_path=findings_path,
             items=bullets(map(describe, asks)),
@@ -132,7 +127,6 @@ class Briefs:
         return render(
             "rebase",
             **_worker_values(self.run_dir, task),
-            report=new_dir / "report.json",
             task_id=new_id,
             findings_path=new_dir / "findings.json",
             items=bullets(map(describe, findings["items"])),

@@ -241,10 +241,8 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         self.waits(self.ticket_merged() + [{}, self.decide_step(ARCHIVE, "retry")])
         with failing_once():
             self.run_driver()
-        self.assertTrue(
-            (self.run_dir / ARCHIVE / "report.2.json").exists(),
-            "the driver did not rebuild the archive the Lead asked for",
-        )
+        built = [e for e in self.run_events("report") if e["unit"] == ARCHIVE]
+        self.assertEqual(len(built), 2, "the driver did not rebuild the archive the Lead asked for")
         states = [row["state"] for row in self.ledger()["plan"]["history"]]
         self.assertEqual(states[-1], "ARCHIVED", states)
 

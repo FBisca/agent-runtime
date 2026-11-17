@@ -23,7 +23,6 @@ from .. import contracts, events, narrate
 from .. import ledger as ledgers
 from ..invariants import PARKED
 from ..report_rules import require
-from .handoff import recover_worker_report
 from .records import is_agent, ready
 from .report import cell
 from .verdict import ATTENTION, VERDICTS, attention
@@ -122,8 +121,8 @@ class Attention:  # noqa: PLR0904
         Driver's own, and only what this module owns lives here."""
         raise AttributeError(name)
 
-    last_tick: Any
     received: Any
+    nudged = False  # a worker was put back to work while the runtime's report was read: the wait has not seen it
 
     def idle(self):
         """Back off after an iteration that dispatched, advanced and handled nothing: the runtime's wait returns
@@ -132,12 +131,9 @@ class Attention:  # noqa: PLR0904
         self.sleep(self.args.idle_interval)
 
     def idle_ticks(self, assignments):
-        """Every `--idle-minutes`, look at each agent the run waits on: did it show anything new, did its CI move?
-        An agent that shows nothing at two consecutive ticks needs the Lead."""
+        """Look at each agent the run waits on: one that shows nothing new (its state, its gate, its CI) for
+        `--idle-minutes` needs the Lead. An agent that ended is not waited for here: `check_ended` hears of it."""
         moment = self.clock()
-        if moment - self.last_tick < self.args.idle_minutes * 60:
-            return
-        self.last_tick = moment
         for unit, task in self.units().items():
             task_id = task["packet"]["task_id"]
             # The Lead already has a `requested` unit, and a merge is a person's step (the pr-ready wake asked).
@@ -149,27 +145,29 @@ class Attention:  # noqa: PLR0904
             if skipped:
                 # A skipped unit that returns to `working` starts a fresh window, not the one it left.
                 self.working_since.pop(task_id, None)
+                self.ticks.pop(task_id, None)
                 continue
             seen = self.watch(
                 task_id,
                 self.unit_assignments(unit),
-                [task.get("gate"), task.get("report_path"), task.get("ci_state")],
+                [task.get("gate"), task.get("ci_state")],
                 assignments,
                 moment,
             )
             if seen is None:
                 continue
-            streak, minutes, working = seen
+            _, minutes, working = seen
+            if minutes < self.args.idle_minutes:
+                continue
             waiting = "ci" if task.get("gate") == "ready-for-ci" else "agent"
-            self.log("idle", unit=unit, task=task_id, waiting=waiting, ticks=streak)
-            if streak >= 2:
-                owed = self.owed(task)
-                self.request(
-                    task_id,
-                    "idle",
-                    self.idle_reason(task, unit, streak, minutes, working, owed),
-                    answerer=owed[3] if owed and owed[0] == "implementer" else None,
-                )
+            self.log("idle", unit=unit, task=task_id, waiting=waiting, minutes=int(minutes))
+            owed = self.owed(task)
+            self.request(
+                task_id,
+                "idle",
+                self.idle_reason(task, unit, minutes, working, owed),
+                answerer=owed[3] if owed and owed[0] == "implementer" else None,
+            )
 
     def watch(self, key, mine, shown, assignments, moment):
         """One step of the idle watchdog for one watched thing. `mine` is its assignment ids and `shown` what it
@@ -203,16 +201,11 @@ class Attention:  # noqa: PLR0904
             }
 
     def owed(self, task):
-        """(role, agent name, file, assignment id) of the agent a unit waits on, or None: the file is the next
-        write-once path it has not written yet, never one that already holds an earlier answer."""
+        """(role, agent name, the file it owes or None, assignment id) of the agent a unit waits on, or None. Only a
+        reviewer owes a file: a worker hands its report in through the runtime."""
         answers = task.get("answers") or {}
         if answers.get("state") == "working":
-            return (
-                "implementer",
-                task["packet"]["worker"],
-                self.next_report(answers["id"]),
-                answers.get("assignment_id"),
-            )
+            return ("implementer", task["packet"]["worker"], None, answers.get("assignment_id"))
         if task.get("gate") == "reviewing":
             return (
                 "reviewer",
@@ -221,28 +214,20 @@ class Attention:  # noqa: PLR0904
                 task["review"].get("assignment_id"),
             )
         if not task.get("gate") and task["status"] == "ACTIVE":
-            return (
-                "worker",
-                task["packet"]["worker"],
-                self.next_report(task["packet"]["task_id"]),
-                task.get("assignment_id"),
-            )
+            return ("worker", task["packet"]["worker"], None, task.get("assignment_id"))
         return None
 
-    def idle_reason(self, task, unit, streak, minutes, working, owed):
-        """What the Lead reads when a unit showed nothing for two ticks: who it waits on, the file that agent owes,
-        how long it has been quiet and the way out."""
-        text = "idle: %s showed no new state or report for %d ticks (%d minutes)" % (
-            unit,
-            streak,
-            minutes,
-        )
+    def idle_reason(self, task, unit, minutes, working, owed):
+        """What the Lead reads when a unit showed nothing for `--idle-minutes`: who it waits on, how long it has
+        been quiet and the way out."""
+        text = "idle: %s showed no new state or report for %d minutes" % (unit, minutes)
         if working is not None:
             text += ", working for %d minutes" % working
         if owed:
-            text += (
-                "; %s %s is live but has not reported complete or written %s: "
-                "look at its terminal, then " % owed[:3]
+            text += "; %s %s is live but has not reported%s: look at its terminal, then " % (
+                owed[0],
+                owed[1],
+                " or written " + owed[2] if owed[2] else "",
             )
         else:
             text += "; "
@@ -263,6 +248,7 @@ class Attention:  # noqa: PLR0904
         """Turn the runtime's reports into gate stages. Agents are told apart by assignment id only: the runtime's
         messages carry no name, and a resumed worker keeps its name across assignments."""
         self.received = bool(result.get("messages"))
+        self.nudged = False
         self.record_usage(result.get("assignments") or [])
         for message in result.get("messages") or []:
             kind, assignment_id = message.get("kind"), message.get("assignment_id")
@@ -272,26 +258,28 @@ class Attention:  # noqa: PLR0904
             if kind != "complete":
                 self.on_agent_attention(assignment_id, "exited" if kind == "failed" else kind, text)
                 continue
-            closing, held = self.complete_message(assignment_id, text)
+            closing, held, handin = self.complete_message(assignment_id, text)
             if closing:
                 self.resolved_by_worker(closing, assignment_id)
             if held:
                 self.hold(held[0], assignment_id, "complete", held[1])
+            if handin:  # the report the call carried is read now, not at a later round
+                self.take_report(handin[0], text, answerer=handin[1])
         self.check_ended(result.get("assignments") or [])
 
     def step_outcome(self, task, assignment_id, text):
-        """What one complete does to one task: ("answers", state), ("gate", name), ("closing", id),
+        """What one complete does to one task: ("handin", (id, from the answerer)), ("gate", name), ("closing", id),
         ("held", (id, text)), or None when the complete is not this task's."""
         if task["status"] in ("COMPLETE", "RELEASED"):
             return None
         gate = task.get("gate")
         answers = task.get("answers") or {}
         if answers.get("state") == "working" and answers.get("assignment_id") == assignment_id:
-            return ("answers", "reported")
+            return ("handin", (task["packet"]["task_id"], True))
         if gate == "reviewing" and task["review"].get("assignment_id") == assignment_id:
             return ("gate", "reviewed")
         if not gate and task.get("assignment_id") == assignment_id:
-            return ("gate", "reported")
+            return ("handin", (task["packet"]["task_id"], False))
         if gate == "requested" and self.escalated_reviewer(task, assignment_id):
             return ("closing", task["packet"]["task_id"])
         if gate == "requested" and task.get("assignment_id") == assignment_id:
@@ -299,16 +287,17 @@ class Attention:  # noqa: PLR0904
         return None
 
     def complete_message(self, assignment_id, text):
-        """(the request it resolved, the request it held) after one agent's complete, booked in one write."""
-        closing = held = None
+        """(the request it resolved, the request it held, the hand-in to read) after one agent's complete, booked in
+        one write."""
+        closing = held = handin = None
         with self.book() as data:
             for task in data["tasks"].values():
                 outcome = self.step_outcome(task, assignment_id, text)
                 if outcome is None:
                     continue
                 what, value = outcome
-                if what == "answers":
-                    task["answers"] = dict(task["answers"], state=value)
+                if what == "handin":
+                    handin = value
                 elif what == "gate":
                     task["gate"] = value
                 elif what == "closing":
@@ -325,7 +314,7 @@ class Attention:  # noqa: PLR0904
                     None,
                     "a complete from assignment %s matches no open step; ignored" % assignment_id,
                 )
-        return closing, held
+        return closing, held, handin
 
     def resolved_by_worker(self, closing, assignment_id):
         """A reviewer's complete resolved the request before the Lead decided: the record says which one."""
@@ -430,10 +419,18 @@ class Attention:  # noqa: PLR0904
         if silent and role != "worker":
             return None
         if role == "worker":
-            if kind == "exited" and recover_worker_report(self, task_id, assignment_id):
-                return
             if silent:
                 return None
+            if kind == "exited" and not self.task(task_id).get("resumed_empty"):
+                # the first time a worker ends without a report it is resumed; only a second time asks the Lead
+                self.mark(task_id, resumed_empty=True)
+                return self.nudge(
+                    task_id,
+                    "You ended without a report; hand it in. Your task is %s (task_id `%s`) and its work is in "
+                    "your checkout: finish it if it is not finished, then hand in the report JSON as the text "
+                    "of your agent-runtime `report` call."
+                    % (self.run_dir / self.unit_of(task_id) / "task.md", task_id),
+                )
             return self.request(task_id, kind, reason)
         if role == "answerer":
             self.mark(task_id, answers=dict(self.task(task_id)["answers"], state="failed"))

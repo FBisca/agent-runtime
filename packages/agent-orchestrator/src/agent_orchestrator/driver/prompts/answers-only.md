@@ -1,5 +1,4 @@
 Contract: $contract
-Report: $report
 
 # Answers only for $unit (task $task_id)
 

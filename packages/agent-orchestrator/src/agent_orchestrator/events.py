@@ -11,6 +11,8 @@ ledger status changed), `route` (the route a worker was dispatched on: `unit`, `
 `idle` (a loop iteration that made no progress), `error`, `wake` (a line for the Lead was written to `wakes.jsonl`),
 `held`, `held-acted` and `held-dropped` (a worker message that arrived while its unit had an open request), `finish`
 (the run ended; `orchestrate.py await` reads it), `contract-error` (a handoff file broke its contract: `where`, `error`),
+`report` (a worker's hand-in was accepted: `unit`, `task`, the full `report`), `report-refused` (a hand-in was refused back to its sender:
+`unit`, `task`, `reason`, `payload`), `flaky` (a CI failure passed on one re-run: `unit`, `task`, `pr`, `checks`),
 `clarification` (an agent listed a question in `clarifications[]`: `finding`, `asked_by`, `note`, `source`), `answers`
 (the implementer was resumed for the answer_required items of a passing review), `response` (one per answered finding),
 `scope` (a re-review's blocking item outside the delta, about no earlier finding, was deferred: `id`, `file`),

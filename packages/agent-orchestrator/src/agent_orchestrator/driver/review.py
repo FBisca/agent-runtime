@@ -1,50 +1,28 @@
 """The reviewer's packet: one home for the brief a review is read from and the trail it is given.
 
-A review is opened on one attempt's report, so the brief names that report — its exact path, when it
-was written and the head it claims — instead of a glob over the unit's directory, which a stale
-attempt answers once the unit has been re-dispatched. The trail behind the review is read in the order
+A review is opened on one attempt's report, so the brief carries that report's content instead of a glob
+over the unit's directory, which a stale attempt answers once the unit has been re-dispatched. The trail behind the review is read in the order
 the record holds, so the newest attempt is the one the record says was made last.
 
 They live beside `__init__.py` rather than in it because no module of the package may pass a thousand
 lines, and because the one reading of "which report is this" has one home.
 """
 
-from datetime import datetime, timezone
+import json
 from pathlib import Path
 
-from .pointers import collection, reference
+from .pointers import collection
 from .prompts import block, render
 from .records import reported_attempt, unit_attempts
 
 
-def _written_at(path):
-    """When a file was written, to the second, in UTC; "" when it is not there."""
-    try:
-        stamp = Path(path).stat().st_mtime
-    except OSError:
-        return ""
-    return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _reported(driver, packet):
-    """The report of the attempt under review: the path the record holds, when the file was written and the head it
-    claims. No glob over the unit's directory, and no file read under another name as a fallback for it."""
-    task = driver.book.task(packet["task_id"])
-    path = task.get("report_path")
-    if not path:
+    """The report of the attempt under review, in full: the worker handed it in through the runtime, so there is no
+    file to name. The driver's own checkpoint of it is the record (its status reads PARTIAL until the merge)."""
+    report = driver.book.task(packet["task_id"]).get("report")
+    if not report:
         return "no report recorded for this attempt yet"
-    try:
-        path = reference(driver.run_dir, path, "read")
-    except ValueError:
-        raise ValueError(
-            "%s: expected the recorded report file; restore it and retry the review" % path
-        ) from None
-    head = (task.get("report") or {}).get("head")
-    return "%s, written %s, claiming head %s (its status, files, covers, checks)" % (
-        path,
-        _written_at(path) or "not on disk",
-        head or "none",
-    )
+    return "```json\n%s\n```" % json.dumps(report, indent=2)
 
 
 def review_brief(driver, packet, review_path, delta=None, open_items=None):
@@ -91,8 +69,8 @@ def review_brief(driver, packet, review_path, delta=None, open_items=None):
 
 
 def attempt_trail(driver, unit):
-    """(last reviewed commit, newest findings.json, newest report.json) over the unit's attempts, read newest first by
-    the order the record holds; each answer is the newest attempt that has that thing, and "" when none has it.
+    """(last reviewed commit, newest findings.json, newest report) over the unit's attempts, read newest first by
+    the order the record holds; each answer is the newest attempt that has that thing, and "" (a report: None) when none has it.
 
     Three unit-scoped questions with one order: the newest attempt that was reviewed, the newest attempt that
     left findings on disk, the newest attempt that reported. An attempt that lacks one of the three does not
@@ -109,4 +87,4 @@ def attempt_trail(driver, unit):
         ),
         None,
     )
-    return reviewed, str(findings) if findings else "", (reported or {}).get("report_path") or ""
+    return reviewed, str(findings) if findings else "", (reported or {}).get("report")

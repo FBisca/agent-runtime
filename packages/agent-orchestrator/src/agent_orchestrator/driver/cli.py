@@ -280,9 +280,8 @@ def _add_run_timing(sub):
     sub.add_argument(
         "--idle-minutes",
         type=float,
-        default=10,
-        help="Minutes between the idle ticks: a unit whose agent and CI show nothing new is logged idle, "
-        "and at two ticks in a row the Lead is asked",
+        default=60,
+        help="Minutes an agent may show nothing new (state, report, CI) before the Lead is asked",
     )
     sub.add_argument(
         "--working-minutes",

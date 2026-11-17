@@ -117,34 +117,8 @@ class InvariantFixture(GateFixture):
         return (data["tasks"].get("t1") or {}).get("review", {}).get("path")
 
 
-class S1PayloadTests(InvariantFixture, unittest.TestCase):
-    @pytest.mark.spec("A refused report goes back to its sender")
-    def test_S1_a_malformed_report_is_refused_and_the_drive_reaches_finish(self):
-        """A prose check outcome is refused to the sender: the drive keeps its errors empty and finishes."""
-        # The refusal goes back to the sender, which writes a report the driver accepts; the unit then converges,
-        # is reviewed and merges. At base the drive exits 1 before any of that.
-        self.waits(
-            [
-                self.worker_done(tests=True, report=self.malformed()),
-                self.second_report(text=self.report("t1")),
-                self.reviewer_done(),
-            ]
-        )
-        result = self.run_driver()
-        answer = json.loads(result.stdout)
-        self.assertEqual(answer["errors"], [], "the drive booked a worker payload as its own error")
-        self.assertEqual(
-            self.run_events("error"), [], "the drive logged an error for a worker payload"
-        )
-        self.assertTrue(self.run_events("finish"), "the drive did not reach finish")
-        resumed = self.calls("resume")
-        self.assertTrue(resumed, "the sender was never told its report was refused")
-        self.assertIn("invalid check outcome", resumed[-1]["args"]["task"])
-        self.assertIn("report", resumed[-1]["args"]["task"].lower())
-
-
 class S1ControlTests(InvariantFixture, unittest.TestCase):
-    @pytest.mark.spec("A refused report goes back to its sender")
+    @pytest.mark.spec("A report is handed in through the runtime")
     def test_S1_control_a_well_formed_report_is_gated_as_before(self):
         """A report that meets the COMPLETE rules still converges and reaches its review."""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])

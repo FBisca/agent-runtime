@@ -98,7 +98,6 @@ class Driver(
     park_asks: Any
     recovered: Any
     ticks: Any
-    last_tick: Any
     working_since: Any
     run_logs: Any
     _archive: Any
@@ -172,7 +171,6 @@ class Driver(
         self.park_asks = 0  # how many times the park has asked the Lead again
         self.recovered = approval_recovery.Recovered()  # the approval a lost span was repaired with
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
-        self.last_tick = self.clock()
         self.working_since = {}  # task id -> when its agent was first seen `working`, unbroken
         self.run_logs = {}  # run id -> its failed-step log, once a round: the findings reuse the readiness read
 
@@ -368,9 +366,11 @@ class Driver(
         # return at once: it is not work, so a run with only parked units left ends.
         parked = self.parked_assignments()
         # An attempt recovered after this wait is one it could not list: the next wait settles it, not `status`.
-        idle = not recovered and not [
-            entry for entry in result.get("unfinished") or [] if entry not in parked
-        ]
+        idle = (
+            not recovered
+            and not self.nudged
+            and not [entry for entry in result.get("unfinished") or [] if entry not in parked]
+        )
         if not (dispatched or acted or self.received):
             self.idle()
         return idle

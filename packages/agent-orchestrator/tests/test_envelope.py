@@ -289,7 +289,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         )
         brief = (self.run_dir / "t1r1" / "missing.md").read_text(encoding="utf-8")
         self.assertIn("Q1", brief)
-        self.assertIn("report.2.json", brief)
+        self.assertIn("Hand in a full report again", brief)
         self.assertEqual(self.ledger_failed(), 1)
         self.assertEqual(len(self.run_events("round")), 1)
         self.assertEqual(self.task("t1r1")["gate"], "done")

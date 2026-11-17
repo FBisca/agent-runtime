@@ -71,7 +71,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
         if complete:
             step.pop("agents")
             step["complete"] = ["demo-t1"]
-        if report:
+        if report and complete:
             step["write"].append([str(self.run_dir / "t1" / "report.json"), self.report("t1")])
         step["write"].append(
             [str(self.worktree / "src" / "a" / "x.py"), "def x():\n    return 1\n"]
@@ -87,7 +87,11 @@ class BaselineTests(GateFixture, unittest.TestCase):
     def worker_complete(self):
         """A wait step: the runtime delivers the worker's completion message. The reviewer is already running, so
         the runtime still holds it open: the driver must not read the run as over."""
-        return {"complete": ["demo-t1"], "agents": ["demo-t1-review"]}
+        return {
+            "complete": ["demo-t1"],
+            "agents": ["demo-t1-review"],
+            "write": [[str(self.run_dir / "t1" / "report.json"), self.report("t1")]],
+        }
 
     def reviewer_complete(self):
         """A wait step: the reviewer wrote its review and the runtime delivered the completion message."""

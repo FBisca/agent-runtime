@@ -20,7 +20,7 @@ TICKET = SimpleNamespace(id="T1", satisfies=["S1"], paths=["src/", "tests/test_a
 
 def gate(covers):
     report = {"contract": 3, "task_id": "t1", "covers": covers}
-    return verify.covers(TICKET, report, "/repo", "main", {"tests/test_a.py"}, {})
+    return verify.covers(TICKET, report, "/repo", "main", {"tests/test_a.py"})
 
 
 class ImplementationProvidesItsEvidence(unittest.TestCase):
@@ -40,4 +40,4 @@ class ImplementationProvidesItsEvidence(unittest.TestCase):
     def test_the_same_report_with_a_changed_covering_node_passes(self):
         with mock.patch.object(verify, "node_problem", return_value=None) as problem:
             self.assertEqual(gate({"S1": [NODE]}), [])
-        problem.assert_called_once_with("/repo", NODE, "main", {"tests/test_a.py"}, {})
+        problem.assert_called_once_with("/repo", NODE, "main", {"tests/test_a.py"}, "")

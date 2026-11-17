@@ -67,7 +67,7 @@ def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
     for alternatives in ((), (other,)):
         notices.clear()
         result = driver.Driver.read_payload(
-            cast(Any, reader), "t1", "report", expected, Path.read_text, alternatives
+            cast(Any, reader), "t1", "review", expected, Path.read_text, alternatives
         )
         assert result is None
         assert str(expected) in str(notices)
@@ -77,24 +77,18 @@ def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
     notices.clear()
     assert (
         driver.Driver.read_payload(
-            cast(Any, reader), "t1", "report", expected, Path.read_text, (other,)
+            cast(Any, reader), "t1", "review", expected, Path.read_text, (other,)
         )
         is None
     )
     assert str(expected) in str(notices) and str(other) in str(notices)
     expected.unlink()
-    from agent_orchestrator.driver.review import review_brief
-
-    book = SimpleNamespace(task=lambda _: {"report_path": str(expected), "report": {}})
     stub = SimpleNamespace(
         run_dir=tmp_path,
         plan_path=tmp_path / "plan.yaml",
         args=SimpleNamespace(base="main"),
-        book=book,
     )
     packet = {"checkout": str(tmp_path), "unit": "t1", "task_id": "t1"}
-    with pytest.raises(ValueError, match="report.json.*expected.*report"):
-        review_brief(stub, packet, tmp_path / "review.json")
     monkeypatch.setenv(driver.TDD_SKILL_ENV, str(expected))
     ticket = {"#": "T1", "What it delivers": "work"}
     packet.update({"checks": [], "owns": [], "worker": "worker"})
@@ -161,12 +155,12 @@ class PointerRun(GateFixture, unittest.TestCase):
         assert {"t1", "t1r1", "t1-review", "t1a1"} <= {p.parent.name for p in artifacts}
         rendered = [(str(path), path.read_text()) for path in artifacts]
         rendered.extend(self.other_outputs())
-        from agent_orchestrator.driver.records import TEST_SCOPE_INSTRUCTION
+        from agent_orchestrator.driver.records import CHECK_INSTRUCTIONS
 
         # Every brief that sends a worker back to its gate keeps it on targeted tests.
         for name, content in rendered:
             if name in ("rebase", "answer", "retry"):
-                assert TEST_SCOPE_INSTRUCTION in content, name
+                assert CHECK_INSTRUCTIONS in content, name
         guard = PointerGuard(self.worktree)
         for artifact, content in rendered:
             assert not guard.violations(content), (artifact, guard.violations(content))
@@ -196,7 +190,7 @@ class PointerRun(GateFixture, unittest.TestCase):
         trail = (
             "",
             str(self.run_dir / "t1r1" / "findings.json"),
-            str(self.run_dir / "t1r1" / "report.json"),
+            None,
         )
         sender = Spawning(
             SimpleNamespace(
@@ -360,4 +354,3 @@ def archive_output(tmp_path):
     body = call[call.index("--body") + 1]
     shutil.rmtree(checkout)
     assert not PointerGuard(tmp_path).violations(body), body
-    assert (tmp_path / "archive" / "report.json").is_file()

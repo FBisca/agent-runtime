@@ -31,6 +31,7 @@ __all__ = [
     "CHECK_INSTRUCTIONS",
     "CI_EXCERPT_CHARS",
     "CONTRACT",
+    "FENCE",
     "DECISION_KEYS",
     "DRIVER_ID",
     "DRIVER_MARKS",
@@ -57,13 +58,11 @@ __all__ = [
     "Refused",
     "Routes",
     "SILENT",
-    "SPELLING_INSTRUCTION",
     "STEPS",
     "SpawnSurface",
     "Spawning",
     "TDD_SKILL_ENV",
     "TDD_SKILL_PLACES",
-    "TEST_SCOPE_INSTRUCTION",
     "TREE_TIMEOUT",
     "TURN_ENDED",
     "USAGE_COLUMNS",
@@ -165,7 +164,6 @@ __all__ = [
     "owned_paths",
     "owned_scope",
     "pane_name",
-    "passed_checks",
     "payload_waits",
     "plan_home",
     "plan_slug",
@@ -173,6 +171,7 @@ __all__ = [
     "plan_status",
     "re",
     "read_decision",
+    "read_hand_in",
     "read_json",
     "read_ledger_file",
     "read_repo_config",
@@ -180,7 +179,6 @@ __all__ = [
     "ready",
     "rebuild_evidence",
     "rebuild_metrics",
-    "recover_worker_report",
     "reference",
     "render",
     "release",
@@ -189,7 +187,6 @@ __all__ = [
     "repo_key",
     "repo_root",
     "report_crash",
-    "report_reader",
     "reported_attempt",
     "require",
     "require_completable",
@@ -209,7 +206,6 @@ __all__ = [
     "runtime_process",
     "satisfied",
     "scenario_number",
-    "settle_merged",
     "short",
     "show",
     "snapshot_dir",
@@ -311,7 +307,6 @@ from .book import claim as claim
 from .book import merged_snapshot_of as merged_snapshot_of
 from .book import owned_paths as owned_paths
 from .book import release as release
-from .book import settle_merged as settle_merged
 from .book import snapshot_of as snapshot_of
 from .book import task_summary as task_summary
 from .book import unit_summary as unit_summary
@@ -355,7 +350,8 @@ from .findings import Findings as Findings
 from .gates import STEPS as STEPS
 from .gates import Gates as Gates
 from .gates import step_failed as step_failed
-from .handoff import recover_worker_report as recover_worker_report
+from .handoff import FENCE as FENCE
+from .handoff import read_hand_in as read_hand_in
 from .lifecycle import Lifecycle as Lifecycle
 from .lifecycle import metrics as metrics
 from .lifecycle import sum_usage as sum_usage
@@ -380,8 +376,6 @@ from .pull import job_log as job_log
 from .pull import log_tail as log_tail
 from .records import CHECK_INSTRUCTIONS as CHECK_INSTRUCTIONS
 from .records import ROUTE as ROUTE
-from .records import SPELLING_INSTRUCTION as SPELLING_INSTRUCTION
-from .records import TEST_SCOPE_INSTRUCTION as TEST_SCOPE_INSTRUCTION
 from .records import assignment_of as assignment_of
 from .records import check_commit as check_commit
 from .records import context_verdict as context_verdict
@@ -391,9 +385,7 @@ from .records import merge_state as merge_state
 from .records import newest_attempts as newest_attempts
 from .records import normalise_check as normalise_check
 from .records import open_attempt as open_attempt
-from .records import passed_checks as passed_checks
 from .records import ready as ready
-from .records import report_reader as report_reader
 from .records import reported_attempt as reported_attempt
 from .records import require_completable as require_completable
 from .records import routed as routed

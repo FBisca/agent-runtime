@@ -74,7 +74,6 @@ class WorkflowTests(unittest.TestCase):
             "acceptance_met": True,
             "decisions": ["Keep error format"],
             "interfaces": [],
-            "remaining": [],
             "checks": [{"command": "unit-check", "outcome": "passed"}],
         }
 
@@ -165,13 +164,8 @@ class WorkflowTests(unittest.TestCase):
             app.checkpoint(self.data, "validation", self.report())
         app.bind(self.data, "validation", "child")
         invalid = [
-            dict(self.report(), checks=[]),
             dict(self.report(), acceptance_met=False),
-            dict(self.report(), remaining=["finish tests"]),
-            dict(
-                self.report(),
-                checks=[{"command": "unit-check", "outcome": "failed", "reason": "broken"}],
-            ),
+            dict(self.report(), checks=[{"command": "unit-check", "outcome": "green"}]),
         ]
         for report in invalid:
             with self.assertRaises(ValueError):

@@ -86,28 +86,13 @@ class VerifyFixture(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-qm", message)
 
-    def measured(self, covers):
-        """A `test_cost` that accounts for every test file and covered node this ticket changed."""
-        files, added = verify.changed(self.repo, "main")
-        patterns = yaml_plan.repo_config(self.repo).test_patterns
-        modules = {
-            name: 0.25
-            for name in files
-            if yaml_plan.is_test_path(name, patterns) and added.get(name)
+    def gate(self, covers, red=None, others=(), done=(), **ticket):
+        report = {
+            "contract": 3,
+            "task_id": "t1",
+            "covers": covers,
+            "red": seen_red(covers) if red is None else red,
         }
-        return {
-            "command": "uv run pytest tests/ --durations=0 -q",
-            "modules": modules,
-            "tests": {node: 0.25 for nodes in covers.values() for node in nodes},
-        }
-
-    AUTO = object()
-
-    def gate(self, covers, test_cost=AUTO, others=(), done=(), **ticket):
-        report = {"contract": 3, "task_id": "t1", "covers": covers, "red": seen_red(covers)}
-        cost = self.measured(covers) if test_cost is self.AUTO else test_cost
-        if cost is not None:
-            report["test_cost"] = cost
         return verify.invariants(
             model(others, **ticket),
             "T1",
@@ -140,17 +125,25 @@ class CoversTests(VerifyFixture):
         self.assertIn("does not exist", text)
 
     @pytest.mark.spec("Scenario evidence")
-    def test_S9_a_node_missing_from_an_existing_file_is_refused(self):
+    def test_a_node_whose_name_the_red_excerpt_lacks_is_refused_in_any_language(self):
+        """The one rule for every language: the worker copies the name from the runner's failing output."""
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
+        self.write("web/a.test.ts", "it('shows the total', () => {})\n")
         findings = self.gate(
-            {"S1": ["tests/test_a.py::test_nope"], "S2": ["tests/test_a.py::test_new"]}
+            {"S1": ["tests/test_a.py::test_new"], "S2": ["web/a.test.ts::shows the total"]},
+            red={
+                "S1": "FAILED tests/test_a.py::test_other",
+                "S2": "FAIL a.test.ts > shows the total",
+            },
+            paths=["web/", "tests/"],
         )
         self.assertEqual(
             self.found(findings),
             [
                 (
                     "covers",
-                    "S1: test node tests/test_a.py::test_nope does not exist (no test_nope in tests/test_a.py)",
+                    "S1: test node tests/test_a.py::test_new: the red excerpt does not contain test_new;"
+                    " copy the name from the runner's failing output",
                 )
             ],
         )
@@ -173,19 +166,15 @@ class CoversTests(VerifyFixture):
         )
 
     @pytest.mark.spec("Scenario evidence")
-    def test_S9_an_untouched_test_beside_a_changed_one_in_the_same_file_did_not_change(self):
-        self.write("tests/test_old.py", OLD_TESTS + "\ndef test_added():\n    assert 1\n")
+    def test_one_counting_node_is_enough_for_a_scenario(self):
+        self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
         findings = self.gate(
-            {"S1": ["tests/test_old.py::test_added"], "S2": ["tests/test_old.py::test_old"]},
-            paths=["tests/test_old.py"],
+            {
+                "S1": ["tests/test_a.py::test_new", "tests/test_old.py::test_old"],
+                "S2": ["tests/test_a.py::test_new"],
+            }
         )
-        self.assertEqual(
-            [c for c, _ in self.found(findings)],
-            ["covers"],
-        )
-        self.assertIn(
-            "S2: test node tests/test_old.py::test_old did not change", findings[0]["excerpt"]
-        )
+        self.assertEqual(findings, [])
 
     @pytest.mark.spec("Scenario evidence")
     def test_S9_a_class_method_node_and_a_committed_change_count(self):
@@ -213,79 +202,6 @@ class CoversTests(VerifyFixture):
         self.assertEqual(
             [e.split(":")[0] for c, e in self.found(findings) if c == "covers"], ["S1", "S2", "S3"]
         )
-
-
-class TestCostTests(VerifyFixture):
-    """A ticket that changes a test names what those tests cost, timed by whatever runner the repository uses."""
-
-    def changed_test(self):
-        self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
-        return {"S1": ["tests/test_a.py::test_new"], "S2": ["tests/test_a.py::test_new"]}
-
-    @pytest.mark.spec("Test changes carry their cost")
-    def test_S1_a_changed_test_without_test_cost_is_refused_naming_the_file_and_the_fix(self):
-        findings = self.gate(self.changed_test(), test_cost=None)
-        (finding,) = [f for f in self.found(findings) if f[0] == "test_cost"]
-        self.assertIn("no test_cost", finding[1])
-        self.assertIn("the command that timed the touched tests", finding[1])
-
-    @pytest.mark.spec("Test changes carry their cost")
-    def test_S1_a_test_cost_without_a_command_is_refused(self):
-        covers = self.changed_test()
-        cost = self.measured(covers)
-        cost["command"] = " "
-        findings = self.gate(covers, test_cost=cost)
-        self.assertEqual(
-            [f for f in self.found(findings) if f[0] == "test_cost"],
-            [
-                (
-                    "test_cost",
-                    "test_cost.command is empty: time the touched tests and name the command that did",
-                )
-            ],
-        )
-
-    def test_S1_any_runners_timing_command_is_accepted(self):
-        """The repository may use any runner: verify names no runner or flag of its own."""
-        covers = self.changed_test()
-        for command in ("npx vitest run --reporter=verbose tests/a.test.ts", "go test -v ./..."):
-            with self.subTest(command=command):
-                cost = self.measured(covers)
-                cost["command"] = command
-                findings = self.gate(covers, test_cost=cost)
-                self.assertEqual([f for f in self.found(findings) if f[0] == "test_cost"], [])
-
-    def test_S1_a_missing_module_row_names_the_file(self):
-        covers = self.changed_test()
-        cost = self.measured(covers)
-        cost["modules"] = {}
-        (finding,) = [
-            f for f in self.found(self.gate(covers, test_cost=cost)) if f[0] == "test_cost"
-        ]
-        self.assertIn("tests/test_a.py", finding[1])
-
-    def test_S1_a_missing_node_row_names_the_node(self):
-        covers = self.changed_test()
-        cost = self.measured(covers)
-        cost["tests"] = {}
-        (finding,) = [
-            f for f in self.found(self.gate(covers, test_cost=cost)) if f[0] == "test_cost"
-        ]
-        self.assertIn("tests/test_a.py::test_new", finding[1])
-
-    def test_S1_a_negative_or_boolean_second_is_not_a_measurement(self):
-        covers = self.changed_test()
-        for value in (-1, True):
-            cost = self.measured(covers)
-            cost["modules"] = {"tests/test_a.py": value}
-            findings = self.gate(covers, test_cost=cost)
-            self.assertTrue([f for f in self.found(findings) if f[0] == "test_cost"], value)
-
-    @pytest.mark.spec("Test changes carry their cost")
-    def test_S1_a_change_with_no_test_needs_no_test_cost(self):
-        self.write("src/a/x.py", "x = 1\n")
-        files, added = verify.changed(self.repo, "main")
-        self.assertEqual(verify.test_cost({}, self.repo, "main", files, added), [])
 
 
 class ScopeAndIntegrityTests(VerifyFixture):
@@ -385,7 +301,6 @@ class FolderPlanIntegrityTests(VerifyFixture):
         plan_path = Path("/elsewhere/plan.yaml") if outside else self.repo / plan_rel
         report = {"contract": 3, "task_id": "t1", "covers": self.covers}
         report["red"] = seen_red(self.covers)
-        report["test_cost"] = self.measured(self.covers)
         return self.found(
             verify.invariants(
                 folder_model(**ticket),

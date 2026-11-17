@@ -32,7 +32,7 @@ def attempt(task_id, unit, started_at, report):
     return {
         "packet": {"task_id": task_id, "unit": unit},
         "started_at": started_at,
-        "report_path": report,
+        "report": {"task_id": task_id, "path": report},
     }
 
 
@@ -52,7 +52,9 @@ class TrailOrderTests(unittest.TestCase):
             }
         )
         _reviewed, _findings, report = driver.unit_trail("t1")
-        self.assertEqual(report, "/run/t1o1/report.json", "a stale attempt's report was answered")
+        self.assertEqual(
+            report["path"], "/run/t1o1/report.json", "a stale attempt's report was answered"
+        )
 
 
 if __name__ == "__main__":

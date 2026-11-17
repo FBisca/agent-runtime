@@ -105,14 +105,14 @@ When the drive adopts a re-approval that changes the `paths`, `satisfies` or `de
 - THEN the run proceeds: the lint runs in `plan check` and `plan approve` only
 
 ### Requirement: Scenario evidence
-Verify SHALL pass a ticket report only when every scenario the ticket satisfies is mapped in `covers` to a test node the ticket changed and that was seen failing before the fix.
+Verify SHALL pass a ticket report only when every scenario the ticket satisfies is mapped in `covers` to a test node `path::name` whose file exists and changed in the ticket and whose name its `red` excerpt contains, the one rule for every language.
 
 #### Scenario: an unmapped or unchanged covering node
-- WHEN a ticket report (contract 3) leaves a satisfied scenario unmapped in `covers`, or maps it to a test node that does not exist or did not change in the ticket
-- THEN verify fails the gate with a fix round naming the scenario, the node and the reason; nothing in the plan exempts a scenario, and CI green on the same head proves the tests pass
+- WHEN a ticket report (contract 3) leaves a satisfied scenario unmapped in `covers`, or maps it only to test nodes whose file does not exist, did not change in the ticket, or whose name the scenario's `red` excerpt does not contain
+- THEN verify fails the gate with a fix round naming the scenario, the node and the reason; one counting node is enough and the worker copies the name from the runner's failing output; nothing in the plan exempts a scenario, and CI green on the same head proves the tests pass
 
 #### Scenario: a missing red excerpt
-- WHEN a report carries no `red` excerpt for a satisfied scenario, or one that names none of that scenario's `covers` nodes
+- WHEN a report carries no `red` excerpt for a satisfied scenario
 - THEN verify fails the gate with a fix round naming the scenario; the reviewer judges whether each excerpt is a genuine assertion failure of the behaviour, not an import error or a test that cannot fail
 
 #### Scenario: paths that can hold no test

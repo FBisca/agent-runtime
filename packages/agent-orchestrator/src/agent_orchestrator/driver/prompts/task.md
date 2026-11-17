@@ -1,5 +1,4 @@
 Contract: $contract
-Report: $report
 
 # $ticket: $delivers
 
@@ -12,12 +11,12 @@ Scope contents: $scope_contents
 Owns (edit nothing else): $owns.
 Shared databases are read-only; schema changes go through migrations in your own branch.
 
-Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists; keep that failing output for the report's `red`.
+Scenarios, verbatim. Work red-first: a test per scenario, seen failing before the code exists; keep that failing output for the report's `red`.
 $tdd
 
 $scenarios
 
-Before you report COMPLETE, run: $checks.
+Before you hand in, run: $checks.
 $check_instructions
 $full_suite
 Then open a draft pull request against $pr_base.

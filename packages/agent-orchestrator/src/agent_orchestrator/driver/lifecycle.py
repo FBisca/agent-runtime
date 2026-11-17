@@ -26,7 +26,6 @@ from ..report_rules import require
 from ..timeutil import iso as now
 from .answers import IntentUnsettled, Unreadable
 from .book import release, worker_name
-from .handoff import recover_worker_report
 from .prompts import render
 from .records import is_agent, ready, satisfied, terminal_gone
 from .report import cell, metrics_table, show
@@ -420,8 +419,6 @@ class Lifecycle:
                     assignment_id, "exited", "the runtime answered " + said, quiet=True
                 )
                 acted += 1
-            elif recover_worker_report(self, task_id, assignment_id):
-                acted += 1
             else:
                 acted += self.redispatch(task_id, said)
         return acted
@@ -433,8 +430,6 @@ class Lifecycle:
         Lead is told. Returns 1 when it acted, 0 otherwise.
         """
         ended = said in ("idle", "done")
-        if ended and role == "worker" and recover_worker_report(self, task_id, assignment_id):
-            return 1
         self.strand(
             task_id,
             name,

@@ -23,7 +23,7 @@ from typing import Any
 from .. import contracts, narrate, timeutil
 from ..ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from ..invariants import PARKED, next_path
-from .book import ARCHIVE, checkpoint, settle_merged
+from .book import ARCHIVE, checkpoint
 from .records import merge_state, open_attempt, reported_attempt, unit_attempt
 from .report import item_text
 from .runtime import head_of
@@ -124,14 +124,8 @@ class Pull:  # noqa: PLR0904
     def pr_url(self, task_id):
         """The unit's pull request: a fix round opens none, so fall back to an earlier attempt's report."""
         task = self.task(task_id)
-        reports = []
-        if task.get("report_path"):
-            try:
-                reports.append(contracts.load(task["report_path"], contracts.validate_report))
-            except contracts.ContractError:
-                pass
         with self.book() as data:
-            reports += [
+            reports = [
                 t["report"]
                 for t in data["tasks"].values()
                 if t["packet"].get("unit") == task["packet"]["unit"] and t.get("report")
@@ -149,7 +143,7 @@ class Pull:  # noqa: PLR0904
             )
         match = re.fullmatch(r"https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)/?", url or "")
         if match is None:
-            raise ValueError("report.json names no pull request URL to check (pr: %r)" % url)
+            raise ValueError("the report names no pull request URL to check (pr: %r)" % url)
         return url, "%s#%s" % match.groups()
 
     def pr_of(self, task_id):
@@ -393,7 +387,7 @@ class Pull:  # noqa: PLR0904
         log = next_path(self.run_dir / task_id, check, ".log")[0]
         log.write_text(excerpt + "\n", encoding="utf-8")
         self.log("conflict", unit=unit, task=task_id, pr=url, state=status)
-        report = contracts.load(self.task(task_id)["report_path"], contracts.validate_report)
+        report = self.task(task_id)["report"]
         item = {
             "id": "BR1",
             "kind": "blocking",
@@ -455,28 +449,18 @@ class Pull:  # noqa: PLR0904
                 _engine().enter_plan_state(data, "ARCHIVED")
 
     def complete_merged(self, task_id, report):
-        """The ledger's COMPLETE for a merged unit. A merge is final, so a report that fails the COMPLETE rules does
-        not hold it back: the unit completes with the checks as reported, deferred.md says what went unverified, and no
-        Lead is asked. False when the ledger refuses for another reason (a closed task); the Lead is asked then."""
-        unverified = None
+        """The ledger's COMPLETE for a merged unit. A merge is final, so a checkout that is gone does not hold it
+        back. False when the ledger refuses (a closed task); the Lead is asked then."""
         gone = self.task(task_id)["packet"]["checkout"]
         if not Path(gone).exists():
             self.log("merged-checkout-missing", task=task_id, checkout=gone)
             narrate.say("warn", "merge", "merged, but its checkout %s is gone" % gone, task=task_id)
         try:
             with self.book() as data:
-                try:
-                    checkpoint(data, task_id, report, merged=True)
-                except ValueError as error:
-                    unverified = " ".join(str(error).split())
-                    settle_merged(data, task_id, report)
+                checkpoint(data, task_id, report, merged=True)
         except ValueError as error:
             self.request(task_id, "merge", "merged, but the ledger rejected COMPLETE: %s" % error)
             return False
-        if unverified:
-            unit = self.unit_of(task_id)
-            self._defer_unverified(task_id, unverified)
-            self.log("merged-unverified", unit=unit, task=task_id, reason=unverified)
         return True
 
     def merged_early(self, task_id, state):
@@ -525,7 +509,6 @@ class Pull:  # noqa: PLR0904
             "files": [],
             "decisions": [],
             "interfaces": [],
-            "remaining": [],
             "checks": self._reported_checks(task_id),
             "review_rounds": 0,
             "usage": "unknown",
@@ -567,11 +550,6 @@ class Pull:  # noqa: PLR0904
                     "- %s %s [merged-early]: %s (%s)\n"
                     % (unit.upper(), item.get("id", "?"), item_text(item), source)
                 )
-
-    def _defer_unverified(self, task_id, reason):
-        """A unit that merged without meeting the COMPLETE rules: the human reads what went unverified."""
-        with self._deferred_file().open("a", encoding="utf-8") as stream:
-            stream.write("- [merged-unverified] %s: %s\n" % (task_id, reason))
 
     def keep(self, task_id, reason):
         self.mark(task_id, gate="done", cleanup="kept: " + reason)
