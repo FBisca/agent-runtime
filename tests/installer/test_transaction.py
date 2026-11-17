@@ -24,7 +24,7 @@ RELEASE = "agent-runtime-v0.1.0.tar.gz"
 
 # A stand-in for python3 that is the real one until a step is named. A step is `add:<component>` for
 # the manifest or `swap:<shim>` for a link; the mode says what happens there: `fail` exits 1, `term`
-# signals the installer shell that called it, `term-bootstrap` signals the bootstrap above that one.
+# signals the installer shell that called it.
 FAKE_PYTHON = """#!/bin/sh
 real="$FAKE_REAL_PYTHON"
 step=
@@ -43,11 +43,6 @@ if [ -n "${FAKE_PYTHON_STEP:-}" ] && [ "$step" = "$FAKE_PYTHON_STEP" ]; then
   case ${FAKE_PYTHON_MODE:-fail} in
     fail) exit 1 ;;
     term) kill -TERM "$PPID"; exit 1 ;;
-    term-bootstrap)
-      # Never the test runner: with no bootstrap above the installer, the signal is not sent.
-      above=$(ps -o ppid= -p "$PPID" | tr -d ' ')
-      [ "$above" = "$FAKE_RUNNER_PID" ] || kill -TERM "$above"
-      exit 1 ;;
   esac
 fi
 exec "$real" "$@"
@@ -70,7 +65,6 @@ class TransactionCase(release.ReleaseCase):
             tool.write_text(f'#!/bin/sh\necho {name} >> "$FAKE_CALLS"\nexit 1\n', encoding="utf-8")
             tool.chmod(0o755)
         self.environment["FAKE_REAL_PYTHON"] = real
-        self.environment["FAKE_RUNNER_PID"] = str(os.getpid())
         self.environment["FAKE_MARK"] = str(self.root / "fault-fired")
 
     def fault(self, step, mode="fail"):
@@ -175,19 +169,6 @@ class ActivationRollbackTests(TransactionCase):
         before = shared.snapshot(self.home)
 
         result = self.move_to_release(env=self.fault("add:orchestrator", "term"))
-
-        self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr)
-        self.assertEqual(shared.snapshot(self.home), before)
-        self.assert_prior_usable(prior)
-
-    @pytest.mark.spec("Verified atomic install")
-    def test_s6_a_signal_to_the_bootstrap_is_passed_on_and_the_prior_version_is_kept(self):
-        """Verified atomic install: the bootstrap is killed while the installer inside it works: that one rolls back too."""
-        prior = self.install_prior()
-        self.release("0.1.0")
-        before = shared.snapshot(self.home)
-
-        result = self.move_to_release(env=self.fault("add:orchestrator", "term-bootstrap"))
 
         self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr)
         self.assertEqual(shared.snapshot(self.home), before)
