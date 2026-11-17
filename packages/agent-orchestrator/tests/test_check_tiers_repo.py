@@ -39,7 +39,6 @@ ROOTS = (
     "herdr",
     "packages/agent-orchestrator/src",
     "packages/agent-eval/src",
-    "packages/agent-review/src",
     "packages/agent-runtime/src",
 )
 
