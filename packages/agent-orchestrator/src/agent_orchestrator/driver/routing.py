@@ -140,11 +140,11 @@ def is_yaml(plan_path):
 
 
 def require_yaml(plan_path):
-    """A plan is a plan/1 YAML file; a Markdown plan is refused with the way out."""
+    """A plan is a plan/2 YAML file; a Markdown plan is refused with the way out."""
     if not is_yaml(plan_path):
         raise PlanError(
-            "%s is not a plan/1 YAML plan (<name>.plan.yaml, or plan.yaml in its own folder): the Markdown plan format is no longer read. "
-            "Rewrite it as plan/1 YAML and run `plan check <plan.yaml>`, then `plan approve`"
+            "%s is not a plan/2 YAML plan (<name>.plan.yaml, or plan.yaml in its own folder): the Markdown plan format is no longer read. "
+            "Rewrite it as plan/2 YAML and run `plan check <plan.yaml>`, then `plan approve`"
             % plan_path
         )
 
@@ -610,7 +610,7 @@ class Routes:
 
     def contract_fields(self, ticket, scenarios):
         """The packet fields a ticket's contract fixes: what it delivers, the paths it owns, the scenarios it
-        satisfies and the checks its worker runs. A dispatch and an adopted amendment write the same ones."""
+        satisfies and the checks its worker runs. A dispatch and an adopted re-approval write the same ones."""
         owns = [p.strip() for p in ticket["Paths"].split(",") if p.strip()]
         checks, affected, full = self.tier_checks(owns)
         return {

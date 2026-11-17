@@ -14,7 +14,7 @@ from test_gates import GateFixture
 pytestmark = pytest.mark.integration
 
 PR = "https://github.com/o/r/pull/7"
-MENU = ["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer", "amend"]
+MENU = ["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]
 
 
 class WakeFixture(GateFixture):
@@ -552,6 +552,7 @@ class FailedHandOverTests(WakeFixture, unittest.TestCase):
         """The runtime refuses every resume of `name` with `error`, as it does a pane blocked on a login."""
         (self.home / "refuse_resume.json").write_text(json.dumps({name: error}), encoding="utf-8")
 
+    @pytest.mark.spec("A decision reaches its worker")
     def test_S8_a_decision_that_cannot_be_handed_over_raises_a_new_request_naming_why(self):
         """engine-gaps/S8"""
         self.refuse_resumes()
@@ -573,6 +574,7 @@ class FailedHandOverTests(WakeFixture, unittest.TestCase):
         )  # the second decision, `skip`, ended the unit
         self.assertEqual(len(self.calls("resume")), 1, "one resume, refused; nothing sent again")
 
+    @pytest.mark.spec("A decision reaches its worker")
     def test_S8_a_complete_that_lands_while_that_request_is_open_is_acted_on_without_a_hand_over(
         self,
     ):

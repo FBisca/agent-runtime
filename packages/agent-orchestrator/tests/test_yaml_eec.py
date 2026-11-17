@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fixtures import load_script, red_of, report_wait, spawn_id
+from fixtures import added, load_script, red_of, report_wait, spawn_id
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -21,17 +21,19 @@ LIFECYCLE = ["APPROVED", "RUNNING", "ACCEPTED", "ARCHIVED"]
 def plan_yaml():
     return yaml.safe_dump(
         {
-            "schema": "plan/1",
+            "schema": "plan/2",
             "slug": "demo",
             "goal": "The feature file says done.",
             "spec": "docs/specs/demo.md",
-            "scenarios": [
-                {
-                    "id": "S1",
-                    "when": "the feature is delivered",
-                    "then": "src/a/feature.txt reads done",
-                }
-            ],
+            "requirements": added(
+                [
+                    {
+                        "id": "S1",
+                        "when": "the feature is delivered",
+                        "then": "src/a/feature.txt reads done",
+                    }
+                ]
+            ),
             "tickets": [
                 {
                     "id": "T1",

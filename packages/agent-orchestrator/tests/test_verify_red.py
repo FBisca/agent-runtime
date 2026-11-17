@@ -29,16 +29,19 @@ def gate(red):
 
 
 class RedFirstProof(unittest.TestCase):
+    @pytest.mark.spec("Scenario evidence")
     def test_a_satisfied_scenario_without_a_red_excerpt_fails_naming_it(self):
         findings = gate(None)
         self.assertEqual([f["check"] for f in findings], ["red"])
         self.assertIn("S1: no red excerpt", findings[0]["excerpt"])
 
+    @pytest.mark.spec("Scenario evidence")
     def test_a_red_excerpt_that_names_another_node_fails_naming_the_scenario_and_its_nodes(self):
         findings = gate({"S1": "FAILED tests/test_b.py::test_other - AssertionError"})
         self.assertEqual([f["check"] for f in findings], ["red"])
         self.assertIn("S1", findings[0]["excerpt"])
         self.assertIn(NODE, findings[0]["excerpt"])
 
+    @pytest.mark.spec("Scenario evidence")
     def test_a_red_excerpt_that_names_the_covering_node_passes(self):
         self.assertEqual(gate({"S1": FAILED}), [])

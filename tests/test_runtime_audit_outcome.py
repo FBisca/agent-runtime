@@ -38,7 +38,7 @@ from agent_runtime.dispatch_store import Store  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
-PLUGIN = Path(__file__).resolve().parents[2]
+PLUGIN = Path(__file__).resolve().parents[1]
 HOOK = PLUGIN / "hooks" / "pre_tool_use.py"
 CLI = PLUGIN / "server" / "agent_runtime.py"
 

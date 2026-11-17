@@ -1,9 +1,10 @@
-"""The plan/1 YAML document: what a plan, its scenarios, its tickets and an approval are.
+"""The plan/2 YAML document: what a plan, its requirement changes, its tickets and an approval are.
 
 The models refuse an unknown key and a wrong type; `read_yaml` adds the duplicate-key and location
 diagnostics the models cannot see, both as a `PlanError` the CLI exits 2 on before dispatch. Nothing
-here reads the repository or runs a check. A scenario is its WHEN and THEN; the ticket that satisfies it
-provides its evidence, as the tests its report's `covers` maps it to.
+here reads the repository or runs a check. A plan changes its spec's requirements: it adds, modifies or
+removes them by title, and each scenario sits under the requirement it proves. A scenario is its WHEN and
+THEN; the ticket that satisfies it provides its evidence, as the tests its report's `covers` maps it to.
 """
 
 from pathlib import Path
@@ -50,8 +51,51 @@ class Mapping(BaseModel):
 
 class Scenario(Mapping):
     id: ScenarioId
+    name: Text | None = Field(
+        default=None, description="The scenario's heading in the spec; its WHEN when absent"
+    )
     when: Text
     then: Text
+
+
+class Requirement(Mapping):
+    """An added or modified requirement, stated whole: the archive writes it into the spec as it stands."""
+
+    title: Text
+    shall: Annotated[str, Field(min_length=1, pattern=r"\bSHALL\b")]
+    scenarios: Annotated[list[Scenario], Field(min_length=1, max_length=3)]
+
+
+class Removal(Mapping):
+    title: Text
+    why: Text
+
+
+class Changes(Mapping):
+    added: list[Requirement] = Field(default_factory=list)
+    modified: list[Requirement] = Field(default_factory=list)
+    removed: list[Removal] = Field(default_factory=list)
+
+
+def scenario_entries(data):
+    """(YAML path, mapping) of each scenario of a plan mapping, in plan order: each added, then each modified
+    requirement's. Rows that are not mappings are skipped; the model refuses them with their own path."""
+    changes = data.get("requirements") if isinstance(data, dict) else None
+    changes = changes if isinstance(changes, dict) else {}
+    entries = []
+    for kind in ("added", "modified"):
+        items = changes.get(kind)
+        for i, item in enumerate(items if isinstance(items, list) else []):
+            rows = item.get("scenarios") if isinstance(item, dict) else None
+            for j, row in enumerate(rows if isinstance(rows, list) else []):
+                if isinstance(row, dict):
+                    entries.append((f"requirements.{kind}[{i}].scenarios[{j}]", row))
+    return entries
+
+
+def scenario_rows(data):
+    """The scenario mappings of a plan mapping, in plan order."""
+    return [row for _, row in scenario_entries(data)]
 
 
 class Ticket(Mapping):
@@ -95,19 +139,11 @@ class Approval(Mapping):
     at: Text
     base: Annotated[str, Field(pattern=r"^[0-9a-f]{40,64}$")]
     digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-
-
-class Amendment(Mapping):
-    prev_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-    digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-    at: Text
-    by: Text
-    reason: Text
-    tickets: list[TicketId] = Field(default_factory=list)
+    reason: Text | None = None
 
 
 class Plan(Mapping):
-    schema_version: Literal["plan/1"] = Field(alias="schema")
+    schema_version: Literal["plan/2"] = Field(alias="schema")
     slug: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
     goal: Text
     spec: RepoPath | None = Field(
@@ -119,13 +155,18 @@ class Plan(Mapping):
         description="Folder plans: what archive does with the plan folder; the repo config's archive.mode when "
         "absent",
     )
-    scenarios: Annotated[list[Scenario], Field(min_length=1)]
+    requirements: Changes = Field(
+        description="The requirements this plan adds to, modifies in or removes from its spec, by title"
+    )
     tickets: Annotated[list[Ticket], Field(min_length=1)]
     approval: Approval | None = None
-    amendments: list[Amendment] = Field(
-        default_factory=list,
-        description="The history `plan amend` appends to: neither it nor the approval is part of the digest",
-    )
+
+    @property
+    def scenarios(self):
+        """Every scenario of the plan, in plan order: the added requirements', then the modified ones'."""
+        return [
+            s for r in self.requirements.added + self.requirements.modified for s in r.scenarios
+        ]
 
     @field_validator("spec")
     @classmethod
@@ -209,7 +250,7 @@ def read_yaml(path):
                         walk(v, loc + (i,))
 
             if node is None:
-                return None, ["plan: empty YAML — write a plan/1 mapping"]
+                return None, ["plan: empty YAML — write a plan/2 mapping"]
             walk(node, ())
             return loader.construct_document(node), loader.problems
         finally:

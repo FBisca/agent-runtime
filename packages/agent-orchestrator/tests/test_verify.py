@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from agent_orchestrator import plan as yaml_plan
 from agent_orchestrator import verify
+from fixtures import added
 
 pytestmark = pytest.mark.integration
 
@@ -29,15 +30,17 @@ def seen_red(covers, scenarios=("S1", "S2", "S3")):
 def model(**ticket):
     return yaml_plan.Plan.model_validate(
         {
-            "schema": "plan/1",
+            "schema": "plan/2",
             "slug": "demo",
             "goal": "deliver",
             "spec": "docs/specs/demo.md",
-            "scenarios": [
-                {"id": "S1", "when": "a", "then": "b"},
-                {"id": "S2", "when": "c", "then": "d"},
-                {"id": "S3", "when": "e", "then": "f"},
-            ],
+            "requirements": added(
+                [
+                    {"id": "S1", "when": "a", "then": "b"},
+                    {"id": "S2", "when": "c", "then": "d"},
+                    {"id": "S3", "when": "e", "then": "f"},
+                ]
+            ),
             "tickets": [
                 dict(
                     {
@@ -118,6 +121,7 @@ class VerifyFixture(unittest.TestCase):
 
 
 class CoversTests(VerifyFixture):
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_satisfied_scenario_mapped_to_changed_nodes_passes(self):
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
         self.assertEqual(
@@ -125,6 +129,7 @@ class CoversTests(VerifyFixture):
             [],
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_node_in_a_file_that_does_not_exist_names_scenario_node_and_reason(self):
         findings = self.gate({"S1": ["tests/test_gone.py::test_x"], "S2": ["tests/test_a.py::t"]})
         text = " | ".join(e for c, e in self.found(findings) if c == "covers")
@@ -132,6 +137,7 @@ class CoversTests(VerifyFixture):
         self.assertIn("tests/test_gone.py::test_x", text)
         self.assertIn("does not exist", text)
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_node_missing_from_an_existing_file_is_refused(self):
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
         findings = self.gate(
@@ -147,6 +153,7 @@ class CoversTests(VerifyFixture):
             ],
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_node_that_did_not_change_in_the_ticket_is_refused(self):
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
         findings = self.gate(
@@ -163,6 +170,7 @@ class CoversTests(VerifyFixture):
             ],
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_an_untouched_test_beside_a_changed_one_in_the_same_file_did_not_change(self):
         self.write("tests/test_old.py", OLD_TESTS + "\ndef test_added():\n    assert 1\n")
         findings = self.gate(
@@ -177,6 +185,7 @@ class CoversTests(VerifyFixture):
             "S2: test node tests/test_old.py::test_old did not change", findings[0]["excerpt"]
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_class_method_node_and_a_committed_change_count(self):
         self.write(
             "tests/test_a.py",
@@ -186,6 +195,7 @@ class CoversTests(VerifyFixture):
         nodes = ["tests/test_a.py::TestA::test_two"]
         self.assertEqual(self.gate({"S1": nodes, "S2": nodes}), [])
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_satisfied_scenario_left_unmapped_is_refused_and_named(self):
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
         findings = self.gate({"S1": ["tests/test_a.py::test_new"]})
@@ -194,6 +204,7 @@ class CoversTests(VerifyFixture):
             [("covers", "S2: no test node in covers; map the scenario to the tests that prove it")],
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_report_without_covers_names_every_satisfied_scenario_left_unmapped(self):
         # An implementation provides its evidence: no scenario is exempt from needing a covering node.
         findings = self.gate({}, satisfies=["S1", "S2", "S3"])
@@ -279,6 +290,7 @@ class ScopeAndIntegrityTests(VerifyFixture):
         super().setUp()
         self.write("tests/test_a.py", "def test_new():\n    assert 1\n")
 
+    @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_a_file_outside_the_ticket_paths_fails_naming_file_and_scope(self):
         self.write("src/b/other.py", "x = 1\n")
         self.assertEqual(
@@ -286,18 +298,21 @@ class ScopeAndIntegrityTests(VerifyFixture):
             [("scope", "src/b/other.py is outside the ticket paths (src/a/, tests/test_a.py)")],
         )
 
+    @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_a_file_inside_the_ticket_paths_passes_committed_or_not(self):
         self.write("src/a/x.py", "x = 1\n")
         self.commit("work")
         self.write("src/a/y.py", "y = 1\n")
         self.assertEqual(self.gate(self.covers), [])
 
+    @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_a_path_prefix_is_a_directory_not_a_string_prefix(self):
         self.write("src/ab/x.py", "x = 1\n")
         self.assertEqual([c for c, _ in self.found(self.gate(self.covers))], ["scope"])
 
+    @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_touching_the_plan_is_an_integrity_failure_even_inside_the_paths(self):
-        self.write(PLAN_REL, "schema: plan/1\n")
+        self.write(PLAN_REL, "schema: plan/2\n")
         found = self.found(self.gate(self.covers, paths=["docs/", "tests/test_a.py"]))
         self.assertEqual(
             found,
@@ -309,9 +324,10 @@ class ScopeAndIntegrityTests(VerifyFixture):
             ],
         )
 
+    @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_every_failing_rule_is_reported_in_one_gate(self):
         self.write("src/b/other.py", "x = 1\n")
-        self.write(PLAN_REL, "schema: plan/1\n")
+        self.write(PLAN_REL, "schema: plan/2\n")
         self.assertEqual(
             sorted(c for c, _ in self.found(self.gate({"S1": ["tests/test_a.py::test_new"]}))),
             ["covers", "integrity", "scope"],
@@ -351,6 +367,7 @@ class FolderPlanIntegrityTests(VerifyFixture):
             )
         )
 
+    @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S7_touching_a_file_of_the_plan_folder_is_an_integrity_failure_naming_it(self):
         for name in ("plan.yaml", "plan.md", "brief.md", "notes/design.md"):
             with self.subTest(name):

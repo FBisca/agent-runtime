@@ -36,7 +36,7 @@ verbatim: a review item's fields outside the core survive a round trip unchanged
                 list the action names as strings; they are still read.
 `decision.json` Lead (through `agent-orchestrator decide`): one `action` from the menu, a `reason`, and for `answer` the
                 `answer`. It carries the contract version of the request it answers, so the driver that wrote the
-                request reads it. Contract 3 adds the `amend` action; contracts 1 and 2 are still read.
+                request reads it; contracts 1 and 2 are still read.
 """
 
 import json
@@ -59,7 +59,6 @@ ACTIONS = (
     "mark blocked",
     "skip",
     "answer",
-    "amend",
 )  # the menu of a request
 LEAD_VERSION = 3  # what the driver writes for a request and a decision
 LEAD_SUPPORTED = (1, 2, 3)  # what it reads of them
@@ -70,10 +69,6 @@ SUMMARIES = {
     "mark blocked": "Park the unit as blocked until a person sets its Status to TO-DO.",
     "skip": "Release the unit without building it.",
     "answer": "Answer what the worker asked; the same worker resumes with your answer.",
-    "amend": (
-        "Change the plan to unblock the unit: the unit parks, then edit the plan and run `plan amend --reason`; the "
-        "same worker resumes once the run adopts the amendment."
-    ),
 }  # what each action does, as the typed menu says it
 MAJOR_FIELDS = ("id", "file", "line", "problem", "fix")  # contract 1
 KINDS = ("blocking", "concern", "question", "nit", "deferred")
@@ -99,9 +94,7 @@ Status = Literal["PARTIAL", "BLOCKED", "COMPLETE"]
 Kind = Literal["blocking", "concern", "question", "nit", "deferred"]
 Source = Literal["converge", "verify", "review", "ci", "conflict"]
 ReportContract = Literal[1, 2, 3]
-Action = Literal[
-    "retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer", "amend"
-]
+Action = Literal["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]
 ResponseStatus = Literal["fixed", "disputed"]
 ResolutionStatus = Literal["fixed", "disproven"]
 

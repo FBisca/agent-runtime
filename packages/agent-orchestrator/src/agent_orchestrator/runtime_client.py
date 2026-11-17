@@ -125,12 +125,12 @@ HOST_MARKERS = (
 
 
 def ask_the_lead(verb):
-    """The way out, for each caller: a worker cannot approve or amend, and a Lead the runtime cannot verify (a plain
+    """The way out, for each caller: a worker cannot approve, and a Lead the runtime cannot verify (a plain
     agent session with no hc ancestry) runs it where no agent marker makes its identity doubtful."""
     return (
         "%s belongs to the Lead (the person in their own session): a worker: ask the Lead to run plan %s; "
         "a Lead runs plan %s from a terminal with no agent host, or from its hc Lead terminal"
-        % ("approval" if verb == "approve" else "amendment", verb, verb)
+        % ("approval" if verb == "approve" else verb, verb, verb)
     )
 
 

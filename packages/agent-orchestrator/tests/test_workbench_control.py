@@ -52,7 +52,7 @@ class PanelFixture(WorkbenchFixture):
         data["slug"] = slug
         return self.write_plan(data)
 
-    def ledger(self, slug, statuses, plan_state, tasks=None, agents=None):
+    def ledger(self, slug, statuses, plan_state, tasks=None, agents=None):  # ty: ignore[invalid-method-override]
         key = load_script().repo_key(self.repo)
         path = self.state_dir / key / (slug + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -46,7 +46,7 @@ COMMANDS = (
 )
 
 GROUPS = {
-    "plan": ("schema", "check", "approve", "amend"),
+    "plan": ("schema", "check", "approve"),
     "plans": ("list",),
     "workbench": ("plans", "plan", "totals"),
 }

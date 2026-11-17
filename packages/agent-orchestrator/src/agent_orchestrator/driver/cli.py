@@ -20,21 +20,23 @@ from . import __doc__ as ENGINE_DOC
 
 
 def add_plan_commands(commands):
-    """`plan`: the plan/1 contract's own verbs under one group."""
+    """`plan`: the plan/2 contract's own verbs under one group."""
     plan_commands = commands.add_parser(
-        "plan", help="Validate and approve plan/1 YAML contracts"
+        "plan", help="Validate and approve plan/2 YAML contracts"
     ).add_subparsers(dest="plan_command", required=True)
-    plan_commands.add_parser("schema", help="Print the plan/1 JSON Schema")
+    plan_commands.add_parser("schema", help="Print the plan/2 JSON Schema")
 
-    for verb in ("check", "approve", "amend"):
+    for verb in ("check", "approve"):
         sub = plan_commands.add_parser(verb)
         sub.add_argument("plan")
         sub.add_argument("--repo", help="Repository root; default the plan file's repository")
         sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
         if verb == "approve":
             sub.add_argument("--base", default="origin/main")
-        if verb == "amend":
-            sub.add_argument("--reason", required=True, help="Why the approved plan changes")
+            sub.add_argument(
+                "--reason",
+                help="Why the plan changes; a re-approval under a live driver keeps its approval's base",
+            )
 
 
 def add_plans_commands(commands):

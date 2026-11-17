@@ -20,10 +20,16 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fixtures import load_script
+from fixtures import added, load_script
 from test_yaml_eec import LIFECYCLE, YamlPlanFixture, plan_yaml
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.spec("Plan discovery"),
+    pytest.mark.spec("Plan layouts"),
+    pytest.mark.spec("Discard archive"),
+    pytest.mark.spec("Plan lifecycle"),
+]
 
 FOLDER = "2026-11-12-demo"
 
@@ -37,16 +43,18 @@ def config(plans, mode="promote"):
 
 def folder_plan(spec=True):
     data = {
-        "schema": "plan/1",
+        "schema": "plan/2",
         "slug": "demo",
         "goal": "The feature file says done.",
-        "scenarios": [
-            {
-                "id": "S1",
-                "when": "the feature is delivered",
-                "then": "src/a/feature.txt reads done",
-            }
-        ],
+        "requirements": added(
+            [
+                {
+                    "id": "S1",
+                    "when": "the feature is delivered",
+                    "then": "src/a/feature.txt reads done",
+                }
+            ]
+        ),
         "tickets": [
             {
                 "id": "T1",
@@ -226,7 +234,8 @@ class PromoteArchive(FolderPlanFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.status()["plan"]["history"], LIFECYCLE)
         self.assertIn(
-            "(from demo/S1)", self.git(self.origin, "show", "feat/demo-archive:docs/specs/demo.md")
+            "### Requirement: Demo",
+            self.git(self.origin, "show", "feat/demo-archive:docs/specs/demo.md"),
         )
         self.assertEqual(
             self.git(

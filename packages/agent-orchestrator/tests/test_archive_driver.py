@@ -4,7 +4,6 @@ import json
 import re
 import sys
 import unittest
-from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -14,45 +13,6 @@ from test_archive import ARCHIVE, ArchiveFixture
 from test_complete import NODE, PersonFixture
 
 pytestmark = pytest.mark.integration
-
-
-def driver_with(scenarios, covers, slug="demo"):
-    """A Driver that knows its plan's scenarios and the tickets' covers, nothing else (no run, no ledger)."""
-    driver = load_script().Driver.__new__(load_script().Driver)
-    driver.slug = slug
-    driver.model = SimpleNamespace(scenarios=scenarios)
-    driver.ticket_covers = lambda: covers
-    return driver
-
-
-def scenario(sid, when="a", then="b"):
-    return SimpleNamespace(id=sid, when=when, then=then)
-
-
-class SpecSectionUnit(unittest.TestCase):
-    def test_S2_a_scenario_the_spec_lacks_is_a_requirement_and_a_coverage_row(self):
-        driver = driver_with([scenario("S1", "a  b", "c\nd")], {"S1": ["t.py::t"]})
-        text = driver.spec_section("- **R4** x", {})
-        self.assertEqual(
-            text,
-            "## Requirements: demo\n\n- **R5** WHEN a b, THEN c d (from demo/S1)\n\n"
-            "## Coverage: demo\n\n| Requirement | Scenario | Test nodes |\n|---|---|---|\n| R5 | S1 | `t.py::t` |\n",
-        )
-
-    def test_S2_a_held_scenario_keeps_its_number_and_adds_no_requirement(self):
-        driver = driver_with([scenario("S1")], {"S1": ["t.py::t"]})
-        text = driver.spec_section("", {"S1": "R9"})
-        self.assertNotIn("## Requirements", text)
-        self.assertIn("| R9 | S1 | `t.py::t` |", text)
-
-    def test_S2_the_nodes_are_the_covers_joined_by_br(self):
-        driver = driver_with([scenario("S1")], {"S1": ["a::b", "c::d"]})
-        self.assertIn("| `a::b`<br>`c::d` |", driver.spec_section("", {}))
-
-    def test_S4_every_scenario_with_no_node_is_missing(self):
-        """An implementation provides its evidence: no scenario is exempt from its test node."""
-        driver = driver_with([scenario("S1"), scenario("S2"), scenario("S3")], {"S1": ["a::b"]})
-        self.assertEqual(driver.archive_missing(), ["S2", "S3"])
 
 
 def failing_once():
@@ -82,7 +42,9 @@ def failing_once():
     return mock.patch.object(load_script().Driver, "gate", gate)
 
 
+@pytest.mark.spec("Archive applies the change set")
 class DriverArchive(ArchiveFixture, unittest.TestCase):
+    @pytest.mark.spec("Archive applies the change set")
     def test_S1_the_archive_is_committed_pushed_and_opened_by_the_driver_with_no_trailer(self):
         self.waits(self.ticket_merged())
         self.run_driver()
@@ -93,17 +55,7 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
         message = self.git(self.origin, "log", "-1", "--format=%B", "feat/demo-archive")
         self.assertNotRegex(message, r"(?i)co-authored|generated with")
 
-    def test_S4_a_missing_node_opens_no_pr_and_asks_the_lead(self):
-        driver = driver_with([scenario("S1")], {})
-        driver.request = mock.Mock()
-        driver.archive_missing = load_script().Driver.archive_missing.__get__(driver)
-        driver.scenario_nodes = load_script().Driver.scenario_nodes.__get__(driver)
-        driver.build_archive = load_script().Driver.build_archive.__get__(driver)
-        driver.build_archive("archive")
-        task, kind, reason = driver.request.call_args.args
-        self.assertEqual((task, kind), ("archive", "archive"))
-        self.assertRegex(reason, r"S1.*`retry`.*`skip`")
-
+    @pytest.mark.spec("Archive applies the change set")
     def test_S5_a_failing_archive_gate_asks_the_lead_with_retry_and_skip_and_spawns_no_worker(self):
         self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
         with failing_once():
@@ -299,6 +251,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
 
 
 class ArchiveRouteRefusal(ArchiveFixture, unittest.TestCase):
+    @pytest.mark.spec("Archive has no agent route")
     def test_S7_a_route_config_naming_the_archive_step_is_refused_before_any_spawn(self):
         path = self.root / "routes.json"
         path.write_text(
@@ -334,6 +287,7 @@ class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
         self.first_drive()
         self.assertIn("ACCEPTED", self.history())
 
+    @pytest.mark.spec("Plan lifecycle")
     def test_S7_the_archive_neither_starts_nor_asks_for_a_node_while_a_person_ticket_is_open(self):
         self.first_drive()
         self.assertFalse((self.run_dir / "archive" / "request.json").exists())
@@ -348,21 +302,12 @@ class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ACCEPTED", self.history())
 
-    def test_S7_after_complete_the_next_run_archives_with_the_cover_node_in_the_coverage_row(self):
+    @pytest.mark.spec("Person tickets")
+    def test_S7_after_complete_the_next_run_archives_with_the_person_tickets_requirement(self):
         self.first_drive()
         code, said = self.complete("T2", "S2=" + NODE)
         self.assertEqual(code, 0, said)
         self.drive_once([])
         self.assertEqual(self.history()[-1], "ARCHIVED")
         spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
-        rows = [line for line in spec.splitlines() if line.startswith("| R") and "| S2 |" in line]
-        self.assertEqual(len(rows), 1, spec)
-        self.assertIn("`%s`" % NODE, rows[0])
-
-    def test_S7_a_person_ticket_completed_with_no_cover_leaves_its_scenario_to_be_asked_for(self):
-        self.first_drive()
-        self.assertEqual(self.complete("T2")[0], 0)
-        self.drive_once([self.skip_archive_if_asked()] * 4)
-        request = json.loads((self.run_dir / "archive" / "request.json").read_text("utf-8"))
-        self.assertIn("S2", request["reason"])
-        self.assertIn("no test node", request["reason"])
+        self.assertIn("### Requirement: Also S2", spec)

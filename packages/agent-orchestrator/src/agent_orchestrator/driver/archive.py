@@ -4,8 +4,8 @@ A drive that can go no further parks. The ledger keeps one record of it - its ki
 approval the drive holds, since when, the units and the way out - `attention.md` shows that record
 beside the tickets that need a person, the Lead is woken with it, and a park with nothing in flight
 asks again until it is answered. A plan whose tickets are all done is archived: a discard deletes its
-folder, a promote deletes the folder (or copies a legacy plan's files), writes the spec section with its
-Coverage table, commits, pushes and opens the pull request. A park the Lead answers is reopened from the plan, and the guard that catches an escaping error
+folder, a promote deletes the folder (or copies a legacy plan's files), applies the plan's requirement
+changes to its spec, commits, pushes and opens the pull request. A park the Lead answers is reopened from the plan, and the guard that catches an escaping error
 logs it, wakes the Lead and says it on stderr.
 
 It lives beside `__init__.py` rather than in it because no module of the package may pass a thousand
@@ -22,16 +22,14 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
-from .. import approval_recovery, contracts, narrate, timeutil
+from .. import approval_recovery, contracts, narrate, spec_blocks
 from .. import config as repo_config
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
-from ..invariants import AMENDING, PARKED, next_path
+from ..invariants import PARKED, next_path
 from .book import ARCHIVE
 from .records import is_agent, is_done
-from .report import cell
 from .runtime import TREE_TIMEOUT, head_of
-from .spec import spec_defects
 
 
 def _engine():
@@ -53,10 +51,10 @@ PARK_ASK_EVERY = 30 * 60.0  # seconds between the asks after the first, until th
 # The runtime id of a unit the driver does itself: no agent is behind the archive.
 DRIVER_ID = "driver"
 
-# What the archive's worker is held to: the spec section and the approved bytes, in the worker's words.
+# What the archive unit is held to, in a worker's words: the change set applied and the approved bytes kept.
 YAML_ARCHIVE_ACCEPTANCE = [
-    "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
-    "plan.yaml and its Markdown narrative are byte-identical to the approved copies; no test is renamed and no Status is written into plan.yaml",
+    "The plan's spec holds each added and modified requirement as the plan states it, and no removed one",
+    "plan.yaml and its Markdown narrative are byte-identical to the approved copies",
 ]
 
 
@@ -127,11 +125,10 @@ class Archive:
         self.refresh_attention()
         return record
 
-    def end_park(self, kind="plan"):
-        """The park is over: the ledger and attention.md stop naming it. With `kind`, only a park of that kind ends,
-        so a plan the drive could not use and units that wait for an amendment are not taken for each other."""
+    def end_park(self):
+        """The park is over: the ledger and attention.md stop naming it."""
         with self.book() as data:
-            ended = ledgers.end_park(data, kind)
+            ended = ledgers.end_park(data)
         if ended is None:
             return None
         self.refresh_attention()
@@ -140,8 +137,7 @@ class Archive:
     def park_due(self):
         """Whether the park owes the Lead another ask: fifteen minutes in, then every thirty, while nothing is in
         flight. A parked unit's assignment is open in the runtime but is no work (`parked_assignments`), so it never
-        silences the park: the unit the Lead parked to amend the plan is the one watching for the answer. The plan is
-        never given up for it (R126 keeps the drain's promise) and no worker starts."""
+        silences the park. The plan is never given up for it (R126 keeps the drain's promise) and no worker starts."""
         if not self.drain or self.unfinished - self.parked_assignments():
             return False
         interval = PARK_ASK_EVERY if self.park_asks else PARK_ASK_FIRST
@@ -157,42 +153,6 @@ class Archive:
         narrate.say("ask", None, narrate.park_ask(park, again=True))
         self.wake("drain", None, narrate.park_ask(park, again=True))
 
-    def _parked_units(self):
-        """(unit, why it waits, since when) for every unit parked `awaiting-amendment`: nothing runs for it and only
-        an amendment releases it."""
-        with self.book() as data:
-            return [
-                (
-                    task["packet"]["unit"],
-                    (task.get("amend") or {}).get("reason") or "waiting for the plan to be amended",
-                    (task.get("amend") or {}).get("since"),
-                )
-                for task in data["tasks"].values()
-                if task.get("gate") == AMENDING and task["status"] not in ("COMPLETE", "RELEASED")
-            ]
-
-    def park_at_exit(self):
-        """A run that ends with units parked says why it ends: the ledger and attention.md name the park, its cause
-        and the way out, and the exit lists the units rather than reading as a run with nothing left to do."""
-        parked = self._parked_units()
-        if not parked:
-            # a run can end on a plan whose earlier run parked units that this one released: the record is stale
-            self.end_park("units")
-            return []
-        held = self.held_approval()
-        record = {
-            "kind": "units",
-            "cause": AMENDING,
-            "error": "; ".join("%s: %s" % (unit, reason) for unit, reason, _ in parked),
-            "digest": held.get("digest"),
-            "base": held.get("base"),
-            "since": min((since for _, _, since in parked if since), default=None),
-            "units": [unit for unit, _, _ in parked],
-        }
-        self._book_park(record)
-        narrate.say("ask", None, narrate.park_ask(record))
-        return record["units"]
-
     def parked_assignments(self):
         """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the runtime, not work."""
         with self.book() as data:
@@ -203,32 +163,6 @@ class Archive:
                 for agent in (task, task.get("review") or {}, task.get("decision") or {})
             } - {None}
             return parked
-
-    def park_for_amendment(self, task_id, task, reason):
-        """The Lead decided `amend`: the unit parks, its worker stays where it is and nothing is sent or started. The
-        Lead edits the plan and runs `plan amend`; the adopted amendment releases the unit (`release_amendment`)."""
-        unit, name = task["packet"]["unit"], task["packet"]["worker"]
-        asked = task.get("request") or {}
-        with self.book() as data:
-            # the digest the request was raised under: a park outlives the run, and the approval the drive adopted
-            # after the request was raised is exactly the one that releases it
-            data["tasks"][task_id].update(
-                gate=AMENDING,
-                updated_at=timeutil.iso(),
-                held=[],
-                # what the park waits for and since when: a run that ends with it parked names both
-                amend={"reason": reason, "since": timeutil.iso()},
-                amend_from=asked.get("digest") or (self.approval.digest if self.approval else None),
-            )
-        for message in task.get("held") or []:
-            self.log("held-dropped", unit=unit, task=task_id, held=message["kind"], why="amend")
-        self.write_status(unit.upper(), "IN PROGRESS · awaiting amendment: " + cell(reason))
-        narrate.say(
-            "info",
-            "decide",
-            "%s waits for the plan to be amended: edit it, then run `plan amend`" % name,
-            task=task_id,
-        )
 
     # ---- the archive -------------------------------------------------------------------------------------------------
     # the driver's own unit, no agent: the branch, the spec, the pull request
@@ -380,14 +314,6 @@ class Archive:
     def build_archive(self, task_id):
         """Build, push and open the archive, then hand its report to the gates. Any trouble asks the Lead."""
         try:
-            missing = self.archive_missing() if self._archive_mode() == "promote" else []
-            if missing:
-                return self.request(
-                    task_id,
-                    "archive",
-                    "no test node for %s: add a node to a ticket report's `covers` and `retry`, or `skip` and "
-                    "archive by hand" % ", ".join(missing),
-                )
             head = self._archive_branch(task_id)
             self._snapshot_spec(task_id)
             url = self._archive_pr(task_id)
@@ -405,9 +331,9 @@ class Archive:
             "status": "COMPLETE",
             "summary": "the driver archived the plan: %s"
             % (
-                "plan files copied, spec section appended"
+                "plan files copied, requirement changes applied"
                 if self._archive_mode() == "promote" and not self.layout.is_folder
-                else "plan folder deleted, spec section appended"
+                else "plan folder deleted, requirement changes applied"
                 if self._archive_mode() == "promote"
                 else "the discarded plan folder deleted"
             ),
@@ -435,15 +361,9 @@ class Archive:
                 self.run_dir / task_id / "archived-spec",
             )
 
-    def archive_missing(self):
-        """The scenarios with no test node: every scenario needs one, from a ticket's `covers` or a person's
-        `complete --cover`."""
-        nodes = self.scenario_nodes()
-        return [s.id for s in self.plan_model().scenarios if not nodes[s.id]]
-
     def _archive_branch(self, task_id):
         """The archive branch, rebuilt from the current base: the plan folder deleted or the plan files copied, the
-        spec section appended, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
+        requirement changes applied, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
         packet = self.task(task_id)["packet"]
         path, branch = Path(packet["checkout"]), "feat/" + packet["worker"]
         remote = self.args.base.partition("/")[0]
@@ -461,7 +381,7 @@ class Archive:
         self.remove_plan_folder(path)
         message = "docs(%s): delete the discarded plan folder" % self.slug
         if self._archive_mode() == "promote":
-            message = "docs(%s): archive the plan into %s" % (self.slug, self.plan_model().spec)
+            message = self._archive_message()
             self._promote_into(path)
         _engine().run(["git", "-C", str(path), "add", "-A"], timeout=TREE_TIMEOUT)
         _engine().run(
@@ -493,20 +413,25 @@ class Archive:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(child.read_bytes())
 
+    def _archive_message(self):
+        """The archive commit: the plan's goal, and why each removed requirement went."""
+        model = self.plan_model()
+        lines = ["docs(%s): archive the plan into %s" % (self.slug, model.spec), "", model.goal]
+        if model.requirements.removed:
+            lines += [""] + [
+                "Removed %s: %s" % (r.title, r.why) for r in model.requirements.removed
+            ]
+        return "\n".join(lines)
+
     def _write_spec(self, path):
-        """The spec section with its Coverage table, appended to the base's own text, and a base already broken
-        logged rather than fixed here."""
-        spec = path / self.plan_model().spec
+        """The plan's requirement changes applied to the base's own spec text."""
+        model = self.plan_model()
+        spec = path / model.spec
         try:
             before = spec.read_text(encoding="utf-8")
         except FileNotFoundError:
             before = ""
-        text = self.spec_text(before, self.held_requirements(spec))
-        already = spec_defects(before)
-        if (
-            already
-        ):  # the base was already broken: not this archive's to fix, and not silently passed on
-            self.log("spec-defects", spec=self.plan_model().spec, defects=len(already))
+        text = spec_blocks.apply(before, model.requirements, model.spec)
         spec.parent.mkdir(parents=True, exist_ok=True)
         spec.write_text(text, encoding="utf-8")
 
@@ -573,11 +498,11 @@ class Archive:
         if self.layout.is_folder:
             where = reference(self.repo, self.layout.folder, "collection")
             return (
-                "Archives the plan %s into the living spec: the folder is deleted and the spec section with its "
-                "Coverage table is written by the driver. Spec snapshot: `%s`." % (where, spec)
+                "Archives the plan %s into the living spec: the folder is deleted and the plan's requirement "
+                "changes are applied by the driver. Spec snapshot: `%s`." % (where, spec)
             )
         return (
-            "Archives `%s` into the living spec: the plan files and the spec section with its Coverage table, "
+            "Archives `%s` into the living spec: the plan files and the plan's requirement changes, "
             "written by the driver. Spec snapshot: `%s`."
             % (reference(self.repo, self.plan_path, "read"), spec)
         )
@@ -737,9 +662,9 @@ class ArchiveSurface:
         the exit all read the same record."""
         return self.archive.park_here()
 
-    def end_park(self, kind="plan"):
+    def end_park(self):
         """The park is over: the ledger and attention.md stop naming it."""
-        return self.archive.end_park(kind)
+        return self.archive.end_park()
 
     def park_due(self):
         """Whether the park owes the Lead another ask: fifteen minutes in, then every thirty, while
@@ -751,21 +676,10 @@ class ArchiveSurface:
         progress."""
         return self.archive.ask_parked()
 
-    def park_at_exit(self):
-        """A run that ends with units parked says why it ends: the ledger and attention.md name the
-        park, its cause and the way out, and the exit lists the units rather than reading as a run
-        with nothing left to do."""
-        return self.archive.park_at_exit()
-
     def parked_assignments(self):
         """Assignment ids that belong to a parked unit (paused, blocked or skipped): open in the
         runtime, not work."""
         return self.archive.parked_assignments()
-
-    def park_for_amendment(self, task_id, task, reason):
-        """The Lead decided `amend`: the unit parks, its worker stays where it is and nothing is sent
-        or started."""
-        return self.archive.park_for_amendment(task_id, task, reason)
 
     def start_archive(self, plan):
         """The archive's own unit, started once every ticket is done and the plan is accepted: a discard
@@ -785,10 +699,6 @@ class ArchiveSurface:
     def build_archive(self, task_id):
         """Build, push and open the archive, then hand its report to the gates."""
         return self.archive.build_archive(task_id)
-
-    def archive_missing(self):
-        """The scenarios with no test node: every scenario needs one."""
-        return self.archive.archive_missing()
 
     def undraft_archive(self, task_id):
         """A readied archive pull request goes back to draft before the Lead is asked: nobody merges a

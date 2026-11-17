@@ -1,163 +1,136 @@
-schema: plan/1
+schema: plan/2
 slug: locator-invariants
-goal: >-
-  Every path the engine hands a reader is a path the engine holds, printed as a
-  path and resolved once — never a rule for finding it — and a pointer that
-  resolves to nothing, or to more than one thing, is a refusal naming it and the
-  way out; so the review packet names the attempt's own report with its mtime
-  and the claimed head, a review written under another name is not a second
-  answer,
-  "the unit's newest report" is answered once, and the rule itself stands in the
-  living spec as a numbered requirement with the guard that holds it.
+goal: "Every path the engine hands a reader is a path the engine holds, printed as a path and resolved once \u2014 never a\
+  \ rule for finding it \u2014 and a pointer that resolves to nothing, or to more than one thing, is a refusal naming it and\
+  \ the way out; so the review packet names the attempt's own report with its mtime and the claimed head, a review written\
+  \ under another name is not a second answer, \"the unit's newest report\" is answered once, and the rule itself stands in\
+  \ the living spec as a numbered requirement with the guard that holds it."
 spec: docs/specs/orchestrator-engine.md
 archive: promote
-scenarios:
-  - id: S1
-    when: >-
-      a unit is re-dispatched to a second attempt and that attempt reports, so
-      the unit's first review is written for it
-    then: >-
-      the reviewer's brief names the exact report path the ledger recorded for
-      that attempt, prints that file's mtime in UTC whole seconds and the head
-      its report claims, and names no directory to search and no glob to match,
-      so a reviewer cannot read an earlier attempt's report by mistake
-  - id: S2
-    when: >-
-      a reviewer writes its review under another name inside the run directory
-      and names that file in its report
-    then: >-
-      the gate does not read that file: the reviewer is asked for the file the
-      driver named, nothing is copied into the driver's path, and the unit does
-      not advance, so one question has exactly one answer
-  - id: S3
-    when: >-
-      the engine renders any instruction for a reader — the attempt's task, the
-      review brief, a fix round's task, the answers task, the archive task, the
-      hand-over, or the `status` and `verify` renderings
-    then: >-
-      every path it prints is a file that exists, or the file the reader is
-      asked to write, and a collection is printed with the number of files in
-      it — no token is a glob, a bare directory to search or the word that asks
-      for the newest of something, so a pointer nobody has written yet cannot
-      reintroduce the search
-  - id: S4
-    when: the brief tells the reviewer what to write and where
-    then: >-
-      it names the one file the driver will read, and the engine holds no reader
-      that adopts a review from a name the reviewer chose — the announced-path
-      reader, the adoption step and the field it recorded are gone with the
-      sentence that promised them
-  - id: S5
-    when: >-
-      any reader asks for the unit's newest report, its newest findings, or the
-      attempt still open for it — the review packet, the hand-over, the merge's
-      reported checks, the open findings, or the `verify` and `status`
-      renderings of the unit's trail
-    then: >-
-      every reader answers with the same file, ordered by what the ledger
-      records for the attempt (its start time, then its place in the ledger) and
-      never by a dict's iteration order, the attempt named open is the one the
-      record's status says is open, and a reader that finds nothing answers
-      nothing rather than falling back to an earlier attempt's file
-  - id: S6
-    when: the living spec is read for what the review packet promises
-    then: >-
-      R145 names the report path the ledger recorded rather than the newest
-      `report*.json` in a directory, the requirement that adopted a review
-      written under another name is gone with its coverage row, and every
-      remaining citation resolves to a test that exists
-  - id: S7
-    when: >-
-      a pointer the engine would follow resolves to nothing, or would resolve to
-      more than one file
-    then: >-
-      it is a refusal that names the pointer, what was expected there and the
-      way out — never a fallback to an earlier attempt's file and never the
-      first match that exists — so a search that finds the wrong thing cannot
-      pass as an answer, and one that finds nothing is not mistaken for one that
-      found the work
-
-  - id: S8
-    when: >-
-      a reader of the living spec asks what the engine may hand an agent, or
-      what it may print for a person
-    then: >-
-      one numbered requirement states the rule in its two clauses and its three
-      exemptions, its coverage row names the guard that checks it on every
-      artifact a run renders, and that row's citations resolve to tests that
-      exist
-
-  - id: S9
-    when: >-
-      an agent reads this repository's instructions before it writes anything,
-      and a reviewer is handed them as the rules its change is judged by
-    then: >-
-      one paragraph states the pointer rule in the repository's own voice —
-      name the file, do not describe how to find it, and refuse when a pointer
-      resolves to nothing or to several — and names the numbered requirement
-      and the guard that hold it, so the rule meets the next author before the
-      guard does
-
+requirements:
+  added:
+  - title: The review packet names the attempt's report
+    shall: The review brief SHALL name the exact report the ledger recorded for the attempt under review and the one review
+      file the driver reads.
+    scenarios:
+    - id: S1
+      when: a unit is re-dispatched to a second attempt and that attempt reports, so the unit's first review is written for
+        it
+      then: the reviewer's brief names the exact report path the ledger recorded for that attempt, prints that file's mtime
+        in UTC whole seconds and the head its report claims, and names no directory to search and no glob to match, so a reviewer
+        cannot read an earlier attempt's report by mistake
+    - id: S2
+      when: a reviewer writes its review under another name inside the run directory and names that file in its report
+      then: 'the gate does not read that file: the reviewer is asked for the file the driver named, nothing is copied into
+        the driver''s path, and the unit does not advance, so one question has exactly one answer'
+    - id: S4
+      when: the brief tells the reviewer what to write and where
+      then: "it names the one file the driver will read, and the engine holds no reader that adopts a review from a name the\
+        \ reviewer chose \u2014 the announced-path reader, the adoption step and the field it recorded are gone with the sentence\
+        \ that promised them"
+  - title: Every pointer resolves to one file
+    shall: Every path the engine prints for a reader SHALL be a file that exists or the file the reader writes, and a pointer
+      that resolves to nothing or several SHALL be refused naming it and the way out.
+    scenarios:
+    - id: S3
+      when: "the engine renders any instruction for a reader \u2014 the attempt's task, the review brief, a fix round's task,\
+        \ the answers task, the archive task, the hand-over, or the `status` and `verify` renderings"
+      then: "every path it prints is a file that exists, or the file the reader is asked to write, and a collection is printed\
+        \ with the number of files in it \u2014 no token is a glob, a bare directory to search or the word that asks for the\
+        \ newest of something, so a pointer nobody has written yet cannot reintroduce the search"
+    - id: S7
+      when: a pointer the engine would follow resolves to nothing, or would resolve to more than one file
+      then: "it is a refusal that names the pointer, what was expected there and the way out \u2014 never a fallback to an\
+        \ earlier attempt's file and never the first match that exists \u2014 so a search that finds the wrong thing cannot\
+        \ pass as an answer, and one that finds nothing is not mistaken for one that found the work"
+  - title: One newest report
+    shall: Every reader of a unit's newest report, findings or open attempt SHALL answer with the same file, ordered by what
+      the ledger records.
+    scenarios:
+    - id: S5
+      when: "any reader asks for the unit's newest report, its newest findings, or the attempt still open for it \u2014 the\
+        \ review packet, the hand-over, the merge's reported checks, the open findings, or the `verify` and `status` renderings\
+        \ of the unit's trail"
+      then: every reader answers with the same file, ordered by what the ledger records for the attempt (its start time, then
+        its place in the ledger) and never by a dict's iteration order, the attempt named open is the one the record's status
+        says is open, and a reader that finds nothing answers nothing rather than falling back to an earlier attempt's file
+  - title: The pointer rule is written down
+    shall: The living spec and the repository's instructions SHALL state the pointer rule and name the guard that holds it.
+    scenarios:
+    - id: S6
+      when: the living spec is read for what the review packet promises
+      then: R145 names the report path the ledger recorded rather than the newest `report*.json` in a directory, the requirement
+        that adopted a review written under another name is gone with its coverage row, and every remaining citation resolves
+        to a test that exists
+    - id: S8
+      when: a reader of the living spec asks what the engine may hand an agent, or what it may print for a person
+      then: one numbered requirement states the rule in its two clauses and its three exemptions, its coverage row names the
+        guard that checks it on every artifact a run renders, and that row's citations resolve to tests that exist
+    - id: S9
+      when: an agent reads this repository's instructions before it writes anything, and a reviewer is handed them as the
+        rules its change is judged by
+      then: "one paragraph states the pointer rule in the repository's own voice \u2014 name the file, do not describe how\
+        \ to find it, and refuse when a pointer resolves to nothing or to several \u2014 and names the numbered requirement\
+        \ and the guard that hold it, so the rule meets the next author before the guard does"
 tickets:
-  - id: T1
-    delivers: >-
-      The review packet names the report of the attempt under review as the
-      ledger recorded it, with that file's mtime and the head its report claims,
-      and every other pointer in the brief follows the same rule: the file the
-      brief names is the one the reviewer must write, the earlier review a
-      re-review works from is named rather than described as a directory to
-      search, and the run's receipts are printed with how many there are. The
-      announced-path reader, the adoption of a review written under another name
-      and the clause that promised it are deleted, and R145 and R155 say what
-      the engine now does.
-    satisfies: [S1, S2, S4, S6]
-    paths:
-      - packages/agent-orchestrator/src/agent_orchestrator/driver/
-      - packages/agent-orchestrator/tests/test_review_brief.py
-      - packages/agent-orchestrator/tests/test_gates.py
-      - packages/agent-orchestrator/tests/test_review_payload.py
-      - packages/agent-orchestrator/tests/test_driver_review_packet.py
-      - packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py
-      - docs/specs/orchestrator-engine.md
-    size: regular
-    difficulty: complex
-  - id: T2
-    delivers: >-
-      A guard over every instruction the engine renders for a reader — each
-      attempt's task, the review brief, a fix round's task, the answers task,
-      the archive task, the hand-over, and the `status` and `verify` renderings:
-      every path it prints is checked to be a file that exists, the file the
-      reader is asked to write, or a collection printed with its count, and a
-      glob, a bare directory or the newest-of wording fails naming the token,
-      so the next pointer added to any of them is held to the rule without
-      anyone listing it here — and the rule itself is written as a numbered
-      requirement in the living spec, with a coverage row naming this guard, so
-      the next pointer is held to a sentence rather than to a plan folder — and
-      the same rule meets the next author in `AGENTS.md`, one paragraph in the
-      repository's voice that names that requirement instead of restating it.
-    satisfies: [S3, S7, S8, S9]
-    paths:
-      - packages/agent-orchestrator/src/agent_orchestrator/driver/
-      - packages/agent-orchestrator/tests/test_driver_pointers.py
-      - docs/specs/orchestrator-engine.md
-      - AGENTS.md
-    size: regular
-    difficulty: complex
-    blocked_by: [T1]
-  - id: T3
-    delivers: >-
-      One reader answers "the unit's newest report", "its newest findings" and
-      "the attempt still open for it" from what the ledger records for each
-      attempt — its start time, then its place in the ledger — and from the
-      record's own status, and the places that each looped over the ledger's
-      dict to answer it for themselves call that reader instead: the review
-      packet, the hand-over, the merge's reported checks, the open findings and
-      the `verify` and `status` renderings of the trail.
-    satisfies: [S5]
-    paths:
-      - packages/agent-orchestrator/src/agent_orchestrator/driver/
-      - packages/agent-orchestrator/tests/test_driver_attempts.py
-    size: regular
-    difficulty: complex
-    blocked_by: [T1]
-    risk: [state]
+- id: T1
+  delivers: 'The review packet names the report of the attempt under review as the ledger recorded it, with that file''s mtime
+    and the head its report claims, and every other pointer in the brief follows the same rule: the file the brief names is
+    the one the reviewer must write, the earlier review a re-review works from is named rather than described as a directory
+    to search, and the run''s receipts are printed with how many there are. The announced-path reader, the adoption of a review
+    written under another name and the clause that promised it are deleted, and R145 and R155 say what the engine now does.'
+  satisfies:
+  - S1
+  - S2
+  - S4
+  - S6
+  paths:
+  - packages/agent-orchestrator/src/agent_orchestrator/driver/
+  - packages/agent-orchestrator/tests/test_review_brief.py
+  - packages/agent-orchestrator/tests/test_gates.py
+  - packages/agent-orchestrator/tests/test_review_payload.py
+  - packages/agent-orchestrator/tests/test_driver_review_packet.py
+  - packages/agent-orchestrator/acceptance/driver/test_review_payload_path.py
+  - docs/specs/orchestrator-engine.md
+  size: regular
+  difficulty: complex
+- id: T2
+  delivers: "A guard over every instruction the engine renders for a reader \u2014 each attempt's task, the review brief,\
+    \ a fix round's task, the answers task, the archive task, the hand-over, and the `status` and `verify` renderings: every\
+    \ path it prints is checked to be a file that exists, the file the reader is asked to write, or a collection printed with\
+    \ its count, and a glob, a bare directory or the newest-of wording fails naming the token, so the next pointer added to\
+    \ any of them is held to the rule without anyone listing it here \u2014 and the rule itself is written as a numbered requirement\
+    \ in the living spec, with a coverage row naming this guard, so the next pointer is held to a sentence rather than to\
+    \ a plan folder \u2014 and the same rule meets the next author in `AGENTS.md`, one paragraph in the repository's voice\
+    \ that names that requirement instead of restating it."
+  satisfies:
+  - S3
+  - S7
+  - S8
+  - S9
+  paths:
+  - packages/agent-orchestrator/src/agent_orchestrator/driver/
+  - packages/agent-orchestrator/tests/test_driver_pointers.py
+  - docs/specs/orchestrator-engine.md
+  - AGENTS.md
+  size: regular
+  difficulty: complex
+  blocked_by:
+  - T1
+- id: T3
+  delivers: "One reader answers \"the unit's newest report\", \"its newest findings\" and \"the attempt still open for it\"\
+    \ from what the ledger records for each attempt \u2014 its start time, then its place in the ledger \u2014 and from the\
+    \ record's own status, and the places that each looped over the ledger's dict to answer it for themselves call that reader\
+    \ instead: the review packet, the hand-over, the merge's reported checks, the open findings and the `verify` and `status`\
+    \ renderings of the trail."
+  satisfies:
+  - S5
+  paths:
+  - packages/agent-orchestrator/src/agent_orchestrator/driver/
+  - packages/agent-orchestrator/tests/test_driver_attempts.py
+  size: regular
+  difficulty: complex
+  blocked_by:
+  - T1
+  risk:
+  - state

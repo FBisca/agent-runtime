@@ -12,14 +12,18 @@ from unittest import mock
 
 import pytest
 import yaml
+from agent_orchestrator import contracts
 from agent_orchestrator import plan as yaml_plan
 from fixtures import (
     RunFixture,
+    added,
     assignment,
+    keep_scenarios,
     load_script,
     red_of,
     report_wait,
     resume_id,
+    scenarios_of,
     spawn_id,
     wait_result,
 )
@@ -77,7 +81,7 @@ def held(data):
         dict(
             id="T9",
             delivers="sign-off",
-            satisfies=[data["scenarios"][0]["id"]],
+            satisfies=[scenarios_of(data)[0]["id"]],
             paths=["docs/"],
             owner="Felippe",
             blocked_by=[t["id"] for t in tickets],
@@ -102,7 +106,7 @@ class GateFixture(RunFixture):
             if mutate:
                 mutate(data)
             wanted = {sid for ticket in data["tickets"] for sid in ticket["satisfies"]}
-            data["scenarios"] = [s for s in data["scenarios"] if s["id"] in wanted]
+            keep_scenarios(data, wanted)
             if self.HOLD:
                 held(data)
 
@@ -205,12 +209,14 @@ class GateFixture(RunFixture):
         before the lint existed. With `unproven` the ticket also satisfies S2, which the default covers leave
         unmapped."""
         data = {
-            "schema": "plan/1",
+            "schema": "plan/2",
             "slug": "demo",
             "goal": "deliver",
             "spec": "docs/specs/demo.md",
-            "scenarios": [dict(id="S1", when="a", then="b")]
-            + ([dict(id="S2", when="c", then="d")] if unproven else []),
+            "requirements": added(
+                [dict(id="S1", when="a", then="b")]
+                + ([dict(id="S2", when="c", then="d")] if unproven else [])
+            ),
             "tickets": [
                 dict(
                     id="T1",
@@ -931,7 +937,9 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
         self.assertIn("test_nope", task_md)
 
-    def test_S4_a_covers_failure_on_paths_that_hold_no_test_says_so_and_leads_with_amend(self):
+    @pytest.mark.spec("Agent tickets hold a test path")
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_a_covers_failure_on_paths_that_hold_no_test_names_the_reapproval(self):
         self.use_yaml_plan(paths=("src/a/x.py",), lint=False, unproven=True)
         self.extra_files = {"src/a/x.py": "x = 1\n"}
         self.waits(
@@ -947,8 +955,10 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         request = self.request()
         self.assertEqual(request["task"], "t1r3")
         self.assertIn("the ticket's Paths can hold no test", request["reason"])
-        first = request["menu"][0]
-        self.assertEqual(first["action"] if isinstance(first, dict) else first, "amend")
+        self.assertIn("agent-orchestrator plan approve ", request["reason"])
+        self.assertIn(" --reason <why>", request["reason"])
+        self.assertIn("decide `retry`", request["reason"])
+        self.assertEqual([o["action"] for o in request["menu"]], list(contracts.ACTIONS))
 
     def test_S4_a_covers_failure_on_paths_that_hold_a_test_keeps_the_plain_reason_and_menu(self):
         self.use_yaml_plan(unproven=True)
@@ -998,7 +1008,7 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1"])
 
     def test_S10_touching_the_plan_is_an_integrity_failure_not_a_scope_one(self):
-        self.extra_files = {"docs/plans/demo.plan.yaml": "schema: plan/1\n"}
+        self.extra_files = {"docs/plans/demo.plan.yaml": "schema: plan/2\n"}
         self.waits([self.worker_done(tests=True)])
         self.run_driver()
         self.assertEqual(

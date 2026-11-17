@@ -1,4 +1,4 @@
-"""plan/1 for a plan that lives in its own folder: the archive key, its check rules, and the digest and snapshot over
+"""plan/2 for a plan that lives in its own folder: the archive key, its check rules, and the digest and snapshot over
 plan.yaml alone. Legacy plans keep their digests (S12)."""
 
 import copy
@@ -84,6 +84,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
 
     # S3
 
+    @pytest.mark.spec("Archive mode")
     def test_S3_a_folder_plan_takes_the_archive_key(self):
         code, message = self.command("check")
         self.assertEqual(code, 0, message)
@@ -92,9 +93,11 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
                 self.write(folder_contract(archive=archive))
                 self.assertEqual(self.command("check")[0], 0)
 
+    @pytest.mark.spec("Archive mode")
     def test_S3_archive_is_a_mode(self):
         self.refused(folder_contract(archive="keep"), "archive")
 
+    @pytest.mark.spec("Archive mode")
     def test_S3_the_folder_key_is_refused_in_a_legacy_plan(self):
         legacy = self.folder.parent / "2026-11-10-demo.plan.yaml"
         data = contract()
@@ -107,6 +110,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
 
     # S4
 
+    @pytest.mark.spec("Archive mode")
     def test_S4_the_repo_config_decides_promote_when_the_plan_does_not_say(self):
         (self.repo / ".orchestrate" / "config.yaml").write_text(
             yaml.safe_dump({"archive": {"mode": "discard"}})
@@ -115,9 +119,11 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.command("check")[0], 0)
         self.refused(folder_contract(spec=None, archive="promote"), "spec")
 
+    @pytest.mark.spec("Archive mode")
     def test_S4_a_promote_plan_needs_a_spec(self):
         self.refused(folder_contract(spec=None), "spec", "archive: discard")
 
+    @pytest.mark.spec("Archive mode")
     def test_S4_a_discard_plan_needs_no_spec(self):
         self.write(folder_contract(archive="discard", spec=None))
         code, message = self.command("check")
@@ -145,17 +151,20 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
             for needle in ("plans.dir", str(plans), str(plan.parent), "move"):
                 self.assertIn(needle, message)
 
+    @pytest.mark.spec("Archive mode")
     def test_S3_a_discard_folder_outside_plans_dir_is_refused_by_check_and_approve(self):
         plans = self.root / "plans"
         plans.mkdir()
         plan = self.discarding_copy(self.root / "elsewhere", plans)
         self.refused_by_plans_dir(plan, plans)
 
+    @pytest.mark.spec("Archive mode")
     def test_S3_a_discard_folder_nested_below_plans_dir_is_refused(self):
         plans = self.root / "plans"
         plan = self.discarding_copy(plans / "nested", plans)
         self.refused_by_plans_dir(plan, plans)
 
+    @pytest.mark.spec("Archive mode")
     def test_S3_a_discard_folder_reached_through_a_symlink_is_refused(self):
         plans = self.root / "plans"
         plans.mkdir()
@@ -163,6 +172,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         (plans / target.name).symlink_to(target)
         self.refused_by_plans_dir(plans / target.name / "plan.yaml", plans)
 
+    @pytest.mark.spec("Archive mode")
     def test_S3_a_discard_folder_directly_under_a_plans_dir_outside_the_repository_passes(self):
         plans = self.root / "plans"
         plan = self.discarding_copy(plans, plans)
@@ -180,6 +190,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
 
     # S5
 
+    @pytest.mark.spec("Plan approval")
     def test_S5_approve_digests_the_plan_alone(self):
         approval = self.approve()
         identity = Path(self.git(self.repo, "rev-parse", "--git-common-dir"))
@@ -201,6 +212,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.command("check")[0], 0)
         self.assertEqual(self.approve()["digest"], expected)
 
+    @pytest.mark.spec("Plan approval")
     def test_S5_a_changed_plan_is_named_and_can_be_approved_again(self):
         self.approve()
         self.plan.write_text(self.plan.read_text().replace("goal: deliver", "goal: changed"))
@@ -211,6 +223,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.approve()
         self.assertEqual(self.command("check")[0], 0)
 
+    @pytest.mark.spec("Plan approval")
     def test_S5_the_plan_schema_describes_the_folder_keys(self):
         out = io.StringIO()
         with redirect_stdout(out):
@@ -232,6 +245,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         legacy.write_text(yaml.safe_dump(data, sort_keys=False))
         return legacy, data
 
+    @pytest.mark.spec("Plan layouts")
     def test_S12_a_legacy_plan_digests_as_before_with_or_without_a_repo_config(self):
         legacy, data = self.legacy_plan()
         config = self.repo / ".orchestrate" / "config.yaml"
@@ -258,6 +272,7 @@ class FolderPlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         snapshot = self.state_dir / "approvals" / expected
         self.assertEqual(sorted(p.name for p in snapshot.iterdir()), ["plan.yaml"])
 
+    @pytest.mark.spec("Plan layouts")
     def test_S12_a_legacy_plan_still_needs_its_spec(self):
         legacy, data = self.legacy_plan()
         data2 = copy.deepcopy(data)

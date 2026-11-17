@@ -7,8 +7,7 @@ blocking whatever the reviewer's own flag said, a reviewer that stops leaves an 
 the evidence it had and is never retried, and a signal nobody disposed of stays unresolved (D20, D34, D39).
 
 This is the seam the spawn hands its answer to: the reviewer itself is checked where it runs in
-`test_deep_review_spawn`, and the whole invocation over a canned reviewer in the plan's acceptance evidence
-(`acceptance/deep-review/test_deep_review.py`), which drives the CLI for all three scenarios.
+`test_deep_review_spawn`.
 """
 
 from dataclasses import replace

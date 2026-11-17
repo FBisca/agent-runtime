@@ -1,5 +1,4 @@
-"""An agent Lead reads a typed menu and answers it with JSON, `amend` among the options: the unit parks until the
-amendment lands (plan-amend/S17)."""
+"""An agent Lead reads a typed menu and answers it with JSON."""
 
 import json
 import unittest
@@ -8,9 +7,9 @@ import pytest
 from fixtures import DRIVER, wait_result
 from test_wake import WakeFixture
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.spec("Lead decisions")]
 
-AMEND = {"action": "amend", "reason": "T1 needs a test path"}
+BLOCK = {"action": "mark blocked", "reason": "T1 needs a test path"}
 
 
 def json_lines(text):
@@ -68,32 +67,24 @@ class DecideJson(WakeFixture, unittest.TestCase):
     def decision(self):
         return json.loads((self.run_dir / "t1" / "decision.json").read_text(encoding="utf-8"))
 
-    def test_S17_the_menu_is_typed_and_offers_amend_with_its_inputs(self):
-        self.waits([self.blocked(), self.json_step(AMEND)])
+    def test_the_menu_is_typed_with_its_inputs(self):
+        self.waits([self.blocked(), self.json_step(BLOCK)])
         self.run_driver()
         request = self.request()
         self.assertEqual(request["contract"], 3)
         menu = {option["action"]: option for option in request["menu"]}
-        self.assertIn("amend", menu)
         self.assertIn("answer", menu)
+        self.assertEqual(self.task()["gate"], "blocked")
         for option in menu.values():
             self.assertTrue(option["summary"])
             self.assertTrue(option["inputs"]["reason"]["required"])
         self.assertTrue(menu["answer"]["inputs"]["answer"]["required"])
 
-    def test_S17_an_amend_decision_parks_the_unit_until_the_amendment_lands(self):
-        self.waits([self.blocked(), self.json_step(AMEND)])
-        self.run_driver()
-        self.assertEqual(self.decision()["action"], "amend")
-        self.assertEqual(self.task()["gate"], "awaiting-amendment")
-        self.assertEqual(self.calls("resume"), [])
-        self.assertEqual([t for t in self.ledger()["tasks"] if t != "archive"], ["t1"])
-
     def test_S17_a_json_decision_is_answered_with_json(self):
         self.write_open_request()
-        result = self.decide_json(AMEND)
+        result = self.decide_json(BLOCK)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["action"], "amend")
+        self.assertEqual(json.loads(result.stdout)["action"], "mark blocked")
 
     def test_S17_a_json_decision_is_written_as_the_flag_form_writes_it(self):
         self.write_open_request()

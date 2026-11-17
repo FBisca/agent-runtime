@@ -129,6 +129,7 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("would pass without the change", text)
         self.assertIn("scenario not really tested", text)
 
+    @pytest.mark.spec("Scenario evidence")
     def test_the_brief_asks_the_reviewer_to_judge_each_red_excerpt(self):
         text = self.brief()
         self.assertIn("`red`", text)

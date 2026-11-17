@@ -21,6 +21,7 @@ class ConfigTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
+    @pytest.mark.spec("Plan discovery")
     def test_S1_missing_file_means_the_defaults(self):
         loaded = config.load(self.root)
         self.assertEqual(loaded.plans_dir, self.root / "docs" / "plans")
@@ -39,6 +40,7 @@ class ConfigTests(unittest.TestCase):
         self.write("plans:\n  dir: /somewhere/else\n")
         self.assertEqual(config.load(self.root).plans_dir, Path("/somewhere/else"))
 
+    @pytest.mark.spec("Plan discovery")
     def test_S1_unknown_key_is_refused_naming_its_dotted_path_and_the_fix(self):
         for text, dotted in (
             ("colour: red\n", "colour"),
@@ -127,6 +129,7 @@ class TestPatternTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
+    @pytest.mark.spec("Agent tickets hold a test path")
     def test_S2_default_patterns_decide_a_test_file_by_name_or_tests_directory(self):
         from agent_orchestrator import plan
 
@@ -150,6 +153,7 @@ class TestPatternTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(plan.is_test_path(path, patterns))
 
+    @pytest.mark.spec("Agent tickets hold a test path")
     def test_S2_config_replaces_the_patterns(self):
         from agent_orchestrator import plan
 
@@ -160,6 +164,7 @@ class TestPatternTests(unittest.TestCase):
         # a directory named tests still holds tests whatever the patterns say
         self.assertTrue(plan.is_test_path("tests/x.sh", patterns))
 
+    @pytest.mark.spec("Agent tickets hold a test path")
     def test_S2_a_non_list_or_empty_value_is_refused_naming_its_dotted_path(self):
         for body in ("patterns: x", "patterns: []", "patterns: [1]", "patterns: ['']"):
             with self.subTest(body=body):

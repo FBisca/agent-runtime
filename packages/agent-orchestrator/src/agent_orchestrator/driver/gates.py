@@ -726,8 +726,6 @@ class Gates:
         held = task.get("held") or []
         asked = task.get("request") or {}
         self.release_intents(asked.get("intent"), "the Lead decided %s" % action)
-        if action == "amend":
-            return self.park_for_amendment(task_id, task, reason)
         if action in ("mark blocked", "skip"):
             return self._decide_paused(task_id, action, reason, held, unit)
         if unit == ARCHIVE:

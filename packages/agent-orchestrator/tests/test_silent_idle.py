@@ -95,6 +95,7 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
     def resumed(self, name):
         return [c for c in self.calls("resume") if c["args"].get("name") == name]
 
+    @pytest.mark.spec("A decision reaches its worker")
     def test_S9_an_answer_to_an_idle_reviewer_resumes_the_reviewer_not_the_implementer(self):
         """engine-gaps/S9"""
         finished = self.reviewer_done()
@@ -116,6 +117,7 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
         folder = Path(self.task()["review"]["dir"])
         return "".join(p.read_text(encoding="utf-8") for p in sorted(folder.glob("*.md")))
 
+    @pytest.mark.spec("A decision reaches its worker")
     def test_S9_a_reviewer_whose_pane_is_gone_is_replaced_by_one_whose_brief_carries_the_answer(
         self,
     ):
@@ -130,6 +132,7 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
         self.assertIn(self.ANSWER, self.brief_text())
         self.assertEqual(self.task()["review"]["assignment_id"], spawn_id(REVIEWER, 2))
 
+    @pytest.mark.spec("A decision reaches its worker")
     def test_S9_a_refused_reviewer_resume_asks_again_and_the_next_answer_still_reaches_the_reviewer(
         self,
     ):

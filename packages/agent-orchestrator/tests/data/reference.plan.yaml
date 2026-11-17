@@ -1,87 +1,111 @@
-schema: plan/1
+schema: plan/2
 slug: yaml-eec
 goal: A plan is a schema-validated YAML contract the orchestrator consumes directly; each ticket proves the scenarios it satisfies
   with tests it changed and saw red first; converge no longer exists as a separate mechanism.
 spec: docs/specs/plan-contract.md
-scenarios:
-- id: S1
-  when: '`plan check <plan.yaml>` reads a plan with an unknown or duplicate key, a missing required field, a duplicate ID,
-    a reference to an undeclared scenario or ticket, a dependency cycle, or a scenario carrying an `evidence:` block'
-  then: it exits 2 and names each defect with its YAML path and the fix; a valid plan, scenarios and tickets only, exits 0
-- id: S2
-  when: '`plan approve` runs on a valid plan, and afterwards plan.yaml (outside `approval`) changes'
-  then: 'approve runs nothing, writes `approval: {by, at, base, digest}` (digest over repo identity, base and the plan alone)
-    and snapshots the plan under the state dir; after the change `plan check` and `run` refuse, naming the changed file and
-    `plan approve`; no worker is spawned'
-- id: S3
-  when: '`plan approve` is invoked by an agent the runtime''s dispatch store knows as a spawned worker'
-  then: it refuses, naming the reason and that approval is the Lead's; nothing is written
-- id: S4
-  when: an approved YAML plan is launched
-  then: its agent tickets dispatch with the class, effort, model and blocking order a Markdown plan with the same rows gets
-    today
-- id: S5
-  when: '`plans list --json` runs with an explicit path, in a repo whose plans sit in one directory (`docs/plans/` or hidden
-    `.plans/`), in a repo with plan files in two directories, and in a repo with none'
-  then: it lists the explicit plan; that directory's plans; refuses naming both directories and the explicit-path way out;
-    an empty list. No directory or config file is created
-- id: S6
-  when: a plan.yaml outside the repository is passed explicitly with `--repo` to `plan check`, `plan approve` and `run`
-  then: all three work, and nothing is written next to the plan except the approval block
-- id: S7
-  when: a YAML plan runs through dispatch, a pause, a `decide` answer and a merge
-  then: plan.yaml stays byte-identical; `status <plan> --json` reports run_dir, the plan state and its history, and each ticket's
-    state, reason and PR, before and during the run
-- id: S8
-  when: two repositories each run a plan with the same slug, and a ledger under the old `<state>/<slug>.json` key exists
-  then: each gets its own ledger under `<state>/<repo-key>/<slug>`; the old ledger is imported once into the repository that
-    owns it
-- id: S9
-  when: a ticket report (contract 3) leaves a satisfied scenario unmapped in `covers`, maps it to a test node that does not
-    exist or did not change in the ticket, or carries no `red` excerpt naming one of its nodes
-  then: verify fails the gate with a fix round naming the scenario, the node and the reason
-- id: S10
-  when: a ticket's diff touches a file outside its paths, or its plan
-  then: verify fails the gate naming the file and the rule (scope or integrity)
-- id: S11
-  when: a Markdown plan in flight is gated
-  then: verify's legacy path gives the verdicts converge gives today; the plan can reach COMPLETE (outcome unverified), never
-    ACCEPTED
-- id: S17
-  when: every agent ticket of a YAML plan is COMPLETE
-  then: the plan is ACCEPTED and the archive may start once every ticket, a person's included, is COMPLETE
-- id: S20
-  when: a ticket reports COMPLETE while a scenario it satisfies has no covering test it changed
-  then: the gate refuses it with a fix round; the ticket never reaches COMPLETE, so the plan is not ACCEPTED
-- id: S22
-  when: a plan is edited after approval
-  then: the drive refuses to start work on the edited contract, names the changed file and `plan amend`, and the plan is not
-    ACCEPTED or archived on it
-- id: S23
-  when: a one-ticket YAML plan is approved, launched and its work reaches the default branch
-  then: status history is APPROVED → RUNNING → ACCEPTED → ARCHIVED; plan.yaml is unchanged since approval
-- id: S24
-  when: a small real YAML plan in a scratch repository is planned with start-planning, approved, orchestrated with real agents
-    and archived
-  then: '`status --json` shows it ARCHIVED and `plan check` still accepts its approval digest'
-- id: S25
-  when: an ACCEPTED plan archives
-  then: 'the driver archives it with no agent: it deletes a folder plan''s folder or copies a legacy plan''s files, appends
-    the spec section with its Coverage table of test node ids, commits, pushes and opens the pull request; the plan is ARCHIVED
-    when that PR merges'
-- id: S26
-  when: the orchestrate shim is asked for `plan check`, `plan approve`, `plans list` or `status`
-  then: it hands them to the member unchanged, and the agent-skills tree carries no converge skill
-- id: S28
-  when: a Markdown plan is passed to `run` after the legacy path is removed
-  then: it is refused naming the YAML format and `plan check`; the converge adapter and the plan-cell writer no longer exist
-- id: S29
-  when: every ticket of an ACCEPTED YAML plan is COMPLETE and the driver builds its archive
-  then: the archive names the plan's `spec` as the living spec (no new spec file), writes no Status into plan.yaml and renames
-    no test
+requirements:
+  added:
+  - title: Requirement 1
+    shall: The system SHALL meet Requirement 1.
+    scenarios:
+    - id: S1
+      when: '`plan check <plan.yaml>` reads a plan with an unknown or duplicate key, a missing required field, a duplicate
+        ID, a reference to an undeclared scenario or ticket, a dependency cycle, or a scenario carrying an `evidence:` block'
+      then: it exits 2 and names each defect with its YAML path and the fix; a valid plan, scenarios and tickets only, exits
+        0
+    - id: S2
+      when: '`plan approve` runs on a valid plan, and afterwards plan.yaml (outside `approval`) changes'
+      then: 'approve runs nothing, writes `approval: {by, at, base, digest}` (digest over repo identity, base and the plan
+        alone) and snapshots the plan under the state dir; after the change `plan check` and `run` refuse, naming the changed
+        file and `plan approve`; no worker is spawned'
+    - id: S3
+      when: '`plan approve` is invoked by an agent the runtime''s dispatch store knows as a spawned worker'
+      then: it refuses, naming the reason and that approval is the Lead's; nothing is written
+  - title: Requirement 2
+    shall: The system SHALL meet Requirement 2.
+    scenarios:
+    - id: S4
+      when: an approved YAML plan is launched
+      then: its agent tickets dispatch with the class, effort, model and blocking order a Markdown plan with the same rows
+        gets today
+    - id: S5
+      when: '`plans list --json` runs with an explicit path, in a repo whose plans sit in one directory (`docs/plans/` or
+        hidden `.plans/`), in a repo with plan files in two directories, and in a repo with none'
+      then: it lists the explicit plan; that directory's plans; refuses naming both directories and the explicit-path way
+        out; an empty list. No directory or config file is created
+    - id: S6
+      when: a plan.yaml outside the repository is passed explicitly with `--repo` to `plan check`, `plan approve` and `run`
+      then: all three work, and nothing is written next to the plan except the approval block
+  - title: Requirement 3
+    shall: The system SHALL meet Requirement 3.
+    scenarios:
+    - id: S7
+      when: a YAML plan runs through dispatch, a pause, a `decide` answer and a merge
+      then: plan.yaml stays byte-identical; `status <plan> --json` reports run_dir, the plan state and its history, and each
+        ticket's state, reason and PR, before and during the run
+    - id: S8
+      when: two repositories each run a plan with the same slug, and a ledger under the old `<state>/<slug>.json` key exists
+      then: each gets its own ledger under `<state>/<repo-key>/<slug>`; the old ledger is imported once into the repository
+        that owns it
+    - id: S9
+      when: a ticket report (contract 3) leaves a satisfied scenario unmapped in `covers`, maps it to a test node that does
+        not exist or did not change in the ticket, or carries no `red` excerpt naming one of its nodes
+      then: verify fails the gate with a fix round naming the scenario, the node and the reason
+  - title: Requirement 4
+    shall: The system SHALL meet Requirement 4.
+    scenarios:
+    - id: S10
+      when: a ticket's diff touches a file outside its paths, or its plan
+      then: verify fails the gate naming the file and the rule (scope or integrity)
+    - id: S11
+      when: a Markdown plan in flight is gated
+      then: verify's legacy path gives the verdicts converge gives today; the plan can reach COMPLETE (outcome unverified),
+        never ACCEPTED
+    - id: S17
+      when: every agent ticket of a YAML plan is COMPLETE
+      then: the plan is ACCEPTED and the archive may start once every ticket, a person's included, is COMPLETE
+  - title: Requirement 5
+    shall: The system SHALL meet Requirement 5.
+    scenarios:
+    - id: S20
+      when: a ticket reports COMPLETE while a scenario it satisfies has no covering test it changed
+      then: the gate refuses it with a fix round; the ticket never reaches COMPLETE, so the plan is not ACCEPTED
+    - id: S22
+      when: a plan is edited after approval
+      then: the drive refuses to start work on the edited contract, names the changed file and `plan approve`, and the plan
+        is not ACCEPTED or archived on it
+    - id: S23
+      when: a one-ticket YAML plan is approved, launched and its work reaches the default branch
+      then: "status history is APPROVED \u2192 RUNNING \u2192 ACCEPTED \u2192 ARCHIVED; plan.yaml is unchanged since approval"
+  - title: Requirement 6
+    shall: The system SHALL meet Requirement 6.
+    scenarios:
+    - id: S24
+      when: a small real YAML plan in a scratch repository is planned with start-planning, approved, orchestrated with real
+        agents and archived
+      then: '`status --json` shows it ARCHIVED and `plan check` still accepts its approval digest'
+    - id: S25
+      when: an ACCEPTED plan archives
+      then: 'the driver archives it with no agent: it deletes a folder plan''s folder or copies a legacy plan''s files, appends
+        the spec section with its Coverage table of test node ids, commits, pushes and opens the pull request; the plan is
+        ARCHIVED when that PR merges'
+    - id: S26
+      when: the orchestrate shim is asked for `plan check`, `plan approve`, `plans list` or `status`
+      then: it hands them to the member unchanged, and the agent-skills tree carries no converge skill
+  - title: Requirement 7
+    shall: The system SHALL meet Requirement 7.
+    scenarios:
+    - id: S28
+      when: a Markdown plan is passed to `run` after the legacy path is removed
+      then: it is refused naming the YAML format and `plan check`; the converge adapter and the plan-cell writer no longer
+        exist
+    - id: S29
+      when: every ticket of an ACCEPTED YAML plan is COMPLETE and the driver builds its archive
+      then: the archive names the plan's `spec` as the living spec (no new spec file), writes no Status into plan.yaml and
+        renames no test
 tickets:
 - id: T1
-  delivers: plan/1 model and strict loader, `plan check`, `plan approve` (digest, snapshot, worker refusal), YAML plans dispatch
+  delivers: plan/2 model and strict loader, `plan check`, `plan approve` (digest, snapshot, worker refusal), YAML plans dispatch
     through the existing loop
   satisfies:
   - S1

@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 import yaml
-from fixtures import load_script, red_of
+from fixtures import added, load_script, red_of
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -30,12 +30,12 @@ TICKET = dict(
 
 def promote_plan():
     return {
-        "schema": "plan/1",
+        "schema": "plan/2",
         "slug": "demo",
         "goal": "deliver",
         "spec": "docs/specs/demo.md",
         "archive": "promote",
-        "scenarios": [dict(id="S1", when="a", then="b")],
+        "requirements": added([dict(id="S1", when="a", then="b")]),
         "tickets": [dict(TICKET)],
     }
 
@@ -142,13 +142,15 @@ class PromoteArchiveTests(FolderArchiveFixture, unittest.TestCase):
         super().setUp()
         self.folder_plan(promote_plan(), tracked=True)
 
+    @pytest.mark.spec("Archive applies the change set")
     def test_S8_the_driver_deletes_the_plan_folder_in_the_archive_tree_and_writes_the_spec(self):
         self.drive()
         self.assertEqual(self.origin_files("feat/demo-archive", "docs/plans/" + FOLDER), [])
         self.assertEqual(self.spawned().count("demo-archive"), 0)
         spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
-        self.assertIn("(from demo/S1)", spec)
+        self.assertIn("### Requirement: Demo", spec)
 
+    @pytest.mark.spec("Plan lifecycle")
     def test_S10_a_promoted_folder_plan_runs_to_archived(self):
         self.drive()
         self.assertEqual(self.history(), ["APPROVED", "RUNNING", "ACCEPTED", "ARCHIVED"])
@@ -156,6 +158,7 @@ class PromoteArchiveTests(FolderArchiveFixture, unittest.TestCase):
 
 
 class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
+    @pytest.mark.spec("Discard archive")
     def test_S9_a_discard_plan_outside_the_repository_is_deleted_and_archived_with_no_pr(self):
         self.configure(self.root / "plans")
         self.folder_plan(discard_plan(), root=self.root / "plans")
@@ -166,6 +169,7 @@ class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
         self.assertEqual(self.gh_calls("pr", "create"), [])
         self.assertNotIn("archive", self.ledger()["tasks"])
 
+    @pytest.mark.spec("Discard archive")
     def test_S9_a_discard_plan_tracked_in_the_repository_is_deleted_by_a_delete_only_pr(self):
         self.folder_plan(discard_plan(), tracked=True)
         self.drive()
@@ -183,6 +187,7 @@ class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
         )
         self.assertEqual(self.history()[-2:], ["ACCEPTED", "ARCHIVED"])
 
+    @pytest.mark.spec("Discard archive")
     def test_S11_a_discard_plan_outside_the_repository_ends_archived_leaving_origin_untouched(self):
         self.configure(self.root / "plans")
         self.folder_plan(discard_plan(), root=self.root / "plans")
@@ -238,6 +243,7 @@ class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
             texts += [p.read_text(encoding="utf-8") for p in self.run_dir.rglob("request*.json")]
         return "\n".join(texts)
 
+    @pytest.mark.spec("Discard archive")
     def test_S4_discarding_a_folder_outside_plans_dir_deletes_nothing_and_names_both(self):
         self.start(discard_plan(), self.root / "plans")
         self.configure(self.repo / "docs" / "plans")  # the config moved after the plan loaded
@@ -248,6 +254,7 @@ class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
         self.assertIn(str(self.folder), str(caught.exception))
         self.assertIn(str(self.repo / "docs" / "plans"), str(caught.exception))
 
+    @pytest.mark.spec("Discard archive")
     def test_S4_the_plan_folder_of_a_promote_archive_tree_is_deleted_only_directly_under_plans_dir(
         self,
     ):
@@ -265,6 +272,7 @@ class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
         self.driver().remove_plan_folder(checkout)
         self.assertFalse(kept.parent.exists())
 
+    @pytest.mark.spec("Discard archive")
     def test_S4_a_symlink_into_plans_dir_is_not_deleted(self):
         self.start(discard_plan(), self.root / "elsewhere")
         plans = self.root / "plans"
@@ -276,6 +284,7 @@ class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
             self.driver().discard_plan({})
         self.assertTrue((self.folder / "plan.yaml").is_file())
 
+    @pytest.mark.spec("Discard archive")
     def test_S4_a_discard_run_whose_plans_dir_moved_mid_run_is_not_archived_and_keeps_its_folder(
         self,
     ):
@@ -287,6 +296,7 @@ class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
         self.assertIn("plans.dir", said)
         self.assertIn(str(self.folder), said)
 
+    @pytest.mark.spec("Discard archive")
     def test_S4_a_promote_archive_whose_plans_dir_moved_mid_run_asks_the_lead_and_deletes_nothing(
         self,
     ):

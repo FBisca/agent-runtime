@@ -4,15 +4,13 @@ No model calls and no shell evaluation. Only `run` starts workers, and only thro
 
 The package is a facade: every engine collaborator lives in the module beside it - the state and its
 locks in `state.py`, the round in `lifecycle.py`, a worker's report and the Lead's answer in
-`answers.py` and `findings.py`, the routing in `routing.py`, the plan's acceptance in `acceptance.py`, what
-a unit delivered in `coverage.py`, the Lead's attention in `attention.py`, the handlers in
+`answers.py` and `findings.py`, the routing in `routing.py`, the plan's acceptance in `acceptance.py`, the Lead's attention in `attention.py`, the handlers in
 `commands.py` - and the names below are re-exported so a caller, a test and the entry points keep
 asking `driver.<name>`.
 """
 
 __all__ = [
     "ACCEPTED_STATES",
-    "AMENDING",
     "ARCHIVE",
     "ARCHIVE_MENU",
     "ARCHIVE_REBUILDS",
@@ -33,7 +31,6 @@ __all__ = [
     "CHECK_INSTRUCTIONS",
     "CI_EXCERPT_CHARS",
     "CONTRACT",
-    "Coverage",
     "DECISION_KEYS",
     "DRIVER_ID",
     "DRIVER_MARKS",
@@ -45,7 +42,6 @@ __all__ = [
     "JsonRefusal",
     "Lifecycle",
     "MATRIX",
-    "NO_TEST_MENU",
     "PACKET_TEXT",
     "PARKED",
     "PARK_ASK_EVERY",
@@ -60,15 +56,10 @@ __all__ = [
     "Refused",
     "Routes",
     "SILENT",
-    "SPEC_HEADING",
-    "SPEC_MARKER",
     "SPELLING_INSTRUCTION",
-    "SPEC_REQUIREMENT",
-    "SPEC_ROW",
     "STEPS",
     "SpawnSurface",
     "Spawning",
-    "SpecSections",
     "TDD_SKILL_ENV",
     "TDD_SKILL_PLACES",
     "TEST_SCOPE_INSTRUCTION",
@@ -156,7 +147,6 @@ __all__ = [
     "lock_held",
     "log_tail",
     "main",
-    "merge_requirements",
     "merge_state",
     "merged_snapshot",
     "merged_snapshot_of",
@@ -224,7 +214,6 @@ __all__ = [
     "show",
     "snapshot_dir",
     "snapshot_of",
-    "spec_defects",
     "split_row",
     "split_status",
     "state_layout",
@@ -246,7 +235,6 @@ __all__ = [
     "unreadable_decision",
     "verify",
     "whole",
-    "without_coverage",
     "workbench",
     "worker_name",
     "write_atomic",
@@ -273,7 +261,6 @@ from .. import routes as routes
 from .. import timeutil as timeutil
 from .. import verify as verify
 from .. import workbench as workbench
-from ..invariants import AMENDING as AMENDING
 from ..invariants import PARKED as PARKED
 from ..invariants import checked_write as ledger
 from ..invariants import next_path as next_path
@@ -288,7 +275,6 @@ from .answers import ARCHIVE_REBUILDS as ARCHIVE_REBUILDS
 from .answers import ATTEMPT_LETTERS as ATTEMPT_LETTERS
 from .answers import DECISION_KEYS as DECISION_KEYS
 from .answers import FAILURE_LINE as FAILURE_LINE
-from .answers import NO_TEST_MENU as NO_TEST_MENU
 from .answers import Answers as Answers
 from .answers import IntentUnsettled as IntentUnsettled
 from .answers import Unreadable as Unreadable
@@ -358,7 +344,6 @@ from .commands import legacy_markdown_view as legacy_markdown_view
 from .commands import plan_status as plan_status
 from .commands import rebuild_evidence as rebuild_evidence
 from .commands import rebuild_metrics as rebuild_metrics
-from .coverage import Coverage as Coverage
 from .engine import Driver as Driver
 from .findings import Findings as Findings
 from .gates import STEPS as STEPS
@@ -446,14 +431,6 @@ from .runtime import runtime_call as runtime_call
 from .runtime import runtime_process as runtime_process
 from .spawn import Spawning as Spawning
 from .spawn import SpawnSurface as SpawnSurface
-from .spec import SPEC_HEADING as SPEC_HEADING
-from .spec import SPEC_MARKER as SPEC_MARKER
-from .spec import SPEC_REQUIREMENT as SPEC_REQUIREMENT
-from .spec import SPEC_ROW as SPEC_ROW
-from .spec import SpecSections as SpecSections
-from .spec import merge_requirements as merge_requirements
-from .spec import spec_defects as spec_defects
-from .spec import without_coverage as without_coverage
 from .state import DRIVER_MARKS as DRIVER_MARKS
 from .state import JsonRefusal as JsonRefusal
 from .state import Refused as Refused

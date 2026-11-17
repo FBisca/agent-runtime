@@ -1,6 +1,6 @@
 """The refusals an authoring command makes about a plan's paths.
 
-`plan check`, `plan approve` and `plan amend` make them; the driver's load never runs them, so a plan
+`plan check` and `plan approve` make them; the driver's load never runs them, so a plan
 approved before a rule existed keeps running. A path decides whether it can hold a test, and a discarding
 folder whether it may be deleted.
 """

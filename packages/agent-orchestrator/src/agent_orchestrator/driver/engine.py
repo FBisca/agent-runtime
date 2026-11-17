@@ -30,7 +30,6 @@ from .answers import Answers
 from .archive import Archive, ArchiveSurface
 from .book import Book, BookSurface
 from .briefs import Briefs
-from .coverage import Coverage
 from .findings import Findings
 from .gates import Gates
 from .lifecycle import Lifecycle
@@ -39,7 +38,6 @@ from .report import cell
 from .routing import Routes, load_approved, require_yaml
 from .runtime import runtime_call
 from .spawn import Spawning, SpawnSurface
-from .spec import SpecSections
 from .state import state_layout
 from .watch import Attention
 
@@ -61,12 +59,10 @@ class Driver(
     Acceptance,
     Lifecycle,
     Findings,
-    Coverage,
     ArchiveSurface,
     PullSurface,
     SpawnSurface,
     BookSurface,
-    SpecSections,
 ):
     """The dispatch loop. It keeps no state of its own: the plan, the ledger and the runtime hold it.
 
@@ -98,7 +94,6 @@ class Driver(
     parked_since: Any
     asked_at: Any
     park_asks: Any
-    parked: Any
     recovered: Any
     ticks: Any
     last_tick: Any
@@ -145,7 +140,6 @@ class Driver(
         self.stranded = (
             set()
         )  # tasks the last reconciliation could not settle: the run must not finish over them
-        self.released = 0  # units an amendment released: work in the round it was released
         self.unfinished = set()  # the assignment ids the runtime's last `wait` listed as unfinished
         self.reconciled = False
         self.touched = (
@@ -161,7 +155,7 @@ class Driver(
         self.discarded = (
             False  # the plan folder was deleted by this drive: the plan it last read is the plan
         )
-        self.model: yaml_plan.Plan | None = None  # the approved plan/1 model of a YAML plan
+        self.model: yaml_plan.Plan | None = None  # the approved plan/2 model of a YAML plan
         self.approval: yaml_plan.Approval | None = (
             None  # the approval block of the YAML plan the loop last read
         )
@@ -174,7 +168,6 @@ class Driver(
             None  # the drive's clock at the last ask: a park with nothing in flight asks again
         )
         self.park_asks = 0  # how many times the park has asked the Lead again
-        self.parked = []  # the units the run ended with parked: the exit names them
         self.recovered = approval_recovery.Recovered()  # the approval a lost span was repaired with
         self.ticks = {}  # unit -> [what it showed at the last tick, how many ticks it showed nothing new]
         self.last_tick = self.clock()
@@ -211,7 +204,7 @@ class Driver(
         events.append(self.run_dir / "events.jsonl", kind, **fields)
 
     def read_plan(self):
-        """The plan as the run gates and dispatches it: the approved snapshot, until an amendment is adopted.
+        """The plan as the run gates and dispatches it: the approved snapshot, until a re-approval is adopted.
 
         A plan edited since its approval, or one that no longer loads, does not stop a run in flight: the run drains
         on the last approved snapshot (`begin_drain`) until the file is back to its approved bytes or carries a valid
@@ -244,13 +237,13 @@ class Driver(
         )
         if self.model is not None and model.slug != self.model.slug:
             raise PlanError(
-                "the plan's slug changed from %s to %s: the slug names the run's ledger, so no amendment can "
+                "the plan's slug changed from %s to %s: the slug names the run's ledger, so no re-approval can "
                 "change it" % (self.model.slug, model.slug)
             )
         return model
 
     def _settle_plan(self, model, settled):
-        """Hold the plan just read: adopt it as an amendment, end a drain, or take it as the plan of a new run."""
+        """Hold the plan just read: adopt its re-approval, end a drain, or take it as the plan of a new run."""
         found = model.approval.digest if model.approval else None
         if settled and found != self.approved_digest():
             held = self.model
@@ -285,7 +278,7 @@ class Driver(
         if self.drain:
             return
         cause = "edited" if str(error).startswith("approval: changed") else "unloadable"
-        # The load error names `plan approve` as its way out; a live run's way out is `plan amend`.
+        # The load error's way out assumes no driver; the park names a live run's own (`plan approve --reason`).
         text = re.sub(
             r"(; )?approval: after fixing \S+, run agent-orchestrator plan approve \S+",
             "",
@@ -319,7 +312,7 @@ class Driver(
         idle = False
         while True:
             acted, dispatched = self._loop_round()
-            # A drain has no timeout: the run waits for the Lead to amend the plan or restore it.
+            # A drain has no timeout: the run waits for the Lead to re-approve the plan or restore it.
             if idle and not dispatched and not acted and not self.awaiting() and not self.drain:
                 recovered = self._loop_recover()
                 if recovered is None:
@@ -330,7 +323,7 @@ class Driver(
     def _loop_round(self):
         """One round: the plan read, its gates advanced and its tickets dispatched. (acted, dispatched)."""
         self.read_plan()  # Integrity precedes gates, which can also spawn workers.
-        acted, self.released = self.advance() + self.released, 0  # a release is work too
+        acted = self.advance()
         plan, valid = self.current_plan()
         if not valid:
             # A drain: running attempts, reviews and the merge bookkeeping go on, and no worker starts (a first
@@ -349,12 +342,7 @@ class Driver(
 
     def _loop_recover(self):
         """A quiet round: reconcile once. The work it recovered, or None when the run ends here."""
-        dispatched = self.reconcile(finishing=True)
-        if dispatched:
-            return dispatched
-        # A run that ends with units parked says why it ends; it did not run out of work.
-        self.parked = self.park_at_exit()
-        return None
+        return self.reconcile(finishing=True) or None
 
     def _loop_settle(self, dispatched, acted):
         """Wait on the runtime, take what it reported, and answer whether the run has gone idle."""
@@ -389,34 +377,31 @@ class Driver(
         """The plan carries a valid approval other than the one this run holds: gate and dispatch against it from
         now on. `held` is the model the run held until now."""
         if self.model is None:
-            raise PlanError("the run holds no plan to adopt an amendment into")
+            raise PlanError("the run holds no plan to adopt a re-approval into")
         digest = self.approved_digest()
-        amendment = next((a for a in reversed(self.model.amendments) if a.digest == digest), None)
         self.log(
             "amended",
             prev_digest=held.approval.digest,
             digest=digest,
-            reason=amendment.reason[:500] if amendment else None,
-            tickets=amendment.tickets if amendment else None,
+            reason=(getattr(self.approval, "reason", None) or "")[:500] or None,
             drained=True if self.drain else None,
         )
-        narrate.say("info", None, "adopted the amended plan %s" % digest[:12])
+        narrate.say("info", None, "adopted the re-approved plan %s" % digest[:12])
         self.drain = None
         self.last_plan = plan
-        self.end_park()  # the plan the drive could not use came back as an amendment, so the park is over
+        self.end_park()  # the plan the drive could not use came back re-approved, so the park is over
         with self.book() as data:
             ledgers.record_approval(data, self.held_approval())
             self.resume_plan_state(
                 data
-            )  # a ticket the amendment added reopens a plan that was accepted
-        self.release_amendment(self.resume_changed(held, plan), plan)
+            )  # a ticket the re-approval added reopens a plan that was accepted
+        self.resume_changed(held, plan)
 
     def resume_changed(self, held, plan):
-        """Each open attempt (working or parked) whose ticket's `paths`, `satisfies` or `delivers` the amendment
+        """Each open attempt (working or parked) whose ticket's `paths`, `satisfies` or `delivers` the re-approval
         changed gets its next packet and its worker is resumed on it; any other attempt is left alone."""
-        handed = {}
         if self.model is None:
-            return handed
+            return
         before = {t.id.lower(): t for t in held.tickets}
         changed = {}
         for ticket in self.model.tickets:
@@ -427,7 +412,7 @@ class Driver(
             ):
                 changed[ticket.id.lower()] = (old, ticket)
         if not changed:
-            return handed
+            return
         rows = {t["#"].lower(): t for t in plan["tickets"]}
         with self.book() as data:
             open_ = [
@@ -441,25 +426,21 @@ class Driver(
         for task_id, task in open_:
             unit = task["packet"]["unit"]
             try:
-                handed[task_id] = self.next_packet(task_id, task, rows[unit], plan, *changed[unit])
+                self.next_packet(task_id, task, rows[unit], plan, *changed[unit])
             except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                handed[task_id] = (
-                    None  # a parked unit stays parked: its worker still has the old contract
-                )
-                self.log("error", unit=unit, task=task_id, gate="amend", error=str(error)[:500])
+                self.log("error", unit=unit, task=task_id, gate="repacket", error=str(error)[:500])
                 narrate.say("fail", None, "could not hand %s its new packet: %s" % (task_id, error))
                 self.wake(
-                    "amend-failed",
+                    "repacket-failed",
                     unit,
-                    "amend-failed %s: its worker could not be given the amended contract: %s -> look at its "
+                    "repacket-failed %s: its worker could not be given the re-approved contract: %s -> look at its "
                     "terminal" % (unit, cell(error, 300)),
                     key="%s:%s" % (task_id, self.approved_digest()),
                 )
-        return handed
 
     def current_plan(self):
         """(plan, open): the plan the run holds, and whether it may start work. A plan edited since its approval is
-        drained, not dispatched: `open` is False and nothing new starts until the edit is amended or undone."""
+        drained, not dispatched: `open` is False and nothing new starts until the edit is re-approved or undone."""
         self.last_plan = self.read_plan()
         return self.last_plan, not self.drain
 
@@ -473,7 +454,7 @@ class Driver(
             return (data.get("plan") or {}).get("state")
 
     def plan_model(self):
-        """The approved plan/1 model; an archive only runs for a YAML plan, which holds one."""
+        """The approved plan/2 model; an archive only runs for a YAML plan, which holds one."""
         assert self.model is not None
         return self.model
 

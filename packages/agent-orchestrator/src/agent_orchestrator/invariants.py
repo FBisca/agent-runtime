@@ -1,7 +1,7 @@
 """The ledger's state invariants: checked where the driver writes it, readable as `ledger check`.
 
-Three states stalled a run and each was found by hand afterwards: two open attempts naming one review file, a park
-whose release key was lost, and a gate the driver does not know. Each is refused by name — the invariant, the task
+Two states stalled a run and each was found by hand afterwards: two open attempts naming one review file, and a
+gate the driver does not know. Each is refused by name — the invariant, the task
 and the way out — at the write and on a captured ledger, so the next spelling is refused instead of discovered. A
 `LedgerInvariant` is a `ValueError`, so a gate step's own handler turns it into a request that names the way out.
 Standard library only: the plugin ships without dependencies."""
@@ -10,7 +10,6 @@ from contextlib import contextmanager
 
 from . import ledger as ledgers
 
-AMENDING = "awaiting-amendment"  # the Lead decided `amend`: the unit waits for the driver to adopt the new plan
 GATES = (
     "reported",
     "converged",
@@ -28,23 +27,18 @@ PARKED = (
     "attention",
     "blocked",
     "skipped",
-    AMENDING,
-)  # nothing runs for the unit until the user acts (`attention`: runs of the old driver) or, for AMENDING, until the
-# driver adopts an amendment
+)  # nothing runs for the unit until the user acts (`attention`: runs of the old driver)
 SETTLED = (
     "done",
     "superseded",
 )  # the unit has left the gates: a later attempt owns whatever comes next
 
 REVIEW_FILE_SHARED = "review-file-shared"
-PARK_WITHOUT_KEY = "park-without-key"
 UNKNOWN_GATE = "unknown-gate"
 
 WAY_OUT = {
     REVIEW_FILE_SHARED: "give each open attempt its own review file: the rework writes the next free "
     "<unit>/review.<n>.json, and the attempt that no longer runs is released",
-    PARK_WITHOUT_KEY: "record the approval digest the park is released by on the task (`decide amend` writes it as "
-    "`amend_from`), or release the unit instead of parking it",
     UNKNOWN_GATE: "name a gate the driver knows (%s), or release the task and let the drive write it again"
     % ", ".join(GATES + PARKED + SETTLED),
 }
@@ -129,15 +123,14 @@ def shape(data):
             record(task).get("gate"),
             record(task).get("status"),
             review_file(task),
-            record(task).get("amend_from"),
         )
         for task_id, task in sorted((data.get("tasks") or {}).items())
     )
 
 
 def violations(data):
-    """Every illegal state the ledger holds, in a stable order: one review file per open attempt, a park that names
-    the approval that releases it, a gate the driver knows."""
+    """Every illegal state the ledger holds, in a stable order: one review file per open attempt, a gate the driver
+    knows."""
     tasks = sorted((data.get("tasks") or {}).items())
     found, holders = [], {}
     for task_id, task in tasks:
@@ -155,16 +148,8 @@ def violations(data):
         else:
             holders[path] = task_id
     for task_id, task in tasks:
-        task, gate = record(task), record(task).get("gate")
-        if gate == AMENDING and not task.get("amend_from"):
-            found.append(
-                LedgerInvariant(
-                    PARK_WITHOUT_KEY,
-                    task_id,
-                    "waits for an amendment with no `amend_from`: nothing can release it",
-                )
-            )
-        elif gate is not None and gate not in GATES + PARKED + SETTLED:
+        gate = record(task).get("gate")
+        if gate is not None and gate not in GATES + PARKED + SETTLED:
             found.append(LedgerInvariant(UNKNOWN_GATE, task_id, "names the gate %r" % (gate,)))
     return found
 

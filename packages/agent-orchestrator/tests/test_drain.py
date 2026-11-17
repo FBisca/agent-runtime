@@ -1,6 +1,6 @@
 """The live driver and a plan that changes under it: an edit or an unloadable file drains the run on its last approved
-snapshot, an amendment is adopted on the next read, and each in-flight worker whose contract changed is resumed on its
-next packet (plan-amend/S5, S12, S13, S14)."""
+snapshot, a re-approval (`plan approve --reason` under the live driver) is adopted on the next read, and each in-flight
+worker whose contract changed is resumed on its next packet."""
 
 import json
 import unittest
@@ -25,7 +25,7 @@ class DrainFixture(GateFixture):
         super().setUp()
         self.set_plan(self.rows)
         self.approved = self.plan.read_text(encoding="utf-8")
-        # The Lead runs `plan amend`: a worker's own session must not turn it into the worker refusal.
+        # The Lead re-approves: a worker's own session must not turn it into the worker refusal.
         patcher = mock.patch.object(load_script(), "resolve_runtime", return_value={"role": "lead"})
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -46,11 +46,11 @@ class DrainFixture(GateFixture):
     def writes(self, text):
         return [[str(self.plan), text]]
 
-    def amend_argv(self, reason=REASON):
+    def reapprove_argv(self, reason=REASON):
         return [
             *DRIVER,
             "plan",
-            "amend",
+            "approve",
             str(self.plan),
             "--reason",
             reason,
@@ -82,6 +82,7 @@ class DrainFixture(GateFixture):
 
 
 class DrainTests(DrainFixture, unittest.TestCase):
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_an_edited_plan_drains_instead_of_crashing(self):
         both = ("demo-t1", "demo-t3")
         self.waits(
@@ -98,10 +99,12 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertEqual(drained["cause"], "edited")
         self.assertIn("demo.plan.yaml", drained["error"])
         (wake,) = self.wake_lines("drain")
-        self.assertIn("plan amend", wake)
+        self.assertIn("plan approve --base", wake)
+        self.assertIn("--reason", wake)
         self.assertEqual(self.run_events("crash"), [])
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t3"])
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_an_unloadable_plan_drains_and_names_the_load_error(self):
         both = ("demo-t1", "demo-t3")
         self.waits(
@@ -118,8 +121,9 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertIn("invalid YAML", drained["error"])
         (wake,) = self.wake_lines("drain")
         self.assertIn("invalid YAML", wake)
-        self.assertIn("plan amend", wake)
+        self.assertIn("--reason", wake)
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_a_plan_that_is_not_a_mapping_drains_too(self):
         both = ("demo-t1", "demo-t3")
         self.waits(
@@ -133,6 +137,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertEqual(len([e for e in self.run_events("drain") if e.get("state") != "ended"]), 1)
         self.assertEqual(self.run_events("crash"), [])
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_one_drain_and_one_wake_however_long_the_edit_stays(self):
         both = ("demo-t1", "demo-t3")
         self.waits(
@@ -147,6 +152,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertEqual(len(self.run_events("drain")), 2, "the drain, and its end")
         self.assertEqual(len(self.wake_lines("drain")), 1)
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_an_edit_to_the_brief_alone_does_not_drain(self):
         brief = self.plan.with_name("demo.brief.md")
         both = ("demo-t1", "demo-t3")
@@ -164,6 +170,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertEqual(self.run_events("drain"), [])
         self.assertEqual(self.wake_lines("drain"), [])
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_a_drain_starts_no_first_dispatch_while_reports_and_merges_go_on(self):
         self.waits(
             [
@@ -179,6 +186,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
         (t3,) = self.at_call("spawn", "demo-t3")
         self.assertTrue(self.drain_had_ended(t3), "demo-t3 was started only once the drain ended")
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_a_drain_starts_no_fix_round_until_it_ends(self):
         self.waits(
             [
@@ -192,6 +200,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertTrue(resumes, "the fix round was handed over once the drain ended")
         self.assertTrue(all(self.drain_had_ended(seen) for seen in resumes))
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_a_drain_starts_no_redispatch_of_a_lost_worker(self):
         self.run_driver("--max-workers", "1")
         self.gone("demo-t1", "exited")
@@ -206,6 +215,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertEqual(len(spawns), 2)
         self.assertTrue(self.drain_had_ended(spawns[1]))
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S12_a_drain_does_not_finish_the_run(self):
         self.waits(
             [
@@ -221,6 +231,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
             kinds.index("finish"),
         )
 
+    @pytest.mark.spec("Drain on an unapproved edit")
     def test_S13_the_drain_ends_when_the_file_is_back_to_the_approved_bytes(self):
         both = ("demo-t1", "demo-t3")
         self.waits(
@@ -236,7 +247,8 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertEqual(self.run_events("amended"), [])
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t3"])
 
-    def test_S13_an_amendment_ends_the_drain_and_the_driver_gates_against_the_new_contract(self):
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_a_reapproval_ends_the_drain_and_the_driver_gates_against_the_new_contract(self):
         """T1 now satisfies S2 too: the report that covers only S1 fails the gate on the new contract."""
         self.set_plan(("T1",))
         self.approved = self.plan.read_text(encoding="utf-8")
@@ -244,7 +256,9 @@ class DrainTests(DrainFixture, unittest.TestCase):
         def satisfy_s2(data):
             # S2 joins the plan for T1 to satisfy, so a test node must prove it
             data["tickets"][0].update(satisfies=["S1", "S2"])
-            data["scenarios"].append({"id": "S2", "when": "c", "then": "d"})
+            data["requirements"]["added"][0]["scenarios"].append(
+                {"id": "S2", "when": "c", "then": "d"}
+            )
 
         first = self.edit(satisfy_s2)
         resumed = report_wait("demo-t1", "complete", id=resume_id("demo-t1"))
@@ -252,7 +266,7 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.waits(
             [
                 wait_result(self.working("demo-t1"), write=self.writes(first)),
-                wait_result(self.working("demo-t1"), run=[self.amend_argv()]),
+                wait_result(self.working("demo-t1"), run=[self.reapprove_argv()]),
                 resumed,
             ]
         )
@@ -271,8 +285,10 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.assertIn("S2", json.dumps(findings["items"]))
 
 
-class AmendTests(DrainFixture, unittest.TestCase):
-    def drive_through_an_amendment(self, text=None):
+class ReapproveTests(DrainFixture, unittest.TestCase):
+    """The Lead edits the plan under a live drive (a running ticket's paths and a new ticket) and re-approves it."""
+
+    def drive_through_a_reapproval(self, text=None):
         self.digest = yaml.safe_load(self.approved)["approval"]["digest"]
         both = ("demo-t1", "demo-t3")
         self.waits(
@@ -281,26 +297,31 @@ class AmendTests(DrainFixture, unittest.TestCase):
                     self.working(*both), write=self.writes(text or self.widen_t1_and_add_t5())
                 ),
                 self.timeout(*both),
-                wait_result(self.working(*both), run=[self.amend_argv()]),
+                wait_result(self.working(*both), run=[self.reapprove_argv()]),
                 wait_result(self.working(*both, "demo-t5"), reason="timeout"),
                 wait_result(self.working(*both, "demo-t5"), reason="timeout"),
             ]
         )
         return self.run_driver()
 
-    def test_S5_one_drive_drains_on_the_edit_then_adopts_the_amendment(self):
-        self.drive_through_an_amendment()
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_one_drive_drains_on_the_edit_then_adopts_the_reapproval(self):
+        self.drive_through_a_reapproval()
         self.assertIn("drain", self.kinds())
         (amended,) = self.run_events("amended")
         approval = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]
         self.assertEqual(
             (amended["prev_digest"], amended["digest"]), (self.digest, approval["digest"])
         )
+        self.assertEqual(amended["reason"], REASON)
+        self.assertEqual(approval["reason"], REASON)
         (wake,) = self.wake_lines("drain")
-        self.assertIn("plan amend", wake)
+        self.assertIn("plan approve --base", wake)
+        self.assertIn("--reason", wake)
 
-    def test_S5_the_new_ticket_is_dispatched_only_after_the_amendment_is_adopted(self):
-        self.drive_through_an_amendment()
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_the_new_ticket_is_dispatched_only_after_the_reapproval_is_adopted(self):
+        self.drive_through_a_reapproval()
         self.assertIn("demo-t5", self.spawned())
         events = self.run_events()
         drained = next(i for i, e in enumerate(events) if e["kind"] == "drain")
@@ -311,8 +332,10 @@ class AmendTests(DrainFixture, unittest.TestCase):
         self.assertLess(drained, adopted)
         self.assertLess(adopted, t5)
 
-    def test_S5_the_changed_worker_is_resumed_on_its_new_packet_and_the_unchanged_one_is_not(self):
-        self.drive_through_an_amendment()
+    @pytest.mark.spec("A re-approval reaches running workers")
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_the_changed_worker_is_resumed_on_its_new_packet_and_the_unchanged_one_is_not(self):
+        self.drive_through_a_reapproval()
         packet = self.run_dir / "t1" / "task.v2.md"
         self.assertIn("tests/test_a.py", packet.read_text(encoding="utf-8"))
         resumes = [r for r in self.calls("resume") if r["args"]["name"] == "demo-t1"]
@@ -324,27 +347,22 @@ class AmendTests(DrainFixture, unittest.TestCase):
         self.assertEqual([r for r in self.calls("resume") if r["args"]["name"] == "demo-t3"], [])
         self.assertFalse((self.run_dir / "t3" / "task.v2.md").exists())
 
-    def test_S5_the_plan_records_the_amendment(self):
-        self.drive_through_an_amendment()
-        data = yaml.safe_load(self.plan.read_text(encoding="utf-8"))
-        (entry,) = data["amendments"]
-        self.assertEqual(entry["prev_digest"], self.digest)
-        self.assertEqual(entry["digest"], data["approval"]["digest"])
-        self.assertEqual(entry["reason"], REASON)
-        self.assertEqual(sorted(entry["tickets"]), ["T1", "T5"])
-        self.assertTrue(entry["at"] and entry["by"])
-
-    def test_S5_control_an_unedited_plan_dispatches_its_tickets_without_a_drain(self):
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_control_an_unedited_plan_dispatches_its_tickets_without_a_drain(self):
         self.waits([self.timeout("demo-t1", "demo-t3")])
         self.run_driver()
         self.assertEqual(sorted(self.spawned()), ["demo-t1", "demo-t3"])
         self.assertEqual(self.run_events("drain"), [])
         self.assertEqual(self.run_events("amended"), [])
 
-    def test_S14_a_changed_satisfies_or_delivers_resumes_the_worker_on_the_next_packet(self):
+    @pytest.mark.spec("A re-approval reaches running workers")
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_a_changed_satisfies_or_delivers_resumes_the_worker_on_the_next_packet(self):
         def satisfies(data):
             data["tickets"][0]["satisfies"] = ["S1", "S2"]
-            data["scenarios"].append({"id": "S2", "when": "c", "then": "d"})
+            data["requirements"]["added"][0]["scenarios"].append(
+                {"id": "S2", "when": "c", "then": "d"}
+            )
 
         def delivers(data):
             data["tickets"][0]["delivers"] = "first, and then some"
@@ -355,7 +373,7 @@ class AmendTests(DrainFixture, unittest.TestCase):
         ):
             with self.subTest(changed=name):
                 self.setUp()
-                self.drive_through_an_amendment(self.edit(change))
+                self.drive_through_a_reapproval(self.edit(change))
                 packet = (self.run_dir / "t1" / "task.v2.md").read_text(encoding="utf-8")
                 self.assertIn(needle, packet)
                 resumes = [r for r in self.calls("resume") if r["args"]["name"] == "demo-t1"]
@@ -363,7 +381,9 @@ class AmendTests(DrainFixture, unittest.TestCase):
                 self.assertIn("task.v2.md", resumes[0]["args"]["task"])
                 self.assertEqual([r for r in self.calls("resume") if "t3" in r["args"]["name"]], [])
 
-    def test_S14_a_second_amendment_writes_the_packet_after_the_last(self):
+    @pytest.mark.spec("A re-approval reaches running workers")
+    @pytest.mark.spec("Re-approval under a live driver")
+    def test_a_second_reapproval_writes_the_packet_after_the_last(self):
         everyone = ("demo-t1", "demo-t3", "demo-t5")
         wider = yaml.safe_load(self.widen_t1_and_add_t5())
         wider["tickets"][0]["paths"] = ["src/a/", "tests/test_a.py", "tests/test_b.py"]
@@ -373,12 +393,12 @@ class AmendTests(DrainFixture, unittest.TestCase):
                     self.working("demo-t1", "demo-t3"),
                     write=self.writes(self.widen_t1_and_add_t5()),
                 ),
-                wait_result(self.working("demo-t1", "demo-t3"), run=[self.amend_argv()]),
+                wait_result(self.working("demo-t1", "demo-t3"), run=[self.reapprove_argv()]),
                 wait_result(
                     self.working(*everyone),
                     write=self.writes(self.reapproved(wider)),
                 ),
-                wait_result(self.working(*everyone), run=[self.amend_argv("one more path")]),
+                wait_result(self.working(*everyone), run=[self.reapprove_argv("one more path")]),
                 wait_result(self.working(*everyone), reason="timeout"),
             ]
         )
@@ -390,8 +410,8 @@ class AmendTests(DrainFixture, unittest.TestCase):
         )
 
     def reapproved(self, data):
-        """The amended plan's file with `data`'s tickets, its new approval block and history kept: the Lead's second
-        hand edit."""
+        """The re-approved plan's file with `data`'s tickets and its new approval block kept: the Lead's second hand
+        edit."""
         current = yaml.safe_load(self.plan.read_text(encoding="utf-8"))
         current["tickets"] = data["tickets"]
         return yaml.safe_dump(current, sort_keys=False)
@@ -564,7 +584,7 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
         (wake,) = self.wake_lines("drain")
         self.assertIn("plan approve --base", wake)
         self.assertIn(park["base"], wake)
-        self.assertIn("plan amend", wake)
+        self.assertIn("--reason", wake)
         # it started no new work while it was parked: T2 waited for the park to end, not for a slot
         (t2,) = self.at_call("spawn", "demo-t2")
         self.assertTrue(self.drain_had_ended(t2), "demo-t2 was started while the drive was parked")
@@ -621,7 +641,7 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
         self.waits(
             [
                 report_wait("demo-t1", "blocked", "cannot reach the database"),
-                self.decide_step("t1", "amend", "T1 needs its test file"),
+                self.decide_step("t1", "mark blocked", "T1 needs its test file"),
                 # the Lead's edit drains the drive while the parked unit's assignment stays open
                 wait_result(self.working("demo-t1"), write=self.writes(self.widened_t1())),
                 self.tick(16 * 60, *self.working("demo-t1")),
@@ -632,7 +652,7 @@ class ParkedDrive(DrainFixture, unittest.TestCase):
         spec = load_script()
         with mock.patch.object(spec.Driver, "clock", staticmethod(self.clock)):
             self.run_driver()
-        self.assertEqual(self.task("t1")["gate"], "awaiting-amendment")
+        self.assertEqual(self.task("t1")["gate"], "blocked")
         wakes = self.wake_lines("drain")
         self.assertEqual(
             len(wakes),

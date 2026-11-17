@@ -1,4 +1,4 @@
-"""plan/1 validation and approval at the CLI boundary."""
+"""plan/2 validation and approval at the CLI boundary."""
 
 import copy
 import hashlib
@@ -26,11 +26,19 @@ class Done:
 
 def contract():
     return {
-        "schema": "plan/1",
+        "schema": "plan/2",
         "slug": "demo",
         "goal": "deliver",
         "spec": "docs/specs/demo.md",
-        "scenarios": [{"id": "S1", "when": "a", "then": "b"}],
+        "requirements": {
+            "added": [
+                {
+                    "title": "Demo",
+                    "shall": "The demo SHALL deliver.",
+                    "scenarios": [{"id": "S1", "when": "a", "then": "b"}],
+                }
+            ]
+        },
         "tickets": [
             {
                 "id": "T1",
@@ -97,6 +105,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(code, 0, message)
         return yaml.safe_load(self.plan.read_text())["approval"]
 
+    @pytest.mark.spec("Plan format")
     def test_S1_valid_reference_and_schema(self):
         from agent_orchestrator.plan import load
 
@@ -110,12 +119,13 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
             self.assertEqual(load_script().run_cli(["plan", "schema"]), 0)
         self.assertFalse(json.loads(out.getvalue())["additionalProperties"])
 
+    @pytest.mark.spec("Plan format")
     def test_S1_names_all_schema_and_graph_defects(self):
         data = contract()
         data["mystery"] = True
         del data["goal"]
-        data["scenarios"] += [
-            copy.deepcopy(data["scenarios"][0]),
+        data["requirements"]["added"][0]["scenarios"] += [
+            copy.deepcopy(data["requirements"]["added"][0]["scenarios"][0]),
             {"id": "S2", "when": "x", "then": "y", "evidence": {}},
         ]
         data["tickets"][0].update(
@@ -128,8 +138,8 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         for path in (
             "mystery",
             "goal",
-            "scenarios[1].id",
-            "scenarios[2].evidence",
+            "requirements.added[0].scenarios[1].id",
+            "requirements.added[0].scenarios[2].evidence",
             "tickets[0].size",
             "tickets[0].blocked_by[0]",
             "tickets[0].blocked_by",
@@ -143,6 +153,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.plan.read_bytes(), before)
         self.assertFalse(self.state_dir.exists())
 
+    @pytest.mark.spec("Plan format")
     def test_S1_duplicate_key_is_named(self):
         self.plan.write_text(
             self.plan.read_text().replace("size: small", "size: small\n  size: regular")
@@ -152,9 +163,22 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertIn("tickets[0].size", message)
         self.assertIn("duplicate", message)
 
+    @pytest.mark.spec("Plan format")
     def test_S1_strict_nested_mappings_and_literal_paths(self):
         for change, path in [
-            ({"scenarios": [dict(contract()["scenarios"][0], typo=1)]}, "scenarios[0].typo"),
+            (
+                {
+                    "requirements": {
+                        "added": [
+                            dict(
+                                contract()["requirements"]["added"][0],
+                                scenarios=[{"id": "S1", "when": "a", "then": "b", "typo": 1}],
+                            )
+                        ]
+                    }
+                },
+                "requirements.added[0].scenarios[0].typo",
+            ),
             (
                 {"approval": {"by": "a", "at": "b", "base": "c", "digest": "d", "typo": 1}},
                 "approval.typo",
@@ -243,22 +267,6 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         )
         self.refused_approve("worker")
 
-    def test_S20_plan_amend_refuses_a_worker_the_runtime_verifies_by_ancestry_too(self):
-        block = self.approve()
-        self.without_host_markers()
-        self.answer = lambda argv: Done(
-            0, json.dumps({"role": "lead", "caller": {"kind": "worker", "verified": True}})
-        )
-        before = self.plan.read_bytes()
-        code, message = self.command("amend", "--reason", "retitle")
-        self.assertEqual(code, 2, message)
-        self.assertIn("worker", message)
-        self.assertIn("amend", message)
-        self.assertEqual(self.plan.read_bytes(), before)
-        self.assertEqual(
-            yaml.safe_load(self.plan.read_text())["approval"]["digest"], block["digest"]
-        )
-
     def test_S20_the_way_out_names_both_a_worker_and_a_lead(self):
         self.answer = lambda argv: Done(
             0, json.dumps({"role": "unknown", "caller": {"kind": "unknown"}})
@@ -273,6 +281,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertIn("digest", self.approve())
         self.assertEqual(self.asked[0][-2:], ["resolve", "--json"])
 
+    @pytest.mark.spec("Plan approval")
     def test_S2_digest_snapshot_comments_and_idempotence(self):
         before = self.plan.read_text()
         approval = self.approve()
@@ -298,6 +307,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.approve()["digest"], expected)
         self.assertEqual(self.plan.read_text().count("\napproval:"), 1)
 
+    @pytest.mark.spec("Plan approval")
     def test_S2_changes_missing_snapshot_and_unapproved_run_refuse(self):
         self.run_driver("--repo", str(self.repo), expect=2)
         self.assertFalse(self.calls("spawn"))
@@ -316,6 +326,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(code, 2)
         self.assertIn("snapshot", message)
 
+    @pytest.mark.spec("Plan approval")
     def test_S2_approve_base_and_repo_identity_are_bound(self):
         self.approve()
         other = self.root / "other"
@@ -327,6 +338,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(code, 2)
         self.assertIn("base", message)
 
+    @pytest.mark.spec("Only the Lead approves")
     def test_S3_runtime_worker_is_refused_before_any_write(self):
         before = self.plan.read_bytes()
         with mock.patch.object(
@@ -341,6 +353,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.plan.read_bytes(), before)
         self.assertFalse(self.state_dir.exists())
 
+    @pytest.mark.spec("Plan approval")
     def test_S2_missing_snapshot_is_repaired_by_reapproval(self):
         block = self.approve()
         snap = self.state_dir / "approvals" / block["digest"] / "plan.yaml"
@@ -349,6 +362,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.approve()
         self.assertEqual(self.command("check")[0], 0)
 
+    @pytest.mark.spec("Plan approval")
     def test_S2_same_contract_under_another_filename_can_be_approved(self):
         self.approve()
         self.plan = self.plan.with_name("another.plan.yaml")
@@ -356,6 +370,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.approve()
         self.assertEqual(self.command("check")[0], 0)
 
+    @pytest.mark.spec("Plan approval")
     def test_S2_flow_mapping_and_explicit_document_end_remain_valid(self):
         for text in (
             yaml.safe_dump(contract(), default_flow_style=True),
@@ -368,26 +383,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
                 self.approve()
                 self.assertEqual(self.command("check")[0], 0)
 
-    def test_S1_a_scenario_evidence_block_is_refused_naming_the_way_out(self):
-        data = contract()
-        data["scenarios"][0]["evidence"] = {"check": "pytest", "baseline": "fail"}
-        self.write(data)
-        before = self.plan.read_bytes()
-        for verb in ("check", "approve"):
-            with self.subTest(verb=verb):
-                code, message = self.command(verb)
-                self.assertEqual(code, 2, message)
-                # The refusal is the last line, as JSON: read it back so its dash is a dash.
-                message = json.loads(message.strip().splitlines()[-1])["error"]
-                self.assertIn(
-                    "scenarios[0].evidence: scenario evidence is gone; the ticket's tests are its "
-                    "evidence — delete the block",
-                    message,
-                )
-                self.assertNotIn("Extra inputs are not permitted", message)
-        self.assertEqual(self.plan.read_bytes(), before)
-        self.assertFalse((self.state_dir / "approvals").exists())
-
+    @pytest.mark.spec("Plan approval")
     def test_S2_approve_runs_nothing_and_spawns_no_worktree(self):
         """A stripped plan (scenarios and tickets only) is approved by writing its block and its snapshot: no check
         runs at the base, so no scratch worktree is ever added to the repository."""
@@ -403,12 +399,13 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(list(self.state_dir.rglob("receipts")), [])
         self.assertEqual(self.command("check")[0], 0)
 
-    def test_S2_plan_schema_is_a_closed_plan_v1_schema(self):
+    @pytest.mark.spec("Plan format")
+    def test_S2_plan_schema_is_a_closed_plan_v2_schema(self):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = load_script().run_cli(["plan", "schema"])
         self.assertEqual(code, 0, err.getvalue())
         schema = json.loads(out.getvalue())
         self.assertIs(schema["additionalProperties"], False)
-        self.assertIn("scenarios", schema["properties"])
+        self.assertIn("requirements", schema["properties"])
         self.assertIn("tickets", schema["properties"])

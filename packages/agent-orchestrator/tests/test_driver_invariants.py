@@ -8,7 +8,7 @@ The four cases are the plan's outcome:
 
   - S1: a worker report whose check outcome is prose is refused back as a request naming it; the drive books no
     error and reaches `finish` (it exited 1 on this report in the 00c run)
-  - S2: `ledger check` refuses a park with no release key, two open attempts naming one review file, and a gate
+  - S2: `ledger check` refuses two open attempts naming one review file, and a gate
     the driver does not know, each by name; a coherent ledger passes
   - S3: a unit answered after its review writes the next review file, and the earlier review keeps its blocking id
   - S4: a check whose run is still in progress stays pending and its log placeholder never becomes evidence; the
@@ -28,7 +28,7 @@ import pytest
 
 # A fresh worktree's venv holds no workspace member: the package under test is importable from its source, so the
 # fixtures can import it.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fixtures import DRIVER, assignment, report_wait, resume_id, wait_result  # noqa: E402
 from test_gates import BLOCKING, GateFixture  # noqa: E402
@@ -154,7 +154,7 @@ class S1ControlTests(InvariantFixture, unittest.TestCase):
 
 class S2LedgerTests(InvariantFixture, unittest.TestCase):
     def test_S2_the_ledger_refuses_the_states_that_stalled_the_run(self):
-        """A park with no key, two attempts naming one review file, and an unknown gate are each refused by name."""
+        """Two attempts naming one review file, and an unknown gate, are each refused by name."""
         shared = {
             "version": 1,
             "kind": "agent-orchestrator/ledger",
@@ -165,7 +165,6 @@ class S2LedgerTests(InvariantFixture, unittest.TestCase):
         }
         for name, tasks, invariant in (
             ("shared", shared, "review-file-shared"),
-            ("parked", {"t1": task(gate="awaiting-amendment")}, "park-without-key"),
             ("unknown", {"t1": task(gate="reviewer")}, "unknown-gate"),
         ):
             with self.subTest(invariant=invariant):
@@ -180,22 +179,13 @@ class S2LedgerTests(InvariantFixture, unittest.TestCase):
                 self.assertIn("way_out", result.stderr)
 
     def test_S2_control_a_finished_run_leaves_a_coherent_ledger(self):
-        """What the driver itself writes is coherent: one file per open review, no park without a key."""
+        """What the driver itself writes is coherent: one file per open review."""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         tasks = self.ledger()["tasks"]
         self.assertTrue(tasks, "the run wrote no task")
         paths = [t["review"]["path"] for t in tasks.values() if t.get("review", {}).get("path")]
         self.assertEqual(len(paths), len(set(paths)), "two attempts name one review file")
-        self.assertEqual(
-            [
-                t
-                for t in tasks.values()
-                if t.get("gate") == "awaiting-amendment" and not t.get("amend_from")
-            ],
-            [],
-            "a park carries no release key",
-        )
 
 
 class S3ReviewWriteOnceTests(InvariantFixture, unittest.TestCase):

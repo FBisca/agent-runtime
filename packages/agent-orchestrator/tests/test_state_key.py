@@ -40,6 +40,7 @@ class StateKeyFixture(RunFixture):
 
 
 class StateKeyTests(StateKeyFixture, unittest.TestCase):
+    @pytest.mark.spec("Ledger and status")
     def test_S8_two_repositories_with_one_slug_each_get_their_own_ledger(self):
         """plan-contract/S8: <state>/<repo-key>/<slug>, nothing under the old key"""
         self.assertNotEqual(self.key, self.key2)
@@ -61,6 +62,7 @@ class StateKeyTests(StateKeyFixture, unittest.TestCase):
         self.assertEqual(spec.repo_key(worktree), self.key)
         self.assertTrue(self.key.startswith("repo-"), self.key)
 
+    @pytest.mark.spec("Ledger and status")
     def test_S8_the_old_ledger_is_imported_once_into_the_repository_that_owns_it(self):
         """plan-contract/S8: <state>/<slug>.json goes to the repository whose tickets it holds, one time"""
         self.drive(self.repo2, self.plan2)
@@ -103,6 +105,7 @@ class StateKeyTests(StateKeyFixture, unittest.TestCase):
         (keyed / "demo").rename(self.state_dir / "demo")
         shutil.rmtree(keyed)
 
+    @pytest.mark.spec("Ledger and status")
     def test_S8_a_lead_command_leaves_the_old_ledger_where_a_live_driver_reads_it(self):
         """plan-contract/S8: only `run` imports; `await`/`decide` resolve the old key in place, run lock held"""
         self.old_key_of_repo2()
@@ -118,6 +121,7 @@ class StateKeyTests(StateKeyFixture, unittest.TestCase):
         self.assertTrue((self.state_dir / "demo").is_dir())
         self.assertFalse((self.state_dir / self.key2).exists())
 
+    @pytest.mark.spec("Ledger and status")
     def test_S8_the_import_refuses_while_a_driver_holds_the_old_ledger(self):
         """plan-contract/S8: the old ledger's lock is taken before the move; a live holder is named, nothing moves"""
         self.old_key_of_repo2()

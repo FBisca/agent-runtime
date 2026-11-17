@@ -23,12 +23,14 @@ class AttentionRefresh(DeciderFixture, unittest.TestCase):
         super().setUp()
         self.set_plan(("T1", "T4"))
 
+    @pytest.mark.spec("Person tickets")
     def test_control_a_waiting_person_ticket_is_listed_once(self):
         self.run_driver()
         self.run_driver(expect=1)
         self.assertEqual(self.attention_md().count("sign-off"), 1)
         self.assertIn("T4", self.attention_md())
 
+    @pytest.mark.spec("Person tickets")
     def test_a_person_ticket_set_complete_leaves_the_attention_file(self):
         self.run_driver()
         self.assertIn("sign-off", self.attention_md())
@@ -43,6 +45,7 @@ class AttentionRefresh(DeciderFixture, unittest.TestCase):
             "# Needs you", self.attention_md(), "nothing waits, so the file keeps its header only"
         )
 
+    @pytest.mark.spec("Person tickets")
     def test_a_person_ticket_set_complete_during_a_run_leaves_the_file_in_that_run(self):
         self.run_driver()
         self.assertIn("sign-off", self.attention_md())

@@ -1,6 +1,6 @@
 """Acceptance for the provider contract (00b-agent-review-provider-contract/S1..S6).
 
-The runner places this file at `packages/agent-review/acceptance/screening/`. It drives the `agent-review` console
+It drives the `agent-review` console
 script as a subprocess over a real repository, a configuration it writes, a local System One endpoint that records what
 the tool sent, and a canned screening provider for the paths that do not need the wire; it imports nothing from the
 package, so it collects cleanly before the phase exists and fails at base.

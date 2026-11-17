@@ -20,7 +20,7 @@ from .. import contracts, invariants, narrate, verify
 from ..invariants import next_path
 from ..report_rules import require
 from ..timeutil import iso as now
-from .answers import ARCHIVE_REBUILDS, NO_TEST_MENU
+from .answers import ARCHIVE_REBUILDS
 from .book import ARCHIVE, unit_summary
 from .report import cell, item_text, short
 from .review import attempt_trail
@@ -165,16 +165,15 @@ class Findings:
         if fix["attempt"] <= self.fix_cap(unit):
             return None
         last = "; ".join(short(item) for item in fix["items"])
-        menu = None
         reason = "%s failed its gates %d times; last: %s" % (unit, fix["attempt"], last)
         if source == "verify" and self.covers_without_test(unit, fix["items"]):
-            menu = NO_TEST_MENU
             reason = (
                 "%s failed its covers gate %d times because the ticket's Paths can hold no test, "
-                "so the gate can never pass: add a test file, or a directory that holds its tests, "
-                "to its paths (`amend`); last: %s" % (unit, fix["attempt"], last)
+                "so the gate can never pass: edit the plan's paths to hold a test and re-approve it "
+                "(`agent-orchestrator plan approve %s --reason <why>`), then decide `retry`; last: %s"
+                % (unit, fix["attempt"], self.plan_path, last)
             )
-        asked = self.book_request(data, task_id, "gate", reason, fix=fix, menu=menu)
+        asked = self.book_request(data, task_id, "gate", reason, fix=fix)
         return ("gate", reason, asked) if asked is not None else None
 
     def _settle_failure(self, task_id, unit, owed, fix, rebuild, asked):

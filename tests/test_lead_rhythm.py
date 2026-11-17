@@ -19,7 +19,7 @@ from test_hooks_stop_guard import CodexHookTests
 
 pytestmark = pytest.mark.integration
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 SHIM = ROOT / "bin" / "agent-runtime-hook"
 CLAUDE_STOP = {"hook_event_name": "Stop", "stop_hook_active": False}
 

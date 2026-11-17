@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[3]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
 # The directories that can ship the engine. Tooling trees (`.pi`, `.claude`, `docs`) cannot hold a
 # second copy a suite would import, and walking them cost seconds for nothing.
-SOURCE_ROOTS = ("packages", "server", "hooks", "tests", "acceptance", "bin", "scripts", "herdr")
+SOURCE_ROOTS = ("packages", "server", "hooks", "tests", "bin", "scripts", "herdr")
 
 
 def sources():

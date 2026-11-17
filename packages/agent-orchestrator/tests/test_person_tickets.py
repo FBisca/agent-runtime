@@ -1,5 +1,5 @@
-"""Acceptance for the engine-gaps plan: a person-owned ticket is recorded done with `complete`, its `--cover` nodes
-reach the archive's Coverage table, and a promoting archive waits until every ticket, person tickets included, is
+"""Acceptance for the engine-gaps plan: a person-owned ticket is recorded done with `complete`, its requirement
+reaches the archive's spec, and a promoting archive waits until every ticket, person tickets included, is
 COMPLETE.
 
 It drives `run`, `plan check` and the new `complete` command through the archive fixture of the folder-plan tests
@@ -9,7 +9,7 @@ It drives `run`, `plan check` and the new `complete` command through the archive
 
   - the ticket's status becomes `COMPLETE <date> · <note>`; a spawned worker, an agent ticket, an unknown ticket and
     a `--cover` for a scenario the ticket does not satisfy are each refused (non-zero exit)
-  - the archive's Coverage row of a scenario lists the person ticket's cover nodes as given
+  - the archive's spec holds the requirement the person ticket's scenario sits under
   - the plan is accepted once every agent ticket is COMPLETE; the archive starts only once every ticket is
 
 Each class has a `control` test that holds whatever the change: it proves the fixture is real.
@@ -24,10 +24,14 @@ from unittest import mock
 import pytest
 import yaml
 from agent_orchestrator import runtime_client
-from fixtures import load_script, wait_result
+from fixtures import add_scenario, load_script, wait_result
 from test_archive_modes import FolderArchiveFixture, promote_plan
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.spec("Plan lifecycle"),
+    pytest.mark.spec("Person tickets"),
+]
 
 NODE = "other-repo/tests/test_manual.py::test_the_runbook_step"
 NOTE = "ran the runbook step in other-repo"
@@ -43,8 +47,8 @@ if os.path.exists(request) and not os.path.exists(decision):
 
 def plan_with_a_person_ticket():
     data = promote_plan()
-    data["scenarios"].append(
-        dict(id="S2", when="the person runs the runbook step", then="it is recorded")
+    add_scenario(
+        data, dict(id="S2", when="the person runs the runbook step", then="it is recorded")
     )
     data["tickets"].append(
         dict(
@@ -167,7 +171,7 @@ class PersonTicketArchive(PersonFixture, unittest.TestCase):
         self.first_drive()
         self.assertIn("ACCEPTED", self.history())
 
-    def test_the_archive_waits_for_the_person_ticket_then_carries_its_cover_nodes(self):
+    def test_the_archive_waits_for_the_person_ticket_then_carries_its_requirement(self):
         self.first_drive()
         self.assertFalse(
             (self.run_dir / "archive" / "request.json").exists(),
@@ -180,9 +184,7 @@ class PersonTicketArchive(PersonFixture, unittest.TestCase):
         self.drive_once([])
         self.assertEqual(self.history()[-1], "ARCHIVED")
         spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
-        rows = [line for line in spec.splitlines() if line.startswith("| R") and "| S2 |" in line]
-        self.assertEqual(len(rows), 1, spec)
-        self.assertIn("`%s`" % NODE, rows[0])
+        self.assertIn("### Requirement: Also S2", spec)
 
 
 if __name__ == "__main__":

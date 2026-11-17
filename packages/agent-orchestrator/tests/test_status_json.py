@@ -72,6 +72,8 @@ class StatusFixture(GateFixture):
 
 
 class StatusJsonTests(StatusFixture, unittest.TestCase):
+    @pytest.mark.spec("Ledger and status")
+    @pytest.mark.spec("Plan lifecycle")
     def test_S7_status_json_reads_the_ledger_and_plan_yaml_never_changes(self):
         """plan-contract/S7: dispatch, a pause, a decide answer and a merge leave plan.yaml byte-identical"""
         before = self.plan.read_bytes()
@@ -121,6 +123,7 @@ class StatusJsonTests(StatusFixture, unittest.TestCase):
         self.assertTrue(ticket["reason"].startswith("merged " + PR), ticket)
         self.assertEqual(self.plan.read_bytes(), before)
 
+    @pytest.mark.spec("Ledger and status")
     def test_S7_a_ticket_the_driver_spawned_is_in_progress_in_the_ledger_not_the_plan(self):
         """plan-contract/S7: the dispatch Status goes to the ledger like every other Status"""
         before = self.plan.read_bytes()

@@ -30,11 +30,12 @@ class YamlArchiveDestinationTests(unittest.TestCase):
         driver.repo = Path(repo)
         return driver
 
+    @pytest.mark.spec("Archive applies the change set")
     def test_S29_plan_outside_repo_lands_inside_the_checkout(self):
         with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as repo:
             plans = Path(outside) / "plans"
             plans.mkdir()
-            (plans / "demo.plan.yaml").write_text("schema: plan/1\n", encoding="utf-8")
+            (plans / "demo.plan.yaml").write_text("schema: plan/2\n", encoding="utf-8")
             (plans / "demo.plan.md").write_text("# demo\n", encoding="utf-8")
             driver = self.driver_for(plans / "demo.plan.yaml", repo)
             destinations = [rel for rel, _ in driver.yaml_copies()]

@@ -14,7 +14,7 @@ from unittest import mock
 
 import pytest
 import yaml
-from fixtures import WORLDS, RunFixture, load_script, red_of, report_wait, spawn_id
+from fixtures import WORLDS, RunFixture, added, load_script, red_of, report_wait, spawn_id
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -45,11 +45,11 @@ def ticket(tid="T1", satisfies=("S1",), **over):
 
 def plan_data(scenarios, tickets):
     return {
-        "schema": "plan/1",
+        "schema": "plan/2",
         "slug": "demo",
         "goal": "The feature file says done.",
         "spec": "docs/specs/demo.md",
-        "scenarios": scenarios,
+        "requirements": added(scenarios),
         "tickets": tickets,
     }
 
@@ -247,6 +247,7 @@ class TicketGateTests(AcceptanceFixture, unittest.TestCase):
 
 
 class AcceptedTests(AcceptanceFixture, unittest.TestCase):
+    @pytest.mark.spec("Plan lifecycle")
     def test_S17_every_agent_ticket_complete_accepts_the_plan_and_the_archive_starts(self):
         self.delivered()
         self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
