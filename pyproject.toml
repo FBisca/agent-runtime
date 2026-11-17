@@ -24,6 +24,7 @@ dev = [
     "pydantic>=2.7",
     "PyYAML>=6.0",
     "pytest-impacted>=0.37.0",
+    "pytest-timeout>=2.4.0",
 ]
 
 [tool.pytest.ini_options]
@@ -34,6 +35,8 @@ testpaths = ["tests", "acceptance", "packages/agent-orchestrator/tests", "packag
 pythonpath = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
+# R249: a test past this many seconds fails, so a slow one cannot hide inside a passing run.
+timeout = 18
 markers = [
     "unit: pure logic, no subprocess and no server (the fast suite)",
     "integration: drives the server over stdio, a subprocess or the filesystem",
@@ -50,7 +53,6 @@ impacted_map = [
   # The scripts are named one by one: a `scripts/*` wildcard also routed a new script to the
   # installer suite, so the cheap tier ran the tests of its neighbour's change.
   "scripts/build-release.sh=tests/installer",
-  "scripts/suite_budget.py=tests/test_suite_budget.py",
   "server/*=tests",
   "hooks/*=tests",
   "bin/*=tests",
@@ -98,7 +100,7 @@ quote-style = "double"
 
 [tool.ty.environment]
 python-version = "3.11"
-# Check every platform: the legacy budget must not depend on the runner OS.
+# Check every platform: the type gate must not depend on the runner OS.
 python-platform = "all"
 # The acceptance tests import the test helpers of the suite they moved out of, as pytest lets them.
 extra-paths = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]

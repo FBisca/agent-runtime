@@ -67,6 +67,7 @@ dev = [
     { name = "pydantic" },
     { name = "pytest" },
     { name = "pytest-impacted" },
+    { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
@@ -80,6 +81,7 @@ dev = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-impacted", specifier = ">=0.37.0" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.6" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = ">=0.9" },
@@ -420,6 +422,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ab/a3/820d8590a10cbe59a2822f8fe590500f37f02d97281445109f66f2bf30a7/pytest_impacted-0.37.0.tar.gz", hash = "sha256:bd7cfd09c476984874d355fafbd6e720a27d92b181a0a93eb317556549cbd68f", size = 891089, upload-time = "2026-11-02T12:24:58.947Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2e/55/230585f0ef9d518267dc3558773ba8af5c1a17ad2266cba87327743a8cc3/pytest_impacted-0.37.0-py3-none-any.whl", hash = "sha256:2d3ef4642ea63d117ce84daaad245d4c9b84384930809171ee0c37b5d093e2ae", size = 818147, upload-time = "2026-11-02T12:24:57.213Z" },
+]
+
+[[package]]
+name = "pytest-timeout"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/82/4c9ecabab13363e72d880f2fb504c5f750433b2b6f16e99f4ec21ada284c/pytest_timeout-2.4.0.tar.gz", hash = "sha256:7e68e90b01f9eff71332b25001f85c75495fc4e3a836701876183c4bcfd0540a", size = 17973, upload-time = "2025-05-05T19:44:34.99Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/b6/3127540ecdf1464a00e5a01ee60a1b09175f6913f0644ac748494d9c4b21/pytest_timeout-2.4.0-py3-none-any.whl", hash = "sha256:c42667e5cdadb151aeb5b26d114aff6bdf5a907f176a007a30b940d3d865b5c2", size = 14382, upload-time = "2025-05-05T19:44:33.502Z" },
 ]
 
 [[package]]
