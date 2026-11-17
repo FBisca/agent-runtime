@@ -11,7 +11,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["packages/agent-runtime", "packages/agent-orchestrator", "packages/agent-eval", "packages/agent-review"]
+members = ["packages/agent-runtime", "packages/agent-orchestrator", "packages/agent-eval"]
 
 [dependency-groups]
 dev = [
@@ -29,9 +29,9 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests", "packages/agent-orchestrator/tests", "packages/agent-eval/tests", "packages/agent-review/tests"]
+testpaths = ["tests", "packages/agent-orchestrator/tests", "packages/agent-eval/tests"]
 # A test imports its package's helpers (`fixtures`, `local_http`) by module name.
-pythonpath = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]
+pythonpath = ["packages/agent-orchestrator/tests", "tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
 # A test past this many seconds fails, so a slow one cannot hide inside a passing run.
@@ -71,7 +71,6 @@ impacted_map = [
   # The driver's prompt templates sit one directory deeper still.
   "packages/agent-orchestrator/src/*/*/*/*=packages/agent-orchestrator/tests",
   "packages/agent-eval/src/*/*=packages/agent-eval/tests",
-  "packages/agent-review/src/*/*=packages/agent-review/tests",
 ]
 
 [tool.ruff]
@@ -106,7 +105,7 @@ python-version = "3.11"
 # Check every platform: the type gate must not depend on the runner OS.
 python-platform = "all"
 # The tests import their package's helpers by module name, as pytest lets them.
-extra-paths = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]
+extra-paths = ["packages/agent-orchestrator/tests", "tests"]
 
 # The orchestrator audit's plan-level test lives in the unit suite, and its fixture mixins reach the RunFixture
 # attributes only through the class they are mixed into, which ty cannot see.
