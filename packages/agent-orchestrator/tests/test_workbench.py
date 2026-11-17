@@ -17,6 +17,7 @@ from unittest import mock
 
 import pytest
 import yaml
+from agent_orchestrator.driver import prune
 from fixtures import RunFixture, load_script
 from test_plan import contract
 
@@ -122,15 +123,17 @@ class WorkbenchFixture(RunFixture, unittest.TestCase):
         # Discovery lists the repository's tracked plan files.
         self.git(self.repo, "add", str(path))
         if approve:
-            code, out, err = self.run_cli(
-                "plan",
-                "approve",
-                str(path),
-                "--repo",
-                str(self.repo),
-                "--state-dir",
-                str(self.state_dir),
-            )
+            # The sweep deletes the archived ledgers these tests lay down for the workbench to read.
+            with mock.patch.object(prune, "sweep"):
+                code, out, err = self.run_cli(
+                    "plan",
+                    "approve",
+                    str(path),
+                    "--repo",
+                    str(self.repo),
+                    "--state-dir",
+                    str(self.state_dir),
+                )
             self.assertEqual(code, 0, out + err)
         return path
 

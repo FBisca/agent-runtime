@@ -14,7 +14,7 @@ from typing import Any
 from .. import narrate
 from .records import is_agent, is_done
 from .routing import load_approved, repo_root, require_yaml
-from .state import enter_plan_state, locate_state, read_ledger_file
+from .state import enter_plan_state, read_ledger_file, state_layout
 from .watch import ACCEPTED_STATES
 
 
@@ -27,7 +27,7 @@ def acceptance_context(args):
     model = load_approved(
         plan_path, repo=repo, state_dir=args.state_dir, require_approval=True, recover=True
     )
-    ledger_path, run_dir = locate_state(args.state_dir, plan_path, repo, model.slug)
+    ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, model.slug)
     data = read_ledger_file(ledger_path) if ledger_path.is_file() else {}
     return model, repo, ledger_path, run_dir, data
 

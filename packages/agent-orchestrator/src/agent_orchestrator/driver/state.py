@@ -10,7 +10,6 @@ lines.
 """
 
 import fcntl
-import json
 import os
 import re
 import sys
@@ -79,82 +78,6 @@ def state_layout(state_dir, plan_path, repo, slug):
     return keyed / (slug + ".json"), keyed / slug
 
 
-def owns_ledger(repo, data):
-    """Whether a ledger written under the old `<state>/<slug>.json` key belongs to `repo`: one of its tasks names the
-    plan file or the checkout inside the repository or its `.worktrees` directory. A ledger that names neither is
-    nobody's."""
-    repo = Path(os.path.realpath(repo))
-    roots = (repo, repo.parent / (repo.name + ".worktrees"))
-    for task in (data.get("tasks") or {}).values():
-        packet = task.get("packet") if isinstance(task, dict) else None
-        for field in ("plan", "checkout"):
-            value = (packet or {}).get(field)
-            if isinstance(value, str) and any(
-                Path(os.path.realpath(value)).is_relative_to(root) for root in roots
-            ):
-                return True
-    return False
-
-
-def old_ledger_of(state_dir, repo, slug):
-    """The ledger of the old `<state>/<slug>.json` key when `repo` owns it, else None."""
-    path = Path(state_dir).expanduser() / (slug + ".json")
-    if not path.is_file() or path.is_symlink():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return path if isinstance(data, dict) and owns_ledger(repo, data) else None
-
-
-def import_old_ledger(state_dir, repo, slug, ledger_path, run_dir):
-    """Move a ledger and a run directory written under the old `<state>/<slug>` key into the repository that owns
-    them. Only a `run` does it, under the plan's run lock: a Lead command that moved them would pull the files out
-    from under a live driver. Once the repository's own ledger exists nothing is imported over it, and a repository
-    that does not own the old ledger leaves it alone for the one that does."""
-    state = Path(state_dir).expanduser()
-    state.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(state / ".import.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if ledger_path.exists():
-            return
-        old = old_ledger_of(state, repo, slug)
-        if old is None:
-            return
-        # The old ledger's own lock is what a driver holds while it updates that ledger.
-        old_fd = os.open(
-            old.with_name(old.name + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
-        )
-        with os.fdopen(old_fd, "w") as old_lock:
-            try:
-                fcntl.flock(old_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise PlanError(
-                    "plan '%s': a live driver is updating its old ledger %s; the ledger moves to %s "
-                    "when that driver has stopped — follow it with `await`, or stop it and run again"
-                    % (slug, old, ledger_path)
-                ) from None
-            ledger_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            old_run = state / slug
-            if old_run.is_dir() and not run_dir.exists():
-                os.replace(old_run, run_dir)
-            os.replace(old, ledger_path)
-
-
-def locate_state(state_dir, plan_path, repo, slug, importing=False):
-    """(ledger path, run directory) of a plan. A YAML plan's old ledger is imported only when `importing`, which is
-    `run` under the plan's run lock; every other caller reads the old key in place while the repository's own ledger
-    is absent and the repository owns the old one."""
-    ledger_path, run_dir = state_layout(state_dir, plan_path, repo, slug)
-    if importing:
-        import_old_ledger(state_dir, repo, slug, ledger_path, run_dir)
-    elif not ledger_path.exists() and old_ledger_of(state_dir, repo, slug):
-        return Path(state_dir).expanduser() / (slug + ".json"), Path(state_dir).expanduser() / slug
-    return ledger_path, run_dir
-
-
 def plan_home(args):
     """(slug, ledger path, run directory) of the plan a Lead command names."""
     plan_path = Path(args.plan).resolve(strict=True)
@@ -162,7 +85,7 @@ def plan_home(args):
     if not slug:
         raise Refused("plan has no Slug")
     repo = repo_root(plan_path, getattr(args, "repo", None))
-    return (slug, *locate_state(args.state_dir, plan_path, repo, slug))
+    return (slug, *state_layout(args.state_dir, plan_path, repo, slug))
 
 
 def enter_plan_state(data, state, at=None):

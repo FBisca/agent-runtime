@@ -295,3 +295,18 @@ A new attempt of a unit SHALL run on the higher of its last attempt's class and 
 #### Scenario: titles and tags match
 - WHEN every title has a tag and every tag names a title
 - THEN the script exits 0; a spec with no `### Requirement:` heading asks for nothing
+
+### Requirement: Archived plans leave no state
+The state dir SHALL hold only plans that are not yet archived: a driver start and `plan approve` SHALL delete every ledger already in ARCHIVED with its lock, its run dir and the approval snapshots its digests name (the ledger's and every `amended` event's). It deletes nothing at the moment of archive, so the finishing driver and `await` keep their run dir. A snapshot no ledger names (approved but not started, or superseded before any driver started) stays: no safe rule exists for it.
+
+#### Scenario: an archived plan is swept
+- WHEN a driver starts or `plan approve` runs and the state dir holds a ledger in ARCHIVED
+- THEN its ledger, lock, run dir and snapshots are gone
+
+#### Scenario: a plan not archived is kept
+- WHEN the state dir holds a ledger in any other state, or a snapshot no ledger names
+- THEN the sweep leaves them
+
+#### Scenario: a live archived plan is skipped
+- WHEN an archived ledger's lock is held, or the newest `start` in its run dir names a live process
+- THEN the sweep leaves it for the next one

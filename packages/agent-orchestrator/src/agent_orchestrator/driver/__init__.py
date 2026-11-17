@@ -128,7 +128,6 @@ __all__ = [
     "forwarded",
     "gh_process",
     "head_of",
-    "import_old_ledger",
     "invariants",
     "is_agent",
     "is_done",
@@ -143,7 +142,6 @@ __all__ = [
     "legacy_markdown_view",
     "live_terminals",
     "load_approved",
-    "locate_state",
     "lock_held",
     "log_tail",
     "main",
@@ -159,12 +157,10 @@ __all__ = [
     "normalise_check",
     "now",
     "numbered",
-    "old_ledger_of",
     "open_attempt",
     "owned_collections",
     "owned_paths",
     "owned_scope",
-    "owns_ledger",
     "pane_name",
     "passed_checks",
     "payload_waits",
@@ -220,6 +216,7 @@ __all__ = [
     "step_failed",
     "subprocess",
     "sum_usage",
+    "sweep",
     "take_wake",
     "task_summary",
     "task_text",
@@ -360,6 +357,7 @@ from .pointers import owned_scope as owned_scope
 from .pointers import reference as reference
 from .pointers import task_text as task_text
 from .pointers import tdd_instruction as tdd_instruction
+from .prune import sweep as sweep
 from .pull import CI_EXCERPT_CHARS as CI_EXCERPT_CHARS
 from .pull import Pull as Pull
 from .pull import PullSurface as PullSurface
@@ -437,14 +435,10 @@ from .state import Refused as Refused
 from .state import await_lock_path as await_lock_path
 from .state import driver_gone as driver_gone
 from .state import enter_plan_state as enter_plan_state
-from .state import import_old_ledger as import_old_ledger
 from .state import last_mark as last_mark
 from .state import legacy_imports as legacy_imports
-from .state import locate_state as locate_state
 from .state import lock_held as lock_held
 from .state import numbered as numbered
-from .state import old_ledger_of as old_ledger_of
-from .state import owns_ledger as owns_ledger
 from .state import plan_home as plan_home
 from .state import plan_slug as plan_slug
 from .state import read_ledger_file as read_ledger_file

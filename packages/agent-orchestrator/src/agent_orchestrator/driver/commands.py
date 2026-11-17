@@ -26,6 +26,7 @@ from ..invariants import checked_write as ledger
 from ..plan import PlanError
 from ..report_rules import require
 from ..runtime_client import approval_refusal
+from . import prune
 from .answers import decide
 from .archive import report_crash
 from .book import checkpoint, claim, release, task_summary, unit_summary
@@ -49,7 +50,6 @@ from .state import (
     await_lock_path,
     driver_gone,
     legacy_imports,
-    old_ledger_of,
     read_ledger_file,
     run_dir_of,
     run_finished,
@@ -160,15 +160,9 @@ def _plan_header(args, plan_path, model):
 
 
 def _plan_state_paths(args, plan_path, repo, slug):
-    """(ledger path, run directory) of the plan: the old key for a legacy plan, the layout's for a YAML one."""
-    if repo is None:
-        # A legacy plan's ledger stays at the old `<state>/<slug>.json` key.
-        state_root = Path(args.state_dir).expanduser()
-        return state_root / (slug + ".json"), state_root / slug
-    ledger_path, run_dir = state_layout(args.state_dir, plan_path, repo, slug)
-    if not ledger_path.exists():
-        ledger_path = old_ledger_of(args.state_dir, repo, slug) or ledger_path
-    return ledger_path, run_dir
+    """(ledger path, run directory) of the plan, from the state layout."""
+    # A Markdown plan no longer runs, so it has no ledger of its own: its paths are where one would be.
+    return state_layout(args.state_dir, plan_path, repo or repo_root(plan_path, args.repo), slug)
 
 
 def _plan_ledger(ledger_path, repo, statuses, state, history):
@@ -426,6 +420,7 @@ def drive(args):
     require(args.idle_minutes >= 0, "--idle-minutes must not be negative")
     require(args.working_minutes >= 0, "--working-minutes must not be negative")
     require_yaml(args.plan)
+    prune.sweep(args.state_dir)  # before the run lock: archived plans are nobody's
     driver = Driver(args)
     slug = driver.slug = driver.read_plan()["slug"]
     with run_lock(driver.repo, slug, driver.plan_path):
@@ -518,6 +513,7 @@ def _approved(args):
             "(the person in their own session); ask the Lead to run plan approve"
             % caller.get("parent", "unknown")
         )
+    prune.sweep(args.state_dir)  # before the approval writes its own snapshot
     return {
         "approval": yaml_plan.approve(
             args.plan, repo=args.repo, state_dir=args.state_dir, base=args.base, reason=args.reason
