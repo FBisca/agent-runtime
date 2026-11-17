@@ -29,6 +29,12 @@ class AttemptRecord:
 
 
 class ReviewBriefTests(unittest.TestCase):
+    @pytest.mark.spec("A refused verdict goes back to its reviewer")
+    def test_the_brief_says_the_report_text_is_the_verdict_json_alone(self):
+        text = self.brief()
+        self.assertIn("The report text is the verdict JSON alone", text)
+        self.assertIn("remaining work", text)
+
     def stub(self, run=None, attempt=None):
         # the brief reads only these attributes; a whole Driver needs a repo and a runtime
         return cast(

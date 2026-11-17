@@ -615,7 +615,7 @@ class Answers:
         return self.resume_reviewer(
             task_id,
             "Your verdict was refused: %s. Fix it and hand it in again: your agent-runtime `report` call "
-            "carries the whole verdict JSON as its text." % error,
+            "carries the verdict JSON alone as its text, with no prose before or after it." % error,
         )
 
     def review_ended(self, task_id, reason):

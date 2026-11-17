@@ -26,4 +26,5 @@ Inputs, each read by you:
 ## The verdict
 Hand it in as the text of your agent-runtime `report` call, kind=complete, with the assignment id of this brief:
 {"verdict": "pass" | "block", "findings": [{"file": "<path in the checkout>", "line": <int>, "quote": "<the line as written>", "claim": "<what breaks and for whom>", "rule": "<bold title of the rulebook rule it breaks>"}]}
+The report text is the verdict JSON alone, from its `{` to its closing `}`. The worker protocol's compact block (files changed, checks, decisions, remaining work) is a worker's shape; a review has no use for it, and any text beside the JSON refuses the verdict.
 `rule` is optional: leave it out when the finding is your own judgment; both kinds block equally. The verdict is `block` exactly when `findings` has an entry. The driver checks the JSON on receipt and answers a wrong shape at once with the errors; hand in the corrected verdict.

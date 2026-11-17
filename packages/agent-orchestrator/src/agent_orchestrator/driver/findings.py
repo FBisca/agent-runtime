@@ -112,6 +112,11 @@ class Findings:
                 rounds[unit] = unit_summary(data, unit)["failed_reviews"]
             rounds[unit] += 1
             fix["attempt"] = rounds[unit]
+            # One gate failing again is what asks the Lead; a different gate failing is a new problem a fix round
+            # may still solve. A ledger of an older driver has no per-gate count: it starts at 0.
+            failures = data.setdefault("failures", {}).setdefault(unit, {})
+            failures[source] = failures.get(source, 0) + 1
+            fix["failures"] = failures[source]
             self.log("round", unit=unit, task=task_id, source=source, attempt=rounds[unit])
             if unit == ARCHIVE:
                 self.book_report(data, task_id, report)
@@ -152,16 +157,16 @@ class Findings:
     def _gate_refusal(self, data, task_id, unit, source, fix):
         """(kind, reason, the requested unit) once the unit has spent its fix rounds, else None. A unit that already
         holds an open request is asked nothing (its unit is None), and one under the cap takes a fix round instead."""
-        if fix["attempt"] <= self.fix_cap(unit):
+        if fix["failures"] <= self.fix_cap(unit):
             return None
         last = "; ".join(short(item) for item in fix["items"])
-        reason = "%s failed its gates %d times; last: %s" % (unit, fix["attempt"], last)
+        reason = "%s failed its %s gate %d times; last: %s" % (unit, source, fix["failures"], last)
         if source == "verify" and self.covers_without_test(unit, fix["items"]):
             reason = (
                 "%s failed its covers gate %d times because the ticket's Paths can hold no test, "
                 "so the gate can never pass: edit the plan's paths to hold a test and re-approve it "
                 "(`agent-orchestrator plan approve %s --reason <why>`), then decide `retry`; last: %s"
-                % (unit, fix["attempt"], self.plan_path, last)
+                % (unit, fix["failures"], self.plan_path, last)
             )
         asked = self.book_request(data, task_id, "gate", reason, fix=fix)
         return ("gate", reason, asked) if asked is not None else None
