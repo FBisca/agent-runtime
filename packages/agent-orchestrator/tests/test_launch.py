@@ -91,7 +91,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
         """orchestrator-engine/R14: orchestrator-lead-alerts/S7"""
         self.launch(parent="t175")
         argv = [c for c in self.hc_calls() if c[0] == "run"][0]
-        tail = argv[argv.index("--") + 1 :]
+        tail = argv[argv.index("--") + 5 :]
         self.assertEqual(tail[tail.index("--notify-terminal") + 1], "t175")
 
     def test_S7_a_run_launched_outside_a_terminal_alerts_no_one(self):
@@ -127,7 +127,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
         self.assertEqual(argv[:2], ["run", "--bg"])
         self.assertEqual(argv[argv.index("--name") + 1], "orchestrate-demo")
         self.assertEqual(argv[argv.index("--cwd") + 1], str(self.repo))
-        tail = argv[argv.index("--") + 1 :]
+        tail = argv[argv.index("--") + 5 :]
         # The member is a package: the pane runs `python -m agent_orchestrator run <plan>`.
         self.assertEqual(tail[1:4], ["-m", "agent_orchestrator", "run"])
         self.assertEqual(tail[4], str(self.plan))
@@ -211,7 +211,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["pane"], "orchestrate-demo")
         starts = [c for c in self.hc_calls() if c[0] == "run"]
         self.assertEqual(len(starts), 1)
-        tail = starts[0][starts[0].index("--") + 1 :]
+        tail = starts[0][starts[0].index("--") + 5 :]
         self.assertEqual(tail[2:5], ["agent_orchestrator", "run", str(self.plan)])
         self.assertEqual(tail[tail.index("--state-dir") + 1], str(self.state_dir))
 
