@@ -6,6 +6,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -18,7 +19,7 @@ SECRET = "sk-launch-env-secret-value"
 
 class LaunchEnvTests(unittest.TestCase):
     def launched_argv(self, env, code=0):
-        seen = {}
+        seen: dict[str, Any] = {}
 
         def fake_run(argv, **_kwargs):
             seen["argv"] = list(argv)
