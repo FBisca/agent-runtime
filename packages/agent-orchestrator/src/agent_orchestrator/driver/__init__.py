@@ -216,6 +216,7 @@ __all__ = [
     "step_failed",
     "subprocess",
     "sum_usage",
+    "sweep",
     "take_wake",
     "task_summary",
     "task_text",
@@ -356,6 +357,7 @@ from .pointers import owned_scope as owned_scope
 from .pointers import reference as reference
 from .pointers import task_text as task_text
 from .pointers import tdd_instruction as tdd_instruction
+from .prune import sweep as sweep
 from .pull import CI_EXCERPT_CHARS as CI_EXCERPT_CHARS
 from .pull import Pull as Pull
 from .pull import PullSurface as PullSurface
