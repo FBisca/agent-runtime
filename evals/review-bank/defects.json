@@ -1,0 +1,561 @@
+{
+ "429625b-rmtree": {
+  "description": "fix(orchestrator): a plan folder is deleted only directly under plans.dir (#281)\n\n* fix(orchestrator): a plan folder is deleted only directly under plans.dir\n\nplan check, plan approve and plan amend refuse a discarding folder plan whose resolved parent is not the\nresolved plans.dir; the driver refuses to start on one, and checks again at the deletion itself, for a discard\nand for a promote's archive tree, so a config that moved mid-run deletes nothing and the Lead is told the folder\nand plans.dir. A discard plan's archive still runs the gaps reviewer.\n\n* style(orchestrator): ruff format the plans.dir guard tests\n\n* test(orchestrator): the plans.dir run test passes the typed route file",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": [
+    [
+     5156,
+     5156
+    ],
+    [
+     5170,
+     5170
+    ]
+   ],
+   "packages/agent-orchestrator/src/agent_orchestrator/plan.py": [
+    [
+     364,
+     364
+    ],
+    [
+     368,
+     368
+    ],
+    [
+     879,
+     879
+    ],
+    [
+     960,
+     960
+    ],
+    [
+     1300,
+     1300
+    ],
+    [
+     1516,
+     1516
+    ]
+   ]
+  },
+  "source": "fixed by 109c98b",
+  "diff": "diff --git a/packages/agent-orchestrator/src/agent_orchestrator/driver.py b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\nindex 81d573b..297598a 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n@@ -1072,4 +1072,6 @@ class Driver:\n                 self.end_drain()\n             elif not settled:\n+                if found := yaml_plan.discard_problems(model, self.plan_path, self.repo):\n+                    raise PlanError(\"; \".join(found))  # a run starts only on a plan it may delete\n                 self.model, self.approval = model, model.approval\n         return self.legacy_of(model)\n@@ -5604,7 +5606,16 @@ class Driver:\n         return bool(listed)\n \n+    def guard_plan_folder(self):\n+        \"\"\"Refuse to delete a plan folder that is not directly under plans.dir. The config is read again here, not\n+        taken from the plan's load: it can change mid-run, and this is the check at the deletion itself.\"\"\"\n+        layout = self.layout\n+        plans_dir = repo_config.load(self.repo).plans_dir\n+        if layout.folder is not None and not layout.directly_under(plans_dir):\n+            raise ValueError(yaml_plan.not_under_plans_dir(layout.folder, plans_dir))\n+\n     def discard_plan(self, plan):\n         \"\"\"A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No\n         worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan.\"\"\"\n+        self.guard_plan_folder()\n         folder = self.layout.folder\n         shutil.rmtree(folder)\n@@ -5621,4 +5632,5 @@ class Driver:\n         rel = self.plan_folder_rel()\n         if rel is not None:\n+            self.guard_plan_folder()\n             shutil.rmtree(Path(checkout) / rel, ignore_errors=True)\n \ndiff --git a/packages/agent-orchestrator/src/agent_orchestrator/plan.py b/packages/agent-orchestrator/src/agent_orchestrator/plan.py\nindex 029dfe5..50c4168 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/plan.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/plan.py\n@@ -417,4 +417,10 @@ class PlanLayout:\n         return self.is_folder and not self.holds_repo()\n \n+    def directly_under(self, plans_dir):\n+        \"\"\"Whether the plan folder's resolved parent is the resolved `plans_dir`: the only place a folder is deleted\n+        from. Resolving both means a folder nested deeper, or a symlink into `plans_dir`, is not directly under it.\"\"\"\n+        folder = self.folder\n+        return folder is not None and folder.resolve().parent == Path(plans_dir).resolve()\n+\n     def folder_place(self):\n         \"\"\"The deletable folder's path in the repository; None for a legacy plan or a folder kept outside the\n@@ -477,9 +483,22 @@ def holds_no_test(paths, patterns):\n \n \n-def lint_problems(model, repo):\n+def discard_problems(model, path, repo):\n+    \"\"\"The refusal of a folder plan that discards from a folder that is not directly under plans.dir, as a list. It\n+    is no part of the load every driver tick makes: a config that moves mid-run must reach the deletion's own check,\n+    not drain a run that holds an approved plan.\"\"\"\n+    layout = PlanLayout(path, repo)\n+    cfg = repo_config(repo)\n+    if not layout.is_folder or (model.archive or cfg.archive_mode) != \"discard\":\n+        return []\n+    if layout.directly_under(cfg.plans_dir):\n+        return []\n+    return [not_under_plans_dir(layout.folder, cfg.plans_dir)]\n+\n+\n+def lint_problems(model, repo, path):\n     \"\"\"Problems `plan check`, `plan approve` and `plan amend` refuse; the driver's load never runs this, so a plan\n     approved before a rule existed keeps running.\"\"\"\n     patterns = repo_config(repo).test_patterns\n-    return [\n+    return discard_problems(model, path, repo) + [\n         f\"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file \"\n         \"or directory, so the covers gate could never pass \u2014 add a test file, or a directory that holds its \"\n@@ -794,4 +813,14 @@ def package_files(package, skip):\n \n \n+def not_under_plans_dir(folder, plans_dir):\n+    \"\"\"The refusal of a plan folder that may not be deleted, naming the folder, plans.dir and the way out.\"\"\"\n+    resolved = Path(folder).resolve()\n+    return (\n+        f\"plan folder {folder}: a plan that is deleted must sit directly under plans.dir ({plans_dir}), and its \"\n+        f\"folder resolves to {resolved} \u2014 move the folder to {plans_dir}/{resolved.name}, or set plans.dir in \"\n+        f\".orchestrate/config.yaml to {resolved.parent}\"\n+    )\n+\n+\n def folder_problems(data, path, repo, scenarios):\n     \"\"\"The rules of a plan in its own folder: the folder keys, their files, and what a promote may not clobber.\"\"\"\n@@ -1075,5 +1104,5 @@ def load(\n         raise PlanError(\"; \".join(problems))\n     assert model is not None\n-    if lint and (found := lint_problems(model, repo)):\n+    if lint and (found := lint_problems(model, repo, path)):\n         raise PlanError(\"; \".join(found))\n     if model.approval and verify:\n@@ -1423,5 +1452,5 @@ def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):\n     if not reason.strip():\n         raise PlanError(\"amend: --reason is empty \u2014 say why the plan changes\")\n-    if found := lint_problems(model, repo):\n+    if found := lint_problems(model, repo, path):\n         raise PlanError(\"; \".join(found))\n     with amend_lock(repo, model.slug):\n"
+ },
+ "89bba2f-flaky": {
+  "description": "fix(orchestrator): a FAIL under an earlier approval digest no longer makes a PASS flaky (#274)\n\nThe D16 flaky rule matched prior receipts by tree only. After plan amend, an oracle's new\nbytes passing on a tree where the old bytes failed was marked UNKNOWN (flaky). Match the\ndigest too, in a pure is_flaky helper with unit tests.",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": [
+    [
+     4155,
+     4156
+    ]
+   ]
+  },
+  "source": "fixed by 3afe564",
+  "diff": "diff --git a/packages/agent-orchestrator/src/agent_orchestrator/driver.py b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\nindex b6961e2..814520b 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n@@ -907,4 +907,16 @@ def head_of(checkout):\n \n \n+def is_flaky(receipt, prior):\n+    \"\"\"A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it. Only\n+    under the same approval digest: an amended contract runs other oracle bytes, and a FAIL under the old ones says\n+    nothing about the new.\"\"\"\n+    return receipt[\"result\"] == \"PASS\" and any(\n+        r.get(\"tree\") == receipt[\"tree\"]\n+        and r.get(\"digest\") == receipt.get(\"digest\")\n+        and r.get(\"result\") == \"FAIL\"\n+        for r in prior\n+    )\n+\n+\n def check_commit(claimed, head, what=\"review.json\"):\n     \"\"\"A claimed commit is at least 7 hex characters and is the checkout's HEAD (or an abbreviation of it).\"\"\"\n@@ -4602,8 +4614,5 @@ class Driver:\n         )\n         receipt = result.receipt\n-        # A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it.\n-        if receipt[\"result\"] == \"PASS\" and any(\n-            r.get(\"tree\") == receipt[\"tree\"] and r.get(\"result\") == \"FAIL\" for r in prior\n-        ):\n+        if is_flaky(receipt, prior):\n             receipt.update(\n                 result=\"UNKNOWN\",\n"
+ },
+ "e9bd1ad-checks": {
+  "description": "fix(orchestrator): require each worker check once and keep a required command out of the forbidden line (#316)\n\nTiers that render the same check listed it twice, so the worker was asked to\nrun one command twice; and a `full` equal to a required check was handed to\nthe worker as the command not to run, forbidding a check it must pass.\nEquivalent commands (a launcher prefix apart) now fold into one requirement,\na distinct `full` stays the verify/CI-owned line, and COMPLETE validation is\ndecided by the same set: the `affected` not_run allowance no longer waives a\ncommand another tier also requires.",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": [
+    [
+     286,
+     286
+    ],
+    [
+     532,
+     532
+    ],
+    [
+     5373,
+     5375
+    ],
+    [
+     5384,
+     5384
+    ]
+   ]
+  },
+  "source": "fixed by f953773",
+  "diff": "diff --git a/packages/agent-orchestrator/src/agent_orchestrator/driver.py b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\nindex 0f4563a..b51e3e1 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n@@ -265,4 +265,16 @@ def normalise_check(command):\n \n \n+def unique_checks(commands):\n+    \"\"\"Each required command once, in the spelling it was declared: tiers that render the same gate add no second\n+    requirement, so a worker is never asked to run one command twice, nor told not to run one it must pass.\"\"\"\n+    seen, unique = set(), []\n+    for command in commands:\n+        key = normalise_check(command)\n+        if key not in seen:\n+            seen.add(key)\n+            unique.append(command)\n+    return unique\n+\n+\n def merged_snapshot(path):\n     \"\"\"The checkout's snapshot, or None when the tree is gone: after a merge the snapshot is evidence, not a\n@@ -290,7 +302,9 @@ def require_completable(task, report):\n         if c.get(\"outcome\") == \"passed\" and isinstance(c.get(\"command\"), str)\n     }\n-    # The rendered `affected` check may be `not_run` with a reason: the selection found no test to run.\n+    # The rendered `affected` check may be `not_run` with a reason: the selection found no test to run. A command\n+    # another tier also requires is never that, so the allowance is only for a tier that stands alone.\n+    keys = [normalise_check(c) for c in task[\"packet\"][\"checks\"]]\n     affected = task[\"packet\"].get(\"affected\")\n-    if isinstance(affected, str):\n+    if isinstance(affected, str) and keys.count(normalise_check(affected)) == 1:\n         passed |= {\n             normalise_check(c[\"command\"])\n@@ -538,5 +552,5 @@ CONTRACT = \"\"\"# Contract for every task in this run\n   BLOCKED needs \"blocker\" and a next action in \"remaining\". In a fix round report \"review_rounds\":0: the driver counts failed rounds.\n - A YAML plan's ticket reports `\"contract\":3` and adds `\"covers\":{\"S<n>\":[\"path::test_name\"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node, unless the plan's evidence for it brings its own test files (acceptance files or oracles) or is `human` (a person checks it): map such a scenario only to tests this ticket changes, never to a test written to stand in for the check.\n-- COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.\n+- COMPLETE checks: every required check must be reported `passed`. Match by command: a leading `bash`, `sh`, `uv run`, `python -m`, `python3 -m` or `./` is ignored, so `bash scripts/checks.sh` and `./scripts/checks.sh` both match `scripts/checks.sh`; any other prefix does not. Each required command is required once, a launcher spelling apart, and the one `not_run` allowance (`affected` with a `reason`, when no test was selected) never waives a command another tier also requires. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.\n - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.\n - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.\n@@ -6749,7 +6763,8 @@ class Driver:\n     def tier_checks(self, owns):\n         \"\"\"The checks a worker runs: the named `--gate` alone, else the repo's `fast` and rendered `affected` tiers.\n-        Returns (checks, the rendered affected command or None, the `full` command the worker leaves to verify).\"\"\"\n+        Each required command appears once. Returns (checks, the rendered affected command when it is a\n+        requirement of its own, the `full` command the worker leaves to verify when it is not one of them).\"\"\"\n         if self.args.gate:\n-            return list(self.args.gate), None, None\n+            return unique_checks(self.args.gate), None, None\n         tiers = repo_config.load(self.repo).checks\n         if tiers is None or not (tiers.fast or tiers.affected):\n@@ -6760,5 +6775,17 @@ class Driver:\n                 \"{paths}\", \" \".join(shlex.quote(p) for p in owns)\n             )\n-        return [c for c in (tiers.fast, affected) if c], affected, tiers.full_run\n+        checks = unique_checks([c for c in (tiers.fast, affected) if c])\n+        # A rendered `affected` that repeats `fast` adds no requirement, so it keeps no `not_run` allowance of its\n+        # own; and a command the worker must pass is never the one it is told not to run.\n+        if (\n+            affected is not None\n+            and tiers.fast\n+            and normalise_check(affected) == normalise_check(tiers.fast)\n+        ):\n+            affected = None\n+        full = tiers.full_run\n+        if full and normalise_check(full) in {normalise_check(c) for c in checks}:\n+            full = None\n+        return checks, affected, full\n \n     def last_attempt(self, unit, task_id):\n"
+ },
+ "silent-idle": {
+  "description": "Three judged defects: a silent idle's state transition is not recorded in events.jsonl; the S8 continuation has no test; an idle answerer is left working after a Lead decision.",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": [
+    [
+     292,
+     292
+    ],
+    [
+     577,
+     577
+    ],
+    [
+     962,
+     969
+    ],
+    [
+     1391,
+     1391
+    ],
+    [
+     1406,
+     1409
+    ],
+    [
+     1416,
+     1445
+    ],
+    [
+     1461,
+     1461
+    ],
+    [
+     1503,
+     1503
+    ],
+    [
+     1516,
+     1516
+    ],
+    [
+     1540,
+     1540
+    ],
+    [
+     1550,
+     1555
+    ],
+    [
+     1569,
+     1577
+    ],
+    [
+     1584,
+     1584
+    ],
+    [
+     1617,
+     1618
+    ],
+    [
+     1630,
+     1631
+    ],
+    [
+     1959,
+     1959
+    ],
+    [
+     1964,
+     1964
+    ],
+    [
+     2000,
+     2001
+    ],
+    [
+     2374,
+     2376
+    ],
+    [
+     2640,
+     2640
+    ],
+    [
+     2646,
+     2646
+    ],
+    [
+     2744,
+     2744
+    ],
+    [
+     2812,
+     2812
+    ],
+    [
+     2974,
+     2974
+    ],
+    [
+     3759,
+     3760
+    ],
+    [
+     3764,
+     3764
+    ],
+    [
+     4494,
+     4494
+    ],
+    [
+     4790,
+     4790
+    ],
+    [
+     4847,
+     4847
+    ],
+    [
+     4851,
+     4851
+    ],
+    [
+     5222,
+     5222
+    ]
+   ]
+  },
+  "source": "introduced by 67f7405",
+  "diff": ""
+ },
+ "engine-gaps/t4r1": {
+  "description": "fix(orchestrator): a decision the driver cannot hand over asks the Lead again and acts on a complete that lands meanwhile",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": [
+    [
+     1256,
+     1256
+    ],
+    [
+     1915,
+     1915
+    ],
+    [
+     1951,
+     1951
+    ],
+    [
+     1984,
+     1984
+    ],
+    [
+     4026,
+     4026
+    ],
+    [
+     4271,
+     4271
+    ],
+    [
+     4365,
+     4366
+    ],
+    [
+     4442,
+     4442
+    ],
+    [
+     5381,
+     5381
+    ],
+    [
+     5619,
+     5619
+    ],
+    [
+     5740,
+     5740
+    ],
+    [
+     6141,
+     6141
+    ],
+    [
+     6247,
+     6247
+    ],
+    [
+     6271,
+     6271
+    ],
+    [
+     6367,
+     6367
+    ],
+    [
+     6453,
+     6453
+    ],
+    [
+     6523,
+     6523
+    ]
+   ]
+  },
+  "source": "fixed by 2cfb4e0",
+  "diff": "diff --git a/packages/agent-orchestrator/src/agent_orchestrator/driver.py b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\nindex 670130d..e3fa649 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n@@ -1984,4 +1984,6 @@ class Driver:\n                     break\n                 except (ValueError, OSError, subprocess.TimeoutExpired) as error:\n+                    if self.decision_unapplied(task_id, gate, error):\n+                        break  # the Lead is asked again, as for an unsettled intent: not an error of the run\n                     self.stuck.add((task_id, gate))\n                     self.errors.append(\"%s: %s\" % (task_id, error))\n@@ -4069,4 +4071,42 @@ class Driver:\n         self.request(task_id, \"intent\", str(error), menu=(\"retry\", \"skip\"), intent=error.operations)\n \n+    def decision_unapplied(self, task_id, gate, error):\n+        \"\"\"A step that was applying the Lead's decision failed (the hand-over was refused, e.g. the pane is blocked on\n+        a login): the unit gets a new request naming the failure and the way out, instead of sitting stuck for the rest\n+        of the run. A worker message that lands while it is open is held, and the next decision acts on it. False when\n+        the step was not applying a decision.\"\"\"\n+        task = self.task(task_id)\n+        if task.get(\"gate\") != gate:\n+            return False\n+        applying = (task.get(\"decision\") or {}).get(\"applying\")\n+        if gate == \"decided\":\n+            applying = applying or self.decided_action(task)\n+        elif gate not in (\"redo-pending\", \"fix-pending\") or not applying:\n+            return False\n+        worker = task[\"packet\"][\"worker\"]\n+        # the wake cuts a reason at 200 characters: the way out comes first, the runtime's words (all in the file) after\n+        reason = (\n+            \"the Lead's decision (%s) could not reach %s; retry it once the pane works, or fresh worker, mark blocked \"\n+            \"or skip: %s\" % (applying or \"decision\", worker, \" \".join(str(error).split())[:600])\n+        )\n+        with self.book() as data:\n+            if \"decision\" in data[\"tasks\"][task_id]:\n+                data[\"tasks\"][task_id][\"decision\"].pop(\"applying\", None)\n+        self.log(\n+            \"error\",\n+            unit=task[\"packet\"][\"unit\"],\n+            task=task_id,\n+            gate=gate,\n+            error=str(error)[:500],\n+        )\n+        self.request(task_id, \"handover\", reason)\n+        return True\n+\n+    def decided_action(self, task):\n+        try:\n+            return contracts.load(task[\"decision\"][\"path\"], contracts.validate_decision)[\"action\"]\n+        except (contracts.ContractError, KeyError, OSError, ValueError):\n+            return None\n+\n     def ensure_agent(self, name, role, unit, spawn, fresh=False, attempt=None):\n         \"\"\"Put one agent under `name` and return (address, assignment_id).\n@@ -4317,12 +4357,25 @@ class Driver:\n         task_id, new_id = task[\"packet\"][\"task_id\"], successor[\"task_id\"]\n         with self.book() as data:\n-            if data[\"tasks\"][task_id][\"status\"] != \"RELEASED\":\n+            before = data[\"tasks\"][task_id][\"status\"]\n+            if before != \"RELEASED\":\n                 release(data, task_id, \"superseded by \" + new_id)\n-            claim(data, successor)\n+            reserved = claim(data, successor)[\"action\"] == \"reserved\"\n             bound = data[\"tasks\"][new_id][\"runtime_id\"]\n         if not bound:\n-            runtime_id, assignment_id = self.hand_over(\n-                task, successor, task_md, text, fresh, answer\n-            )\n+            try:\n+                runtime_id, assignment_id = self.hand_over(\n+                    task, successor, task_md, text, fresh, answer\n+                )\n+            except (ValueError, OSError, subprocess.TimeoutExpired):\n+                # Nothing took the round over, so the worker's own task stays the unit's open task: a `complete` that\n+                # lands while the Lead is asked again must still find it (a released task is not looked at).\n+                with self.book() as data:\n+                    if before != \"RELEASED\":\n+                        data[\"tasks\"][task_id].update(status=before, updated_at=now())\n+                        for key in (\"release_reason\", \"cutoff\"):\n+                            data[\"tasks\"][task_id].pop(key, None)\n+                    if reserved and not data[\"tasks\"][new_id][\"runtime_id\"]:\n+                        del data[\"tasks\"][new_id]\n+                raise\n             with self.book() as data:\n                 bind(data, new_id, str(runtime_id))\n@@ -4476,7 +4529,10 @@ class Driver:\n             \"answer\": decision.get(\"answer\"),\n         }\n+        applying = dict(task[\"decision\"], applying=action)  # a failed hand-over asks the Lead again\n         if task.get(\"fix\"):\n-            return self.mark(task_id, gate=\"fix-pending\", fix=dict(task[\"fix\"], **flags))\n-        self.mark(task_id, gate=\"redo-pending\", redo=dict(flags, reason=reason))\n+            return self.mark(\n+                task_id, gate=\"fix-pending\", fix=dict(task[\"fix\"], **flags), decision=applying\n+            )\n+        self.mark(task_id, gate=\"redo-pending\", redo=dict(flags, reason=reason), decision=applying)\n \n     def step_answer(self, task_id, decision):\n"
+ },
+ "plan-layout/t4r1": {
+  "excluded": "the next round fixed the acceptance test (oracle-fix.diff), not the code"
+ },
+ "stale-team/t1r1": {
+  "description": "fix(runtime): the live-lead refusal advises only what can be followed\n\nLEAD_ID cannot carry a real generation: a pid:lstart stamp has spaces, so\n\"pass --lead <generation>\" told the caller to do something impossible.\nThe refusal now offers that way out only when the generation can be\npassed, and otherwise names the terminal's own hc terminal as the way out.",
+  "locations": {
+   "packages/agent-runtime/src/agent_runtime/agent_runtime.py": [
+    [
+     879,
+     879
+    ]
+   ]
+  },
+  "source": "fixed by 66c4b74",
+  "diff": "diff --git a/packages/agent-runtime/src/agent_runtime/agent_runtime.py b/packages/agent-runtime/src/agent_runtime/agent_runtime.py\nindex 218d0e1..389bb52 100755\n--- a/packages/agent-runtime/src/agent_runtime/agent_runtime.py\n+++ b/packages/agent-runtime/src/agent_runtime/agent_runtime.py\n@@ -837,4 +837,15 @@ def terminal_root_pid(terminal_id):\n \n \n+def lead_advice(generation):\n+    \"\"\"The way out of a live-lead refusal, worded so that it can be followed.\n+\n+    LEAD_ID cannot carry a real generation (its start stamp has spaces), so the advice to pass\n+    --lead is only given when the generation can be passed.\n+    \"\"\"\n+    if LEAD_ID.fullmatch(generation):\n+        return \"run this driver in its own hc terminal or pass --lead %s\" % generation\n+    return \"run this driver in its own hc terminal, or wait until that generation's work is done\"\n+\n+\n def cmd_call(args):\n     hc_tools = hc_tools_module()\n@@ -877,5 +888,5 @@ def cmd_call(args):\n             print(\n                 \"this terminal's live lead generation is %s with unfinished assignments or unacknowledged reports; \"\n-                \"run this driver in its own hc terminal or pass --lead %s\" % (live, live),\n+                \"%s\" % (live, lead_advice(live)),\n                 file=sys.stderr,\n             )\n"
+ },
+ "plan-amend/t4r2": {
+  "description": "fix(orchestrator): the drain and adoption code narrows the held approval and plan before reading them",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": [
+    [
+     1090,
+     1090
+    ],
+    [
+     1129,
+     1129
+    ],
+    [
+     1145,
+     1145
+    ],
+    [
+     1153,
+     1154
+    ],
+    [
+     1159,
+     1159
+    ],
+    [
+     1164,
+     1164
+    ],
+    [
+     1175,
+     1175
+    ],
+    [
+     1209,
+     1209
+    ],
+    [
+     1237,
+     1237
+    ],
+    [
+     1284,
+     1284
+    ]
+   ]
+  },
+  "source": "fixed by 564e700",
+  "diff": "diff --git a/packages/agent-orchestrator/src/agent_orchestrator/driver.py b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\nindex 7af4066..5504049 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n@@ -1099,5 +1099,5 @@ class Driver:\n         else:\n             settled = self.model is not None and started\n-            if settled and model.approval.digest != self.approval.digest:\n+            if settled and model.approval.digest != self.approved_digest():\n                 held = self.model\n                 self.model, self.approval = model, model.approval\n@@ -1123,4 +1123,11 @@ class Driver:\n     # `plan amend` writes the approval snapshot before it replaces the file: a read finds the old plan or the new one.\n \n+    def approved_digest(self):\n+        \"\"\"The digest of the approval this run gates against; the drain and adoption code only runs once a plan is\n+        held, so a missing one is a bug, not a state.\"\"\"\n+        if self.approval is None:\n+            raise PlanError(\"the run holds no approved plan yet\")\n+        return self.approval.digest\n+\n     def begin_drain(self, error):\n         \"\"\"Drain once per edit: one event and one wake, however many reads find the file still changed.\"\"\"\n@@ -1138,5 +1145,5 @@ class Driver:\n         ]\n         self.drain = {\"cause\": cause, \"error\": text}\n-        self.log(\"drain\", state=\"draining\", cause=cause, error=text, digest=self.approval.digest)\n+        self.log(\"drain\", state=\"draining\", cause=cause, error=text, digest=self.approved_digest())\n         narrate.say(\"warn\", None, \"draining: the plan is %s: %s\" % (cause, text))\n         self.wake(\n@@ -1154,5 +1161,5 @@ class Driver:\n             state=\"ended\",\n             cause=(self.drain or {}).get(\"cause\"),\n-            digest=self.approval.digest,\n+            digest=self.approved_digest(),\n         )\n         narrate.say(\"info\", None, \"the plan is back to its approved bytes: the drain ended\")\n@@ -1162,16 +1169,17 @@ class Driver:\n         \"\"\"The plan carries a valid approval other than the one this run holds: gate and dispatch against it from\n         now on. `held` is the model the run held until now.\"\"\"\n-        amendment = next(\n-            (a for a in reversed(self.model.amendments) if a.digest == self.approval.digest), None\n-        )\n+        if self.model is None:\n+            raise PlanError(\"the run holds no plan to adopt an amendment into\")\n+        digest = self.approved_digest()\n+        amendment = next((a for a in reversed(self.model.amendments) if a.digest == digest), None)\n         self.log(\n             \"amended\",\n             prev_digest=held.approval.digest,\n-            digest=self.approval.digest,\n+            digest=digest,\n             reason=amendment.reason[:500] if amendment else None,\n             tickets=amendment.tickets if amendment else None,\n             drained=True if self.drain else None,\n         )\n-        narrate.say(\"info\", None, \"adopted the amended plan %s\" % self.approval.digest[:12])\n+        narrate.say(\"info\", None, \"adopted the amended plan %s\" % digest[:12])\n         self.drain = None\n         self.last_plan = plan\n@@ -1185,4 +1193,6 @@ class Driver:\n         \"\"\"Each open attempt (working or parked) whose ticket's `paths`, `satisfies` or `delivers` the amendment\n         changed gets its next packet and its worker is resumed on it; any other attempt is left alone.\"\"\"\n+        if self.model is None:\n+            return\n         before = {t.id.lower(): t for t in held.tickets}\n         changed = {}\n@@ -1218,5 +1228,5 @@ class Driver:\n                     \"amend-failed %s: its worker could not be given the amended contract: %s -> look at its \"\n                     \"terminal\" % (unit, cell(error, 300)),\n-                    key=\"%s:%s\" % (task_id, self.approval.digest),\n+                    key=\"%s:%s\" % (task_id, self.approved_digest()),\n                 )\n \n@@ -1246,5 +1256,5 @@ class Driver:\n                     \"The plan was amended (%s). This packet replaces your earlier ones: keep the work already in \"\n                     \"this checkout and finish against the contract above. What changed:\"\n-                    % self.approval.digest[:12],\n+                    % self.approved_digest()[:12],\n                     *changes,\n                     \"\",\n@@ -1293,5 +1303,5 @@ class Driver:\n             packet=packet_md.name,\n             resumed=resumed,\n-            digest=self.approval.digest,\n+            digest=self.approved_digest(),\n         )\n         narrate.say(\n"
+ },
+ "review-gate/t2r2": {
+  "description": "docs(orchestrator): read a null requirement violation as absent\n\nA review item may carry `requirement_violation` as an optional field, so a\nproducer that serialises it always writes `null` when nothing is asserted. The\nreaders already treated that as absent, but R136 said any non-object metadata\nis refused, which promised a refusal nobody implemented and nothing tested.\n\nThe requirement now says a present metadata value that is neither an object nor\n`null` is refused, and names the null behaviour: it asserts nothing, so both\nreaders read it as absent and the reviewer is not sent to repair a shape that\nclaims nothing. The S3 metadata test covers the null case on a concern and on a\nblocking item, through both readers, so the row's coverage proves the sentence.",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/contracts.py": [
+    [
+     20,
+     20
+    ],
+    [
+     124,
+     125
+    ],
+    [
+     218,
+     218
+    ]
+   ]
+  },
+  "source": "fixed by cdd8265",
+  "diff": "diff --git a/packages/agent-orchestrator/src/agent_orchestrator/contracts.py b/packages/agent-orchestrator/src/agent_orchestrator/contracts.py\nindex c18c831..0624109 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/contracts.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/contracts.py\n@@ -18,5 +18,6 @@ verbatim: a review item's fields outside the core survive a round trip unchanged\n                 `line`, `fix` and `evidence {command, exit, excerpt, log_path}`. An item that asserts a\n                 `requirement_violation {source, id, expected, observed}` (each nonempty text) must be blocking: a\n-                requirement breach never passes as an optional observation. Any other field is kept verbatim.\n+                requirement breach never passes as an optional observation. An explicit `null` asserts nothing and is\n+                read as absent. Any other field is kept verbatim.\n                 Block iff there is a blocking item.\n `findings.json` driver -> fix round: `source`, `attempt`, the blocking and answer_required `items` (converge, verify,\n@@ -122,6 +123,7 @@ def versioned(value, what):\n def violation_problem(item):\n     \"\"\"Why an item's asserted `requirement_violation` is inconsistent, or None when none is asserted or it is well\n-    formed. Presence asserts a violation of a named requirement, so the item blocks and names the source, the\n-    requirement, what it promised and what it did instead: a real breach never passes as an optional observation.\"\"\"\n+    formed. A non-null `requirement_violation` asserts a violation of a named requirement, so the item blocks and\n+    names the source, the requirement, what it promised and what it did instead: a real breach never passes as an\n+    optional observation. A null asserts nothing, so it is read as absent.\"\"\"\n     violation = item.get(\"requirement_violation\")\n     if violation is None:\n@@ -216,5 +218,5 @@ class ReviewItem(Open):\n     \"\"\"One review item (contract 2). The core fields are required; the rest is kept verbatim.\n \n-    `requirement_violation` is kept verbatim too and validated here: its presence asserts a violation.\"\"\"\n+    `requirement_violation` is kept verbatim too and validated here: a non-null one asserts a violation.\"\"\"\n \n     id: str = Field(min_length=1)\n"
+ },
+ "yaml-eec/t8r3": {
+  "description": "fix(orchestrator): an archive outcome re-runs only the items that passed, ARCHIVED is entered wherever the archive merges, and the archive head is checked against the approved bytes\n\nfix(orchestrator): the archive gate checks the placed oracles only, the copied plan files are the reviewer's",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver.py": [
+    [
+     3070,
+     3070
+    ],
+    [
+     3147,
+     3150
+    ],
+    [
+     3197,
+     3197
+    ],
+    [
+     4195,
+     4195
+    ],
+    [
+     4213,
+     4213
+    ],
+    [
+     4218,
+     4220
+    ],
+    [
+     4529,
+     4537
+    ],
+    [
+     4554,
+     4564
+    ]
+   ]
+  },
+  "source": "fixed by b4d2057, 08f58c1",
+  "diff": "diff --git a/packages/agent-orchestrator/src/agent_orchestrator/driver.py b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\nindex 7925a6f..e15960e 100644\n--- a/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n+++ b/packages/agent-orchestrator/src/agent_orchestrator/driver.py\n@@ -3145,10 +3145,15 @@ class Driver:\n             \"COMPLETE %s \u00b7 merged %s%s\" % (now()[:10], url, \" (%s)\" % commit[:7] if commit else \"\"),\n         )\n-        self.mark(task_id, gate=\"cleanup\", merge_commit=commit)\n-        if self.model and self.task(task_id)[\"packet\"][\"unit\"] == ARCHIVE:\n-            with self.book() as data:  # the plan is ARCHIVED when its archive PR merges\n-                enter_plan_state(data, \"ARCHIVED\")\n+        self.mark_merged(task_id, merge_commit=commit)\n         event(\"%s merged: %s\" % (task_id, url))\n \n+    def mark_merged(self, task_id, **fields):\n+        \"\"\"The unit's cleanup gate, and for the archive unit the plan's ARCHIVED, in one transaction: a crash between\n+        them cannot leave a merged archive with an ACCEPTED plan.\"\"\"\n+        with self.book() as data:\n+            data[\"tasks\"][task_id].update(fields, gate=\"cleanup\", updated_at=now())\n+            if self.model and data[\"tasks\"][task_id][\"packet\"][\"unit\"] == ARCHIVE:\n+                enter_plan_state(data, \"ARCHIVED\")\n+\n     def complete_merged(self, task_id, report):\n         \"\"\"The ledger's COMPLETE for a merged unit. A merge is final, so a report that fails the COMPLETE rules does\n@@ -3195,5 +3200,10 @@ class Driver:\n             \"COMPLETE %s \u00b7 merged %s%s\" % (now()[:10], url, \" (%s)\" % commit[:7] if commit else \"\"),\n         )\n-        self.mark(task_id, gate=\"cleanup\", pr=url, merge_commit=commit)\n+        if self.model and unit == ARCHIVE:\n+            verdict, lines = self.archive_evidence(task_id, task[\"packet\"])\n+            self.log(\n+                \"archive-evidence-merged-early\", task=task_id, verdict=verdict, items=len(lines)\n+            )\n+        self.mark_merged(task_id, pr=url, merge_commit=commit)\n         self.stop_unit_agents(unit, \"merged\")\n         event(\"%s merged early: %s\" % (unit, url))\n@@ -4209,7 +4219,32 @@ class Driver:\n         return (\"FAIL\", items) if items else (\"PASS\", [])\n \n+    def archive_mismatches(self, checkout, model):\n+        \"\"\"Files on the archive head that are not the approved bytes: each placed oracle against the approval\n+        snapshot, and each copied plan file against its source. Read before the runner re-places anything, so an\n+        edit cannot be masked by the re-run.\"\"\"\n+        files = self.oracles()\n+        root = Path(checkout)\n+        bad = []\n+        for rel, name in self.oracle_targets(model):\n+            path = root / rel\n+            if not path.is_file() or path.read_bytes() != files[name]:\n+                bad.append(rel)\n+        for rel, source in self.yaml_copies():\n+            if source.is_dir():\n+                for child in sorted(p for p in source.rglob(\"*\") if p.is_file()):\n+                    path = root / rel.rstrip(\"/\") / child.relative_to(source).as_posix()\n+                    if not path.is_file() or path.read_bytes() != child.read_bytes():\n+                        bad.append(path.relative_to(root).as_posix())\n+            else:\n+                path = root / rel\n+                if not path.is_file() or path.read_bytes() != source.read_bytes():\n+                    bad.append(rel)\n+        return bad\n+\n     def archive_evidence(self, task_id, packet):\n         \"\"\"The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have\n-        changed what the plan delivered. (\"PASS\" | \"FAIL\" | \"error\", items); FAIL and UNKNOWN are both a fix round.\"\"\"\n+        changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set\n+        verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can\n+        change that. (\"PASS\" | \"FAIL\" | \"error\", items); FAIL and UNKNOWN are both a fix round.\"\"\"\n         try:\n             commit = verify.snapshot_commit(packet[\"checkout\"])\n@@ -4217,6 +4252,31 @@ class Driver:\n             model = self.contract()[0]\n             items = []\n+            mismatched = self.archive_mismatches(packet[\"checkout\"], model)\n+            log = self.run_dir / task_id / \"approved-bytes.log\"\n+            if mismatched:\n+                log.parent.mkdir(parents=True, exist_ok=True)\n+                log.write_text(\n+                    \"\\n\".join(\"differs: \" + rel for rel in mismatched) + \"\\n\", encoding=\"utf-8\"\n+                )\n+            for rel in mismatched:\n+                items.append(\n+                    {\n+                        \"id\": \"E%d\" % (len(items) + 1),\n+                        \"kind\": \"blocking\",\n+                        \"source\": \"verify\",\n+                        \"check\": \"approved bytes\",\n+                        \"command\": \"cmp\",\n+                        \"exit\": 1,\n+                        \"excerpt\": \"%s differs from the approved bytes; restore it byte-identical\"\n+                        % rel,\n+                        \"log_path\": str(log),\n+                    }\n+                )\n+            with self.book() as data:\n+                held = {\n+                    i[\"scenario\"] for i in self.acceptance_of(data)[\"items\"] if i[\"state\"] == \"PASS\"\n+                }\n             for scenario in verify.check_scenarios(model):\n-                if scenario.id not in model.outcome:\n+                if scenario.id not in model.outcome or scenario.id not in held:\n                     continue\n                 result = self.run_evidence(scenario.id, \"archive\", commit)\n@@ -4523,17 +4583,25 @@ class Driver:\n         event(\"spawned %s (%s, %s, %s)\" % (name, klass, model, effort))\n \n+    def oracle_targets(self, model):\n+        \"\"\"(repo-relative place, oracle file name) for each promote oracle. The oracle keeps its source name without\n+        the `.oracle` suffix: only the promoted name is collected as a test. One derivation for the placing and the\n+        brief, so they cannot disagree.\"\"\"\n+        targets = []\n+        for scenario in model.scenarios:\n+            evidence = scenario.evidence\n+            if evidence and evidence.promote and evidence.place:\n+                for name in evidence.oracle:\n+                    placed = evidence.place.rstrip(\"/\") + \"/\" + name.removesuffix(\".oracle\")\n+                    targets.append((placed, name))\n+        return targets\n+\n     def place_oracles(self, checkout):\n         \"\"\"Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.\n         The worker starts after this, so it never has to copy a test it is not allowed to change.\"\"\"\n         files = self.oracles()\n-        for scenario in self.contract()[0].scenarios:\n-            evidence = scenario.evidence\n-            if evidence and evidence.promote and evidence.place:\n-                for name in evidence.oracle:\n-                    target = (\n-                        Path(checkout) / evidence.place.rstrip(\"/\") / name.removesuffix(\".oracle\")\n-                    )\n-                    target.parent.mkdir(parents=True, exist_ok=True)\n-                    target.write_bytes(files[name])\n+        for rel, name in self.oracle_targets(self.contract()[0]):\n+            target = Path(checkout) / rel\n+            target.parent.mkdir(parents=True, exist_ok=True)\n+            target.write_bytes(files[name])\n \n     def narrative_path(self):\n@@ -4552,15 +4620,7 @@ class Driver:\n \n     def yaml_places(self, model):\n-        \"\"\"(repo-relative destination, approved source) for each promote oracle file, at its place. The oracle\n-        keeps its source name without the `.oracle` suffix: only the promoted name is collected as a test.\"\"\"\n+        \"\"\"(repo-relative destination, approved source) for each promote oracle file, at its place.\"\"\"\n         oracle = yaml_plan.oracle_dir(self.plan_p"
+ },
+ "pr399": {
+  "description": "The driver package facade stopped re-exporting `owned_paths` when the helpers moved to book.py: the new `from .book import (...)` list omits it, so `driver.owned_paths` no longer resolves (85 public names became 84).",
+  "locations": {
+   "packages/agent-orchestrator/src/agent_orchestrator/driver/__init__.py": [
+    [
+     1,
+     8471
+    ]
+   ]
+  },
+  "source": "by hand",
+  "diff": ""
+ },
+ "pr408": {
+  "description": "fix(agent-review): start the reviewer the way its own CLI runs, and keep the screening it stopped after\n\nA deep review now asks its harness one question in that harness's own\nnon-interactive mode, with the prompt on stdin: `claude -p` and `pi -p` both\nread the prompt there and print the answer, so no variadic option of theirs can\nread the prompt as another tool name. The arguments that hold a family to\nreading and searching and the flag that makes it answer at all come from one\ntable in agent-runtime, so a family cannot answer with controls and then be\nstarted without the mode that runs it.\n\nA reviewer that cannot start, times out or exits nonzero is an incomplete\nexecution, not a refusal: the provider already answered, so report.json is\nwritten with the screening's judgments, its usage and the escalation that asked\nfor the review, and the stop is named in `failure.reason` and in the review's\nown record, with the exit code saying incomplete. The run is never retried and\nnever falls back to another model.\n\nThe runtime answers `cannot(family)` beside `run(family)`, and a stub harness on\nPATH proves every family the runtime holds receives the prompt whole and its\ncontrols, while each family it cannot hold is refused by name with the reason\nits own sandbox falls short. A family added to the runtime's list fails a test\nuntil it is answered one way or the other.",
+  "locations": {
+   "packages/agent-review/src/agent_review/cli.py": [
+    [
+     209,
+     209
+    ],
+    [
+     362,
+     368
+    ],
+    [
+     443,
+     443
+    ],
+    [
+     447,
+     448
+    ]
+   ],
+   "packages/agent-review/src/agent_review/deep_review.py": [
+    [
+     164,
+     164
+    ],
+    [
+     178,
+     178
+    ],
+    [
+     193,
+     193
+    ],
+    [
+     214,
+     214
+    ],
+    [
+     237,
+     250
+    ],
+    [
+     325,
+     325
+    ],
+    [
+     335,
+     335
+    ],
+    [
+     341,
+     341
+    ],
+    [
+     346,
+     346
+    ]
+   ],
+   "packages/agent-review/src/agent_review/readonly.py": [
+    [
+     1,
+     5
+    ],
+    [
+     12,
+     12
+    ],
+    [
+     36,
+     42
+    ],
+    [
+     46,
+     47
+    ]
+   ],
+   "packages/agent-runtime/src/agent_runtime/read_only.py": [
+    [
+     1,
+     1
+    ],
+    [
+     10,
+     22
+    ],
+    [
+     31,
+     40
+    ],
+    [
+     57,
+     58
+    ],
+    [
+     63,
+     66
+    ],
+    [
+     76,
+     77
+    ]
+   ]
+  },
+  "source": "fixed by 9444966",
+  "diff": "diff --git a/packages/agent-review/src/agent_review/cli.py b/packages/agent-review/src/agent_review/cli.py\nindex 8fcf927..7b69782 100644\n--- a/packages/agent-review/src/agent_review/cli.py\n+++ b/packages/agent-review/src/agent_review/cli.py\n@@ -207,5 +207,5 @@ def main(argv: Sequence[str] | None = None) -> int:\n     print(report.summary(path))\n     if report.failure is not None:\n-        print(f\"agent-review: screening failed: {report.failure}\", file=sys.stderr)\n+        print(f\"agent-review: execution incomplete: {report.failure}\", file=sys.stderr)\n         return 1\n     return 0\n@@ -360,13 +360,13 @@ def _reviewed(\n     if reviewer is None or not report.escalation or report.failure is not None:\n         return report\n-    return replace(\n-        report,\n-        deep_review=deep_review.review(\n-            settings=report.bank.deep_review,\n-            escalation=report.escalation,\n-            target=target,\n-            reviewer=reviewer,\n-        ),\n+    reviewed = deep_review.review(\n+        settings=report.bank.deep_review,\n+        escalation=report.escalation,\n+        target=target,\n+        reviewer=reviewer,\n     )\n+    # A reviewer that stopped leaves the screening it paid for standing: the report says incomplete and\n+    # names the stop, never throwing away judgments and usage the provider already answered (D20, R10).\n+    return replace(report, deep_review=reviewed, failure=reviewed.failure)\n \n \n@@ -441,10 +441,12 @@ def _reviewer(args: argparse.Namespace) -> deep_review.Reviewer | None:\n         return None\n     try:\n-        controls = readonly.controls(args.deep_review)\n+        invocation = readonly.invocation(args.deep_review)\n     except readonly.ReadOnlyError as refusal:\n         raise ReviewError(str(refusal)) from None\n     if args.deep_review_fixture is not None:\n-        return deep_review.FixtureReviewer(args.deep_review, controls, args.deep_review_fixture)\n-    return deep_review.HarnessReviewer(args.deep_review, controls)\n+        return deep_review.FixtureReviewer(\n+            args.deep_review, invocation.controls, args.deep_review_fixture\n+        )\n+    return deep_review.HarnessReviewer(args.deep_review, invocation)\n \n \ndiff --git a/packages/agent-review/src/agent_review/deep_review.py b/packages/agent-review/src/agent_review/deep_review.py\nindex e49bf4f..5379a0b 100644\n--- a/packages/agent-review/src/agent_review/deep_review.py\n+++ b/packages/agent-review/src/agent_review/deep_review.py\n@@ -177,4 +177,6 @@ class Review:\n     signals: tuple[EscalationReason, ...]\n     spawns: int = 1\n+    # Why the reviewer never finished, when it did not: the review records its own stop (D20, R10).\n+    failure: str | None = None\n \n     @property\n@@ -192,4 +194,5 @@ class Review:\n             \"spawns\": self.spawns,\n             \"signals\": [signal.as_dict() for signal in self.signals],\n+            \"failure\": self.failure,\n         }\n \n@@ -235,21 +238,23 @@ class FixtureReviewer:\n \n class HarnessReviewer:\n-    \"\"\"One read/search-only reviewer, run through its harness's own CLI with the controls it enforces.\"\"\"\n+    \"\"\"One read/search-only reviewer, run through its harness's own CLI with the arguments that hold it.\"\"\"\n \n-    def __init__(self, harness: str, controls: Sequence[str]) -> None:\n+    def __init__(self, harness: str, invocation: readonly.Invocation) -> None:\n         self.harness = harness\n-        self.controls = tuple(controls)\n+        self.invocation = invocation\n+        self.controls = tuple(invocation.controls)\n \n     def spawn(self, request: Spawn) -> None:\n-        \"\"\"Start the reviewer with its read-only arguments and the prompt, prompt last (D38).\n+        \"\"\"Ask the family one question read-only, with the prompt on stdin and the answer left on stdout.\n \n-        A harness that cannot start, times out or exits nonzero stops the invocation rather than reporting a\n-        review that never happened; what an incomplete review's status is belongs to the report that judges\n-        the reviewer's answer (D20).\n+        The prompt never travels as a positional: a family's options can be variadic, and a prompt after them\n+        is read as another value of theirs. A harness that cannot start, times out or exits nonzero stops the\n+        review, and the report records the stop rather than throwing the screening away (D20, R10).\n         \"\"\"\n-        argv = [self.harness, *self.controls, request.prompt]\n+        argv = [self.harness, *self.invocation.argv]\n         try:\n             done = subprocess.run(\n                 argv,\n+                input=request.prompt,\n                 cwd=request.root,\n                 capture_output=True,\n@@ -323,5 +328,8 @@ def review(\n \n     The scope and the instructions are decided here, from the reasons the tool recorded, so neither is the\n-    reviewer's choice; the reviewer is spawned once, with the frozen change in hand (D18, D20).\n+    reviewer's choice; the reviewer is spawned once, with the frozen change in hand (D18, D20). A reviewer\n+    that cannot start, times out or exits nonzero is recorded here as the review's own stop and not raised:\n+    the screening it was asked about already happened, and what the execution then is belongs to the report\n+    that keeps it (D20, R10).\n     \"\"\"\n     signals = tuple(escalation)\n@@ -339,5 +347,11 @@ def review(\n         root=target.root,\n     )\n-    reviewer.spawn(request)\n+    stop = None\n+    try:\n+        reviewer.spawn(request)\n+    except ReviewError as ended:\n+        # The screening already answered: the review records what stopped it, and the report keeps the\n+        # judgments and usage it paid for instead of the invocation refusing with no report (D20, R10).\n+        stop = str(ended)\n     return Review(\n         harness=request.harness,\n@@ -345,4 +359,5 @@ def review(\n         instructions=request.instructions,\n         signals=signals,\n+        failure=stop,\n     )\n \ndiff --git a/packages/agent-review/src/agent_review/readonly.py b/packages/agent-review/src/agent_review/readonly.py\nindex d07b4da..00605ba 100644\n--- a/packages/agent-review/src/agent_review/readonly.py\n+++ b/packages/agent-review/src/agent_review/readonly.py\n@@ -1,7 +1,8 @@\n-\"\"\"Which harness families a read-only reviewer may be spawned through: the runtime's answer, asked here.\n+\"\"\"How a reviewer is started: the runtime's answer for one family, asked here (D38, P2-D2).\n \n A deep review may read and search and nothing else (D18), and the arguments that hold each harness family to\n-that are the runtime's answer, one per family, beside the family list it ranges over (D38, P2-D2). This module\n-asks that answer rather than keeping a second table that would drift from it.\n+that are the runtime's answer, one per family, beside the family list it ranges over. This module asks that\n+answer rather than keeping a second table that would drift from it, and hands the review the arguments to\n+start with.\n \n The ask happens when a deep review needs it, not when this package is imported: screening is answered with\n@@ -11,4 +12,5 @@ is refused there - naming the install that would answer it - instead of the whol\n \n import importlib\n+from dataclasses import dataclass\n \n \n@@ -17,4 +19,21 @@ class ReadOnlyError(ValueError):\n \n \n+@dataclass(frozen=True)\n+class Invocation:\n+    \"\"\"The arguments that start one family read-only, and the controls that hold it to that.\n+\n+    The prompt is not among them: it travels on the reviewer's stdin, where no variadic option of the family's\n+    own parsing can read it as another value (see `agent_runtime.read_only`).\n+    \"\"\"\n+\n+    controls: tuple[str, ...]\n+    flags: tuple[str, ...]\n+\n+    @property\n+    def argv(self) -> tuple[str, ...]:\n+        \"\"\"The arguments after the family's own name, in the order they are passed.\"\"\"\n+        return (*self.controls, *self.flags)\n+\n+\n def _answer():\n     \"\"\"The runtime module that answers for each family, or a refusal naming what this environment lacks.\"\"\"\n@@ -34,14 +53,29 @@ def capabilities"
+ },
+ "pr409": {
+  "description": "fix(structure): measure the files the branch carries, not only the committed ones\n\nAsking git for `--cached` alone left a file the branch adds but has not committed\nunmeasured, so a new module over a ceiling passed the gate that S3 and S8 promise.\nThe budget's listing now asks for tracked and untracked-but-not-ignored files, the\nsame question the plan check asks, and drops the cache trees by hand because\n`--others` lifts `.venv/`, `node_modules/` and `__pycache__/` back in. A nested\ncheckout and an ignored directory are still unlisted: git reports the first as one\ndirectory entry and never sees the second.\n\nThe plan side keeps `--others` \u2014 a module pytest imports is one whether or not it\nwas committed, and R40's refusal test writes an untracked one \u2014 so its S23 node now\nbuilds both copies git does not read as modules: one in an ignored tree, one in a\nnested checkout. A plain untracked copy under the package is still refused; that is\nthe tension between S23's wording and R40, and it is the plan owner's to narrow.",
+  "locations": {
+   "scripts/structure_budget.py": [
+    [
+     125,
+     130
+    ],
+    [
+     136,
+     136
+    ],
+    [
+     142,
+     143
+    ]
+   ]
+  },
+  "source": "fixed by f318135",
+  "diff": "diff --git a/scripts/structure_budget.py b/scripts/structure_budget.py\nindex 9b03300..c039f0c 100644\n--- a/scripts/structure_budget.py\n+++ b/scripts/structure_budget.py\n@@ -123,10 +123,11 @@ def tracked(root):\n     \"\"\"The Python files git says `root` holds, relative to it and POSIX, or None outside a checkout.\n \n-    Git is what decides which files the tree holds: it tracks the files a commit carries, it never\n-    descends into another checkout, and an ignored directory is not source at all. A scratch copy or\n-    a nested worktree therefore cannot be measured as this tree's source, whatever it holds.\n+    Git is what decides which files the tree holds: the ones it tracks and the new ones it would carry,\n+    so a file the branch adds is measured before anyone commits it. What it does not descend into \u2014\n+    another checkout \u2014 and what it ignores \u2014 a scratch copy \u2014 is no source of this tree, whatever it\n+    holds. The cache trees SKIP names are dropped by hand: git lists them when it ignores them not.\n     \"\"\"\n     try:\n-        done = git(root, \"ls-files\", \"-z\", \"--cached\", text=False)\n+        done = git(root, \"ls-files\", \"-z\", \"--cached\", \"--others\", \"--exclude-standard\", text=False)\n     except Refused:  # no git at all: the walk is the only answer there is\n         return None\n@@ -134,5 +135,7 @@ def tracked(root):\n         return None\n     names = done.stdout.decode(\"utf-8\", \"surrogateescape\").split(\"\\0\")\n-    return sorted(name for name in names if name.endswith(\".py\"))\n+    return sorted(\n+        name for name in names if name.endswith(\".py\") and not SKIP.intersection(name.split(\"/\"))\n+    )\n \n \n@@ -140,6 +143,7 @@ def walk(root):\n     \"\"\"Every Python file under `root`, as a POSIX path relative to it, sorted.\n \n-    What belongs to the tree is what git tracks, so a copy another tree holds is neither measured nor\n-    a growth. A tree outside a repository has no index to ask, and is walked instead.\n+    What belongs to the tree is what git lists: a file it tracks or would carry, and no ignored\n+    directory's or another checkout's copy. A tree outside a repository has no index to ask, and is\n+    walked instead.\n     \"\"\"\n     root = Path(root)\n"
+ }
+}

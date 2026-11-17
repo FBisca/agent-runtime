@@ -1,0 +1,282 @@
+[
+ {
+  "id": "429625b-rmtree",
+  "kind": "bad",
+  "base": "bfcaeace6be4b4eba457576312072d55d910e52d",
+  "head": "429625b5a53040fd93a9a288ca910fada66a547f",
+  "split": "authoring",
+  "note": "fixed by 109c98b: rmtree ran outside plans.dir"
+ },
+ {
+  "id": "89bba2f-flaky",
+  "kind": "bad",
+  "base": "375f405f7d7d5d1d79e4b0fa02496b0c4ae4d1b2",
+  "head": "89bba2f7cfe3cb54c59129e2c9a50101a6e6697b",
+  "split": "authoring",
+  "note": "fixed by 3afe564: flaky rule matched by tree only"
+ },
+ {
+  "id": "e9bd1ad-checks",
+  "kind": "bad",
+  "base": "5abdd78020fb2f4801b06d09f7e5a1fb05e09810",
+  "head": "e9bd1ad4fb18db4696a0713b250f8fc3f185e013",
+  "split": "authoring",
+  "note": "fixed by f953773: duplicate check, required command forbidden"
+ },
+ {
+  "id": "silent-idle",
+  "kind": "bad",
+  "base": "74564408977aa28fb88056db23c7598b9af417fd",
+  "head": "72c4da9538a95184b04adf8f3e8edd92f54f01ee",
+  "split": "authoring",
+  "note": "agent-judge FAIL 0.70: missing event, missing test, idle answerer left working"
+ },
+ {
+  "id": "c239004-brief",
+  "kind": "clean",
+  "base": "0bde508124d7c1c50d6899dbcf49124c2e31af90",
+  "head": "c23900428f76ee87d13e23c0db97f3437e223b95",
+  "split": "authoring",
+  "note": "no fix commit names it"
+ },
+ {
+  "id": "74addfe-rtk",
+  "kind": "clean",
+  "base": "dcd358491a80ae6724bfee8b092e6289ff6a1ab6",
+  "head": "74addfef66572827c14d538895965689c9107434",
+  "split": "authoring",
+  "note": "no fix commit names it"
+ },
+ {
+  "id": "engine-gaps/t4r1",
+  "kind": "bad",
+  "base": "cb7f727b3d758e38ba878c928c462818ff6cc6b0",
+  "head": "d15a4f21637b2b420134bffa758cce8abaecb037",
+  "split": "authoring",
+  "note": "a real check failed on this change: evidence S8"
+ },
+ {
+  "id": "plan-layout/t4r1",
+  "kind": "bad",
+  "base": "100a6a2e2f0748092446b5e8d7b7ecc0faab00ad",
+  "head": "dece9630398b0476fb990a033884af9a47be6671",
+  "split": "authoring",
+  "note": "a real check failed on this change: evidence S10"
+ },
+ {
+  "id": "stale-team/t1r1",
+  "kind": "bad",
+  "base": "a8b4e01b4112713f2eddaec0674f53a457d15bc0",
+  "head": "dc9331d228ad10509647d7fa74f0b90d2eac8628",
+  "split": "authoring",
+  "note": "a real check failed on this change: evidence S7"
+ },
+ {
+  "id": "check-tiers/t2",
+  "kind": "clean",
+  "base": "fefcbb39847e42b01f36f32b4d70c30fcb506d7c",
+  "head": "98368ecc324e0b5734d7b2ddae1186034b8277ec",
+  "split": "authoring",
+  "note": "COMPLETE, no blocking finding ever"
+ },
+ {
+  "id": "named-capture/t1",
+  "kind": "clean",
+  "base": "5ba70fa8e7832d3543992351ede8a05e3a75145c",
+  "head": "ce3a0e7338b7e0c965145e1b1d6c73acc060a918",
+  "split": "authoring",
+  "note": "COMPLETE, no blocking finding ever"
+ },
+ {
+  "id": "review-cli/t2",
+  "kind": "clean",
+  "base": "d2036c8e4edcda9b72def5ad994b64b2d7f9c049",
+  "head": "433509a59a1ae9f37b428931bf7c1a67d41cd5b3",
+  "split": "authoring",
+  "note": "COMPLETE, no blocking finding ever"
+ },
+ {
+  "id": "plan-amend/t4r2",
+  "kind": "bad",
+  "base": "ba52bb6fd807d1933fede19c87fcc67e05786c74",
+  "head": "1620b70bff09cbeed4dab86b1918d21e62565cee",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "review-gate/t2r2",
+  "kind": "bad",
+  "base": "f9537736d807fcd403b8e1cab543a2a7563f1bdc",
+  "head": "de6328e77e0ba0a61dee81602e2987626c1fe3c2",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "yaml-eec/t8r3",
+  "kind": "bad",
+  "base": "a16104a82df522ccefd583dbd16505ae1748ff8c",
+  "head": "7d0bf594c945d23f8c53ef12ae9caa91852a6c7a",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "review-cli/t1",
+  "kind": "clean",
+  "base": "4025d6938e6f7904c1ae0fd1dfb23ebf67d20f2a",
+  "head": "bf1bf9cda075cc1eeb49b792d1600fbd9b526be7",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "label-evidence/t1",
+  "kind": "clean",
+  "base": "9deb8f2ef140bcf05434815f9257ad1e75dc58a2",
+  "head": "87ffb48736b8ce24b81f291838bd42a3fa840101",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "workbench/t1",
+  "kind": "clean",
+  "base": "14254e5b9b807bb35692b857cc51484a0cada77b",
+  "head": "bcc8502d7cbc9518855fbefee1e0c685b0c3b091",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "check-tiers/t1o1",
+  "kind": "clean",
+  "base": "f14b74a2695fb036053220cfabac3945905909e1",
+  "head": "3bf5c3a6a7aef8cac48d2da6155824a0984e08b4",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "check-tiers/t3",
+  "kind": "clean",
+  "base": "e9bd1ad4fb18db4696a0713b250f8fc3f185e013",
+  "head": "dc5ed4d0ad58df9dca15486e47a1265b3986fc3a",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "archive/t2",
+  "kind": "clean",
+  "base": "ce4246f97980d87ac32c3f1946455f21bdddb152",
+  "head": "919b61f8b95faa2bd6ab09fa9761191d1f0b16c9",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "gaps/t1",
+  "kind": "clean",
+  "base": "cc8ba9bf377c099f41c2ef3cebd64158a923ed30",
+  "head": "55cf6c172df5f52962d25c98a0adebbfb208c96c",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "gaps/t2",
+  "kind": "clean",
+  "base": "cb7f727b3d758e38ba878c928c462818ff6cc6b0",
+  "head": "81069c1747177a3d3b3f832ed46379f92038a5ba",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "gaps/t3",
+  "kind": "clean",
+  "base": "cb7f727b3d758e38ba878c928c462818ff6cc6b0",
+  "head": "d57217452542234b30bc2fd381c7acde02729aeb",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "gaps/t4",
+  "kind": "clean",
+  "base": "cb7f727b3d758e38ba878c928c462818ff6cc6b0",
+  "head": "672ea7cf9572a32f1e3548e954c96c4ecdf4deb1",
+  "split": "holdout",
+  "note": ""
+ },
+ {
+  "id": "pr394",
+  "kind": "clean",
+  "base": "aa3c1173869fed446cc323673be4197443863aa1",
+  "head": "87cb62f88852631186c9eb3073a0e454880e8441",
+  "split": "field",
+  "note": "extraction; review raised concerns only"
+ },
+ {
+  "id": "pr396",
+  "kind": "clean",
+  "base": "93dafaac3ef00a4357e2bee2b7d07d26bf10fbcf",
+  "head": "08d4a56f05321a1bc6f166e7f1954f170262d4e5",
+  "split": "field",
+  "note": "extraction; review raised concerns only"
+ },
+ {
+  "id": "pr399",
+  "kind": "bad",
+  "base": "f50c8c19f82d008901ed4ce3a4c14c3b993d3382",
+  "head": "9f81da7dc799b7d41645e6c558be09230e6d7121",
+  "split": "field",
+  "note": "owned_paths left the public facade (85 -> 84 names); found by Lead"
+ },
+ {
+  "id": "pr401",
+  "kind": "clean",
+  "base": "ec64bee1eb7cac462f409677e46869c59550e1a7",
+  "head": "ececdfd62a8020388630ca4fcccdbb1167cb2a91",
+  "split": "field",
+  "note": "extraction; one concern (Gates.__getattr__)"
+ },
+ {
+  "id": "pr407",
+  "kind": "bad",
+  "base": "e1be62f42d84326b67317d810d40560012c44fdc",
+  "head": "2aa69bc423ff87af92524fd99b21e47cb19ff5be",
+  "split": "field",
+  "note": "report and PR body described a change the branch lacks, at another head (claims defect, not in the diff)"
+ },
+ {
+  "id": "pr408",
+  "kind": "bad",
+  "base": "e1be62f42d84326b67317d810d40560012c44fdc",
+  "head": "5ee561843c075b9826a914c5685c45eaa7edda0a",
+  "split": "field",
+  "note": "variadic flag ate the prompt; reviewer stop dropped a paid screening (fixed by 9444966; head was 2d4ca57b, after the fix)"
+ },
+ {
+  "id": "pr409",
+  "kind": "bad",
+  "base": "e1be62f42d84326b67317d810d40560012c44fdc",
+  "head": "7cfdad71263544ddcb3d47238bff32b2e06944ea",
+  "split": "field",
+  "note": "the budget asked git only for --cached: an uncommitted added file is unmeasured (fixed by f318135; head was ef4bef6a, after the fix)"
+ },
+ {
+  "id": "pr417",
+  "kind": "bad",
+  "base": "555251fe070476c0481aeaf405a3bce30a388158",
+  "head": "a0a150ea6e81650c71a529ee1716cb46bec16d02",
+  "split": "field",
+  "note": "report claimed ruff format --check passed; it failed (claims defect, not in the diff)"
+ },
+ {
+  "id": "pr415",
+  "kind": "unlabelled",
+  "base": "555251fe070476c0481aeaf405a3bce30a388158",
+  "head": "72b08d5e77da99a02de1b8ddec5b863fe59e3783",
+  "split": "field",
+  "note": "shadowed, no label"
+ },
+ {
+  "id": "pr423",
+  "kind": "unlabelled",
+  "base": "c5536634898ef950d6067f81dc00e620c3c80045",
+  "head": "cdadb8d2d65fbba6000ee3893146fe01e6b439a8",
+  "split": "field",
+  "note": "shadowed, no label"
+ }
+]
