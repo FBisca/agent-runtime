@@ -14,7 +14,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 # Loaded into the fast suite with `-p`: a `unit` test (not also marked `integration`) that starts a process or opens a network socket fails, naming it.
 GUARD = textwrap.dedent(
@@ -158,7 +158,7 @@ class FastSuiteTests(unittest.TestCase):
         two collections, and a test that only asks which tests a run selected pays for both.
         """
         name = "test_S1_the_fast_suite_reports_under_three_seconds"
-        module = "acceptance/suite/test_fast_suite.py"
+        module = "tests/test_fast_suite.py"
         self.assertEqual(selected("-k", name), 0)
         self.assertEqual(selected(module, "-k", name), 1)
 

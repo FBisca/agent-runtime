@@ -29,9 +29,8 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests", "acceptance", "packages/agent-orchestrator/tests", "packages/*/acceptance", "packages/agent-eval/tests", "packages/agent-review/tests"]
-# An acceptance test imports its package's helpers (`fixtures`, `local_http`) as the package's own
-# tests do; the root package's acceptance/ imports the root tests/ the same way.
+testpaths = ["tests", "packages/agent-orchestrator/tests", "packages/agent-eval/tests", "packages/agent-review/tests"]
+# A test imports its package's helpers (`fixtures`, `local_http`) by module name.
 pythonpath = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
@@ -102,15 +101,8 @@ quote-style = "double"
 python-version = "3.11"
 # Check every platform: the type gate must not depend on the runner OS.
 python-platform = "all"
-# The acceptance tests import the test helpers of the suite they moved out of, as pytest lets them.
+# The tests import their package's helpers by module name, as pytest lets them.
 extra-paths = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]
-
-# An acceptance test's fixture subclasses may override a suite helper with a signature of their own.
-[[tool.ty.overrides]]
-include = ["packages/*/acceptance/**", "acceptance/**"]
-
-[tool.ty.overrides.rules]
-invalid-method-override = "ignore"
 
 # The orchestrator audit's plan-level test lives in the unit suite, and its fixture mixins reach the RunFixture
 # attributes only through the class they are mixed into, which ty cannot see.

@@ -1,6 +1,6 @@
 """Acceptance for a score's ladder (01-score-levels-are-bands/S1).
 
-The runner places this file at `packages/agent-review/acceptance/screening/`. It drives the `agent-review` console
+It drives the `agent-review` console
 script as a subprocess over a real repository, a question bank it writes, and a canned screening provider, so the
 check needs no credential and no socket; it imports nothing from the package, so it collects cleanly before the
 phase exists and fails at base.

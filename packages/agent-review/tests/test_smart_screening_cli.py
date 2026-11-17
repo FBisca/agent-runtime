@@ -1,6 +1,6 @@
 """Acceptance for the smart screening CLI (01-agent-review-smart-screening/S1..S6).
 
-The runner places this file at `packages/agent-review/acceptance/screening/`. It drives the `agent-review` console
+It drives the `agent-review` console
 script as a subprocess over a real repository, a configuration and a price table it writes, and a canned System One
 provider; it imports nothing from the package, so it collects cleanly before the phase exists and fails at base.
 

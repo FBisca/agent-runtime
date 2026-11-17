@@ -26,7 +26,7 @@ import yaml
 
 # A fresh worktree's venv holds no workspace member: the package under test is importable from its source, so the
 # fixtures can import it.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fixtures import DRIVER, assignment, load_script, report_wait, resume_id, wait_result  # noqa: E402
 from test_gates import GateFixture  # noqa: E402

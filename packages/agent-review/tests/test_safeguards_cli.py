@@ -94,8 +94,7 @@ def git(where, *args):
 def repository_root():
     """The checkout this test runs in, found by git rather than by counting the path's parents.
 
-    The file is placed at `packages/agent-review/acceptance/safeguards/` when the evidence runs, and the
-    engine runs it in a scratch checkout, so its depth differs between the plan folder and its destination.
+    A scratch checkout may hold this file at another depth than the repository does.
     """
     return Path(git(Path(__file__).resolve().parent, "rev-parse", "--show-toplevel"))
 

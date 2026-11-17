@@ -1,6 +1,6 @@
 """Acceptance for the screening CLI (00-agent-review-screening-cli/S2, S3, S4).
 
-The runner places this file at `packages/agent-review/acceptance/`. It drives the `agent-review` console script as a
+It drives the `agent-review` console script as a
 subprocess over a real two-revision git repository, a config it writes and a canned screening response; it imports
 nothing from the package, so it collects cleanly before the package exists. The contract it pins (`brief.md`,
 P0-D1..P0-D4):

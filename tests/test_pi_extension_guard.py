@@ -17,7 +17,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 HANDLERS = ROOT / "extensions" / "agent-runtime" / "handlers.mjs"
 REASON = "agent-runtime: 2 unfinished, 1 undelivered — call wait(all) before ending the turn"
 
