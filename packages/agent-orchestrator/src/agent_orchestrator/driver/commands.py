@@ -487,9 +487,12 @@ def _launched(name, repo, plan_path, run_args):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(_forwardable_env(), handle)
+        # The pane starts after the launcher returns, before its bootstrap opens the file: on success the bootstrap
+        # owns the deletion.
         return _launch_pane(name, repo, plan_path, run_args, env_path)
-    finally:
+    except BaseException:
         Path(env_path).unlink(missing_ok=True)
+        raise
 
 
 def _launch_pane(name, repo, plan_path, run_args, env_path):
