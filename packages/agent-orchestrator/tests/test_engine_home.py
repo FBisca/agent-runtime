@@ -33,10 +33,10 @@ def sources():
 
 
 class EngineHomeTests(unittest.TestCase):
-    """R1: the suite drives the member, and the engine has one home."""
+    """One engine, one suite: the suite drives the member, and the engine has one home."""
 
+    @pytest.mark.spec("One engine, one suite")
     def test_S1_the_suite_drives_the_member_driver(self):
-        """orchestrator-engine/R1"""
         from agent_orchestrator import driver
 
         # The engine is a package inside the member's source directory, so its home is named by
@@ -44,6 +44,7 @@ class EngineHomeTests(unittest.TestCase):
         self.assertEqual(Path(driver.__file__).resolve().parent.parent, MEMBER.resolve())
         self.assertFalse((MEMBER / "driver.py").exists())
 
+    @pytest.mark.spec("Driver facade and entry points")
     def test_S10_the_driver_is_a_package_every_entry_point_still_reaches(self):
         import agent_orchestrator
         from agent_orchestrator import driver
@@ -66,8 +67,8 @@ class EngineHomeTests(unittest.TestCase):
         module, _, attribute = target.partition(":")
         self.assertIs(getattr(importlib.import_module(module), attribute), driver.run_cli)
 
+    @pytest.mark.spec("One engine, one suite")
     def test_S1_the_repository_holds_one_copy_of_the_engine(self):
-        """orchestrator-engine/R1"""
         copies = []
         for path in sources():
             try:
@@ -86,8 +87,9 @@ class EngineHomeTests(unittest.TestCase):
                 copies.append(path.relative_to(REPO).as_posix())
         self.assertEqual(copies, [])  # the Markdown plan reader is gone: no source defines it
 
+    @pytest.mark.spec("One engine, one suite")
+    @pytest.mark.spec("Workspace CI gates")
     def test_S3_ci_runs_the_member_suite_and_the_plain_gates(self):
-        """orchestrator-engine/R3"""
         workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("uv run pytest -n 4", workflow)
         # The checkout must hold the history: a

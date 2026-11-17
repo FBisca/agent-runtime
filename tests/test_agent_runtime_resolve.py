@@ -44,40 +44,40 @@ def run_main(*argv, env=None):
 
 
 class ResolveTests(unittest.TestCase):
+    @pytest.mark.spec("Runtime resolution")
     def test_herdr_pane_with_claude_is_herdmates(self):
-        """agent-runtime/R1"""
         self.assertEqual(line({"HERDR_PANE_ID": "p1"}), "runtime=herdmates role=unknown cli=claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_herdr_pane_with_codex_is_native(self):
-        """agent-runtime/R2"""
         self.assertEqual(
             line({"HERDR_PANE_ID": "p1"}, cli="codex"), "runtime=native role=lead cli=codex"
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_hc_terminal_without_parent_is_lead(self):
-        """agent-runtime/R3"""
         self.assertEqual(
             line({"HC_TERMINAL_ID": "t1"}, hc=hc_returning(None)), "runtime=hc role=lead cli=claude"
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_hc_terminal_with_parent_is_worker(self):
-        """agent-runtime/R4"""
         self.assertEqual(
             line({"HC_TERMINAL_ID": "t1"}, hc=hc_returning("tX")),
             "runtime=hc role=worker parent=tX cli=claude",
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_no_variables_is_native_lead(self):
-        """agent-runtime/R5"""
         self.assertEqual(line({}), "runtime=native role=lead cli=claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_herdr_pane_wins_over_hc_terminal(self):
-        """agent-runtime/R6"""
         out = line({"HERDR_PANE_ID": "p1", "HC_TERMINAL_ID": "t1"}, hc=hc_returning("tX"))
         self.assertEqual(out, "runtime=herdmates role=unknown cli=claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_hc_failure_or_timeout_is_unknown_and_exits_zero(self):
-        """agent-runtime/R7"""
         self.assertEqual(line({"HC_TERMINAL_ID": "t1"}), "runtime=hc role=unknown cli=claude")
         timeout = subprocess.TimeoutExpired("hc", 2)
         with patch.object(app.subprocess, "run", side_effect=timeout) as run:
@@ -91,8 +91,8 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(buf.getvalue().strip(), "runtime=hc role=unknown cli=claude")
         self.assertEqual(run.call_args.kwargs["timeout"], 2)
 
+    @pytest.mark.spec("Runtime resolution")
     def test_json_output_has_same_fields(self):
-        """agent-runtime/R5"""
         buf = io.StringIO()
         with patch.dict(app.os.environ, {}, clear=True), redirect_stdout(buf):
             self.assertEqual(app.main(["resolve", "--json", "--cli", "codex"]), 0)
@@ -120,8 +120,8 @@ class CodexDetectionTests(unittest.TestCase):
         ):
             return app.detect_cli(env)
 
+    @pytest.mark.spec("Runtime resolution")
     def test_nearest_codex_ancestor_wins_over_inherited_claudecode(self):
-        """agent-runtime/R32"""
         procs = {
             100: (90, "/bin/zsh -c run"),
             90: (80, "/opt/homebrew/bin/codex exec"),
@@ -129,13 +129,13 @@ class CodexDetectionTests(unittest.TestCase):
         }
         self.assertEqual(self.detect({"CLAUDECODE": "1"}, procs.get), "codex")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_nearest_claude_ancestor_wins_over_inherited_codex_markers(self):
-        """agent-runtime/R32"""
         procs = {100: (90, "/bin/zsh"), 90: (80, "claude"), 80: (70, "codex")}
         self.assertEqual(self.detect({"CODEX_THREAD_ID": "x"}, procs.get), "claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_node_wrapped_cli_is_matched(self):
-        """agent-runtime/R32"""
         procs = {  # noqa: F841
             100: (90, "node /usr/lib/node_modules/@openai/codex/bin/codex.js"),
             90: (1, "node /x/bin/claude"),
@@ -147,23 +147,23 @@ class CodexDetectionTests(unittest.TestCase):
             "codex",
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_walk_failure_falls_back_to_env_markers(self):
-        """agent-runtime/R32"""
         none = lambda pid: None  # noqa: E731
         self.assertEqual(self.detect({"CODEX_THREAD_ID": "x", "CLAUDECODE": "1"}, none), "codex")
         self.assertEqual(self.detect({"CODEX_TOOL_CALL_ID": "x"}, none), "codex")
         self.assertEqual(self.detect({"CLAUDECODE": "1"}, none), "claude")
         self.assertIsNone(self.detect({}, none))
 
+    @pytest.mark.spec("Runtime resolution")
     def test_walk_is_capped_and_survives_cycles(self):
-        """agent-runtime/R32"""
         loop = {100: (90, "sh"), 90: (100, "sh")}
         self.assertIsNone(self.detect({}, loop.get))
         deep = {n: (n + 1, "sh") for n in range(100, 400)}
         self.assertIsNone(self.detect({}, deep.get))
 
+    @pytest.mark.spec("Runtime resolution")
     def test_codex_without_cli_resolves_native_in_herdr(self):
-        """agent-runtime/R32"""
         procs = {100: (90, "codex")}
         with (
             patch.object(app, "ps_entry", side_effect=procs.get),
@@ -172,8 +172,8 @@ class CodexDetectionTests(unittest.TestCase):
             info = app.resolve({"HERDR_PANE_ID": "p1", "CLAUDECODE": "1"}, None, hc_failing)
         self.assertEqual((info["runtime"], info["cli"]), ("native", "codex"))
 
+    @pytest.mark.spec("Runtime resolution")
     def test_explicit_cli_wins_over_ancestry(self):
-        """agent-runtime/R32"""
         procs = {100: (90, "codex")}
         with (
             patch.object(app, "ps_entry", side_effect=procs.get),
@@ -182,12 +182,12 @@ class CodexDetectionTests(unittest.TestCase):
             info = app.resolve({"HERDR_PANE_ID": "p1"}, "claude", hc_failing)
         self.assertEqual((info["runtime"], info["cli"]), ("herdmates", "claude"))
 
+    @pytest.mark.spec("Runtime resolution")
     def test_no_marker_defaults_to_claude(self):
-        """agent-runtime/R32"""
         self.assertEqual(app.resolve({}, None, hc_failing)["cli"], "claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_hc_foreground_codex_is_fallback_after_env(self):
-        """agent-runtime/R32"""
         reply = {"parent": "t1", "foreground": {"argv": ["/opt/homebrew/bin/codex", "--no-daemon"]}}
         info = app.resolve({"HC_TERMINAL_ID": "t2"}, None, lambda t: reply)
         self.assertEqual((info["runtime"], info["role"], info["cli"]), ("hc", "worker", "codex"))
@@ -198,16 +198,16 @@ class CodexDetectionTests(unittest.TestCase):
         )
         self.assertEqual(info["cli"], "claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_commands_without_cli_flag_use_detected_cli_even_on_fallback(self):
-        """agent-runtime/R32"""
         env = {"CODEX_THREAD_ID": "x"}
         code, out = run_main("resolve", env=env)
         self.assertEqual(out.strip(), "runtime=native role=lead cli=codex")
         code, out = run_main("resolve", "--bogus", env=env)
         self.assertEqual((code, out.strip()), (0, "runtime=native role=unknown cli=codex"))
 
+    @pytest.mark.spec("Runtime resolution")
     def test_ps_entry_failure_never_raises(self):
-        """agent-runtime/R32"""
         with patch.object(app.subprocess, "run", side_effect=OSError("no ps")):
             self.assertIsNone(app.real_ps_entry(1))
 
@@ -251,53 +251,54 @@ class CliTests(unittest.TestCase):
         self.fake_hc("cat <<'EOF'\n%s\nEOF" % text)
         return self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}, process=process)
 
+    @pytest.mark.spec("Runtime resolution")
     def test_null_parent_through_symlink_is_lead(self):
-        """agent-runtime/R3; S13: the executable through its symlink is the boundary"""
+        """S13: the executable through its symlink is the boundary"""
         self.assertEqual(
             self.hc_out('{"parent": null}', process=True), "runtime=hc role=lead cli=claude"
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_parent_through_symlink_is_worker(self):
-        """agent-runtime/R4"""
         self.assertEqual(
             self.hc_out('{"parent": "tX"}', process=True),
             "runtime=hc role=worker parent=tX cli=claude",
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_non_string_empty_or_spaced_parent_is_unknown(self):
-        """agent-runtime/R4"""
         for parent in ("5", '""', '"a b"', "[]", "true"):
             with self.subTest(parent=parent):
                 self.assertEqual(
                     self.hc_out('{"parent": %s}' % parent), "runtime=hc role=unknown cli=claude"
                 )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_missing_hc_is_unknown(self):
-        """agent-runtime/R7"""
         self.assertEqual(
             self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}),
             "runtime=hc role=unknown cli=claude",
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_nonzero_exit_is_unknown(self):
-        """agent-runtime/R7"""
         self.fake_hc("exit 3")
         self.assertEqual(
             self.run_cli("resolve", env={"HC_TERMINAL_ID": "t1"}),
             "runtime=hc role=unknown cli=claude",
         )
 
+    @pytest.mark.spec("Runtime resolution")
     def test_non_json_is_unknown(self):
-        """agent-runtime/R7"""
         self.assertEqual(self.hc_out("not json"), "runtime=hc role=unknown cli=claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_json_list_or_missing_parent_is_unknown(self):
-        """agent-runtime/R7"""
         self.assertEqual(self.hc_out("[1]"), "runtime=hc role=unknown cli=claude")
         self.assertEqual(self.hc_out("{}"), "runtime=hc role=unknown cli=claude")
 
+    @pytest.mark.spec("Runtime resolution")
     def test_bad_cli_value_falls_back_and_exits_zero(self):
-        """agent-runtime/R5"""
         self.assertEqual(
             self.run_cli("resolve", "--cli", "gemini"), "runtime=native role=unknown cli=claude"
         )

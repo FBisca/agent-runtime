@@ -373,7 +373,7 @@ def _reviewed(
         bank=report.bank,
     )
     # A reviewer that stopped leaves the screening it paid for standing: the report says incomplete and
-    # names the stop, never throwing away judgments and usage the provider already answered (D20, R10).
+    # names the stop, never throwing away judgments and usage the provider already answered (D20).
     return replace(report, deep_review=reviewed, failure=reviewed.failure)
 
 

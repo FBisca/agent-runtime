@@ -33,22 +33,22 @@ def count_words(node):
 
 
 class ActivationWiringTest(unittest.TestCase):
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_both_hosts_enable_dispatch_with_600_second_deadline(self):
-        """agent-runtime/R56"""
         claude = json.loads(MCP_JSON.read_text())["mcpServers"]["agent-runtime"]
         self.assertEqual(claude["env"]["AGENT_RUNTIME_DISPATCH"], "1")
         self.assertEqual(claude["timeout"], 600000)
         self.assertLessEqual(hc_tools.WAIT_MAX, claude["timeout"] // 1000 - 10)
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_claude_hooks_match_every_tool(self):
-        """agent-runtime/R56"""
         hooks = json.loads((PLUGIN / "hooks" / "hooks.json").read_text())["hooks"]["PreToolUse"]
         for tool in mcp_server.TOOL_NAMES:
             name = f"mcp__plugin_agent-runtime_agent-runtime__{tool}"
             self.assertTrue(any(re.fullmatch(h["matcher"], name) for h in hooks), tool)
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_schema_carries_new_optional_fields(self):
-        """agent-runtime/R56"""
         tools = {n: s["properties"] for n, _, s in mcp_server.TOOLS}
         for name, props in tools.items():
             self.assertIn("receipt", props, name)
@@ -58,8 +58,8 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertIn("message_id", tools["message"])
         self.assertIn("cursor", tools["task"])
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_descriptions_fit_400_words_and_teach_the_wait_flow(self):
-        """agent-runtime/R56"""
         listing = [{"description": d, "inputSchema": s} for _, d, s in mcp_server.TOOLS]
         self.assertLessEqual(count_words(listing), 400)
         text = " ".join(d for _, d, _ in mcp_server.TOOLS).lower()
@@ -70,8 +70,8 @@ class ActivationWiringTest(unittest.TestCase):
         self.assertIn("diagnostic", desc["collect"])
         self.assertIn("promptly", desc["spawn"])
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_S4_wait_and_resume_descriptions_say_delivery_is_pull_only(self):
-        """agent-runtime/R99"""
         desc = {n: d.lower() for n, d, _ in mcp_server.TOOLS}
         for name in ("wait", "resume"):
             self.assertIn("pull-only", desc[name], name)
@@ -79,8 +79,8 @@ class ActivationWiringTest(unittest.TestCase):
         listing = [{"description": d, "inputSchema": s} for _, d, s in mcp_server.TOOLS]
         self.assertLessEqual(count_words(listing), 400)
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_plugin_version_is_bumped_and_consistent(self):
-        """agent-runtime/R56"""
         version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
         self.assertEqual(version, "0.2.4")
         self.assertEqual(mcp_server.SERVER_INFO["version"], version)
@@ -88,8 +88,8 @@ class ActivationWiringTest(unittest.TestCase):
         for plugin in market["plugins"]:
             self.assertIn(plugin.get("version", version), (version,))
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_docs_list_all_ten_tools_and_state_no_stale_version(self):
-        """agent-runtime/R81"""
         tools = [name for name, _, _ in mcp_server.TOOLS]
         self.assertEqual(len(tools), 10)
         readme = (REPO / "README.md").read_text()
@@ -114,8 +114,8 @@ class ActivationWiringTest(unittest.TestCase):
                 )
         self.assertIn("receipt", intro)
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_descriptions_state_lookup_and_dispatch_rules(self):
-        """agent-runtime/R56"""
         desc = {n: d for n, d, _ in mcp_server.TOOLS}
         self.assertIn("lookup is rejected", desc["spawn"])
         self.assertIn("per work period", desc["wait"])
@@ -123,8 +123,8 @@ class ActivationWiringTest(unittest.TestCase):
         wait = next(s for n, _, s in mcp_server.TOOLS if n == "wait")
         self.assertIn("dispatch allows 0", wait["properties"]["timeout"]["description"])
 
+    @pytest.mark.spec("Diagnostic fallback")
     def test_spec_intro_says_diagnostics_authorize_store_first_then_fall_back(self):
-        """agent-runtime/R92"""
         spec = (REPO / "docs/specs/agent-runtime.md").read_text()
         intro = spec[: spec.index("## Requirements")]
         self.assertRegex(intro, r"(?is)diagnostics authorize against the dispatch store first")

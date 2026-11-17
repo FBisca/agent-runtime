@@ -1,4 +1,4 @@
-"""worker-usage/S13: usage the runtime puts on `wait` reaches metrics.json and attempts.jsonl, null where incomplete."""
+"""usage the runtime puts on `wait` reaches metrics.json and attempts.jsonl, null where incomplete."""
 
 import json
 import unittest
@@ -43,6 +43,7 @@ class UsageMetricsOutcome(GateFixture, unittest.TestCase):
         ]
         return metrics["tickets"]["t1"]["usage"], next(r for r in rows if r["task_id"] == "t1")
 
+    @pytest.mark.spec("Usage rolls up")
     def test_control_figures_both_assignments_report_reach_both_files(self):
         """Holds today: the wait steps' usage reaches metrics.json and attempts.jsonl for the figures both report."""
         common = ("input_tokens", "cached_input_tokens", "output_tokens")
@@ -57,8 +58,8 @@ class UsageMetricsOutcome(GateFixture, unittest.TestCase):
             (817, 173, 3900),
         )
 
+    @pytest.mark.spec("Usage rolls up")
     def test_S13_a_figure_one_assignment_lacks_totals_to_null(self):
-        """agent-runtime: worker-usage/S13"""
         usage, attempt = self.run_with(WORKER, REVIEWER)
         self.assertEqual(usage["input_tokens"], 817)
         self.assertEqual(usage["cached_input_tokens"], 3900)
@@ -79,8 +80,8 @@ class UsageMetricsOutcome(GateFixture, unittest.TestCase):
         self.assertIn("cost_usd", attempt)
         self.assertIsNone(attempt["cost_usd"])
 
+    @pytest.mark.spec("Usage rolls up")
     def test_S13_a_figure_every_assignment_reports_is_summed(self):
-        """agent-runtime: worker-usage/S13"""
         usage, attempt = self.run_with(
             dict(WORKER, reasoning_tokens=0), dict(REVIEWER, cost_usd=0.5)
         )
@@ -105,8 +106,8 @@ class UsageMetricsOutcome(GateFixture, unittest.TestCase):
         self.assertEqual(attempt["counters"]["model_calls"], 5)
         self.assertEqual(attempt["counters"]["tool_calls"], 6)
 
+    @pytest.mark.spec("Usage rolls up")
     def test_S13_a_count_one_assignment_lacks_totals_to_null(self):
-        """agent-runtime: worker-usage/S13"""
         reviewer = {
             key: value
             for key, value in REVIEWER.items()

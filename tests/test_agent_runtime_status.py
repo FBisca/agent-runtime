@@ -67,8 +67,8 @@ def hc_status(record, name="fix"):
 
 
 class StatusTests(unittest.TestCase):
+    @pytest.mark.spec("Status and list views")
     def test_hc_status_has_all_fields_and_non_empty_next(self):
-        """agent-runtime/R11"""
         info = hc_status(raw({"app": "claude-code", "state": "working"}))
         self.assertEqual(set(info), STATUS_KEYS)
         self.assertEqual(
@@ -80,8 +80,8 @@ class StatusTests(unittest.TestCase):
         for row in info["next"]:
             self.assertEqual(set(row), {"why", "do", "verb", "gap"})
 
+    @pytest.mark.spec("Status and list views")
     def test_native_field_is_trimmed_to_actionable_raw_fields(self):
-        """agent-runtime/R11"""
         record = raw(
             {"app": "claude-code", "state": "working"},
             exit_code=None,
@@ -105,8 +105,8 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(set(herd), {"pane", "session", "agent_status", "note"})
         self.assertIn("verify live agent identity", herd["note"])
 
+    @pytest.mark.spec("Status and list views")
     def test_status_output_is_compact_json_and_pretty_is_optional(self):
-        """agent-runtime/R11"""
         world = {"fix": raw("idle")}
         for flags, multiline in (([], False), (["--pretty"], True)):
             buf = io.StringIO()
@@ -119,8 +119,8 @@ class StatusTests(unittest.TestCase):
             self.assertEqual("\n" in buf.getvalue().strip(), multiline)
             json.loads(buf.getvalue())
 
+    @pytest.mark.spec("Status and list views")
     def test_status_command_prints_json_through_symlink(self):
-        """agent-runtime/R11"""
         with tempfile.TemporaryDirectory() as tmp:
             hc = Path(tmp) / "hc"
             hc.write_text("#!/bin/sh\necho '%s'\n" % json.dumps(raw("idle")))
@@ -138,8 +138,8 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(set(info), STATUS_KEYS)
         self.assertEqual(info["state"], "idle")
 
+    @pytest.mark.spec("Status and list views")
     def test_hc_states_map_to_contract_states(self):
-        """agent-runtime/R12"""
         cases = [
             ({"app": "x", "state": "working"}, "live", "working"),
             ("working", "live", "working"),
@@ -156,8 +156,8 @@ class StatusTests(unittest.TestCase):
             with self.subTest(status=status, state=state):
                 self.assertEqual(hc_status(raw(status, state=state))["state"], expected)
 
+    @pytest.mark.spec("Status and list views")
     def test_exited_or_finished_in_state_or_status_maps_to_exited(self):
-        """agent-runtime/R12"""
         cases = [
             ("exited", "live"),
             ({"app": "x", "state": "exited"}, "live"),
@@ -170,8 +170,9 @@ class StatusTests(unittest.TestCase):
             with self.subTest(status=status, state=state):
                 self.assertEqual(hc_status(raw(status, state=state))["state"], "exited")
 
+    @pytest.mark.spec("Status and list views")
     def test_blocked_next_has_ask_the_user_gap_row(self):
-        """agent-runtime/R12: blocked offers an ask-the-user gap row, not raw hc keys."""
+        """blocked offers an ask-the-user gap row, not raw hc keys."""
         rows = hc_status(raw("blocked"))["next"]
         gaps = [r for r in rows if r["gap"]]
         self.assertTrue(gaps)
@@ -179,8 +180,8 @@ class StatusTests(unittest.TestCase):
         self.assertTrue(any("ask the user" in r["do"] for r in gaps))
         self.assertTrue(all(r["verb"] is not None for r in rows if not r["gap"]))
 
+    @pytest.mark.spec("Status and list views")
     def test_next_rows_lead_with_contract_verbs(self):
-        """agent-runtime/R12"""
         expect = {"done": "collect", "idle": "message", "working": "wait", "exited": "collect"}
         for state, verb in expect.items():
             status, term = ("done", "finished") if state == "exited" else (state, "live")
@@ -188,19 +189,21 @@ class StatusTests(unittest.TestCase):
                 rows = hc_status(raw(status, state=term))["next"]
                 self.assertEqual(rows[0]["verb"], verb)
 
+    @pytest.mark.spec("Status and list views")
     def test_failing_hc_get_is_unknown_with_next(self):
-        """agent-runtime/R12"""
         with patch.object(app, "run_command", side_effect=RuntimeError("boom")):
             info = app.status("hc", "fix", {"HC_TERMINAL_ID": "t0"})
         self.assertEqual(info["state"], "unknown")
         self.assertTrue(info["next"])
 
+    @pytest.mark.spec("Wait attention and failure")
+    @pytest.mark.spec("Status and list views")
     def test_hc_error_state_maps_to_error(self):
-        """agent-runtime/R12: hc error state maps to error (updated by lead-delivery-gaps/S9)."""
+        """hc error state maps to error (updated by )."""
         self.assertEqual(hc_status(raw("error"))["state"], "error")
 
+    @pytest.mark.spec("Status and list views")
     def test_herdmates_missing_identity_never_calls_cli(self):
-        """agent-runtime/R13"""
         with patch.object(app, "run_command") as run:
             info = app.status("herdmates", "w1:p1", {}, session="default")
             run.assert_not_called()
@@ -210,8 +213,8 @@ class StatusTests(unittest.TestCase):
                 app.herdr_snapshot("w1:p1", "default", {})
             run.assert_not_called()
 
+    @pytest.mark.spec("Status and list views")
     def test_herdmates_inspection_uses_explicit_session_and_no_mutation(self):
-        """agent-runtime/R13"""
         env = {
             "HERDR_ENV": "1",
             "HERDR_SOCKET_PATH": "/tmp/example.sock",
@@ -224,8 +227,8 @@ class StatusTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 app.herdr_snapshot("w1:p2", "different", env)
 
+    @pytest.mark.spec("Status and list views")
     def test_herdmates_maps_agent_status(self):
-        """agent-runtime/R13"""
         env = {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/example.sock", "HERDR_PANE_ID": "w1:p1"}
         for herdr, expected in (
             ("idle", "idle"),
@@ -243,8 +246,8 @@ class StatusTests(unittest.TestCase):
                 self.assertEqual((info["runtime"], info["state"]), ("herdmates", expected))
                 self.assertTrue(info["next"])
 
+    @pytest.mark.spec("Status and list views")
     def test_native_status_is_unknown_pointing_to_return_value_or_sendmessage(self):
-        """agent-runtime/R14"""
         info = app.status("native", "helper", {})
         self.assertEqual(set(info), STATUS_KEYS)
         self.assertEqual(info["state"], "unknown")
@@ -252,8 +255,8 @@ class StatusTests(unittest.TestCase):
         self.assertIn("return value", text)
         self.assertIn("SendMessage", text)
 
+    @pytest.mark.spec("Status and list views")
     def test_hc_list_returns_one_status_per_child_of_caller_and_never_gets_foreign_terminals(self):
-        """agent-runtime/R15"""
         world = {
             "a": raw("working", parent="t0", address="a"),
             "b": raw("idle", parent="t0", address="b"),
@@ -272,8 +275,8 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(sorted(c[2] for c in calls if c[1] == "get"), ["a", "b", "e"])
         self.assertTrue(all(set(i) == STATUS_KEYS for i in infos))
 
+    @pytest.mark.spec("Status and list views")
     def test_list_outside_hc_is_empty_with_stderr_note(self):
-        """agent-runtime/R15"""
         for runtime in ("herdmates", "native"):
             out, err = io.StringIO(), io.StringIO()
             with (
@@ -285,8 +288,8 @@ class StatusTests(unittest.TestCase):
             self.assertEqual(json.loads(out.getvalue()), [])
             self.assertIn("only available under hc", err.getvalue())
 
+    @pytest.mark.spec("Status and list views")
     def test_list_command_prints_json_array(self):
-        """agent-runtime/R15"""
         world = {"a": raw("idle", parent="t0", address="a")}
         buf = io.StringIO()
         with (

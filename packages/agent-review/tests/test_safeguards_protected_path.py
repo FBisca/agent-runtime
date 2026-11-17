@@ -73,6 +73,7 @@ def test_the_mandatory_baseline_ships_with_the_member():
     )
 
 
+@pytest.mark.spec("Protected path safeguard")
 def test_S3_a_baseline_path_matched_as_added_modified_deleted_or_renamed_carries_one_reason_per_path():
     change = read(
         unified(".github/workflows/ci.yml", "", "on: push\n", status="new")
@@ -91,6 +92,7 @@ def test_S3_a_baseline_path_matched_as_added_modified_deleted_or_renamed_carries
     ], "a rename is a changed path on both of its sides"
 
 
+@pytest.mark.spec("Protected path safeguard")
 def test_S4_a_near_miss_under_a_matching_directory_matches_no_pattern():
     change = read(
         unified(".github/ISSUE_TEMPLATE.md", "", "template\n", status="new")
@@ -104,6 +106,7 @@ def test_S4_a_near_miss_under_a_matching_directory_matches_no_pattern():
     ], "a path under a matching directory is not a path the pattern names"
 
 
+@pytest.mark.spec("Protected path safeguard")
 def test_S5_a_repository_pattern_extends_the_baseline_instead_of_replacing_it():
     change = read(
         unified(
@@ -131,6 +134,7 @@ def test_a_repository_pattern_that_repeats_a_baseline_pattern_keeps_the_baseline
 
 
 @pytest.mark.parametrize("spelled", ["hooks/**", {"dir": "hooks/**"}, 7])
+@pytest.mark.spec("Safeguard configuration validation")
 def test_S9_sensitive_paths_that_is_not_a_list_is_refused_by_path(tmp_path, spelled):
     import yaml
 
@@ -146,6 +150,7 @@ def test_S9_sensitive_paths_that_is_not_a_list_is_refused_by_path(tmp_path, spel
 
 
 @pytest.mark.parametrize("entry", [1, "", "  "])
+@pytest.mark.spec("Safeguard configuration validation")
 def test_S9_sensitive_paths_that_holds_something_else_than_patterns_is_refused_by_path(
     tmp_path, entry
 ):
@@ -162,6 +167,7 @@ def test_S9_sensitive_paths_that_holds_something_else_than_patterns_is_refused_b
 
 
 @pytest.mark.parametrize("spelled", ["hooks/", {"dir": "hooks/"}, 7])
+@pytest.mark.spec("Safeguard configuration validation")
 def test_S9_a_stdlib_only_declaration_that_is_not_a_list_of_paths_is_refused_by_path(
     tmp_path, spelled
 ):
@@ -179,6 +185,7 @@ def test_S9_a_stdlib_only_declaration_that_is_not_a_list_of_paths_is_refused_by_
 
 
 @pytest.mark.parametrize("entry", [1, "", "  "])
+@pytest.mark.spec("Safeguard configuration validation")
 def test_S9_a_stdlib_only_entry_that_is_not_a_path_is_refused_by_path(tmp_path, entry):
     import yaml
 

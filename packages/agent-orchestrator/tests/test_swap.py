@@ -38,7 +38,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         return [c["args"] for c in self.calls("spawn") if c["args"]["name"] == name]
 
     def test_S19_an_implementer_below_the_reserve_is_swapped_for_a_fresh_one_with_the_handoff(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
+        """orchestrate-lean-loop/S19"""
         self.waits(
             [
                 with_usage(self.worker_done(), sample(190000)),
@@ -69,7 +69,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(self.wakes(), [])
 
     def test_S19_the_units_counts_survive_a_swap(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
+        """orchestrate-lean-loop/S19"""
         self.waits(
             [
                 with_usage(self.worker_done(), sample(190000)),
@@ -82,7 +82,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["gate"], "superseded")
 
     def test_S19_a_reviewer_below_the_reserve_is_swapped_before_the_re_review(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
+        """orchestrate-lean-loop/S19"""
         first = with_usage(
             self.reviewer_done(self.review2(verdict="block", items=[self.blocking()])),
             sample(195000),
@@ -114,7 +114,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
     def test_S19_unknown_usage_resumes_and_logs_context_unknown(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
+        """orchestrate-lean-loop/S19"""
         self.waits([self.worker_done()])
         self.run_driver()
         self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1"])
@@ -133,17 +133,17 @@ class ContextReserveTests(RoutedRunFixture, unittest.TestCase):
         return load_script().context_verdict(usage, self.settled.args.context_reserve)["status"]
 
     def test_S19_a_stale_or_unusable_measurement_counts_as_unknown(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
+        """orchestrate-lean-loop/S19"""
         stale = dict(sample(190000), observed_at="2020-01-01T00:00:00+00:00")
         self.assertEqual(self.verdict(stale), "unknown")
         self.assertEqual(self.verdict(dict(sample(190000), source="")), "unknown")
 
     def test_S19_an_agent_with_room_is_resumed_without_a_swap(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
+        """orchestrate-lean-loop/S19"""
         self.assertEqual(self.verdict(sample(50000)), "room_available")
 
     def test_S19_the_reserve_is_set_by_a_flag(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S19"""
+        """orchestrate-lean-loop/S19"""
         self.assertEqual(self.verdict(sample(190000)), "checkpoint")
         self.assertEqual(
             self.verdict(sample(190000), "--context-reserve", "1000"), "room_available"

@@ -207,6 +207,7 @@ class WorkbenchFixture(RunFixture, unittest.TestCase):
 
 
 class PlansTests(WorkbenchFixture):
+    @pytest.mark.spec("Workbench plan list")
     def test_S2_one_json_object_lists_every_plan_with_its_state_and_ticket_counts(self):
         approved = self.write_plan(graph([], ["T1"], ["T1"]))
         draft_data = graph([], [])
@@ -252,17 +253,20 @@ class PlansTests(WorkbenchFixture):
         self.assertNotIn("graph", old)
         self.assertNotIn("layers", old)
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S2_an_approved_plan_without_a_ledger_is_approved(self):
         self.write_plan(graph([]))
         shown = json.loads(self.workbench("plans")[1])
         self.assertEqual(shown["plans"][0]["state"], "APPROVED")
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S2_a_path_names_the_plan_directory_without_a_repo_flag(self):
         path = self.write_plan(graph([]))
         code, out, err = self.workbench("plans", str(path), repo=False)
         self.assertEqual(code, 0, err)
         self.assertEqual([p["slug"] for p in json.loads(out)["plans"]], ["bench"])
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S11_a_plan_that_does_not_load_is_an_error_entry_with_null_counts_not_zero(self):
         self.write_plan(graph([]))
         broken = graph([], ["T1"])
@@ -289,6 +293,7 @@ class PlansTests(WorkbenchFixture):
         self.assertNotIn("tickets", shown)
         return shown["error"]
 
+    @pytest.mark.spec("Workbench errors")
     def test_S3_outside_a_repository_is_not_a_repo_with_the_way_out(self):
         elsewhere = self.root / "not-a-repo"
         elsewhere.mkdir()
@@ -307,12 +312,14 @@ class PlansTests(WorkbenchFixture):
         self.assertEqual((code, out), (2, ""))
         self.assertEqual(json.loads(err)["error"]["kind"], "not_a_repo")
 
+    @pytest.mark.spec("Workbench errors")
     def test_S3_a_repository_without_plans_is_no_plans_never_an_empty_list(self):
         error = self.error("plans")
         self.assertEqual(error["kind"], "no_plans")
         self.assertIn("/start-planning", error["way_out"])
         self.assertIn("path", error["way_out"])
 
+    @pytest.mark.spec("Workbench errors")
     def test_S3_several_plan_directories_are_ambiguous_and_all_named(self):
         self.write_plan(graph([]))
         other = graph([])
@@ -329,6 +336,7 @@ class PlansTests(WorkbenchFixture):
         self.assertIn("path", error["way_out"])
         self.assertIn("--repo", error["way_out"])
 
+    @pytest.mark.spec("Workbench errors")
     def test_S3_several_plan_directories_with_a_repo_config_naming_one_list_that_one(self):
         self.write_plan(graph([]))
         fixture = self.repo / "tests" / "data" / "reference.plan.yaml"
@@ -344,6 +352,7 @@ class PlansTests(WorkbenchFixture):
         self.assertTrue(listed, out)
         self.assertTrue(all("/docs/plans/" in path for path in listed), listed)
 
+    @pytest.mark.spec("Workbench errors")
     def test_S3_a_plan_that_does_not_exist_is_a_named_error(self):
         error = self.error("plan", str(self.plans / "nope.plan.yaml"))
         self.assertEqual(error["kind"], "no_such_plan")
@@ -365,6 +374,7 @@ class PlansTests(WorkbenchFixture):
         self.assertEqual(code, 0, err)
         return {entry["path"]: entry for entry in json.loads(out)["plans"]}[str(self.plans / name)]
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S2_a_legacy_ledger_without_ticket_status_keeps_the_plan_files_statuses(self):
         ledger = self.state_dir / "old.json"
         ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -375,6 +385,7 @@ class PlansTests(WorkbenchFixture):
         )
         self.assertEqual(entry["tickets"], {"total": 3, "by_state": {"COMPLETE": 2, "TO-DO": 1}})
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S2_a_second_table_with_id_and_status_columns_yields_no_tickets(self):
         entry = self.legacy_listing(
             "2026-11-02-twotables.plan.md",
@@ -385,6 +396,7 @@ class PlansTests(WorkbenchFixture):
         )
         self.assertEqual(entry["tickets"], {"total": 3, "by_state": {"COMPLETE": 2, "TO-DO": 1}})
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S2_a_legacy_plan_without_a_slug_line_lists_under_its_file_name(self):
         entry = self.legacy_listing(
             "2026-11-03-noslug.plan.md",
@@ -396,6 +408,7 @@ class PlansTests(WorkbenchFixture):
 
 
 class PlanListTests(WorkbenchFixture):
+    @pytest.mark.spec("Workbench plan slugs")
     def test_S25_a_markdown_twin_of_a_yaml_plan_is_not_listed_and_a_lone_markdown_plan_is_legacy(
         self,
     ):
@@ -410,6 +423,7 @@ class PlanListTests(WorkbenchFixture):
         self.assertEqual((entries["bench"]["format"], entries["bench"]["legacy"]), ("yaml", False))
         self.assertEqual((entries["old"]["format"], entries["old"]["legacy"]), ("markdown", True))
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S26_each_plan_is_grouped_active_or_older(self):
         self.approved("live")
         self.write_ledger("live", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
@@ -443,6 +457,7 @@ class PlanListTests(WorkbenchFixture):
             },
         )
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S27_plans_carry_their_last_activity_and_are_ordered_active_first_newest_first(self):
         for slug, minutes in (("early", 5), ("late", 50)):
             self.approved(slug)
@@ -464,6 +479,7 @@ class PlanListTests(WorkbenchFixture):
         )
         self.assertEqual([entry["slug"] for entry in shown["plans"]], ["late", "early", "done"])
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S27_without_events_the_plan_files_mtime_is_the_last_activity(self):
         path = self.approved("quiet")
         stamp = (T0 + timedelta(days=3)).timestamp()
@@ -474,6 +490,7 @@ class PlanListTests(WorkbenchFixture):
             T0 + timedelta(days=3),
         )
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S27_a_torn_last_line_does_not_hide_the_newest_event(self):
         self.approved("torn")
         run = self.log_events("torn", [{"at": at(0), "kind": "start", "pid": os.getpid()}])
@@ -482,6 +499,7 @@ class PlanListTests(WorkbenchFixture):
         entry = self.by_slug(self.listing())["torn"]
         self.assertEqual(datetime.fromisoformat(entry["last_activity"]), T0 + timedelta(minutes=7))
 
+    @pytest.mark.spec("Workbench plan list")
     def test_S27_a_plan_with_no_event_and_no_file_has_null_last_activity_and_sorts_last(self):
         from agent_orchestrator import workbench_needs
 
@@ -498,6 +516,7 @@ class PlanListTests(WorkbenchFixture):
 
 
 class ReadOnlyTests(WorkbenchFixture):
+    @pytest.mark.spec("Workbench output is read-only")
     def test_S11_no_workbench_command_writes_under_the_repository_or_the_state_directory(self):
         path = self.write_plan(graph([], ["T1"]))
         # A ledger under the old `<state>/<slug>.json` key is what a run would import and a lock would guard.
@@ -531,6 +550,7 @@ class ReadOnlyTests(WorkbenchFixture):
             )
         )
 
+    @pytest.mark.spec("Workbench output is read-only")
     def test_S11_output_holds_no_report_or_message_bodies_and_no_environment_values(self):
         path = self.write_plan(graph([]))
         self.write_ledger(
@@ -562,6 +582,7 @@ class AgentsTests(WorkbenchFixture):
         data["agents"] = agents
         path.write_text(json.dumps(data), encoding="utf-8")
 
+    @pytest.mark.spec("Ticket agents")
     def test_S1_each_ticket_carries_the_ledger_agents_of_its_unit(self):
         path = self.approved("bench", [], [])
         self.with_agents(
@@ -585,6 +606,7 @@ class AgentsTests(WorkbenchFixture):
         )
         self.assertEqual(tickets["T2"]["agents"], [])
 
+    @pytest.mark.spec("Ticket agents")
     def test_S2_each_plan_lists_its_ticket_agents_and_the_prs_awaiting_merge(self):
         self.approved("bench", [], [])
         self.approved("old")

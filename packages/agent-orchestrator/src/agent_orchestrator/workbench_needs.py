@@ -2,7 +2,7 @@
 waits on the person.
 
 Everything here is read-only and prints only kinds, ids and times: an escalation's reason, a report or a message is
-never read into an answer (R7). A plan's `events.jsonl` can be megabytes, so an older plan costs one read of its tail;
+never read into an answer (the read-only rule). A plan's `events.jsonl` can be megabytes, so an older plan costs one read of its tail;
 only an active plan's log is read whole, once, because `needs_me` needs the last start, the last error and every
 unit's last request."""
 

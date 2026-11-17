@@ -56,6 +56,7 @@ class StopFailureTests(event_helpers.EventRig):
         self.assertFalse(result["isError"], result)
         return result
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S11_a_stop_test_that_talks_to_the_lead_alone_starts_no_worker_session(self):
         """S11: the stop and wait go through the lead's server; no worker session is started for them."""
         started = self.count_sessions()
@@ -64,8 +65,8 @@ class StopFailureTests(event_helpers.EventRig):
         self.wait()
         self.assertEqual(started, ["t0"])
 
+    @pytest.mark.spec("Stopped workers")
     def test_stop_of_a_vanished_terminal_succeeds_and_later_waits_exclude_it(self):
-        """agent-runtime/R66"""
         self.prepare()
         self.set_reply("get:w1", {"rc": 1, "err": NOT_FOUND})
         self.rpc_call("stop", {"name": "w1"})
@@ -74,8 +75,8 @@ class StopFailureTests(event_helpers.EventRig):
         self.assertEqual([a["name"] for a in batch["assignments"]], ["w2"])
         self.assertNotEqual(batch["reason"], "failed")
 
+    @pytest.mark.spec("Stopped workers")
     def test_other_hc_errors_leave_the_record_active(self):
-        """agent-runtime/R66"""
         self.prepare()
         for err in (
             "timeout talking to hc",
@@ -88,8 +89,8 @@ class StopFailureTests(event_helpers.EventRig):
         self.assertEqual(self.runs("kill") + self.runs("rm"), [])
         self.assertEqual({a["name"] for a in self.wait()["assignments"]}, {"w1", "w2"})
 
+    @pytest.mark.spec("Stopped workers")
     def test_stop_of_a_name_owned_by_another_lead_touches_only_our_record(self):
-        """agent-runtime/R67"""
         self.prepare()
         other = dict(self.rows[0], parent="t7", address="t8")
         self.set_reply("get:w1", {"out": json.dumps(other)})
@@ -97,8 +98,8 @@ class StopFailureTests(event_helpers.EventRig):
         self.assertEqual(self.runs("kill") + self.runs("rm"), [])
         self.assertEqual([a["name"] for a in self.wait()["assignments"]], ["w2"])
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_observed_exit_persists_one_failure_and_ack_clears_it(self):
-        """agent-runtime/R68"""
         self.prepare()
         self.rows.remove(self.rows[0])  # w1's terminal disappeared from hc ls
         self.set_reply("ls", {"out": json.dumps({"terminals": self.rows})})
@@ -112,8 +113,8 @@ class StopFailureTests(event_helpers.EventRig):
         self.assertEqual([a["name"] for a in later["assignments"]], ["w2"])
         self.assertEqual(later["messages"], [])
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_replaced_terminal_is_a_persisted_failure_too(self):
-        """agent-runtime/R68"""
         self.prepare()
         self.rows[0]["parent"] = "t7"  # the address now belongs to another lead's terminal
         self.set_reply("ls", {"out": json.dumps({"terminals": self.rows})})
@@ -123,8 +124,8 @@ class StopFailureTests(event_helpers.EventRig):
         later = self.wait(0, receipt=first["receipt"])
         self.assertEqual([a["name"] for a in later["assignments"]], ["w2"])
 
+    @pytest.mark.spec("Task release on worker loss")
     def test_observed_failure_returns_the_linked_task_to_pending(self):
-        """agent-runtime/R69"""
         self.prepare()
         store = Store(self.env)
         put_task(
@@ -138,8 +139,8 @@ class StopFailureTests(event_helpers.EventRig):
         self.assertEqual(self.wait(3)["reason"], "failed")
         self.assertEqual(task_row(store), {"status": "pending", "owner": None, "assignment": None})
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_resumed_worker_exit_persists_one_message_for_the_current_assignment(self):
-        """agent-runtime/R68"""
         self.prepare()
         old = self.assignments[0]
         self.assignments[0] = self.rpc_call("resume", {"name": "w1", "task": "again"})[
@@ -173,23 +174,23 @@ class StoreTaskReleaseTests(unittest.TestCase):
         self.identity = self.store.register(self.team, "w1")
         put_task(self.store, self.identity["assignment_id"], self.identity["worker_id"], self.team)
 
+    @pytest.mark.spec("Task release on worker loss")
     def test_stopped_worker_releases_its_unfinished_task(self):
-        """agent-runtime/R69"""
         self.store.bind(self.identity["assignment_id"], "t1", "test")
         self.store.stopped(self.team, "w1")
         self.assertEqual(
             task_row(self.store), {"status": "pending", "owner": None, "assignment": None}
         )
 
+    @pytest.mark.spec("Task release on worker loss")
     def test_failed_spawn_releases_its_unfinished_task(self):
-        """agent-runtime/R69"""
         self.store.fail(self.identity["assignment_id"])
         self.assertEqual(
             task_row(self.store), {"status": "pending", "owner": None, "assignment": None}
         )
 
+    @pytest.mark.spec("Task release on worker loss")
     def test_stopped_worker_releases_its_blocked_task(self):
-        """agent-runtime/R69"""
         self.store.bind(self.identity["assignment_id"], "t1", "test")
         with self.store.transaction() as db:
             db.execute("UPDATE tasks SET status='blocked'")
@@ -212,8 +213,9 @@ class StoreTaskReleaseTests(unittest.TestCase):
                 if json.loads(r[0])["kind"] == "failed"
             ]
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_removed_terminal_after_a_blocked_report_fails_and_releases_the_task(self):
-        """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("blocked")
         self.store.fail(self.identity["assignment_id"], inactive=True)
         self.assertEqual(
@@ -223,8 +225,9 @@ class StoreTaskReleaseTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT state FROM assignments").fetchone()[0], "failed")
         self.assertEqual(self.failed_messages(), ["failed"])
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_removed_terminal_after_a_decision_report_fails_and_releases_the_task(self):
-        """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("decision")
         self.store.fail(self.identity["assignment_id"], inactive=True)
         self.assertEqual(
@@ -234,15 +237,17 @@ class StoreTaskReleaseTests(unittest.TestCase):
         self.store.fail(self.identity["assignment_id"], inactive=True)  # repeating adds nothing
         self.assertEqual(self.failed_messages(), ["failed"])
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_removed_terminal_keeps_a_completed_assignment(self):
-        """agent-runtime/R84; agent-runtime/R69"""
         self.report_then("complete")
         self.store.fail(self.identity["assignment_id"], inactive=True)
         self.assertEqual(task_row(self.store)["status"], "complete")
         self.assertEqual(self.failed_messages(), [])
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_failed_resume_after_a_blocked_report_keeps_the_task_owned(self):
-        """agent-runtime/R86; agent-runtime/R69"""
         self.report_then("blocked")
         before = task_row(self.store)
         self.store.fail(self.identity["assignment_id"])  # resume failure: the worker is still alive
@@ -251,8 +256,8 @@ class StoreTaskReleaseTests(unittest.TestCase):
         self.assertIsNotNone(before["owner"])
         self.assertEqual(self.failed_messages(), [])
 
+    @pytest.mark.spec("Task release on worker loss")
     def test_stop_keeps_a_completed_task(self):
-        """agent-runtime/R69"""
         with self.store.transaction() as db:
             db.execute("UPDATE tasks SET status='complete'")
         self.store.stopped(self.team, "w1")
@@ -289,6 +294,7 @@ class StopStoreFailureTests(event_helpers.HcCase):
         first = self.store.register(self.team, "w1")
         self.store.bind(first["assignment_id"], "t9", scope)
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S11_a_stop_driven_in_process_starts_no_server(self):
         """S11: the stop reads the fake binary and the store; no server answers for it."""
         self.stop()
@@ -302,8 +308,8 @@ class StopStoreFailureTests(event_helpers.HcCase):
         with self.store.transaction() as db:
             return db.execute("SELECT active FROM workers WHERE name='w1'").fetchone()[0]
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_stop_store_failure_after_the_kill_names_the_kill_and_the_record(self):
-        """agent-runtime/R247"""
         for error in (
             sqlite3.OperationalError("database is locked"),
             StorageError("store is busy"),
@@ -318,8 +324,9 @@ class StopStoreFailureTests(event_helpers.HcCase):
                 self.assertIn("retry the stop", text)
                 self.assertEqual(self.record(), 1)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_stop_store_refusal_after_the_kill_names_the_kill_and_gives_no_retry(self):
-        """agent-runtime/R247: a refusal answers the same on every retry, so it carries no retry advice."""
+        """a refusal answers the same on every retry, so it carries no retry advice."""
         refusal = StoreError("invalid receipt")
         with mock.patch.object(Store, "stopped", side_effect=refusal):
             result, text = self.stop()
@@ -329,8 +336,8 @@ class StopStoreFailureTests(event_helpers.HcCase):
         self.assertNotIn("still recorded active", text)
         self.assertNotIn("retry", text)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_stop_of_an_unregistered_name_whose_terminal_is_gone_keeps_the_stores_refusal(self):
-        """agent-runtime/R247"""
         replies = json.loads((self.dir / "replies").read_text())
         replies["get:ghost"] = {"rc": 1, "err": NOT_FOUND}
         (self.dir / "replies").write_text(json.dumps(replies))
@@ -341,8 +348,8 @@ class StopStoreFailureTests(event_helpers.HcCase):
             self.assertEqual(text, "worker is not registered in this team")
         self.assertEqual([c for c in self.runs() if c[0] in ("kill", "rm")], [])
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_stop_retry_after_a_store_failure_reconciles_the_record(self):
-        """agent-runtime/R247"""
         with mock.patch.object(Store, "stopped", side_effect=sqlite3.OperationalError("locked")):
             self.stop()
         replies = json.loads((self.dir / "replies").read_text())
@@ -352,8 +359,8 @@ class StopStoreFailureTests(event_helpers.HcCase):
         self.assertFalse(result["isError"], text)
         self.assertEqual(self.record(), 0)
 
+    @pytest.mark.spec("Store failure handling")
     def test_S8_stop_store_failure_with_the_terminal_untouched_says_so(self):
-        """agent-runtime/R247"""
         other = json.loads(raw("w1", "t7"))
         replies = json.loads((self.dir / "replies").read_text())
         replies["get:w1"] = {"out": json.dumps(other)}  # another lead owns this name

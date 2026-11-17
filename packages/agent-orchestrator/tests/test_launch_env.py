@@ -40,6 +40,7 @@ class LaunchEnvTests(unittest.TestCase):
                 seen["refused"] = True
         return seen
 
+    @pytest.mark.spec("Launch hands over the Lead's environment")
     def test_R_the_lead_environment_reaches_the_driver_but_not_argv(self):
         seen = self.launched_argv(
             {
@@ -59,11 +60,13 @@ class LaunchEnvTests(unittest.TestCase):
         self.assertTrue(Path(seen["env_file"]).exists())
         self.assertEqual(os.stat(seen["env_file"]).st_mode & 0o777, 0o600)
 
+    @pytest.mark.spec("Launch hands over the Lead's environment")
     def test_R_a_refused_launch_leaves_no_env_file_behind(self):
         seen = self.launched_argv({"LEAD_ONLY_VAR": SECRET}, code=1)
         self.assertTrue(seen["refused"])
         self.assertFalse(Path(seen["env_file"]).exists())
 
+    @pytest.mark.spec("Launch hands over the Lead's environment")
     def test_R_the_pane_bootstrap_applies_the_file_deletes_it_and_runs_the_driver(self):
         path = Path(self.id() + ".env")
         path.write_text(json.dumps({"LEAD_ONLY_VAR": SECRET}), encoding="utf-8")

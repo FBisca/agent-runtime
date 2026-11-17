@@ -355,21 +355,14 @@ def add_status_command(commands):
 
 
 def add_complete_command(commands):
-    """`complete`: the Lead records a person-owned ticket complete, with its proving nodes."""
+    """`complete`: the Lead records a person-owned ticket complete."""
     sub = commands.add_parser(
         "complete",
-        help="The Lead records a person-owned ticket COMPLETE, with the test nodes that prove its scenarios",
+        help="The Lead records a person-owned ticket COMPLETE",
     )
     sub.add_argument("plan")
     sub.add_argument("ticket", help="The person-owned ticket, such as T2")
     sub.add_argument("--note", required=True, help="What was done: kept in the ticket's status")
-    sub.add_argument(
-        "--cover",
-        action="append",
-        metavar="S<n>=<node>",
-        help="A test node that proves a scenario the ticket satisfies; a node in another repository is "
-        "<repo-name>/<path>::<test>. Repeat for more",
-    )
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
 

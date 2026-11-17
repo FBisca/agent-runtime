@@ -1,5 +1,5 @@
 """Capture a session named by id on any harness: the resolution, its refusals, the root it names, and
-the manifest's own fields (agent-eval-named-capture/R228-R229)."""
+the manifest's own fields."""
 
 import gzip
 
@@ -52,8 +52,8 @@ class NamedCase(CaptureCase):
 
 
 class NamedSessionTests(NamedCase):
-    def test_R228_a_named_pi_session_is_captured_with_its_harness_and_cwd(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_named_pi_session_is_captured_with_its_harness_and_cwd(self):
         source = pi_session(
             self.pi, "--Users-x-demo--", "p", PI_ID, "/work/demo", "2026-11-10T10:00:00Z"
         )
@@ -68,8 +68,9 @@ class NamedSessionTests(NamedCase):
         self.assertEqual(gzip.decompress(stored.read_bytes()), source.read_bytes())
         self.assertEqual(entry["files"], [])
 
-    def test_R228_a_named_session_brings_no_subagent_and_nothing_else(self):
-        """agent-eval-named-capture/R228: a named session is a session, not a run"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_named_session_brings_no_subagent_and_nothing_else(self):
+        """a named session is a session, not a run"""
         pi_session(self.pi, "--Users-x-demo--", "p", PI_ID, "/work/demo", "2026-11-10T10:00:00Z")
         result = self.capture("--session", PI_ID)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -78,8 +79,8 @@ class NamedSessionTests(NamedCase):
         self.assertIsNone(manifest["orchestrate"])
         self.assertFalse((self.case(PI_ID) / "changes.patch").exists())
 
-    def test_R228_a_named_codex_session_is_captured_with_its_later_rollouts(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_named_codex_session_is_captured_with_its_later_rollouts(self):
         first = codex_rollout(
             self.codex, "2026/11/10", "a", CODEX_ID, "/work/demo", "2026-11-10T10:00:00Z"
         )
@@ -99,8 +100,8 @@ class NamedSessionTests(NamedCase):
         rollout = self.case(CODEX_ID) / entry["files"][0]["file"]
         self.assertEqual(gzip.decompress(rollout.read_bytes()), later.read_bytes())
 
-    def test_R228_a_named_session_is_captured_under_a_unique_prefix_of_its_id(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_named_session_is_captured_under_a_unique_prefix_of_its_id(self):
         pi_session(self.pi, "--Users-x-demo--", "p", PI_ID, "/work/demo", "2026-11-10T10:00:00Z")
         result = self.capture("--session", PI_ID[:8])
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -109,8 +110,8 @@ class NamedSessionTests(NamedCase):
         self.assertEqual(entry["cwd"], "/work/demo")
         self.assertEqual((entry["role"], entry["parent"]), ("root", None))
 
-    def test_R228_a_named_codex_session_is_captured_under_a_unique_prefix_of_its_id(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_named_codex_session_is_captured_under_a_unique_prefix_of_its_id(self):
         codex_rollout(self.codex, "2026/11/10", "a", CODEX_ID, "/work/demo", "2026-11-10T10:00:00Z")
         result = self.capture("--session", CODEX_ID[:8])
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -118,8 +119,9 @@ class NamedSessionTests(NamedCase):
         self.assertEqual(entry["harness"], "codex")
         self.assertEqual(entry["cwd"], "/work/demo")
 
-    def test_R228_the_capture_help_names_every_harness(self):
-        """agent-eval-named-capture/R228: the help and the spec agree"""
+    @pytest.mark.spec("Named session capture")
+    def test_the_capture_help_names_every_harness(self):
+        """the help and the spec agree"""
         result = self.run_cli("capture", "--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         flag = result.stdout.split("--session")[1].split("--case")[0]
@@ -128,16 +130,16 @@ class NamedSessionTests(NamedCase):
 
 
 class RefusalTests(NamedCase):
-    def test_R228_an_unknown_ref_is_refused_naming_every_harness_it_looked_in(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_an_unknown_ref_is_refused_naming_every_harness_it_looked_in(self):
         result = self.capture("--session", "99999999-0000-4000-8000-000000000000")
         self.assertEqual(result.returncode, 2)
         for place in (self.claude / "projects", self.codex / "sessions", self.pi / "sessions"):
             self.assertIn(str(place), result.stderr)
         self.assertEqual(self.tree(), [])
 
-    def test_R228_an_ambiguous_prefix_inside_one_harness_is_refused_naming_both(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_an_ambiguous_prefix_inside_one_harness_is_refused_naming_both(self):
         pi_session(self.pi, "--Users-x-demo--", "a", PI_ID, "/work/demo", "2026-11-10T10:00:00Z")
         pi_session(self.pi, "--Users-x-demo--", "b", PI_TWIN, "/work/demo", "2026-11-10T10:01:00Z")
         result = self.capture("--session", PI_ID[:8])
@@ -155,8 +157,8 @@ class RefusalTests(NamedCase):
         )
         self.assertEqual(self.tree(), [])
 
-    def test_R228_a_prefix_that_matches_two_harnesses_is_refused_naming_both(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_prefix_that_matches_two_harnesses_is_refused_naming_both(self):
         pi_session(self.pi, "--Users-x-demo--", "p", PI_X, "/work/demo", "2026-11-10T10:00:00Z")
         codex_rollout(self.codex, "2026/11/10", "a", CODEX_X, "/work/demo", "2026-11-10T10:00:00Z")
         result = self.capture("--session", PI_X[:8])
@@ -167,8 +169,8 @@ class RefusalTests(NamedCase):
         self.assertTrue(any(self.named_on(line, "codex", CODEX_X) for line in lines), result.stderr)
         self.assertEqual(self.tree(), [])
 
-    def test_R228_the_same_session_under_two_harnesses_is_refused(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_the_same_session_under_two_harnesses_is_refused(self):
         pi_file = pi_session(
             self.pi, "--Users-x-demo--", "p", SAME, "/work/demo", "2026-11-10T10:00:00Z"
         )
@@ -185,8 +187,9 @@ class RefusalTests(NamedCase):
 
 
 class RootTests(NamedCase):
-    def test_R228_the_first_named_session_is_the_root_and_names_the_case(self):
-        """agent-eval-named-capture/R228: the first --session decides, not the oldest session"""
+    @pytest.mark.spec("Named session capture")
+    def test_the_first_named_session_is_the_root_and_names_the_case(self):
+        """the first --session decides, not the oldest session"""
         pi_session(self.pi, "--Users-x-demo--", "p", PI_ID, "/work/demo", INSIDE)
         codex_rollout(self.codex, "2026/11/10", "a", CODEX_ID, "/work/demo", EARLIER)
         result = self.capture("--session", PI_ID, "--session", CODEX_ID)
@@ -199,8 +202,8 @@ class RootTests(NamedCase):
         self.assertTrue(self.case(PI_ID).is_dir())
         self.assertFalse(self.case(CODEX_ID).exists())
 
-    def test_R228_a_named_session_that_is_also_a_run_worker_joins_once(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_named_session_that_is_also_a_run_worker_joins_once(self):
         worktree = self.worktree()
         orchestrate_run(self.state, SLUG, {"t1": worktree}, FIRST, LAST)
         pi_session(self.pi, "--demo--", "p", PI_ID, worktree, INSIDE)
@@ -220,8 +223,8 @@ class RootTests(NamedCase):
         self.assertEqual((entries[PI_ID]["role"], entries[WORKER]["role"]), ("root", "worker"))
         self.assertEqual(self.manifest(PI_ID)["orchestrate"]["slug"], SLUG)
 
-    def test_R228_a_named_session_can_be_excluded_and_is_listed(self):
-        """agent-eval-named-capture/R228"""
+    @pytest.mark.spec("Named session capture")
+    def test_a_named_session_can_be_excluded_and_is_listed(self):
         pi_session(self.pi, "--Users-x-demo--", "p", PI_ID, "/work/demo", INSIDE)
         codex_rollout(self.codex, "2026/11/10", "a", CODEX_ID, "/work/demo", INSIDE)
         result = self.capture("--session", PI_ID, "--session", CODEX_ID, "--exclude", CODEX_ID[:8])
@@ -232,8 +235,8 @@ class RootTests(NamedCase):
 
 
 class ManifestFieldTests(NamedCase):
-    def test_R229_a_named_session_records_its_cwd_and_assignment_id(self):
-        """agent-eval-named-capture/R229"""
+    @pytest.mark.spec("Session cwd and assignment id")
+    def test_a_named_session_records_its_cwd_and_assignment_id(self):
         pi_session(
             self.pi,
             "--Users-x-demo--",
@@ -262,8 +265,8 @@ class ManifestFieldTests(NamedCase):
             (entries[WORKER_C]["cwd"], entries[WORKER_C]["assignment_id"]), ("/work/c", ASSIGNMENT)
         )
 
-    def test_R229_a_session_captured_by_name_and_as_a_worker_records_the_same_fields(self):
-        """agent-eval-named-capture/R229"""
+    @pytest.mark.spec("Session cwd and assignment id")
+    def test_a_session_captured_by_name_and_as_a_worker_records_the_same_fields(self):
         worktree = self.worktree()
         orchestrate_run(self.state, SLUG, {"t1": worktree}, FIRST, LAST)
         claude_session(self.claude, "-wt", WORKER, worktree, INSIDE, PROMPT % ASSIGNMENT)
@@ -291,8 +294,9 @@ class ManifestFieldTests(NamedCase):
             self.assertEqual(name_entries[sid]["assignment_id"], ASSIGNMENT)
             self.assertEqual(name_entries[sid]["cwd"], worktree)
 
-    def test_R229_a_subagent_records_its_own_cwd_and_assignment_id(self):
-        """agent-eval-named-capture/R229: the subagent road carries the same two fields"""
+    @pytest.mark.spec("Session cwd and assignment id")
+    def test_a_subagent_records_its_own_cwd_and_assignment_id(self):
+        """the subagent road carries the same two fields"""
         claude_session(self.claude, "-app", WORKER, "/work/c", "2026-11-10T10:00:00Z")
         write(
             self.claude / "projects" / "-app" / WORKER / "subagents" / "agent-s1.jsonl",
@@ -303,8 +307,9 @@ class ManifestFieldTests(NamedCase):
         entry = self.entries(WORKER)["agent-s1"]
         self.assertEqual((entry["cwd"], entry["assignment_id"]), ("/work/sub", None))
 
-    def test_R229_a_chain_member_records_its_own_cwd_and_assignment_id(self):
-        """agent-eval-named-capture/R229: the chain road carries the same two fields"""
+    @pytest.mark.spec("Session cwd and assignment id")
+    def test_a_chain_member_records_its_own_cwd_and_assignment_id(self):
+        """the chain road carries the same two fields"""
         claude_session(self.claude, "-chain", PARENT, "/work/parent", EARLIER, "the parent prompt")
         claude_session(self.claude, "-chain", CHILD, "/work/child", INSIDE, PROMPT % ASSIGNMENT)
         job(self.claude, "99999999", sessionId=CHILD, resumeSessionId=PARENT)
@@ -319,8 +324,9 @@ class ManifestFieldTests(NamedCase):
         self.assertEqual(entries[PARENT]["cwd"], "/work/parent")
         self.assertIsNone(entries[PARENT]["assignment_id"])
 
-    def test_R229_a_session_without_a_marker_records_a_null_assignment_id(self):
-        """agent-eval-named-capture/R229: the marker is read from the first prompt, not the first record"""
+    @pytest.mark.spec("Session cwd and assignment id")
+    def test_a_session_without_a_marker_records_a_null_assignment_id(self):
+        """the marker is read from the first prompt, not the first record"""
         pi_session(self.pi, "--Users-x-demo--", "p", PI_ID, "/work/demo", "2026-11-10T10:00:00Z")
         codex_rollout(self.codex, "2026/11/10", "a", CODEX_ID, "/work/demo", "2026-11-10T10:00:00Z")
         result = self.capture("--session", PI_ID, "--session", CODEX_ID)
@@ -335,8 +341,9 @@ class ManifestFieldTests(NamedCase):
             (None, None),
         )
 
-    def test_R237_a_codex_prompt_that_starts_with_a_bracket_keeps_its_assignment_id(self):
-        """R237: only Codex's own injected messages are skipped"""
+    @pytest.mark.spec("Codex injected context")
+    def test_a_codex_prompt_that_starts_with_a_bracket_keeps_its_assignment_id(self):
+        """only Codex's own injected messages are skipped"""
         codex_rollout(
             self.codex,
             "2026/11/10",
@@ -354,7 +361,7 @@ class ManifestFieldTests(NamedCase):
 
 class ControlTests(NamedCase):
     def test_control_a_named_claude_session_still_joins_with_its_chain_and_subagents(self):
-        """agent-eval-named-capture/R228: today's Claude chain holds"""
+        """today's Claude chain holds"""
         result = self.capture("--session", CHAIN)
         self.assertEqual(result.returncode, 0, result.stderr)
         entries = self.entries(RESUMED)
@@ -362,7 +369,7 @@ class ControlTests(NamedCase):
         self.assertEqual((entries[RESUMED]["role"], entries[RESUMED]["parent"]), ("root", None))
 
     def test_control_a_run_capture_still_copies_the_run_directory(self):
-        """agent-eval-named-capture/R228: today's run path holds"""
+        """today's run path holds"""
         worktree = self.worktree()
         orchestrate_run(self.state, SLUG, {"t1": worktree}, FIRST, LAST)
         claude_session(self.claude, "-wt", WORKER, worktree, INSIDE)

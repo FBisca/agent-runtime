@@ -1,4 +1,4 @@
-"""R249: a single test past the configured timeout fails, by pytest-timeout and no script of ours."""
+"""A single test past the configured timeout fails, by pytest-timeout and no script of ours."""
 
 import subprocess
 import sys
@@ -14,6 +14,7 @@ SLEEPER = "import time\n\n\ndef test_sleeps_past_the_timeout():\n    time.sleep(
 
 
 class PytestTimeoutTests(unittest.TestCase):
+    @pytest.mark.spec("Per-test timeout")
     def test_S6_a_test_past_the_timeout_fails_naming_the_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "test_sleeper.py"
@@ -38,6 +39,7 @@ class PytestTimeoutTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout[-2000:])
         self.assertIn("Timeout", result.stdout)
 
+    @pytest.mark.spec("Per-test timeout")
     def test_S6_the_configured_timeout_is_eighteen_seconds(self):
         import tomllib
 

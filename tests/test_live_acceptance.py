@@ -171,8 +171,8 @@ class HarnessTests(unittest.TestCase):
                     self.assertEqual(done.returncode, 0, done.stderr)
                     self.assertEqual(done.stdout.strip(), expected)
 
+    @pytest.mark.spec("Live mixed-CLI acceptance")
     def test_harness_accepts_name_arguments(self):
-        """agent-runtime/R57"""
         lead = object.__new__(Lead)
         lead.log, lead.i, lead.lines = lambda *a, **k: None, 0, 0
         seen = []
@@ -306,8 +306,8 @@ class LiveProfileTests(unittest.TestCase):
     os.environ.get("AGENT_RUNTIME_LIVE") == "1", "set AGENT_RUNTIME_LIVE=1 for the live run"
 )
 class LiveAcceptance(unittest.TestCase):
+    @pytest.mark.spec("Live mixed-CLI acceptance")
     def test_live_mixed_cli_dispatch(self):  # noqa: PLR0912, PLR0915
-        """agent-runtime/R57"""
         work = tempfile.mkdtemp(prefix="agent-runtime-live-")
         log_path = os.environ.get("AGENT_RUNTIME_LIVE_LOG") or os.path.join(work, "live.log")
         logfile = open(log_path, "a")
@@ -486,8 +486,8 @@ class LiveAcceptance(unittest.TestCase):
                         break
                 lead.close()
 
+    @pytest.mark.spec("Live mixed-CLI acceptance")
     def test_externally_killed_worker_stops_cleanly(self):
-        """agent-runtime/R82"""
         work = tempfile.mkdtemp(prefix="agent-runtime-live-kill-")
         logfile = open(
             os.environ.get("AGENT_RUNTIME_LIVE_LOG") or os.path.join(work, "live.log"), "a"
@@ -567,7 +567,6 @@ class LiveAcceptance(unittest.TestCase):
 )
 class CodexHooksTrustTests(unittest.TestCase):
     def test_spawned_codex_worker_starts_its_task_with_the_lead_hooks_installed(self):
-        """agent-runtime/R127"""
         try:
             config = (Path.home() / ".codex" / "config.toml").read_text()
         except OSError:

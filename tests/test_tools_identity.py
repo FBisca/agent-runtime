@@ -35,16 +35,16 @@ class IdentityTests(ToolCase):
         ):
             return hc_tools.dispatch_identity(dict(self.ENV, **extra))
 
+    @pytest.mark.spec("Session generation")
     def test_server_identity_ignores_session_ids_under_a_cli_ancestor(self):
-        """agent-runtime/R107"""
         scope, generation = self.identity(
             CODEX_THREAD_ID="t", CLAUDE_CODE_SESSION_ID="c", CLAUDE_SESSION_ID="s"
         )
         self.assertEqual(generation, "90:Wed Nov  4 10:00:00 2026")
 
+    @pytest.mark.spec("Session generation")
     def test_the_session_identity_is_resolved_once_and_never_changes(self):
-        """agent-runtime/R165
-        A session's identity is decided once: a walk that misses its budget on a later call must not
+        """A session's identity is decided once: a walk that misses its budget on a later call must not
         fork the team, or the workers of the first team go stale."""
         ctx = hc_tools.Context()
         with mock.patch.object(
@@ -55,8 +55,8 @@ class IdentityTests(ToolCase):
             second = hc_tools.dispatch_identity(self.ENV, ctx)
         self.assertEqual(first, second)
 
+    @pytest.mark.spec("Session generation")
     def test_clear_or_new_in_same_process_keeps_team_and_assignments(self):
-        """agent-runtime/R108"""
         from agent_runtime import dispatch_store as store_module
 
         Store = store_module.Store
@@ -113,8 +113,9 @@ class TerminalOwnerTests(ToolCase):
         self.store().register(team["id"], "w1")
         return session, team
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S1_a_session_that_inherits_a_live_leads_terminal_is_refused(self):
-        """stale-team-generation/S1: a session that inherits the terminal never owns it."""
+        """a session that inherits the terminal never owns it."""
         lead, team = self.lead()
         other = self.session()
         result, text = self.call(other, "wait", {"target": "all", "timeout": 0})
@@ -128,8 +129,9 @@ class TerminalOwnerTests(ToolCase):
         )
         self.assertEqual(len(self.teams()), 1, "the other session registered a team")
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S2_the_live_lead_keeps_its_team_after_the_other_session_called(self):
-        """stale-team-generation/S2: the lead reaches its own workers after the other session called."""
+        """the lead reaches its own workers after the other session called."""
         lead, team = self.lead()
         other = self.session()
         self.call(other, "wait", {"target": "all", "timeout": 0})
@@ -143,8 +145,9 @@ class TerminalOwnerTests(ToolCase):
         self.assertEqual(workers, {team["id"]}, "the worker left the lead's team")
         self.assertEqual(messages, 1, "the lead's message never reached its worker")
 
+    @pytest.mark.spec("Diagnostic fallback")
     def test_S9_a_refused_session_gets_the_diagnostic_view_with_a_delivery_error(self):
-        """stale-team-generation/S9: a diagnostic call never fails the session that asks."""
+        """a diagnostic call never fails the session that asks."""
         lead, team = self.lead()
         other = self.session()
         for verb, arguments in (

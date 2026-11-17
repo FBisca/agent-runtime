@@ -18,9 +18,10 @@ from agent_runtime import rhythm  # noqa: E402
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.spec("Harness rhythm capabilities")
 class CapabilityTests(unittest.TestCase):
     def test_S9_every_harness_the_runtime_resolves_has_a_rhythm_row(self):
-        """pi-lead-rhythm/S9: one table, one row per resolvable harness."""
+        """one table, one row per resolvable harness."""
         self.assertLessEqual(set(app.HARNESSES), set(rhythm.CAPABILITIES))
         for cli in app.HARNESSES:
             row = rhythm.capabilities(cli)
@@ -35,7 +36,7 @@ class CapabilityTests(unittest.TestCase):
             rhythm.capabilities("gemini")
 
     def test_S9_the_runtime_reports_the_row_of_the_harness_it_resolves(self):
-        """pi-lead-rhythm/S9: the harness `resolve` names reports its row from the one table."""
+        """the harness `resolve` names reports its row from the one table."""
         for cli in app.HARNESSES:
             resolved = app.resolve({}, cli)
             self.assertEqual(resolved["cli"], cli)

@@ -54,7 +54,7 @@ class ReuseFixture(GateFixture):
 
 class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
     def test_S8_a_fix_round_resumes_the_same_reviewer_with_the_delta(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S8"""
+        """orchestrate-lean-loop/S8"""
         self.waits(
             self.first_block()
             + [self.fix_report(), self.re_review(self.review2(**self.closure(BLOCKING)))]
@@ -80,7 +80,7 @@ class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
     def test_S8_a_converge_fix_round_is_reviewed_by_a_reviewer_spawned_once(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S8"""
+        """orchestrate-lean-loop/S8"""
         self.waits(
             [
                 self.worker_done(),
@@ -95,7 +95,7 @@ class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(set(self.checks_log()), {"https://github.com/o/r/pull/7"})
 
     def test_S8_a_ci_fix_round_is_re_reviewed_before_ci_runs_again(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S8"""
+        """orchestrate-lean-loop/S8"""
         self.checks([("fail", "unit tests"), "green"])
         self.waits(
             [
@@ -121,7 +121,7 @@ class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
         )
 
     def test_S8_a_blocking_re_review_keeps_the_unit_out_of_ci(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S8"""
+        """orchestrate-lean-loop/S8"""
         blocked = self.review2(verdict="block", items=[dict(BLOCKING, id="B3", file="src/a/x.py")])
         self.waits(self.first_block() + [self.fix_report(), self.re_review(blocked)])
         self.run_driver()
@@ -135,7 +135,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         return self.review2(verdict="block", items=list(items), **over)
 
     def test_S9_a_blocking_item_outside_the_delta_with_no_earlier_finding_is_deferred(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
+        """orchestrate-lean-loop/S9"""
         # The earlier blocker is closed with evidence, so only the new out-of-delta item is at issue.
         closure = self.closure(BLOCKING)
         self.waits(
@@ -161,7 +161,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
     def test_S9_a_blocking_item_in_a_changed_file_still_gates(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
+        """orchestrate-lean-loop/S9"""
         inside = dict(OFF_SCOPE, id="B4", file="src/a/x.py")
         self.waits(
             self.first_block()
@@ -176,7 +176,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
 
     def test_S9_a_blocking_item_that_references_an_earlier_finding_still_gates(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
+        """orchestrate-lean-loop/S9"""
         again = dict(OFF_SCOPE, id="B5", finding="B1")
         self.waits(
             self.first_block()
@@ -196,7 +196,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         )
 
     def test_S9_only_the_out_of_scope_item_is_dropped_from_a_mixed_re_review(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
+        """orchestrate-lean-loop/S9"""
         inside = dict(OFF_SCOPE, id="B4", file="src/a/x.py")
         self.waits(
             self.first_block()
@@ -211,7 +211,7 @@ class ScopeFilterTests(ReuseFixture, unittest.TestCase):
         self.assertEqual([e["id"] for e in self.run_events("scope")], ["B2"])
 
     def test_S9_a_first_review_is_not_filtered(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S9"""
+        """orchestrate-lean-loop/S9"""
         self.waits(self.first_block(OFF_SCOPE))
         self.run_driver()
         self.assertEqual(self.run_events("scope"), [])
@@ -246,7 +246,7 @@ class OpenBlockerTests(ReuseFixture, unittest.TestCase):
         self.held()
 
     def test_S5_a_legacy_major_and_a_new_blocker_reach_one_fix_round(self):
-        """R138: the round carries both payloads, so it is a fix round and not a Lead request."""
+        """Open blocking findings persist: the round carries both payloads, so it is a fix round and not a Lead request."""
         second = dict(BLOCKING, id="B2", summary="a second violation", file="src/a/x.py")
         self.waits(
             [
@@ -278,14 +278,14 @@ class PaneStopTests(ReuseFixture, unittest.TestCase):
         return [c["args"]["name"] for c in self.calls("stop")]
 
     def test_S11_a_merged_unit_stops_its_implementer_and_reviewer(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S11"""
+        """orchestrate-lean-loop/S11"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(sorted(self.stopped()), ["demo-t1", "demo-t1-review"])
         self.assertEqual(self.task()["status"], "COMPLETE")
 
     def test_S11_a_dirty_checkout_still_stops_both_panes(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S11"""
+        """orchestrate-lean-loop/S11"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertTrue(self.worktree.exists())
@@ -293,7 +293,7 @@ class PaneStopTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(sorted(self.stopped()), ["demo-t1", "demo-t1-review"])
 
     def test_S11_a_unit_the_lead_blocks_stops_its_implementer_and_reviewer(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S11"""
+        """orchestrate-lean-loop/S11"""
         broken = self.review2(
             verdict="pass", items=[BLOCKING]
         )  # breaks its contract: the unit pauses for the Lead
@@ -309,7 +309,7 @@ class PaneStopTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "blocked")
 
     def test_S11_a_unit_waiting_for_the_lead_keeps_its_panes_for_the_decision(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S11"""
+        """orchestrate-lean-loop/S11"""
         broken = self.review2(verdict="pass", items=[BLOCKING])
         self.waits(
             [
@@ -327,7 +327,7 @@ class PaneStopTests(ReuseFixture, unittest.TestCase):
         self.assertEqual(sorted(self.stopped()), ["demo-t1", "demo-t1-review"])
 
     def test_S11_a_pane_that_is_already_gone_is_not_stopped_again(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S11"""
+        """orchestrate-lean-loop/S11"""
         self.states({"demo-t1-review": "exited"})
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()

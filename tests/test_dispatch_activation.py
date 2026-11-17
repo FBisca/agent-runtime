@@ -14,8 +14,8 @@ pytestmark = pytest.mark.integration
 
 
 class ActivationTests(ToolCase):
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_status_without_hc_falls_back_to_legacy_with_dispatch_on(self):
-        """agent-runtime/R56"""
         out = []
         for flag in ("0", "1"):
             session = self.start(
@@ -26,8 +26,8 @@ class ActivationTests(ToolCase):
         self.assertEqual(out[0], out[1])
         self.assertNotIn("gap: add native support", out[1][1])
 
+    @pytest.mark.spec("Dispatch activation")
     def test_default_preserves_legacy_spawn_report_wait_resume_and_schema(self):
-        """agent-runtime/R58"""
         for flag in (None, "0"):
             with self.subTest(flag=flag):
                 env = {} if flag is None else {"AGENT_RUNTIME_DISPATCH": flag}

@@ -201,7 +201,7 @@ class Report:
         return "\n".join(lines)
 
     def _conclusion(self) -> list[str]:
-        """The verdict in a person's words, told apart by which stage stopped (D34, D35, R20).
+        """The verdict in a person's words, told apart by which stage stopped (D34, D35).
 
         Three cases. A screening that stopped has nothing to show, so the summary says the change was not
         screened and names why. A screening that concluded and a review that then stopped keeps what the

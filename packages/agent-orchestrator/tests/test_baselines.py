@@ -120,7 +120,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
         return self.ledger()["tasks"].get(task_id) or {}
 
     def test_S0_a_report_that_landed_before_the_turn_ended_reaches_a_verified_terminal_state(self):
-        """orchestrator-engine/R2: P3.T1/S0 — the report is on disk and the runtime says the turn ended; the ticket still gets verified."""
+        """P3.T1/S0 — the report is on disk and the runtime says the turn ended; the ticket still gets verified."""
         self.prs(["OPEN", "MERGED"])
         self.waits([self.worker_turn_ended(), self.worker_complete(), self.reviewer_complete()])
         record = self.drive(budget=15.0, label="S0-report-timing")
@@ -142,7 +142,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
         self.assertIn("COMPLETE ", self.ticket_status("T1"))
 
     def test_S0_a_restart_after_the_report_landed_still_finishes_the_ticket(self):
-        """orchestrator-engine/R2: P3.T1/S0 — the driver died with the report on disk; the restart finishes the ticket, nobody is asked."""
+        """P3.T1/S0 — the driver died with the report on disk; the restart finishes the ticket, nobody is asked."""
         self.prs(["OPEN", "MERGED"])
         self.waits([self.worker_turn_ended(stall=["sleep", "60"])])
         first = self.drive(budget=10.0, label="S0-restart-killed")
@@ -165,8 +165,9 @@ class BaselineTests(GateFixture, unittest.TestCase):
         self.assertIsNone(self.request(), "the driver asked a human about a report it already had")
         self.assertEqual(self.task().get("status"), "COMPLETE", self.task())
 
+    @pytest.mark.spec("Budgeted runs are terminated for good")
     def test_S3_a_run_that_stalls_is_terminated_and_recorded_as_a_failure(self):
-        """orchestrator-engine/R2, orchestrator-engine/R7: P3.T1/S3 — the run exceeds its declared budget; the
+        """, P3.T1/S3 — the run exceeds its declared budget; the
         benchmark kills it, waits for the tree it killed, and records the failure."""
         records = self.root / "records.jsonl"
         self.waits([self.worker_turn_ended(stall=["sleep", "120"])])
@@ -181,7 +182,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
         self.assertEqual(bench.read_records(str(records))[0]["outcome"], "failure")
 
     def test_S3_a_run_that_finishes_is_recorded_as_a_pass_with_its_revision(self):
-        """orchestrator-engine/R2: P3.T1/S3 — the record says which revision ran, so only that revision can be called verified."""
+        """P3.T1/S3 — the record says which revision ran, so only that revision can be called verified."""
         records = self.root / "records.jsonl"
         self.prs(["OPEN", "MERGED"])
         self.waits([self.worker_turn_ended(complete=True), self.reviewer_complete()])
@@ -194,7 +195,7 @@ class BaselineTests(GateFixture, unittest.TestCase):
         )
 
     def test_S0_only_the_validator_marks_a_source_revision_verified(self):
-        """orchestrator-engine/R2: P3.T1/S0 — a revision is verified only when every run of it passed."""
+        """P3.T1/S0 — a revision is verified only when every run of it passed."""
         records = self.root / "records.jsonl"
         manifest_path = self.root / "verified.json"
         passing = {

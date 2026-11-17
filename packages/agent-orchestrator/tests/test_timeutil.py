@@ -29,6 +29,7 @@ def modules_defining_now():
 
 
 class TimestampDefinitionTests(unittest.TestCase):
+    @pytest.mark.spec("One UTC timestamp definition")
     def test_s12_the_utc_timestamp_is_defined_once_and_each_call_site_keeps_its_type(self):
         moment = timeutil.now()
         self.assertIsInstance(moment, datetime)

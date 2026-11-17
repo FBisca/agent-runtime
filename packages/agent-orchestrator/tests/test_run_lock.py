@@ -24,29 +24,33 @@ class RunLockTests(RunFixture, unittest.TestCase):
         stream.write(holder)
         stream.flush()
 
+    @pytest.mark.spec("One driver per plan")
     def test_S1_a_second_driver_of_the_same_plan_is_refused(self):
-        """orchestrator-engine/R17: orchestrator-run-lock/S1"""
+        """orchestrator-run-lock/S1"""
         self.hold(self.lock_path(), "pid 4242 since 2026-11-09T10:00:00Z")
         result = self.run_driver(expect=2)
         self.assertIn("'demo' is already being driven by pid 4242", result.stderr)
         self.assertIn("await", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("One driver per plan")
     def test_S1_the_lock_holds_whatever_the_state_dir(self):
-        """orchestrator-engine/R17: orchestrator-run-lock/S1 — a different --state-dir is the same repository."""
+        """orchestrator-run-lock/S1 — a different --state-dir is the same repository."""
         self.hold(self.lock_path(), "pid 4242 since 2026-11-09T10:00:00Z")
         self.state_dir = self.root / "other-state"
         self.run_driver(expect=2)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("One driver per plan")
     def test_S2_another_plan_in_the_same_repository_runs(self):
-        """orchestrator-engine/R17: orchestrator-run-lock/S2"""
+        """orchestrator-run-lock/S2"""
         self.hold(self.lock_path("another-plan"), "pid 4242 since 2026-11-09T10:00:00Z")
         self.run_driver()
         self.assertTrue(self.calls("spawn"))
 
+    @pytest.mark.spec("One driver per plan")
     def test_S2_a_finished_run_releases_the_lock_and_names_itself(self):
-        """orchestrator-engine/R17: orchestrator-run-lock/S2 — the lock dies with the run, never left stale."""
+        """orchestrator-run-lock/S2 — the lock dies with the run, never left stale."""
         self.run_driver()
         with open(self.lock_path(), "r+", encoding="utf-8") as stream:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if the run still held it

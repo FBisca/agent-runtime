@@ -24,7 +24,7 @@ class CompatTests(GateFixture, unittest.TestCase):
         (self.state_dir / "demo.json").write_text(json.dumps(data), encoding="utf-8")
 
     def test_S34_v1_major_items_are_blocking_and_v1_deferred_items_are_deferred(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S34"""
+        """orchestrate-lean-loop/S34"""
         review = {
             "contract": 1,
             "verdict": "block",
@@ -40,7 +40,7 @@ class CompatTests(GateFixture, unittest.TestCase):
         self.assertEqual((blocking, deferred), ([], [DEFERRED]))
 
     def test_S34_in_flight_units_continue_on_a_run_dir_without_events(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S34"""
+        """orchestrate-lean-loop/S34"""
         self.v1_run_dir()
         review = self.review(verdict="block", major=[MAJOR], deferred=[DEFERRED])
         self.waits([self.reviewer_done(review)])
@@ -56,7 +56,7 @@ class CompatTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.run_events()[0]["kind"], "import")
 
     def test_S34_metrics_of_a_run_dir_without_events_come_from_the_ledger(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S34"""
+        """orchestrate-lean-loop/S34"""
         self.v1_run_dir()
         result = subprocess.run(
             [*DRIVER, "metrics", str(self.plan), "--state-dir", str(self.state_dir)],

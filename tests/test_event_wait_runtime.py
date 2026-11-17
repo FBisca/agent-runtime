@@ -19,9 +19,10 @@ pytestmark = pytest.mark.integration
 
 
 class RuntimeStatusTests(EventRig):
+    @pytest.mark.spec("Wait attention and failure")
+    @pytest.mark.spec("Probe timeouts")
     def test_a_slow_status_probe_does_not_hide_the_failed_worker(self):
-        """agent-runtime/R166
-        agent-runtime-dispatch/S27: the probe is what sees the exit; a probe that misses its budget
+        """the probe is what sees the exit; a probe that misses its budget
         would answer with the queued report instead of the failure."""
         self.prepare()
         self.rows[0]["status"] = "exited"
@@ -31,9 +32,8 @@ class RuntimeStatusTests(EventRig):
         batch = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 5}))
         self.assertEqual(batch["reason"], "failed")
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_completion_committed_during_bounded_probe_overrides_observed_exit(self):
-        """agent-runtime/R60
-        agent-runtime-dispatch/S27"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("events", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -56,8 +56,8 @@ class RuntimeStatusTests(EventRig):
         with store.transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0], 1)
 
+    @pytest.mark.spec("Unreported workers")
     def test_never_reported_worker_past_grace_needs_attention(self):
-        """agent-runtime/R100"""
         self.prepare()
         self.silent(0, age=60)
         batch = self.wait_all()
@@ -70,16 +70,16 @@ class RuntimeStatusTests(EventRig):
         rows = hc_tools.lib.hc_next("w1", "unreported")
         self.assertTrue(silent["next"].endswith("; ".join(r["do"] for r in rows)))
 
+    @pytest.mark.spec("Unreported workers")
     def test_never_reported_worker_inside_grace_keeps_working(self):
-        """agent-runtime/R101"""
         self.prepare()
         self.silent(0, age=5)
         batch = self.wait_all(timeout=0.3)
         self.assertEqual(batch["reason"], "timeout")
         self.assertNotIn("unreported", json.dumps(batch["assignments"]))
 
+    @pytest.mark.spec("Unreported workers")
     def test_worker_that_reported_before_is_not_unreported(self):
-        """agent-runtime/R102"""
         self.prepare()
         self.set_row(
             0,
@@ -95,8 +95,8 @@ class RuntimeStatusTests(EventRig):
         self.assertEqual(batch["reason"], "timeout")
         self.assertNotIn("unreported", json.dumps(batch["assignments"]))
 
+    @pytest.mark.spec("Unreported workers")
     def test_exited_never_reported_worker_fails_not_unreported(self):
-        """agent-runtime/R103"""
         for state in ("exited", "interrupted", "replaced"):
             with self.subTest(state=state):
                 self.prepare()
@@ -109,8 +109,8 @@ class RuntimeStatusTests(EventRig):
                 self.assertEqual(batch["reason"], "failed")
                 self.assertNotIn("unreported", json.dumps(batch))
 
+    @pytest.mark.spec("Unreported workers")
     def test_failed_hc_get_falls_back_to_unknown(self):
-        """agent-runtime/R100"""
         self.prepare()
         self.silent(0, age=60)
         for reply in ({"rc": 1, "err": "boom"}, {"rc": 0, "out": "not json"}):
@@ -122,8 +122,8 @@ class RuntimeStatusTests(EventRig):
                 self.assertEqual(batch["reason"], "timeout")
                 self.assertNotIn("unreported", json.dumps(batch["assignments"]))
 
+    @pytest.mark.spec("Unreported workers")
     def test_rows_missing_reported_or_created_ms_are_never_flagged(self):
-        """agent-runtime/R100"""
         for missing in ("reported", "created_ms"):
             with self.subTest(missing=missing):
                 self.prepare()
@@ -135,8 +135,8 @@ class RuntimeStatusTests(EventRig):
                 batch = self.wait_all(timeout=0.3)
                 self.assertEqual(batch["reason"], "timeout")
 
+    @pytest.mark.spec("Unreported workers")
     def test_member_that_reported_once_costs_no_repeated_get(self):
-        """agent-runtime/R106"""
         self.prepare()
         self.set_row(
             0,
@@ -152,8 +152,8 @@ class RuntimeStatusTests(EventRig):
         self.assertEqual(batch["reason"], "timeout")
         self.assertLessEqual(len([c for c in self.runs("get") if c[1] == "t1"]), 1)
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_hc_error_status_needs_attention(self):
-        """agent-runtime/R104"""
         self.prepare()
         self.set_row(0, "error")
         batch = self.wait_all()
@@ -162,8 +162,8 @@ class RuntimeStatusTests(EventRig):
         self.assertEqual(silent["runtime_state"], "error")
         self.assertIn("ask the user", silent["next"])
 
+    @pytest.mark.spec("Unreported workers")
     def test_all_statuses_non_null_runs_no_hc_get(self):
-        """agent-runtime/R106"""
         self.prepare()
 
         def workers():

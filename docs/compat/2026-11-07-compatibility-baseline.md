@@ -132,6 +132,6 @@ tree in the other one.
 
 | Test | Requirement | File |
 |---|---|---|
-| `test_S8_the_legacy_tree_still_answers_through_its_shims` | R203 | `tests/test_rollback_contract.py` |
-| `test_S8_a_store_written_by_the_new_tree_opens_in_the_legacy_tree_without_a_migration` | R203 | `tests/test_rollback_contract.py` |
-| `test_S8_a_store_written_by_the_legacy_tree_opens_in_the_new_tree_without_a_migration` | R203 | `tests/test_rollback_contract.py` |
+| `test_S8_the_legacy_tree_still_answers_through_its_shims` | Rollback keeps the store | `tests/test_rollback_contract.py` |
+| `test_S8_a_store_written_by_the_new_tree_opens_in_the_legacy_tree_without_a_migration` | Rollback keeps the store | `tests/test_rollback_contract.py` |
+| `test_S8_a_store_written_by_the_legacy_tree_opens_in_the_new_tree_without_a_migration` | Rollback keeps the store | `tests/test_rollback_contract.py` |

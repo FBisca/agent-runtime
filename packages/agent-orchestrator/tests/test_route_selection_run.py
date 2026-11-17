@@ -39,8 +39,9 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
     def workers(self):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_the_selected_route_is_logged_in_the_event_log(self):
-        """orchestrator-engine/R2: P4/S2 — the run says which route it dispatched on."""
+        """P4/S2 — the run says which route it dispatched on."""
         path = self.routes_file(
             config(
                 route("small", "codex", "gpt-s", effort="high"),
@@ -56,8 +57,9 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             ("codex", "gpt-s", "high"),
         )
 
+    @pytest.mark.spec("Backend and effort routes")
     def test_S1_a_route_naming_pi_and_the_top_effort_reaches_the_worker_spawn(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — pi and max are expressible, and the spawn carries both."""
+        """— pi and max are expressible, and the spawn carries both."""
         path = self.routes_file(
             config(
                 route("small", "pi", "minimax/MiniMax-M3.1-Flash", effort="max"),
@@ -72,8 +74,9 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             ("pi", "minimax/MiniMax-M3.1-Flash", "max"),
         )
 
+    @pytest.mark.spec("Backend and effort routes")
     def test_S4_the_matrix_answers_the_effort_when_no_route_names_one(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S4 — a route that names no effort leaves the size/difficulty matrix in charge."""
+        """— a route that names no effort leaves the size/difficulty matrix in charge."""
         path = self.routes_file(
             config(
                 route("small", "codex", "gpt-s"),
@@ -87,8 +90,9 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             (worker["cli"], worker["model"], worker["effort"]), ("codex", "gpt-s", "low")
         )
 
+    @pytest.mark.spec("Backend and effort routes")
     def test_S1_an_override_naming_pi_dispatches_a_pi_worker(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S1 — an override may name pi, and the run spawns it."""
+        """— an override may name pi, and the run spawns it."""
         self.run_driver("--route", "small=pi/minimax/MiniMax-M3.1-Flash@xhigh")
         worker = self.workers()["demo-t1"]
         self.assertEqual(
@@ -96,15 +100,17 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
             ("pi", "minimax/MiniMax-M3.1-Flash", "xhigh"),
         )
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S3_an_override_for_an_unknown_class_fails_before_any_worker_is_spawned(self):
-        """orchestrator-engine/R2: P4/S3 — an override for a class the driver does not know stops the run."""
+        """P4/S3 — an override for a class the driver does not know stops the run."""
         result = self.run_driver("--route", "tiny=codex/gpt-s", expect=2)
         self.assertIn("route override", result.stderr)
         self.assertIn("tiny", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S3_a_config_that_leaves_a_class_out_fails_before_any_worker_is_spawned(self):
-        """orchestrator-engine/R2: P4/S3 — a class with no route must not fall back to another billable model."""
+        """P4/S3 — a class with no route must not fall back to another billable model."""
         path = self.routes_file(
             config(route("small", "claude", "haiku"), route("medium", "claude", "sonnet"))
         )
@@ -201,8 +207,9 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
         ledger = json.loads((keyed / (slug + ".json")).read_text(encoding="utf-8"))
         return {"gates": gates, "plan": ledger["ticket_status"]["T1"], "state": state}
 
+    @pytest.mark.spec("Routing leaves the state machine alone")
     def test_S4_the_gate_review_and_pr_state_machine_stays_stable_under_a_new_provider_route(self):
-        """orchestrator-engine/R2: P4/S4 — routing the worker to another provider and the reviewer to another role moves nothing else."""
+        """P4/S4 — routing the worker to another provider and the reviewer to another role moves nothing else."""
         legacy = self.lifecycle("demo", pr=7)
         path = self.routes_file(
             config(
@@ -221,8 +228,9 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
         self.assertIn("merged https://github.com/o/r/pull/7", legacy["plan"])
         self.assertIn("merged https://github.com/o/r/pull/8", routed["plan"])
 
+    @pytest.mark.spec("Routing leaves the state machine alone")
     def test_S4_the_routed_run_really_dispatched_on_the_new_provider(self):
-        """orchestrator-engine/R2: P4/S4 — the comparison above is not vacuous: the routed run used the other provider."""
+        """P4/S4 — the comparison above is not vacuous: the routed run used the other provider."""
         path = self.routes_file(
             config(
                 route("small", "claude", "haiku"),
@@ -256,16 +264,18 @@ class RouteSettlementTests(RoutedRunFixture, unittest.TestCase):
             self.route("large", "claude", "opus"),
         )
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_the_configured_backend_model_and_effort_are_chosen(self):
-        """orchestrator-engine/R2: P4/S2 — the config names the combination the worker runs on."""
+        """P4/S2 — the config names the combination the worker runs on."""
         path = self.routes_file(
             self.config(*self.classes_with_small("codex", "gpt-s", effort="high"))
         )
         self.settle("--routes-file", path)
         self.assertEqual(self.small(), ("codex", "gpt-s", "high"))
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_the_selected_route_is_logged_in_the_route_ledger(self):
-        """orchestrator-engine/R2: P4/S2 — the ledger keeps the resolved route, so the run says what it spent and where."""
+        """P4/S2 — the ledger keeps the resolved route, so the run says what it spent and where."""
         path = self.routes_file(
             self.config(*self.classes_with_small("codex", "gpt-s", effort="high"))
         )
@@ -278,8 +288,9 @@ class RouteSettlementTests(RoutedRunFixture, unittest.TestCase):
             {"class": "small", "backend": "codex", "model": "gpt-s", "effort": "high"},
         )
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_the_repository_policy_config_answers_when_no_file_is_named(self):
-        """orchestrator-engine/R2: P4/S2 — the repository's own policy answers when the run names no config."""
+        """P4/S2 — the repository's own policy answers when the run names no config."""
         policy = self.repo / ".orchestrate" / "routes.json"
         policy.parent.mkdir(parents=True, exist_ok=True)
         policy.write_text(
@@ -289,8 +300,9 @@ class RouteSettlementTests(RoutedRunFixture, unittest.TestCase):
         self.assertEqual(self.small()[:2], ("codex", "gpt-s"))
         self.assertEqual(self.ledger()["routes"]["source"], "repo")
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_the_user_default_config_answers_when_no_other_config_is_named(self):
-        """orchestrator-engine/R2: P4/S2 — the user's own default answers when neither the run nor the repository names a config."""
+        """P4/S2 — the user's own default answers when neither the run nor the repository names a config."""
         home = self.root / "home"
         (home / ".config" / "orchestrate").mkdir(parents=True)
         (home / ".config" / "orchestrate" / "routes.json").write_text(
@@ -301,8 +313,9 @@ class RouteSettlementTests(RoutedRunFixture, unittest.TestCase):
         self.assertEqual(self.small()[:2], ("codex", "gpt-s"))
         self.assertEqual(self.ledger()["routes"]["source"], "user")
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_the_named_config_wins_over_the_repository_policy(self):
-        """orchestrator-engine/R2: P4/S2 — the order is explicit, then the repository's policy, then the user's default."""
+        """P4/S2 — the order is explicit, then the repository's policy, then the user's default."""
         policy = self.repo / ".orchestrate" / "routes.json"
         policy.parent.mkdir(parents=True, exist_ok=True)
         policy.write_text(
@@ -313,8 +326,9 @@ class RouteSettlementTests(RoutedRunFixture, unittest.TestCase):
         self.assertEqual(self.small()[:2], ("codex", "gpt-s"))
         self.assertEqual(self.ledger()["routes"]["source"], "explicit")
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_an_explicit_override_wins_over_the_config(self):
-        """orchestrator-engine/R2: P4/S2 — the override on the command line beats the config file."""
+        """P4/S2 — the override on the command line beats the config file."""
         path = self.routes_file(self.config(*self.classes_with_small("claude", "haiku")))
         self.settle("--routes-file", path, "--route", "small=codex/gpt-s@high")
         self.assertEqual(self.small(), ("codex", "gpt-s", "high"))

@@ -781,7 +781,7 @@ class Gates:
         """A decision on a request that named the silent answerer: the hand-over below puts that pane on a
         new assignment, so its old answers assignment can never report. Left `working`, pr-ready would
         wait on it for ever; `failed` is what the old exit path recorded. Any other request leaves a busy
-        answerer alone: its complete is still received (R85)."""
+        answerer alone: its complete is still received (One idle watchdog)."""
         answers = task.get("answers") or {}
         named = asked.get("answerer")
         if answers.get("state") != "working" or named != answers.get("assignment_id"):

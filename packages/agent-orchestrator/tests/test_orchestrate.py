@@ -79,7 +79,6 @@ class WorkflowTests(unittest.TestCase):
         }
 
     def test_round_trip_reuse_and_dependency(self):
-        """orchestrator-engine/R2"""
         packet_path = self.save("packet.json", self.packet)
         first = self.cli("claim", "--state", str(self.state), "--packet", packet_path)
         self.assertEqual(first["action"], "reserved")
@@ -122,7 +121,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(stored["report"]["decisions"], ["Keep error format"])
 
     def test_conflicts_and_invalid_dependencies(self):
-        """orchestrator-engine/R2"""
         app.claim(self.data, self.packet)
         for candidate in (
             dict(self.packet, task_id="other"),
@@ -143,14 +141,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result["action"], "reserved")
 
     def test_symlink_and_path_escape(self):
-        """orchestrator-engine/R2"""
         (self.repo / "escape").symlink_to(self.root, target_is_directory=True)
         for owns in (["../outside"], ["escape/file"], [str(self.root)], ["src/**"]):
             with self.assertRaises(ValueError):
                 app.claim(self.data, dict(self.packet, owns=owns))
 
     def test_independent_checkouts_can_own_same_relative_path(self):
-        """orchestrator-engine/R2"""
         app.claim(self.data, self.packet)
         other = self.root / "other"
         subprocess.run(
@@ -164,7 +160,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result["action"], "reserved")
 
     def test_completion_requires_evidence(self):
-        """orchestrator-engine/R2"""
         app.claim(self.data, self.packet)
         with self.assertRaises(ValueError):
             app.checkpoint(self.data, "validation", self.report())
@@ -197,7 +192,6 @@ class WorkflowTests(unittest.TestCase):
         )
 
     def test_routed_packet_records_its_cell_and_completion_records_usage(self):
-        """orchestrator-engine/R2"""
         routed = self.routed()
         for bad in (
             dict(routed, size="huge"),
@@ -226,7 +220,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(app.task_summary(done)["class"], "small")
 
     def test_legacy_model_metadata_stays_unrouted(self):
-        """orchestrator-engine/R2"""
         legacy = dict(self.packet, model="any-model", effort="high")
         app.claim(self.data, legacy)
         app.bind(self.data, "validation", "child")
@@ -235,7 +228,6 @@ class WorkflowTests(unittest.TestCase):
         )
 
     def test_unit_counts_failed_reviews_and_cutoffs_across_attempts(self):
-        """orchestrator-engine/R2"""
         app.claim(self.data, self.routed("t1-a1", "w1"))
         app.bind(self.data, "t1-a1", "child-1")
         with self.assertRaises(ValueError):
@@ -272,7 +264,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([a["task_id"] for a in unit["attempts"]], ["t1-a1", "t1-a2"])
 
     def test_blocked_retains_ownership_and_release_requires_stopped(self):
-        """orchestrator-engine/R2"""
         app.claim(self.data, self.packet)
         app.bind(self.data, "validation", "child")
         report = dict(
@@ -311,7 +302,6 @@ class WorkflowTests(unittest.TestCase):
         )
 
     def test_runtime_id_cannot_own_two_active_tasks(self):
-        """orchestrator-engine/R2"""
         app.claim(self.data, self.packet)
         app.bind(self.data, "validation", "same-child")
         app.claim(self.data, dict(self.packet, task_id="other", worker="other", owns=["tests"]))
@@ -319,7 +309,6 @@ class WorkflowTests(unittest.TestCase):
             app.bind(self.data, "other", "same-child")
 
     def test_failed_update_preserves_ledger(self):
-        """orchestrator-engine/R2"""
         with app.ledger(self.state) as data:
             app.claim(data, self.packet)
         before = self.state.read_bytes()
@@ -330,7 +319,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.state.read_bytes(), before)
 
     def test_concurrent_claims_have_one_owner(self):
-        """orchestrator-engine/R2"""
         packets = [self.packet, dict(self.packet, task_id="other", worker="other")]
         processes = [
             subprocess.Popen(
@@ -366,7 +354,6 @@ class ContextAndTransportTests(unittest.TestCase):
         }
 
     def test_context_reserve_boundary_and_unknown(self):
-        """orchestrator-engine/R2"""
         self.assertEqual(app.context_verdict(self.sample(), 20)["status"], "room_available")
         self.assertEqual(app.context_verdict(self.sample(), 30)["status"], "checkpoint")
         stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
@@ -381,7 +368,6 @@ class ContextAndTransportTests(unittest.TestCase):
             self.assertEqual(app.context_verdict(sample, 20)["status"], "unknown")
 
     def test_metrics_preserve_unknowns_and_reject_duplicate_usage(self):
-        """orchestrator-engine/R2"""
         sample = {
             "kind": "request",
             "id": "1",
@@ -404,8 +390,6 @@ class ContextAndTransportTests(unittest.TestCase):
             app.metrics([dict(sample, kind="cumulative")])
 
     def test_inspect_resolves_runtime_from_agent_runtime_home_then_path(self):
-        """orchestrator-engine/R2: agent-runtime/R23"""
-
         def cli(env, *argv):
             return subprocess.run([*DRIVER, *argv], capture_output=True, text=True, env=env)
 
@@ -435,13 +419,11 @@ class ContextAndTransportTests(unittest.TestCase):
             self.assertFalse(hasattr(app, "herdr_snapshot"))
 
     def test_inspect_without_any_runtime_reports_unknown(self):
-        """orchestrator-engine/R2: agent-runtime/R23"""
         with patch.dict(os.environ, {"PATH": "/nonexistent"}):
             os.environ.pop("AGENT_RUNTIME_HOME", None)
             self.assertEqual(app.resolve_runtime(), {"runtime": "unknown"})
 
     def test_inspect_survives_resolver_failure(self):
-        """orchestrator-engine/R2: agent-runtime/R23"""
         # The resolver reads `run` in the module that starts the process, `driver.runtime`; the
         # package publishes it for callers, and a patch there would leave the resolver's own call real.
         from agent_orchestrator.driver import runtime

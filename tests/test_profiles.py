@@ -32,38 +32,40 @@ class ProfileConfigTests(unittest.TestCase):
         path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
         return {"HOME": str(self.dir), "XDG_CONFIG_HOME": str(self.dir)}
 
+    @pytest.mark.spec("Raw hc guard")
     def test_a_missing_config_is_no_profiles(self):
-        """agent-runtime/R21"""
         self.assertEqual(profiles.load({"HOME": str(self.dir)}), {})
 
+    @pytest.mark.spec("Raw hc guard")
     def test_a_valid_config_is_read(self):
-        """agent-runtime/R21"""
         env = self.write({"profiles": {"mini": {"cli": "claude", "env": {"ANTHROPIC_MODEL": "m"}}}})
         self.assertEqual(list(profiles.load(env)), ["mini"])
 
+    @pytest.mark.spec("Raw hc guard")
     def test_a_profile_may_not_shadow_a_builtin(self):
-        """agent-runtime/R21: `pi` is a built-in family, so no profile may take its name."""
+        """`pi` is a built-in family, so no profile may take its name."""
         env = self.write({"profiles": {"pi": {"cli": "claude", "env": {}}}})
         with self.assertRaises(profiles.ProfileError) as error:
             profiles.load(env)
         self.assertIn("built-ins", str(error.exception))
 
+    @pytest.mark.spec("Claude profile settings")
     def test_a_malformed_config_is_refused_without_echoing_it(self):
-        """agent-runtime/R145"""
         env = self.write("{")
         with self.assertRaises(profiles.ProfileError) as error:
             profiles.load(env)
         self.assertNotIn("{", str(error.exception))
 
+    @pytest.mark.spec("Claude profile settings")
     def test_a_reserved_variable_is_refused(self):
-        """agent-runtime/R145"""
         env = self.write({"profiles": {"mini": {"cli": "claude", "env": {"HC_TERMINAL_ID": "t0"}}}})
         with self.assertRaises(profiles.ProfileError) as error:
             profiles.load(env)
         self.assertIn("reserved", str(error.exception))
 
+    @pytest.mark.spec("Claude profile settings")
     def test_a_credential_must_be_a_reference(self):
-        """agent-runtime/R145: a secret never travels in the config."""
+        """a secret never travels in the config."""
         env = self.write(
             {"profiles": {"mini": {"cli": "claude", "env": {"ANTHROPIC_API_KEY": "sk-live"}}}}
         )
@@ -71,8 +73,8 @@ class ProfileConfigTests(unittest.TestCase):
             profiles.load(env)
         self.assertIn("credential reference", str(error.exception))
 
+    @pytest.mark.spec("Claude profile settings")
     def test_launch_options_belong_to_the_claude_family(self):
-        """agent-runtime/R145"""
         env = self.write(
             {"profiles": {"mini": {"cli": "codex", "env": {}, "permission_mode": "auto"}}}
         )
@@ -101,36 +103,38 @@ class ScrubTests(unittest.TestCase):
         return {prefix[index + 1] for index, arg in enumerate(prefix) if arg == "-u"}
 
     def test_a_pi_worker_keeps_the_pi_provider_variables(self):
-        """agent-runtime/R191: a pi worker authenticates with them, so they are not removed."""
+        """a pi worker authenticates with them, so they are not removed."""
         removed = self.scrubbed("pi")
         for name in profiles.PI_PROVIDER_VARIABLES:
             self.assertNotIn(name, removed, name)
 
     def test_a_claude_or_codex_worker_loses_them(self):
-        """agent-runtime/R191"""
+        """a pi worker keeps its profile."""
         for family in ("claude", "codex"):
             removed = self.scrubbed(family)
             for name in profiles.PI_PROVIDER_VARIABLES:
                 self.assertIn(name, removed, family)
 
+    @pytest.mark.spec("Raw hc guard")
     def test_every_family_loses_the_anthropic_variables(self):
-        """agent-runtime/R21"""
         for family in ("claude", "codex", "pi"):
             removed = self.scrubbed(family)
             self.assertIn("ANTHROPIC_API_KEY", removed, family)
             self.assertIn("ANTHROPIC_BASE_URL", removed, family)
 
+    @pytest.mark.spec("Raw hc guard")
     def test_a_profile_variable_is_scrubbed_from_a_built_in_spawn(self):
-        """agent-runtime/R19: a built-in worker inherits no credential of a configured profile."""
+        """a built-in worker inherits no credential of a configured profile."""
         self.assertIn("PROFILE_MARKER", self.scrubbed("claude"))
 
     def test_the_built_in_names_are_the_families_the_runtime_knows(self):
-        """agent-runtime/R190"""
+        """a pi worker keeps its profile."""
         self.assertEqual(profiles.BUILTINS, ("claude", "codex", "pi"))
         self.assertEqual(profiles.cli_names(self.env), ["claude", "codex", "pi", "mini"])
 
+    @pytest.mark.spec("Claude profile settings")
     def test_a_broken_config_still_leaves_the_built_ins(self):
-        """agent-runtime/R145: the schema never disappears because a config is broken."""
+        """the schema never disappears because a config is broken."""
         (self.dir / "agent-runtime" / "profiles.json").write_text("{", encoding="utf-8")
         self.assertEqual(profiles.cli_names(self.env), ["claude", "codex", "pi"])
 
@@ -138,20 +142,18 @@ class ScrubTests(unittest.TestCase):
 class ConfigPathTests(unittest.TestCase):
     """Where the config lives, and what an override does."""
 
+    @pytest.mark.spec("Raw hc guard")
     def test_the_default_path_is_under_the_config_home(self):
-        """agent-runtime/R21"""
         path = profiles.config_path({"HOME": "/home/you", "XDG_CONFIG_HOME": "/cfg"})
         self.assertEqual(path, Path("/cfg/agent-runtime/profiles.json"))
 
     def test_an_override_wins(self):
-        """agent-runtime/R22"""
         path = profiles.config_path(
             {"HOME": "/home/you", "AGENT_RUNTIME_PROFILES": "/elsewhere.json"}
         )
         self.assertEqual(path, Path("/elsewhere.json"))
 
     def test_a_tilde_override_expands_to_the_home(self):
-        """agent-runtime/R22"""
         path = profiles.config_path({"HOME": "/home/you", "AGENT_RUNTIME_PROFILES": "~/alt.json"})
         self.assertEqual(path, Path("/home/you/alt.json"))
 

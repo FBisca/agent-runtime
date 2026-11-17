@@ -33,6 +33,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
             if e.get("where") == "review"
         ]
 
+    @pytest.mark.spec("One idle watchdog")
     def test_a_reviewer_idle_on_a_background_job_completes_when_it_reports(self):
         """S1: idle and done turns are not a finished review; the later complete under the original id is."""
         self.waits(
@@ -61,6 +62,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertIn("reviewed_commit", task, "the reviewer's verdict was not recorded")
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
 
+    @pytest.mark.spec("One idle watchdog")
     def test_a_reviewer_that_never_reports_is_asked_about_by_the_idle_watchdog(self):
         """S4: no warning resumes and no missing-file error; one idle request naming the reviewer and the way out."""
         self.waits(
@@ -87,6 +89,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertIn("decide", request["reason"])
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
+    @pytest.mark.spec("One idle watchdog")
     def test_control_a_reviewer_that_reports_at_once_completes_the_unit(self):
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
@@ -95,6 +98,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.assertIn("reviewed_commit", task)
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
 
+    @pytest.mark.spec("One idle watchdog")
     def test_control_a_dead_reviewer_without_a_review_goes_straight_to_the_lead(self):
         self.states({REVIEWER: "exited"})
         self.waits([self.worker_done(tests=True), self.reviewer_done(write=[]), self.skipped()])

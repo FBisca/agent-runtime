@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 DEAD_GENERATION = "999999999:Wed Nov  4 10:00:00 2026"
 
 
-# R45: dispatch returns before the workers finish. A blocking dispatch waits for the turn (170s by
+# Concurrent dispatch: dispatch returns before the workers finish. A blocking dispatch waits for the turn (170s by
 # default), so a bound far below that still separates the two; the old one-second bound measured
 # the machine, not the dispatch.
 RESUME_BOUND = 10
@@ -29,6 +29,7 @@ class PeerDispatchTests(event_helpers.EventRig):
         self.assertFalse(result["isError"], result)
         return result
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S11_a_dispatch_test_that_talks_to_no_worker_starts_none(self):
         """S11: stop and wait go through the lead's server; no worker session is started for them."""
         started = self.count_sessions()
@@ -43,8 +44,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         """One wait(all) page hands the lead its reports; until then the server refuses a mutating verb."""
         return self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
 
+    @pytest.mark.spec("Pending work on results")
     def test_S2_lead_spawn_resume_message_results_carry_unfinished_count_and_wait_nudge(self):
-        """agent-runtime/R97"""
         self.prepare()
         row = {"name": "w3", "address": "t4", "parent": "t0", "status": "working"}
         self.replies.update(
@@ -63,8 +64,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         sent = self.tool("message", to="w1", text="hi")["structuredContent"]
         self.assertEqual((sent["unfinished"], sent["next"]), (2, self.NUDGE))
 
+    @pytest.mark.spec("Pending work on results")
     def test_S3_message_without_lead_unfinished_work_carries_no_nudge(self):
-        """agent-runtime/R98"""
         self.prepare()
         peer, text = self.call(
             self.workers[0],
@@ -84,8 +85,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         self.assertNotIn("unfinished", sent)
         self.assertNotIn("next", sent)
 
+    @pytest.mark.spec("Pending work on results")
     def test_S3_stopped_and_exited_then_acked_workers_count_as_finished(self):
-        """agent-runtime/R98"""
         self.prepare()
         self.tool("stop", name="w1")
         Store(self.env).fail_observed({self.assignments[1]["assignment_id"]: "exited"})
@@ -99,8 +100,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         empty = self.batch(self.rpc, self.rpc.tool("wait", {"target": "all", "timeout": 0}))
         self.assertEqual(empty["unfinished"], [])
 
+    @pytest.mark.spec("Pending work on results")
     def test_S2_worker_leading_its_own_children_gets_the_nudge_over_its_own_team(self):
-        """agent-runtime/R97"""
         self.prepare()
         row = {"name": "kid", "address": "t5", "parent": "t1", "status": "working"}
         self.replies.update(
@@ -121,8 +122,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         peer, text = self.call(self.workers[0], "message", {"to": "w2", "text": "hi"})
         self.assertNotIn("unfinished", peer["structuredContent"], text)
 
+    @pytest.mark.spec("Concurrent dispatch")
     def test_mixed_workers_resume_promptly_with_fresh_ids_and_preserve_failed_dispatch(self):
-        """agent-runtime/R45"""
         self.prepare()
         self.assignments[1] = self.tool(
             "spawn", kind="worker", cli="codex", name="w2", task="codex work", cwd="/tmp"
@@ -165,8 +166,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         )
         self.assertTrue(old["isError"])
 
+    @pytest.mark.spec("Peer messages")
     def test_peer_idle_and_active_inboxes_deliver_true_sender_without_hc_injection(self):
-        """agent-runtime/R47"""
         self.prepare()
         first, text = self.call(
             self.workers[0],
@@ -239,8 +240,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         denied, _ = self.call(self.workers[1], "message", {"to": "foreign-worker-id", "text": "no"})
         self.assertTrue(denied["isError"])
 
+    @pytest.mark.spec("Peer messages")
     def test_stale_worker_session_cannot_route_into_reused_team_generation(self):
-        """agent-runtime/R47"""
         self.prepare()
         old, text = self.call(
             self.workers[0],
@@ -273,8 +274,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         )
         self.assertEqual([m["text"] for m in received["messages"]], ["new team"])
 
+    @pytest.mark.spec("Peer messages")
     def test_worker_can_message_its_own_child_without_crossing_peer_team(self):
-        """agent-runtime/R47"""
         self.prepare()
         child = self.spawn(
             self.workers[0], "child", assignment_id=self.assignments[0]["assignment_id"]
@@ -305,8 +306,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         replacement.handshake()
         return replacement, [self.spawn(replacement, name) for name in ("w1", "w2")]
 
+    @pytest.mark.spec("Peer messages")
     def test_first_message_requires_assignment_proof_before_generation_pin(self):
-        """agent-runtime/R47"""
         self.prepare()
         _, fresh = self.replace_team_without_contacting_old_workers()
         for proof in (None, self.assignments[0]["assignment_id"]):
@@ -324,8 +325,8 @@ class PeerDispatchTests(event_helpers.EventRig):
             [],
         )
 
+    @pytest.mark.spec("Peer messages")
     def test_first_inbox_wait_cannot_adopt_reused_address_or_read_new_team(self):
-        """agent-runtime/R47"""
         self.prepare()
         replacement, fresh = self.replace_team_without_contacting_old_workers()
         sent, text = self.call(
@@ -360,8 +361,8 @@ class PeerDispatchTests(event_helpers.EventRig):
             finally:
                 worker.close()
 
+    @pytest.mark.spec("Peer messages")
     def test_failed_pending_report_cannot_establish_first_use_proof(self):
-        """agent-runtime/R47"""
         self.prepare()
         store = Store(self.env)
         team = self.assignments[0]["team_id"]
@@ -382,8 +383,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         denied, _ = self.call(self.workers[0], "message", {"to": "w2", "text": "unproven"})
         self.assertTrue(denied["isError"])
 
+    @pytest.mark.spec("Peer messages")
     def test_successful_fast_report_proves_session_in_publication_transaction(self):
-        """agent-runtime/R47"""
         self.prepare()
         store = Store(self.env)
         pending = store.register(self.assignments[0]["team_id"], "w1")
@@ -399,8 +400,8 @@ class PeerDispatchTests(event_helpers.EventRig):
         self.assertFalse(result["isError"], text)
         self.assertEqual(result["structuredContent"]["assignment_id"], pending["assignment_id"])
 
+    @pytest.mark.spec("Receipt acknowledgment")
     def test_piggyback_ack_is_atomic_and_invalid_or_foreign_receipts_do_not_act(self):
-        """agent-runtime/R52"""
         self.prepare()
         self.publish(0, "progress", "first")
         first = self.batch(self.rpc, self.rpc.tool("wait", {"target": "any", "timeout": 0}))
@@ -457,8 +458,8 @@ class PeerDispatchTests(event_helpers.EventRig):
             [],
         )
 
+    @pytest.mark.spec("Stopped workers")
     def test_stop_wakes_an_already_pending_wait(self):
-        """agent-runtime/R54"""
         self.prepare()
         request_id = self.begin()
         self.tool("stop", name="w1")
@@ -469,9 +470,9 @@ class PeerDispatchTests(event_helpers.EventRig):
         self.assertEqual(states[self.assignments[0]["assignment_id"]], "failed")
         self.assertEqual(states[self.assignments[1]["assignment_id"]], "working")
 
+    @pytest.mark.spec("Stopped workers")
     def test_stop_wakes_wait_preserves_reports_and_keeps_accepted_completion(self):
-        """agent-runtime/R54
-        S1: the queued report returns at once; the stop still surfaces the assignment as failed."""
+        """S1: the queued report returns at once; the stop still surfaces the assignment as failed."""
         self.prepare()
         progress = self.publish(0, "progress")
         request_id = self.rpc.tool("wait", {"target": "all", "timeout": 5})

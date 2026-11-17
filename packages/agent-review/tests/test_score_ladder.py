@@ -5,7 +5,7 @@ script as a subprocess over a real repository, a question bank it writes, and a 
 check needs no credential and no socket; it imports nothing from the package, so it collects cleanly before the
 phase exists and fails at base.
 
-The contract it pins (docs/specs/agent-review.md R12):
+The contract it pins (docs/specs/agent-review.md, "Score ladder bounds"):
 
   - a score answer is a position on the question's ladder, so any finite number from 0 up to one less than
     the declared levels is the provider's own answer and travels into the judgment unchanged

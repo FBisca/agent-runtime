@@ -15,70 +15,6 @@ validates the labels; capture needs nothing beyond the standard library. It only
 the files of the orchestrator, the runtime and the harnesses; it imports none of them and opens none of
 their stores.
 
-## Claude chain
-
-`$CLAUDE_CONFIG_DIR/jobs/*/state.json` links sessions. A job with `resumeSessionId` different from
-`sessionId` resumed that session (role `continuation`); a job with `forkParentSessionId` forked from it
-(role `fork`, and the fork link wins when a job names the same session in both). A job whose `sessionId`
-equals its `resumeSessionId` resumed itself and links nothing, so it never hides a later job that resumed
-the same session. Capture walks the links in both directions through every job: naming a fork finds its
-parent, and the parent's other continuations join too. `--exclude` leaves out what the run did not
-include.
-
-Each session's `subagents/agent-*.jsonl` sits beside its transcript under `projects/<dir>/<session>/`,
-with the `agent-*.meta.json` of the same name, and its `tool-results/` files (outputs the transcript
-offloads) sit in the same directory. Capture reads regular files only: a symlink in those directories is
-not followed.
-
-The root session is the oldest session of the first `--session` chain (job `createdAt`, then id), and it
-names the default case even when excluded. Sessions of a later `--session` that no link joins to the chain
-have role `session`. A session the job state names whose file is already deleted is listed under `missing`;
-one the user named that has no file is an error.
-
-## Orchestrate runs
-
-`--orchestrate-run <slug>` names a run of the orchestrator: its state directory `<state>/<slug>/`, where
-`<state>` is `--orchestrate-state-dir` (the orchestrator's `--state-dir`, default
-`~/.local/state/orchestrate`). The directory is read as its own record. `events.jsonl` gives the run
-window, from its earliest to its latest `at`, and each `<task>/task.md` names the checkout its worker was
-given on a `Checkout: <path> on branch <branch>` line: those paths are the run's ticket worktrees.
-
-The whole directory joins the case, every regular file gzipped under `orchestrate/` (links are not
-followed), with the same sha256 and size as a transcript. Then every session of Claude, Codex or Pi whose
-cwd is one of the ticket worktrees (compared as real paths) and whose first record is inside the window,
-ends included, joins as role `worker`, with its subagents and tool results when it is a Claude session.
-Its `assignment_id` is the 32 hex digits after `assignment_id` in the first prompt, null without one: the
-first prompt is the first user message with text, and for Codex the first one that is not the
-`# AGENTS.md instructions` or `<...>` context Codex injects. A session `--session` already named is not
-captured twice, and `--exclude` leaves a worker out. Without `--session` the case is named after the run.
-A session id found under two Claude project directories, or under two harnesses, is refused.
-
-Codex keeps `sessions/**/rollout-*.jsonl` under `$CODEX_HOME` (default `~/.codex`). A session may span
-several rollout files; the `id` of each file's first record, a `session_meta`, groups them, whatever the
-file name or the day folder says. The earliest file is the session's transcript and starts it; the rest
-are in its `files` as kind `rollout`.
-
-Pi keeps `sessions/<folder>/*.jsonl` under `$PI_CODING_AGENT_DIR` (default `~/.pi/agent`). The first
-record of each file is the session header; its `id` is the session's id and its `cwd` the session's cwd.
-The folder name, which starts with `--` and encodes the cwd lossily, is never read back, and a file whose
-first line is not a header is skipped.
-
-## Naming a session
-
-`--session <ref>` is looked up in all three harnesses: the Claude transcripts under
-`$CLAUDE_CONFIG_DIR/projects`, the Codex sessions under `$CODEX_HOME/sessions` and the Pi sessions under
-`$PI_CODING_AGENT_DIR/sessions`. A ref is a full id or a unique prefix, and a full id wins over longer ids
-it prefixes. A Codex or Pi session has no job state to link it: it joins alone, with its transcript and, for
-Codex, its later rollout files, and with no subagent entry and no aux file of its own. The first `--session`'s
-session is the `root` and names the default case, whatever the other sessions' age (for a Claude session, the
-root is still the oldest session of its chain); a later `--session`'s session that no link joins to it has role
-`session`. A named session that is also a worker of the run joins once, with the role the naming gave it.
-`--exclude` leaves a named session out and lists it under `excluded`.
-
-A ref that matches no session, several sessions, or one session found under two harnesses exits 2 and writes
-nothing: an unknown ref names the directory it looked in for each harness, an ambiguous one every candidate
-with its harness, and a session under two harnesses the two places it was found.
-
 ## Case layout
 
 `manifest.json` (`schema: case/1`), `transcripts/<id>.jsonl.gz`,
@@ -205,90 +141,223 @@ rules, whose score is not the weighted mean of its dimensions (quality .35, test
 communication .15, renormalised over the scored dimensions, rounded half up to 2 decimals) or whose verdict does
 not follow from its gates and scores.
 
-## Listing cases
-
-`agent-eval list` reads every directory under `<home>/cases/` that holds a real `manifest.json` and prints
-one line per case: the slug, the capture date, the session count, the label's verdict, its score and the
-judging model, each `-` when the case has no label yet. Newest first, by the manifest's `captured` and
-then by slug. `--json` prints the same rows as one array, with `null` for an unlabelled case's verdict,
-score and judge (the whole field set: `case`, `captured`, `sessions`, `verdict`, `score`, `judge`).
-
-Only a case's own record is read, its `manifest.json` and `labels/<kind>.json`, never a transcript or an
-orchestrate file, so a listing does not cost what the run behind it weighed. A directory without a
-manifest, or with one that does not parse, is not a case: it is skipped, and one unreadable label makes
-that case show as unlabelled rather than failing the listing. Nothing is written, and an empty or missing
-`<home>` prints nothing (`[]` with `--json`) and exits 0.
-
 ## Requirements
 
-- **R207** WHEN `agent-eval capture --session <claude-id>` runs on a session that belongs to a Claude background job, including a job whose state resumes itself (`sessionId == resumeSessionId`) and a job forked from another (`forkParentSessionId`), THEN the case holds every session reachable through every job's resume and fork links, each session's `subagents/agent-*.jsonl` with its `.meta.json`, and each session's `tool-results/` files; the manifest lists each session with harness `claude`, role and parent. (from agent-eval-p0/S1)
-- **R208** WHEN `--session` is repeated, THEN every named session and its subagents join the case, so a chain the job state cannot resolve can still be captured. (from agent-eval-p0/S2)
-- **R209** WHEN a transcript or session file is captured, THEN it is stored gzipped and the manifest records the sha256 and byte size of the original file; decompressing reproduces those bytes. (from agent-eval-p0/S3)
-- **R210** WHEN `--case <slug>` is given, or omitted, or names a case that exists, THEN the case lives at `<home>/cases/<slug>/`; without it the slug is the root (oldest) session id of the first `--session` chain, even when that session is excluded; an existing case makes capture exit non-zero naming it, and nothing is written. (from agent-eval-p0/S4)
-- **R211** WHEN `--exclude <id>` names a session of the chain, THEN it is not copied and the manifest lists it under `excluded`. (from agent-eval-p0/S5)
-- **R212** WHEN a captured session's file was last modified more than 25 × 86400 seconds ago, THEN capture prints a warning naming the session and the days left before the 30-day deletion, and still captures it; a file 25.5 days old warns, one 24.9 days old does not. (from agent-eval-p0/S6)
-- **R213** WHEN `--repo <path> --base <rev> --head <rev>` are given, or omitted, THEN `changes.patch` holds `git diff --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ base..head`, independent of the user's diff config, and the manifest records the resolved shas; without them the manifest records null and no patch is written. (from agent-eval-p0/S7)
-- **R214** WHEN the same session id is found under two Claude project directories, THEN capture exits non-zero naming both paths, and nothing is written. (from agent-eval-p0/S7a)
-- **R215** WHEN capture writes, THEN every directory it creates, `<home>` and its parents included, is 0700 and every file 0600, and nothing is written inside a git working tree or outside `<home>` (env `AGENT_EVALS_HOME`, default `~/.local/state/agent-evals`). (from agent-eval-p0/S11)
-- **R216** WHEN `--orchestrate-run <slug>` is given, THEN the run dir is copied into the case and every Claude, Codex or Pi session whose cwd is one of the run's ticket worktrees and which started inside the run window joins the case as a worker, with its `assignment_id` when the first prompt carries one. (from agent-eval-p0/S8)
-- **R217** WHEN a Codex session spans several rollout files, THEN all files sharing its `session_meta` id are captured under that one session. (from agent-eval-p0/S9)
-- **R218** WHEN a Pi session is captured, THEN its id is the first record's `id` and its cwd the first record's `cwd`, including directories whose names start with `--`. (from agent-eval-p0/S10)
-- **R219** WHEN `agent-eval add-label <case> --kind agent-judge <file>` reads a JSON label, THEN an invalid one exits 2 naming each failing field, a valid `label/1` one (`source: transcribed`) is written to `labels/agent-judge.json`, and an existing label is refused (exit 1, nothing written). (from agent-eval-p0/S12)
-- **R220** WHEN `agent-eval add-label <case> --kind agent-judge <file>` reads a `label/2` JSON, THEN a valid one is written to `labels/agent-judge.json` as given; an invalid one exits 2 naming each failing field by its path (`dimensions.quality.findings[0].evidence[1].quote`), and nothing is written. A valid label has `subject.session`, `judge` (`skill`, 64-hex `rubric_sha256`, `model`), `judged_at` (a real date), `source: judged`, `verdict` PASS, FAIL, BLOCKED or INCOMPLETE, `score` (0..1 or null), `gates`, the four dimensions (each `label`, `score` 1.0, 0.8, 0.4, 0.2 or null, `rationale`, `findings`), `top_issue`, `smallest_improvement` and `probable_cause` (`cause` model, harness, repo, instructions, mixed or unknown; `confidence` low, medium or high), with `schema: label/2` and `kind`; any other field is refused. A finding has `kind`, `claim`, `deduction` and `evidence`. (from agent-eval-label-evidence/S1)
-- **R221** WHEN a `label/2` evidence ref (`file`, optional `line`, required `quote` of at most 300 characters) is checked, THEN it is accepted only when `file` is a file of the case listed in its manifest (a transcript, an orchestrate file) or `changes.patch`, and `quote` occurs verbatim in that file's decompressed text, on line `line` when given (the quote starts on it); a ref to an absolute path, a path leaving the case, an unlisted file, a line past the end or a quote that is not there exits 2 naming the ref. (from agent-eval-label-evidence/S2)
-- **R222** WHEN a dimension of a `label/2` is checked, THEN a scored dimension has at least one finding with evidence; a dimension scored below 1.0 has at least one finding with `deduction: true`; a finding's `kind` is proven, risk or strength; a finding with `deduction: true` has evidence; a null score has label `insufficient_evidence`, a rationale and no deduction, and a scored dimension never has that label; anything else exits 2 naming the dimension. (from agent-eval-label-evidence/S3)
-- **R223** WHEN the score and verdict of a `label/2` are checked, THEN `score` equals the weighted mean (quality .35, tests .25, efficiency .25, communication .15) renormalised over the scored dimensions, rounded half up to 2 decimals on the exact decimal mean, and is null only when none is scored; `verdict` is BLOCKED exactly when `gates` is non-empty (each gate with `gate`, `rationale` and evidence), else INCOMPLETE when quality or tests is null, else PASS when every scored dimension and the score are at least 0.8, else FAIL; a mismatch exits 2 naming the expected value. (from agent-eval-label-evidence/S4)
-- **R224** WHEN a label names its subject or source, THEN a `label/2` whose `subject.session` is not a session of the case manifest exits 2 naming it; a `label/1` with `source: judged` exits 2 saying a judged label is `label/2`; a `label/1` with `source: transcribed` is still accepted as before. (from agent-eval-label-evidence/S5)
-- **R225** WHEN `agent-eval add-label --help` is read, or the spec's case layout, THEN both show `labels/<kind>.json` and a complete `label/2` example, and the spec names Pydantic as the package's one dependency. (from agent-eval-label-evidence/S6)
-- **R226** WHEN `score-agent` is given a case directory, THEN it judges from the case's own files, writes a `label/2` JSON whose every evidence ref points into the case with a verbatim quote, and prints its score block rendered from that label. (from agent-eval-label-evidence/S6a)
-- **R227** WHEN the case `orchestrator-silent-idle` is judged again, THEN `labels/agent-judge.json` holds a `label/2` from score-agent with `source: judged`, accepted by `add-label`, whose every deduction's quote can be found in the case. (from agent-eval-label-evidence/S7)
-- **R228** WHEN `agent-eval capture --session <ref>` names a Codex or Pi session, THEN the case holds its transcript (with its later rollout files, for Codex) and the manifest lists it with its harness, the cwd of its first record, its role and parent and no subagent entry or aux file of its own; the first `--session`'s session is the `root` and names the default case whatever the other sessions' age, a later one has role `session`, a named session that is also a worker of the run joins once with the role the naming gave it, and `--exclude` leaves it out and lists it; a ref that matches no session, several sessions, or one session under two harnesses exits 2 and writes nothing, naming the directory looked in for each harness, every candidate with its harness, or the two places it was found. (from agent-eval-named-capture/S1, S2, S3)
-- **R229** WHEN a session is captured, whichever road it entered the case by (named, in a chain, as a subagent or as a worker of a run), THEN the manifest records its `cwd` and its `assignment_id` when its own first prompt carries one, and null when it does not; the same session captured by name and as a worker records the same two fields. (from agent-eval-named-capture/S4)
-- **R230** WHEN `agent-eval capture --session <id>` names a Codex or Pi session, THEN the case holds that session's transcript (with its later rollout files, for Codex), and the manifest lists it with its harness (`codex` or `pi`), the cwd of its first record, its role and parent, and no subagent entry and no aux file of its own. (from agent-eval-named-capture/S1)
-- **R231** WHEN the `--session` ref matches no session, several sessions in one harness, or the same session under two harnesses, THEN capture exits 2 and writes nothing: an unknown ref names the directory it looked in for each harness, an ambiguous one names every candidate with its harness, and a session found under two harnesses names the two places it was found. (from agent-eval-named-capture/S2)
-- **R232** WHEN `--session` names a Codex or Pi session, alone or beside another `--session`, with or without a run, THEN the first `--session`'s session is the `root` and names the default case, whatever the other sessions' age, a later one has role `session`, a named session that is also a worker of the run joins once, keeping the role the naming gave it, and `--exclude` leaves a named session out and lists it. (from agent-eval-named-capture/S3)
-- **R233** WHEN the four Pi sessions of the 2026-11-10 batch are captured by name, THEN each case holds the session's whole transcript with its harness `pi`, the cwd of its first record and role `root`. (from agent-eval-named-capture/S5)
-- **R234** WHEN `agent-eval list` runs, THEN it prints one line per case under `<home>/cases` with the slug, the capture date, the session count, the verdict, the score and the judging model, newest first by the manifest's `captured` and then by slug; a case with no label prints `-` for the verdict, the score and the judge; a directory under `cases/` that holds no `manifest.json`, or one that does not parse, is not listed; nothing is written. (from agent-eval-list/S1)
-- **R235** WHEN `agent-eval list --json` runs, THEN it prints one JSON array with `case`, `captured`, `sessions`, `verdict`, `score` and `judge` per case, `null` verdict, score and judge for an unlabelled case, and it reads no transcript, so a case of any size is listed in the time its own record takes. (from agent-eval-list/S2)
-- **R236** WHEN `<home>` or its `cases/` directory does not exist, THEN `agent-eval list` prints nothing (`[]` with `--json`), exits 0 and creates nothing. (from agent-eval-list/S3)
-- **R237** WHEN a Codex rollout's first user messages are Codex's own injected context (`# AGENTS.md instructions`, `<environment_context>`, `<user_instructions>`, `<guardian_tool_descriptions>`, `<no retained transcript delta entries>`), THEN they are skipped and the next user message is the first prompt, even one that starts with `<`, so its `assignment_id` is recorded. (from the 2026-11-10 eval batch, case 9008700e)
-- **R238** WHEN `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR` or `AGENT_EVALS_HOME` is unset or empty, THEN agent-eval reads `~/.claude`, `~/.codex`, `~/.pi/agent` or `~/.local/state/agent-evals` respectively. (from the 2026-11-10 eval batch, case 9008700e)
+### Requirement: Claude chain capture
+`agent-eval capture --session <claude-id>` SHALL capture every Claude session reachable from the named one through the resume and fork links of every background job, each with its subagents and tool results.
 
-## Coverage
+#### Scenario: a chain of resumed and forked jobs
+- WHEN the session belongs to a Claude background job, including a job whose state resumes itself (`sessionId == resumeSessionId`) and a job forked from another (`forkParentSessionId`; the fork link wins when a job names the same session in both)
+- THEN the case holds every session reachable through every job's links in both directions (naming a fork finds its parent and the parent's other continuations), each session's `subagents/agent-*.jsonl` with its `.meta.json`, and its `tool-results/` files; a self-resuming job links nothing and hides no later job; the manifest lists each session with harness `claude`, role and parent, and a session the job state names whose file is deleted is listed under `missing`
 
-| Scenario | Requirement | Test |
-|---|---|---|
-| S1 | R207 | `packages/agent-eval/tests/test_capture_claude.py`: `test_R207_resume_fork_subagents_meta_and_tool_results`, `test_R207_a_self_resuming_job_does_not_hide_the_continuation`, `test_R207_naming_the_fork_captures_its_parent_and_siblings`, `test_R207_a_fork_with_its_own_resume_link_is_still_a_fork`, `test_R207_unique_id_prefix_is_enough`, `test_R207_ambiguous_prefix_is_a_usage_error_and_writes_nothing`, `test_R207_unknown_session_fails_and_writes_nothing`, `test_R207_a_session_the_job_names_but_whose_file_is_deleted_is_listed_missing`, `test_R207_a_symlink_in_a_session_directory_is_not_followed` |
-| S2 | R208 | `test_R208_repeated_session_joins_every_named_session_and_subagents`, `test_R208_a_session_named_twice_or_also_in_the_chain_is_captured_once` |
-| S3 | R209 | `test_R209_stored_gzipped_with_sha256_and_size_of_the_original` |
-| S4 | R210 | `test_R210_default_slug_is_the_root_session_id`, `test_R210_default_slug_is_the_root_even_when_the_root_is_excluded`, `test_R210_the_slug_is_the_root_of_the_first_session_chain`, `test_R210_case_flag_names_the_directory`, `test_R210_an_existing_case_is_refused_by_name_and_nothing_is_written`, `test_R210_an_existing_default_case_is_refused`, `test_R210_a_slug_cannot_leave_home`, `test_R207_the_oldest_root_of_a_chain_with_two_roots_is_the_root` |
-| S5 | R211 | `test_R211_an_excluded_session_is_not_copied_and_is_listed`, `test_R211_an_id_prefix_names_the_session_and_none_is_listed_by_default`, `test_R211_excluding_a_session_outside_the_chain_fails_and_writes_nothing` |
-| S6 | R212 | `test_R212_a_25_5_day_old_session_warns_with_days_left_and_is_still_captured`, `test_R212_a_24_9_day_old_session_does_not_warn`, `test_R212_the_days_left_count_down_with_the_age`, `test_R212_only_the_old_session_is_named`, `test_R212_past_the_deadline_says_zero_days_left_and_still_captures` |
-| S7 | R213 | `test_R213_the_patch_holds_the_pinned_diff_and_the_manifest_the_resolved_shas`, `test_R213_the_patch_does_not_depend_on_the_users_diff_config`, `test_R213_without_them_the_manifest_records_null_and_no_patch`, `test_R213_partial_arguments_are_a_usage_error_and_write_nothing`, `test_R213_an_unresolvable_revision_fails_and_writes_nothing` |
-| S7a | R214 | `test_R214_one_id_under_two_project_directories_is_refused_naming_both`, `test_R214_a_duplicate_reached_through_the_chain_is_refused_too` |
-| S11 | R215 | `test_R215_directories_0700_and_files_0600_home_and_parents_included`, `test_R215_a_home_inside_a_git_working_tree_is_refused_and_nothing_is_written`, `test_R215_a_stray_dot_git_that_git_does_not_accept_is_not_a_working_tree`, `test_R215_a_home_inside_a_dot_git_directory_is_refused`, `test_R215_the_default_home_is_under_the_user_state_dir`, `test_R215_nothing_is_left_behind_when_a_write_fails` |
-| S8 | R216 | `packages/agent-eval/tests/test_capture_orchestrate.py`: `test_R216_the_run_dir_is_copied_into_the_case`, `test_R216_claude_codex_and_pi_sessions_of_the_ticket_worktrees_join_as_workers`, `test_R216_a_session_outside_the_worktrees_or_the_run_window_stays_out`, `test_R216_the_window_is_inclusive_at_both_ends`, `test_R216_the_case_slug_defaults_to_the_run_and_session_flags_add_to_it`, `test_R216_a_worker_the_chain_already_holds_is_captured_once`, `test_R216_exclude_leaves_a_worker_out_and_lists_it`, `test_R216_without_an_orchestrate_run_no_worker_joins_and_the_manifest_says_null`, `test_R216_an_unknown_run_fails_naming_it_and_writes_nothing`, `test_R216_a_run_with_no_session_to_capture_fails_and_writes_nothing`, `test_R216_a_run_slug_cannot_leave_the_state_dir`, `test_R216_a_symlink_in_the_run_dir_is_not_followed`, `test_R216_a_claude_worker_found_under_two_project_directories_is_refused` |
-| S9 | R217 | `test_R217_every_rollout_file_of_a_session_is_captured_under_it`, `test_R217_rollout_files_with_the_same_id_in_other_directories_still_join`, `test_R217_a_later_rollout_does_not_pull_in_a_session_that_started_outside_the_window` |
-| S10 | R218 | `test_R218_id_and_cwd_come_from_the_first_record_in_a_dash_dash_directory`, `test_R218_a_directory_name_that_looks_like_the_worktree_does_not_decide_the_cwd`, `test_R218_a_file_whose_first_record_is_not_a_session_header_is_skipped` |
-| S12 | R219 | `test_R219_an_invalid_label_exits_2_naming_each_failing_field`, `test_R219_a_label_valid_only_in_form_exits_2`, `test_R219_an_unreadable_label_file_exits_2`, `test_R219_a_valid_label_is_written_to_labels_agent_judge_json`, `test_R219_an_existing_label_is_refused_and_left_unchanged` |
-| agent-eval-label-evidence/S1 | R220 | `packages/agent-eval/tests/test_add_label2.py`: `test_S1_a_valid_label2_is_written_as_given`, `test_S1_an_invalid_label2_names_each_failing_field_by_its_path`, `test_S1_each_shape_fault_is_refused_and_nothing_is_written` |
-| agent-eval-label-evidence/S2 | R221 | `test_S2_a_ref_into_a_listed_file_with_a_verbatim_quote_is_accepted`, `test_S2_a_ref_that_does_not_resolve_exits_2_naming_it`, `test_S2_a_gate_ref_is_resolved_like_any_other`, `test_S2_a_listed_file_that_is_gone_from_the_case_is_refused` |
-| agent-eval-label-evidence/S3 | R222 | `test_S3_a_dimension_that_breaks_a_rule_exits_2_naming_it`, `test_S3_a_perfect_dimension_needs_evidence_but_no_deduction`, `test_S3_every_dimension_is_named_when_several_break` |
-| agent-eval-label-evidence/S4 | R223 | `test_S4_the_recomputed_score_and_verdict_are_accepted`, `test_S4_a_wrong_score_exits_2_naming_the_expected_value`, `test_S4_a_score_where_nothing_is_scored_must_be_null`, `test_S4_a_wrong_verdict_exits_2_naming_the_expected_value`, `test_S4_a_gate_makes_the_verdict_blocked_and_only_a_gate_does`, `test_S4_a_blocked_verdict_without_a_gate_is_refused` |
-| agent-eval-label-evidence/S5 | R224 | `test_S5_a_subject_that_is_not_a_session_of_the_manifest_exits_2_naming_it`, `test_S5_a_label2_needs_a_readable_manifest`, `test_S5_a_judged_label1_exits_2_saying_a_judged_label_is_label2`, `test_S5_a_transcribed_label1_is_still_accepted`, `test_S5_a_label2_of_another_kind_is_refused`, `test_S5_an_existing_label_still_stays` |
-| agent-eval-label-evidence/S6 | R225 | `test_S6_the_help_shows_where_the_label_goes_and_a_complete_label2`, `test_S6_the_spec_case_layout_and_example_match_the_help`, `test_S6_the_spec_names_pydantic_as_the_one_dependency`, `test_S6_the_example_is_accepted_by_add_label_against_the_case_it_cites` |
-| agent-eval-label-evidence/S6a | R226 | human: score-agent's `case-mode.md` (agent-skills#72, merged); a run on a copy of `orchestrator-silent-idle` was accepted by `add-label` on its first try, 2026-11-10 |
-| agent-eval-label-evidence/S7 | R227 | human: `orchestrator-silent-idle/labels/agent-judge.json`, `label/2` FAIL 0.70, stored by `add-label` with mode 0600, 2026-11-10 |
-| agent-eval-named-capture/S1 | R228 | `packages/agent-eval/tests/test_capture_named_outcome.py`: `test_R228_a_named_pi_session_is_captured_with_its_harness_and_cwd`, `test_R228_a_named_session_brings_no_subagent_and_nothing_else`, `test_R228_a_named_codex_session_is_captured_with_its_later_rollouts`, `test_R228_a_named_session_is_captured_under_a_unique_prefix_of_its_id`, `test_R228_a_named_codex_session_is_captured_under_a_unique_prefix_of_its_id`, `test_R228_the_capture_help_names_every_harness` |
-| agent-eval-named-capture/S2 | R228 | `test_R228_an_unknown_ref_is_refused_naming_every_harness_it_looked_in`, `test_R228_an_ambiguous_prefix_inside_one_harness_is_refused_naming_both`, `test_R228_a_prefix_that_matches_two_harnesses_is_refused_naming_both`, `test_R228_the_same_session_under_two_harnesses_is_refused` |
-| agent-eval-named-capture/S3 | R228 | `test_R228_the_first_named_session_is_the_root_and_names_the_case`, `test_R228_a_named_session_that_is_also_a_run_worker_joins_once`, `test_R228_a_named_session_can_be_excluded_and_is_listed` |
-| agent-eval-named-capture/S4 | R229 | `test_R229_a_named_session_records_its_cwd_and_assignment_id`, `test_R229_a_subagent_records_its_own_cwd_and_assignment_id`, `test_R229_a_session_captured_by_name_and_as_a_worker_records_the_same_fields`, `test_R229_a_chain_member_records_its_own_cwd_and_assignment_id`, `test_R229_a_session_without_a_marker_records_a_null_assignment_id` |
-| agent-eval-named-capture/S1 | R230 | `packages/agent-eval/tests/test_capture_named_outcome.py`: `NamedSessionTests::test_R228_a_named_pi_session_is_captured_with_its_harness_and_cwd`, `NamedSessionTests::test_R228_a_named_session_brings_no_subagent_and_nothing_else`, `NamedSessionTests::test_R228_a_named_codex_session_is_captured_with_its_later_rollouts`, `NamedSessionTests::test_R228_a_named_session_is_captured_under_a_unique_prefix_of_its_id`, `NamedSessionTests::test_R228_a_named_codex_session_is_captured_under_a_unique_prefix_of_its_id` |
-| agent-eval-named-capture/S2 | R231 | `packages/agent-eval/tests/test_capture_named_outcome.py`: `RefusalTests::test_R228_an_unknown_ref_is_refused_naming_every_harness_it_looked_in`, `RefusalTests::test_R228_an_ambiguous_prefix_inside_one_harness_is_refused_naming_both`, `RefusalTests::test_R228_a_prefix_that_matches_two_harnesses_is_refused_naming_both`, `RefusalTests::test_R228_the_same_session_under_two_harnesses_is_refused` |
-| agent-eval-named-capture/S3 | R232 | `packages/agent-eval/tests/test_capture_named_outcome.py`: `RootTests::test_R228_the_first_named_session_is_the_root_and_names_the_case`, `RootTests::test_R228_a_named_session_that_is_also_a_run_worker_joins_once`, `RootTests::test_R228_a_named_session_can_be_excluded_and_is_listed` |
-| agent-eval-named-capture/S5 | R233 | human: Felippe's capture of the four Pi sessions of the 2026-11-10 batch by name (T2): each case holds the whole transcript, harness `pi`, the session's cwd and role `root` |
-| agent-eval-list/S1 | R234 | `packages/agent-eval/tests/test_list.py`: `test_R234_two_cases_are_listed_newest_first_with_their_verdict_and_score`, `test_R234_an_unlabelled_case_is_listed_with_a_dash_not_hidden`, `test_R234_a_directory_that_is_not_a_case_is_not_listed` |
-| agent-eval-list/S2 | R235 | `test_R235_json_prints_one_array_with_nulls_for_an_unlabelled_case`, `test_R235_listing_reads_no_transcript` |
-| agent-eval-list/S3 | R236 | `test_R236_an_empty_or_missing_home_prints_nothing_and_creates_nothing` |
-| eval batch d1110 | R237 | `packages/agent-eval/tests/test_harness_defaults.py`: `CodexInjectedTests::test_R237_codex_own_messages_are_injected`, `CodexInjectedTests::test_R237_a_user_prompt_that_starts_with_a_bracket_is_not_injected`; `packages/agent-eval/tests/test_capture_named_outcome.py`: `ManifestFieldTests::test_R237_a_codex_prompt_that_starts_with_a_bracket_keeps_its_assignment_id` |
-| eval batch d1110 | R238 | `packages/agent-eval/tests/test_harness_defaults.py`: `DefaultHomeTests::test_R238_each_harness_home_defaults_under_the_user_home_when_unset`, `DefaultHomeTests::test_R238_an_empty_override_counts_as_unset` |
+#### Scenario: repeated --session flags
+- WHEN `--session` is repeated, or a named session is also in the chain
+- THEN every named session and its subagents join the case, each once, so a chain the job state cannot resolve can still be captured
+
+#### Scenario: a symlink is not followed
+- WHEN a session directory holds a symlink
+- THEN capture reads regular files only and does not follow it
+
+### Requirement: Duplicate session refusal
+`capture` SHALL refuse a session id found under two Claude project directories and write nothing.
+
+#### Scenario: one id under two project directories
+- WHEN the same session id is found under two Claude project directories, directly or through the chain
+- THEN capture exits non-zero naming both paths, and nothing is written
+
+### Requirement: Verbatim gzipped capture
+`capture` SHALL store each captured file gzipped and record the sha256 and byte size of the original.
+
+#### Scenario: the original bytes are recoverable
+- WHEN a transcript or session file is captured
+- THEN it is stored gzipped, the manifest records the sha256 and size of the original bytes, and decompressing reproduces those bytes
+
+### Requirement: Case naming
+`capture` SHALL write the case to `<home>/cases/<slug>/`, where the slug is `--case` or the root session id, and SHALL refuse an existing case.
+
+#### Scenario: the default slug
+- WHEN `--case` is omitted
+- THEN the slug is the id of the root (oldest) session of the first `--session` chain, even when that session is excluded
+
+#### Scenario: an existing case or a slug leaving home
+- WHEN the case directory already exists, or the slug would leave `<home>/cases`
+- THEN capture exits non-zero naming it, and nothing is written
+
+### Requirement: Session exclusion
+`capture` SHALL leave out a session named by `--exclude` and list it under `excluded`.
+
+#### Scenario: an excluded session
+- WHEN `--exclude <id>` (a full id or unique prefix) names a session of the chain
+- THEN it is not copied and the manifest lists it under `excluded`; an id outside the chain fails and writes nothing
+
+### Requirement: Transcript deletion warning
+`capture` SHALL warn when a captured session's file is old enough that Claude is about to delete it, and still capture it.
+
+#### Scenario: a session nearing the 30-day deletion
+- WHEN a captured session's file was last modified more than 25 x 86400 seconds ago
+- THEN capture prints a warning naming only that session and the days left before the deletion (0 past it) and captures it; a file 25.5 days old warns, one 24.9 days old does not
+
+### Requirement: Change patch capture
+`capture` SHALL freeze the code change as `changes.patch` when a repository is named, independent of the user's diff configuration.
+
+#### Scenario: a repository, base and head
+- WHEN `--repo <path> --base <rev> --head <rev>` are given
+- THEN `changes.patch` holds `git diff --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ base..head` whatever the user's diff config, and the manifest records the resolved shas
+
+#### Scenario: no repository, or an unusable one
+- WHEN the three flags are omitted
+- THEN the manifest records `git: null` and no patch is written; a partial set of flags or an unresolvable revision fails and writes nothing
+
+### Requirement: Private case storage
+`capture` SHALL keep cases on this machine, outside every git working tree, directories 0700 and files 0600, never overwritten.
+
+#### Scenario: permissions and location
+- WHEN capture writes
+- THEN every directory it creates, `<home>` and its parents included, is 0700 and every file 0600, `<home>` is `$AGENT_EVALS_HOME` (default `~/.local/state/agent-evals`), and a failed write leaves nothing behind
+
+#### Scenario: a home inside a working tree
+- WHEN `<home>` is inside a git working tree or a `.git` directory
+- THEN capture refuses and writes nothing; a stray `.git` entry that git does not accept does not make a working tree
+
+### Requirement: Orchestrate run capture
+`capture --orchestrate-run <slug>` SHALL copy the run's directory into the case and add every session of its ticket worktrees as a worker.
+
+#### Scenario: the run directory and its workers
+- WHEN `--orchestrate-run <slug>` names a run under `--orchestrate-state-dir` (default `~/.local/state/orchestrate`)
+- THEN every regular file of the run directory joins gzipped under `orchestrate/` (links are not followed), and every Claude, Codex or Pi session whose cwd is one of the ticket worktrees (read from each `task.md`'s `Checkout:` line, compared as real paths) and whose first record is inside the run window of `events.jsonl`, ends included, joins as role `worker` with its `assignment_id` when its first prompt names one
+
+#### Scenario: outside the run
+- WHEN a session is outside the worktrees or the window, or the run is unknown, has no session, or its slug would leave the state directory
+- THEN the session stays out, or capture fails naming the run and writes nothing; a worker already named joins once, `--exclude` leaves one out and lists it, and a Claude worker found under two project directories is refused
+
+### Requirement: Codex rollout grouping
+`capture` SHALL group the rollout files of one Codex session under that session.
+
+#### Scenario: a session spanning several rollout files
+- WHEN several `sessions/**/rollout-*.jsonl` files under `$CODEX_HOME` share the `id` of their first record (a `session_meta`), whatever the file name or day folder
+- THEN the earliest file is the session's transcript and starts it, and the rest are in its `files` as kind `rollout`
+
+### Requirement: Pi session capture
+`capture` SHALL take a Pi session's id and cwd from the first record of its file.
+
+#### Scenario: a Pi session file
+- WHEN a Pi session under `$PI_CODING_AGENT_DIR/sessions/<folder>/*.jsonl` is captured
+- THEN its id is the first record's `id` and its cwd that record's `cwd`, never the folder name (which starts with `--`); a file whose first line is not a session header is skipped
+
+### Requirement: Transcribed label
+`agent-eval add-label` SHALL accept a `label/1` that is valid in form, and write it once.
+
+#### Scenario: a label/1
+- WHEN `agent-eval add-label <case> --kind agent-judge <file>` reads a `label/1` JSON with `source: transcribed`
+- THEN a valid one is written to `labels/agent-judge.json`; an invalid or unreadable one exits 2 naming each failing field; an existing label is refused (exit 1) and left unchanged
+
+### Requirement: Judge label shape
+`add-label` SHALL accept a `label/2` only in its closed shape and name each failing field by its path.
+
+#### Scenario: a valid label/2
+- WHEN a `label/2` has `subject.session`, `judge` (`skill`, 64-hex `rubric_sha256`, `model`), `judged_at` (a real date), `source: judged`, `verdict` PASS, FAIL, BLOCKED or INCOMPLETE, `score` (0..1 or null), `gates`, the four dimensions (each `label`, `score` 1.0, 0.8, 0.4, 0.2 or null, `rationale`, `findings`), `top_issue`, `smallest_improvement` and `probable_cause` (`cause` model, harness, repo, instructions, mixed or unknown; `confidence` low, medium or high), with `schema: label/2` and `kind`
+- THEN it is written to `labels/agent-judge.json` as given
+
+#### Scenario: an invalid label/2
+- WHEN a field is missing, malformed or not in the shape (a finding has `kind`, `claim`, `deduction` and `evidence`)
+- THEN `add-label` exits 2 naming each failing field by its path (`dimensions.quality.findings[0].evidence[1].quote`), and nothing is written
+
+### Requirement: Label evidence refs
+`add-label` SHALL accept an evidence ref only when it points into the case and quotes it verbatim.
+
+#### Scenario: a ref that resolves
+- WHEN a ref (`file`, optional `line`, required `quote` of at most 300 characters) names a file of the case listed in its manifest, or `changes.patch`
+- THEN it is accepted when `quote` occurs verbatim in the file's decompressed text, on line `line` when given (the quote starts on it); gate refs resolve like any other
+
+#### Scenario: a ref that does not
+- WHEN a ref names an absolute path, a path leaving the case, an unlisted or vanished file, a line past the end, or a quote that is not there
+- THEN `add-label` exits 2 naming the ref
+
+### Requirement: Label dimension rules
+`add-label` SHALL hold each dimension of a `label/2` to the rubric's rules.
+
+#### Scenario: a dimension that breaks a rule
+- WHEN a scored dimension has no finding with evidence, a dimension scored below 1.0 has no finding with `deduction: true`, a finding's `kind` is not proven, risk or strength, a deduction has no evidence, a null score lacks label `insufficient_evidence` or a rationale or carries a deduction, or a scored dimension has that label
+- THEN `add-label` exits 2 naming every dimension that breaks a rule
+
+### Requirement: Label score and verdict
+`add-label` SHALL accept a `label/2` only when its score and verdict follow from its dimensions and gates.
+
+#### Scenario: the recomputed score and verdict
+- WHEN `score` is the weighted mean of the scored dimensions (quality .35, tests .25, efficiency .25, communication .15, renormalised over the scored ones, rounded half up to 2 decimals on the exact decimal mean, null only when none is scored) and `verdict` is BLOCKED exactly when `gates` is non-empty (each gate with `gate`, `rationale` and evidence), else INCOMPLETE when quality or tests is null, else PASS when every scored dimension and the score are at least 0.8, else FAIL
+- THEN the label is accepted
+
+#### Scenario: a mismatch
+- WHEN the score or verdict differs from that recomputation
+- THEN `add-label` exits 2 naming the expected value
+
+### Requirement: Label subject and source
+`add-label` SHALL check that a label names a session of the case and a source that fits its schema.
+
+#### Scenario: subject and source
+- WHEN a `label/2`'s `subject.session` is not a session of the case manifest, or its manifest is unreadable, or its kind is another than the one asked, or a `label/1` has `source: judged`
+- THEN `add-label` exits 2 naming it (a judged label is `label/2`); a `label/1` with `source: transcribed` is still accepted, and an existing label still stays
+
+### Requirement: Label documentation
+`agent-eval add-label --help` and this spec SHALL show `labels/<kind>.json` and the same complete `label/2` example, and the spec SHALL name Pydantic as the package's one dependency.
+
+#### Scenario: the help and the spec agree
+- WHEN `add-label --help` and the Case layout section of this spec are read
+- THEN both show `labels/<kind>.json` and the same `label/2` example, and the example is accepted by `add-label` against the case it cites
+
+### Requirement: Named session capture
+`capture --session <ref>` SHALL capture a session of any of the three harnesses by id or unique prefix, and refuse a ref that does not name exactly one.
+
+#### Scenario: a Codex or Pi session
+- WHEN `--session` names a Codex session under `$CODEX_HOME/sessions` or a Pi session under `$PI_CODING_AGENT_DIR/sessions` (Claude's are under `$CLAUDE_CONFIG_DIR/projects`; a full id wins over longer ids it prefixes)
+- THEN it joins alone, with its transcript (and later rollout files for Codex), listed with its harness, the cwd of its first record, role and parent, and with no subagent entry and no aux file of its own
+
+#### Scenario: a ref that names no single session
+- WHEN a ref matches no session, several sessions, or one session found under two harnesses
+- THEN capture exits 2 and writes nothing: an unknown ref names the directory it looked in for each harness, an ambiguous one every candidate with its harness, and a session under two harnesses the two places it was found
+
+#### Scenario: root, roles and exclusion
+- WHEN `--session` is repeated, with or without a run
+- THEN the first `--session`'s session is the `root` and names the default case whatever the other sessions' age, a later one that no link joins has role `session`, a named session that is also a worker of the run joins once with the role the naming gave it, and `--exclude` leaves a named session out and lists it under `excluded`
+
+### Requirement: Session cwd and assignment id
+`capture` SHALL record each session's `cwd` and `assignment_id` in the manifest whichever way it entered the case.
+
+#### Scenario: the fields of a session
+- WHEN a session is captured by name, in a chain, as a subagent or as a worker of a run
+- THEN the manifest records the cwd of its own first record that carries one and the 32 hex digits after `assignment_id` in its own first prompt (the first user message with text), each null when the session does not say; the same session captured by name and as a worker records the same two fields
+
+### Requirement: Codex injected context
+`capture` SHALL skip the context Codex injects when it looks for a session's first prompt.
+
+#### Scenario: injected messages
+- WHEN a Codex rollout's first user messages are Codex's own (`# AGENTS.md instructions`, `<environment_context>`, `<user_instructions>`, `<guardian_tool_descriptions>`, `<no retained transcript delta entries>`)
+- THEN they are skipped and the next user message is the first prompt, even one that starts with `<`, so its `assignment_id` is recorded
+
+### Requirement: Harness home defaults
+agent-eval SHALL read each harness's own home when its override is unset or empty.
+
+#### Scenario: an unset or empty override
+- WHEN `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR` or `AGENT_EVALS_HOME` is unset or empty
+- THEN agent-eval reads `~/.claude`, `~/.codex`, `~/.pi/agent` or `~/.local/state/agent-evals` respectively
+
+### Requirement: Case listing
+`agent-eval list` SHALL print one line per case under `<home>/cases`, newest first, reading only the case's own record.
+
+#### Scenario: cases and their labels
+- WHEN `agent-eval list` runs
+- THEN each case prints its slug, capture date, session count, verdict, score and judging model (each `-` when it has no label yet, or when its label is unreadable), newest first by the manifest's `captured` and then by slug; a directory with no `manifest.json`, or one that does not parse, is skipped; only `manifest.json` and `labels/<kind>.json` are read, never a transcript, and nothing is written
+
+### Requirement: Case listing as JSON
+`agent-eval list --json` SHALL print the same rows as one array.
+
+#### Scenario: the JSON rows
+- WHEN `agent-eval list --json` runs
+- THEN it prints one array with `case`, `captured`, `sessions`, `verdict`, `score` and `judge` per case, `null` verdict, score and judge for an unlabelled case, and it reads no transcript
+
+### Requirement: Empty home listing
+`agent-eval list` SHALL print nothing and create nothing when there are no cases.
+
+#### Scenario: a missing home
+- WHEN `<home>` or its `cases/` directory does not exist
+- THEN it prints nothing (`[]` with `--json`), exits 0 and creates nothing

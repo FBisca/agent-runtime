@@ -15,6 +15,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 
 class AgentRuntimeTiersTests(unittest.TestCase):
+    @pytest.mark.spec("This repository declares check tiers")
     def test_S8_the_repo_config_declares_fast_affected_through_pytest_impacted_and_a_parallel_full(
         self,
     ):

@@ -89,8 +89,9 @@ class RoutedRunFixture(RunFixture):
 class StepRouteTests(RoutedRunFixture, unittest.TestCase):
     """A run whose steps are routed one by one: the reviewer, read where the driver settles it."""
 
+    @pytest.mark.spec("Step routes")
     def test_S8_each_step_names_its_own_backend_model_and_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the reviewer sits where its own step says."""
+        """— the reviewer sits where its own step says."""
         path = self.routes_file(
             self.config(
                 self.route("small", "pi", "minimax/MiniMax-M3.1-Flash", effort="max"),
@@ -104,13 +105,15 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
         self.settle("--routes-file", path)
         self.assertEqual(self.reviewer(), ("codex", "gpt-l", "xhigh"))
 
+    @pytest.mark.spec("Step routes")
     def test_S3_a_gate_without_a_step_route_keeps_todays_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — no step route, no new effort: the reviewer high."""
+        """— no step route, no new effort: the reviewer high."""
         self.settle()
         self.assertEqual(self.reviewer()[2], "high")
 
+    @pytest.mark.spec("Step routes")
     def test_S3_a_step_route_names_the_gates_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — the gates' effort comes from their own step, not from a constant."""
+        """— the gates' effort comes from their own step, not from a constant."""
         path = self.routes_file(
             self.config(
                 *self.classes(),
@@ -122,13 +125,15 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
         self.settle("--routes-file", path)
         self.assertEqual(self.reviewer()[2], "xhigh")
 
+    @pytest.mark.spec("Step routes")
     def test_S9_the_brain_names_one_backend_for_every_gate_step(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — `--brain-cli` still answers for the reviewer."""
+        """— `--brain-cli` still answers for the reviewer."""
         self.settle("--brain-cli", "codex", "--routes-file", self.routes_file(self.brain_config()))
         self.assertEqual(self.reviewer()[:2], ("codex", "gpt-m"))
 
+    @pytest.mark.spec("Step routes")
     def test_S9_a_step_route_overrides_the_brain(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — a step route wins over the brain."""
+        """— a step route wins over the brain."""
         self.settle(
             "--brain-cli",
             "codex",
@@ -139,10 +144,11 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
         )
         self.assertEqual(self.reviewer(), ("pi", "minimax/MiniMax-M3.1-Flash", "max"))
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S10_a_step_route_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned(
         self,
     ):
-        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — the run stops with an explanation, and nothing is spawned."""
+        """— the run stops with an explanation, and nothing is spawned."""
         path = self.routes_file(
             self.config(*self.classes(), steps=[self.step("janitor", "codex", "gpt-l")])
         )
@@ -150,8 +156,9 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
         self.assertIn("janitor", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S10_a_step_route_naming_the_removed_gaps_step_is_refused_naming_the_way_out(self):
-        """orchestrator-engine/R4: the gaps reviewer was removed, so a route for it fails the run, naming the fix."""
+        """the gaps reviewer was removed, so a route for it fails the run, naming the fix."""
         path = self.routes_file(
             self.config(*self.classes(), steps=[self.step("gaps", "codex", "gpt-l")])
         )
@@ -159,10 +166,11 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
         self.assertIn("the gaps reviewer was removed; remove the `gaps` step", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S10_a_step_route_naming_an_unknown_backend_fails_the_run_before_any_worker_is_spawned(
         self,
     ):
-        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — a backend the driver cannot run is an error, not a fall back."""
+        """— a backend the driver cannot run is an error, not a fall back."""
         path = self.routes_file(
             self.config(*self.classes(), steps=[self.step("reviewer", "gemini", "gpt-l")])
         )
@@ -170,10 +178,11 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
         self.assertIn("gemini", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Route refusals name the value")
     def test_S10_a_step_override_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned(
         self,
     ):
-        """orchestrator-engine/R4: orchestrator-routing-effort-role/S10 — the same for the command line."""
+        """— the same for the command line."""
         result = self.settle("--step", "janitor=codex/gpt-l", expect=2)
         self.assertIn("janitor", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
@@ -189,14 +198,16 @@ class StepRouteBoundaryTests(RoutedRunFixture, ArchiveFixture, unittest.TestCase
     def spawns(self):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
 
+    @pytest.mark.spec("Step routes")
     def test_S3_a_gate_without_a_step_route_spawns_on_todays_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — the spawns carry the default: the reviewer high."""
+        """— the spawns carry the default: the reviewer high."""
         self.run_driver()
         spawns = self.spawns()
         self.assertEqual(spawns[REVIEW]["effort"], "high")
 
+    @pytest.mark.spec("Step routes")
     def test_S8_a_step_route_for_the_implementer_overrides_the_class_route(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the implementer's own step route answers, whatever the class says."""
+        """— the implementer's own step route answers, whatever the class says."""
         path = self.routes_file(
             self.config(
                 *self.classes(),

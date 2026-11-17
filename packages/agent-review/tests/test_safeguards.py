@@ -309,6 +309,7 @@ def test_a_rename_keeps_both_of_its_paths():
     assert (change.files[0].old_path, change.files[0].path) == ("old.py", "new.py")
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S1_a_computed_delete_with_no_confinement_escalates_as_target_outside_root():
     reasons = safeguards.decide(read(unified(BEFORE, grown(UNGUARDED))))
     assert [reason.rule for reason in reasons] == [safeguards.TARGET_OUTSIDE_ROOT]
@@ -317,6 +318,7 @@ def test_S1_a_computed_delete_with_no_confinement_escalates_as_target_outside_ro
     assert "rmtree" in reasons[0].pattern, "the reason names the call a person must read"
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S1_the_defect_as_it_shipped_escalates_once_for_its_path():
     reasons = safeguards.decide(read(unified(BEFORE, grown(THE_DEFECT_AS_IT_SHIPPED))))
     assert [reason.rule for reason in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
@@ -326,6 +328,7 @@ def test_S1_the_defect_as_it_shipped_escalates_once_for_its_path():
     assert reasons[0].path == SOURCE
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S1_the_defect_escalates_once_for_its_path_in_a_change_that_also_has_a_test_helper():
     """The defect as it shipped, beside the test helper that recreates the file it unlinks."""
     change = read(
@@ -343,16 +346,19 @@ def test_S1_the_defect_escalates_once_for_its_path_in_a_change_that_also_has_a_t
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_computed_delete_confined_in_the_same_change_is_not_escalated():
     assert reasons_for(GUARDED) == [], "the target is confined before it is deleted"
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_confinement_factored_into_a_guard_the_change_adds_is_not_escalated():
     assert reasons_for(GUARD_ADDED_BESIDE_THE_CALL) == [], (
         "the target is handed to a guard the change adds, which confines it"
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_target_handed_to_a_guard_binds_to_its_parameter_by_position():
     assert reasons_for(GUARD_HANDED_AN_ATTRIBUTE) == [], (
         "the caller hands `self.layout.folder` where the guard's parameter is named `folder`: the argument binds "
@@ -360,24 +366,28 @@ def test_S2_a_target_handed_to_a_guard_binds_to_its_parameter_by_position():
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_local_handed_to_a_guard_binds_to_its_parameter_by_position():
     assert reasons_for(GUARD_WITH_A_LOCAL_HANDED) == [], (
         "the guard's parameter is named `target` and the caller hands it `folder`: the binding is positional"
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_guard_that_confines_with_commonpath_confines_the_target_it_is_handed():
     assert reasons_for(GUARD_THAT_CONFINES_WITH_COMMONPATH) == [], (
         "`commonpath([folder, root])` tests each path it joins, so the guard confines the target handed to it"
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_guard_that_tests_an_attribute_confines_that_attribute_in_its_caller():
     assert reasons_for(GUARD_THAT_TESTS_AN_ATTRIBUTE) == [], (
         "`self.layout.folder` is the same target in the guard and in the caller that calls it"
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_a_guards_confinement_of_an_attribute_does_not_answer_for_a_callers_local():
     reasons = reasons_for(GUARD_THAT_TESTS_AN_ATTRIBUTE_BESIDE_A_LOCAL)
     assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
@@ -386,6 +396,7 @@ def test_a_guards_confinement_of_an_attribute_does_not_answer_for_a_callers_loca
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S1_a_delete_of_the_root_a_target_is_confined_into_is_not_confined_by_it():
     reasons = reasons_for(DELETE_OF_THE_ROOT)
     assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
@@ -394,6 +405,7 @@ def test_S1_a_delete_of_the_root_a_target_is_confined_into_is_not_confined_by_it
     assert "self.root" in reasons[0][2], "the reason names the delete of the root"
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_a_commonpath_test_in_an_added_function_is_decided_rather_than_raising():
     assert (
         reasons_for(
@@ -408,12 +420,14 @@ def test_a_commonpath_test_in_an_added_function_is_decided_rather_than_raising()
     ), "a path join is not a delete: the rule decides the change instead of dying on it"
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_containment_test_on_the_resolved_target_is_not_escalated():
     assert reasons_for(RESOLVED_CONTAINMENT) == [], (
         "`target.resolve().is_relative_to(root)` is the containment test SG-D5 names"
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S1_confinement_over_another_relationship_leaves_the_delete_unconfined():
     reasons = reasons_for(CONFINEMENT_OVER_ANOTHER_RELATIONSHIP)
     assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
@@ -421,6 +435,7 @@ def test_S1_confinement_over_another_relationship_leaves_the_delete_unconfined()
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S1_one_confinement_test_confines_only_the_target_it_names():
     reasons = reasons_for(ONE_CONFINEMENT_TWO_TARGETS)
     assert len(reasons) == 1, "one of the two deletes is confined and the other is not"
@@ -430,6 +445,7 @@ def test_S1_one_confinement_test_confines_only_the_target_it_names():
     )
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S1_a_guard_confines_only_the_target_it_is_handed():
     reasons = reasons_for(GUARD_THAT_CONFINES_ANOTHER_TARGET)
     assert [rule for rule, _, _ in reasons] == [safeguards.TARGET_OUTSIDE_ROOT], (
@@ -475,6 +491,7 @@ def test_one_deletion_is_one_call_however_the_os_module_spells_it():
     assert len(safeguards.destructive_calls("os.rmdir(self.directory)")) == 1
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_change_with_no_destructive_call_is_not_escalated():
     assert (
         reasons_for(

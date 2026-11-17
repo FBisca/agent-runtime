@@ -162,6 +162,7 @@ def review(tmp_path, monkeypatch):
     return where
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_declared_member_that_imports_outside_the_standard_library_escalates_without_a_request(
     review,
 ):
@@ -182,6 +183,7 @@ def test_S6_a_declared_member_that_imports_outside_the_standard_library_escalate
     ]
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_the_summary_names_the_member_the_module_and_the_way_out(review, capsys):
     assert review.screen() == 0
     summary = capsys.readouterr().out
@@ -191,6 +193,7 @@ def test_S6_the_summary_names_the_member_the_module_and_the_way_out(review, caps
     assert "standard library" in summary, "the summary says what a person should do about it"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_a_commented_import_line_escalates_without_a_request(tmp_path, monkeypatch):
     for variable in ("TYPESAFE_API_KEY", "AGENT_REVIEW_API_KEY", "AGENT_REVIEW_BASE_URL"):
         monkeypatch.delenv(variable, raising=False)
@@ -206,6 +209,7 @@ def test_S6_a_commented_import_line_escalates_without_a_request(tmp_path, monkey
     assert report["escalation"]["reasons"][0]["path"] == "plugin/tool.py"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S6_each_package_the_member_adds_is_its_own_reason_in_the_report(tmp_path, monkeypatch):
     for variable in ("TYPESAFE_API_KEY", "AGENT_REVIEW_API_KEY", "AGENT_REVIEW_BASE_URL"):
         monkeypatch.delenv(variable, raising=False)
@@ -223,6 +227,7 @@ def test_S6_each_package_the_member_adds_is_its_own_reason_in_the_report(tmp_pat
     assert {reason["rule"] for reason in reasons} == {"stdlib-only"}
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_a_declared_member_that_adds_a_standard_library_import_is_screened(
     tmp_path, monkeypatch
 ):
@@ -238,6 +243,7 @@ def test_S7_a_declared_member_that_adds_a_standard_library_import_is_screened(
     assert report["judgments"], "the provider's answer is in the report"
 
 
+@pytest.mark.spec("Standard-library-only safeguard")
 def test_S7_an_undeclared_member_that_adds_a_third_party_import_is_screened(tmp_path, monkeypatch):
     for variable in ("TYPESAFE_API_KEY", "AGENT_REVIEW_API_KEY", "AGENT_REVIEW_BASE_URL"):
         monkeypatch.delenv(variable, raising=False)

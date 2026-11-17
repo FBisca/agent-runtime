@@ -129,7 +129,7 @@ def write_store(tree: RollbackTree, env):
 
 
 class RollbackTests(unittest.TestCase):
-    """R203: the tree before the move still works, and the store survives the round trip."""
+    """The tree before the move still works, and the store survives the round trip."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -175,8 +175,8 @@ class RollbackTests(unittest.TestCase):
         self._ensure_the_history_is_there()
         return materialise(self.commit, self.directory / "tree")
 
+    @pytest.mark.spec("Rollback keeps the store")
     def test_S8_the_legacy_tree_still_answers_through_its_shims(self):
-        """python-workspace-contracts/R203"""
         tree = self._tree()
 
         # The CLI shim: the shim in `bin/` resolves itself and execs the flat module in `server/`.
@@ -204,8 +204,8 @@ class RollbackTests(unittest.TestCase):
         tools = sorted(tool["name"] for tool in replies[1]["result"]["tools"])
         self.assertEqual(sorted(baseline()["mcp_tools"]), tools)
 
+    @pytest.mark.spec("Rollback keeps the store")
     def test_S8_a_store_written_by_the_new_tree_opens_in_the_legacy_tree_without_a_migration(self):
-        """python-workspace-contracts/R203"""
         tree = self._tree()
 
         sys.path.insert(0, str(RUNTIME_SRC))
@@ -226,8 +226,8 @@ class RollbackTests(unittest.TestCase):
         self.assertEqual([["w1", "rollback-worker", "addr1"]], opened["workers"])
         self.assertEqual([["t1", "lead"]], opened["teams"])
 
+    @pytest.mark.spec("Rollback keeps the store")
     def test_S8_a_store_written_by_the_legacy_tree_opens_in_the_new_tree_without_a_migration(self):
-        """python-workspace-contracts/R203"""
         tree = self._tree()
         write_store(tree, self.store_env)
 

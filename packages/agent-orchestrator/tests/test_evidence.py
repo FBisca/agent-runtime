@@ -60,7 +60,7 @@ def row(kind, **fields):
 class EvidenceTests(unittest.TestCase):
     @pytest.mark.unit
     def test_S2_token_figures_are_labelled_input_output_and_cached(self):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         evidence = load_evidence()
         counted = evidence.tokens(
             {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 5}
@@ -76,7 +76,7 @@ class EvidenceTests(unittest.TestCase):
 
     @pytest.mark.unit
     def test_S2_an_unmeasured_figure_is_null_and_never_zero(self):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         evidence = load_evidence()
         self.assertEqual(
             evidence.tokens(None),
@@ -91,7 +91,7 @@ class EvidenceTests(unittest.TestCase):
     def test_S2_an_attempt_record_counts_retries_loops_and_interventions_and_leaves_unknowns_null(
         self,
     ):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         evidence = load_evidence()
         data = {"version": 1, "tasks": {"t1": task()}}
         rows = [
@@ -139,7 +139,7 @@ class EvidenceTests(unittest.TestCase):
 
     @pytest.mark.unit
     def test_S2_an_attempt_that_ended_without_a_verified_report_is_not_verified(self):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         evidence = load_evidence()
         data = {"version": 1, "tasks": {"t1": task(status="RELEASED", report=None)}}
         record = evidence.attempts(data, [], "demo")[0]
@@ -148,9 +148,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(record["finished_at"], "2026-11-07T00:01:30+00:00")
         self.assertEqual(record["elapsed_seconds"], 90.0)
 
+    @pytest.mark.spec("Usage rolls up")
     @pytest.mark.unit
     def test_S11_a_record_sums_usage_and_nulls_what_any_assignment_lacks(self):
-        """worker-usage/S11"""
         evidence = load_evidence()
         full = {
             "input_tokens": 1,
@@ -187,9 +187,9 @@ class EvidenceTests(unittest.TestCase):
         del rows[1]
         self.assertIsNone(evidence.attempts(data, rows, "demo")[0]["tokens"]["input"])
 
+    @pytest.mark.spec("Usage rolls up")
     @pytest.mark.unit
     def test_S13_metrics_and_attempts_sum_what_both_report_and_null_what_one_lacks(self):
-        """worker-usage/S13"""
         from agent_orchestrator import events
 
         evidence = load_evidence()
@@ -247,7 +247,7 @@ class EvidenceTests(unittest.TestCase):
 
     @pytest.mark.unit
     def test_S2_the_evidence_manifest_names_the_fields_the_records_carry(self):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         evidence = load_evidence()
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema_version"], evidence.SCHEMA_VERSION)
@@ -276,7 +276,7 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
 
     @pytest.mark.integration
     def test_S2_a_finished_run_writes_one_evidence_record_per_attempt(self):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         worker = self.worker_done(tests=True)
         worker["assignments"][0]["usage"] = {"input_tokens": 100, "output_tokens": 20}
         reviewer = self.reviewer_done()
@@ -304,7 +304,7 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
     def test_S2_a_run_that_needed_a_person_records_the_intervention_and_no_verified_completion(
         self,
     ):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         blocked = report_wait("demo-t1", "blocked", "cannot reach the database")
         self.waits([blocked, self.decide_step("t1", "skip")])
         self.run_driver()
@@ -321,7 +321,7 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
 
     @pytest.mark.integration
     def test_S2_the_evidence_can_be_rebuilt_after_the_run_died(self):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         worker = self.worker_done(tests=True)
         self.waits([worker, self.reviewer_done()])
         self.run_driver()
@@ -335,7 +335,7 @@ class EvidenceRunTests(GateFixture, unittest.TestCase):
 
     @pytest.mark.integration
     def test_S2_the_old_metrics_json_consumer_still_reads_a_run_written_with_evidence(self):
-        """orchestrator-engine/R2: P3.T3/S2"""
+        """P3.T3/S2"""
         worker = self.worker_done(tests=True)
         worker["assignments"][0]["usage"] = {"input_tokens": 100, "output_tokens": 20}
         reviewer = self.reviewer_done()

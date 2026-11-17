@@ -82,32 +82,33 @@ class LaunchTests(RunFixture, unittest.TestCase):
         return result
 
     def test_S49_starts_under_launcher_terminal(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S49"""
+        """orchestrate-lean-loop/S49"""
         self.launch(parent="t175")
         argv = [c for c in self.hc_calls() if c[0] == "run"][0]
         self.assertEqual(argv[argv.index("--parent") + 1], "t175")
 
+    @pytest.mark.spec("Lead wakes")
     def test_S7_the_run_is_told_the_launching_terminal_to_alert(self):
-        """orchestrator-engine/R14: orchestrator-lead-alerts/S7"""
+        """orchestrator-lead-alerts/S7"""
         self.launch(parent="t175")
         argv = [c for c in self.hc_calls() if c[0] == "run"][0]
         tail = argv[argv.index("--") + 5 :]
         self.assertEqual(tail[tail.index("--notify-terminal") + 1], "t175")
 
+    @pytest.mark.spec("Lead wakes")
     def test_S7_a_run_launched_outside_a_terminal_alerts_no_one(self):
-        """orchestrator-engine/R14: orchestrator-lead-alerts/S7"""
+        """orchestrator-lead-alerts/S7"""
         self.launch()
         argv = [c for c in self.hc_calls() if c[0] == "run"][0]
         self.assertNotIn("--notify-terminal", argv)
 
     def test_S50_starts_top_level_outside_terminal(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S50"""
+        """orchestrate-lean-loop/S50"""
         self.launch()
         argv = [c for c in self.hc_calls() if c[0] == "run"][0]
         self.assertNotIn("--parent", argv)
 
     def test_bad_parent_falls_back_to_top_level(self):
-        """orchestrator-engine/R2"""
         out = json.loads(self.launch(parent="stale", bad_parent=True).stdout)
         starts = [c for c in self.hc_calls() if c[0] == "run"]
         self.assertEqual(len(starts), 2)
@@ -117,8 +118,9 @@ class LaunchTests(RunFixture, unittest.TestCase):
         self.assertFalse(out["nested"])
         self.assertIn("unknown parent", out["nesting_error"])
 
+    @pytest.mark.spec("Launch runs the member's CLI")
     def test_S17_starts_run_in_a_named_pane(self):
-        """orchestrator-engine/R6: code-driven-orchestrator/S17"""
+        """code-driven-orchestrator/S17"""
         result = self.launch()
         self.assertEqual(json.loads(result.stdout)["pane"], "orchestrate-demo")
         starts = [c for c in self.hc_calls() if c[0] == "run"]
@@ -133,14 +135,14 @@ class LaunchTests(RunFixture, unittest.TestCase):
         self.assertEqual(tail[4], str(self.plan))
 
     def test_S17_invalid_plan_exits_2_and_starts_nothing(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S17"""
+        """code-driven-orchestrator/S17"""
         self.plan.write_text(yaml.safe_dump(plan_data(), sort_keys=False), encoding="utf-8")
         result = self.launch(expect=2)
         self.assertIn("plan approve", result.stderr)
         self.assertEqual([c for c in self.hc_calls() if c[0] == "run"], [])
 
     def test_S17_live_driver_is_not_started_twice(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S17"""
+        """code-driven-orchestrator/S17"""
         self.live(["orchestrate-demo"])
         result = self.launch()
         out = json.loads(result.stdout)
@@ -245,7 +247,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
         self.assertIn("t1 has no open request", result.stderr + result.stdout)
 
     def test_S17_exited_terminal_of_the_same_name_does_not_block(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S17"""
+        """code-driven-orchestrator/S17"""
         self.live(["orchestrate-demo"], state="exited")
         out = json.loads(self.launch().stdout)
         self.assertTrue(out["started"])

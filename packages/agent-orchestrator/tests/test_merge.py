@@ -40,7 +40,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         return step
 
     def test_S8_a_passing_review_polls_the_reports_pr_checks(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S8"""
+        """code-driven-orchestrator/S8"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertTrue(self.checks_log())
@@ -48,7 +48,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.calls("resume"), [])
 
     def test_S8_a_failing_check_sends_the_failed_log_to_the_worker_as_a_fix_round(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S8"""
+        """code-driven-orchestrator/S8"""
         self.checks([("fail", "unit tests"), "green"])
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
@@ -72,7 +72,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
     def test_S9_the_ticket_reads_awaiting_merge_until_gh_reports_it_merged(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S9"""
+        """code-driven-orchestrator/S9"""
         self.prs(["OPEN", "OPEN", "MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
@@ -89,7 +89,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertTrue(self.checks_log())
 
     def test_S9_an_unmerged_pr_backs_off_instead_of_spinning_on_gh(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S9"""
+        """code-driven-orchestrator/S9"""
         self.prs(["OPEN"] * 6 + ["MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         spec = load_script()
@@ -116,7 +116,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["status"], "COMPLETE")
 
     def test_S9_a_merged_ticket_makes_its_dependents_dispatchable(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S9"""
+        """code-driven-orchestrator/S9"""
         self.set_plan(("T1", "T2"))
         self.prs(["OPEN", "MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
@@ -135,8 +135,8 @@ class MergeTests(GateFixture, unittest.TestCase):
             merged,
         ]
 
+    @pytest.mark.spec("A merged unit completes")
     def test_S6_a_merged_pr_completes_a_unit_whose_report_fails_the_rules(self):
-        """orchestrator-engine/R31"""
         self.set_plan(("T1", "T2"))
         failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
         self.waits(self.refused_then_merged(failed))
@@ -170,8 +170,8 @@ class MergeTests(GateFixture, unittest.TestCase):
 
         self.gh_process = process
 
+    @pytest.mark.spec("A merged unit completes")
     def test_S8_a_merged_pr_completes_when_the_checkout_is_gone(self):
-        """orchestrator-engine/R34"""
         gone = str(self.worktree)
         self.prs(["OPEN", "MERGED"])
         self.on_merged_view(lambda: shutil.rmtree(gone))
@@ -186,8 +186,8 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertTrue(logged, "no log line names the missing checkout")
         self.assertNotEqual(task["gate"], "awaiting-merge")
 
+    @pytest.mark.spec("A merged unit completes")
     def test_S8_a_merged_pr_that_fails_the_rules_completes_when_the_checkout_is_gone(self):
-        """orchestrator-engine/R34"""
         gone = str(self.worktree)
         failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
         self.on_merged_view(lambda: shutil.rmtree(gone))
@@ -200,9 +200,8 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertIn("- [merged-unverified] t1r1: ", deferred)
         self.assertFalse((self.run_dir / "t1r1" / "request.json").exists())
 
+    @pytest.mark.spec("A merged unit completes")
     def test_S9_cleanup_keeps_a_worktree_a_sibling_under_another_worker_still_uses(self):
-        """orchestrator-engine/R36"""
-
         def edit_ledger(status):
             path = self.state_dir / "demo.json"
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -236,7 +235,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertIn("kept", self.task()["cleanup"])
 
     def test_S10_a_clean_pushed_checkout_is_stopped_and_removed_but_the_branch_stays(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S10"""
+        """code-driven-orchestrator/S10"""
         self.waits([self.worker_committed(), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(
@@ -248,7 +247,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S10_a_dirty_checkout_is_left_in_place_with_the_reason_recorded(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S10"""
+        """code-driven-orchestrator/S10"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(
@@ -258,7 +257,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertIn("uncommitted", self.task()["cleanup"])
 
     def test_S10_unpushed_commits_are_left_in_place_with_the_reason_recorded(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S10"""
+        """code-driven-orchestrator/S10"""
         self.waits([self.worker_committed(push=False), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(
@@ -268,7 +267,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertIn("neither pushed nor merged", self.task()["cleanup"])
 
     def test_D2_review_rounds_comes_from_the_drivers_gate_history_not_the_worker(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6"""
+        """code-driven-orchestrator/S6"""
         self.waits(
             [
                 self.worker_done(tests=True, report=self.report("t1", review_rounds=5)),
@@ -279,7 +278,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.task()["report"]["review_rounds"], 0)
 
     def test_D5_a_review_of_another_commit_is_a_contract_error(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S6a"""
+        """code-driven-orchestrator/S6a"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -293,7 +292,7 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
 
     def test_a_blocking_review_never_reaches_the_ci_gate(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S8"""
+        """code-driven-orchestrator/S8"""
         review = self.review(verdict="block", major=[MAJOR])
         self.waits([self.worker_done(tests=True), self.reviewer_done(review)])
         self.run_driver()

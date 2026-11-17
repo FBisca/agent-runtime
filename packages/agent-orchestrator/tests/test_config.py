@@ -67,6 +67,7 @@ class ConfigTests(unittest.TestCase):
             config.load(self.root)
         self.assertIn("plans", str(caught.exception))
 
+    @pytest.mark.spec("Check tiers are read from the config")
     def test_S1_checks_node_reads_each_optional_key(self):
         self.write(
             "checks:\n  fast: pytest -q\n  affected: scripts/affected.sh {base} {paths}\n"
@@ -77,6 +78,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(checks.affected, "scripts/affected.sh {base} {paths}")
         self.assertEqual(checks.full_run, "scripts/full.sh")
 
+    @pytest.mark.spec("Check tiers are read from the config")
     def test_S1_checks_node_is_absent_by_default_and_each_key_is_optional(self):
         self.assertIsNone(config.load(self.root).checks)
         self.write("checks: {}\n")
@@ -85,6 +87,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIsNone(checks.affected)
         self.assertIsNone(checks.full_run)
 
+    @pytest.mark.spec("Check tiers are read from the config")
     def test_S1_unknown_checks_key_is_refused_naming_its_dotted_path(self):
         for text, dotted in (
             ("checks:\n  slow: x\n", "checks.slow"),
@@ -96,6 +99,7 @@ class ConfigTests(unittest.TestCase):
             self.assertIn(dotted, str(caught.exception))
             self.assertIn("remove", str(caught.exception))
 
+    @pytest.mark.spec("Check tiers are read from the config")
     def test_S1_affected_placeholder_other_than_base_or_paths_is_refused(self):
         self.write("checks:\n  affected: run {paths} {ticket}\n")
         with self.assertRaises(config.ConfigError) as caught:
@@ -105,6 +109,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("{base}", str(caught.exception))
         self.assertIn("{paths}", str(caught.exception))
 
+    @pytest.mark.spec("Check tiers are read from the config")
     def test_S1_checks_values_of_the_wrong_type_are_refused_by_path(self):
         for text, dotted in (
             ("checks:\n  fast: [pytest]\n", "checks.fast"),

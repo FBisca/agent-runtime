@@ -47,10 +47,10 @@ def wheel_metadata(path, name="METADATA"):
 
 
 class WorkspaceTests(unittest.TestCase):
-    """R192, R193: the workspace resolves reproducibly."""
+    """The workspace resolves reproducibly."""
 
+    @pytest.mark.spec("Reproducible workspace lock")
     def test_S1_uv_lock_is_current_for_both_members(self):
-        """python-workspace-contracts/R193"""
         result = run(["uv", "lock", "--check"])
         self.assertEqual(result.returncode, 0, f"the lockfile is stale: {result.stderr}")
 
@@ -58,8 +58,8 @@ class WorkspaceTests(unittest.TestCase):
         for member in ("agent-runtime", "agent-orchestrator"):
             self.assertIn(f'name = "{member}"', lock)
 
+    @pytest.mark.spec("Reproducible workspace lock")
     def test_S1_uv_sync_frozen_installs_both_members(self):
-        """python-workspace-contracts/R192"""
         with tempfile.TemporaryDirectory() as tmp:
             environment = Path(tmp) / "env"
             result = run(
@@ -80,10 +80,10 @@ class WorkspaceTests(unittest.TestCase):
 
 
 class IsolationTests(unittest.TestCase):
-    """R194, R195: the runtime wheel stands alone."""
+    """The runtime wheel stands alone."""
 
+    @pytest.mark.spec("Member dependency isolation")
     def test_S5_runtime_wheel_works_without_orchestrator_dependencies(self):
-        """python-workspace-contracts/R194"""
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "wheels"
             out_dir.mkdir()
@@ -137,8 +137,8 @@ class IsolationTests(unittest.TestCase):
             self.assertEqual(replies[0]["result"]["serverInfo"]["name"], "agent-runtime")
             self.assertTrue(replies[1]["result"]["tools"], "the MCP server offers no tool")
 
+    @pytest.mark.spec("Member dependency isolation")
     def test_S5_member_manifests_declare_their_own_dependencies(self):
-        """python-workspace-contracts/R195"""
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "wheels"
             out_dir.mkdir()
@@ -152,10 +152,10 @@ class IsolationTests(unittest.TestCase):
 
 
 class ToolchainTests(unittest.TestCase):
-    """R196: CI runs the tests, the linters and the isolated install checks."""
+    """CI runs the tests, the linters and the isolated install checks."""
 
+    @pytest.mark.spec("Workspace CI gates")
     def test_S6_workflow_runs_the_toolchain_on_the_matrix(self):
-        """python-workspace-contracts/R196"""
         workflow = WORKFLOW.read_text(encoding="utf-8")
         for command in ("ruff check .", "ruff format --check .", "ty check"):
             self.assertIn(command, workflow)
@@ -171,10 +171,9 @@ class ToolchainTests(unittest.TestCase):
             re.search(r"--no-deps", workflow), "CI does not install the runtime wheel in isolation"
         )
 
+    @pytest.mark.spec("Workspace CI gates")
     def test_S6_the_format_and_type_gates_are_plain_commands_that_fail_on_their_own(self):
-        """python-workspace-contracts/R197
-
-        A gate that pipes its output through a count or ends in `|| true` can pass on a violation."""
+        """A gate that pipes its output through a count or ends in `|| true` can pass on a violation."""
         workflow = WORKFLOW.read_text(encoding="utf-8")
         for command in (
             "uv run ruff format --check .",

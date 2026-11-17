@@ -35,8 +35,8 @@ class NotStartedTests(GateFixture, unittest.TestCase):
     def unit_ticks(self):
         return [e for e in self.run_events("idle") if e.get("unit") == "t1"]
 
+    @pytest.mark.spec("Not-started attempts reach the Lead")
     def test_a_resumed_worker_that_never_started_is_named_on_the_tick_its_verdict_arrives(self):
-        """orchestrator-engine/R95"""
         spec = load_script()
         moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
         self.waits([self.worker_done(), *(self.resumed() for _ in range(3)), self.skipped()])
@@ -58,8 +58,8 @@ class NotStartedTests(GateFixture, unittest.TestCase):
         self.assertIn("fresh worker", request["reason"])
         self.assertEqual(len(self.wake_lines("decision")), 1, self.wake_lines())
 
+    @pytest.mark.spec("Not-started attempts reach the Lead")
     def test_a_resumed_worker_that_reports_is_not_woken(self):
-        """orchestrator-engine/R95"""
         spec = load_script()
         moments = itertools.count(0, 600)
         self.waits([self.worker_done(), self.worker_done("t1r1", tests=True)])

@@ -55,6 +55,7 @@ def usage(report):
     return report.as_dict()["usage"]
 
 
+@pytest.mark.spec("Screening cost")
 def test_S6_the_cost_is_the_declared_tables_rate_for_the_model_the_provider_served(tmp_path):
     # 1000 input tokens at 0.042 per million plus 20 output tokens at zero per million.
     written = usage(priced(tmp_path, {SERVED: (0.042, 0.0)}))
@@ -70,6 +71,7 @@ def test_S6_the_cost_is_the_declared_tables_rate_for_the_model_the_provider_serv
     assert written["cost_unknown"] is None
 
 
+@pytest.mark.spec("Screening cost")
 def test_S6_an_unlisted_served_model_is_unknown_never_zero(tmp_path):
     written = usage(priced(tmp_path, {SERVED: (0.042, 0.0)}, served="jev-9.9.9"))
 
@@ -78,6 +80,7 @@ def test_S6_an_unlisted_served_model_is_unknown_never_zero(tmp_path):
     assert "jev-9.9.9" in written["cost_unknown"], "the report says which model it could not price"
 
 
+@pytest.mark.spec("Screening cost")
 def test_S6_no_declared_table_leaves_the_cost_unknown_never_zero():
     written = usage(
         Report(
@@ -112,6 +115,7 @@ def test_S6_no_declared_table_leaves_the_cost_unknown_never_zero():
     ],
     ids=["negative-rate", "missing-output-rate", "models-not-a-mapping", "no-version"],
 )
+@pytest.mark.spec("Screening cost")
 def test_S6_a_table_a_rule_cannot_read_is_refused_by_its_field_path(tmp_path, document, field):
     path = tmp_path / "pricing.yaml"
     path.write_text(document, encoding="utf-8")

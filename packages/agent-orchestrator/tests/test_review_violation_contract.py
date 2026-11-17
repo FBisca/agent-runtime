@@ -28,6 +28,7 @@ def review(item, verdict="pass"):
     }
 
 
+@pytest.mark.spec("Review items assert violations as blocking")
 @pytest.mark.parametrize("kind", ["concern", "nit", "question", "deferred"])
 def test_S3_requirement_violation_requires_blocking_classification(kind):
     from agent_orchestrator import contracts
@@ -48,6 +49,7 @@ def test_S3_requirement_violation_requires_blocking_classification(kind):
             validate(review(item))
 
 
+@pytest.mark.spec("Review items assert violations as blocking")
 @pytest.mark.parametrize("violation", [{}, dict(VIOLATION, expected=""), "R2"])
 def test_S3_requirement_metadata_must_name_the_contract_and_observed_breach(violation):
     from agent_orchestrator import contracts
@@ -68,6 +70,7 @@ def test_S3_requirement_metadata_must_name_the_contract_and_observed_breach(viol
             validate(review(item, "block"))
 
 
+@pytest.mark.spec("Review items assert violations as blocking")
 def test_control_optional_concern_and_legacy_clean_reviews_remain_valid():
     from agent_orchestrator import contracts
 
@@ -85,6 +88,7 @@ def test_control_optional_concern_and_legacy_clean_reviews_remain_valid():
     )
 
 
+@pytest.mark.spec("Review items assert violations as blocking")
 def test_control_well_formed_requirement_blocker_is_accepted():
     from agent_orchestrator import contracts
 
@@ -102,6 +106,7 @@ def test_control_well_formed_requirement_blocker_is_accepted():
     contracts.validate_review(review(item, "block"))
 
 
+@pytest.mark.spec("Review items assert violations as blocking")
 @pytest.mark.parametrize("field", ["source", "id", "expected", "observed"])
 @pytest.mark.parametrize("bad", [None, "", " ", 7])
 def test_S3_every_violation_field_requires_nonempty_text(field, bad):

@@ -15,7 +15,6 @@ pytestmark = pytest.mark.unit
 
 class FakeGhTests(unittest.TestCase):
     def test_draft_poll_limit_and_per_pr_ready(self):
-        """orchestrator-engine/R2"""
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             plan = home / "plan.md"
@@ -43,7 +42,6 @@ class FakeGhTests(unittest.TestCase):
                 )
 
     def test_draft_views_ready_checks_and_a_failing_undo_are_scripted(self):
-        """orchestrator-engine/R2"""
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             plan = home / "plan.md"

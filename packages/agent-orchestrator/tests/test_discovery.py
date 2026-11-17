@@ -316,6 +316,7 @@ class SlugTests(DiscoveryFixture):
         self.assertEqual(code, 0, err)
         return {entry["path"].rsplit("/", 1)[1]: entry["slug"] for entry in json.loads(out)}
 
+    @pytest.mark.spec("Workbench plan slugs")
     def test_S1_a_yaml_plan_is_listed_under_its_slug_field_not_its_dated_file_name(self):
         data = contract()
         data["slug"] = "agent-workbench"
@@ -329,6 +330,7 @@ class SlugTests(DiscoveryFixture):
             },
         )
 
+    @pytest.mark.spec("Workbench plan slugs")
     def test_S1_a_yaml_plan_that_does_not_parse_keeps_its_file_derived_slug(self):
         self.track("docs/plans/2026-11-11-broken.plan.yaml", "slug: [unclosed\n")
         self.assertEqual(self.slugs(), {"2026-11-11-broken.plan.yaml": "2026-11-11-broken"})

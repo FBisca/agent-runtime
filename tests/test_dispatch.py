@@ -99,6 +99,7 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(result["structuredContent"], json.loads(text))
         return result["structuredContent"]
 
+    @pytest.mark.spec("Terminal ownership")
     def test_S8_a_spawn_binds_to_the_leads_own_team_when_the_newer_row_is_dead_and_empty(self):
         """The binding and the authorization agree on who owns the terminal: a session that left nothing
         behind never takes the terminal from the lead that still works."""
@@ -116,6 +117,7 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(assignment["team_id"], team)
         self.assertIsNotNone(store.worker_address(team, "w1"))
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S10_seeded_reports_reach_the_lead_as_a_worker_session_would_publish_them(self):
         """A test about how the lead reads many reports seeds them through the store: no worker session starts."""
         lead = self.lead()
@@ -143,8 +145,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         )
         self.assertEqual(self.runs("send"), [], "a report went through hc send")
 
+    @pytest.mark.spec("Structured report delivery")
     def test_structured_reports_from_both_clis_without_hc_send(self):
-        """agent-runtime/R34"""
         for cli in ("claude", "codex"):
             # Each CLI's lead runs in its own terminal: a terminal belongs to one owning session.
             socket = "/hc/sock-%s" % cli
@@ -161,8 +163,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
             self.assertEqual(batch["reason"], "completed")
         self.assertEqual(self.runs("send"), [])
 
+    @pytest.mark.spec("Structured report delivery")
     def test_restart_keeps_reports_and_receipts_private(self):
-        """agent-runtime/R35"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -179,8 +181,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
 
+    @pytest.mark.spec("Structured report delivery")
     def test_fast_report_binds_pending_assignment_without_resetting_completion(self):
-        """agent-runtime/R34"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         identity = store.register(team, "w1")
@@ -200,8 +202,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         store.bind(identity["assignment_id"], "t9", "test")
         self.assertEqual(store.read(team, "t0", "all")["reason"], "completed")
 
+    @pytest.mark.spec("Structured report delivery")
     def test_failure_after_fast_complete_preserves_completion(self):
-        """agent-runtime/R34"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         identity = store.register(team, "w1")
@@ -213,8 +215,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(batch["reason"], "completed")
         self.assertEqual(batch["unfinished"], [])
 
+    @pytest.mark.spec("Dispatch activation")
     def test_explicit_opt_in_uses_structured_path_and_validates_report(self):
-        """agent-runtime/R58"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -232,8 +234,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.runs("wait"), [])
 
+    @pytest.mark.spec("Stale reports")
     def test_failed_launch_preserves_previous_assignment(self):
-        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         old = store.register(team, "w1")
@@ -242,8 +244,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         store.fail(failed["assignment_id"])
         self.assertEqual(store.read(team, "t0", "all")["unfinished"], [old["assignment_id"]])
 
+    @pytest.mark.spec("Stale reports")
     def test_stale_pending_cannot_replace_newer_registration_or_binding(self):
-        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         for bound in (False, True):
@@ -280,8 +282,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
                 )
                 self.assertEqual([m["text"] for m in batch["messages"]], ["current"])
 
+    @pytest.mark.spec("Stale reports")
     def test_stale_pending_cannot_steal_address_from_new_team_generation(self):
-        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         old_team = store.team("test", "t0", "old-lead")
         old = store.register(old_team, "old-name")
@@ -316,8 +318,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(store.read(old_team, "t0", "all")["messages"], [])
         self.assertEqual(store.read(new_team, "t0", "all")["reason"], "completed")
 
+    @pytest.mark.spec("Receipt acknowledgment")
     def test_replay_and_repeated_ack_are_idempotent(self):
-        """agent-runtime/R36"""
         lead = self.lead()
         assignment = self.spawn(lead)
         self.publish(self.worker(), assignment)
@@ -332,8 +334,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         )
         self.assertTrue(result["isError"])
 
+    @pytest.mark.spec("Structured report delivery")
     def test_publication_deduplicates_and_conflicts(self):
-        """agent-runtime/R37"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -345,8 +347,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertIn("conflict", text)
         self.assertEqual(len(self.read(lead)["messages"]), 1)
 
+    @pytest.mark.spec("Stale reports")
     def test_old_assignment_and_reused_address_are_isolated(self):
-        """agent-runtime/R46"""
         lead = self.lead()
         old = self.spawn(lead)
         current = self.spawn(lead)
@@ -362,8 +364,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertTrue(result["isError"])
         self.assertEqual(self.read(foreign)["messages"], [])
 
+    @pytest.mark.spec("Bounded results")
     def test_bounded_batches_and_large_payload_are_lossless(self):
-        """agent-runtime/R53"""
         lead = self.lead()
         assignment = self.spawn(lead)
         for i in range(35):
@@ -391,10 +393,9 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(len(last["messages"]), 1)
         self.assertFalse(last["more"])
 
+    @pytest.mark.spec("Bounded results")
     def test_exact_compact_array_boundary_and_one_byte_overflow_are_lossless(self):
-        """S1/S2: new reports behind a full replay page return without losing replay.
-        agent-runtime/R59
-        agent-runtime-dispatch/S26"""
+        """S1/S2: new reports behind a full replay page return without losing replay."""
         lead = self.lead()
         assignment = self.spawn(lead)
 
@@ -423,8 +424,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
                 self.assertFalse(continuation["more"])
                 self.assertEqual(self.read(lead, receipt=continuation["receipt"])["messages"], [])
 
+    @pytest.mark.spec("Live scope binding")
     def test_worker_binds_and_reports_with_its_own_hc_scope_token(self):
-        """agent-runtime/R62"""
         lead = self.lead()
         assignment = self.spawn(lead)
         worker = self.worker()
@@ -451,8 +452,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         result, _ = self.publish(other, assignment, message_id="foreign")
         self.assertTrue(result["isError"])
 
+    @pytest.mark.spec("Wait attention and failure")
     def test_worker_turn_ended_without_final_report_returns_attention(self):
-        """agent-runtime/R63"""
         lead = self.start(
             {
                 "get:w1": {"out": raw("w1", "t0", "working")},
@@ -488,9 +489,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.publish(self.worker(), assignment)
         self.assertEqual(self.read(lead)["reason"], "completed")
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_unsent_spawn_is_removed_and_can_be_spawned_again(self):
-        """agent-runtime/R72
-        agent-runtime/R64"""
         replies = {
             "run": {"out": json.dumps({"first_message": {"sent": False}})},
             "get:w1": {"out": raw("w1", "t0")},
@@ -517,14 +517,14 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertFalse(result["isError"], text)
         self.assertEqual([a["name"] for a in self.read(lead)["assignments"]], ["w1"])
 
+    @pytest.mark.spec("Stale reports")
     def test_old_shape_assignment_insert_still_works_after_init(self):
-        """agent-runtime/R46"""
         store = Store({"HOME": str(self.dir / "home")})
         with store.transaction() as db:
             db.execute("INSERT INTO assignments VALUES (?,?,?,'pending',0)", ("a", "t", "w"))
 
+    @pytest.mark.spec("Stopped workers")
     def test_wait_all_excludes_stopped_and_acknowledged_assignments(self):
-        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         stopped = store.register(team, "stopped")
@@ -554,8 +554,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         self.assertEqual(store.snapshot(team, "t0", "any"), [])
         self.assertEqual(store.read(team, "t0", "all", assignment_ids=[])["reason"], "empty")
 
+    @pytest.mark.spec("Stopped workers")
     def test_address_reuse_surfaces_the_replaced_assignment_once(self):
-        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         a, b = store.register(team, "a"), store.register(team, "b")
@@ -580,8 +580,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
             [b["assignment_id"]],
         )
 
+    @pytest.mark.spec("Stopped workers")
     def test_unacknowledged_report_of_a_superseded_assignment_stays_a_member(self):
-        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         old = store.register(team, "c")
@@ -600,8 +600,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
             [new["assignment_id"]],
         )
 
+    @pytest.mark.spec("Stopped workers")
     def test_runtime_failure_and_acknowledged_attention_stay_members(self):
-        """agent-runtime/R65"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("test", "t0", "lead")
         working, blocked = store.register(team, "w"), store.register(team, "b")
@@ -615,16 +615,16 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
         names = {m["name"] for m in store.snapshot(team, "t0", "all", batch["receipt"])}
         self.assertEqual(names, {"w", "b"})
 
+    @pytest.mark.spec("Stopped workers")
     def test_messages_without_members_are_not_empty(self):
-        """agent-runtime/R65"""
         from agent_runtime import dispatch_wait
 
         batch = {"assignments": [], "messages": [{"message_id": "m"}], "unfinished": []}
         self.assertEqual(dispatch_wait.reason(batch, "all", {}), "messages")
         self.assertEqual(dispatch_wait.reason(dict(batch, messages=[]), "all", {}), "empty")
 
+    @pytest.mark.spec("Stopped workers")
     def test_acknowledged_completion_leaves_the_next_wait_empty(self):
-        """agent-runtime/R65"""
         lead = self.lead()
         assignment = self.spawn(lead)
         self.publish(self.worker(), assignment)
@@ -635,8 +635,8 @@ class DispatchTests(ToolCase):  # noqa: PLR0904
             (later["reason"], later["assignments"], later["unfinished"]), ("empty", [], [])
         )
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_failed_spawn_deactivates_worker_and_rejects_message_and_resume(self):
-        """agent-runtime/R64"""
         lead = self.start(
             {
                 "run": {"rc": 1, "err": "bad name shaped like an id"},

@@ -24,7 +24,7 @@ class ReopenTests(DeciderFixture, unittest.TestCase):
         return [c["args"]["name"] for c in self.calls("stop")]
 
     def test_S4_a_paused_ticket_set_to_todo_gets_a_fresh_attempt_of_the_same_unit(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S4"""
+        """code-driven-orchestrator/S4"""
         self.pause()
         self.set_status("TO-DO")
         self.waits([])
@@ -38,7 +38,6 @@ class ReopenTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.plan_status(), "IN PROGRESS")
 
     def test_S5_a_refused_reopen_is_asked_about_and_dispatched_again_after_the_lead_s_todo(self):
-        """orchestrator-engine/R29"""
         self.pause()
         self.set_status("TO-DO")
         self.refuse(["demo-t1"])
@@ -56,7 +55,7 @@ class ReopenTests(DeciderFixture, unittest.TestCase):
         self.assertNotIn("t1p2", tasks)
 
     def test_S4_a_paused_ticket_set_to_complete_unblocks_its_dependent(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S4"""
+        """code-driven-orchestrator/S4"""
         self.pause(rows=("T1", "T2"))
         self.set_status("COMPLETE 2026-11-07")
         self.waits([])
@@ -66,7 +65,7 @@ class ReopenTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.plan_status("T1"), "COMPLETE 2026-11-07")
 
     def test_S4_any_other_edit_leaves_the_ticket_paused(self):
-        """orchestrator-engine/R2: code-driven-orchestrator/S4"""
+        """code-driven-orchestrator/S4"""
         self.pause()
         self.set_status("IN PROGRESS · thinking")
         self.waits([])

@@ -21,8 +21,9 @@ class ReviewPayloadPathAcceptance(GateFixture, unittest.TestCase):
     def reviewer_resumes(self):
         return [c for c in self.calls("resume") if c["args"].get("name") == "demo-t1-review"]
 
+    @pytest.mark.spec("The review file path is named")
     def test_S1_the_reviewers_assignment_names_the_review_file_it_must_write(self):
-        """orchestrator-engine/R154: review-payload-path/S1"""
+        """review-payload-path/S1"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         spawns = [c for c in self.calls("spawn") if c["args"].get("name") == "demo-t1-review"]

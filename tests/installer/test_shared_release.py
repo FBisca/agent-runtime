@@ -15,6 +15,7 @@ pytestmark = pytest.mark.integration
 
 
 class SharedReleaseTests(release.ReleaseCase):
+    @pytest.mark.spec("Test fixtures are built once")
     def test_S9_the_release_is_built_once_and_a_reader_shares_it(self):
         first = self.release("0.1.0")
         builds = release.BUILDS.get("0.1.0")
@@ -24,6 +25,7 @@ class SharedReleaseTests(release.ReleaseCase):
         self.assertEqual(builds, 1)
         self.assertTrue((self.releases / "v0.1.0" / "install.sh").is_file())
 
+    @pytest.mark.spec("Test fixtures are built once")
     def test_S9_a_test_that_changes_the_release_takes_a_copy(self):
         shared = self.shared_release("0.1.0")
         copy = self.release_copy("0.1.0")
@@ -42,6 +44,7 @@ class SharedReleaseTests(release.ReleaseCase):
 
 
 class NoClockTests(unittest.TestCase):
+    @pytest.mark.spec("Tests wait on signals, not clocks")
     def test_S7_the_fakes_signal_the_installer_and_return_without_a_sleep(self):
         self.assertNotIn("sleep", release.FAKE_CURL)
         self.assertNotIn("sleep", transaction.FAKE_PYTHON)

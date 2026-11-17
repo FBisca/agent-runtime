@@ -1,5 +1,5 @@
-"""`complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...`: the Lead records a person-owned ticket done, with the
-test nodes that prove the scenarios it satisfies. The archive's side of it is in test_archive_driver."""
+"""`complete <plan> <T#> --note TEXT`: the Lead records a person-owned ticket done. The archive's side of it is in
+test_archive_driver."""
 
 import json
 import subprocess
@@ -15,7 +15,6 @@ from test_archive_modes import FolderArchiveFixture, promote_plan
 
 pytestmark = pytest.mark.integration
 
-NODE = "other-repo/tests/test_manual.py::test_the_runbook_step"
 NOTE = "ran the runbook step in other-repo"
 
 # The Lead skips an archive request only once one is open: a `decide` with nothing to answer would fail the step.
@@ -80,10 +79,8 @@ class PersonFixture(FolderArchiveFixture):
             result = self.in_process(load_script(), list(args))
         return result.returncode, result.stdout + result.stderr
 
-    def complete(self, ticket, *covers, note=NOTE, role="lead", plan=None):
+    def complete(self, ticket, note=NOTE, role="lead", plan=None):
         argv = ["complete", str(plan or self.plan), ticket, "--note", note]
-        for cover in covers:
-            argv += ["--cover", cover]
         argv += ["--repo", str(self.repo), "--state-dir", str(self.state_dir)]
         return self.as_caller(role, *argv)
 
@@ -115,31 +112,24 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
         self.assertIn("digest", approval)
 
     @pytest.mark.spec("Person tickets")
-    def test_S6_complete_records_the_ticket_done_with_its_note_and_its_cover_nodes(self):
-        self.first_drive()
-        code, said = self.complete("T2", "S2=" + NODE)
-        self.assertEqual(code, 0, said)
-        status = self.ticket_status("T2")
-        self.assertRegex(status, r"^COMPLETE \d{4}-\d{2}-\d{2} · " + NOTE + "$")
-        self.assertEqual(self.ledger()["person_covers"], {"T2": {"S2": [NODE]}})
-
-    def test_S6_a_ticket_may_be_completed_with_no_cover(self):
+    def test_S6_complete_records_the_ticket_done_with_its_note(self):
         self.first_drive()
         code, said = self.complete("T2")
         self.assertEqual(code, 0, said)
-        self.assertTrue(self.ticket_status("T2").startswith("COMPLETE "))
+        status = self.ticket_status("T2")
+        self.assertRegex(status, r"^COMPLETE \d{4}-\d{2}-\d{2} · " + NOTE + "$")
 
     @pytest.mark.spec("Person tickets")
     def test_S6_a_spawned_worker_is_refused_naming_why(self):
         self.first_drive()
-        code, said = self.complete("T2", "S2=" + NODE, role="worker")
+        code, said = self.complete("T2", role="worker")
         self.assertNotEqual(code, 0, said)
         self.assertRegex(said, r"spawned worker.*Lead")
         self.assertFalse(self.ticket_status("T2").startswith("COMPLETE"))
 
     def test_S6_a_caller_the_runtime_does_not_verify_as_the_lead_is_refused(self):
         self.first_drive()
-        code, said = self.complete("T2", "S2=" + NODE, role="unverified")
+        code, said = self.complete("T2", role="unverified")
         self.assertNotEqual(code, 0, said)
         self.assertRegex(said, r"does not verify the caller as the Lead")
         self.assertFalse(self.ticket_status("T2").startswith("COMPLETE"))
@@ -158,21 +148,6 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
         self.assertNotEqual(code, 0, said)
         self.assertRegex(said, r"no ticket T9")
 
-    @pytest.mark.spec("Person tickets")
-    def test_S6_a_cover_for_a_scenario_the_ticket_does_not_satisfy_is_refused(self):
-        self.first_drive()
-        code, said = self.complete("T2", "S1=" + NODE)
-        self.assertNotEqual(code, 0, said)
-        self.assertRegex(said, r"S1.*T2 does not satisfy")
-        self.assertFalse(self.ticket_status("T2").startswith("COMPLETE"))
-        self.assertNotIn("person_covers", self.ledger())
-
-    def test_S6_a_cover_that_is_not_scenario_equals_node_is_refused(self):
-        self.first_drive()
-        code, said = self.complete("T2", NODE)
-        self.assertNotEqual(code, 0, said)
-        self.assertRegex(said, r"not S<n>=<node>")
-
     def test_S6_a_blank_note_is_refused(self):
         self.first_drive()
         code, said = self.complete("T2", note="  ")
@@ -188,18 +163,17 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
 
     def test_S6_a_refusal_records_nothing_and_a_valid_complete_still_works(self):
         self.first_drive()
-        for covers, role in ((("S2=" + NODE,), "worker"), (("S1=" + NODE,), "lead")):
-            self.assertNotEqual(self.complete("T2", *covers, role=role)[0], 0)
+        self.assertNotEqual(self.complete("T2", role="worker")[0], 0)
         self.assertFalse(self.ticket_status("T2").startswith("COMPLETE"))
-        code, said = self.complete("T2", "S2=" + NODE)
+        code, said = self.complete("T2")
         self.assertEqual(code, 0, said)
 
-    def test_S6_the_covers_are_written_under_the_ledger_lock(self):
+    def test_S6_the_status_is_written_under_the_ledger_lock(self):
         self.first_drive()
         with mock.patch.object(
             load_script().ledgers, "locked", wraps=load_script().ledgers.locked
         ) as locked:
-            code, said = self.complete("T2", "S2=" + NODE)
+            code, said = self.complete("T2")
         self.assertEqual(code, 0, said)
         self.assertEqual(locked.call_count, 1)
 

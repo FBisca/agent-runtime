@@ -34,7 +34,7 @@ testpaths = ["tests", "packages/agent-orchestrator/tests", "packages/agent-eval/
 pythonpath = ["packages/agent-orchestrator/tests", "packages/agent-review/tests", "tests"]
 # `-q` keeps the output readable; `--strict-markers` turns an unknown marker into an error.
 addopts = "-q --strict-markers"
-# R249: a test past this many seconds fails, so a slow one cannot hide inside a passing run.
+# A test past this many seconds fails, so a slow one cannot hide inside a passing run.
 timeout = 18
 markers = [
     "unit: pure logic, no subprocess and no server (the fast suite)",

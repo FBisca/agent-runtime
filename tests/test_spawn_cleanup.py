@@ -34,8 +34,9 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Claude profile settings")
     def test_S23_malformed_config_falls_back_and_refuses_profiles_before_run(self):
-        """S23 agent-runtime/R145: invalid JSON or invalid shape publishes built-ins and explains failed profile spawns."""
+        """S23 : invalid JSON or invalid shape publishes built-ins and explains failed profile spawns."""
         path = self.dir / "profiles.json"
         lead = self.start({}, dict(ENV, AGENT_RUNTIME_PROFILES=str(path)))
         for body in (
@@ -49,7 +50,7 @@ class SpawnCleanupTests(event_helpers.HcCase):
             '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": 1}}}}',
             '{"profiles": {"custom": {"cli": "claude", "env": {"BAD=NAME": "x"}}}}',
             '{"profiles": {"custom": {"cli": "claude", "env": {"TOKEN": "$"}}}}',
-            # agent-runtime/R145: launch options are claude-only, a known mode, an absolute or ~/ path
+            # : launch options are claude-only, a known mode, an absolute or ~/ path
             '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": "yolo"}}}',
             '{"profiles": {"custom": {"cli": "claude", "env": {}, "permission_mode": 1}}}',
             '{"profiles": {"custom": {"cli": "claude", "env": {}, "settings": "relative.json"}}}',
@@ -124,24 +125,24 @@ class SpawnCleanupTests(event_helpers.HcCase):
         self.assertEqual(states, ["failed"])
         self.assertEqual(active, [0])
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_unsent_first_message_removes_the_terminal_and_fails_the_assignment(self):
-        """agent-runtime/R72"""
         lead = self.start({"run": {"out": json.dumps({"first_message": {"sent": False}})}}, ENV)
         result, _ = self.call(lead, "spawn", ARGS)
         self.assertTrue(result["isError"])
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_unreadable_address_removes_the_terminal(self):
-        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"rc": 1, "err": "boom"}}, ENV)
         result, _ = self.call(lead, "spawn", ARGS)
         self.assertTrue(result["isError"])
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_cancel_during_address_read_removes_the_terminal(self):
-        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0"), "sleep": 30}}, ENV)
         write = lambda m: (lead.proc.stdin.write(json.dumps(m) + "\n"), lead.proc.stdin.flush())  # noqa: E731
         write(
@@ -162,8 +163,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_duplicate_name_spawn_keeps_the_live_worker_active_and_reporting(self):
-        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0")}, "live": []}, ENV)
         result, text = self.call(lead, "spawn", ARGS)
         self.assertFalse(result["isError"], text)
@@ -185,8 +186,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
             caller_name="w1",
         )
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_interrupted_hc_run_discards_only_an_orphan_we_started(self):
-        """agent-runtime/R72"""
         self.install_hc({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
@@ -221,8 +222,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
             with store.transaction() as db:
                 self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [1])
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_bind_error_removes_the_terminal(self):
-        """agent-runtime/R72"""
         self.install_hc({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
@@ -238,8 +239,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         self.assertEqual(self.removed(), [["kill", "w1"], ["rm", "w1"]])
         self.assert_failed_and_inactive()
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_failed_respawn_of_an_existing_worker_leaves_it_inactive(self):
-        """agent-runtime/R72"""
         lead = self.start({"get:w1": {"out": raw("w1", "t0")}, "live": []}, ENV)
         result, text = self.call(lead, "spawn", ARGS)
         self.assertFalse(result["isError"], text)
@@ -253,8 +254,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with store.transaction() as db:
             self.assertEqual([r[0] for r in db.execute("SELECT active FROM workers")], [0])
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_a_failed_unsent_spawn_can_be_spawned_again_with_the_same_name(self):
-        """agent-runtime/R72"""
         lead = self.start(
             {
                 "run": {"out": json.dumps({"first_message": {"sent": False}})},
@@ -270,8 +271,9 @@ class SpawnCleanupTests(event_helpers.HcCase):
         result, text = self.call(lead, "spawn", ARGS)
         self.assertFalse(result["isError"], text)
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_failed_spawn_releases_its_linked_task(self):
-        """agent-runtime/R72; agent-runtime/R69"""
         self.install_hc({"run": {"out": json.dumps({"first_message": {"sent": False}})}}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
@@ -300,8 +302,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
                 ("pending", None, None),
             )
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_unresolvable_identity_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime/R73"""
         self.install_hc({}, ENV)
         env = {
             "PATH": "%s:/usr/bin:/bin" % (self.dir / "bin"),
@@ -318,8 +320,9 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store(env).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Spawn model")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_invalid_model_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime/R73 agent-runtime/R132 agent-runtime/R133 agent-runtime/R134"""
         lead = self.start({}, ENV)
         for model in ("  ", 3, "-x"):
             result, _ = self.call(lead, "spawn", dict(ARGS, model=model))
@@ -328,8 +331,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Spawn agent role")
     def test_invalid_agent_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime/R139 agent-runtime/R140"""
         lead = self.start({}, ENV)
         for cli, agent in (
             ("claude", "-x"),
@@ -343,8 +346,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Spawn agent role")
     def test_codex_agent_without_instructions_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime/R141"""
         lead = self.start({}, ENV)
         result, text = self.call(lead, "spawn", dict(ARGS, cli="codex", agent="reviewer"))
         self.assertTrue(result["isError"])
@@ -353,8 +356,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Spawn instructions file")
     def test_invalid_instructions_file_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime/R161"""
         home = self.dir / "home"
         (home / "blank.md").write_text("   \n")
         lead = self.start({}, ENV)
@@ -379,8 +382,9 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Spawn instructions file")
     def test_instructions_file_is_refused_for_a_family_that_loads_the_role_itself(self):
-        """agent-runtime/R162: orchestrator-routing-effort-role/S6 — the family that loads the role itself takes no instructions_file."""
+        """— the family that loads the role itself takes no instructions_file."""
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
         lead = self.start({}, ENV)
@@ -393,8 +397,9 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Spawn instructions file")
     def test_S6_instructions_file_applies_to_a_backend_with_no_role_file(self):
-        """agent-runtime/R168: orchestrator-routing-effort-role/S6 — a Pi worker reads the file the caller names."""
+        """— a Pi worker reads the file the caller names."""
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
         lead = self.start({"get:w1": {"out": raw("w1", "t0")}}, ENV)
@@ -406,8 +411,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         self.assertTrue(program[-1].startswith("ROLE FILE RULES"))
         self.assertIn("Worker protocol:", program[-1])
 
+    @pytest.mark.spec("Spawn instructions file")
     def test_agent_and_instructions_file_are_mutually_exclusive(self):
-        """agent-runtime/R163"""
         home = self.dir / "home"
         (home / "role.md").write_text("ROLE FILE RULES\n")
         lead = self.start({}, ENV)
@@ -425,8 +430,8 @@ class SpawnCleanupTests(event_helpers.HcCase):
         with Store({"HOME": str(self.dir / "home")}).transaction() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM assignments").fetchone()[0], 0)
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_codex_without_instructions_starts_no_terminal_and_registers_nothing(self):
-        """agent-runtime/R73"""
         (self.dir / "home" / ".codex" / "agents" / "implementer.toml").unlink()
         lead = self.start({}, ENV)
         result, _ = self.call(lead, "spawn", dict(ARGS, cli="codex", agent="implementer"))
@@ -501,18 +506,21 @@ class FastReportTests(event_helpers.HcCase):
             kinds = [json.loads(r[0])["kind"] for r in db.execute("SELECT body FROM messages")]
         self.assertEqual([k for k in kinds if k == "failed"], ["failed"])
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S11_a_spawn_driven_in_process_starts_no_server(self):
         """S11: the spawn handler reads the fake binary and the store; no server answers for it."""
         started = self.count_sessions()
         self.check_unsent("blocked")
         self.assertEqual(started, [])
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_unsent_spawn_after_a_blocked_report_fails_and_releases_the_task(self):
-        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         self.check_unsent("blocked")
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_unsent_spawn_after_a_decision_report_fails_and_releases_the_task(self):
-        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         self.check_unsent("decision")
 
     def failed_count(self, store):
@@ -533,8 +541,8 @@ class FastReportTests(event_helpers.HcCase):
             "parent": None,
         }
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_timed_out_hc_run_after_a_fast_report_leaves_the_worker_inactive(self):
-        """agent-runtime/R85; agent-runtime/R72"""
         store, seen = self.spawn_with_fast_report(
             {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "progress", link_task=False
         )
@@ -557,8 +565,9 @@ class FastReportTests(event_helpers.HcCase):
         self.assertEqual(self.runs("send"), [])
         self.assertEqual(self.failed_count(store), 1)
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_timed_out_hc_run_after_a_fast_blocked_report_releases_the_task(self):
-        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         store, seen = self.spawn_with_fast_report(
             {"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, "blocked"
         )
@@ -570,8 +579,8 @@ class FastReportTests(event_helpers.HcCase):
             )
         self.assertEqual(self.failed_count(store), 1)
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_a_live_worker_bound_by_a_concurrent_spawn_is_not_discarded(self):
-        """agent-runtime/R94; agent-runtime/R72"""
         self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
@@ -602,8 +611,9 @@ class FastReportTests(event_helpers.HcCase):
             states = sorted(r[0] for r in db.execute("SELECT state FROM assignments"))
         self.assertEqual(states, ["failed", "working"])
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_respawn_of_a_finished_worker_after_a_fast_blocked_report_is_cleaned_up(self):
-        """agent-runtime/R84; agent-runtime/R72; agent-runtime/R69"""
         self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         scope, generation = hc_tools.dispatch_identity(self.env)[:2]
@@ -655,8 +665,8 @@ class FastReportTests(event_helpers.HcCase):
             )
         self.assertEqual(self.failed_count(store), 1)
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_a_store_error_in_the_orphan_check_keeps_the_original_error_and_still_fails(self):
-        """agent-runtime/R94; agent-runtime/R72"""
         self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         real_run = hc_tools.run
 
@@ -676,8 +686,8 @@ class FastReportTests(event_helpers.HcCase):
                 [r[0] for r in db.execute("SELECT state FROM assignments")], ["failed"]
             )
 
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_a_completed_result_is_mentioned_when_hc_run_times_out(self):
-        """agent-runtime/R95; agent-runtime/R72"""
         self.install_hc({"timeout": True, "get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         real_register, real_run = Store.register, hc_tools.run
@@ -703,8 +713,9 @@ class FastReportTests(event_helpers.HcCase):
             with self.assertRaisesRegex(hc_tools.ToolError, "result had already landed"):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
 
+    @pytest.mark.spec("Task release on worker loss")
+    @pytest.mark.spec("Spawn failure cleanup")
     def test_failure_after_the_exit_was_observed_adds_no_second_failed_message(self):
-        """agent-runtime/R84; agent-runtime/R69"""
         self.install_hc(
             {
                 "run": {"out": json.dumps({"first_message": {"sent": False}})},
@@ -737,8 +748,9 @@ class FastReportTests(event_helpers.HcCase):
                 hc_tools.spawn(ARGS, self.env, hc_tools.Context())
         self.assertEqual(self.failed_count(store), 1)
 
+    @pytest.mark.spec("Spawn failure cleanup")
+    @pytest.mark.spec("Resume with a task")
     def test_resume_failing_after_the_report_landed_keeps_the_report_and_task(self):
-        """agent-runtime/R86; agent-runtime/R80"""
         self.install_hc({"get:w1": {"out": raw("w1", "t0")}}, ENV)
         store = Store(self.env)
         scope, generation = hc_tools.dispatch_identity(self.env)[:2]

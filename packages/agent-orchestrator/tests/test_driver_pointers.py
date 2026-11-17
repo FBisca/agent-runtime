@@ -11,9 +11,12 @@ pytestmark = pytest.mark.integration
 ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.spec("Pointers name one file")
 def test_S8_spec_names_the_pointer_rule_and_its_guard():
     spec = (ROOT / "docs/specs/orchestrator-engine.md").read_text()
-    requirement = next(line for line in spec.splitlines() if line.startswith("- **R173**"))
+    requirement = spec.split("### Requirement: Pointers name one file", 1)[1].split(
+        "### Requirement:", 1
+    )[0]
     for phrase in (
         "file that exists",
         "file the reader is asked to write",
@@ -21,20 +24,9 @@ def test_S8_spec_names_the_pointer_rule_and_its_guard():
         "glob",
         "bare directory",
         "newest",
+        "zero or several files",
     ):
         assert phrase in requirement
-    row = next(line for line in spec.splitlines() if line.startswith("| R173 |"))
-    assert "test_S3_" in row
-    import ast
-    import re
-
-    for citation in re.findall(r"`([^`]+::[^`]*test_[^`]+)`", row):
-        file, *names = citation.split("::")
-        nodes = ast.parse((ROOT / file).read_text()).body
-        for name in names:
-            match = next((node for node in nodes if getattr(node, "name", None) == name), None)
-            assert match is not None, citation
-            nodes = getattr(match, "body", [])
 
 
 def test_S9_repository_instructions_name_the_rule(tmp_path):
@@ -60,6 +52,7 @@ def test_S9_repository_instructions_name_the_rule(tmp_path):
     assert "test_driver_pointers.py" in rules.read_text()
 
 
+@pytest.mark.spec("Pointers name one file")
 def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -242,6 +235,7 @@ class PointerRun(GateFixture, unittest.TestCase):
 
 
 class TestRenderedPointers:
+    @pytest.mark.spec("Pointers name one file")
     def test_S3_scope_names_each_path_beside_its_count(self, tmp_path):
         from agent_orchestrator.driver.pointers import owned_collections, owned_scope
 
@@ -255,6 +249,7 @@ class TestRenderedPointers:
                 % (directory, tmp_path / "src" / "new")
             )
 
+    @pytest.mark.spec("Pointers name one file")
     @pytest.mark.parametrize("installed", [False, True])
     def test_S3_tdd_instruction_uses_available_skill_or_contract(
         self, tmp_path, monkeypatch, installed
@@ -276,6 +271,7 @@ class TestRenderedPointers:
             assert "contract" in instruction.lower()
             assert not PointerGuard(tmp_path).violations(instruction)
 
+    @pytest.mark.spec("Pointers name one file")
     def test_S3_rendered_instructions_name_their_files(self, tmp_path):
         from types import SimpleNamespace
 

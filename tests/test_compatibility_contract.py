@@ -50,7 +50,6 @@ class BaselineTests(unittest.TestCase):
     """The recorded inventory must exist and describe this tree."""
 
     def test_the_baseline_inventory_is_recorded(self):
-        """python-workspace-contracts/R199"""
         data = baseline()
         for key in (
             "entrypoints",
@@ -67,31 +66,31 @@ class BaselineTests(unittest.TestCase):
 
 
 class EntrypointTests(unittest.TestCase):
-    """R199: the documented entrypoints keep their behaviour."""
+    """The documented entrypoints keep their behaviour."""
 
+    @pytest.mark.spec("Harness behaviour unchanged by the workspace")
     def test_S2_entrypoint_shims_are_present_and_executable(self):
-        """python-workspace-contracts/R199"""
         for name, entry in baseline()["entrypoints"].items():
             path = PLUGIN / entry["path"]
             self.assertTrue(path.is_file(), name)
             self.assertTrue(os.access(path, os.X_OK), f"{name} is not executable")
             self.assertTrue(path.read_text().startswith("#!/bin/sh"), name)
 
+    @pytest.mark.spec("Harness behaviour unchanged by the workspace")
     def test_S2_entrypoint_shims_resolve_to_their_python_entrypoints(self):
-        """python-workspace-contracts/R199"""
         for name, entry in baseline()["entrypoints"].items():
             target = PLUGIN / entry["python"]
             self.assertTrue(target.is_file(), f"{name} -> {entry['python']}")
             self.assertIn(entry["python"], (PLUGIN / entry["path"]).read_text(), name)
 
+    @pytest.mark.spec("Harness behaviour unchanged by the workspace")
     def test_S2_recorded_entrypoints_match_the_bin_directory(self):
-        """python-workspace-contracts/R199"""
         recorded = {entry["path"] for entry in baseline()["entrypoints"].values()}
         present = {f"bin/{p.name}" for p in (PLUGIN / "bin").iterdir() if p.is_file()}
         self.assertEqual(present, recorded)
 
+    @pytest.mark.spec("Harness behaviour unchanged by the workspace")
     def test_S2_the_installer_links_every_entrypoint_and_wires_the_hooks(self):
-        """python-workspace-contracts/R199"""
         installer = (PLUGIN / "install.sh").read_text()
         for name in baseline()["entrypoints"]:
             self.assertIn(name, installer, name)
@@ -100,8 +99,8 @@ class EntrypointTests(unittest.TestCase):
         self.assertIn("agent-runtime-hook", installer)
         self.assertIn("[[hooks.PreToolUse]]", installer)
 
+    @pytest.mark.spec("Harness behaviour unchanged by the workspace")
     def test_S2_the_cli_keeps_its_subcommands(self):
-        """python-workspace-contracts/R199"""
         parser = agent_runtime.build_parser()
         subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
         self.assertEqual(1, len(subs))
@@ -109,17 +108,17 @@ class EntrypointTests(unittest.TestCase):
 
 
 class PublicSurfaceTests(unittest.TestCase):
-    """R200: orchestration talks to the runtime through the public surface."""
+    """Orchestration talks to the runtime through the public surface."""
 
+    @pytest.mark.spec("Orchestrator reaches the runtime through its public surface")
     def test_S3_the_public_tool_surface_covers_the_orchestration_verbs(self):
-        """python-workspace-contracts/R200"""
         tools = set(mcp_server.TOOL_NAMES)
         self.assertEqual(sorted(baseline()["mcp_tools"]), sorted(tools))
         for verb, tool in baseline()["orchestration_verbs"].items():
             self.assertIn(tool, tools, f"{verb} -> {tool}")
 
+    @pytest.mark.spec("Orchestrator reaches the runtime through its public surface")
     def test_S3_direct_sqlite_access_stays_inside_the_runtime_store_layer(self):
-        """python-workspace-contracts/R200"""
         recorded = sorted(baseline()["sqlite_imports"])
         found = []
         for path in sorted((PLUGIN / "packages" / "agent-runtime" / "src").rglob("*.py")):
@@ -138,16 +137,14 @@ class PublicSurfaceTests(unittest.TestCase):
 
 
 class PrPinTests(unittest.TestCase):
-    """R205: the semantics merged by PR #39 and PR #45 stay pinned."""
+    """The semantics merged by PR #39 and PR #45 stay pinned."""
 
     def test_S7_the_pr_commits_are_pinned_in_the_baseline(self):
-        """python-workspace-contracts/R205"""
         pins = baseline()["pr_pins"]
         self.assertIn("39", pins)
         self.assertIn("45", pins)
 
     def test_S7_resume_and_usage_semantics_keep_their_own_regression_tests(self):
-        """python-workspace-contracts/R205"""
         coverage = baseline()["regression_coverage"]
         for name, needles in coverage.items():
             path = PLUGIN / name
@@ -157,9 +154,7 @@ class PrPinTests(unittest.TestCase):
                 self.assertIn(needle, text, f"{name} lost its {needle} coverage")
 
     def test_S7_the_baseline_pins_the_semantics_the_plan_describes_for_each_pr(self):
-        """python-workspace-contracts/R205
-
-        The plan's Sources table names PR #39 as the resume/undelivered-attention work and
+        """The plan's Sources table names PR #39 as the resume/undelivered-attention work and
         PR #45 as the session-usage attribution work. The baseline must say which semantics
         each pinned PR carries, so pinning the wrong commit is caught here and not by a
         reader squinting at the JSON.
@@ -172,9 +167,7 @@ class PrPinTests(unittest.TestCase):
             self.assertTrue(semantics[pr].strip(), f"PR #{pr} has empty semantics")
 
     def test_S7_each_pr_pins_the_regression_tests_that_own_its_semantics(self):
-        """python-workspace-contracts/R205
-
-        The regression tests that own the live resume/session semantics must be pinned per
+        """The regression tests that own the live resume/session semantics must be pinned per
         PR: deleting them must break the contract, not just shrink the suite.
         """
         data = baseline()
@@ -191,7 +184,6 @@ class PrPinTests(unittest.TestCase):
                     self.assertIn(needle, text, f"{name} lost its {needle} coverage")
 
     def test_S7_this_contract_does_not_duplicate_the_existing_test_names(self):
-        """python-workspace-contracts/R205"""
         mine = {name for name in dir(PrPinTests) if name.startswith("test_")}
         for path in (PLUGIN / "tests").glob("test_*.py"):
             if path.name == Path(__file__).name:
@@ -203,16 +195,14 @@ class PrPinTests(unittest.TestCase):
 
 
 class DependencyTests(unittest.TestCase):
-    """R194: the runtime stays standard-library only at deployment."""
+    """The runtime stays standard-library only at deployment."""
 
     def test_the_runtime_declares_no_production_dependency(self):
-        """python-workspace-contracts/R194"""
         pyproject = (PLUGIN / "pyproject.toml").read_text()
         self.assertEqual(baseline()["runtime_dependencies"], [])
         self.assertIn("dependencies = []", pyproject)
 
     def test_the_runtime_imports_only_the_standard_library(self):
-        """python-workspace-contracts/R194"""
         siblings = {p.stem for p in (PLUGIN / "server").glob("*.py")}
         third_party = set()
         for path in sorted((PLUGIN / "server").glob("*.py")):
@@ -234,9 +224,7 @@ class WorkspaceLandedTests(unittest.TestCase):
     """Contracts that held from the ticket that built the workspace: they are green now."""
 
     def test_S2_the_workspace_packages_exist_beside_the_legacy_shims(self):
-        """python-workspace-contracts/R192"""
         self.assertTrue((PLUGIN / "packages" / "agent-runtime" / "pyproject.toml").is_file())
 
     def test_S3_the_orchestrator_talks_to_a_public_runtime_client(self):
-        """python-workspace-contracts/R200"""
         self.assertTrue((PLUGIN / "packages" / "agent-orchestrator").is_dir())

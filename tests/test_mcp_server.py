@@ -248,7 +248,6 @@ class ServerCase(unittest.TestCase):
 
 class ToolListTests(ServerCase):
     def test_S1_tools_list_returns_the_ten_tools_within_400_words(self):
-        """agent-runtime-tools/S1"""
         session = self.start()
         init = session.handshake()
         self.assertIn("tools", init["result"]["capabilities"])
@@ -279,8 +278,8 @@ class ToolListTests(ServerCase):
                 ["claude", "codex", "pi", "custom"],
             )
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_spawn_schema_has_optional_string_model(self):
-        """agent-runtime/R135"""
         session = self.start()
         session.handshake()
         spawn = next(
@@ -289,8 +288,8 @@ class ToolListTests(ServerCase):
         self.assertEqual(spawn["inputSchema"]["properties"]["model"]["type"], "string")
         self.assertNotIn("model", spawn["inputSchema"]["required"])
 
+    @pytest.mark.spec("Spawn effort")
     def test_spawn_schema_has_optional_effort_enum(self):
-        """agent-runtime/R149"""
         session = self.start()
         session.handshake()
         spawn = next(
@@ -302,8 +301,8 @@ class ToolListTests(ServerCase):
         )
         self.assertNotIn("effort", spawn["inputSchema"]["required"])
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_spawn_schema_has_optional_string_agent(self):
-        """agent-runtime/R142"""
         session = self.start()
         session.handshake()
         spawn = next(
@@ -314,8 +313,8 @@ class ToolListTests(ServerCase):
         self.assertIn("report", agent["description"])
         self.assertNotIn("agent", spawn["inputSchema"]["required"])
 
+    @pytest.mark.spec("Tool schemas and descriptions")
     def test_spawn_schema_has_optional_string_instructions_file(self):
-        """agent-runtime/R164"""
         session = self.start()
         session.handshake()
         spawn = next(
@@ -327,14 +326,12 @@ class ToolListTests(ServerCase):
         self.assertIn("none", properties["agent"]["description"])
 
     def test_ping_and_unknown_method(self):
-        """agent-runtime-tools/S1"""
         session = self.start()
         session.handshake()
         self.assertEqual(session.send("ping")["result"], {})
         self.assertEqual(session.send("nope")["error"]["code"], -32601)
 
     def test_notification_gets_no_reply_and_eof_exits(self):
-        """agent-runtime-tools/S1"""
         session = self.start()
         session.handshake()
         session.send("notifications/initialized", notify=True)
@@ -344,7 +341,6 @@ class ToolListTests(ServerCase):
         self.assertEqual(session.proc.stdout.read(), "")
 
     def test_bad_params_and_stray_responses(self):
-        """agent-runtime-tools/S1"""
         session = self.start()
         session.handshake()
         session.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 99, "result": {}}) + "\n")
@@ -355,7 +351,6 @@ class ToolListTests(ServerCase):
         self.assertEqual(init["result"]["protocolVersion"], "2025-03-26")
 
     def test_stdout_carries_only_protocol_json(self):
-        """agent-runtime-tools/S1"""
         session = self.start()
         session.handshake()
         session.send("tools/list")
@@ -366,8 +361,9 @@ class ToolListTests(ServerCase):
 
 
 class ToolCallTests(ServerCase):
+    @pytest.mark.spec("Operation lookup")
     def test_operation_is_refused_by_both_mcp_dispatch_paths(self):
-        """agent-runtime/R262: operation is available only through the call CLI."""
+        """operation is available only through the call CLI."""
         from agent_runtime import mcp_server
 
         params = {"name": "operation", "arguments": {"operation_id": "private-key"}}
@@ -387,7 +383,6 @@ class ToolCallTests(ServerCase):
         return session.send("tools/call", {"name": name, "arguments": arguments})["result"]
 
     def test_status_wraps_the_library_with_a_fake_hc(self):
-        """agent-runtime-tools/S1"""
         raw = {
             "address": "t9",
             "name": "w1",
@@ -402,7 +397,6 @@ class ToolCallTests(ServerCase):
         self.assertEqual((info["runtime"], info["state"], info["parent"]), ("hc", "idle", "t0"))
 
     def test_list_returns_children_of_the_caller(self):
-        """agent-runtime-tools/S1"""
         body = (
             'case "$1" in ls) echo \'{"terminals":[{"address":"t5","parent":"t0"},{"address":"t6","parent":"tX"}]}\';;'
             ' get) echo \'{"address":"t5","name":"w5","parent":"t0","status":"working"}\';; esac'
@@ -414,7 +408,6 @@ class ToolCallTests(ServerCase):
         self.assertEqual([r["name"] for r in rows], ["w5"])
 
     def test_list_outside_hc_is_an_error(self):
-        """agent-runtime-tools/S1"""
         session = self.start()
         session.handshake()
         result = self.call(session, "list", {})
@@ -422,7 +415,6 @@ class ToolCallTests(ServerCase):
         self.assertIn("hc-only", result["content"][0]["text"])
 
     def test_unknown_tool_is_a_protocol_error(self):
-        """agent-runtime-tools/S1"""
         session = self.start()
         session.handshake()
         reply = session.send("tools/call", {"name": "bogus", "arguments": {}})
@@ -515,8 +507,8 @@ class CallLimitTests(unittest.TestCase):
         self.server = InProcessServer()
         self.addCleanup(self.server.close)
 
+    @pytest.mark.spec("MCP request ids")
     def test_S9_a_non_scalar_id_is_invalid_and_the_server_keeps_serving(self):
-        """agent-runtime/R248"""
         for bad in ([1], {"a": 1}, True, False):
             self.server.send(
                 {
@@ -542,8 +534,8 @@ class CallLimitTests(unittest.TestCase):
         self.server.call("after", "status")
         self.assertFalse(self.server.reply_for("after")["result"]["isError"])
 
+    @pytest.mark.spec("Call thread release")
     def test_S10_finished_call_threads_are_not_retained(self):
-        """agent-runtime/R249"""
         for number in range(40):
             self.server.call(number, "status")
         for number in range(40):
@@ -558,8 +550,8 @@ class CallLimitTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(len(held), 0, "finished call threads are still referenced")
 
+    @pytest.mark.spec("Call caps")
     def test_S11_the_wait_and_total_caps_refuse_at_once_and_retryably(self):
-        """agent-runtime/R250"""
         for number in range(56):
             self.server.call("w%d" % number, "wait")
         self.server.wait_started(56)
@@ -596,7 +588,6 @@ class WiringTests(unittest.TestCase):
         return json.loads(Path(path).read_text(encoding="utf-8"))
 
     def test_S18_manifest_mcp_and_hooks_files_are_valid_and_wired(self):
-        """agent-runtime-tools/S18"""
         manifest = self.load(PLUGIN / ".claude-plugin" / "plugin.json")
         self.assertEqual(manifest["name"], "agent-runtime")
         self.assertTrue(manifest["description"])
@@ -619,7 +610,6 @@ class WiringTests(unittest.TestCase):
         self.assertTrue(SERVER.is_file())
 
     def test_S18_local_marketplace_lists_the_plugin_by_relative_source(self):
-        """agent-runtime-tools/S18"""
         market = self.load(MARKETPLACE)
         self.assertTrue(market["name"])
         self.assertTrue(market["owner"]["name"])

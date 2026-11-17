@@ -68,8 +68,8 @@ class TeamLimitTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM workers WHERE team=? AND active=1", (self.team,)
             ).fetchone()[0]
 
+    @pytest.mark.spec("Team limit")
     def test_S1_stopped_workers_do_not_count_toward_the_limit(self):
-        """agent-runtime/R240"""
         self.fill(1, 31)
         self.store.register(self.team, "fresh")
         self.assertEqual(self.active(), 2)
@@ -80,16 +80,16 @@ class TeamLimitTests(unittest.TestCase):
                 "SELECT active FROM workers WHERE team=? AND name=?", (self.team, name)
             ).fetchone()[0]
 
+    @pytest.mark.spec("Team limit")
     def test_S2_a_full_team_refuses_a_new_name(self):
-        """agent-runtime/R241"""
         self.fill(32, 0)
         with self.assertRaises(StoreError) as caught:
             self.store.register(self.team, "brand-new")
         self.assertEqual(str(caught.exception), REFUSAL)
         self.assertEqual(self.active(), 32)
 
+    @pytest.mark.spec("Team limit")
     def test_S2_a_full_team_refuses_to_resume_a_stopped_name(self):
-        """agent-runtime/R241"""
         self.fill(32, 1)  # 33 registered, w32 stopped
         with self.assertRaises(StoreError) as caught:
             self.store.register(self.team, "w32", transfer=True)
@@ -97,8 +97,8 @@ class TeamLimitTests(unittest.TestCase):
         self.assertEqual(self.active(), 32)
         self.assertEqual(self.worker_active("w32"), 0)
 
+    @pytest.mark.spec("Team limit")
     def test_S2_a_pending_resume_of_a_stopped_name_holds_its_slot_until_it_fails(self):
-        """agent-runtime/R241"""
         self.fill(31, 1)
         identity = self.store.register(self.team, "w31", transfer=True)
         with self.assertRaises(StoreError) as caught:
@@ -109,8 +109,8 @@ class TeamLimitTests(unittest.TestCase):
         self.assertEqual(self.active(), 31)
         self.store.register(self.team, "brand-new")
 
+    @pytest.mark.spec("Team limit")
     def test_S2_a_failed_resume_of_an_active_worker_leaves_it_active(self):
-        """agent-runtime/R241"""
         self.fill(2, 0)
         with self.store.transaction() as db:
             db.execute("UPDATE workers SET address='pane-1' WHERE name='w1'")  # a bound worker
@@ -118,8 +118,8 @@ class TeamLimitTests(unittest.TestCase):
         self.store.fail(identity["assignment_id"])
         self.assertEqual(self.worker_active("w1"), 1)
 
+    @pytest.mark.spec("Team limit")
     def test_S2_concurrent_registrations_never_exceed_the_limit(self):
-        """agent-runtime/R241"""
         self.fill(30, 0)
         outcomes = []
 
@@ -139,8 +139,8 @@ class TeamLimitTests(unittest.TestCase):
         self.assertEqual(outcomes.count(REFUSAL), 6)
         self.assertEqual(self.active(), 32)
 
+    @pytest.mark.spec("Team limit")
     def test_S3_resuming_an_active_worker_takes_no_slot(self):
-        """agent-runtime/R242"""
         self.fill(32, 0)
         identity = self.store.register(self.team, "w5")
         self.assertEqual(identity["team_id"], self.team)
@@ -162,16 +162,17 @@ class SeededTeamTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM workers WHERE team=? AND active=?", (self.team, active)
             ).fetchone()[0]
 
+    @pytest.mark.spec("Tests start only what they exercise")
+    @pytest.mark.spec("Team limit")
     def test_S10_a_seeded_full_team_refuses_the_33rd_active_worker(self):
-        """agent-runtime/R241"""
         seed_workers(self.store, self.team, "test", active=["w%02d" % i for i in range(32)])
         self.assertEqual(self.count(1), 32)
         with self.assertRaises(StoreError) as caught:
             self.store.register(self.team, "w32")
         self.assertEqual(str(caught.exception), REFUSAL)
 
+    @pytest.mark.spec("Team limit")
     def test_S10_a_seeded_stopped_worker_holds_no_slot_and_keeps_its_name(self):
-        """agent-runtime/R240"""
         seed_workers(
             self.store,
             self.team,
@@ -187,14 +188,14 @@ class SeededTeamTests(unittest.TestCase):
             )  # reactivating it would be the 33rd
         self.assertEqual(str(caught.exception), REFUSAL)
 
+    @pytest.mark.spec("Team limit")
     def test_S10_a_stopped_name_is_reactivated_by_seeding_it_active(self):
-        """agent-runtime/R240"""
         seed_workers(self.store, self.team, "test", stopped=["w00", "w01"])
         seed_workers(self.store, self.team, "test", active=["w01"])
         self.assertEqual((self.count(1), self.count(0)), (1, 1))
 
+    @pytest.mark.spec("Team limit")
     def test_S10_a_seeded_worker_answers_at_its_own_address(self):
-        """agent-runtime/R240"""
         seed_workers(self.store, self.team, "test", active=["w05"])
         self.assertEqual(self.store.worker_address(self.team, "w05"), "t105")
 

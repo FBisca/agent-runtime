@@ -16,6 +16,7 @@ pytestmark = pytest.mark.integration
 
 
 class PlanTests(WorkbenchFixture):
+    @pytest.mark.spec("Ticket graph")
     def test_S4_every_ticket_has_its_blocked_by_edges_and_a_layer_ordered_by_layer_then_plan(self):
         # T1 free; T2 and T3 behind T1; T4 behind both; T5 free; T6 behind T4 and T5.
         path = self.write_plan(graph([], ["T1"], ["T1"], ["T2", "T3"], [], ["T5", "T4"]))
@@ -38,6 +39,7 @@ class PlanTests(WorkbenchFixture):
         self.assertEqual(shown["state"], "APPROVED")
         self.assertFalse(shown["revision"]["drift"])
 
+    @pytest.mark.spec("Ticket graph")
     def test_S4_a_ticket_carries_its_state_and_reason_from_the_ledger(self):
         path = self.write_plan(graph([], ["T1"]))
         self.write_ledger("bench", {"T1": "COMPLETE 2026-11-11", "T2": "needs you: pick a name"})
@@ -60,6 +62,7 @@ class PlanTests(WorkbenchFixture):
         self.assertEqual(before, tree_digest(self.repo, self.state_dir))
         return shown["error"]["message"]
 
+    @pytest.mark.spec("Invalid plan refused")
     def test_S5_a_cycle_is_the_loaders_error_naming_the_tickets_and_no_view(self):
         message = self.refused(self.write_plan(graph(["T2"], ["T1"]), approve=False))
         self.assertIn("dependency cycle", message)
@@ -67,17 +70,20 @@ class PlanTests(WorkbenchFixture):
         self.assertIn("T2", message)
         self.assertIn("tickets[", message)
 
+    @pytest.mark.spec("Invalid plan refused")
     def test_S5_a_duplicate_ticket_id_is_named(self):
         data = graph([], [])
         data["tickets"][1]["id"] = "T1"
         message = self.refused(self.write_plan(data, approve=False))
         self.assertIn("duplicate id T1", message)
 
+    @pytest.mark.spec("Invalid plan refused")
     def test_S5_a_reference_to_a_missing_ticket_is_named(self):
         message = self.refused(self.write_plan(graph([], ["T9"]), approve=False))
         self.assertIn("T9", message)
         self.assertIn("blocked_by", message)
 
+    @pytest.mark.spec("Invalid plan refused")
     def test_S5_malformed_yaml_names_the_file(self):
         path = self.plans / "2026-11-11-bad.plan.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +91,7 @@ class PlanTests(WorkbenchFixture):
         message = self.refused(path)
         self.assertIn("invalid YAML", message)
 
+    @pytest.mark.spec("Approved snapshot drift")
     def test_S6_an_edited_plan_shows_the_approved_snapshot_with_drift_and_both_digests(self):
         path = self.write_plan(graph([], ["T1"]))
         approved = self.view(path)
@@ -117,6 +124,7 @@ class PlanTests(WorkbenchFixture):
         )
         return path
 
+    @pytest.mark.spec("Approved snapshot drift")
     def test_S6_a_slug_edited_after_approval_keeps_the_ledger_state_of_the_approved_plan(self):
         path = self.drifted_ledger()
         self.edit(path, lambda data: data.update(slug="renamed"))
@@ -128,6 +136,7 @@ class PlanTests(WorkbenchFixture):
         self.assertEqual((listed["slug"], listed["state"]), ("bench", "RUNNING"))
         self.assertEqual(listed["tickets"], {"total": 2, "by_state": {"COMPLETE": 2}})
 
+    @pytest.mark.spec("Approved snapshot drift")
     def test_S6_a_ticket_removed_after_approval_keeps_its_ledger_state(self):
         path = self.drifted_ledger()
         self.edit(path, lambda data: data["tickets"].pop())
@@ -139,6 +148,7 @@ class PlanTests(WorkbenchFixture):
         listed = json.loads(self.workbench("plans")[1])["plans"][0]
         self.assertEqual(listed["tickets"], {"total": 2, "by_state": {"COMPLETE": 2}})
 
+    @pytest.mark.spec("Approved snapshot drift")
     def test_S6_a_draft_plan_has_no_approval_to_drift_from(self):
         path = self.write_plan(graph([]), approve=False)
         shown = self.view(path)
@@ -182,6 +192,7 @@ class AttemptTests(WorkbenchFixture):
         (found,) = [t for t in self.view(path)["tickets"] if t["id"] == ticket]
         return found["attempts"]
 
+    @pytest.mark.spec("Attempt history")
     def test_S7_every_ledger_task_of_a_ticket_appears_once_and_the_newest_is_latest(self):
         tasks = {
             "t1": attempt_task("t1", "RELEASED", started_at="2026-11-11T10:00:00+00:00"),
@@ -231,10 +242,12 @@ class AttemptTests(WorkbenchFixture):
         )
         self.assertIsNone(found[4]["finished_at"], "a running attempt has no end: null, not 0")
 
+    @pytest.mark.spec("Attempt history")
     def test_S7_the_other_tickets_attempts_are_not_mixed_in_and_a_ticket_without_one_has_none(self):
         found = self.attempts({"t2": attempt_task("t2", unit="t2")}, ticket="T1")
         self.assertEqual(found, [])
 
+    @pytest.mark.spec("Attempt history")
     def test_S7_attempts_keep_the_ledger_order_when_two_start_at_the_same_time(self):
         same = "2026-11-11T10:00:00+00:00"
         found = self.attempts(
@@ -247,10 +260,12 @@ class AttemptTests(WorkbenchFixture):
             [(a["task_id"], a["latest"]) for a in found], [("t1", False), ("t1r1", True)]
         )
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_the_address_is_the_one_the_runtime_returned(self):
         found = self.attempts({"t1": attempt_task("t1", address="t1sf", runtime_id="t1sf")})
         self.assertEqual(found[0]["address"], "t1sf")
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_a_ledger_without_an_address_field_reads_the_runtime_id_unless_it_is_the_fallback(
         self,
     ):
@@ -266,6 +281,7 @@ class AttemptTests(WorkbenchFixture):
             found, {"t1": "t1sf", "t1r1": None, "t1d1": None, "t1o1": None, "t1p1": None}
         )
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_the_agent_name_or_assignment_of_another_attempt_is_the_fallback_too(self):
         tasks = {
             "t1": attempt_task("t1", "RELEASED", runtime_id="a-t1"),
@@ -274,10 +290,12 @@ class AttemptTests(WorkbenchFixture):
         found = {a["task_id"]: a["address"] for a in self.attempts(tasks)}
         self.assertEqual(found, {"t1": None, "t1r1": None})
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_a_recorded_null_address_is_null_whatever_the_runtime_id_holds(self):
         found = self.attempts({"t1": attempt_task("t1", address=None, runtime_id="term-bench-t1")})
         self.assertIsNone(found[0]["address"])
 
+    @pytest.mark.spec("Attempt addresses")
     def test_S8_an_address_is_never_taken_from_another_attempt(self):
         tasks = {
             "t1": attempt_task("t1", "RELEASED", address="t1sf"),
@@ -286,6 +304,7 @@ class AttemptTests(WorkbenchFixture):
         found = {a["task_id"]: a["address"] for a in self.attempts(tasks)}
         self.assertEqual(found, {"t1": "t1sf", "t1r1": None})
 
+    @pytest.mark.spec("Claimed versus verified")
     def test_S9_a_worker_that_reported_complete_on_a_ticket_still_in_progress_is_claimed_not_verified(
         self,
     ):
@@ -302,6 +321,7 @@ class AttemptTests(WorkbenchFixture):
         self.assertNotIn(BODY, json.dumps(shown))
         self.assertIs(t2["verified"], False)
 
+    @pytest.mark.spec("Claimed versus verified")
     def test_S9_a_completed_ticket_is_verified(self):
         """A ticket completes only through verify's invariants and its pull request's CI: complete is verified."""
         path = self.write_plan(graph([]))
@@ -313,10 +333,12 @@ class AttemptTests(WorkbenchFixture):
         self.assertNotIn("gates", t1)
         self.assertNotIn("unverified", t1)
 
+    @pytest.mark.spec("Claimed versus verified")
     def test_S9_an_attempt_still_running_claims_nothing_yet(self):
         found = self.attempts({"t1": attempt_task("t1", "ACTIVE")})
         self.assertIsNone(found[0]["claimed"])
 
+    @pytest.mark.spec("Claimed versus verified")
     def test_S9_an_attempt_that_ended_without_a_complete_report_claims_nothing(self):
         found = self.attempts({"t1": attempt_task("t1", "RELEASED")})
         self.assertIs(found[0]["claimed"], False)

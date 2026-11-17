@@ -129,8 +129,9 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
         )
         return done.returncode, done.stdout, done.stderr
 
+    @pytest.mark.spec("Call command")
     def test_S1_hc_terminal_runs_the_tool_and_prints_its_json(self):
-        """agent-runtime/R150; S13: the one test that starts the executable as a host does"""
+        """S13: the one test that starts the executable as a host does"""
         code, out, err = self.call(
             "status", "--lead", "L1", "--json", '{"name": "w1"}', process=True
         )
@@ -138,8 +139,8 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
         info = json.loads(out)
         self.assertEqual((info["name"], info["parent"]), ("w1", "t0"))
 
+    @pytest.mark.spec("Call command")
     def test_S1_plain_text_tool_result_is_wrapped_as_json(self):
-        """agent-runtime/R150"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -147,8 +148,8 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(code, 0, err)
         self.assertIn("stopped", json.loads(out)["result"])
 
+    @pytest.mark.spec("Call command")
     def test_S2_unexpected_exception_prints_error_json_not_a_traceback(self):
-        """agent-runtime/R151"""
         (self.dir / "state").write_text(
             "not a directory"
         )  # the store cannot open under XDG_STATE_HOME
@@ -157,16 +158,16 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
         self.assertTrue(json.loads(out)["isError"])
         self.assertNotIn("Traceback", err)
 
+    @pytest.mark.spec("Call command")
     def test_S2_tool_error_prints_result_json_and_exits_1(self):
-        """agent-runtime/R151"""
         code, out, err = self.call("status", "--lead", "L1", "--json", "{}")
         self.assertEqual(code, 1, err)
         result = json.loads(out)
         self.assertTrue(result["isError"])
         self.assertIn("name", result["content"][0]["text"])
 
+    @pytest.mark.spec("Call command")
     def test_S3_outside_hc_exits_2_with_require_hc_message_and_starts_nothing(self):
-        """agent-runtime/R152"""
         code, out, err = self.call(
             "spawn", "--lead", "L1", "--json", '{"kind": "worker", "name": "w1"}', hc_terminal=None
         )
@@ -174,8 +175,8 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
         self.assertIn("worker tools", err)
         self.assertEqual(self.hc_calls(), [])
 
+    @pytest.mark.spec("Call command")
     def test_S4_bad_json_or_unknown_tool_exits_2_with_usage_and_starts_nothing(self):
-        """agent-runtime/R153"""
         for args in (
             ("status", "--json", "{not json"),
             ("status", "--json", "[1]"),
@@ -187,8 +188,8 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
                 self.assertIn("usage", err)
                 self.assertEqual(self.hc_calls(), [])
 
+    @pytest.mark.spec("Call command")
     def test_S5_same_lead_in_two_processes_shares_assignments(self):
-        """agent-runtime/R154"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -219,10 +220,10 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
             [(assignment, "complete", "done")],
         )
 
+    @pytest.mark.spec("Call generation conflict")
     def test_S7_other_generation_with_unfinished_work_is_refused_and_the_live_one_keeps_working(
         self,
     ):
-        """agent-runtime/R156"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -256,8 +257,8 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)["reason"], "completed")
 
+    @pytest.mark.spec("Call generation conflict")
     def test_S7_other_generation_is_refused_while_the_live_one_has_an_unacknowledged_report(self):
-        """agent-runtime/R156"""
         spawn_args = {"kind": "worker", "name": "w1", "task": "do x", "cwd": str(self.dir)}
         code, out, err = self.call("spawn", "--lead", "L1", "--json", json.dumps(spawn_args))
         self.assertEqual(code, 0, err)
@@ -291,8 +292,8 @@ class CallTests(unittest.TestCase):  # noqa: PLR0904
             [(assignment, "complete", "done")],
         )
 
+    @pytest.mark.spec("Call generation conflict")
     def test_S7_other_generation_may_start_once_the_live_one_has_nothing_unfinished(self):
-        """agent-runtime/R156"""
         code, out, err = self.call("status", "--lead", "L1", "--json", '{"name": "w1"}')
         self.assertEqual(code, 0, err)
         code, out, err = self.call("status", "--lead", "L2", "--json", '{"name": "w1"}')

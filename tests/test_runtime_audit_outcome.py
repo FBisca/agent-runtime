@@ -101,7 +101,7 @@ class FakeHc(ToolCase):
 
 
 class TeamLimitOutcome(FakeHc):
-    """runtime-audit-fixes/S1-S3: the limit counts active workers. A team of 32 is seeded through the store, never
+    """-S3: the limit counts active workers. A team of 32 is seeded through the store, never
     spawned: only the spawn or resume that is under test goes through the server's call path, which runs in this
     process with hc answered in process. The race for the last slot, which needs the server's threads, runs wholly
     over the real MCP server (a lead resolved here and one resolved by the server can differ on a loaded machine,
@@ -145,6 +145,7 @@ class TeamLimitOutcome(FakeHc):
         """32 active workers and one stopped name: w00 is stopped, w01..w32 are active (33 registered)."""
         self.seed(session, active=[name(i) for i in range(1, LIMIT + 1)], stopped=[name(0)])
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S10_a_full_team_is_seeded_and_only_the_step_under_test_launches(self):
         """The 32 workers a full team needs come from the store: the fake hc sees no launch until the spawn
         that is under test."""
@@ -155,8 +156,9 @@ class TeamLimitOutcome(FakeHc):
         self.assertTrue(result["isError"], "a 33rd active worker was spawned")
         self.assertEqual(self.runs("run"), [])
 
+    @pytest.mark.spec("Team limit")
     def test_S1_a_team_of_32_registered_and_31_stopped_spawns_a_new_name(self):
-        """runtime-audit-fixes/S1, S17: the team limit counts active workers only."""
+        """S17: the team limit counts active workers only."""
         session = self.lead()
         self.seed(session, active=[name(0)], stopped=[name(i) for i in range(1, LIMIT)])
         result, text = self.spawn(session, LIMIT)
@@ -165,8 +167,9 @@ class TeamLimitOutcome(FakeHc):
         )
         self.assertEqual(len(self.launched(name(LIMIT))), 1)
 
+    @pytest.mark.spec("Team limit")
     def test_S2_a_new_name_at_32_active_is_refused_with_the_way_out_and_nothing_launches(self):
-        """runtime-audit-fixes/S2, S17: the 33rd active worker is refused before anything launches."""
+        """S17: the 33rd active worker is refused before anything launches."""
         session = self.lead()
         self.seed(session, active=[name(i) for i in range(LIMIT)])
         result, text = self.spawn(session, LIMIT)
@@ -174,8 +177,9 @@ class TeamLimitOutcome(FakeHc):
         self.assertIn(LIMIT_TEXT, text)
         self.assertEqual(self.launched(name(LIMIT)), [], "hc run was called for the refused name")
 
+    @pytest.mark.spec("Team limit")
     def test_S2_resuming_a_stopped_name_at_32_active_is_refused_and_nothing_is_sent(self):
-        """runtime-audit-fixes/S2: reactivating a stopped name takes a slot, so a full team refuses it."""
+        """reactivating a stopped name takes a slot, so a full team refuses it."""
         session = self.lead()
         self.full_team_with_history(session)
         result, text = self.call(session, "resume", {"name": name(0), "task": "come back"})
@@ -204,8 +208,9 @@ class TeamLimitOutcome(FakeHc):
             replies[reply["id"]] = reply["result"]
         return [replies[900 + index] for index in range(len(calls))]
 
+    @pytest.mark.spec("Team limit")
     def test_S2_a_reactivation_racing_a_new_spawn_for_the_last_slot_takes_it_once(self):
-        """runtime-audit-fixes/S2: 31 active and one stopped name; the stopped name's resume and a new spawn race
+        """31 active and one stopped name; the stopped name's resume and a new spawn race
         for the one free slot. The slot is reserved atomically, so exactly one wins and the other is refused."""
         session = self.start(worker_rows(), ENV)
         first, text = self.spawn(session, 0)  # the server's first call creates the lead's team
@@ -226,8 +231,9 @@ class TeamLimitOutcome(FakeHc):
         started = len(self.sent_to(name(0))) + len(self.launched(name(LIMIT)))
         self.assertEqual(started, 1, "both racers reached the worker")
 
+    @pytest.mark.spec("Team limit")
     def test_S3_resuming_an_active_worker_in_a_full_team_with_history_takes_no_slot(self):
-        """runtime-audit-fixes/S3: at 32 active (one name stopped before), an active resume succeeds."""
+        """at 32 active (one name stopped before), an active resume succeeds."""
         session = self.lead()
         self.full_team_with_history(session)
         result, text = self.call(session, "resume", {"name": name(5), "task": "next step"})
@@ -259,7 +265,7 @@ LEDGER = {"version": 1, "kind": "agent-orchestrator/ledger"}
 
 
 class ReceiptsGuardOutcome(unittest.TestCase):
-    """runtime-audit-fixes/S4-S6: the real hook as a subprocess. A worker is a native subagent (agent_id) or a
+    """-S6: the real hook as a subprocess. A worker is a native subagent (agent_id) or a
     session the runtime resolves as a spawned worker (a fake `agent-runtime` on PATH answers role worker)."""
 
     def setUp(self):
@@ -331,8 +337,9 @@ class ReceiptsGuardOutcome(unittest.TestCase):
         lock.write_text("")
         return keyed, receipts, ledger_path, lock
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S4_a_repository_state_receipts_path_is_allowed_for_workers(self):
-        """runtime-audit-fixes/S4, S17: `src/state/receipts/slice.ts` has no orchestrator ledger beside it."""
+        """S17: `src/state/receipts/slice.ts` has no orchestrator ledger beside it."""
         repo = self.root / "repo"
         source = repo / "src" / "state" / "receipts" / "slice.ts"
         source.parent.mkdir(parents=True)
@@ -363,8 +370,9 @@ class ReceiptsGuardOutcome(unittest.TestCase):
         denied = sorted(key for key, decision in verdicts.items() if decision != "allow")
         self.assertEqual(denied, [], "repository paths were refused: %s" % denied)
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S6_a_marked_ledgers_receipts_ledger_and_lock_are_denied_under_a_custom_root(self):
-        """runtime-audit-fixes/S6: any root, written relative, absolute or through a symlink alias."""
+        """any root, written relative, absolute or through a symlink alias."""
         custom = self.root / "plans-root"
         keyed, receipts, ledger, lock = self.plan_state(custom)
         alias = self.root / "alias"
@@ -393,8 +401,9 @@ class ReceiptsGuardOutcome(unittest.TestCase):
         allowed = sorted(key for key, decision in verdicts.items() if decision != "deny")
         self.assertEqual(allowed, [], "marked orchestrator state was writable: %s" % allowed)
 
+    @pytest.mark.spec("Receipts path guard")
     def test_S6_an_unmarked_ledger_outside_the_default_root_is_not_protected(self):
-        """runtime-audit-fixes/S6: the documented gap until the orchestrator writes the marker (D5)."""
+        """the documented gap until the orchestrator writes the marker (D5)."""
         unmarked = self.root / "elsewhere" / "state"
         _, receipts, ledger, _ = self.plan_state(unmarked, ledger={"version": 1})
         payloads = [
@@ -408,8 +417,9 @@ class ReceiptsGuardOutcome(unittest.TestCase):
             denied, [], "an unmarked ledger outside the default root was guarded: %s" % denied
         )
 
+    @pytest.mark.spec("Receipts path guard")
     def test_control_a_default_root_receipt_is_denied_and_reading_it_is_allowed(self):
-        """runtime-audit-fixes/S5, S17: the default root `~/.local/state/orchestrate/` stays protected."""
+        """S17: the default root `~/.local/state/orchestrate/` stays protected."""
         default = self.root / ".local" / "state" / "orchestrate"
         _, receipts, _, _ = self.plan_state(default)
         receipt = receipts / "S1.integration.1.json"
@@ -432,7 +442,7 @@ class ReceiptsGuardOutcome(unittest.TestCase):
 
 
 class ResumeRollbackOutcome(FakeHc):
-    """runtime-audit-fixes/S7: the server's call path in process, with the store failing once between the
+    """the server's call path in process, with the store failing once between the
     resume's registration and its send (the plan's seam: a patched store raising sqlite3.Error)."""
 
     def env(self):
@@ -475,8 +485,8 @@ class ResumeRollbackOutcome(FakeHc):
         self.assertFalse(spawned["isError"], text)
         return task_id, spawned["structuredContent"]
 
+    @pytest.mark.spec("Store failure handling")
     def test_S7_a_store_failure_after_registration_fails_the_assignment_and_releases_the_task(self):
-        """runtime-audit-fixes/S7"""
         task_id, first = self.linked_worker()
         registered, armed, fired = [], [False], [False]
         real_register, real_transaction = Store.register, Store.transaction
@@ -655,7 +665,7 @@ WAITS, LIVE = 56, 64
 
 
 class McpServerOutcome(FakeHc):
-    """runtime-audit-fixes/S9, S11 over stdio. Waits are held in flight by a fake `hc wait` that sleeps; slow
+    """S11 over stdio. Waits are held in flight by a fake `hc wait` that sleeps; slow
     non-wait calls by a fake `hc get` that sleeps under `collect`."""
 
     HOLD = 40  # seconds a held call's hc sleeps; the checks finish well inside it
@@ -692,10 +702,11 @@ class McpServerOutcome(FakeHc):
         early = [r for r in (wire.answer(1000 + i, 0) for i in range(WAITS)) if r]
         self.assertEqual(early, [], "harness: held waits returned early")
 
+    @pytest.mark.spec("MCP request ids")
     def test_S9_a_non_scalar_id_is_answered_with_32600_and_id_null_and_the_server_keeps_serving(
         self,
     ):
-        """runtime-audit-fixes/S9, S17"""
+        """S17"""
         outcomes = {}
         for label, bad in (("array", [1, 2]), ("object", {"k": 1}), ("boolean", True)):
             wire = self.wire()
@@ -710,8 +721,8 @@ class McpServerOutcome(FakeHc):
         expected = {"error": -32600, "next served": True}
         self.assertEqual(outcomes, {label: expected for label in outcomes})
 
+    @pytest.mark.spec("Call caps")
     def test_S11_the_57th_wait_is_refused_at_once_while_non_wait_tools_and_ping_are_served(self):
-        """runtime-audit-fixes/S11"""
         wire = self.wire()
         self.hold_waits(wire)
         wire.tool(1999, "wait", {"target": "all", "timeout": 120})
@@ -728,8 +739,9 @@ class McpServerOutcome(FakeHc):
         wire.request(2001, "ping")
         self.assertEqual((wire.answer(2001, 5) or {}).get("result"), {}, "ping is inside the cap")
 
+    @pytest.mark.spec("Call caps")
     def test_S11_the_65th_live_call_is_refused_at_once_while_ping_is_served(self):
-        """runtime-audit-fixes/S11: 56 waits plus 8 slow non-wait calls fill the 64 live calls."""
+        """56 waits plus 8 slow non-wait calls fill the 64 live calls."""
         slow = ["slow%d" % index for index in range(LIVE - WAITS)]
         wire = self.wire({"get:" + s: {"sleep": self.HOLD, "out": raw(s, "t0")} for s in slow})
         self.hold_waits(wire)
@@ -768,7 +780,7 @@ class McpServerOutcome(FakeHc):
 
 
 class CallerIdentityOutcome(unittest.TestCase):
-    """runtime-audit-fixes/S16: `resolve --json` with a fake hc and a process table that cannot be read."""
+    """`resolve --json` with a fake hc and a process table that cannot be read."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -798,8 +810,8 @@ class CallerIdentityOutcome(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         return json.loads(done.stdout)
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_resolve_json_carries_the_caller_kind_and_whether_it_is_verified(self):
-        """runtime-audit-fixes/S16"""
         for env in ({}, {"HC_TERMINAL_ID": "t0"}, {"HC_TERMINAL_ID": "t1"}):
             info = self.resolve(**env)
             self.assertIn("caller", info, "resolve --json has no caller: %s" % info)
@@ -807,8 +819,9 @@ class CallerIdentityOutcome(unittest.TestCase):
             self.assertIn(caller.get("kind"), ("lead", "worker", "unknown"), info)
             self.assertIsInstance(caller.get("verified"), bool, info)
 
+    @pytest.mark.spec("Caller identity")
     def test_S16_worker_environment_markers_alone_never_verify_the_caller(self):
-        """runtime-audit-fixes/S16: no ancestry could be observed, so nothing is verified."""
+        """no ancestry could be observed, so nothing is verified."""
         info = self.resolve(
             HC_TERMINAL_ID="t1",
             CODEX_THREAD_ID="worker-thread",

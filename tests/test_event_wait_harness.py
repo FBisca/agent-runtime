@@ -16,6 +16,7 @@ pytestmark = pytest.mark.integration
 
 
 class EventHarnessTests(EventRig):
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S11_a_test_starts_only_the_sessions_it_talks_to(self):
         """S11: no server for a rig that drives the tool handlers in process; the lead alone for a test that only
         waits on it; a worker's own session once the test talks to that worker."""

@@ -21,7 +21,7 @@ def subsequence(wanted, actual):
 class EventTests(ArchiveFixture, unittest.TestCase):
     @pytest.mark.integration
     def test_S27_every_state_change_is_one_json_line_logged_before_the_next_step(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
+        """orchestrate-lean-loop/S27"""
         self.waits(self.ticket_merged())
         self.run_driver()
         states = [e for e in self.run_events("state") if e["task"] == "t1"]
@@ -59,7 +59,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
 
     @pytest.mark.integration
     def test_S27_findings_are_logged_with_their_kind_and_source(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
+        """orchestrate-lean-loop/S27"""
         review = self.review(verdict="block", major=[MAJOR], deferred=[DEFERRED])
         self.waits([self.worker_done(tests=True), self.reviewer_done(review)])
         self.run_driver()
@@ -71,7 +71,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
 
     @pytest.mark.integration
     def test_S27_verify_failures_and_ci_lines_are_findings_too(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
+        """orchestrate-lean-loop/S27"""
         self.waits([self.worker_done(), self.worker_done("t1r1", tests=True)])
         self.run_driver()
         found = self.run_events("finding")
@@ -82,7 +82,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
 
     @pytest.mark.integration
     def test_S27_idle_ticks_are_logged(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
+        """orchestrate-lean-loop/S27"""
         self.prs(["OPEN"] * 4 + ["MERGED"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
@@ -90,7 +90,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
 
     @pytest.mark.integration
     def test_S27_metrics_are_rebuilt_from_events_after_a_crash(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
+        """orchestrate-lean-loop/S27"""
         worker = self.worker_done(tests=True)
         worker["assignments"][0]["usage"] = {"input_tokens": 100, "output_tokens": 20}
         reviewer = self.reviewer_done(self.review(verdict="block", major=[MAJOR]))
@@ -130,7 +130,7 @@ class RollupTests(unittest.TestCase):
 
     @pytest.mark.unit
     def test_S27_the_rollup_counts_events_alone(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
+        """orchestrate-lean-loop/S27"""
         spec = load_script()
         at = "2026-11-06T00:00:00+00:00"
         rows = [
@@ -181,9 +181,9 @@ class RollupTests(unittest.TestCase):
         self.assertEqual(ticket["usage"], {"input_tokens": 7})
         self.assertEqual(ticket["route"]["model"], "haiku")
 
+    @pytest.mark.spec("Usage rolls up")
     @pytest.mark.unit
     def test_S10_a_key_is_summed_when_every_assignment_reports_it_else_null(self):
-        """worker-usage/S10"""
         spec = load_script()
         at = "2026-11-07T00:00:00+00:00"
 
@@ -206,9 +206,9 @@ class RollupTests(unittest.TestCase):
         rows = [{"at": at, "kind": "state", "unit": "t1", "route": {"model": "haiku"}}]
         self.assertEqual(spec.events.rollup(rows, "demo")["tickets"]["t1"]["usage"], "unknown")
 
+    @pytest.mark.spec("Usage rolls up")
     @pytest.mark.unit
     def test_S10_an_assignment_that_reported_no_usage_nulls_every_figure(self):
-        """worker-usage/S10"""
         spec = load_script()
         at = "2026-11-07T00:00:00+00:00"
 
@@ -237,9 +237,9 @@ class RollupTests(unittest.TestCase):
         rows = [route, agent("a1", "worker"), agent("a2", "reviewer")]
         self.assertEqual(spec.events.rollup(rows, "demo")["tickets"]["t1"]["usage"], "unknown")
 
+    @pytest.mark.spec("Usage rolls up")
     @pytest.mark.unit
     def test_S10_the_metrics_table_shows_each_usage_figure_in_its_column_and_null_as_null(self):
-        """worker-usage/S10"""
         spec = load_script()
         ticket = {
             "route": {"size": "small", "difficulty": "simple"},
@@ -270,7 +270,7 @@ class RollupTests(unittest.TestCase):
 class DecisionEventTests(DeciderFixture, unittest.TestCase):
     @pytest.mark.integration
     def test_S27_an_applied_decision_is_logged(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S27"""
+        """orchestrate-lean-loop/S27"""
         self.waits([self.blocked(), self.decided("skip", reason="not needed")])
         self.run_driver()
         decisions = self.run_events("decision")

@@ -205,9 +205,8 @@ def _ticket_rows(ids, statuses, data):
 
 
 def complete_person_ticket(args):
-    """`complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...`: the Lead records a person-owned ticket done, with
-    the test nodes (a node in another repository included) that prove the scenarios it satisfies. The status and the
-    nodes go into the ledger under its lock, so a live driver keeps them and the next run archives with them."""
+    """`complete <plan> <T#> --note TEXT`: the Lead records a person-owned ticket done. The status goes into the
+    ledger under its lock, so a live driver keeps it and the next run archives with it."""
     refusal = approval_refusal(verb="complete")
     if refusal:
         # The runtime's wording is about approval; its reason is the part before the dash.
@@ -219,33 +218,16 @@ def complete_person_ticket(args):
     note = " ".join(args.note.split())
     if not note:
         raise Refused("complete: needs a --note saying what was done, kept in the ticket's status")
-    covers = _covers_of(args.cover or [])
     model, _, ledger_path, _, seen = _engine().acceptance_context(args)
-    ticket = _person_ticket(model, args.ticket, covers)
+    ticket = _person_ticket(model, args.ticket)
     require(ledger_path.is_file(), "complete: %s has no run yet; run it first" % model.slug)
     status = "COMPLETE %s · %s" % (timeutil.now().date().isoformat(), note)
-    recorded = _record_person_ticket(ledger_path, seen, ticket, covers, status)
-    return {"ticket": ticket.id, "status": status, "covers": recorded}
+    _record_person_ticket(ledger_path, seen, ticket, status)
+    return {"ticket": ticket.id, "status": status}
 
 
-def _covers_of(items):
-    """{scenario: [node, ...]} as `--cover S<n>=<node>` spells it, refused when an item is not one."""
-    covers: dict[str, list[str]] = {}
-    for item in items:
-        scenario_id, separator, node = item.partition("=")
-        if not (separator and scenario_id.strip() and node.strip()):
-            raise Refused(
-                "complete: --cover %r is not S<n>=<node>, such as --cover S2=other-repo/tests/test_x.py::test_y"
-                % item
-            )
-        found = covers.setdefault(scenario_id.strip(), [])
-        if node.strip() not in found:
-            found.append(node.strip())
-    return covers
-
-
-def _person_ticket(model, named, covers):
-    """The person-owned ticket `complete` records, refused when it is missing, an agent's, or covers what it cannot."""
+def _person_ticket(model, named):
+    """The person-owned ticket `complete` records, refused when it is missing or an agent's."""
     ticket = next((t for t in model.tickets if t.id.lower() == named.lower()), None)
     if ticket is None:
         raise Refused(
@@ -257,30 +239,16 @@ def _person_ticket(model, named, covers):
             "complete: %s is an agent ticket; the driver's workers complete it, and `complete` records only a "
             "person-owned ticket" % ticket.id
         )
-    for scenario_id in covers:
-        if scenario_id not in ticket.satisfies:
-            raise Refused(
-                "complete: --cover names %s, which %s does not satisfy (it satisfies %s)"
-                % (scenario_id, ticket.id, ", ".join(ticket.satisfies))
-            )
     return ticket
 
 
-def _record_person_ticket(ledger_path, seen, ticket, covers, status):
-    """The ticket's status and its covered nodes, written under the ledger's lock; a stale snapshot is refused."""
+def _record_person_ticket(ledger_path, seen, ticket, status):
+    """The ticket's status, written under the ledger's lock; a stale snapshot is refused."""
     try:
         with ledger(ledger_path, snapshot=seen, keys=("plan",)) as data:
             data.setdefault("ticket_status", {})[ticket.id] = status
-            recorded = data.setdefault("person_covers", {})
-            if covers:
-                recorded[ticket.id] = covers
-            else:
-                recorded.pop(ticket.id, None)
-            if not recorded:
-                del data["person_covers"]
     except ledgers.LedgerStale as error:
         raise Refused("complete: %s" % error) from None
-    return covers
 
 
 def launch(args, run_args):

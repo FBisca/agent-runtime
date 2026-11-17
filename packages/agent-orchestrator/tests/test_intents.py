@@ -130,8 +130,9 @@ class OperationRuntime(GateFixture):
 
 
 class IntentBooking(OperationRuntime, unittest.TestCase):
+    @pytest.mark.spec("Intents before sends")
     def test_S14_every_spawn_and_resume_is_booked_with_a_fresh_uuid_before_the_call(self):
-        """orchestrator-engine/R103: orchestrator-audit-fixes/S14 — spawn, attach and fix-round resume."""
+        """orchestrator-audit-fixes/S14 — spawn, attach and fix-round resume."""
         self.waits([self.worker_done(), self.worker_done("t1r1", tests=True), self.reviewer_done()])
         self.run_driver()
         calls = self.keyed()
@@ -149,10 +150,11 @@ class IntentBooking(OperationRuntime, unittest.TestCase):
             self.assertTrue(row["assignment_id"])
             self.assertIn(row["name"], ("demo-t1", "demo-t1-review"))
 
+    @pytest.mark.spec("Intents before sends")
     def test_S14_a_runtime_that_does_not_take_operation_ids_gets_no_unkeyed_resume_and_the_lead_is_asked(
         self,
     ):
-        """orchestrator-engine/R103: orchestrator-audit-fixes/S14"""
+        """orchestrator-audit-fixes/S14"""
         self.refused = ("resume",)
         self.waits([self.worker_done(), self.skipped()])
         self.run_driver()
@@ -162,10 +164,11 @@ class IntentBooking(OperationRuntime, unittest.TestCase):
         self.assertIn("operation", self.request()["reason"])
         self.assertEqual(self.open_intents(), {})
 
+    @pytest.mark.spec("Intents before sends")
     def test_S14_a_runtime_that_does_not_take_operation_ids_gets_no_unkeyed_spawn_and_the_lead_is_woken(
         self,
     ):
-        """orchestrator-engine/R103: orchestrator-audit-fixes/S14"""
+        """orchestrator-audit-fixes/S14"""
         self.refused = ("spawn",)
         self.waits([])
         self.run_driver(expect=1)
@@ -175,8 +178,9 @@ class IntentBooking(OperationRuntime, unittest.TestCase):
 
 
 class ChaseAndAnswersKeys(OperationRuntime, EnvelopeFixture, unittest.TestCase):
+    @pytest.mark.spec("Intents before sends")
     def test_S14_a_chase_for_missing_responses_resumes_under_its_own_key(self):
-        """orchestrator-engine/R103: orchestrator-audit-fixes/S14"""
+        """orchestrator-audit-fixes/S14"""
         self.waits(
             self.to_fix_round()
             + [
@@ -192,8 +196,9 @@ class ChaseAndAnswersKeys(OperationRuntime, EnvelopeFixture, unittest.TestCase):
         self.assertIn("t1/t1r1/resume", paths)
         self.assertEqual(len([c for c, _ in calls if c["args"]["name"] == "demo-t1"]), 3)
 
+    @pytest.mark.spec("Intents before sends")
     def test_S14_the_answers_resume_carries_a_key_too(self):
-        """orchestrator-engine/R103: orchestrator-audit-fixes/S14"""
+        """orchestrator-audit-fixes/S14"""
         from test_gates import NIT, QUESTION
 
         answers = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 1))
@@ -214,8 +219,9 @@ class ChaseAndAnswersKeys(OperationRuntime, EnvelopeFixture, unittest.TestCase):
 
 
 class IntentRestart(OperationRuntime, unittest.TestCase):
+    @pytest.mark.spec("A restart resolves open intents")
     def test_S15_an_intent_the_runtime_never_saw_is_acted_on_again(self):
-        """orchestrator-engine/R104: orchestrator-audit-fixes/S15 — absent."""
+        """orchestrator-audit-fixes/S15 — absent."""
         self.crash_the_first_resume(delivered=False)
         (key,) = self.open_intents()
         self.waits([self.worker_done("t1r1", tests=True), self.reviewer_done()])
@@ -229,8 +235,9 @@ class IntentRestart(OperationRuntime, unittest.TestCase):
         self.assertEqual(self.requests_of(), [])
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
+    @pytest.mark.spec("A restart resolves open intents")
     def test_S15_an_intent_the_runtime_holds_as_working_is_adopted_and_not_sent_again(self):
-        """orchestrator-engine/R104: orchestrator-audit-fixes/S15 — bound, working, blocked, decision, complete, failed."""
+        """orchestrator-audit-fixes/S15 — bound, working, blocked, decision, complete, failed."""
         self.crash_the_first_resume()
         (key,) = self.open_intents()
         self.operation_state = "working"
@@ -247,8 +254,9 @@ class IntentRestart(OperationRuntime, unittest.TestCase):
         self.assertEqual(self.requests_of(), [])
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
+    @pytest.mark.spec("A restart resolves open intents")
     def test_S15_every_state_the_runtime_has_bound_is_adopted(self):
-        """orchestrator-engine/R104: orchestrator-audit-fixes/S15"""
+        """orchestrator-audit-fixes/S15"""
         for state in ADOPTED:
             with self.subTest(state=state):
                 self.setUp()
@@ -261,8 +269,9 @@ class IntentRestart(OperationRuntime, unittest.TestCase):
                 self.assertEqual(self.ledger()["intents"][key]["state"], "adopted")
                 self.assertEqual(self.requests_of(), [], "%s: a request was raised" % state)
 
+    @pytest.mark.spec("A restart resolves open intents")
     def test_S15_a_pending_or_unknown_intent_asks_the_lead_and_never_resends(self):
-        """orchestrator-engine/R104: orchestrator-audit-fixes/S15 — the Lead retries, and only then does a resume go out."""
+        """orchestrator-audit-fixes/S15 — the Lead retries, and only then does a resume go out."""
         for state, lookup_fails in (("pending", False), ("unknown", False), ("pending", True)):
             with self.subTest(state=state, lookup_fails=lookup_fails):
                 self.setUp()
@@ -280,8 +289,9 @@ class IntentRestart(OperationRuntime, unittest.TestCase):
                 self.assertTrue(self.wake_lines("decision"), "the Lead was not woken")
                 self.assertEqual(self.ledger()["intents"][key]["state"], "released")
 
+    @pytest.mark.spec("A restart resolves open intents")
     def test_S15_the_lead_deciding_retry_sends_once_under_a_new_key(self):
-        """orchestrator-engine/R104: orchestrator-audit-fixes/S15"""
+        """orchestrator-audit-fixes/S15"""
         self.crash_the_first_resume()
         (first,) = self.open_intents()
         self.operation_state = "pending"
@@ -296,8 +306,9 @@ class IntentRestart(OperationRuntime, unittest.TestCase):
         self.assertEqual(self.ledger()["intents"][first]["state"], "released")
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
+    @pytest.mark.spec("A restart resolves open intents")
     def test_S15_a_held_intent_is_not_looked_up_again_each_round(self):
-        """orchestrator-engine/R104: orchestrator-audit-fixes/S15"""
+        """orchestrator-audit-fixes/S15"""
         self.crash_the_first_resume()
         self.operation_state = "pending"
         self.waits([wait_result()] * 4 + [self.skipped()])
@@ -322,8 +333,9 @@ class FailGateBooking(OperationRuntime, PrFixture, unittest.TestCase):
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
         return [rebased, again]
 
+    @pytest.mark.spec("A failed gate is booked once")
     def test_S16_the_round_the_next_phase_and_the_draft_are_booked_before_any_gh_call(self):
-        """orchestrator-engine/R105: orchestrator-audit-fixes/S16"""
+        """orchestrator-audit-fixes/S16"""
         seen = []
         self.at_undo = seen.append
         self.prs([DIRTY, "MERGED"])
@@ -338,8 +350,9 @@ class FailGateBooking(OperationRuntime, PrFixture, unittest.TestCase):
         self.assertEqual(task["fix"]["source"], "conflict")
         self.assertEqual(task["report"]["review_rounds"], 1)
 
+    @pytest.mark.spec("A failed gate is booked once")
     def test_S16_a_crash_between_the_booking_and_the_draft_counts_the_round_once(self):
-        """orchestrator-engine/R105: orchestrator-audit-fixes/S16"""
+        """orchestrator-audit-fixes/S16"""
 
         def die(_ledger):
             raise Crash("the driver died at the first gh call after the gate failed")
@@ -360,8 +373,9 @@ class FailGateBooking(OperationRuntime, PrFixture, unittest.TestCase):
             self.task()["status"], "COMPLETE"
         )  # merged by hand meanwhile: the fake's next PR state
 
+    @pytest.mark.spec("A failed gate is booked once")
     def test_S16_a_gate_past_the_cap_is_booked_with_its_request_before_any_gh_call(self):
-        """orchestrator-engine/R105: orchestrator-audit-fixes/S16"""
+        """orchestrator-audit-fixes/S16"""
         seen = []
         self.at_undo = seen.append
         self.prs([DIRTY])

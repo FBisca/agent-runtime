@@ -54,6 +54,7 @@ class WaitUsageTests(EventRig):
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
         return path
 
+    @pytest.mark.spec("Wait usage rows")
     def test_S9_wait_rows_of_bound_workers_carry_usage_and_the_rest_carry_none(self):
         """S9: a returned row whose worker has a measurement carries `usage`; another row has no key."""
         self.prepare()

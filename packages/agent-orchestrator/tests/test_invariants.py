@@ -48,6 +48,7 @@ class LedgerInvariantTests(unittest.TestCase):
             code = driver.run_cli(["ledger", "check", str(self.write(data, name))])
         return code, out.getvalue(), err.getvalue()
 
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_a_write_that_breaks_an_invariant_is_refused_by_name_and_nothing_lands(self):
         """R: two open attempts naming one review file are refused at the write, naming the invariant, the task and
         the way out."""
@@ -65,12 +66,14 @@ class LedgerInvariantTests(unittest.TestCase):
         landed = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(landed["tasks"]["t1"]["gate"], None, "the refused write landed")
 
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_a_read_of_a_broken_ledger_is_not_refused(self):
         """D1: only a write is checked, so a legacy ledger can still be diagnosed rather than refused on every read."""
         self.write(ledger(t1=task(gate="reviewer")))
         with driver.ledger(self.path) as data:
             self.assertEqual(data["tasks"]["t1"]["gate"], "reviewer")
 
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_ledger_check_names_the_state_that_stalled_the_run(self):
         """R: the same illegal states, on a captured ledger, each by name with the task that holds it and the
         way out."""
@@ -93,6 +96,7 @@ class LedgerInvariantTests(unittest.TestCase):
                 self.assertEqual(refused["task"], named)
                 self.assertTrue(refused["way_out"])
 
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_control_a_coherent_ledger_passes(self):
         """A ledger the driver itself writes passes: one review file per open attempt (a superseded attempt keeps its
         own), a parked unit, every gate one the driver knows."""
@@ -148,6 +152,7 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
             else []
         )
 
+    @pytest.mark.spec("A reworked unit writes a new review")
     def test_S3_a_rework_after_an_answer_writes_the_next_review_file(self):
         self.waits(
             [
@@ -183,6 +188,7 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
             "resolutions", asked[-1], "the driver forgot the blocker the earlier review raised"
         )
 
+    @pytest.mark.spec("A reworked unit writes a new review")
     def test_S3_a_rework_resolution_closes_the_blocker_the_first_review_raised(self):
         """S3's promise: the earlier blockers stay nameable, so the next review can close one with a resolution."""
         self.waits(
@@ -210,6 +216,7 @@ class ReviewWriteOnceTests(GateFixture, unittest.TestCase):
     def blocking(self):
         return self.review2(verdict="block", items=[BLOCKING])
 
+    @pytest.mark.spec("A reworked unit writes a new review")
     def test_S3_the_delta_rereview_of_a_disputed_answer_still_names_the_earlier_blocker(self):
         """S3 one pass later: the delta re-review a disputed answer starts is the same rework, so the reviews the
         unit already had stay nameable and its resolution still closes the blocker they raised."""
@@ -274,6 +281,7 @@ class LedgerRefusedAtAStepTests(GateFixture, unittest.TestCase):
 
         return mock.patch.object(invariants, "check", check)
 
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_a_refused_step_write_asks_the_lead_instead_of_ending_the_run(self):
         self.waits([self.worker_done(tests=True), self.skipped()])
         with self.refusing("converged"):
@@ -289,6 +297,7 @@ class LedgerRefusedAtAStepTests(GateFixture, unittest.TestCase):
             self.task("t1")["request"]["kind"], "reported", "the request does not name the step"
         )
 
+    @pytest.mark.spec("Ledger invariants")
     def test_S2_a_ledger_that_cannot_hold_the_request_stops_the_run_by_name(self):
         """A ledger already illegal before the write holds no request either: the run stops naming the invariant."""
         self.waits([self.worker_done(tests=True)])

@@ -1,293 +1,680 @@
 # Agent runtime
 Paths: .claude-plugin/, packages/agent-runtime/src/agent_runtime/, packages/agent-runtime/tests/, server/, hooks/, bin/, install.sh
 
-> **Repository move (2026-11-03).** The runtime now lives in its own repository, which supersedes D1 of the archived `agent-runtime-followups` plan ("the runtime stays in dotfiles"). Earlier plans and requirements below refer to the original layout.
+The agent runtime gives skills one set of delegation verbs (spawn, message, resume, report, wait, task, collect, stop, status, list) that per-runtime adapters (hc, herdmates, native) implement. `agent-runtime resolve` picks the runtime deterministically. The plugin serves the verbs as MCP tools in Claude and Codex; a SubagentStart hook tells native subagents which reads they may call, and a PreToolUse guard restricts subagents and blocks raw hc commands in Bash. How Claude Code, Codex and Pi are identified and what each may mutate is specified in [harness-adapters.md](harness-adapters.md).
 
-The agent runtime contract gives skills one set of delegation verbs (spawn, message, resume, report, wait, task, collect, stop, status, list) that per-runtime adapters (hc, herdmates, native) implement. `agent-runtime resolve` picks the runtime deterministically: `HERDR_PANE_ID` (Claude to herdmates, Codex to native) beats `HC_TERMINAL_ID` (hc, role from `hc get`), which beats native.
-
-The plugin serves the verbs as MCP tools in Claude and Codex. A SubagentStart hook tells native subagents which runtime reads they may call, and a PreToolUse guard restricts subagents and blocks raw hc commands in Bash. The harnesses themselves - how Claude Code, Codex and Pi are identified, how a session binds to a team, and what each may mutate - are specified in [harness-adapters.md](harness-adapters.md).
-
-Under structured dispatch (`AGENT_RUNTIME_DISPATCH=1`, enabled in both Claude and Codex configs; R58 keeps the legacy path when absent), reports, peer messages and tasks live in a private versioned SQLite store, not hc text: `report` publishes idempotent, server-attributed events (worker reports no longer use `hc send`), and `wait` returns reports and assignment states together as tool results, with receipts (piggybacked on the next call) acknowledging delivery and `more` continuations bounding payloads. A `task` tool adds durable shared tasks with dependencies and atomic claims. `status` and `collect` remain as diagnostic fallback and never substitute for an accepted report; diagnostics authorize against the dispatch store first and fall back to hc-only state with `delivery_error`, and authorization failures return no hc data; `status`, `list`, `collect` and `task list` piggyback inbox messages only when the call carries a `receipt`. R52's receipt piggyback on any next call is narrowed by R83 for those read tools. Requirements R24, R25 and R29 describe the earlier hc-send path and apply when dispatch is off.
+Under structured dispatch (`AGENT_RUNTIME_DISPATCH=1`, set in both Claude and Codex configs), reports, peer messages and tasks live in a private versioned SQLite store, not in hc text. `report` publishes idempotent, server-attributed events, and `wait` returns reports and assignment states together as tool results, with receipts acknowledging delivery. `status` and `collect` are a diagnostic fallback that never substitutes for an accepted report: diagnostics authorize against the dispatch store first and fall back to hc-only state with `delivery_error`, and authorization failures return no hc data.
 
 ## Requirements
 
-- **R1** WHEN `HERDR_PANE_ID` is set and `--cli claude`, THEN `agent-runtime resolve` prints `runtime=herdmates`. (from agent-runtime/S1)
-- **R2** WHEN `HERDR_PANE_ID` is set and `--cli codex`, THEN it prints `runtime=native`. (from agent-runtime/S2)
-- **R3** WHEN only `HC_TERMINAL_ID` is set and `hc get` reports `parent: null`, THEN it prints `runtime=hc role=lead`. (from agent-runtime/S3)
-- **R4** WHEN only `HC_TERMINAL_ID` is set and `hc get` reports `parent: tX`, THEN it prints `runtime=hc role=worker parent=tX`. (from agent-runtime/S4)
-- **R5** WHEN neither variable is set, THEN it prints `runtime=native role=lead`. (from agent-runtime/S5)
-- **R6** WHEN both variables are set, THEN `HERDR_PANE_ID` wins. (from agent-runtime/S6)
-- **R7** WHEN `hc get` fails or exceeds 2 s, THEN it prints `runtime=hc role=unknown` and exits 0. (from agent-runtime/S7)
-- **R8** WHEN `agent-runtime contract` runs, THEN it prints the verbs, the gap rule and only the resolved runtime's adapter. (from agent-runtime/S8)
-- **R9** WHEN `agent-runtime help` runs, THEN it lists the runtime's capabilities, each marked in-contract yes or no. (from agent-runtime/S9)
-- **R10** WHEN a capability is marked not in contract, THEN the printed gap rule says: propose the change in chat in one line, ask before the raw command. (from agent-runtime/S10)
-- **R11** WHEN `agent-runtime status <name>` runs under hc, THEN it prints JSON with `name, runtime, role, parent, state, turn, native, next` and `next` is non-empty. (from agent-runtime/S11)
-- **R12** WHEN hc reports working, idle, done, blocked, exited/finished or anything else, THEN `state` is working, idle, done, blocked, error, exited or unknown (`error` for an hc `error` status, R104), and a blocked worker's `next` includes a raw `hc keys` row marked as a gap. (from agent-runtime/S12)
-- **R13** WHEN `status` runs under herdmates, THEN it maps `herdr pane get` output (the logic moved from `orchestrate.py herdr`) and the two moved tests pass. (from agent-runtime/S13)
-- **R14** WHEN `status` runs under native, THEN `state` is unknown and `next` points to the return value or SendMessage. (from agent-runtime/S14)
-- **R15** WHEN `agent-runtime list` runs under hc, THEN it returns one status per child of the caller. (from agent-runtime/S15)
-- **R16** WHEN a Claude session starts, THEN its context contains `agent-runtime: runtime=… role=… parent=… · run agent-runtime contract before delegating`. (from agent-runtime/S16) *Superseded by R116–R118 (lead-liveness-hooks): no session pointer is injected; the context hook prints one action-aware reminder only for leads with unseen work.*
-- **R17** WHEN a Codex session starts after the hook is trusted, THEN its context contains the same line. (from agent-runtime/S17) *Superseded by R116–R118 (lead-liveness-hooks): no session pointer is injected; the context hook prints one action-aware reminder only for leads with unseen work.*
-- **R18** WHEN a Claude subagent or in-process teammate starts, THEN its context says it is a subagent and must not run runtime commands. (from agent-runtime/S18)
-- **R19** WHEN a subagent's Bash call runs `hc run`, `hc send` or `hc kill`, THEN the PreToolUse hook denies it with a reason. (from agent-runtime/S19)
-- **R20** WHEN a Bash call inside an agent session runs `herdmates teammux-launch`, THEN it is denied. (from agent-runtime/S20)
-- **R21** WHEN a lead (not a subagent) runs `hc send`, THEN it is allowed. (from agent-runtime/S21)
-- **R22** WHEN the bodies of orchestrate `SKILL.md`, `implementer.md` and `implementer.toml` are searched, THEN `hc`, `herdmates`, `herdr` appear only in a pointer to `agent-runtime`. (from agent-runtime/S22)
-- **R23** WHEN `orchestrate.py inspect` runs, THEN it includes the `agent-runtime resolve` result, the `herdr` subcommand is gone, and the other 11 orchestrate tests pass. (from agent-runtime/S23)
-- **R24** WHEN the lead spawns a Claude implementer through the hc adapter, THEN the worker nests under the lead, does the task and reports with `hc send` to the lead. (live-verified 2026-10-30, plan T8) (from agent-runtime/S24)
-- **R25** WHEN the lead spawns a Codex worker through the hc adapter, THEN it runs with `--no-daemon`, receives the task and reports to the lead. (live-verified 2026-10-30, plan T8) (from agent-runtime/S25)
-- **R26** WHEN S24 and S25 run, THEN the Herdr.app sidebar shows both workers nested under the lead. (live-verified 2026-10-30, plan T8) (from agent-runtime/S26)
-- **R27** WHEN an in-process teammate under hc runs `hc send <lead> x`, THEN the PreToolUse guard denies it (its call carries `agent_id`). Satisfied by teams off (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0). (live-verified 2026-10-30, plan T8) (from agent-runtime/S27)
-- **R28** WHEN an hc worker runs `hc keys`, `hc interrupt`, `hc kill` or `hc send --force` aimed at its parent, THEN the PreToolUse guard denies it with a reason. (from agent-runtime/S28)
-- **R29** WHEN an hc worker runs `hc send <parent> "<result>"`, or any hc command aimed at its own child or a sibling, THEN it is allowed. (from agent-runtime/S29)
-- **R30** WHEN `agent-runtime contract` runs for any runtime, THEN `spawn` lists kinds `lookup` and `worker`, `lookup` maps to that CLI's subagent tool, and the routing rule is printed. (from agent-runtime/S30)
-- **R31** WHEN a Codex hc worker's Bash call runs `hc keys`, `hc interrupt`, `hc kill` or `hc send --force` aimed at its parent, THEN Codex's PreToolUse hook denies it. (from agent-runtime/S31)
-- **R32** WHEN `agent-runtime` runs inside a Codex session without `--cli`, THEN it resolves as `cli=codex` (so Codex in the herdr TUI gets `runtime=native`). (from agent-runtime/S32)
-- **R33** WHEN `agent-runtime contract` runs for any runtime, THEN it lists `resume(name, task)` with that runtime's resume operation, and `help` marks resume in-contract. (from agent-runtime/S33)
-- **R34** WHEN a Claude or Codex worker reports through MCP, THEN its lead receives a structured report with server-derived sender, team, assignment and message IDs through a tool result, with no hc report send or injected user message. (from agent-runtime-dispatch/S1)
-- **R35** WHEN publisher/recipient MCP processes restart, THEN committed reports and pending acknowledgments remain recoverable from the same private store. (from agent-runtime-dispatch/S2)
-- **R36** WHEN an unacknowledged batch is read again after cancellation or a lost response, THEN its messages retain their IDs; repeating a valid receipt acknowledgment is harmless and acknowledged messages are omitted from later normal reads. (from agent-runtime-dispatch/S3)
-- **R37** WHEN a worker retries publication using the same message ID, THEN only one event exists; reusing that ID with different content returns a conflict. (from agent-runtime-dispatch/S4)
-- **R38** WHEN `wait(all)` receives progress or one worker's complete report while another selected assignment runs, THEN the same call remains pending and later returns their accumulated reports together. (from agent-runtime-dispatch/S5)
-- **R39** WHEN every snapshotted assignment reports complete, THEN `wait(all)` returns `completed`, all reports and an empty unfinished list in one tool result, without status/collect calls. (from agent-runtime-dispatch/S6)
-- **R40** WHEN a selected assignment blocks, requests a decision, is interrupted, or its worker exits before completion, THEN the wait returns explicit attention/failure with all unfinished assignments; hc idle/done alone never proves success. (from agent-runtime-dispatch/S7)
-- **R41** WHEN `wait(any)` has an eligible event, THEN it returns that event and any already queued eligible batch; a named wait filters to the selected worker/assignment. (from agent-runtime-dispatch/S8)
-- **R42** WHEN a wait reaches its deadline, is cancelled, or has no selected assignments, THEN it returns a timeout/empty result where a response is possible, or cancels cleanly; messages remain replayable and workers continue. (from agent-runtime-dispatch/S9)
-- **R43** WHEN publication races listener registration or the publisher dies after commit before IPC notification, THEN a waiting recipient receives the committed event within the tested finite recovery bound without model polling. (from agent-runtime-dispatch/S10)
-- **R44** WHEN one MCP call waits, THEN ping, publication and cancellation remain responsive; stdout contains only valid protocol JSON and the call produces one final result. (from agent-runtime-dispatch/S11)
-- **R45** WHEN spawn/resume is invoked for multiple mixed-CLI workers, THEN dispatch returns before their assignments finish and all can run concurrently; each resume receives a fresh assignment ID. (from agent-runtime-dispatch/S12)
-- **R46** WHEN a late report references an old assignment or an hc address/name has been reused, THEN it cannot complete the current assignment or leak into another team generation. (from agent-runtime-dispatch/S13)
-- **R47** WHEN two teammates exchange messages while their recipients wait, THEN messages arrive through the recipients' tool results with true sender identity; idle recipients retain messages for their next call/resume without forced input. (from agent-runtime-dispatch/S14)
-- **R48** WHEN a caller targets an unrelated team, forges sender/parent/assignment identity, or a prohibited native subagent calls a mutating tool, THEN the operation fails before publishing or changing task state; existing permission dialogs are never bypassed. (from agent-runtime-dispatch/S15)
-- **R49** WHEN a lead creates and lists tasks with dependencies, THEN every teammate sees the same durable task IDs, dependency state, owner and status after restart. (from agent-runtime-dispatch/S16)
-- **R50** WHEN two teammates concurrently claim a ready task, THEN exactly one wins; unsatisfied dependencies, missing dependencies and dependency cycles are rejected explicitly. (from agent-runtime-dispatch/S17)
-- **R51** WHEN the owning assignment reports complete/blocked, THEN its linked task changes in the same store transaction; dependent tasks become claimable only after successful prerequisites, and duplicate reports do not duplicate transitions. (from agent-runtime-dispatch/S18)
-- **R52** WHEN a caller piggybacks a valid receipt on its next runtime call, THEN acknowledgment requires no separate call; invalid or foreign receipts fail explicitly and a failed transaction does not lose the batch. (from agent-runtime-dispatch/S19)
-- **R53** WHEN a result exceeds the documented batch/payload limit, THEN it returns bounded data with `more` and a continuation receipt; pending messages remain retrievable without silent loss or implicit acknowledgment. (from agent-runtime-dispatch/S20)
-- **R54** WHEN a worker is stopped or removed, THEN its committed reports and task history remain readable; an active incomplete assignment is surfaced as unfinished/failed and cannot strand waiters indefinitely. (from agent-runtime-dispatch/S21)
-- **R55** WHEN structured delivery fails or a human investigates a worker, THEN status/collect still return diagnostic state/screen output, without silently substituting that output for an accepted complete report. (from agent-runtime-dispatch/S22)
-- **R56** WHEN installed Claude and Codex load the tools, THEN schema, permissions, timeout configuration and instructions support the same dispatch flow; total tool descriptions remain within 400 words and normal instructions use wait results with status/collect only as fallback. (from agent-runtime-dispatch/S23)
-- **R57** WHEN a live lead starts both CLIs, exchanges peer messages, observes completion/blocker, resumes one assignment and recovers after an MCP restart, THEN reports remain attributed, replay works, no hc report text appears, and one wait covers each uninterrupted work period within the configured deadline. (from agent-runtime-dispatch/S24)
-- **R58** WHEN dispatch activation is absent during intermediate merges, THEN existing spawn/report/wait/resume behavior stays usable; when explicitly enabled, THEN the new structured path applies. (from agent-runtime-dispatch/S25)
-- **R59** WHEN serialized message arrays meet the configured byte boundary, THEN JSON framing bytes count toward the limit and pagination remains lossless. (from agent-runtime-dispatch/S26)
-- **R60** WHEN `wait(any)` has queued progress and a bounded hc observation reports its selected worker exited or interrupted, THEN the result surfaces failure and unfinished assignments while preserving those messages; replay cannot bypass that observation indefinitely. (from agent-runtime-dispatch/S27)
-- **R61** WHEN a legal response approaches the complete-envelope budget, THEN states, reports, receipt and continuation fit configured Codex/Claude output limits; deferred messages remain retrievable and acknowledgments cover only delivered messages, including inbox piggyback results. (from agent-runtime-dispatch/S28)
-- **R62** WHEN a lead and its worker run in real hc terminals with different HC_SCOPE tokens on the same hc server, THEN the worker's first runtime call with its assignment ID binds and its reports reach the lead. (from agent-runtime-dispatch/S29)
-- **R63** WHEN a selected worker ends its turn without an accepted complete/blocked/decision report, THEN `wait` returns attention with that assignment unfinished instead of repeated timeouts. (from agent-runtime-dispatch/S30)
-- **R64** WHEN a spawn fails, THEN its worker is inactive and messages or resumes addressed to it fail explicitly. (from agent-runtime-dispatch/S31)
-- **R65** WHEN a lead stops workers or acknowledges their terminal results, THEN later `wait(all)` snapshots exclude those assignments and wait only on current work (returning `empty` when none remains). (from agent-runtime-dispatch/S32)
-- **R66** WHEN a lead stops a worker whose hc terminal no longer exists, THEN `stop` succeeds, the worker is recorded stopped, and the next `wait(all)` excludes it instead of returning `failed`. (from agent-runtime-hardening/S1)
-- **R67** WHEN a lead stops a worker whose name now belongs to another lead's terminal, THEN only the caller's record is marked stopped and the other terminal is neither killed nor removed. (from agent-runtime-hardening/S2)
-- **R68** WHEN `wait` observes a selected worker exited, interrupted or replaced before completion, THEN that result reports the failure with one persisted failure message, and after its receipt is acknowledged later `wait(all)` snapshots exclude the assignment. (from agent-runtime-hardening/S3)
-- **R69** WHEN a stopped worker, a failed spawn or a persisted observed failure has an unfinished linked task, THEN the task returns to `pending` with no owner in the same transaction. (from agent-runtime-hardening/S4)
-- **R70** WHEN status, collect or list run while the store fails, identity cannot be resolved, or hc role lookup times out, THEN they return hc state with an explicit `delivery_error` instead of an error. (from agent-runtime-hardening/S5)
-- **R71** WHEN a forged identity or an unproven worker calls status, collect or list, THEN the call still fails with its authorization error and returns no hc data, inbox or pin. (from agent-runtime-hardening/S6)
-- **R72** WHEN spawn fails after `hc run` (address unreadable, cancellation, bind error or unsent first message), THEN the terminal is removed, the assignment is failed, and the worker is inactive. (from agent-runtime-hardening/S7)
-- **R73** WHEN spawn cannot resolve identity or validate its inputs, THEN no terminal is started. (from agent-runtime-hardening/S8)
-- **R74** WHEN a native Claude or Codex subagent calls `wait` or any runtime tool with `assignment_id`, THEN the hook denies it before the server runs; `task list` and receipt-free status/list/collect without `assignment_id` remain allowed. (from agent-runtime-hardening/S9)
-- **R75** WHEN Claude loads the tracked settings from a clean checkout, THEN the agent-runtime plugin and marketplace are enabled and all ten runtime tools are allowed without prompts, while subagent denials still apply. (from agent-runtime-hardening/S10) *Moved to the consumer (dotfiles contract tests); no test in this repo.*
-- **R76** WHEN the store initializes, THEN the D7 indexes exist, `user_version` is unchanged, and old-shape 0.2.x writes still succeed. (from agent-runtime-hardening/S11)
-- **R77** WHEN `wait` snapshots and reads membership, THEN the query plans use the indexes and do not scan message bodies. (from agent-runtime-hardening/S12)
-- **R78** WHEN a lead spawns a worker with a ready `task_id`, THEN the task links to the new worker and assignment atomically, the result returns `task_id`, and the worker's complete report finishes the task. (from agent-runtime-hardening/S13)
-- **R79** WHEN spawn names a task that is missing, foreign, not pending, has unmet dependencies, or loses a concurrent claim, THEN spawn fails before starting a terminal and exactly one claimant owns the task. (from agent-runtime-hardening/S14)
-- **R80** WHEN a lead resumes a worker with `task_id` for its in_progress/blocked task, or a ready pending task, THEN the task moves to the fresh assignment and that assignment's complete report finishes it; resume without `task_id` leaves links unchanged. (from agent-runtime-hardening/S15)
-- **R81** WHEN users read README, `plugin.json` or the spec intro, THEN all ten tools including `task` are listed, no stale version is stated, and tool descriptions stay within 400 words. (from agent-runtime-hardening/S16)
-- **R82** WHEN the hardened plugin is installed and a lead kills a worker's terminal outside the runtime, THEN `stop` succeeds and the next `wait(all)` is `empty`, and the live mixed-CLI acceptance still passes. (from agent-runtime-hardening/S17)
-- **R83** WHEN status, list, collect or task list run without a `receipt`, THEN the result carries no inbox piggyback and acknowledges nothing; WHEN the same call carries a valid receipt, THEN pending inbox messages are returned as before. (from agent-runtime-hardening/S18)
-- **R84** WHEN spawn fails after `hc run` and removes the terminal after the worker already reported blocked or decision, THEN the assignment is failed, the linked task returns to `pending` with no owner, and the lead receives one `failed` message. (from agent-runtime-followups/S1)
-- **R85** WHEN `hc run` times out or is cancelled after a fast report bound the worker's address, and the terminal is discarded, THEN the worker is inactive and messages or resumes addressed to it fail explicitly. (from agent-runtime-followups/S2)
-- **R86** WHEN a resume fails after the resumed worker's report already landed, THEN that report stands and the linked task stays with the worker's assignment. (from agent-runtime-followups/S3)
-- **R87** WHEN the tracked Claude settings are read, THEN the `dotfiles` marketplace is a `directory` source with path `~/developer/dotfiles/agents`, and no marketplace, plugin or allow entry for the runtime contains an absolute home path. (from agent-runtime-followups/S4) *Moved to the consumer (dotfiles contract tests); no test in this repo.*
-- **R88** WHEN Claude starts with a HOME whose `~/developer/dotfiles/agents` holds the marketplace and the tracked settings, THEN the `dotfiles` marketplace registers at that expanded HOME path. (from agent-runtime-followups/S5) *Moved to the consumer (dotfiles contract tests); no test in this repo.*
-- **R89** WHEN a native Claude or Codex subagent calls a runtime tool whose string `tool_input` is not a JSON object, THEN the hook denies it; the same input from a lead passes the hook. (from agent-runtime-followups/S6)
-- **R90** WHEN the hook receives stdin that is not valid JSON, THEN it emits no decision and exits successfully. (from agent-runtime-followups/S7)
-- **R91** WHEN users read the README agent-runtime install section, THEN it says Claude loads the plugin in place so edits apply at the next session, lists no `marketplace update` or `plugin update` step, and says version bumps are record-only. (from agent-runtime-followups/S8) *Moved to the consumer (dotfiles contract tests); no test in this repo.*
-- **R92** WHEN users read the spec intro, THEN it says diagnostics authorize against the dispatch store first and fall back to hc-only state with `delivery_error`. (from agent-runtime-followups/S9)
-- **R93** WHEN main is pulled into the installed checkout and Claude and Codex restart, THEN the runtime loads from the `~` marketplace path, the plugin suite and `test_orchestrate` pass in that checkout, and only the referenced plugin cache version remains. (from agent-runtime-followups/S10) *Moved to the consumer (dotfiles contract tests); no test in this repo.*
-- **R94** WHEN a timed-out or cancelled spawn cleans up while another spawn of the same name has bound its live terminal, or the ownership check hits a store error, THEN the other worker's terminal is kept and the failed spawn still fails with its original error. (from agent-runtime-followups/S11)
-- **R95** WHEN `hc run` times out after the worker's complete report already landed, THEN the spawn error says the worker's result already landed. (from agent-runtime-followups/S12)
-- **R96** WHEN `spawn(kind=worker)` starts a claude or codex worker, THEN the `hc run` argv carries `--no-notify` before the program. (from lead-delivery-gaps/S1)
-- **R97** WHEN a lead (including a worker leading its own children) with N > 0 unfinished assignments gets a `spawn`, `resume` or `message` result, THEN the result carries `unfinished: N` and `next` telling it to call `wait(target=all)`; the count includes the assignment that call just created. (from lead-delivery-gaps/S2)
-- **R98** WHEN a caller with no unfinished assignments of its own as lead (a lead whose workers all finished, were stopped, or exited with the failure already delivered; or a worker messaging its lead or a peer) gets a `message` result, THEN the result carries no `unfinished` or `next` field. (from lead-delivery-gaps/S3)
-- **R99** WHEN `tools/list` runs, THEN the `wait` and `resume` descriptions say delivery is pull-only and that reports landing after a call need a new `wait(all)`, and all descriptions together stay ≤400 words. (from lead-delivery-gaps/S4)
-- **R100** WHEN a live worker has never reported a status (`reported:false`, `status_ms:null`, `turn:0`) and its `created_ms` is more than 30 s old, THEN `wait` returns `attention` for it with `runtime_state: unreported` and a next step naming collect, asking the user, user-approved hc keys, or stop. It never answers the dialog or claims a confirmed trust block. (from lead-delivery-gaps/S5)
-- **R101** WHEN a never-reported worker is younger than 30 s, THEN `wait` keeps treating it as working, with no attention. (from lead-delivery-gaps/S6)
-- **R102** WHEN a worker that has reported a status at least once later shows a null status, THEN it is not flagged `unreported`. (from lead-delivery-gaps/S7)
-- **R103** WHEN a never-reported worker's terminal has exited, been interrupted or replaced, THEN `wait` returns its one `failed` message (R68), not `unreported`. (from lead-delivery-gaps/S8)
-- **R104** WHEN hc reports a worker's status as `error`, THEN `wait` returns `attention` for it instead of a timeout. (from lead-delivery-gaps/S9)
-- **R105** WHEN `status(name)` targets a never-reported worker past the grace period, THEN it shows state `unreported` with the same next rows as R100. (from lead-delivery-gaps/S10)
-- **R106** WHEN `wait` polls a team whose members all have a non-null hc status, THEN it runs no `hc get`; only live members whose `hc ls` status is null are read with `hc get`. (from lead-delivery-gaps/S11)
-- **R107** WHEN the MCP server and a hook run under the same Claude or Codex process, even with `CODEX_THREAD_ID` or `CLAUDE_CODE_SESSION_ID` set, THEN both compute generation `<pid>:<lstart>` of the nearest CLI ancestor, with no suffix. (from lead-liveness-hooks/S1)
-- **R108** WHEN a lead runs `/clear` (Claude) or `/new` (Codex) in the same process, THEN its next runtime call stays on the same team and sees the same assignments. (from lead-liveness-hooks/S2)
-- **R109** WHEN a lead's `wait(all)` returns a final batch, THEN the team's last-wait row holds that batch's reason, attention count and current fingerprint, committed in the same transaction as the receipt; narrower and cancelled waits leave the row unchanged. (from lead-liveness-hooks/S3)
-- **R110** WHEN after that a lead-addressed message arrives, an assignment changes state or a turn is recorded, THEN the fingerprint computed from the store differs from the stored one; outbound and worker peer messages do not change it. (from lead-liveness-hooks/S4)
-- **R111** WHEN a working assignment has had no `publish` progress and no hc turn change for ≥ 15 min (fixed constant), THEN `wait` returns `attention` with `attention: stalled` and a next step for it, once per episode; the report is marked in the same transaction as the receipt, and it counts in the batch attention. (from lead-liveness-hooks/S5)
-- **R112** WHEN that assignment then makes progress (a `publish` report or an hc turn change) and later goes idle ≥ 15 min again, THEN `wait` returns a new `stalled` attention. (from lead-liveness-hooks/S6)
-- **R113** WHEN an assignment is first observed (new, or existing before the upgrade), THEN its idle clock starts at that observation; WHEN it has exited or failed, THEN `failed` wins over `stalled`; the worker is never stopped and never marked complete. (from lead-liveness-hooks/S7)
-- **R114** WHEN a new hook gets invalid JSON on stdin, the store is missing or write-locked, python3 is missing, or no identity resolves, THEN it exits 0 and allows (Claude: no output; Codex: empty or `{}`). (from lead-liveness-hooks/S8)
-- **R115** WHEN a hook reads the store, THEN it never writes `dispatch.sqlite3`, and honours `XDG_STATE_HOME` whether or not `AGENT_RUNTIME_DISPATCH` is set in its env. (from lead-liveness-hooks/S9)
-- **R116** WHEN Claude SessionStart fires with `source` compact or clear, or UserPromptSubmit fires, for a lead with undelivered messages or unseen working assignments, THEN `additionalContext` is `agent-runtime: N unfinished, M undelivered — call wait(all)`. Known limit: UserPromptSubmit may fire while a backgrounded `wait(all)` is in flight; the Stop guard handles that exemption. (from lead-liveness-hooks/S10)
-- **R117** WHEN the last delivered wait reported attention and the fingerprint is unchanged, THEN `additionalContext` is `agent-runtime: N workers need you — check status`. (from lead-liveness-hooks/S11)
-- **R118** WHEN the caller leads no team with needs, its team's generation differs from the hook's, or SessionStart `source` is startup, resume or fork, THEN the hook prints nothing. (from lead-liveness-hooks/S12)
-- **R119** WHEN a Claude lead's turn ends with undelivered messages or unseen working assignments, THEN the Stop hook blocks with reason `agent-runtime: N unfinished, M undelivered — call wait(all) before ending the turn`. (from lead-liveness-hooks/S13)
-- **R120** WHEN only blocked, decision or failed assignments remain, or the last wait's reason ≠ timeout and the fingerprint is unchanged, THEN Stop allows. (from lead-liveness-hooks/S14)
-- **R121** WHEN a lead's `background_tasks` holds a running `MCP task` with server agent-runtime and tool `wait`, THEN its Stop allows without spending budget; a worker is never exempt, because a parked wait does not deliver its own assignment. Known limit: if the backgrounded `wait` is cut off, the lead only notices on its next turn. The `background_tasks` MCP-task shape (`server`/`tool` fields; plugin servers scoped `plugin:<plugin>:<server>`) comes from the Claude hooks reference and is not live-verified, because `claude -p` never backgrounds MCP calls; an unknown shape only loses the exemption, bounded by the budget. (from lead-liveness-hooks/S15)
-- **R122** WHEN the guard has blocked 3 times since its last reset, THEN the next Stop allows with one note in the dialect's own channel — one stderr line for the Claude and Codex `decision` answer, and the `reason` of the neutral `{"block": false, "reason": <text>}` answer a host asks for with `--dialect json` (pi-lead-rhythm/S2) — and later Stops keep allowing until UserPromptSubmit fires or a check finds nothing to block on. (from lead-liveness-hooks/S16)
-- **R123** WHEN a Stop allows because the budget is spent, because of the R121 exemption, or because of an error, THEN the budget is not reset; WHEN UserPromptSubmit fires, THEN it is reset to 3. (from lead-liveness-hooks/S17)
-- **R124** WHEN a worker that leads its own children ends its turn with unseen work in that team, THEN its Stop blocks as in R119; WHEN a caller leads no team but holds a current assignment in state pending or working, THEN Stop blocks with the reason naming `report complete` and `report blocked`; WHEN it leads no team and holds no such assignment, or only teams of dead or superseded generations, THEN Stop allows. (from lead-liveness-hooks/S18; the no-team clause admits the worker guard of pi-lead-rhythm/S5)
-- **R125** WHEN a Codex lead's turn ends with unseen work, THEN its Stop hook blocks with `decision:"block"` and the R119 reason, and on allow exits 0 with empty or `{}` output; the budget behaves as R122/R123, reset by Codex UserPromptSubmit. (from lead-liveness-hooks/S19)
-- **R126** WHEN Codex SessionStart (compact or clear) or UserPromptSubmit fires for a lead with needs, THEN its context carries the R116/R117 line. (from lead-liveness-hooks/S20)
-- **R127** WHEN a runtime-spawned Codex worker starts after the new Codex hooks are installed, THEN the worker starts its task without stopping at a "Hooks need review" prompt. *Owner sign-off after trusting the hooks (`docs/verification/codex-hooks.md`); the opt-in live test is skipped by default.* (from lead-liveness-hooks/S21)
-- **R128** WHEN the only working assignments left have a reported, unchanged stall (`stall_reported_for = last_progress_ms`), THEN Stop allows and the context hook prints no "call wait(all)" line; WHEN such a worker makes progress, THEN it counts as unseen again. (from lead-liveness-hooks/S18a)
-- **R129** WHEN `spawn` runs with `cli: "claude"` and `model: "haiku"`, THEN the program argv is `claude --permission-mode auto --model haiku <prompt>`, prompt last. (from spawn-model/S1)
-- **R130** WHEN `spawn` runs with `cli: "codex"` and `model: "gpt-5.5"`, THEN the program argv is `codex --no-daemon [-p worker] --model gpt-5.5 <prompt>`, prompt last, no permission-mode; `-p <name>` appears only when the worker profile is usable (name `worker` by default, overridable by `AGENT_RUNTIME_CODEX_PROFILE`). (from spawn-model/S2; worker-token-metrics/S1)
-- **R131** WHEN `spawn` runs without `model`, THEN the program argv carries no model flag. (from spawn-model/S3)
-- **R132** WHEN `model` is blank, whitespace-only or not a string, THEN `spawn` returns an error and no `hc run` happens. (from spawn-model/S4)
-- **R133** WHEN `model` has leading/trailing whitespace or any whitespace/control character inside, THEN `spawn` returns an error and no `hc run` happens. (from spawn-model/S4a)
-- **R134** WHEN `model` starts with `-`, THEN `spawn` returns an error and no `hc run` happens. (from spawn-model/S5)
-- **R135** WHEN a client lists tools, THEN `spawn`'s schema has an optional string `model` property (not required) and all tool descriptions total ≤400 words. (from spawn-model/S6)
-- **R136** WHEN `spawn` runs with `cli: "claude"` and `agent: "scene-reviewer"` (with or without `model`), THEN the program argv is `claude --agent scene-reviewer --permission-mode auto [--model <m>] <prompt>`, prompt last. (from spawn-model/S7)
-- **R137** WHEN `spawn` runs with `cli: "codex"` and `agent: "reviewer"`, THEN the prompt starts with `developer_instructions` from `~/.codex/agents/reviewer.toml` (not implementer's), followed by the task. (from spawn-model/S8)
-- **R138** WHEN `spawn` omits `agent`, THEN every CLI family uses no role and injects the worker protocol; explicitly naming `implementer` selects that role. (from codex-default-role/S1–S3; supersedes spawn-model/S9)
-- **R139** WHEN `agent` is not a string, blank, or fails `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` (e.g. `-x`, `../x`, `a/b`, `a.b`, 65 characters), THEN `spawn` returns an error and no `hc run` happens, for either CLI. (from spawn-model/S10)
-- **R140** WHEN `agent` contains `:` (e.g. `plugin:reviewer`), THEN with `cli: "claude"` the argv carries `--agent plugin:reviewer`, and with `cli: "codex"` `spawn` returns an error and no `hc run` happens. (from spawn-model/S10a)
-- **R141** WHEN `cli: "codex"` and `~/.codex/agents/<agent>.toml` is missing or lacks `developer_instructions`, THEN `spawn` returns an error naming that path and no `hc run` happens; a named agent only — `agent: "none"` reads no toml (R157). (from spawn-model/S11)
-- **R142** WHEN a client lists tools, THEN `spawn`'s schema has an optional string `agent` property whose description says the agent needs the `report` tool, and all tool descriptions total ≤400 words. (from spawn-model/S12)
-- **R143** WHEN a `claude`-family profile sets `permission_mode` (one of `acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `manual`, `plan`), THEN the worker argv carries `--permission-mode <mode>` in place of `auto`; a profile without it, and built-in `claude`, keep `--permission-mode auto`. (from profile-permission-mode)
-- **R144** WHEN a `claude`-family profile sets `settings` to an absolute or `~/` path of an existing file, THEN the worker argv carries `--settings <path>` (with `~/` expanded from `HOME`) right after the permission mode. (from profile-permission-mode)
-- **R145** WHEN `permission_mode` is not one of those modes, `settings` is not an absolute or `~/` string path, or either is set on a non-`claude` profile, THEN the config is invalid: only built-ins are published and a configured spawn returns an error before `hc run`. (from profile-permission-mode)
-- **R146** WHEN a profile's `settings` file does not exist at spawn time, THEN `spawn` returns an error naming the path and no `hc run` happens. (from profile-permission-mode)
-- **R147** WHEN `spawn` runs a `claude`-family worker with `effort` set, THEN the argv carries `--effort <level>` right after any `--model <m>`, before the prompt. (from spawn-effort)
-- **R148** WHEN `spawn` runs a `codex`-family worker with `effort` set, THEN the argv carries `-c model_reasoning_effort="<level>"` right after `--no-daemon` and any `--model <m>`; without `effort` neither CLI gets an effort argument, so the CLI's saved level applies. (from spawn-effort)
-- **R149** WHEN `effort` is anything other than `low`, `medium`, `high`, `xhigh` or `max`, THEN `spawn` returns an error and nothing is launched; `spawn`'s schema publishes `effort` as an optional string enum of those levels. (from spawn-effort)
-- **R150** WHEN `agent-runtime call <tool> --lead L --json '<args>'` runs in an hc terminal, THEN it runs that dispatch tool and prints the tool's JSON result on stdout and exits 0. (from call-cli/S1)
-- **R151** WHEN the tool returns an error result, THEN the CLI prints it as JSON on stdout and exits 1. (from call-cli/S2)
-- **R152** WHEN the caller is not an hc terminal, THEN the CLI exits 2 with the `require_hc` message and starts nothing. (from call-cli/S3)
-- **R153** WHEN `--json` is not valid JSON or the tool name is unknown, THEN the CLI exits 2 with a usage message and starts nothing. (from call-cli/S4)
-- **R154** WHEN two separate `call` processes pass the same `--lead`, THEN `wait` in the second sees and receives reports for assignments spawned by the first. (from call-cli/S5)
-- **R155** WHEN a subagent runs `agent-runtime call <tool>` through Bash, THEN the PreToolUse hook denies it; WHEN a non-subagent runs it with a mutating tool, THEN the hook asks. (from call-cli/S6)
-- **R156** WHEN `call` runs with a `--lead` different from the generation of the terminal's latest team and that team has unfinished assignments, THEN it exits 2 naming the live generation, starts nothing, and the other generation's `wait` still receives its reports. (from call-cli/S7)
-- **R157** WHEN `spawn` runs with `cli: "codex"` and `agent: "none"`, THEN the program argv is `codex --no-daemon [-p worker] <prompt>`, the prompt starts with the task, and no `~/.codex/agents/<agent>.toml` is read. (from spawn-role/S1)
-- **R158** WHEN `spawn` runs with `cli: "claude"` and `agent: "none"`, THEN the program argv carries no `--agent` flag. (from spawn-role/S2)
-- **R159** WHEN `spawn` runs with `agent: "none"` (either CLI), THEN the prompt states the worker protocol: report as `report(kind, assignment_id)` under structured dispatch or `report(text)` otherwise, that a final message alone never reaches the parent, and the result block shape `STATUS: COMPLETE | BLOCKED | PARTIAL`. (from spawn-role/S3; codex-default-role/S4)
-- **R160** WHEN `spawn` runs with `cli: "codex"` and `instructions_file: "<absolute or ~/ path>"`, THEN the prompt starts with the file's content, then the task, and no `~/.codex/agents` toml is read. (from spawn-role/S4)
-- **R161** WHEN `instructions_file` is not a string, is blank, is not an absolute or `~/` path, or names a missing file or a directory, THEN `spawn` returns an error naming it and no `hc run` happens. (from spawn-role/S5)
-- **R162** WHEN `spawn` runs with `instructions_file` and `cli: "claude"`, THEN `spawn` returns an error and no `hc run` happens. (from spawn-role/S6)
-- **R163** WHEN `spawn` runs with both `agent` and `instructions_file`, THEN `spawn` returns an error and no `hc run` happens. (from spawn-role/S7)
-- **R164** WHEN a client lists tools, THEN `spawn`'s schema has an optional string `instructions_file` property, the `agent` description says `none` means no role, and all tool descriptions total ≤400 words. (from spawn-role/S8)
-- **R165** WHEN a session's generation is resolved and a later call's ancestry walk misses its budget, THEN the session keeps the generation it resolved first, the team does not fork, and the workers of the first team do not go stale. (from load-robustness/S1)
-- **R166** WHEN a bounded probe of the runtime needs more than 0.2s (the status probe of a wait, the startup diagnostic of a launcher), THEN the runtime still observes it and reports the failed or blocked worker, or the launcher's diagnostic, instead of the queued report or a bare exit. (from load-robustness/S2)
-- **R167** WHEN `spawn` runs on a backend with no role file of its own (pi) with `agent: "<name>"`, THEN the prompt carries the role's content — the user's `~/.claude/agents/<name>.md`, front matter aside (`AGENT_RUNTIME_ROLE_DIR` moves that directory) — under the role's name and ahead of the task, and the report protocol still follows the task. (from orchestrator-routing-effort-role/S5)
-- **R168** WHEN `spawn` runs with `instructions_file: "<absolute or ~/ path>"` on a backend with no role file of its own, THEN the prompt starts with the file's content, then the task; R162 still refuses it for the family that loads the role itself, and R163 still refuses it together with `agent`. (from orchestrator-routing-effort-role/S6)
-- **R169** WHEN the role's file is missing, empty or unreadable, THEN `spawn` returns an error naming that file and no `hc run` happens. (from orchestrator-routing-effort-role/S7)
-- **R170** WHEN `spawn` runs on any backend, THEN the worker runs interactively: the program argv carries no one-shot flag (`--print`, `-p` for Claude, `exec` for Codex), so the runtime can resume that pane for the next round. (from orchestrator-routing-effort-role/S11)
-- **R171** WHEN `spawn` runs a `pi` worker, THEN the program argv is `pi --approve [--model <m>] [--thinking <level>] <prompt>`, so the worker never stops at a trust prompt in a folder Pi does not know. (from orchestrator-routing-effort-role/S12)
-- **R172** WHEN `spawn` runs a `pi` worker, THEN Pi's user-level `mcp.json` (`$PI_CODING_AGENT_DIR/mcp.json`, else `~/.pi/agent/mcp.json`) carries the `agent-runtime` server — this runtime's own absolute server path, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct` — written by the runtime itself, and every other server in that file survives; a configuration the runtime cannot read or write is an error naming it, and no `hc run` happens. (from orchestrator-routing-effort-role/S13)
-- **R240** WHEN a team has 32 registered workers, 31 of them stopped, and the lead spawns a new name, THEN the spawn succeeds: the team limit counts active workers only. (from runtime-audit-fixes/S1)
-- **R241** WHEN a team has 32 active workers and the lead spawns a new name or resumes a stopped name, THEN the call is refused before anything launches with "team limit is 32 active workers: stop an active worker, then retry"; the slot is reserved in the transaction that registers the assignment, so concurrent spawns cannot exceed 32, and a launch that fails before binding leaves a stopped worker stopped. (from runtime-audit-fixes/S2)
-- **R242** WHEN a team has 32 active workers and the lead resumes a worker that is already active, THEN the resume succeeds and consumes no new slot. (from runtime-audit-fixes/S3)
-- **R243** WHEN a worker or subagent writes, edits or runs a mutating command on a path with a `state/receipts` component but no orchestrator ledger beside it (e.g. `src/state/receipts/slice.ts`), THEN the PreToolUse hook allows it. (from runtime-audit-fixes/S4)
-- **R244** WHEN a worker or subagent mutates a path in a `receipts/` subtree, a ledger or a lock under the default root `~/.local/state/orchestrate/`, THEN the hook denies it with the reason and the way out (fix the code and let the driver re-run the evidence); reading the same path is allowed. (from runtime-audit-fixes/S5)
-- **R245** WHEN a worker or subagent mutates a `<root>/<repo-key>/<slug>/receipts/` path, the sibling ledger `<slug>.json` or its lock under any root, where the ledger carries `"kind": "agent-orchestrator/ledger"`, THEN the hook denies it, whether the path is written relative, absolute or through a symlink alias; outside the default root an unmarked ledger is not protected (the gap until the orchestrator writes the marker). (from runtime-audit-fixes/S6)
-- **R246** WHEN `resume` raises `sqlite3.Error` after registering its pending assignment and before the send, THEN the pending assignment is failed, a task moved to it is released back to its previous assignment, and the error names the store failure and the way out (retry the resume). (from runtime-audit-fixes/S7)
-- **R247** WHEN any tool handler (spawn, resume, message, report, stop, task) raises `sqlite3.Error` or `StoreError`, THEN before its external effect every reversible pending store change is rolled back and the error says what was not done and that the call can be retried; after an irreversible effect (a sent message, a killed or removed terminal) the error names the effect that happened and the store state left to reconcile (a resume's pending assignment, a stopped worker still recorded active, an assignment a spawn could not fail), a refusal by the store (a name that is not registered, a foreign receipt) is never presented as a retryable store failure, and a rollback that itself fails never replaces the error it was rolling back; a failure of the inbox piggybacked on a mutating call's result never turns a committed effect (a report, a task, a message, a started worker) into an error. (from runtime-audit-fixes/S8)
-- **R248** WHEN a `tools/call` request carries an id that is an array, an object or a boolean, THEN the server answers JSON-RPC error -32600 with `id: null` and keeps serving the next request; valid notifications keep their semantics. (from runtime-audit-fixes/S9)
-- **R249** WHEN many tool calls have completed in one server process, THEN the threads of the completed calls are no longer held: the number of retained call threads returns to the number in flight. (from runtime-audit-fixes/S10)
-- **R250** WHEN 56 `wait` calls are in flight and another `wait` arrives, or 64 calls of any kind are in flight and another call arrives, THEN the extra call is refused at once with a retryable reason (never queued); the 8 slots above 56 stay available to non-wait tools; `ping` and cancellation are outside the cap. (from runtime-audit-fixes/S11)
-- **R251** WHEN `spawn` or `resume` carries an `operation_id` (1-128 characters of `A-Z a-z 0-9 . _ : -`, dispatch only) that this owner has not used, THEN one row (team, non-null owner, operation_id, fingerprint, assignment_id) is written in the same transaction that registers the assignment, before anything is sent; the owner is the lead's terminal on its hc server, so a restarted orchestrator finds its keys; the fingerprint covers verb, name, CLI family, profile, task text, cwd, model, effort, role, instructions text and task link. (from runtime-audit-fixes/S12)
-- **R252** WHEN the same owner repeats an `operation_id` with the same fingerprint, THEN the call returns the existing assignment with its current state and `replayed: true`, sends and launches nothing and takes no team slot; a first call that failed is reported as `failed` with the way out (start again with a new operation_id). (from runtime-audit-fixes/S13)
-- **R253** WHEN the same owner repeats an `operation_id` with a different fingerprint, THEN the call is refused naming the conflict and the way out (use a new operation_id); nothing is registered or sent. (from runtime-audit-fixes/S14)
-- **R254** WHEN `agent-runtime call operation --json '{"operation_id": ...}'` runs, THEN it prints the owner-scoped state (absent, pending, bound, working, blocked, decision, complete, failed or unknown) with the assignment id; it is read-only, takes no receipt and never acknowledges a report; `unknown` (an assignment no longer in the store, an unrecognized state, an unreadable store) carries a reason to act on; the operations table is additive and created by the first keyed call, the store's `user_version` stays 2, and a server that never uses an `operation_id` keeps exactly the tables it had. `operation` is a `call` verb, not an MCP tool: the tool list stays the ten tools within 400 words. (from runtime-audit-fixes/S15)
-- **R255** WHEN `agent-runtime resolve --json` runs, THEN its output carries `caller: {kind: lead|worker|unknown, verified: bool}` from the process-ancestry walk; worker environment markers alone never make `verified` true, observed worker ancestry wins over missing markers, a finished terminal never verifies anyone, the nearest live ancestor terminal decides the kind, and a caller outside any hc terminal reports `kind: unknown, verified: false` when it carries no hc marker, or its marker's kind with `verified: false` when it does. (from runtime-audit-fixes/S16)
-- **R256** WHEN the plan-level test runs the real MCP server and CLI over stdio against a fake hc with a team of 32 registered and 31 stopped workers, a hook payload for a repository path with a `state/receipts` component and one for a default-root receipt, a malformed request id, and a spawn repeated with the same operation_id, THEN the new spawn succeeds and the 33rd active worker is refused with the way out; the repository path is allowed and the receipt is denied; the server answers -32600 and serves the next call; the repeated spawn returns the first assignment and the fake hc saw exactly one launch. (from runtime-audit-fixes/S17)
-- **R257** WHEN AGENTS.md and this spec state that the hook is never the only refuser, THEN they name one exception: a native in-process subagent cannot be told from its Lead outside the host hook, so R74 and R89 stay hook-only; no other refusal is an exception. (from runtime-audit-fixes/S18)
-- **R258** WHEN a worker or subagent names a guarded path with `$HOME`, `${HOME}` or `~`, THEN shell and file edits receive the same refusal as the expanded path. (from runtime-audit-fixes/S5)
-- **R259** WHEN the hook checks a candidate ledger, THEN it resolves the caller's role before reading; leads read no candidate ledger, and workers inspect only the first 4096 bytes of regular files, never a FIFO or device. (from runtime-audit-fixes/S6)
-- **R260** WHEN `agent-runtime call operation` runs under a new `--lead` in a terminal whose previous lead remains live, THEN the read-only lookup is exempt from the live-lead conflict check and finds that terminal's keys without acknowledging reports; every other call verb, including every writer, retains the check. (from operation-lookup follow-up)
-- **R261** WHEN constructing the lookup's real Store or reading its operation fails with `OSError`, `sqlite3.Error` or `StoreError` (including `StorageError`, corrupt files, wrong ownership and unopenable directories), THEN lookup returns `state: "unknown"`, a null assignment id and a reason naming the failure and how to restore access and retry, rather than raising or returning absent. (from operation-lookup follow-up)
-- **R262** WHEN either MCP `tools/call` dispatch path receives `operation`, THEN it returns JSON-RPC error -32602 naming the unknown tool before calling its handler; the tool remains a CLI `call` verb only. (from operation-lookup follow-up)
-- **R263** WHEN operation keys are minted, THEN their owner includes the canonical hc socket path, caller terminal id and socket device/inode/ctime in nanoseconds; orchestrator restarts on that socket retain the keys, while a replaced socket at the same path and terminal makes prior-instance keys (including legacy owners without instance evidence) return `unknown`, never absent or replayed, with a reason saying the hc server restarted and directing inspection of earlier work before using a new operation_id; keyed spawn and resume refuse those old keys without launching or sending, and unavailable socket identity fails closed with retry guidance. (from operation-lookup follow-up)
-- **R264** WHEN a Claude worker's transcript is measured and it repeats an assistant record under the same `message.id` (streamed content blocks), carries a `<synthetic>` model record, and its Task subagents wrote `<session>/subagents/*.jsonl`, THEN each `message.id` counts once for tokens and model calls, every `tool_use` block counts as a tool call, `<synthetic>` records count for nothing, and each subagent record is credited to the assignment whose marked prompt is the latest at or before its timestamp; `input_tokens` is the transcript's `input_tokens`, `cached_input_tokens` its `cache_read_input_tokens`, `cache_write_tokens` its `cache_creation_input_tokens`; the transcript is found under `~/.claude/projects/<cwd with every non-alphanumeric character a dash>/` (from worker-usage/S1)
-- **R265** WHEN a Codex worker's rollout is measured, its cumulative `total_token_usage` repeats an identical total or carries `info: null`, and the session has a child thread (`thread_source: guardian_review`, same `session_id`) in its own rollout file whose totals start from zero, THEN the worker binds to its root thread's rollout, never to a child's; each assignment's figures are the increase of the root's cumulative total across its slice; a child thread's figures are credited to the assignment whose marked prompt is the latest at or before the child's records, and a child never starts a slice; a repeated total adds nothing and counts as no model call; `input_tokens` is the gross input minus `cached_input_tokens`, `reasoning_tokens` is `reasoning_output_tokens`; `function_call` and `custom_tool_call` items count as tool calls (from worker-usage/S2)
-- **R266** WHEN a Pi worker is measured, THEN its session is found under `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions/--<cwd slug>--/` by the marker in its first user prompt after the spawn time, its per-message `usage` is summed per slice (`input`, `cacheRead`, `cacheWrite`, `output`, `reasoning`), assistant messages count as model calls, `toolCall` blocks as tool calls, and `cost_usd` is the sum of the messages' `cost.total` (from worker-usage/S3)
-- **R267** WHEN a Claude transcript carries `cost-state` checkpoints with a cumulative `totalCostUSD`, THEN each checkpoint's increase over the previous one is credited to the assignment active when it was written; an assignment whose slice holds no checkpoint carries `cost_usd` 0 when a later checkpoint exists in the session, and no `cost_usd` when none does (from worker-usage/S4)
-- **R268** WHEN a Codex worker is measured, or any CLI record lacks a figure, THEN Codex usage never carries `cost_usd`; a figure is in an assignment's dict when at least one record of its slice carries it and is absent, never 0, when none does; no dollar figure is ever computed from a rate (from worker-usage/S5)
-- **R269** WHEN a worker was resumed, so its session holds several user prompts that carry `assignment_id=<id>`, and the assistant output, a tool call's arguments or a tool result also mention an assignment id, THEN each assignment's slice runs from the prompt whose last marker is its id to the next such prompt; a prompt is a Claude `user` record that is neither `isMeta`, a compact summary nor a tool result, a Codex root-thread `user` message, or a Pi `user` message; a marker in any other record (assistant output, tool call or result, a subagent's or child thread's prompt) starts no slice (from worker-usage/S6)
-- **R270** WHEN the worker has no metadata, no bound log, or a log that is missing, unreadable, truncated mid-line or not JSON, THEN `assignment_usage` returns what it could measure (an empty dict when nothing), never raises, and the complete lines before a truncated last line still count (from worker-usage/S7)
-- **R271** WHEN `assignment_usage` is called again after the log grew, THEN it reads only the bytes appended since the last call, from the offsets kept in `<worker>.usage.json` (0600), and returns exactly what a fresh parse of the whole log returns; a log that shrank or was replaced is re-read from the start; the sidecar holds offsets and numbers only, never prompt, tool or file text (from worker-usage/S8)
-- **R272** WHEN the lead calls `wait` and the returned batch names assignments of bound workers, THEN each such assignment row carries `usage`, the dict for that assignment; a row whose worker has no measurement carries no `usage` key; the store's byte budget reserves a worst-case usage dict per budgeted row, so the response stays under its cap; a failure while measuring never fails the wait; the tool descriptions and parameters are unchanged (from worker-usage/S9)
-- **R273** Moved to `docs/specs/orchestrator-engine.md` as R82: the orchestrator owns it. (from worker-usage/S10)
-- **R274** Moved to `docs/specs/orchestrator-engine.md` as R83: the orchestrator owns it. (from worker-usage/S11)
-- **R275** WHEN a Claude, a Codex and a Pi worker, each spawned on one assignment and resumed on a second, have written session logs that record usage, and `usage.assignment_usage` measures each, THEN each of the six assignments gets exactly its own slice's tokens, model calls, tool calls and (Claude, Pi) cost under the names of S1 to S5, and a worker with no log gets an empty dict (from worker-usage/S12)
-- **R276** Moved to `docs/specs/orchestrator-engine.md` as R84: the orchestrator owns it. (from worker-usage/S13)
+### Requirement: Runtime resolution
+`agent-runtime resolve` SHALL pick the runtime and role deterministically from the environment: `HERDR_PANE_ID` beats `HC_TERMINAL_ID`, which beats native.
 
-## Coverage: runtime audit fixes
+#### Scenario: Herdr pane
+- WHEN `HERDR_PANE_ID` is set
+- THEN `--cli claude` prints `runtime=herdmates` and `--cli codex` prints `runtime=native`, and the pane wins when `HC_TERMINAL_ID` is also set
 
-Each row maps a requirement of the 2026-11-11 runtime audit plan to the test nodes that prove it: the ticket tests and the plan-level test. The operation-key cases of the plan-level test (R252-R254, and the repeated spawn of R256) live once, in `tests/test_operations.py::OperationOutcomeTests`, the keeper of the copy the plan-level test file used to hold; that file keeps the team limit, the receipts guard, the resume rollback, the MCP server and the caller identity. R255 keeps its in-process `CallerIdentityTests` as the logic keeper and the two `CallerIdentityOutcome` tests as the boundary; R257 keeps `HookExceptionDocsTests`. The five MCP resume twins in `tests/test_event_wait_resume.py` (zero timeout, turn advance, fast report, mid-turn clock, grace) are deleted: the in-process `test_S12_zero_timeout_observes_overdue_resume_before_returning`, `test_S13_turn_advance_or_report_suppresses_resume_attention`, `test_S13_fast_mid_turn_progress_keeps_the_resume_baseline`, `test_S14_mid_turn_resume_clock_starts_at_dispatch` and `test_S15_resume_grace_boundary_keeps_assignment_working` keep their guarantees, and `test_S13_mcp_pending_wait_wakes_for_resume_report` stays as the one boundary test.
+#### Scenario: hc terminal
+- WHEN only `HC_TERMINAL_ID` is set
+- THEN it prints `runtime=hc role=lead` when `hc get` reports `parent: null`, `runtime=hc role=worker parent=tX` when it reports `parent: tX`, and `runtime=hc role=unknown` with exit 0 when `hc get` fails or exceeds 2 s
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R240 | S1 | `tests/test_team_limit.py::TeamLimitTests::test_S1_stopped_workers_do_not_count_toward_the_limit`<br>`tests/test_runtime_audit_outcome.py::TeamLimitOutcome::test_S1_a_team_of_32_registered_and_31_stopped_spawns_a_new_name` |
-| R241 | S2 | `tests/test_team_limit.py::TeamLimitTests::test_S2_a_full_team_refuses_a_new_name`<br>`tests/test_team_limit.py::TeamLimitTests::test_S2_a_full_team_refuses_to_resume_a_stopped_name`<br>`tests/test_team_limit.py::TeamLimitTests::test_S2_a_pending_resume_of_a_stopped_name_holds_its_slot_until_it_fails`<br>`tests/test_team_limit.py::TeamLimitTests::test_S2_a_failed_resume_of_an_active_worker_leaves_it_active`<br>`tests/test_team_limit.py::TeamLimitTests::test_S2_concurrent_registrations_never_exceed_the_limit`<br>`tests/test_runtime_audit_outcome.py::TeamLimitOutcome::test_S2_a_new_name_at_32_active_is_refused_with_the_way_out_and_nothing_launches`<br>`tests/test_runtime_audit_outcome.py::TeamLimitOutcome::test_S2_resuming_a_stopped_name_at_32_active_is_refused_and_nothing_is_sent`<br>`tests/test_runtime_audit_outcome.py::TeamLimitOutcome::test_S2_a_reactivation_racing_a_new_spawn_for_the_last_slot_takes_it_once` |
-| R242 | S3 | `tests/test_team_limit.py::TeamLimitTests::test_S3_resuming_an_active_worker_takes_no_slot`<br>`tests/test_runtime_audit_outcome.py::TeamLimitOutcome::test_S3_resuming_an_active_worker_in_a_full_team_with_history_takes_no_slot` |
-| R243 | S4 | `tests/test_hooks_lead.py::PlanContractTests::test_S4_a_state_receipts_path_without_a_ledger_is_not_guarded`<br>`tests/test_runtime_audit_outcome.py::ReceiptsGuardOutcome::test_S4_a_repository_state_receipts_path_is_allowed_for_workers` |
-| R258 | S5 | `tests/test_hooks_lead.py::PlanContractTests::test_S5_a_receipts_subtree_under_the_default_root_is_denied_and_readable` |
-| R259 | S6 | `tests/test_hooks_lead.py::PlanContractTests::test_S6_a_marked_ledgers_receipts_ledger_and_lock_are_denied_under_any_root`<br>`tests/test_hooks_lead.py::PlanContractTests::test_S6_an_unmarked_ledger_outside_the_default_root_is_not_protected`<br>`tests/test_runtime_audit_outcome.py::ReceiptsGuardOutcome::test_S6_a_marked_ledgers_receipts_ledger_and_lock_are_denied_under_a_custom_root`<br>`tests/test_runtime_audit_outcome.py::ReceiptsGuardOutcome::test_S6_an_unmarked_ledger_outside_the_default_root_is_not_protected` |
-| R246 | S7 | `tests/test_store_failures.py::StoreFailureTests::test_S7_resume_store_failure_before_the_send_fails_the_pending_assignment`<br>`tests/test_runtime_audit_outcome.py::ResumeRollbackOutcome::test_S7_a_store_failure_after_registration_fails_the_assignment_and_releases_the_task` |
-| R247 | S8 | `tests/test_store_failures.py::StoreFailureTests::test_S8_resume_store_failure_registering_sends_nothing_and_names_the_way_out`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_resume_store_failure_after_the_send_names_the_send_and_the_pending_assignment`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_resume_store_failure_after_the_send_keeps_a_report_that_landed`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_resume_rollback_that_also_fails_names_the_assignment_left_pending`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_spawn_store_failure_registering_starts_nothing`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_spawn_bind_store_failure_names_the_removed_terminal`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_spawn_rollback_that_also_fails_removes_the_terminal_and_names_the_assignment`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_spawn_refusal_keeps_its_reason_when_the_rollback_fails`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_message_store_failure_says_nothing_was_delivered`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_task_store_failure_says_nothing_changed`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_report_store_failure_says_the_report_was_not_recorded`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_a_committed_task_survives_an_inbox_read_failure`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_a_committed_message_survives_an_inbox_read_failure`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_a_committed_report_survives_an_inbox_read_failure`<br>`tests/test_store_failures.py::StoreFailureTests::test_S8_a_started_worker_survives_an_inbox_read_failure`<br>`tests/test_stop_failures.py::StopStoreFailureTests::test_S8_stop_store_failure_after_the_kill_names_the_kill_and_the_record`<br>`tests/test_stop_failures.py::StopStoreFailureTests::test_S8_stop_retry_after_a_store_failure_reconciles_the_record`<br>`tests/test_stop_failures.py::StopStoreFailureTests::test_S8_stop_store_failure_with_the_terminal_untouched_says_so` |
-| R248 | S9 | `tests/test_mcp_server.py::CallLimitTests::test_S9_a_non_scalar_id_is_invalid_and_the_server_keeps_serving`<br>`tests/test_runtime_audit_outcome.py::McpServerOutcome::test_S9_a_non_scalar_id_is_answered_with_32600_and_id_null_and_the_server_keeps_serving` |
-| R249 | S10 | `tests/test_mcp_server.py::CallLimitTests::test_S10_finished_call_threads_are_not_retained` |
-| R250 | S11 | `tests/test_mcp_server.py::CallLimitTests::test_S11_the_wait_and_total_caps_refuse_at_once_and_retryably`<br>`tests/test_runtime_audit_outcome.py::McpServerOutcome::test_S11_the_57th_wait_is_refused_at_once_while_non_wait_tools_and_ping_are_served`<br>`tests/test_runtime_audit_outcome.py::McpServerOutcome::test_S11_the_65th_live_call_is_refused_at_once_while_ping_is_served` |
-| R251 | S12 | `tests/test_operations.py::OperationRowTests::test_S12_a_new_operation_id_writes_one_row_with_the_assignment_before_the_launch`<br>`tests/test_operations.py::OperationRowTests::test_S12_the_row_is_written_in_the_transaction_that_registers_the_assignment`<br>`tests/test_operations.py::OperationRowTests::test_S12_a_resume_with_an_operation_id_writes_a_row_for_its_assignment` |
-| R252 | S13 | `tests/test_operations.py::OperationReplayTests::test_S13_a_repeated_spawn_returns_the_first_assignment_and_sends_nothing`<br>`tests/test_operations.py::OperationOutcomeTests::test_S13_a_repeated_operation_id_returns_the_first_assignment_and_launches_once` |
-| R253 | S14 | `tests/test_operations.py::OperationConflictTests::test_S14_every_argument_that_changes_behaviour_is_in_the_fingerprint`<br>`tests/test_operations.py::OperationOutcomeTests::test_S14_a_changed_fingerprint_is_refused_naming_the_conflict_and_nothing_is_registered` |
-| R254 | S15 | `tests/test_operations.py::OperationLookupTests::test_S15_the_state_follows_the_assignment_with_its_id`<br>`tests/test_operations.py::OperationStoreTests::test_S15_the_table_is_additive_and_the_schema_version_stays_2`<br>`tests/test_operations.py::OperationOutcomeTests::test_S15_call_operation_prints_the_owner_scoped_state_and_assignment` |
-| R255 | S16 | `tests/test_agent_runtime_identity.py::CallerIdentityTests::test_S16_ancestry_in_a_child_terminal_is_a_verified_worker`<br>`tests/test_agent_runtime_identity.py::CallerIdentityTests::test_S16_ancestry_in_a_parentless_terminal_is_a_verified_lead`<br>`tests/test_agent_runtime_identity.py::CallerIdentityTests::test_S16_worker_markers_alone_are_never_verified`<br>`tests/test_agent_runtime_identity.py::CallerIdentityTests::test_S16_no_marker_and_no_ancestry_is_unknown`<br>`tests/test_runtime_audit_outcome.py::CallerIdentityOutcome::test_S16_resolve_json_carries_the_caller_kind_and_whether_it_is_verified`<br>`tests/test_runtime_audit_outcome.py::CallerIdentityOutcome::test_S16_worker_environment_markers_alone_never_verify_the_caller` |
-| R256 | S17 | `tests/test_operations.py::OutcomeScenario::test_S17_the_fixed_runtime_serves_a_long_lived_lead` |
-| R257 | S18 | `tests/test_agent_runtime_identity.py::HookExceptionDocsTests::test_S18_agents_md_and_spec_name_the_one_hook_only_exception` |
+#### Scenario: neither variable and no `--cli`
+- WHEN neither variable is set
+- THEN it prints `runtime=native role=lead`, and inside a Codex session without `--cli` it resolves as `cli=codex`
 
-## Coverage: worker usage
+### Requirement: Status and list views
+`agent-runtime status` and `list` SHALL report one JSON record per agent with a contract state and a non-empty `next` step.
 
-Each row maps a requirement of the 2026-11-12 worker usage plan to the test nodes that prove it: the ticket tests and the plan-level tests.
+#### Scenario: hc status mapping
+- WHEN `status <name>` runs under hc
+- THEN it prints `name, runtime, role, parent, state, turn, native, next`, `state` is working, idle, done, blocked, error, exited or unknown, and a blocked worker's `next` asks the user rather than offering raw `hc keys`
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R264 | S1 | `tests/test_usage_parse.py::ClaudeUsageTests::test_S1_each_message_counts_once_and_subagents_are_credited_by_time`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S1_a_subagent_record_before_any_marked_prompt_is_credited_to_nothing`<br>`tests/test_usage.py::SessionBindingTests::test_S1_claude_project_directory_replaces_every_non_alphanumeric_character` |
-| R265 | S2 | `tests/test_usage_parse.py::CodexUsageTests::test_S2_the_root_threads_cumulative_increase_per_slice_and_children_credited_by_time`<br>`tests/test_usage_parse.py::CodexUsageTests::test_S2_the_worker_binds_to_the_root_rollout_whichever_file_is_found_first`<br>`tests/test_usage_parse.py::CodexUsageTests::test_S2_a_child_thread_credits_by_time_across_several_assignments`<br>`tests/test_usage.py::SessionBindingTests::test_S2_codex_binding_never_picks_a_child_thread_that_quotes_the_markers` |
-| R266 | S3 | `tests/test_usage_parse.py::PiUsageTests::test_S3_each_slice_sums_its_messages_usage_calls_tools_and_cost`<br>`tests/test_usage_parse.py::PiUsageTests::test_S3_the_session_is_bound_by_the_first_prompt_after_spawn_under_the_cwd_slug`<br>`tests/test_usage_parse.py::PiUsageTests::test_S3_the_pi_agent_directory_comes_from_the_environment` |
-| R267 | S4 | `tests/test_usage_parse.py::ClaudeUsageTests::test_S4_a_checkpoints_increase_is_credited_to_the_assignment_active_when_written`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S4_a_slice_without_a_checkpoint_carries_zero_when_a_later_one_exists_else_none`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S4_a_log_without_any_checkpoint_carries_no_cost` |
-| R268 | S5 | `tests/test_usage_parse.py::CodexUsageTests::test_S5_codex_never_carries_a_dollar_figure`<br>`tests/test_usage_parse.py::CodexUsageTests::test_S5_a_total_without_a_field_leaves_the_figure_out`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S5_a_figure_no_record_carries_is_absent_not_zero` |
-| R269 | S6 | `tests/test_usage_parse.py::ClaudeUsageTests::test_S6_each_slice_runs_from_the_prompt_whose_last_marker_is_its_id`<br>`tests/test_usage_parse.py::CodexUsageTests::test_S6_only_root_thread_user_messages_start_slices_and_the_last_marker_wins` |
-| R270 | S7 | `tests/test_usage_parse.py::ClaudeUsageTests::test_S7_no_metadata_no_log_or_a_foreign_log_measures_nothing`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S7_a_truncated_last_line_or_garbage_counts_only_the_complete_lines`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S7_an_unreadable_or_unwritable_state_never_raises`<br>`tests/test_usage_parse.py::CodexUsageTests::test_S7_a_codex_log_with_garbage_and_a_truncated_tail_counts_the_complete_lines`<br>`tests/test_usage_parse.py::PiUsageTests::test_S7_a_truncated_pi_tail_counts_only_the_complete_lines`<br>`tests/test_usage_parse.py::PiUsageTests::test_S7_a_pi_log_without_a_usage_record_carries_no_figure` |
-| R271 | S8 | `tests/test_usage_parse.py::ClaudeUsageTests::test_S8_a_second_call_reads_only_the_appended_bytes_and_matches_a_fresh_parse`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S8_a_log_that_shrank_or_was_replaced_is_read_again_from_the_start`<br>`tests/test_usage_parse.py::ClaudeUsageTests::test_S8_the_sidecar_holds_offsets_and_numbers_never_log_text`<br>`tests/test_usage_parse.py::CodexUsageTests::test_S8_codex_incremental_equals_fresh_including_children`<br>`tests/test_usage_parse.py::PiUsageTests::test_S8_a_second_pi_call_reads_only_the_appended_bytes_and_matches_a_fresh_parse`<br>`tests/test_usage_parse.py::PiUsageTests::test_S8_a_pi_log_that_shrank_or_was_replaced_is_read_again_from_the_start` |
-| R272 | S9 | `tests/test_event_wait_usage.py::WaitUsageTests::test_S9_wait_rows_of_bound_workers_carry_usage_and_the_rest_carry_none`<br>`tests/test_tools_verbs.py::WaitCollectStopReportTests::test_S9_a_failure_while_measuring_never_fails_the_wait`<br>`tests/test_budgets.py::BudgetTests::test_S9_the_budget_reserves_a_worst_case_usage_dict_for_every_row` |
-| R273 | S10 | moved to `docs/specs/orchestrator-engine.md` R82 |
-| R274 | S11 | moved to `docs/specs/orchestrator-engine.md` R83 |
-| R275 | S12 | `tests/test_worker_usage_outcome.py::WorkerUsageOutcome::test_S12_each_assignment_gets_its_own_slice_for_all_three_harnesses`<br>`tests/test_worker_usage_outcome.py::WorkerUsageOutcome::test_S12_a_second_measurement_after_the_log_grew_matches_a_fresh_one`<br>`tests/test_worker_usage_outcome.py::WorkerUsageOutcome::test_S12_a_worker_without_a_log_or_metadata_measures_nothing`<br>`tests/test_usage_parse.py::OutcomeTests::test_S12_each_of_three_workers_gets_exactly_its_own_slices_and_a_worker_without_a_log_gets_nothing` |
-| R276 | S13 | moved to `docs/specs/orchestrator-engine.md` R84 |
+#### Scenario: herdmates and native
+- WHEN `status` runs under herdmates it maps `herdr pane get` output; under native `state` is unknown and `next` points to the return value or SendMessage
 
-## Requirements: stale-team-generation
+#### Scenario: list
+- WHEN `list` runs under hc
+- THEN it returns one status per child of the caller
 
-- **R277** WHEN a lead session owns an hc terminal (its team is registered for that scope and terminal) and a second CLI session that inherits the same terminal id calls a runtime verb, so it presents a different generation, THEN the call is refused with an error that names the terminal, the generation that owns it and the way out (the session must run in its own hc terminal, or a new session takes the terminal once the owner is gone); no team row is registered for the second session's generation, and the terminal keeps exactly one team (from stale-team-generation/S1)
-- **R278** WHEN the live lead calls the runtime after such a second session called, THEN the lead's own team still owns the terminal: its calls are served and its workers stay reachable, the terminal carries the lead's team alone, and the lead is never fenced with "stale team generation" (from stale-team-generation/S2)
-- **R279** WHEN the terminal's newest team row belongs to a generation whose process is gone (no process carries that pid with that start stamp) and whose team holds no worker, assignment, message, receipt, caller, task, last_wait row or operation, THEN the row is skipped and the live lead's calls are authorized against its own team: a session that left nothing behind never fences the terminal (from stale-team-generation/S3)
-- **R280** WHEN the terminal's newest team row belongs to a generation whose process is still running, THEN that row owns the terminal: the live lead is fenced with "stale team generation" and the message names the owning generation (from stale-team-generation/S4)
-- **R281** WHEN the terminal's newest team row belongs to a generation whose process is gone but whose team still holds a worker, assignment, message, receipt, caller, task, last_wait row or operation, THEN that row keeps the terminal: the live lead is fenced with "stale team generation" and the message names the owning generation (from stale-team-generation/S5)
-- **R282** WHEN a call is refused because the terminal belongs to another generation, or fenced because a newer generation owns the terminal, THEN the refusal names the terminal, the generation that owns it and the way out (run the session in its own hc terminal, or start a new session in this terminal once the owner has exited); the fence keeps the phrase "stale team generation" and names the terminal and the generation that owns it (from stale-team-generation/S6)
-- **R283** WHEN the lead-liveness hooks (the context reminder and the Stop guard) run for a lead whose terminal also has a newer team row, THEN they read the same rule as the server: a newer row that is dead and empty does not hide the lead's own team, and a newer row that is alive or holds work still owns the terminal (from stale-team-generation/S7)
-- **R284** WHEN a lead spawns a worker while the terminal has a newer team row that is dead and empty, THEN the spawn succeeds and the worker belongs to the lead's own team: the binding and the authorization agree on who owns the terminal (from stale-team-generation/S8)
-- **R285** WHEN a session that does not own the terminal calls a diagnostic verb (status, collect or list), THEN the call answers with the hc-only diagnostic view and a delivery_error that names the refusal; it is never an accepted report and never a failed session (from stale-team-generation/S9)
+### Requirement: Subagent runtime limits
+The PreToolUse hook SHALL deny a native Claude or Codex subagent every runtime tool that mutates or addresses an assignment, before the server runs, and SHALL let a lead through.
 
-## Coverage: stale-team-generation
+#### Scenario: a subagent calls a mutating or assignment-bound tool
+- WHEN a native subagent calls `wait`, a mutating tool, a task mutation, a receipt acknowledgment or any runtime tool carrying `assignment_id`, or passes a string `tool_input` that is not a JSON object
+- THEN the hook denies it; `task list` and receipt-free status, list and collect without `assignment_id` stay allowed, and a lead passes the hook
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R277 | S1 | `tests/test_tools_identity.py::TerminalOwnerTests::test_S1_a_session_that_inherits_a_live_leads_terminal_is_refused`<br>`tests/test_stale_team_generation.py::OwnershipOutcome::test_S1_the_other_session_is_refused_and_registers_no_team`<br>`tests/test_dispatch_ownership.py::TerminalRefusalTests::test_S1_a_session_that_descends_from_the_owner_is_refused`<br>`tests/test_dispatch_ownership.py::TerminalRefusalTests::test_S1_an_unrelated_session_is_refused_while_the_owner_is_alive_and_holds_work`<br>`tests/test_stale_team_generation.py` |
-| R278 | S2 | `tests/test_tools_identity.py::TerminalOwnerTests::test_S2_the_live_lead_keeps_its_team_after_the_other_session_called`<br>`tests/test_stale_team_generation.py::OwnershipOutcome::test_S2_the_live_lead_keeps_its_team_after_the_other_session_called`<br>`tests/test_stale_team_generation.py` |
-| R279 | S3 | `tests/test_dispatch_ownership.py::TeamOwnershipTests::test_S3_a_dead_and_empty_newer_row_does_not_fence_the_live_lead`<br>`tests/test_stale_team_generation.py` |
-| R280 | S4 | `tests/test_dispatch_ownership.py::TeamOwnershipTests::test_S4_a_live_newer_row_owns_the_terminal_and_fences_the_live_lead`<br>`tests/test_stale_team_generation.py` |
-| R281 | S5 | `tests/test_dispatch_ownership.py::TeamOwnershipTests::test_S5_a_dead_newer_row_that_holds_work_keeps_the_terminal`<br>`tests/test_stale_team_generation.py` |
-| R282 | S6 | `tests/test_dispatch_ownership.py::TerminalRefusalTests::test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out`<br>`tests/test_stale_team_generation.py::OwnershipOutcome::test_S6_the_refusal_and_the_fence_name_the_owner_and_the_way_out`<br>`tests/test_stale_team_generation.py` |
-| R283 | S7 | `tests/test_hooks_stop_guard.py::StopGuardTests::test_S7_the_lead_liveness_hooks_read_the_same_ownership_rule`<br>`tests/test_hooks_stop_guard.py::StopGuardTests::test_S7_a_lead_behind_a_dead_empty_team_may_end_its_turn_once_it_has_seen_the_result`<br>`tests/test_stale_team_generation.py` |
-| R284 | S8 | `tests/test_dispatch.py::DispatchTests::test_S8_a_spawn_binds_to_the_leads_own_team_when_the_newer_row_is_dead_and_empty`<br>`tests/test_stale_team_generation.py` |
-| R285 | S9 | `tests/test_tools_identity.py::TerminalOwnerTests::test_S9_a_refused_session_gets_the_diagnostic_view_with_a_delivery_error`<br>`tests/test_stale_team_generation.py::OwnershipOutcome::test_S9_a_refused_session_gets_the_diagnostic_view_with_a_delivery_error`<br>`tests/test_stale_team_generation.py` |
+#### Scenario: the start notice
+- WHEN a Claude subagent or in-process teammate starts
+- THEN its context says it is a subagent, names the reads it may call and that it must not run runtime commands
+
+### Requirement: Hook input errors allow
+A hook SHALL exit 0 and allow when it cannot decide, never blocking on its own failure.
+
+#### Scenario: unreadable input or state
+- WHEN a hook gets invalid JSON on stdin, the store is missing or write-locked, python3 is missing, or no identity resolves
+- THEN it exits 0 and allows (Claude: no output; Codex: empty or `{}`), and emits no decision for invalid JSON
+
+### Requirement: Raw hc guard
+The PreToolUse guard SHALL refuse the raw hc commands that mutate another agent, with a reason, and allow the ones a lead or a worker legitimately runs.
+
+#### Scenario: mutating hc commands
+- WHEN a Bash call runs `hc run`, `hc send` or `hc kill` as a subagent, or `hc keys`, `hc interrupt`, `hc kill` or `hc send --force` aimed at the worker's parent (Claude or Codex), or a native teammate carrying `agent_id` runs `hc send`
+- THEN the hook denies it with a reason; wrapped, nested and command-substituted forms are inspected
+
+#### Scenario: allowed commands
+- WHEN a lead runs `hc send`, or a worker sends its result to its parent or runs hc aimed at its own child or a sibling, or reads hc state
+- THEN it is allowed
+
+### Requirement: Structured report delivery
+`report` SHALL publish an idempotent, server-attributed event that the lead receives through a tool result and that survives a restart.
+
+#### Scenario: a worker reports
+- WHEN a Claude or Codex worker reports through MCP
+- THEN its lead receives a structured report with server-derived sender, team, assignment and message ids, with no hc report text or injected user message; committed reports and pending acknowledgments remain recoverable after the MCP processes restart
+
+#### Scenario: a retried publication
+- WHEN a worker publishes again with the same message id
+- THEN one event exists; the same id with different content returns a conflict
+
+### Requirement: Receipt acknowledgment
+A caller SHALL acknowledge delivered messages with a receipt, which SHALL be replay-safe and need no separate call.
+
+#### Scenario: replay
+- WHEN an unacknowledged batch is read again after cancellation or a lost response
+- THEN its messages keep their ids, repeating a valid receipt is harmless, and acknowledged messages are omitted from later reads
+
+#### Scenario: piggyback
+- WHEN a caller attaches a valid receipt to its next runtime call
+- THEN it is acknowledged; an invalid or foreign receipt fails explicitly and a failed transaction does not lose the batch
+
+### Requirement: Bounded results
+A result SHALL stay within the configured byte budget, deferring what does not fit without loss.
+
+#### Scenario: over the limit
+- WHEN a result, counting JSON framing and the complete envelope, exceeds the batch or payload limit
+- THEN it returns bounded data with `more` and a continuation receipt, deferred messages stay retrievable, and acknowledgments cover only delivered messages
+
+### Requirement: Wait all
+`wait(target=all)` SHALL stay pending until every snapshotted assignment completes, then return all reports in one result.
+
+#### Scenario: partial progress
+- WHEN progress or one worker's complete report arrives while another selected assignment runs
+- THEN the same call remains pending and later returns the accumulated reports together
+
+#### Scenario: every assignment complete
+- WHEN every snapshotted assignment reports complete
+- THEN it returns `completed`, all reports and an empty unfinished list, without status or collect calls
+
+### Requirement: Wait any and named
+`wait(target=any)` SHALL return the first eligible event and any queued eligible batch, and a named wait SHALL filter to the selected worker.
+
+#### Scenario: an eligible event
+- WHEN `wait(any)` has an eligible event
+- THEN it returns it with any already queued eligible batch, and a named wait returns only the selected worker's or assignment's events
+
+### Requirement: Wait deadline and cancellation
+A wait SHALL end at its deadline, on cancellation or when nothing is selected without losing messages or stopping workers.
+
+#### Scenario: deadline, cancellation, empty selection
+- WHEN a wait reaches its deadline, is cancelled, or has no selected assignments
+- THEN it returns a timeout or empty result where a response is possible, or cancels cleanly; messages remain replayable and workers continue
+
+### Requirement: Wait recovers missed events
+A waiting recipient SHALL receive a committed event without model polling, even when notification was lost.
+
+#### Scenario: a lost notification
+- WHEN publication races listener registration or the publisher dies after commit before the IPC notification
+- THEN the waiting recipient receives the committed event within the finite recovery bound
+
+### Requirement: Responsive MCP calls
+A waiting MCP call SHALL leave ping, publication and cancellation responsive and the protocol stream clean.
+
+#### Scenario: a long wait
+- WHEN one MCP call waits
+- THEN ping, publication and cancellation stay responsive, stdout carries only valid protocol JSON and the call produces one final result
+
+### Requirement: Wait attention and failure
+`wait` SHALL return explicit attention or failure, with every unfinished assignment, instead of a timeout whenever a selected worker needs the lead.
+
+#### Scenario: a worker needs the lead
+- WHEN a selected assignment blocks, requests a decision, is interrupted, reports hc status `error`, ends its turn without an accepted complete, blocked or decision report, or its worker exits
+- THEN the wait returns attention or failure naming all unfinished assignments; hc idle or done alone never proves success, and queued progress does not bypass a bounded hc observation of an exited or interrupted worker
+
+#### Scenario: an observed failure
+- WHEN `wait` observes a selected worker exited, interrupted or replaced before completion
+- THEN the result carries one persisted failure message, and once its receipt is acknowledged later `wait(all)` snapshots exclude the assignment
+
+### Requirement: Unreported workers
+`wait` and `status` SHALL flag a worker that never reported a status after a grace period, without answering for it.
+
+#### Scenario: past the grace period
+- WHEN a live worker has never reported a status (`reported:false`, `status_ms:null`, `turn:0`) and was created more than 30 s ago
+- THEN `wait` returns attention with `runtime_state: unreported` and a next step naming collect, asking the user, user-approved hc keys or stop, and `status(name)` shows the same state and rows; it never answers the dialog or claims a confirmed trust block
+
+#### Scenario: not unreported
+- WHEN the worker is younger than 30 s, or has reported a status once and later shows null, or its terminal exited, was interrupted or replaced
+- THEN it is not flagged; a younger worker counts as working and a lost terminal returns its one failed message
+
+#### Scenario: probing cost
+- WHEN `wait` polls a team whose members all have a non-null hc status
+- THEN it runs no `hc get`; only live members whose `hc ls` status is null are read with `hc get`
+
+### Requirement: Stalled workers
+`wait` SHALL report a working assignment that makes no progress once per episode, never stopping or completing it.
+
+#### Scenario: a stall
+- WHEN a working assignment has had no `publish` progress and no hc turn change for 15 minutes
+- THEN `wait` returns `attention: stalled` with a next step, once per episode, marked in the transaction that records the receipt and counted in the batch attention; progress then renews it for a later idle period
+
+#### Scenario: clocks and precedence
+- WHEN an assignment is first observed, it starts its idle clock at that observation; when it has exited or failed, `failed` wins over `stalled`
+- THEN the worker is never stopped and never marked complete
+
+### Requirement: Concurrent dispatch
+`spawn` and `resume` SHALL return before the assignment finishes so mixed-CLI workers run concurrently.
+
+#### Scenario: several workers
+- WHEN `spawn` or `resume` is invoked for several mixed-CLI workers
+- THEN dispatch returns before the assignments finish, they run concurrently, and each resume receives a fresh assignment id
+
+### Requirement: Stale reports
+A late report SHALL NOT complete a current assignment or reach another team generation.
+
+#### Scenario: an old assignment or a reused address
+- WHEN a late report references an old assignment, or an hc address or name has been reused
+- THEN it cannot complete the current assignment or leak into another team generation
+
+### Requirement: Peer messages
+Teammates SHALL exchange messages through the recipients' tool results with the true sender identity.
+
+#### Scenario: waiting and idle recipients
+- WHEN two teammates exchange messages
+- THEN messages arrive in a waiting recipient's tool result with true sender identity, and an idle recipient retains them for its next call or resume without forced input
+
+### Requirement: Durable shared tasks
+The `task` tool SHALL keep durable tasks with dependencies that every teammate sees identically and claims atomically.
+
+#### Scenario: shared view
+- WHEN a lead creates and lists tasks with dependencies
+- THEN every teammate sees the same task ids, dependency state, owner and status after a restart
+
+#### Scenario: concurrent claim
+- WHEN two teammates claim a ready task at once
+- THEN exactly one wins; unsatisfied dependencies, missing dependencies and cycles are rejected explicitly
+
+#### Scenario: report drives the task
+- WHEN the owning assignment reports complete or blocked
+- THEN its linked task changes in the same transaction, dependents become claimable only after successful prerequisites, and a duplicate report does not duplicate a transition
+
+### Requirement: Task release on worker loss
+A task SHALL return to `pending` with no owner when its worker is lost.
+
+#### Scenario: stopped, failed or observed failure
+- WHEN a stopped worker, a failed spawn or a persisted observed failure has an unfinished linked task
+- THEN the task returns to `pending` with no owner in the same transaction
+
+### Requirement: Spawn with a task
+`spawn` SHALL link a ready task to the new worker atomically.
+
+#### Scenario: a ready task
+- WHEN a lead spawns a worker with a ready `task_id`
+- THEN the task links to the new worker and assignment, the result returns `task_id`, and the worker's complete report finishes the task
+
+#### Scenario: an unusable task
+- WHEN the task is missing, foreign, not pending, has unmet dependencies or loses a concurrent claim
+- THEN spawn fails before starting a terminal and exactly one claimant owns the task
+
+### Requirement: Resume with a task
+`resume` SHALL move a task to the fresh assignment only when asked.
+
+#### Scenario: with and without `task_id`
+- WHEN a lead resumes a worker with `task_id` for its in_progress or blocked task, or a ready pending task
+- THEN the task moves to the fresh assignment and that assignment's complete report finishes it; resume without `task_id` leaves links unchanged
+
+### Requirement: Stopped workers
+`stop` SHALL leave committed history readable and never strand waiters or another lead's terminal.
+
+#### Scenario: history and waiters
+- WHEN a worker is stopped or removed
+- THEN its committed reports and task history stay readable, an active incomplete assignment is surfaced as unfinished or failed, and later `wait(all)` snapshots exclude stopped or acknowledged assignments (returning `empty` when none remains)
+
+#### Scenario: a missing or reused terminal
+- WHEN the worker's hc terminal no longer exists, `stop` succeeds and the next `wait(all)` excludes it; when its name now belongs to another lead's terminal, only the caller's record is marked stopped and the other terminal is neither killed nor removed
+
+### Requirement: Diagnostic fallback
+`status`, `collect` and `list` SHALL authorize against the dispatch store first and fall back to hc-only state with `delivery_error`, never replacing an accepted report.
+
+#### Scenario: delivery failure
+- WHEN structured delivery fails, the store fails, identity cannot be resolved or hc role lookup times out, or the session does not own the terminal
+- THEN they return hc state or the diagnostic view with an explicit `delivery_error` naming the refusal instead of an error, and never stand in for an accepted complete report
+
+#### Scenario: authorization
+- WHEN a forged identity or an unproven worker calls them
+- THEN the call fails with its authorization error and returns no hc data, inbox or pin
+
+#### Scenario: inbox only with a receipt
+- WHEN `status`, `list`, `collect` or `task list` run without a `receipt`
+- THEN the result carries no inbox piggyback and acknowledges nothing; with a valid receipt, pending inbox messages are returned
+
+### Requirement: Dispatch activation
+The structured path SHALL apply when dispatch is enabled and the legacy path SHALL stay usable when it is absent.
+
+#### Scenario: with and without activation
+- WHEN `AGENT_RUNTIME_DISPATCH` is absent
+- THEN spawn, report, wait and resume keep their legacy behaviour; when enabled, the structured path applies
+
+### Requirement: Tool schemas and descriptions
+The ten runtime tools SHALL publish schemas and instructions that support the dispatch flow within 400 words of descriptions.
+
+#### Scenario: tools/list
+- WHEN a client lists tools
+- THEN all ten tools including `task` are listed, total descriptions stay within 400 words, `wait` and `resume` say delivery is pull-only so reports landing later need a new `wait(all)`, and `spawn` publishes optional string `model` and `instructions_file`, an `agent` property whose description says the agent needs the `report` tool and that `none` means no role, and `effort` as an enum of `low`, `medium`, `high`, `xhigh`, `max`
+
+### Requirement: Spawn failure cleanup
+A failed `spawn` SHALL leave no live terminal, an inactive worker and a failed assignment.
+
+#### Scenario: failure after `hc run`
+- WHEN spawn fails after `hc run` (address unreadable, timeout, cancellation, bind error or unsent first message)
+- THEN the terminal is removed, the assignment is failed, the linked task returns to `pending` with no owner, the lead receives one `failed` message even when the worker already reported blocked or decision, and messages or resumes addressed to the worker fail explicitly
+
+#### Scenario: nothing to start
+- WHEN spawn cannot resolve identity or validate its inputs
+- THEN no terminal is started
+
+#### Scenario: another worker's terminal
+- WHEN cleanup runs while another spawn of the same name has bound its live terminal, or the ownership check hits a store error
+- THEN the other terminal is kept and the failed spawn still fails with its original error; when the timeout comes after the worker's complete report landed, the error says the result already landed
+
+#### Scenario: a failed resume
+- WHEN a resume fails after the resumed worker's report already landed
+- THEN that report stands and the linked task stays with the worker's assignment
+
+### Requirement: Store indexes
+The store SHALL index membership and wait queries without changing its schema version.
+
+#### Scenario: initialization and plans
+- WHEN the store initializes
+- THEN the indexes exist, `user_version` is unchanged and old-shape writes still succeed; `wait` snapshot and membership queries use the indexes and do not scan message bodies
+
+### Requirement: Live scope binding
+A worker SHALL bind to its lead across hc scopes with its assignment id.
+
+#### Scenario: different `HC_SCOPE` tokens
+- WHEN a lead and its worker run in real hc terminals with different `HC_SCOPE` tokens on one hc server
+- THEN the worker's first runtime call with its assignment id binds and its reports reach the lead
+
+### Requirement: Pending work on results
+A lead with unfinished assignments SHALL be told to wait on every spawn, resume and message result.
+
+#### Scenario: unfinished work
+- WHEN a lead (including a worker leading its own children) with N > 0 unfinished assignments gets a `spawn`, `resume` or `message` result
+- THEN it carries `unfinished: N`, counting the assignment that call created, and a `next` telling it to call `wait(target=all)`
+
+#### Scenario: nothing unfinished
+- WHEN the caller has no unfinished assignments as lead, or is a worker messaging its lead or a peer
+- THEN the `message` result carries no `unfinished` or `next`
+
+### Requirement: Worker launch flags
+`spawn` SHALL launch an interactive worker that does not notify the lead through hc.
+
+#### Scenario: argv
+- WHEN `spawn(kind=worker)` starts a worker
+- THEN the argv carries no one-shot flag (`--print`, `-p` for Claude, `exec` for Codex) so the pane can be resumed, and a claude or codex worker's `hc run` argv carries `--no-notify` before the program
+
+### Requirement: Spawn model
+`spawn` SHALL pass a valid `model` to the CLI and refuse an invalid one before launching.
+
+#### Scenario: a model
+- WHEN `spawn` runs with `model: "haiku"` for Claude or `"gpt-5.5"` for Codex
+- THEN the argv is `claude --permission-mode auto --model haiku <prompt>` or `codex --no-daemon [-p worker] --model gpt-5.5 <prompt>`, prompt last, and `-p <name>` appears only when the worker profile is usable (`worker` by default, `AGENT_RUNTIME_CODEX_PROFILE` overrides); without `model` the argv has no model flag
+
+#### Scenario: an invalid model
+- WHEN `model` is blank, not a string, has leading, trailing or inner whitespace or control characters, or starts with `-`
+- THEN `spawn` returns an error and no `hc run` happens
+
+### Requirement: Spawn effort
+`spawn` SHALL pass a valid `effort` to the CLI and refuse any other.
+
+#### Scenario: effort
+- WHEN a claude-family worker has `effort` set the argv carries `--effort <level>` after any `--model`; a codex-family worker carries `-c model_reasoning_effort="<level>"` after `--no-daemon` and any `--model`; without `effort` neither CLI gets an effort argument
+- THEN anything other than `low`, `medium`, `high`, `xhigh` or `max` returns an error and nothing is launched
+
+### Requirement: Spawn agent role
+`spawn` SHALL load a named `agent` role for its CLI and refuse an unusable one before launching.
+
+#### Scenario: a named agent
+- WHEN `agent` is `scene-reviewer` for Claude, or `reviewer` for Codex
+- THEN the Claude argv is `claude --agent scene-reviewer --permission-mode auto [--model <m>] <prompt>`, and the Codex prompt starts with `developer_instructions` from `~/.codex/agents/reviewer.toml`, then the task; `plugin:reviewer` is accepted for Claude only
+
+#### Scenario: an unusable agent
+- WHEN `agent` is not a string, blank, fails `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, contains `:` for Codex, or the Codex toml is missing or lacks `developer_instructions`
+- THEN `spawn` returns an error (naming the path for the toml) and no `hc run` happens
+
+### Requirement: Worker protocol without a role
+A worker spawned without a role SHALL be told the report protocol.
+
+#### Scenario: no role
+- WHEN `spawn` omits `agent`, or passes `agent: "none"`
+- THEN every CLI family uses no role (naming `implementer` selects that role), Claude's argv carries no `--agent`, Codex's prompt starts with the task and reads no toml, and the prompt states that a final message alone never reaches the parent, how to `report` (`report(kind, assignment_id)` under dispatch, `report(text)` otherwise) and the `STATUS: COMPLETE | BLOCKED | PARTIAL` block
+
+### Requirement: Spawn instructions file
+`spawn` SHALL start a role-less worker from an instructions file, only where the CLI does not load a role itself.
+
+#### Scenario: a Codex or role-less backend
+- WHEN `spawn` runs with `instructions_file` (absolute or `~/` path) on Codex or a backend with no role file
+- THEN the prompt starts with the file's content, then the task, and no `~/.codex/agents` toml is read
+
+#### Scenario: refused
+- WHEN `instructions_file` is not a string, blank, not an absolute or `~/` path, or names a missing file or directory, or is combined with `agent`, or used with `cli: "claude"`
+- THEN `spawn` returns an error naming it and no `hc run` happens
+
+### Requirement: Claude profile settings
+A claude-family profile SHALL choose the worker's permission mode and settings file, and an invalid profile SHALL stop the spawn.
+
+#### Scenario: a valid profile
+- WHEN a profile sets `permission_mode` (`acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `manual`, `plan`) and an existing `settings` file (absolute or `~/`)
+- THEN the argv carries `--permission-mode <mode>` in place of `auto` and `--settings <path>` right after it; a profile without them keeps `--permission-mode auto`
+
+#### Scenario: an invalid profile
+- WHEN the mode is unknown, `settings` is not an absolute or `~/` string, either is set on a non-claude profile, or the settings file does not exist at spawn time
+- THEN the config is invalid (only built-ins are published) or `spawn` errors naming the path, before `hc run`
+
+### Requirement: Pi workers
+A `pi` worker SHALL run trust-prompt free with the role and the runtime's MCP server it needs.
+
+#### Scenario: argv and role
+- WHEN `spawn` runs a `pi` worker, optionally with `agent: "<name>"`
+- THEN the argv is `pi --approve [--model <m>] [--thinking <level>] <prompt>`, and the prompt carries the role's content from `~/.claude/agents/<name>.md` (front matter aside; `AGENT_RUNTIME_ROLE_DIR` moves the directory) ahead of the task while the report protocol still applies; a missing, empty or unreadable role file errors naming it before `hc run`
+
+#### Scenario: MCP registration
+- WHEN a `pi` worker is spawned
+- THEN Pi's user-level `mcp.json` (`$PI_CODING_AGENT_DIR/mcp.json`, else `~/.pi/agent/mcp.json`) carries the `agent-runtime` server with this runtime's absolute server path, `AGENT_RUNTIME_DISPATCH=1` and `exposure: direct`, every other server in the file survives, and an unreadable or unwritable configuration is an error naming it before `hc run`
+
+### Requirement: Call command
+`agent-runtime call <tool> --lead L --json '<args>'` SHALL run a dispatch tool from an hc terminal and print its JSON result.
+
+#### Scenario: success and errors
+- WHEN it runs in an hc terminal
+- THEN it prints the tool's JSON result and exits 0, and a tool error is printed as JSON with exit 1; when the caller is not an hc terminal it exits 2 with the `require_hc` message, and invalid `--json` or an unknown tool exits 2 with usage, starting nothing
+
+#### Scenario: shared lead
+- WHEN two separate `call` processes pass the same `--lead`
+- THEN `wait` in the second sees and receives reports for assignments spawned by the first
+
+### Requirement: Call guard
+The PreToolUse hook SHALL deny a subagent `agent-runtime call` and ask before a non-subagent mutating one.
+
+#### Scenario: through Bash
+- WHEN a subagent runs `agent-runtime call <tool>` through Bash, by name, path or python
+- THEN the hook denies it, reading arguments as the CLI parser does; a non-subagent running a mutating tool is asked
+
+### Requirement: Call generation conflict
+`call` SHALL refuse a `--lead` that does not match the live generation of the terminal's latest team.
+
+#### Scenario: a second generation
+- WHEN `call` runs with a `--lead` different from the generation of the terminal's latest team and that team has unfinished assignments
+- THEN it exits 2 naming the live generation, starts nothing, and the other generation's `wait` still receives its reports
+
+### Requirement: Operation keys
+`spawn` and `resume` SHALL accept an `operation_id` that makes a retry return the first assignment instead of repeating it.
+
+#### Scenario: a new key
+- WHEN `spawn` or `resume` carries an `operation_id` (1-128 characters of `A-Z a-z 0-9 . _ : -`, dispatch only) this owner has not used
+- THEN one row (team, owner, operation_id, fingerprint, assignment id) is written in the transaction that registers the assignment, before anything is sent; the owner is the lead's terminal on its hc server and the fingerprint covers verb, name, CLI family, profile, task text, cwd, model, effort, role, instructions text and task link
+
+#### Scenario: a repeat
+- WHEN the same owner repeats the key with the same fingerprint
+- THEN the call returns the existing assignment with its state and `replayed: true`, sends and launches nothing and takes no team slot; a failed first call is reported as `failed` with the way out; a different fingerprint is refused naming the conflict
+
+#### Scenario: a replaced hc socket
+- WHEN keys are minted and later the socket at the same path and terminal is replaced (owner includes the socket path, terminal id and device, inode and ctime)
+- THEN restarts on the same socket keep the keys, prior-instance keys return `unknown`, and keyed spawn and resume refuse them without launching; unavailable socket identity fails closed with retry guidance
+
+### Requirement: Operation lookup
+`agent-runtime call operation` SHALL report the owner-scoped state of an `operation_id` read-only.
+
+#### Scenario: state
+- WHEN `call operation --json '{"operation_id": ...}'` runs
+- THEN it prints absent, pending, bound, working, blocked, decision, complete, failed or unknown with the assignment id, takes no receipt and never acknowledges a report; the operations table is additive, created by the first keyed call, with `user_version` staying 2
+
+#### Scenario: store trouble
+- WHEN the real Store cannot be constructed or read (`OSError`, `sqlite3.Error`, `StoreError`)
+- THEN it returns `unknown`, a null assignment id and a reason naming the failure and how to restore access
+
+#### Scenario: a CLI verb only
+- WHEN it runs under a new `--lead` in a terminal whose previous lead is live
+- THEN the lookup is exempt from the live-lead conflict check while every writer keeps it, and either MCP dispatch path receiving `operation` returns -32602 naming the unknown tool before any handler runs
+
+### Requirement: Caller identity
+`agent-runtime resolve --json` SHALL report who the caller is from the process ancestry, never from markers alone.
+
+#### Scenario: caller kind
+- WHEN `resolve --json` runs
+- THEN it carries `caller: {kind: lead|worker|unknown, verified: bool}`; worker environment markers alone never verify, observed worker ancestry wins over missing markers, a finished terminal never verifies anyone, the nearest live ancestor terminal decides, and a caller outside any hc terminal is `unknown` unverified (or its marker's kind, unverified)
+
+### Requirement: Session generation
+A session SHALL keep one generation, computed the same way by the server and the hooks.
+
+#### Scenario: one generation
+- WHEN the MCP server and a hook run under the same Claude or Codex process, even with `CODEX_THREAD_ID` or `CLAUDE_CODE_SESSION_ID` set
+- THEN both compute `<pid>:<lstart>` of the nearest CLI ancestor, and a lead running `/clear` or `/new` in the same process stays on the same team
+
+#### Scenario: a missed ancestry walk
+- WHEN a later call's ancestry walk misses its budget
+- THEN the session keeps the generation it resolved first, the team does not fork, and the first team's workers do not go stale
+
+### Requirement: Terminal ownership
+The newest live-or-occupied team row SHALL own an hc terminal, and a session that does not own it SHALL be refused.
+
+#### Scenario: a second session
+- WHEN a second CLI session inherits a live lead's terminal id and calls a runtime verb with a different generation
+- THEN the call is refused with an error naming the terminal, the owning generation and the way out (its own hc terminal, or a new session once the owner is gone), no team row is registered for it, and the live lead keeps its team and workers
+
+#### Scenario: a dead and empty row
+- WHEN the terminal's newest team row belongs to a gone process and holds no worker, assignment, message, receipt, caller, task, last_wait row or operation
+- THEN it is skipped and the live lead's calls and spawns authorize against its own team
+
+#### Scenario: a live or occupied row
+- WHEN the newest row's process still runs, or is gone but holds any of those
+- THEN that row keeps the terminal and the live lead is fenced with "stale team generation" naming the owning generation and the way out
+
+### Requirement: Hooks read terminal ownership
+The lead-liveness hooks SHALL apply the same ownership rule as the server.
+
+#### Scenario: a newer team row
+- WHEN the context reminder or Stop guard runs for a lead whose terminal has a newer team row
+- THEN a dead and empty row does not hide the lead's own team and a live or occupied one still owns the terminal
+
+### Requirement: Lead wait record
+The store SHALL record each lead's last final `wait(all)` and a fingerprint to detect unseen work.
+
+#### Scenario: recording and comparing
+- WHEN a lead's `wait(all)` returns a final batch
+- THEN the team's last-wait row holds its reason, attention count and current fingerprint, committed with the receipt (narrower and cancelled waits leave it unchanged); a later lead-addressed message, assignment state change or turn changes the computed fingerprint, while outbound and worker peer messages do not
+
+### Requirement: Lead reminder context
+The context hook SHALL remind a lead of unseen work in one action-aware line and print nothing otherwise.
+
+#### Scenario: work for the lead
+- WHEN Claude SessionStart fires with `source` compact or clear, Codex SessionStart (compact or clear) fires, or UserPromptSubmit fires on either, for a lead with undelivered messages or unseen working assignments
+- THEN `additionalContext` is `agent-runtime: N unfinished, M undelivered — call wait(all)`; when the last delivered wait reported attention and the fingerprint is unchanged it is `agent-runtime: N workers need you — check status`
+
+#### Scenario: nothing to say
+- WHEN the caller leads no team with needs, its team's generation differs from the hook's, or SessionStart `source` is startup, resume or fork
+- THEN the hook prints nothing
+
+### Requirement: Stop guard
+The Stop hook SHALL block a lead's turn from ending while it has unseen work.
+
+#### Scenario: unseen work
+- WHEN a Claude or Codex lead (or a worker leading its own children) ends its turn with undelivered messages or unseen working assignments
+- THEN Stop blocks with `agent-runtime: N unfinished, M undelivered — call wait(all) before ending the turn`
+
+#### Scenario: nothing to wait for
+- WHEN only blocked, decision or failed assignments remain, the last wait's reason is not timeout and the fingerprint is unchanged, or the only working assignments left carry a reported unchanged stall
+- THEN Stop allows, and a worker's progress makes the stall count as unseen again
+
+#### Scenario: a worker with its own assignment
+- WHEN a caller leads no team but holds a current assignment in state pending or working
+- THEN Stop blocks with a reason naming `report complete` and `report blocked`; with no such assignment, or only teams of dead or superseded generations, it allows
+
+### Requirement: Stop guard budget
+The Stop guard SHALL block at most three times before it allows with a note.
+
+#### Scenario: budget spent
+- WHEN the guard has blocked 3 times since its last reset
+- THEN the next Stop allows with one note in the dialect's channel (a stderr line for Claude and Codex, the `reason` of `{"block": false, "reason": <text>}` for `--dialect json`) and later Stops allow until UserPromptSubmit fires or a check finds nothing to block on
+
+#### Scenario: resets
+- WHEN a Stop allows because the budget is spent, because of the backgrounded-wait exemption or because of an error
+- THEN the budget is not reset; UserPromptSubmit resets it to 3
+
+### Requirement: Backgrounded wait exemption
+A lead with a running backgrounded `wait` SHALL be allowed to stop without spending budget, and a worker SHALL never be exempt.
+
+#### Scenario: a background MCP wait
+- WHEN a lead's `background_tasks` holds a running `MCP task` for server agent-runtime and tool `wait`
+- THEN Stop allows without spending budget; a worker is never exempt because a parked wait does not deliver its own assignment, and an unknown task shape only loses the exemption
+
+### Requirement: Hooks never write the store
+A hook SHALL only read the dispatch store, wherever it lives.
+
+#### Scenario: reading
+- WHEN a hook reads the store
+- THEN it never writes `dispatch.sqlite3` and honours `XDG_STATE_HOME` whether or not `AGENT_RUNTIME_DISPATCH` is set in its environment
+
+### Requirement: Probe timeouts
+A bounded probe SHALL NOT hide a failed worker or a launcher's diagnostic behind a queued report.
+
+#### Scenario: a slow probe
+- WHEN a bounded probe (a wait's status probe, a launcher's startup diagnostic) needs more than 0.2 s
+- THEN the runtime still observes it and reports the failed or blocked worker, or the launcher's diagnostic, instead of the queued report or a bare exit
+
+### Requirement: Team limit
+A team SHALL hold at most 32 active workers, counting active workers only.
+
+#### Scenario: stopped workers do not count
+- WHEN a team has 32 registered workers, 31 stopped, and the lead spawns a new name
+- THEN the spawn succeeds
+
+#### Scenario: a full team
+- WHEN a team has 32 active workers and the lead spawns a new name or resumes a stopped name
+- THEN the call is refused before anything launches with "team limit is 32 active workers: stop an active worker, then retry", the slot is reserved in the transaction that registers the assignment so concurrent calls cannot exceed it, and resuming an already active worker consumes no new slot
+
+### Requirement: Receipts path guard
+The PreToolUse hook SHALL refuse a worker or subagent any mutation of an orchestrator ledger, its receipts or lock, and nothing else.
+
+#### Scenario: a guarded path
+- WHEN a worker or subagent mutates a `receipts/` subtree, a ledger or a lock under the default root `~/.local/state/orchestrate/`, or under any root a `<repo-key>/<slug>/receipts/` path, the sibling `<slug>.json` or its lock where the ledger carries `"kind": "agent-orchestrator/ledger"`, written relative, absolute, through a symlink alias, `$HOME`, `${HOME}` or `~`
+- THEN the hook denies it with the reason and the way out (fix the code and let the driver re-run the evidence); reading it is allowed, and the hook resolves the caller's role before reading a candidate ledger (leads read none; workers read the first 4096 bytes of regular files, never a FIFO or device)
+
+#### Scenario: an unguarded path
+- WHEN the path has a `state/receipts` component but no orchestrator ledger beside it (e.g. `src/state/receipts/slice.ts`), or is an unmarked ledger outside the default root
+- THEN the hook allows it
+
+### Requirement: Store failure handling
+A store failure SHALL roll back what is reversible and say what was and was not done.
+
+#### Scenario: before the external effect
+- WHEN `spawn`, `resume`, `message`, `report`, `stop` or `task` raises `sqlite3.Error` or `StoreError` before its external effect
+- THEN every reversible pending change is rolled back, a resume's pending assignment is failed and its moved task released back, and the error says what was not done and that the call can be retried
+
+#### Scenario: after an irreversible effect
+- WHEN the failure follows a sent message or a killed or removed terminal
+- THEN the error names the effect that happened and the store state left to reconcile; a store refusal (an unregistered name, a foreign receipt) is never presented as a retryable store failure, a failing rollback never replaces the original error, and a failure of the piggybacked inbox never turns a committed effect into an error
+
+### Requirement: MCP request ids
+The server SHALL answer a `tools/call` with a non-scalar id with an error and keep serving.
+
+#### Scenario: an array, object or boolean id
+- WHEN a `tools/call` request carries such an id
+- THEN the server answers JSON-RPC error -32600 with `id: null` and serves the next request; valid notifications keep their semantics
+
+### Requirement: Call thread release
+The server SHALL NOT retain the threads of completed calls.
+
+#### Scenario: many calls
+- WHEN many tool calls have completed in one server process
+- THEN the number of retained call threads returns to the number in flight
+
+### Requirement: Call caps
+The server SHALL refuse calls beyond fixed caps at once with a retryable reason instead of queuing them.
+
+#### Scenario: over the cap
+- WHEN 56 `wait` calls are in flight and another `wait` arrives, or 64 calls of any kind are in flight and another arrives
+- THEN the extra call is refused at once with a retryable reason; the 8 slots above 56 stay available to non-wait tools, and `ping` and cancellation are outside the cap
+
+### Requirement: Claude worker usage
+A Claude worker's usage SHALL be measured from its transcript, each message once.
+
+#### Scenario: counting
+- WHEN a transcript repeats an assistant record under the same `message.id`, carries a `<synthetic>` record, and its Task subagents wrote `<session>/subagents/*.jsonl`
+- THEN each `message.id` counts once for tokens and model calls, every `tool_use` block is a tool call, `<synthetic>` counts for nothing, and each subagent record is credited to the assignment whose marked prompt is the latest at or before its timestamp
+
+#### Scenario: cost checkpoints
+- WHEN the transcript carries `cost-state` checkpoints with a cumulative `totalCostUSD`
+- THEN each increase is credited to the assignment active when it was written; a slice with no checkpoint carries `cost_usd` 0 when a later checkpoint exists and none otherwise
+
+### Requirement: Codex worker usage
+A Codex worker's usage SHALL be measured from its root thread's rollout.
+
+#### Scenario: counting
+- WHEN the cumulative `total_token_usage` repeats a total or carries `info: null`, and a child thread (`thread_source: guardian_review`, same `session_id`) has its own rollout
+- THEN the worker binds to the root rollout, each assignment's figures are the increase of the root's cumulative total across its slice, a child's figures are credited by time and never start a slice, a repeated total counts as no model call, and `function_call` and `custom_tool_call` items are tool calls
+
+#### Scenario: no dollar figure
+- WHEN a Codex worker is measured, or any record lacks a figure
+- THEN Codex usage never carries `cost_usd`, and a figure is absent, never 0, when no record of the slice carries it; no dollar figure is computed from a rate
+
+### Requirement: Pi worker usage
+A Pi worker's usage SHALL be measured from its session file.
+
+#### Scenario: binding and summing
+- WHEN a Pi worker is measured
+- THEN its session is found under `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions/--<cwd slug>--/` by the marker in its first user prompt after the spawn time, per-message `usage` is summed per slice, assistant messages are model calls, `toolCall` blocks tool calls, and `cost_usd` sums the messages' `cost.total`
+
+### Requirement: Assignment usage slices
+A resumed worker's session SHALL be divided into one slice per assignment, by marked prompts only.
+
+#### Scenario: marked prompts
+- WHEN a session holds several user prompts carrying `assignment_id=<id>` and other records mention an assignment id
+- THEN each slice runs from the prompt whose last marker is its id to the next such prompt; a prompt is a Claude `user` record that is not `isMeta`, a compact summary or a tool result, a Codex root-thread `user` message, or a Pi `user` message, and a marker anywhere else starts no slice
+
+#### Scenario: three harnesses
+- WHEN a Claude, a Codex and a Pi worker are each spawned on one assignment and resumed on a second
+- THEN each assignment gets exactly its own slice's tokens, model calls, tool calls and (Claude, Pi) cost, and a worker with no log gets an empty dict
+
+### Requirement: Usage measurement resilience
+Measuring usage SHALL never fail, returning what it could measure.
+
+#### Scenario: damaged input
+- WHEN the worker has no metadata or bound log, or the log is missing, unreadable, truncated mid-line or not JSON
+- THEN `assignment_usage` returns what it could measure (an empty dict when nothing), never raises, and the complete lines before a truncated last line still count
+
+### Requirement: Incremental usage reads
+Measuring usage again SHALL read only what was appended and match a fresh parse.
+
+#### Scenario: a grown, shrunk or replaced log
+- WHEN `assignment_usage` is called after the log grew
+- THEN it reads only the appended bytes from the offsets kept in `<worker>.usage.json` (0600) and returns what a fresh parse returns; a log that shrank or was replaced is re-read from the start, and the sidecar holds offsets and numbers only, never prompt, tool or file text
+
+### Requirement: Wait usage rows
+`wait` SHALL attach each bound worker's usage to its assignment rows without ever failing the wait.
+
+#### Scenario: rows
+- WHEN the lead calls `wait` and the batch names assignments of bound workers
+- THEN each row carries `usage` for that assignment, a row whose worker has no measurement carries none, the store's byte budget reserves a worst-case usage dict per budgeted row, a failure while measuring never fails the wait, and tool descriptions and parameters are unchanged
+
+### Requirement: Hook-only exceptions
+The hook SHALL never be the only thing that refuses something, except where a native subagent cannot be told from its Lead.
+
+#### Scenario: the one exception
+- WHEN AGENTS.md and this spec state that the hook is never the only refuser
+- THEN they name one exception: a native in-process subagent cannot be told from its Lead outside the host hook, so the hook alone denies such a subagent a runtime tool (the denial in "Subagent runtime limits"), and no other refusal is an exception
+
+### Requirement: Live mixed-CLI acceptance
+A live lead SHALL drive both CLIs end to end.
+
+#### Scenario: opt-in live run
+- WHEN a live lead (`AGENT_RUNTIME_LIVE=1`) starts both CLIs, exchanges peer messages, observes completion and a blocker, resumes one assignment and recovers after an MCP restart, and a worker's terminal is killed outside the runtime
+- THEN reports remain attributed, replay works, no hc report text appears, one wait covers each uninterrupted work period, `stop` succeeds and the next `wait(all)` is `empty`

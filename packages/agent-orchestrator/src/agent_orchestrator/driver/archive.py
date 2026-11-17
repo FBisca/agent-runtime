@@ -137,7 +137,7 @@ class Archive:
     def park_due(self):
         """Whether the park owes the Lead another ask: fifteen minutes in, then every thirty, while nothing is in
         flight. A parked unit's assignment is open in the runtime but is no work (`parked_assignments`), so it never
-        silences the park. The plan is never given up for it (R126 keeps the drain's promise) and no worker starts."""
+        silences the park. The plan is never given up for it (Drain on an unapproved edit keeps its promise) and no worker starts."""
         if not self.drain or self.unfinished - self.parked_assignments():
             return False
         interval = PARK_ASK_EVERY if self.park_asks else PARK_ASK_FIRST

@@ -122,6 +122,8 @@ def review(tmp_path, monkeypatch):
     return where
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
+@pytest.mark.spec("Safeguard escalation report")
 def test_S1_the_report_carries_one_reason_naming_the_rule_the_path_and_where_it_came_from(review):
     assert review.screen() == 0, "a safeguard completes the execution, so the exit is 0 (D35)"
     report = review.report()
@@ -139,6 +141,7 @@ def test_S1_the_report_carries_one_reason_naming_the_rule_the_path_and_where_it_
     ]
 
 
+@pytest.mark.spec("Safeguard escalation report")
 def test_the_summary_names_the_rule_the_path_and_the_way_out(review, capsys):
     assert review.screen() == 0
     report = review.report()
@@ -152,6 +155,7 @@ def test_the_summary_names_the_rule_the_path_and_the_way_out(review, capsys):
     assert str(review.output / "report.json") in summary, "the summary names the report it wrote"
 
 
+@pytest.mark.spec("Protected path safeguard")
 def test_S2_a_rule_that_only_records_a_signal_does_not_recommend_a_deep_review(review):
     """A sensitive path sends the change to a person; a diff-read rule records its reason and nothing more."""
     assert review.screen() == 0
@@ -161,6 +165,7 @@ def test_S2_a_rule_that_only_records_a_signal_does_not_recommend_a_deep_review(r
     )
 
 
+@pytest.mark.spec("Protected path safeguard")
 def test_S2_a_sensitive_path_recommends_a_full_deep_review(review):
     """A path the mandatory baseline protects sends the change to a person, whatever it would score."""
     review.add("server/agent.py", "value = 1\n")

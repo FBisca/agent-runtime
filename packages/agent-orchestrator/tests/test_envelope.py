@@ -73,20 +73,20 @@ class CommitTests(EnvelopeFixture, unittest.TestCase):
         return self.request()["reason"]
 
     def test_S10_a_commit_shorter_than_seven_hex_characters_is_not_accepted(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S10"""
+        """orchestrate-lean-loop/S10"""
         self.assertIn("commit", self.rejected(self.review2(commit="abc123")))
 
     def test_S10_a_commit_that_is_not_the_checkouts_head_is_not_accepted(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S10"""
+        """orchestrate-lean-loop/S10"""
         self.assertIn("HEAD", self.rejected(self.review2(commit="deadbee")))
         self.assertIn("HEAD", self.rejected(self.review2(commit="d" * 40)))
 
     def test_S10_a_commit_that_is_not_hex_is_not_accepted(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S10"""
+        """orchestrate-lean-loop/S10"""
         self.rejected(self.review2(commit="not-a-sha"))
 
     def test_S10_an_abbreviation_of_head_of_at_least_seven_characters_is_accepted(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S10"""
+        """orchestrate-lean-loop/S10"""
         head = self.git(self.repo, "rev-parse", "HEAD")
         self.waits(
             [self.worker_done(tests=True), self.reviewer_done(self.review2(commit=head[:7]))]
@@ -95,7 +95,7 @@ class CommitTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S10_a_version_1_review_is_held_to_the_same_check(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S10"""
+        """orchestrate-lean-loop/S10"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -109,7 +109,7 @@ class CommitTests(EnvelopeFixture, unittest.TestCase):
 
 class ItemTests(EnvelopeFixture, unittest.TestCase):
     def test_S12_an_item_without_a_core_field_is_a_request_that_names_the_item_and_field(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S12"""
+        """orchestrate-lean-loop/S12"""
         item = {k: v for k, v in QUESTION.items() if k != "summary"}
         self.waits(
             [
@@ -127,7 +127,7 @@ class ItemTests(EnvelopeFixture, unittest.TestCase):
         )
 
     def test_S12_a_blocking_item_without_evidence_is_a_request_that_names_the_item_and_field(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S12"""
+        """orchestrate-lean-loop/S12"""
         item = {k: v for k, v in BLOCKING.items() if k != "evidence"}
         self.waits(
             [
@@ -141,7 +141,7 @@ class ItemTests(EnvelopeFixture, unittest.TestCase):
         self.assertIn("evidence", self.request()["reason"])
 
     def test_S12_fields_outside_the_core_appear_verbatim_in_findings_json(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S12"""
+        """orchestrate-lean-loop/S12"""
         item = dict(
             BLOCKING,
             severity="high",
@@ -160,7 +160,7 @@ class ItemTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.read("t1r1", "findings.json")["items"], [item, question])
 
     def test_S13_a_block_without_a_blocking_item_is_a_request(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S13"""
+        """orchestrate-lean-loop/S13"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -176,7 +176,7 @@ class ItemTests(EnvelopeFixture, unittest.TestCase):
         )
 
     def test_S13_a_pass_with_a_blocking_item_is_a_request(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S13"""
+        """orchestrate-lean-loop/S13"""
         self.waits(
             [
                 self.worker_done(tests=True),
@@ -198,7 +198,7 @@ class EvidenceTests(EnvelopeFixture, unittest.TestCase):
         self.assertIsInstance(item["exit"], int)
 
     def test_S14_a_failing_verify_fills_each_item_with_its_evidence(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S14"""
+        """orchestrate-lean-loop/S14"""
         self.waits([self.worker_done()])
         self.run_driver()
         findings = self.read("t1r1", "findings.json")
@@ -216,7 +216,7 @@ class EvidenceTests(EnvelopeFixture, unittest.TestCase):
         )
 
     def test_S14_a_failing_ci_check_takes_its_excerpt_from_the_failing_log(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S14"""
+        """orchestrate-lean-loop/S14"""
         self.checks([("fail", "unit tests", "lint"), "green"])
         self.waits([self.worker_done(tests=True), self.reviewer_done(), self.worker_done("t1r1")])
         self.run_driver()
@@ -236,7 +236,7 @@ class EvidenceTests(EnvelopeFixture, unittest.TestCase):
 
 class FixRoundTests(EnvelopeFixture, unittest.TestCase):
     def test_S15_a_fix_round_holds_blocking_and_answer_required_items(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S15"""
+        """orchestrate-lean-loop/S15"""
         self.waits(self.to_fix_round())
         self.run_driver()
         findings = self.read("t1r1", "findings.json")
@@ -250,7 +250,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         self.assertNotIn("never cleared", task_md)
 
     def test_S15_every_other_item_is_appended_to_deferred_md(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S15"""
+        """orchestrate-lean-loop/S15"""
         self.waits(self.to_fix_round())
         self.run_driver()
         deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
@@ -266,7 +266,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         )
 
     def test_S16_a_missing_response_resumes_the_worker_once_at_no_round_cost(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S16"""
+        """orchestrate-lean-loop/S16"""
         self.waits(
             self.to_fix_round()
             + [
@@ -296,7 +296,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.run_events("escalation"), [])
 
     def test_S16_a_second_report_still_missing_the_response_is_a_request(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S16"""
+        """orchestrate-lean-loop/S16"""
         self.waits(
             self.to_fix_round()
             + [
@@ -311,7 +311,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(len(self.calls("resume")), 2)
 
     def test_S16_a_complete_set_of_responses_passes_the_first_time(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S16"""
+        """orchestrate-lean-loop/S16"""
         self.waits(
             self.to_fix_round()
             + [
@@ -345,8 +345,9 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
             [assignment("demo-t1", "working", runtime_state, id=resume_id("demo-t1", 1))]
         )
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S7_an_answerer_whose_turn_ended_stays_working_and_its_complete_is_accepted(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S7"""
+        """orchestrator-silent-idle/S7"""
         self.waits(
             self.passing_with_question()
             + [
@@ -361,8 +362,9 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
         self.assertEqual(self.task()["answers"]["state"], "done")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S8_an_answerer_that_never_reports_is_one_idle_request_and_the_pr_stays_blocked(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S8"""
+        """orchestrator-silent-idle/S8"""
         self.waits(
             self.passing_with_question() + [self.silent_answerer("idle")] * 5 + [self.skipped()]
         )
@@ -373,8 +375,9 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         ready = [c for c in self.gh_calls("pr", "ready") if "--undo" not in c]
         self.assertEqual(ready, [], "the PR was marked ready with the answers outstanding")
 
+    @pytest.mark.spec("One idle watchdog")
     def test_S8_after_the_lead_answers_an_idle_answerer_the_unit_reaches_pr_ready_and_done(self):
-        """orchestrator-engine/R62: orchestrator-silent-idle/S8 — the Lead's decision replaces the silent answers
+        """orchestrator-silent-idle/S8 — the Lead's decision replaces the silent answers
         assignment, so the answers no longer hold pr-ready."""
         worker = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 2))
         worker["write"] = [[str(self.run_dir / "t1" / "report.2.json"), self.report("t1")]]
@@ -391,7 +394,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S17_a_pass_with_answer_required_items_goes_to_ci(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S17"""
+        """orchestrate-lean-loop/S17"""
         self.waits(self.passing_with_question() + [self.answers_report([RESPONSE])])
         self.run_driver()
         self.assertIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
@@ -417,14 +420,14 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         )
 
     def test_S17_the_pr_is_not_ready_until_the_answers_are_in(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S17"""
+        """orchestrate-lean-loop/S17"""
         self.waits(self.passing_with_question() + [self.answers_report([RESPONSE])])
         self.run_driver()
         order = [e["kind"] for e in self.run_events("wake", "response")]
         self.assertEqual(order[:2], ["response", "wake"])
 
     def test_S17_a_disputed_response_that_changes_code_goes_to_a_delta_re_review(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S17"""
+        """orchestrate-lean-loop/S17"""
         disputed = dict(RESPONSE, status="disputed", changes_code=True, note="the contract says no")
         second = self.reviewer_done(self.review2())
         second["write"][0][0] = str(self.run_dir / "t1" / "review.2.json")
@@ -445,8 +448,9 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
         self.assertGreaterEqual(len(self.checks_log()), 2)
 
+    @pytest.mark.spec("A conflicting pull request is rebased")
     def test_S8_a_disputed_change_drafts_the_pr_again_and_readies_it_after_the_re_review(self):
-        """orchestrator-engine/R30: orchestrator-pr-merge-state/S8"""
+        """orchestrator-pr-merge-state/S8"""
         self.born_ready()  # the review's draft undo marks the unit; the dispute must not leave that mark behind
         disputed = dict(RESPONSE, status="disputed", changes_code=True, note="the contract says no")
         second = self.reviewer_done(self.review2())
@@ -466,7 +470,7 @@ class AnswerTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual(self.task()["gate"], "done")
 
     def test_S16_missing_answers_resume_the_worker_once_then_become_a_request(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S16"""
+        """orchestrate-lean-loop/S16"""
         self.waits(
             self.passing_with_question()
             + [
@@ -487,7 +491,7 @@ class ClarificationTests(EnvelopeFixture, unittest.TestCase):
     ASKED = {"finding": "Q1", "asked_by": "implementer", "note": "does empty input raise?"}
 
     def test_S26_each_clarification_in_a_report_is_logged_with_its_finding_id(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S26"""
+        """orchestrate-lean-loop/S26"""
         second = dict(self.ASKED, finding="B1", note="which row is last?")
         self.waits(
             [
@@ -508,7 +512,7 @@ class ClarificationTests(EnvelopeFixture, unittest.TestCase):
         self.assertEqual({r["unit"] for r in rows}, {"t1"})
 
     def test_S26_each_clarification_in_a_review_is_logged_with_its_finding_id(self):
-        """orchestrator-engine/R2: orchestrate-lean-loop/S26"""
+        """orchestrate-lean-loop/S26"""
         asked = dict(self.ASKED, asked_by="reviewer")
         self.waits(
             [self.worker_done(tests=True), self.reviewer_done(self.review2(clarifications=[asked]))]
@@ -551,18 +555,21 @@ class RequirementViolationTests(EnvelopeFixture, unittest.TestCase):
         self.assertNotIn("ready-for-ci", gates, "a refused review advanced the unit to CI")
         return self.request()["reason"]
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_a_concern_asserting_a_requirement_violation_is_refused_before_ci(self):
         reason = self.refused(dict(CONCERN, requirement_violation=VIOLATION))
         self.assertIn(CONCERN["id"], reason)
         self.assertIn("requirement_violation", reason)
         self.assertIn("blocking", reason)
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_a_requirement_violation_missing_its_observed_behavior_is_refused(self):
         violation = {k: v for k, v in VIOLATION.items() if k != "observed"}
         reason = self.refused(dict(BLOCKING, requirement_violation=violation), "block")
         self.assertIn(BLOCKING["id"], reason)
         self.assertIn("observed", reason)
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S4_a_concern_without_a_requirement_violation_still_reaches_ci(self):
         self.waits(
             [self.worker_done(tests=True), self.reviewer_done(self.review2(items=[CONCERN]))]
@@ -594,6 +601,7 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
     def resolved(self, *items, status="fixed"):
         return self.re_review(self.review2(**self.closure(*items, status=status)))
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_passing_rereview_that_omits_an_open_blocker_holds_the_unit(self):
         self.waits(
             self.to_fix_round() + [self.fix_round_report(responses=[RESPONSE]), self.re_review()]
@@ -606,6 +614,7 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
         self.assertIn(str(record), brief)
         self.assertIn("B1", self.warning())
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_previous_blocker_cannot_be_downgraded_to_a_concern(self):
         concern = dict(CONCERN, id="B1", summary="rare case")
         self.waits(
@@ -619,6 +628,7 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
         self.held()
         self.assertIn("B1", self.warning())
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_bare_acknowledgment_is_not_closure(self):
         bare = {"id": "B1", "status": "fixed", "commit": "@HEAD", "note": "done"}
         self.waits(
@@ -632,6 +642,7 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
         self.held()
         self.assertIn("evidence", self.warning())
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_failing_evidence_is_not_closure(self):
         failing = dict(
             {
@@ -658,6 +669,7 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
         self.held()
         self.assertIn("exit", self.warning())
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_resolution_naming_no_open_finding_is_refused(self):
         self.waits(
             self.to_fix_round()
@@ -687,14 +699,17 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
         )
         self.assertEqual(self.run_events("contract-error"), [])
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_fixed_resolution_with_current_commit_evidence_closes_the_blocker(self):
         self.closes("fixed")
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_disproven_resolution_with_current_commit_evidence_closes_the_blocker(self):
         self.closes("disproven")
 
+    @pytest.mark.spec("Only a supported resolution closes a finding")
     def test_S6_a_contract_1_review_with_resolutions_is_refused(self):
-        """R139: writing the older contract does not close an open finding."""
+        """Only a supported resolution closes a finding: writing the older contract does not close an open finding."""
         legacy = {
             "contract": 1,
             "verdict": "pass",
@@ -714,6 +729,7 @@ class FindingClosureTests(EnvelopeFixture, unittest.TestCase):
         self.held()
         self.assertIn("contract 2", self.warning())
 
+    @pytest.mark.spec("Open blocking findings persist")
     def test_S5_a_legacy_major_finding_is_open_until_it_is_resolved(self):
         self.waits(
             [

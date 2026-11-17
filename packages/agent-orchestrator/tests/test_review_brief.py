@@ -52,8 +52,8 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("Run targeted tests only", text)
         self.assertIn("CI already ran the suites", text)
 
+    @pytest.mark.spec("Review items assert violations as blocking")
     def test_S3_the_brief_asks_a_requirement_violation_to_be_blocking_with_its_metadata(self):
-        """orchestrator-engine/R136"""
         text = self.brief()
         self.assertIn("requirement_violation", text)
         for field in ("source", "id", "expected", "observed"):
@@ -79,14 +79,15 @@ class ReviewBriefTests(unittest.TestCase):
             found.append(text.index("\n%d. " % number + anchor))
         self.assertEqual(sorted(found), found, "the pass is printed out of order")
 
+    @pytest.mark.spec("The reviewer brief gives one pass")
     def test_S1_the_brief_gives_a_numbered_pass_from_the_diff_to_the_verdict(self):
-        """orchestrator-engine/R145"""
         text = self.brief()
         self.assertIn("## The pass, in this order", text)
         self.pass_steps(text)
 
+    @pytest.mark.spec("Test changes carry their cost")
     def test_S4_the_brief_measures_a_tests_cost_and_blocks_a_material_slowdown(self):
-        """orchestrator-engine/R145: a test that slows every later run is a MAJOR defect."""
+        """a test that slows every later run is a MAJOR defect."""
         text = self.brief()
         self.assertIn("test_cost", text)
         self.assertIn("time the diff's test files yourself", text)
@@ -94,9 +95,10 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("over 2 s", text)
         self.assertIn("materially slows the suite", text)
 
+    @pytest.mark.spec("The reviewer brief gives one pass")
     @pytest.mark.integration
+    @pytest.mark.spec("Reviewer packet names the attempt under review")
     def test_S1_the_brief_names_the_report_whose_claims_the_pass_checks(self):
-        """orchestrator-engine/R145"""
         # The unit's directory holds the first attempt's report, stale the moment the unit was
         # re-dispatched; the attempt under review wrote its own, and that is the one the pass checks.
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,8 +124,8 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertNotIn(str(run / "t1" / "report.json"), text)
         self.assertNotIn("written under another name", text)
 
+    @pytest.mark.spec("The reviewer brief gives one pass")
     def test_S1_the_brief_says_what_makes_a_test_prove_its_scenario(self):
-        """orchestrator-engine/R145"""
         text = self.brief()
         self.assertIn("Reverting the change makes it fail", text)
         self.assertIn("would pass without the change", text)
@@ -136,6 +138,7 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("genuine assertion failure", text)
         self.assertIn("cannot fail", text)
 
+    @pytest.mark.spec("The review file path is named")
     def test_S4_the_brief_names_one_review_file(self):
         text = self.brief()
         self.assertIn("/run/t1/review.json", text)
@@ -143,23 +146,19 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertFalse(hasattr(app, "announced_path"))
         self.assertFalse(hasattr(app, "adopt_review"))
 
+    @pytest.mark.spec("The reviewer brief gives one pass")
     def test_S6_spec_records_the_exact_report_and_no_adoption(self):
         spec = (
             Path(__file__).resolve().parents[3] / "docs/specs/orchestrator-engine.md"
         ).read_text()
-        section = spec.split("## Requirements: reviewer-brief", 1)[1].split(
-            "## Requirements: lead-decision-gates", 1
+        section = spec.split("### Requirement: The reviewer brief gives one pass", 1)[1].split(
+            "### Requirement:", 1
         )[0]
         self.assertIn("report path the ledger recorded", section)
         self.assertNotIn("newest `report*.json`", section)
-        payload = spec.split("## Requirements: review-payload-path", 1)[1].split(
-            "## Requirements:", 1
-        )[0]
-        self.assertNotIn("**R155**", payload)
-        self.assertNotIn("| R155 |", payload)
 
+    @pytest.mark.spec("The re-review brief starts at the delta")
     def test_S2_a_re_review_reads_the_delta_first_and_keeps_the_same_pass(self):
-        """orchestrator-engine/R146"""
         text = self.brief(delta={"from": "abc1234", "findings": "/run/t1/review.json"})
         self.assertIn("read the delta `abc1234..HEAD` first", text)
         self.assertIn("reuse that finding's `id`", text)

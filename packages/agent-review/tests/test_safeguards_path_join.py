@@ -96,6 +96,7 @@ def review(tmp_path, monkeypatch):
     return base, head, config, answers, tmp_path / "review"
 
 
+@pytest.mark.spec("Computed destructive target safeguard")
 def test_S2_a_change_that_joins_paths_is_screened_rather_than_crashing(review, capsys):
     base, head, config, answers, output = review
     code = main(

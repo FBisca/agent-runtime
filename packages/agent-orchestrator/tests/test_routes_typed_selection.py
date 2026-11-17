@@ -48,6 +48,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
     def worker(self, name="demo-t1"):
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}[name]
 
+    @pytest.mark.spec("A typed route config is required")
     def test_S1_a_run_without_a_typed_config_stops_before_any_worker_and_names_the_way_out(self):
         table = self.root / "home" / ".claude" / "CLAUDE.md"
         table.parent.mkdir(parents=True)
@@ -58,6 +59,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertIn("routes.json", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_codex_selects_its_own_profile_over_the_claude_one(self):
         self.profile("routes.json", "claude", "claude-")
         self.profile("routes-codex.json", "codex", "codex-")
@@ -68,6 +70,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
             (worker["cli"], worker["model"], worker["effort"]), ("codex", "codex-small", "low")
         )
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_pi_selects_its_own_profile(self):
         self.profile("routes.json", "claude", "claude-")
         self.profile("routes-pi.json", "pi", "pi-")
@@ -75,6 +78,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("pi", "pi-small"))
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_claude_is_the_default_backend_and_reads_routes_json(self):
         self.profile("routes-codex.json", "codex", "codex-")
         self.profile("routes.json", "claude", "claude-")
@@ -82,6 +86,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("claude", "claude-small"))
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_a_missing_profile_names_the_expected_file_and_does_not_fall_back(self):
         self.profile("routes.json", "claude", "claude-")
         result = self.drive("--cli", "pi")
@@ -89,6 +94,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertIn("routes-pi.json", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Route precedence")
     def test_S2_an_invalid_profile_stops_the_run_and_does_not_fall_back(self):
         self.profile("routes.json", "claude", "claude-")
         (self.config_dir() / "routes-codex.json").write_text("{not json", encoding="utf-8")
@@ -97,6 +103,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertIn("routes-codex.json", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("A typed route config is required")
     def test_S4_models_file_is_refused_even_beside_a_valid_config(self):
         config = self.profile("routes.json", "claude", "claude-")
         result = self.drive("--models-file", str(self.models), "--routes-file", str(config))
@@ -105,6 +112,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertIn("--routes-file", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("A typed route config is required")
     def test_S4_the_model_table_is_never_read(self):
         table = self.root / "home" / ".claude" / "CLAUDE.md"
         table.parent.mkdir(parents=True)
@@ -114,6 +122,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertNotIn("Model classes", result.stderr)
         self.assertNotIn("lacks a", result.stderr)
 
+    @pytest.mark.spec("Route precedence")
     def test_S6_the_explicit_file_beats_the_repository_policy_and_the_profile(self):
         self.profile("routes-codex.json", "codex", "user-")
         (self.repo / ".orchestrate").mkdir()
@@ -125,6 +134,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.worker()["model"], "explicit-small")
 
+    @pytest.mark.spec("Route precedence")
     def test_S6_the_repository_policy_beats_the_backend_profile(self):
         self.profile("routes-codex.json", "codex", "user-")
         (self.repo / ".orchestrate").mkdir()
@@ -135,12 +145,14 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("claude", "repo-small"))
 
+    @pytest.mark.spec("Route precedence")
     def test_S6_a_class_override_beats_the_selected_profile(self):
         self.profile("routes-codex.json", "codex", "user-")
         result = self.drive("--cli", "codex", "--route", "small=codex/over@high")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.worker()["model"], self.worker()["effort"]), ("over", "high"))
 
+    @pytest.mark.spec("Route precedence")
     def test_S6_an_invalid_explicit_file_does_not_fall_back_to_the_profile(self):
         self.profile("routes.json", "claude", "claude-")
         broken = self.config_dir() / "broken.json"
@@ -149,6 +161,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Step routes")
     def test_S7_a_brain_the_medium_route_does_not_run_on_stops_before_any_worker(self):
         config = self.profile("routes.json", "claude", "claude-")
         result = self.drive("--routes-file", str(config), "--brain-cli", "codex")
@@ -157,6 +170,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
         self.assertIn("medium", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
+    @pytest.mark.spec("Step routes")
     def test_S7_explicit_gate_steps_keep_a_brain_on_another_backend_usable(self):
         config = self.profile("routes.json", "claude", "claude-")
         result = self.drive(
@@ -173,6 +187,7 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
             (steps["reviewer"]["backend"], steps["reviewer"]["model"]), ("codex", "review")
         )
 
+    @pytest.mark.spec("Step routes")
     def test_S7_a_medium_route_on_the_brain_backend_needs_no_step_routes(self):
         config = self.config_dir() / "mixed.json"
         data = document("claude", "claude-")

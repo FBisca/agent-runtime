@@ -58,6 +58,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         (found,) = [a for a in self.ticket_view(body, tid)["attempts"] if a["task_id"] == task_id]
         return found
 
+    @pytest.mark.spec("Driven plan outcome")
     def test_the_plan_list_names_the_plan_by_its_slug_and_marks_markdown_legacy(self):
         self.write_plan()
         (self.plan.parent / "2026-11-01-old.plan.md").write_text(
@@ -81,6 +82,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertTrue(by_format["markdown"]["legacy"])
         self.assertNotIn("tickets", by_format["markdown"])
 
+    @pytest.mark.spec("Driven plan outcome")
     def test_the_graph_is_exactly_blocked_by_layered_and_stable_and_reading_writes_nothing(self):
         self.write_plan(
             [scenario("S1"), scenario("S2"), scenario("S3")],
@@ -101,6 +103,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(graph, [("T1", [], 0), ("T2", ["T1"], 1), ("T3", ["T1", "T2"], 2)])
         self.assertEqual(tree(self.repo, self.state_dir), before, "a read command wrote a file")
 
+    @pytest.mark.spec("Driven plan outcome")
     def test_a_cycle_is_a_scoped_error_and_no_view(self):
         data = plan_data(
             [scenario("S1"), scenario("S2")],
@@ -116,6 +119,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertNotIn("tickets", result.stdout)
         self.assertEqual(tree(self.repo, self.state_dir), before)
 
+    @pytest.mark.spec("Driven plan outcome")
     def test_an_accepted_plan_maps_its_attempt_to_the_runtime_address(self):
         self.delivered()
         body = self.view()
@@ -127,6 +131,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertTrue(attempt["claimed"])
         self.assertNotIn("outcome", body, "acceptance is the plan's state, never a second verdict")
 
+    @pytest.mark.spec("Driven plan outcome")
     def test_the_driver_fallback_address_is_unknown_not_a_terminal(self):
         self.delivered()
         data = self.ledger()
@@ -140,6 +145,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(attempt["assignment_id"], assignment)
         self.assertIsNone(attempt["address"])
 
+    @pytest.mark.spec("Driven plan outcome")
     def test_control_the_delivered_fixture_is_accepted(self):
         """Holds today: the fixture the workbench reads is an accepted plan."""
         self.delivered()

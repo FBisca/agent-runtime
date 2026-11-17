@@ -39,6 +39,7 @@ def attempt(task_id, unit, started_at, report):
 class TrailOrderTests(unittest.TestCase):
     """S24: the trail's newest attempt is the record's, never a dictionary's order."""
 
+    @pytest.mark.spec("Reviewer packet names the attempt under review")
     def test_S24_the_trail_answers_the_newest_attempt_by_the_order_the_record_holds(self):
         driver = engine.Driver.__new__(engine.Driver)
         driver.run_dir = Path("/run")

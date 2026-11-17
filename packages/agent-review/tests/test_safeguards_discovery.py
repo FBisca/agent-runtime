@@ -139,6 +139,7 @@ def review(tmp_path, monkeypatch):
     return where
 
 
+@pytest.mark.spec("Protected path safeguard")
 def test_S5_a_discovered_configuration_extends_the_baseline_without_a_flag(review):
     review.revisions(
         {
@@ -171,6 +172,7 @@ def test_S5_a_discovered_configuration_extends_the_baseline_without_a_flag(revie
     )
 
 
+@pytest.mark.spec("Protected path safeguard")
 def test_S4_a_change_that_matches_no_pattern_is_screened(review):
     review.answers.write_text(json.dumps({"responses": [BASELINE_ANSWER]}), encoding="utf-8")
     review.revisions(
@@ -189,6 +191,7 @@ def test_S4_a_change_that_matches_no_pattern_is_screened(review):
     assert report["usage"]["requests"] == 1, "the screening went through the canned provider"
 
 
+@pytest.mark.spec("Safeguard escalation report")
 def test_S8_a_hit_writes_completed_escalated_and_names_what_a_person_should_do(review, capsys):
     review.revisions(
         {"server/agent_runtime.py": "import json\n"},
@@ -207,6 +210,7 @@ def test_S8_a_hit_writes_completed_escalated_and_names_what_a_person_should_do(r
     assert "deep review" in said, "a refusal names the way out"
 
 
+@pytest.mark.spec("Safeguard configuration validation")
 def test_S9_a_malformed_rule_configuration_is_refused_before_any_change_is_read(
     review, tmp_path, capsys
 ):
@@ -229,6 +233,7 @@ def test_S9_a_malformed_rule_configuration_is_refused_before_any_change_is_read(
     assert not (review.output / "report.json").exists(), "a refusal writes no report"
 
 
+@pytest.mark.spec("Safeguard configuration validation")
 def test_S9_a_malformed_stdlib_only_declaration_is_refused_by_field_path(review, capsys):
     review.config.write_text(CONFIG + "safeguards:\n  stdlib_only: hooks/\n", encoding="utf-8")
     code = main(

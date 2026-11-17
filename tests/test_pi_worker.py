@@ -41,6 +41,7 @@ class PiSpawnTests(ToolCase):
         self.assertFalse(result["isError"], text)
         return unwrap(self.runs("run")[-1][10:])
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S1_a_pi_spawn_builds_the_pi_argv_with_the_task_last(self):
         """pi-worker/S1: the pi family launches Pi itself, not a Claude or Codex shim."""
         argv = self.spawn_argv(cli="pi", model="minimax/MiniMax-M3.1-Flash")
@@ -50,6 +51,7 @@ class PiSpawnTests(ToolCase):
         self.assertNotIn("claude", argv)
         self.assertNotIn("codex", argv)
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S1_a_pi_spawn_without_a_model_is_interactive(self):
         """pi-worker/S1: Pi runs interactively with the task as its only argument."""
         argv = self.spawn_argv(cli="pi")
@@ -57,6 +59,7 @@ class PiSpawnTests(ToolCase):
         self.assertEqual(len(argv), 3)
         self.assertIn("do x", argv[-1])
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S1_the_pi_task_carries_the_role_and_the_report_protocol(self):
         """pi-worker/S1: Pi has no role file, so the role's content and the protocol travel in the task."""
         roles = self.dir / "home" / ".claude" / "agents"
@@ -69,6 +72,7 @@ class PiSpawnTests(ToolCase):
         self.assertIn("mcp__agent-runtime__report", task)
         self.assertIn("do x", task)
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S1_a_pi_spawn_with_no_role_states_the_protocol_without_a_role_line(self):
         """pi-worker/S1: agent=none means no role, but the protocol still reaches the worker."""
         task = self.spawn_argv(cli="pi")[-1]
@@ -76,6 +80,7 @@ class PiSpawnTests(ToolCase):
         self.assertNotIn("Role:", task)
         self.assertIn("Worker protocol:", task)
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S6_the_effort_maps_onto_pi_thinking(self):
         """pi-worker/S6: the runtime's five efforts are Pi's five shared levels."""
         for effort in ("low", "medium", "high", "xhigh", "max"):
@@ -84,6 +89,7 @@ class PiSpawnTests(ToolCase):
                 self.assertEqual(argv[:4], ["pi", "--approve", "--thinking", effort])
                 self.assertEqual(len(argv), 5)
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S6_an_effort_pi_does_not_know_is_refused_before_anything_starts(self):
         """pi-worker/S6: the runtime never sends a level the CLI does not accept."""
         for effort in ("off", "minimal", "extreme", ""):
@@ -102,8 +108,9 @@ class PiSpawnTests(ToolCase):
     def mcp_file(self):
         return self.dir / "home" / ".pi" / "agent" / "mcp.json"
 
+    @pytest.mark.spec("Pi workers")
     def test_S13_a_pi_spawn_registers_the_runtime_mcp_server(self):
-        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — the worker finds the report tool: Pi's own configuration carries this runtime's server."""
+        """— the worker finds the report tool: Pi's own configuration carries this runtime's server."""
         self.spawn_argv(cli="pi")
         data = json.loads(self.mcp_file().read_text(encoding="utf-8"))
         server = data["mcpServers"]["agent-runtime"]
@@ -113,8 +120,9 @@ class PiSpawnTests(ToolCase):
         self.assertTrue(Path(server["args"][0]).is_absolute())
         self.assertTrue(Path(server["args"][0]).is_file())
 
+    @pytest.mark.spec("Pi workers")
     def test_S13_the_registration_keeps_the_other_servers(self):
-        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — the file is the operator's: the other servers stay as they are."""
+        """— the file is the operator's: the other servers stay as they are."""
         path = self.mcp_file()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -126,8 +134,9 @@ class PiSpawnTests(ToolCase):
         self.assertEqual(data["mcpServers"]["other"], {"command": "other-server"})
         self.assertIn("agent-runtime", data["mcpServers"])
 
+    @pytest.mark.spec("Pi workers")
     def test_S13_a_broken_pi_configuration_is_refused_and_nothing_starts(self):
-        """agent-runtime/R172: orchestrator-routing-effort-role/S13 — a configuration the runtime cannot read is a refusal, not a silent worker without a report tool."""
+        """— a configuration the runtime cannot read is a refusal, not a silent worker without a report tool."""
         path = self.mcp_file()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{ not json", encoding="utf-8")
@@ -155,6 +164,7 @@ class PiProviderTests(ToolCase):
     def overlays(self):
         return [json.loads(line) for line in (self.dir / "overlay").read_text().splitlines()]
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S2_a_pi_spawn_keeps_the_minimax_and_pi_provider_variables(self):
         """pi-worker/S2: Pi authenticates with MINIMAX_API_KEY, so its worker keeps it."""
         self.env_printer("pi")
@@ -166,6 +176,7 @@ class PiProviderTests(ToolCase):
         self.assertFalse(result["isError"], text)
         self.assertEqual(self.overlays(), [inherited])
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S2_a_claude_or_codex_spawn_loses_them(self):
         """pi-worker/S2: a worker of another family never inherits a credential it cannot use."""
         for family in ("claude", "codex"):
@@ -183,6 +194,7 @@ class PiProviderTests(ToolCase):
                 self.assertFalse(result["isError"], text)
                 self.assertEqual(self.overlays()[-1], {})
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S2_the_scrub_list_covers_the_pi_provider_variables(self):
         """pi-worker/S2: the provider list names every variable a family may hold."""
         for key in PI_VARS:
@@ -212,6 +224,7 @@ class PiWorkerPolicyTests(unittest.TestCase):
             self.assertEqual(host, "pi")
             host_policy.authorize(env, host, role, tool, arguments or {}, None)
 
+    @pytest.mark.spec("Pi worker tool set")
     def test_S3_a_pi_worker_may_report(self):
         """pi-worker/S3: reporting is the one thing a Pi worker must be able to do."""
         env = self.env()
@@ -220,6 +233,7 @@ class PiWorkerPolicyTests(unittest.TestCase):
             env, "worker", "report", {"text": "done", "kind": "complete", "assignment_id": "a1"}
         )
 
+    @pytest.mark.spec("Pi worker tool set")
     def test_S3_a_pi_worker_may_read_its_own_team(self):
         """pi-worker/S3: the team-scoped reads and the peer message stay open."""
         env = self.env()
@@ -228,6 +242,7 @@ class PiWorkerPolicyTests(unittest.TestCase):
             with self.subTest(tool=tool):
                 self.authorize(env, "worker", tool, {"to": "w1", "name": "w1", "target": "all"})
 
+    @pytest.mark.spec("Pi worker tool set")
     def test_S4_a_pi_worker_may_not_spawn_stop_or_resume(self):
         """pi-worker/S4: a worker starts no worker and ends no worker."""
         env = self.env()
@@ -249,6 +264,7 @@ class PiWorkerPolicyTests(unittest.TestCase):
                     )
                 self.assertIn("worker", str(error.exception))
 
+    @pytest.mark.spec("Pi worker tool set")
     def test_S4_a_pi_worker_may_not_create_a_team_task(self):
         """pi-worker/S4: only the lead changes the team's tasks."""
         env = self.env()
@@ -257,6 +273,7 @@ class PiWorkerPolicyTests(unittest.TestCase):
             self.authorize(env, "worker", "task", {"action": "create", "subject": "s"})
         self.authorize(env, "worker", "task", {"action": "list"})
 
+    @pytest.mark.spec("Pi worker tool set")
     def test_S4_a_pi_worker_without_a_policy_may_not_report(self):
         """pi-worker/S4: the operator's policy still governs the host."""
         env = self.env()
@@ -328,6 +345,7 @@ class PiWorkerTests(ToolCase):
         session.handshake()
         return session
 
+    @pytest.mark.spec("Pi worker launch")
     def test_S8_a_pi_worker_reports_once_and_the_lead_team_receives_it(self):
         """pi-worker/S8: the report binds the assignment and lands in the lead's team, once."""
         self.policy(**RULES)
@@ -355,6 +373,7 @@ class PiWorkerTests(ToolCase):
         self.assertEqual(batch["messages"][0]["assignment_id"], assignment)
         self.assertEqual(batch["messages"][0]["recipient"], "t0")
 
+    @pytest.mark.spec("Pi worker tool set")
     def test_S5_a_pi_worker_may_not_reach_a_worker_outside_its_team(self):
         """pi-worker/S5: the team scope holds for a Pi worker too."""
         self.policy(**RULES)
@@ -375,6 +394,7 @@ class PiWorkerTests(ToolCase):
         self.assertTrue(denied["isError"], text)
         self.assertIn("not a worker of your team", text)
 
+    @pytest.mark.spec("Pi worker tool set")
     def test_S4_a_pi_worker_may_not_spawn_another_worker(self):
         """pi-worker/S4: the host policy refuses a worker's spawn, whatever it names."""
         self.policy(**RULES)

@@ -7,7 +7,7 @@ canned reviewer records the same request, so a spawn is checked without reaching
 
 Two seams are checked here that a canned reviewer cannot reach: the family's own CLI, replaced by a stub on
 PATH that records its argv and stdin, and the run that stops - a nonzero exit, a timeout, or an answer that
-is not a review at all - which is an incomplete execution keeping the screening it paid for (D20, R10, S5)
+is not a review at all - which is an incomplete execution keeping the screening it paid for (D20)
 rather than a refusal with no report.
 """
 
@@ -467,7 +467,9 @@ def test_S2_a_safeguard_hit_whose_reviewer_stops_still_names_the_rule_the_path_a
     assert "screened nothing" not in out, "a safeguard DID decide the change; nothing was hidden"
     assert "protected-path" in out, "the terminal names the rule that fired"
     assert MIGRATION in out, "and the path it matched"
-    assert "a person reads the path" in out, "and the way out R20 promises a person"
+    assert "a person reads the path" in out, (
+        "and the way out the safeguard escalation report promises a person"
+    )
     assert "execution: incomplete" in out
     report = review.report()
     assert report["status"] == "incomplete"

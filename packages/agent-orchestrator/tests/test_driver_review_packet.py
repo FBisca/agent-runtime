@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 class ReviewPacketTests(GateFixture, unittest.TestCase):
     def test_S1_redispatch_brief_names_the_ledger_report_and_its_metadata(self):
-        """orchestrator-engine/R145: locator-invariants/S1"""
+        """locator-invariants/S1"""
         report = self.run_dir / "t1d1" / "report.json"
         completed = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 1))
         completed["write"] = [

@@ -1,5 +1,5 @@
 """What agent-eval reads when no override is set: each harness's own home, and Codex's injected
-messages told apart from the user's first prompt (R237-R238)."""
+messages told apart from the user's first prompt."""
 
 import os
 import unittest
@@ -32,8 +32,8 @@ class DefaultHomeTests(unittest.TestCase):
                 "store": store.home(),
             }
 
-    def test_R238_each_harness_home_defaults_under_the_user_home_when_unset(self):
-        """R238"""
+    @pytest.mark.spec("Harness home defaults")
+    def test_each_harness_home_defaults_under_the_user_home_when_unset(self):
         self.assertEqual(
             self.defaults(),
             {
@@ -44,8 +44,8 @@ class DefaultHomeTests(unittest.TestCase):
             },
         )
 
-    def test_R238_an_empty_override_counts_as_unset(self):
-        """R238"""
+    @pytest.mark.spec("Harness home defaults")
+    def test_an_empty_override_counts_as_unset(self):
         from agent_eval import pi
 
         with (
@@ -56,8 +56,8 @@ class DefaultHomeTests(unittest.TestCase):
 
 
 class CodexInjectedTests(unittest.TestCase):
-    def test_R237_codex_own_messages_are_injected(self):
-        """R237"""
+    @pytest.mark.spec("Codex injected context")
+    def test_codex_own_messages_are_injected(self):
         from agent_eval import codex
 
         for text in (
@@ -69,8 +69,8 @@ class CodexInjectedTests(unittest.TestCase):
         ):
             self.assertTrue(codex.injected(text), text)
 
-    def test_R237_a_user_prompt_that_starts_with_a_bracket_is_not_injected(self):
-        """R237"""
+    @pytest.mark.spec("Codex injected context")
+    def test_a_user_prompt_that_starts_with_a_bracket_is_not_injected(self):
         from agent_eval import codex
 
         for text in ("<task>\nfix it", "<b>bold</b> request", "# Gather packet", "fix the bug"):

@@ -93,6 +93,7 @@ class BudgetTests(ToolCase):
         self.assertEqual(result["isError"], not ok, result)
         return result
 
+    @pytest.mark.spec("Tests start only what they exercise")
     def test_S10_a_seeded_backlog_is_read_back_as_the_lead_would_have_created_it(self):
         """The 70 tasks and the large reports a budget test needs are seeded through the store: only the call whose
         budget is under test goes through the server."""
@@ -105,9 +106,8 @@ class BudgetTests(ToolCase):
         waited = self.ask("wait", target="any", timeout=0)["structuredContent"]
         self.assertEqual([m["message_id"] for m in waited["messages"]], [sent])
 
+    @pytest.mark.spec("Bounded results")
     def test_maximum_legal_report_fits_the_complete_wait_envelope(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         self.prepare()
         self.seed_report(0, "progress", "é" * 10900)  # 65400 JSON bytes after escaping
         result = self.ask("wait", target="any", timeout=0)
@@ -117,9 +117,8 @@ class BudgetTests(ToolCase):
         self.assertLessEqual(canonical(payload), MAX_RESPONSE_BYTES)
         self.assertEqual(json.loads(result["content"][0]["text"]), payload)
 
+    @pytest.mark.spec("Bounded results")
     def test_task_base_plus_inbox_is_paginated_without_losing_ids_or_over_acking(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         self.prepare()
         created = self.seed_tasks(70, "s" * 996)
         sent = [
@@ -168,9 +167,8 @@ class BudgetTests(ToolCase):
                 db.execute("SELECT ids FROM receipts WHERE id=?", (receipt,)).fetchone()[0]
             )
 
+    @pytest.mark.spec("Bounded results")
     def test_oversized_collect_text_is_explicitly_partial_not_silently_clipped(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         self.prepare()
         self.replies["read"] = {"out": ("z" * 4000 + "\n") * 2000}
         (self.dir / "replies").write_text(json.dumps(self.replies))
@@ -179,9 +177,8 @@ class BudgetTests(ToolCase):
         self.assertGreater(payload["original_bytes"], len(payload["result"]))
         self.assertLessEqual(canonical(payload), MAX_RESPONSE_BYTES)
 
+    @pytest.mark.spec("Bounded results")
     def test_host_metadata_covers_every_tool_above_the_envelope_bound(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         session = self.start()
         listed = {t["name"]: t for t in session.send("tools/list")["result"]["tools"]}
         self.assertEqual(set(listed), set(TOOLS))
@@ -192,9 +189,8 @@ class BudgetTests(ToolCase):
         self.assertLess(2 * MAX_RESPONSE_BYTES + 4096, 500000)
         self.assertLess(2 * MAX_RESPONSE_BYTES + 4096, 524288)
 
+    @pytest.mark.spec("Bounded results")
     def test_worst_case_wait_all_fixed_arithmetic_fits_and_defers_losslessly(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         self.env = {"HOME": str(self.dir / "home")}
         store = Store(self.env)
         team = store.team("worst", "t0", "lead")
@@ -249,6 +245,7 @@ class BudgetTests(ToolCase):
         )
         self.assertEqual(final["messages"], [])
 
+    @pytest.mark.spec("Wait usage rows")
     def test_S9_the_budget_reserves_a_worst_case_usage_dict_for_every_row(self):
         """S9: a row that later carries every usage figure at its widest still leaves the response under its cap."""
         store = Store({"HOME": str(self.dir / "home")})
@@ -276,9 +273,8 @@ class BudgetTests(ToolCase):
             row["usage"] = dict(widest)
         self.assertLessEqual(canonical(batch) + reserve, MAX_RESPONSE_BYTES)
 
+    @pytest.mark.spec("Bounded results")
     def test_structured_base_at_the_cap_still_admits_the_first_message(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         store = Store({"HOME": str(self.dir / "home")})
         team = store.team("starve", "t0", "lead")
         assignment = store.register(team, "w1")["assignment_id"]
@@ -304,9 +300,8 @@ class BudgetTests(ToolCase):
                 team, "t0", "any", assignment_ids=[], inbox=True, reserve=MAX_BASE_BYTES + 1000
             )
 
+    @pytest.mark.spec("Bounded results")
     def test_collect_partial_keeps_the_tail_with_a_single_bounded_trim(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         self.prepare()
         out = "head-marker\n" + ("z" * 4000 + "\n") * 40 + "final-result-marker"
         self.replies["read"] = {"out": out}
@@ -319,16 +314,14 @@ class BudgetTests(ToolCase):
         self.assertGreater(len(json.dumps(payload["result"])), MAX_BASE_BYTES // 2 - 4096)
         self.assertLessEqual(len(json.dumps(payload["result"])), MAX_BASE_BYTES // 2)
 
+    @pytest.mark.spec("Bounded results")
     def test_task_list_rejects_unicode_digit_cursor_with_a_store_error(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         self.prepare()
         result = self.ask("task", ok=False, action="list", cursor="\u00b2")
         self.assertIn("cursor", result["content"][0]["text"])
 
+    @pytest.mark.spec("Bounded results")
     def test_task_schema_advertises_depends_on_limits(self):
-        """agent-runtime/R61
-        agent-runtime-dispatch/S28"""
         session = self.start()
         listed = {t["name"]: t for t in session.send("tools/list")["result"]["tools"]}
         depends = listed["task"]["inputSchema"]["properties"]["depends_on"]

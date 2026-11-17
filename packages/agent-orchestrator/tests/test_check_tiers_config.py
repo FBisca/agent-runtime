@@ -27,6 +27,7 @@ class ChecksWarningTests(RunFixture, unittest.TestCase):
             )
         return code, err.getvalue()
 
+    @pytest.mark.spec("Check tiers are read from the config")
     def test_S4_no_checks_node_prints_one_warning_naming_the_fields_and_exits_zero(self):
         code, err = self.check()
         self.assertEqual(code, 0, err)
@@ -35,6 +36,7 @@ class ChecksWarningTests(RunFixture, unittest.TestCase):
         for field in ("checks.fast", "checks.affected", "checks.full"):
             self.assertIn(field, lines[0])
 
+    @pytest.mark.spec("Check tiers are read from the config")
     def test_S4_declared_checks_node_prints_no_warning(self):
         config = self.repo / ".orchestrate" / "config.yaml"
         config.parent.mkdir(exist_ok=True)

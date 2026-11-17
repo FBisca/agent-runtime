@@ -224,11 +224,11 @@ A plan SHALL move APPROVED → RUNNING → ACCEPTED → ARCHIVED, ACCEPTED once 
 - THEN `status` history is APPROVED → RUNNING → ACCEPTED → ARCHIVED, plan.yaml is unchanged since approval, and `plan check` accepts its approval digest
 
 ### Requirement: Person tickets
-The Lead SHALL close a person-owned ticket with `complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...`, and the driver SHALL keep `attention.md` in step with the ledger.
+The Lead SHALL close a person-owned ticket with `complete <plan> <T#> --note TEXT`, and the driver SHALL keep `attention.md` in step with the ledger.
 
 #### Scenario: complete records the ticket
 - WHEN `complete` runs for a person-owned ticket
-- THEN its status becomes `COMPLETE <date> · <note>` and its cover nodes are recorded in the ledger, under the ledger lock so a live driver keeps them; it is refused, naming why, for a caller the runtime does not verify as the Lead, an agent ticket, an unknown ticket, or a `--cover` for a scenario the ticket does not satisfy
+- THEN its status becomes `COMPLETE <date> · <note>` and it is recorded in the ledger under the ledger lock, so a live driver keeps it; it is refused, naming why, for a caller the runtime does not verify as the Lead, an agent ticket, or an unknown ticket
 
 #### Scenario: attention.md follows the ledger
 - WHEN a person ticket is set COMPLETE and the driver runs again
