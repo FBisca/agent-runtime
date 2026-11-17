@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -16,13 +17,14 @@ from fixtures import RunFixture, assignment, wait_result
 pytestmark = [pytest.mark.integration, pytest.mark.spec("Archived plans leave no state")]
 
 
-def plant(state, key, slug, plan_state="ARCHIVED", digests=()):
+def plant(state, key, slug, plan_state="ARCHIVED", digests=(), days=30):
     """One plan's state as a driver leaves it: ledger, lock, run dir and the snapshots its digests name."""
     ledger = state / key / (slug + ".json")
     run_dir = state / key / slug
     run_dir.mkdir(parents=True)
     data = ledgers.new()
-    data["plan"] = {"state": plan_state, "history": []}
+    at = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    data["plan"] = {"state": plan_state, "history": [{"state": plan_state, "at": at}]}
     if digests:
         data["approval"] = {"base": "b", "digest": digests[-1]}
     ledger.write_text(json.dumps(data), encoding="utf-8")
@@ -45,6 +47,17 @@ class SweepTests(unittest.TestCase):
         prune.sweep(self.state)
         left = [p for p in self.state.rglob("*") if p.is_file()]
         self.assertEqual(left, [])  # nothing of it is left, snapshots included
+        self.assertFalse(ledger.exists() or run_dir.exists())
+
+    def test_an_archived_plan_younger_than_14_days_is_kept(self):
+        ledger, run_dir = plant(self.state, "r-1", "recent", digests=("d1",), days=13)
+        prune.sweep(self.state)
+        self.assertTrue(ledger.is_file() and run_dir.is_dir())
+        self.assertTrue((self.state / "approvals" / "d1" / "plan.yaml").is_file())
+
+    def test_an_archived_plan_14_days_old_is_swept(self):
+        ledger, run_dir = plant(self.state, "r-1", "aged", digests=("d1",), days=14)
+        prune.sweep(self.state)
         self.assertFalse(ledger.exists() or run_dir.exists())
 
     def test_a_plan_not_archived_keeps_everything(self):
