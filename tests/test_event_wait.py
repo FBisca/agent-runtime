@@ -374,7 +374,7 @@ class EventRig(HcCase):
 
 
 class WaitRecordTests(EventRig):
-    def test_S3_final_wait_records_reason_and_fingerprint_atomically(self):
+    def test_S3_final_wait_records_reason_and_fingerprint_atomically(self):  # noqa: PLR0915
         """agent-runtime/R109
         S3: a partial "messages" result leaves the last-wait row untouched."""
         store = Store({"HOME": str(self.dir / "home")})

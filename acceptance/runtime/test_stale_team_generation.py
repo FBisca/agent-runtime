@@ -43,7 +43,7 @@ WORKER = {"address": "t9", "name": "w1", "parent": LEAD, "status": "idle"}
 SECOND = {"address": "t10", "name": "w2", "parent": LEAD, "status": "idle"}
 
 
-class OwnershipOutcome(ToolCase):
+class OwnershipOutcome(ToolCase):  # noqa: PLR0904
     """The lead's terminal, the other session that inherits it, and the team each one owns."""
 
     def setUp(self):

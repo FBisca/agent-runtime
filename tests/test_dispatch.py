@@ -20,7 +20,7 @@ from agent_runtime.dispatch_store import MAX_BATCH_BYTES, Store, StoreError
 pytestmark = pytest.mark.integration
 
 
-class DispatchTests(ToolCase):
+class DispatchTests(ToolCase):  # noqa: PLR0904
     def lead(self, generation="lead-session", socket="/hc/sock"):
         """The lead's session.
 

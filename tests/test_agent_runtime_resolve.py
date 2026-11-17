@@ -136,7 +136,7 @@ class CodexDetectionTests(unittest.TestCase):
 
     def test_node_wrapped_cli_is_matched(self):
         """agent-runtime/R32"""
-        procs = {
+        procs = {  # noqa: F841
             100: (90, "node /usr/lib/node_modules/@openai/codex/bin/codex.js"),
             90: (1, "node /x/bin/claude"),
         }
@@ -149,7 +149,7 @@ class CodexDetectionTests(unittest.TestCase):
 
     def test_walk_failure_falls_back_to_env_markers(self):
         """agent-runtime/R32"""
-        none = lambda pid: None
+        none = lambda pid: None  # noqa: E731
         self.assertEqual(self.detect({"CODEX_THREAD_ID": "x", "CLAUDECODE": "1"}, none), "codex")
         self.assertEqual(self.detect({"CODEX_TOOL_CALL_ID": "x"}, none), "codex")
         self.assertEqual(self.detect({"CLAUDECODE": "1"}, none), "claude")

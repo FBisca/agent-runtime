@@ -106,7 +106,7 @@ def substitutions(command):
     return found
 
 
-def invocations(command, depth=0):
+def invocations(command, depth=0):  # noqa: PLR0912
     """Yield (program basename, args) for each simple command, descending into sh -c and substitutions."""
     if depth < 3:
         for inner in substitutions(command):

@@ -36,7 +36,7 @@ class EngineHomeTests(unittest.TestCase):
     """R1: the suite drives the member, and the engine has one home."""
 
     def test_S1_the_suite_drives_the_member_driver(self):
-        """orchestrator-engine/R1, structure-budget/S10"""
+        """orchestrator-engine/R1"""
         from agent_orchestrator import driver
 
         # The engine is a package inside the member's source directory, so its home is named by
@@ -45,7 +45,6 @@ class EngineHomeTests(unittest.TestCase):
         self.assertFalse((MEMBER / "driver.py").exists())
 
     def test_S10_the_driver_is_a_package_every_entry_point_still_reaches(self):
-        """structure-budget/S10"""
         import agent_orchestrator
         from agent_orchestrator import driver
 
@@ -100,16 +99,9 @@ class EngineHomeTests(unittest.TestCase):
         # depth-1 checkout resolves neither a pull request's base nor the tip a push replaces.
         after_checkout = workflow.split("uses: actions/checkout@v4", 1)[1]
         self.assertIn("fetch-depth: 0", after_checkout.split("\n      - ", 1)[0])
-        # The structure budget is the same kind of check: the tree, measured against the
-        # revision the change grew from.
         workflow = " ".join(workflow.split())
-        self.assertIn(
-            "python3 scripts/structure_budget.py --root . "
-            "--baseline acceptance/structure/structure_budget.json --since",
-            workflow,
-        )
-        self.assertIn('--since "$SINCE"', workflow)
-        for budget in ("RUFF_CHECK_BUDGET", "RUFF_FORMAT_BUDGET", "TY_BUDGET"):
+        self.assertIn("uv run ruff check .", workflow)
+        for budget in ("RUFF_FORMAT_BUDGET", "TY_BUDGET"):
             self.assertIn(budget, workflow)
         self.assertIn("ty check packages/", workflow)
         pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")

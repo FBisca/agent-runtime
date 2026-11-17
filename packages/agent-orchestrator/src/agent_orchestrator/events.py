@@ -98,7 +98,7 @@ def sum_usage(values):
     return values if len(values) > 1 else values[0]
 
 
-def rollup(events, slug):
+def rollup(events, slug):  # noqa: PLR0912
     """metrics.json from the log: per unit the route, failed gates, escalations (deciders called plus pauses), decider
     calls, findings by kind and worker usage. The lead's own model turns are 0 by construction (the driver is code)."""
     units = {}

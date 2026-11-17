@@ -58,7 +58,6 @@ class IdentityTests(ToolCase):
     def test_clear_or_new_in_same_process_keeps_team_and_assignments(self):
         """agent-runtime/R108"""
         from agent_runtime import dispatch_store as store_module
-        from agent_runtime import hc_tools
 
         Store = store_module.Store
         env = {"HOME": str(self.dir / "home")}

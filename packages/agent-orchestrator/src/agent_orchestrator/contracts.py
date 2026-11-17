@@ -848,7 +848,7 @@ def validate_request(request):
     return request
 
 
-def make_request(unit, task, event, reason, evidence, created_at=None, menu=None, typed=True):
+def make_request(unit, task, event, reason, evidence, created_at=None, menu=None, typed=True):  # noqa: PLR0913
     """A request for the Lead. `typed=False` writes contract 2, whose menu lists the action names: a request kind
     whose readers still compare the string menu."""
     return validate_request(

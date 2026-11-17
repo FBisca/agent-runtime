@@ -126,7 +126,6 @@ class PreSplitLedgerTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S13_a_ledger_written_before_the_split_still_parks_under_the_archive(self):
-        """structure-budget/S13"""
         from agent_orchestrator.driver import archive
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,7 +168,6 @@ class ArchiveHomeTests(unittest.TestCase):
     """S13: the lane lives in `driver/archive.py`, and the Driver reaches it as one collaborator."""
 
     def test_S13_the_lane_members_live_in_one_module(self):
-        """structure-budget/S13"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import archive
 
@@ -204,7 +202,6 @@ class ArchiveHomeTests(unittest.TestCase):
                 self.assertIs(getattr(driver, name), getattr(archive, name))
 
     def test_S13_the_driver_reaches_every_moved_member_through_the_collaborator(self):
-        """structure-budget/S13"""
         from agent_orchestrator import driver as engine
 
         driver = engine.Driver.__new__(engine.Driver)

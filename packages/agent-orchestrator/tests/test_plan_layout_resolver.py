@@ -176,7 +176,7 @@ class PackageCopyTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S23_a_copy_git_ignores_is_no_module_of_the_package_and_a_committed_one_is_named(self):
-        """structure-budget/S23: a nested checkout's or an ignored tree's copy is no module of the package."""
+        """A nested checkout's or an ignored tree's copy is no module of the package."""
         ignored = self.repo / "pkg" / ".worktrees" / "wt" / "acceptance" / "probe.txt"
         ignored.parent.mkdir(parents=True)
         ignored.write_text("probe\n")

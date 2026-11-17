@@ -564,7 +564,7 @@ def mark_archive(model, data, receipts_dir, digest, items):
         item.update(state="UNKNOWN", reason=why)
 
 
-def acceptance(model, data, receipts_dir, *, digest, tree_of=None):
+def acceptance(model, data, receipts_dir, *, digest, tree_of=None):  # noqa: PLR0912, PLR0915
     """What the receipts say about a plan: {"state", "items"}. Each item is {"scenario", "state", "reason"} with the
     state PASS, FAIL, UNKNOWN, HUMAN_ACCEPTED or AWAITING_HUMAN.
 

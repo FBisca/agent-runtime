@@ -54,7 +54,7 @@ def codex_message(text: str) -> dict:
     }
 
 
-def codex_rollout(
+def codex_rollout(  # noqa: PLR0913
     codex: Path,
     day: str,
     stamp: str,

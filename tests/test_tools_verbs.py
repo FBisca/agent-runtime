@@ -110,7 +110,7 @@ class WaitCollectStopReportTests(InProcessToolCase):
         session = self.start(
             {"wait": {"sleep": 30}, "ls": {"out": json.dumps({"terminals": []})}}, process=True
         )
-        write = lambda m: (
+        write = lambda m: (  # noqa: E731
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
         )
@@ -194,7 +194,7 @@ class WaitCollectStopReportTests(InProcessToolCase):
         """agent-runtime/R34
         agent-runtime-dispatch/S1; retains transport cancellation coverage."""
         session = self.start({"read": {"sleep": 30}}, process=True)
-        write = lambda m: (
+        write = lambda m: (  # noqa: E731
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
         )
@@ -304,7 +304,7 @@ class StopCleanupTests(InProcessToolCase):
     def test_S2_cancelling_spawn_ends_the_terminal_it_started(self):
         """agent-runtime-tools/S2"""
         session = self.start({"run": {"sleep": 30}}, process=True)
-        write = lambda m: (
+        write = lambda m: (  # noqa: E731
             session.proc.stdin.write(json.dumps(m) + "\n"),
             session.proc.stdin.flush(),
         )

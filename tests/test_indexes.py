@@ -1,10 +1,8 @@
 """Dispatch store indexes: present, additive, and used by wait's hot queries."""
 
-import sqlite3
 import sys
 import tempfile
 import unittest
-from pathlib import Path
 
 from test_mcp_server import RUNTIME_SRC
 

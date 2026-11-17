@@ -77,7 +77,7 @@ def review2(**over):
     )
 
 
-class ContractTests(unittest.TestCase):
+class ContractTests(unittest.TestCase):  # noqa: PLR0904
     def rejects(self, validate, value, needle):
         with self.assertRaises(contracts.ContractError) as caught:
             validate(value)

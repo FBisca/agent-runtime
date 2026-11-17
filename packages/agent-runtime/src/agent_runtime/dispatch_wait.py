@@ -48,7 +48,7 @@ def persist_failures(store, observations):
         store.fail_observed(failures)
 
 
-def reason(batch, target, observations):
+def reason(batch, target, observations):  # noqa: PLR0912
     for assignment in batch["assignments"]:
         runtime = observations.get(assignment["assignment_id"])
         if runtime and assignment["state"] != "complete":
@@ -135,7 +135,7 @@ def reason(batch, target, observations):
     return None
 
 
-def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=False):
+def wait(store, team, recipient, target, timeout, receipt, ctx, observe, inbox=False):  # noqa: PLR0913
     deadline = time.monotonic() + timeout
     members = store.snapshot(
         team, recipient, "inbox" if inbox else target, receipt, ack=getattr(ctx, "ack", None)

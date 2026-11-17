@@ -82,7 +82,6 @@ class CliSurfaceTests(unittest.TestCase):
     """S14: the decomposition keeps every command name, every group's subcommands and its help."""
 
     def test_S14_the_parser_still_offers_the_twenty_commands(self):
-        """structure-budget/S14"""
         from agent_orchestrator import driver
 
         offered = choices(help_of(driver.build_parser()))
@@ -91,7 +90,6 @@ class CliSurfaceTests(unittest.TestCase):
         self.assertEqual(tuple(name for name in offered if name in COMMANDS), COMMANDS)
 
     def test_S14_each_command_group_still_offers_its_subcommands(self):
-        """structure-budget/S14"""
         from agent_orchestrator import driver
 
         parser = driver.build_parser()
@@ -104,7 +102,6 @@ class CliHomeTests(unittest.TestCase):
     """S10/S14: the entries and the published names reach the one `run_cli` in `driver/cli.py`."""
 
     def test_S14_the_package_entry_and_the_module_entry_reach_the_same_run_cli(self):
-        """structure-budget/S14"""
         import agent_orchestrator
         from agent_orchestrator import __main__ as module_entry
         from agent_orchestrator import driver
@@ -126,7 +123,6 @@ class CliHomeTests(unittest.TestCase):
         )
 
     def test_S10_the_names_the_package_publishes_are_the_cli_modules_own(self):
-        """structure-budget/S10"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import cli
 

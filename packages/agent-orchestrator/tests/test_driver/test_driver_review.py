@@ -40,7 +40,6 @@ class TrailOrderTests(unittest.TestCase):
     """S24: the trail's newest attempt is the record's, never a dictionary's order."""
 
     def test_S24_the_trail_answers_the_newest_attempt_by_the_order_the_record_holds(self):
-        """structure-budget/S24"""
         driver = engine.Driver.__new__(engine.Driver)
         driver.run_dir = Path("/run")
         # The re-dispatched attempt was made an hour after the one it replaced, and the dictionary

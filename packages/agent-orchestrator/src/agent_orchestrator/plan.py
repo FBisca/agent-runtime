@@ -121,7 +121,7 @@ ARCHIVE_MODES = ("promote", "discard")
 SCENARIO_WORD = re.compile(r"^S\d+[a-z]?$")
 
 
-def selector_problems(model, path):
+def selector_problems(model, path):  # noqa: PLR0912
     """The folder plan's checks whose pytest `-k` selector does not select its own scenario's tests, and only them,
     from the acceptance files the evidence names.
 
@@ -216,7 +216,7 @@ def lint_problems(model, repo, path):
     )
 
 
-def semantic_problems(data, path, repo):
+def semantic_problems(data, path, repo):  # noqa: PLR0912, PLR0915
     """Inspect independent fields even when other fields fail Pydantic validation."""
     problems = []
     if not isinstance(data, dict):
@@ -497,7 +497,7 @@ def legacy_problems(data, scenarios):
     return problems
 
 
-def folder_problems(data, path, repo, scenarios):
+def folder_problems(data, path, repo, scenarios):  # noqa: PLR0912, PLR0915
     """The rules of a plan in its own folder: the folder keys, their files, and what a promote may not clobber."""
     problems = []
 
@@ -713,7 +713,7 @@ def baseline(path, model, repo, base_sha, approval_digest, files, carried=None):
     return runs
 
 
-def carried_baselines(path, repo, old, old_files, model, files, previous, sha, state_dir):
+def carried_baselines(path, repo, old, old_files, model, files, previous, sha, state_dir):  # noqa: PLR0913
     """The baseline Runs `plan amend` re-issues instead of running: each check item whose evidence is the same in the
     approved snapshot `old` and in the edit, and whose receipt for the previous digest still passes the receipt
     ledger's tamper check, under the new digest `sha`. A changed or new item, or one whose receipt cannot be vouched

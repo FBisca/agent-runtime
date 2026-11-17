@@ -268,7 +268,7 @@ class ClassWorld:
 WORLDS: dict[type, ClassWorld] = {}
 
 
-class RunFixture(_Case):
+class RunFixture(_Case):  # noqa: PLR0904
     """Mixin for TestCase classes: temp repo with an origin, a plan, a fake agent-runtime on PATH.
 
     The world is built, and its plan approved, once per test class (`ClassWorld`)."""

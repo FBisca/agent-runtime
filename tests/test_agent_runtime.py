@@ -41,7 +41,7 @@ awk -v pid="$4" '$1 == pid { found = 1; $1 = ""; sub(/^ /, ""); print } END { ex
 """
 
 
-class CallTests(unittest.TestCase):
+class CallTests(unittest.TestCase):  # noqa: PLR0904
     """`agent-runtime call` against a fake hc on PATH that logs argv; the dispatch store lives in a temp dir."""
 
     def setUp(self):

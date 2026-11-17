@@ -15,13 +15,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_mcp_server import SERVER  # noqa: E402
 
 RUNTIME_SRC = Path(__file__).resolve().parents[1] / "packages" / "agent-runtime" / "src"
 sys.path.insert(0, str(RUNTIME_SRC))
 
-import pytest
-from agent_runtime import (
+import pytest  # noqa: E402
+from agent_runtime import (  # noqa: E402
     hc_boundary,  # noqa: E402
     hc_tools,  # noqa: E402
     usage,  # noqa: E402
@@ -79,7 +78,7 @@ class CodexProfileTests(ToolCase):
             row = db.execute("SELECT generation FROM teams ORDER BY rowid DESC LIMIT 1").fetchone()
         return row["generation"] if row else "clock-session"
 
-    def spawn(
+    def spawn(  # noqa: PLR0913
         self,
         cli="codex",
         name="w1",
@@ -193,7 +192,7 @@ class CodexProfileTests(ToolCase):
         home = self.codex_home("cancelled")
         env = dict(self.LEAD, CODEX_HOME=str(home), XDG_STATE_HOME=str(self.state()))
         lead = self.start({"run": {"sleep": 30}, "get:w1": {"rc": 1, "err": "boom"}}, env)
-        write = lambda message: (
+        write = lambda message: (  # noqa: E731
             lead.proc.stdin.write(json.dumps(message) + "\n"),
             lead.proc.stdin.flush(),
         )

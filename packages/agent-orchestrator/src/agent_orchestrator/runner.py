@@ -372,7 +372,7 @@ def tail(path):
         return ""
 
 
-def attempt(
+def attempt(  # noqa: PLR0913
     repo,
     commit,
     *,
@@ -477,7 +477,7 @@ def fails_on_assertion(facts):
     )
 
 
-def receipt_of(
+def receipt_of(  # noqa: PLR0913
     facts,
     *,
     scenario,
@@ -522,7 +522,7 @@ def receipt_of(
     }
 
 
-def run_mutation(
+def run_mutation(  # noqa: PLR0913
     repo,
     commit,
     *,
@@ -579,7 +579,7 @@ def run_mutation(
     return Run(receipt, log)
 
 
-def run_evidence(
+def run_evidence(  # noqa: PLR0913
     repo,
     commit,
     *,

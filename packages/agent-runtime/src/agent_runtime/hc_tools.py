@@ -151,7 +151,7 @@ CLIS = profiles.BUILTINS
 SUBAGENT_TOOL = {"claude": "Claude's Agent tool", "codex": "Codex's MultiAgent V2 spawn tool"}
 
 
-def spawn(arguments, env, ctx):
+def spawn(arguments, env, ctx):  # noqa: PLR0912, PLR0915
     kind = arguments.get("kind")
     cli = arguments.get("cli") or "claude"
     if kind == "lookup":
@@ -452,7 +452,7 @@ def spawn(arguments, env, ctx):
     return result(dict(info, **identity), structured=True)
 
 
-def resume(arguments, env, ctx):
+def resume(arguments, env, ctx):  # noqa: PLR0912
     name, task = need(arguments, "name", "task")
     task_id = linked_task(arguments, env)
     key = operation_id(arguments, env)
@@ -554,7 +554,7 @@ def wait(arguments, env, ctx):
     recipient = actor["recipient"] if inbox and actor else env["HC_TERMINAL_ID"]
     reported = set()  # addresses that ever reported: their null status is never a silent worker
 
-    def observe(members, timeout):
+    def observe(members, timeout):  # noqa: PLR0912
         try:
             code, out, _ = run(["hc", "ls", "--all", "--json"], env, ctx, timeout)
             raw = json.loads(out) if code == 0 else None
@@ -641,7 +641,7 @@ def wait(arguments, env, ctx):
     return result(batch, structured=True)
 
 
-def stop(arguments, env, ctx):
+def stop(arguments, env, ctx):  # noqa: PLR0912
     (name,) = need(arguments, "name")
     worker_name(name)
     if not dispatch_enabled(env):
@@ -776,7 +776,7 @@ def call(name, arguments, env, ctx):
         return result(str(error), True)
 
 
-def call_dispatch(name, arguments, env, ctx):
+def call_dispatch(name, arguments, env, ctx):  # noqa: PLR0912, PLR0915
     if not dispatch_enabled(env):
         require_dispatch(env)
         return HANDLERS[name](arguments, env, ctx)
