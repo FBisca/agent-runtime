@@ -1,0 +1,12 @@
+#!/bin/sh
+# Refuse a commit whose staged Python CI's ruff steps would reject, so a worker learns it before CI does.
+# Enable once per clone (its worktrees share it): git config core.hooksPath .githooks
+set -eu
+
+staged() { git diff --cached --name-only -z --diff-filter=ACMR -- '*.py'; }
+[ -n "$(staged | tr -d '\0')" ] || exit 0
+
+if ! staged | xargs -0 uv run --quiet ruff format --check || ! staged | xargs -0 uv run --quiet ruff check; then
+  echo "pre-commit: ruff rejects the staged Python. Run uv run ruff format . && uv run ruff check --fix ., git add the result, and commit again." >&2
+  exit 1
+fi
