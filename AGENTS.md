@@ -15,6 +15,8 @@ adds, modifies or removes, with the scenarios under each; its archive applies th
 - Fix the class, not the instance: when you fix a defect, search every other place with the same
   pattern.
 
+The code standard implementers follow and reviewers judge against is `docs/rulebook.md`.
+
 ## An invariant, not a point fix
 
 A gate, a config or a test either states a rule that decides every case, or it enumerates today's
