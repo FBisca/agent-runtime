@@ -25,7 +25,7 @@ from agent_runtime import hc_tools
 pytestmark = pytest.mark.integration
 
 
-class SpawnTests(InProcessToolCase):
+class SpawnTests(InProcessToolCase):  # noqa: PLR0904
     ARGS = {"kind": "worker", "name": "w1", "task": "do x", "cwd": "/tmp/c"}
 
     def test_S2_claude_worker_runs_hc_run_bg_with_task_and_report_line(self):

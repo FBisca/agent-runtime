@@ -26,10 +26,8 @@ class RunTests(RunFixture, unittest.TestCase):
         self.run_driver()
         spawns = self.calls("spawn")
         self.assertTrue(spawns)
-        workers = [
-            s["args"] for s in spawns if not s["args"]["name"].endswith(("-review", "-gaps"))
-        ]
-        reviewers = [s["args"] for s in spawns if s["args"]["name"].endswith(("-review", "-gaps"))]
+        workers = [s["args"] for s in spawns if not s["args"]["name"].endswith("-review")]
+        reviewers = [s["args"] for s in spawns if s["args"]["name"].endswith("-review")]
         self.assertTrue(workers)
         for spawn in workers:
             self.assertEqual(spawn.get("agent"), "implementer")
@@ -223,7 +221,7 @@ class RunTests(RunFixture, unittest.TestCase):
         self.assertEqual(self.ledger()["tasks"]["t1"]["status"], "ACTIVE")
 
 
-class RecoveryTests(GateFixture, unittest.TestCase):
+class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
     """A restarted drive recovers an attempt whose agent the runtime no longer has, or says why it cannot."""
 
     def crashed(self, state="exited"):

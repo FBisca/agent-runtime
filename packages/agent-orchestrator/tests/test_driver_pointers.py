@@ -232,18 +232,12 @@ class PointerRun(GateFixture, unittest.TestCase):
         )
         status = self.cli("status", str(self.plan), "--state-dir", str(self.state_dir))
         assert status.returncode == 0, status.stderr
-        self.use_yaml_plan()
-        verify = self.cli(
-            "verify", str(self.plan), "--repo", str(self.repo), "--state-dir", str(self.state_dir)
-        )
-        assert verify.stdout, verify.stderr
         return [
             ("handover", self.handover_output()),
             ("rebase", rebase),
             ("answer", answer),
             ("retry", retry),
             ("status", status.stdout),
-            ("verify", verify.stdout),
         ]
 
 

@@ -202,8 +202,7 @@ class Archive:
                 if task.get("gate") in PARKED
                 for agent in (task, task.get("review") or {}, task.get("decision") or {})
             } - {None}
-            # The gaps reviewer is advisory: its open assignment never keeps the run up, ended or not.
-            return parked | {(data.get("gaps") or {}).get("assignment_id")}
+            return parked
 
     def park_for_amendment(self, task_id, task, reason):
         """The Lead decided `amend`: the unit parks, its worker stays where it is and nothing is sent or started. The
@@ -242,7 +241,7 @@ class Archive:
         if not agents or not all(is_done(t) for t in plan["tickets"]) or ARCHIVE in self.failed:
             return 0
         if self.plan_state() not in _engine().ACCEPTED_STATES:
-            return 0  # a plan is archived only once its integration accepted it
+            return 0  # a plan is archived only once it is accepted
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
         if not self._claimable(held):
@@ -317,7 +316,7 @@ class Archive:
 
     def discard_plan(self, plan):
         """A discard plan whose folder is not tracked: the driver deletes the folder and the plan is ARCHIVED. No
-        worker, no branch, no pull request. The advisory gaps review still runs, as for any archived plan."""
+        worker, no branch, no pull request."""
         self._guard_plan_folder()
         folder = self.layout.folder
         shutil.rmtree(folder)
@@ -326,7 +325,6 @@ class Archive:
             _engine().enter_plan_state(data, "ARCHIVED")
         self.log("archive-discarded", folder=str(folder))
         narrate.say("done", "archive", "plan discarded: %s deleted" % folder)
-        self.start_gaps(plan)
         return 1
 
     def remove_plan_folder(self, checkout):

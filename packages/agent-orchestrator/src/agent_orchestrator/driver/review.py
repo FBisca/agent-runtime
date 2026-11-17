@@ -111,7 +111,10 @@ def _pass(driver, packet, delta):
         "3. Each test proves its scenario: it asserts the behaviour the scenario's THEN promises, on the real "
         "code path rather than on a mock of it, and it names its scenario id. Reverting the change makes it "
         "fail. A test that would pass without the change, or that asserts a call happened instead of what the "
-        "behaviour promises, is `blocking`: that is the scenario not really tested.",
+        "behaviour promises, is `blocking`: that is the scenario not really tested. The report's `red` holds, per "
+        "scenario, the covering test's failing output from before the fix: judge whether it is a genuine "
+        "assertion failure of that behaviour. An import or collection error, a missing fixture, or a test "
+        "that cannot fail is no red, and is `blocking`.",
         "4. Test cost: the report's `test_cost` is the measurement, not the claim. Run its command (or time "
         "the diff's test files yourself) and compare each new or changed test's "
         "seconds and each touched module's seconds with the run before this change. A new or changed test "

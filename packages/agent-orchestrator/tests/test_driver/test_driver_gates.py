@@ -90,7 +90,6 @@ class PreSplitLedgerTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S13_a_ledger_written_before_the_split_moves_on_under_the_gates(self):
-        """structure-budget/S13"""
         from agent_orchestrator.driver import gates
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,7 +134,6 @@ class GateHomeTests(unittest.TestCase):
     """S13: the transitions live in `driver/gates.py`, with the table that drives them."""
 
     def test_S13_the_steps_live_in_one_module_with_the_table_that_drives_them(self):
-        """structure-budget/S13"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import gates
 
@@ -151,7 +149,6 @@ class GateHomeTests(unittest.TestCase):
                 self.assertNotIn(name, vars(driver.Driver))
 
     def test_S13_the_driver_advances_through_the_collaborator(self):
-        """structure-budget/S13"""
         from unittest import mock
 
         from agent_orchestrator import driver as engine

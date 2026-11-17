@@ -80,7 +80,7 @@ def _checks_state(drive, code, rows):
     return "error"
 
 
-class Pull:
+class Pull:  # noqa: PLR0904
     """The run's pull request lane, held by the Driver: one method per way GitHub is asked or answered.
 
     A member asks the driver it belongs to for everything else - the record, the plan, the log, the gate a

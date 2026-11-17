@@ -187,15 +187,13 @@ class RoutingMigrationOutcome(RunFixture, unittest.TestCase):
             "codex",
             "--step",
             "reviewer=codex/review@high",
-            "--step",
-            "gaps=codex/gaps@medium",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         steps = self.ledger()["routes"]["steps"]
         self.assertEqual(
             (steps["reviewer"]["backend"], steps["reviewer"]["model"]), ("codex", "review")
         )
-        self.assertEqual((steps["gaps"]["backend"], steps["gaps"]["model"]), ("codex", "gaps"))
+        self.assertNotIn("gaps", steps)
 
     def test_control_explicit_routes_file_drives_the_worker(self):
         config = self.profile("control.json", "claude", "control-")

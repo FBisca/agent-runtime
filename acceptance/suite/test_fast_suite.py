@@ -165,7 +165,7 @@ class FastSuiteTests(unittest.TestCase):
     def test_S5_an_option_value_keeps_the_fast_suite(self):
         # One module is enough: the property is that an option's value is not read as a selection, and a
         # whole-suite collection to prove it is two seconds of a contended runner for the same answer.
-        path = "tests/test_suite_budget.py"
+        path = "tests/test_activation.py"
         self.assertEqual(selected(path, "-p", "no:cacheprovider"), selected(path))
 
     def test_S3_no_unit_test_starts_a_process_or_opens_a_socket(self):

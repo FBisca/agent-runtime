@@ -112,7 +112,7 @@ def own_fields(path: Path) -> tuple[str | None, str | None]:
     return cwd, assignment_id(prompt or "")
 
 
-def plan(
+def plan(  # noqa: PLR0912, PLR0915
     cdir: Path, refs: Sequence[str], excludes: Sequence[str], run: orchestrate.Run | None = None
 ) -> tuple[list[Entry], list[str], list[str], str | None]:
     """-> (entries, excluded ids, missing ids, root id). Reads only; writes nothing.
@@ -215,7 +215,7 @@ def staged_path(entry: Entry) -> str:
     return f"transcripts/{name}.jsonl.gz"
 
 
-def capture(
+def capture(  # noqa: PLR0912, PLR0913, PLR0915
     sessions: Sequence[str],
     case: str | None = None,
     excludes: Sequence[str] = (),

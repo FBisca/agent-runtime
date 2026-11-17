@@ -161,7 +161,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         return path
 
     def test_S6_the_lead_s_retry_for_the_archive_is_refused_while_the_plan_is_not_accepted(self):
-        request = self.seed_request("REJECTED")
+        request = self.seed_request("RUNNING")
         result = self.cli(
             "decide",
             str(self.plan),
@@ -173,7 +173,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
             str(self.state_dir),
         )
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("REJECTED", result.stderr)
+        self.assertIn("RUNNING", result.stderr)
         self.assertIn("run` again", result.stderr)  # the way out
         self.assertFalse((self.run_dir / "archive" / "decision.json").exists())
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
@@ -198,7 +198,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "resolved")
 
     def test_S6_the_json_form_refuses_the_archive_retry_while_the_plan_is_not_accepted(self):
-        request = self.seed_request("REJECTED")
+        request = self.seed_request("RUNNING")
         path = self.root / "decision-in.json"
         path.write_text(json.dumps({"action": "retry", "reason": "again"}), encoding="utf-8")
         result = self.cli(
@@ -212,7 +212,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2, result.stderr)
         refusal = json.loads(result.stderr)
-        self.assertIn("REJECTED", refusal["reason"])
+        self.assertIn("RUNNING", refusal["reason"])
         self.assertTrue(refusal["way_out"])
         self.assertFalse((self.run_dir / "archive" / "decision.json").exists())
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
@@ -220,7 +220,8 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
     def test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted(self):
         """A retry the Lead's own CLI would have refused, written as an older CLI wrote it: the driver asks again."""
         self.waits(
-            self.ticket_merged() + [{}, self.reject_the_plan(), self.write_the_retry(), self.skip()]
+            self.ticket_merged()
+            + [{}, self.unaccept_the_plan(), self.write_the_retry(), self.skip()]
         )
         with failing_once():
             self.run_driver()
@@ -228,25 +229,25 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         self.assertNotEqual(states[-1], "ARCHIVED", states)
         self.assertFalse(
             (self.run_dir / "archive" / "report.2.json").exists(),
-            "the driver built the archive again while the plan was rejected",
+            "the driver built the archive again while the plan was not accepted",
         )
         self.assertEqual(len(self.gh_calls("pr", "create")), 1, self.gh_calls("pr", "create"))
         asked = json.loads(
             (self.run_dir / "archive" / "request.2.json").read_text(encoding="utf-8")
         )
-        self.assertIn("REJECTED", asked["reason"])
-        self.assertRegex(asked["reason"], r"(?i)\bverify\b|\baccept\b")
+        self.assertIn("APPROVED", asked["reason"])
+        self.assertRegex(asked["reason"], r"(?i)\baccepted\b")
         self.assertIn("archive", self.wake_lines("decision")[-1])
 
-    def reject_the_plan(self):
-        """A wait step in which the plan's state becomes REJECTED, as a rejected verification leaves it."""
+    def unaccept_the_plan(self):
+        """A wait step in which the plan's state leaves ACCEPTED for a state the driver does not accept from."""
         return wait_result(
             run=[
                 [
                     sys.executable,
                     "-c",
                     "import json,sys;p=sys.argv[1];d=json.load(open(p));"
-                    "d['plan']={'state':'REJECTED','history':[{'state':'REJECTED','at':'now'}]};"
+                    "d['plan']={'state':'APPROVED','history':[{'state':'APPROVED','at':'now'}]};"
                     "json.dump(d,open(p,'w'))",
                     str(self.state_dir / "demo.json"),
                 ]
@@ -321,7 +322,7 @@ class ArchiveRouteRefusal(ArchiveFixture, unittest.TestCase):
 
     def test_S7_the_other_step_routes_still_work(self):
         routes = load_script().routes
-        self.assertEqual(routes.step_override("gaps=claude/haiku").step, "gaps")
+        self.assertEqual(routes.step_override("reviewer=claude/haiku").step, "reviewer")
         self.assertIsNone(re.search("archive", ",".join(routes.STEPS)))
 
 
@@ -329,7 +330,7 @@ class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
     def first_drive(self):
         self.from_snapshot(self.snapshot_key("first_drive"), super().first_drive)
 
-    def test_control_verify_runs_once_the_agent_ticket_is_complete(self):
+    def test_control_the_plan_is_accepted_once_the_agent_ticket_is_complete(self):
         self.first_drive()
         self.assertIn("ACCEPTED", self.history())
 
@@ -351,7 +352,7 @@ class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
         self.first_drive()
         code, said = self.complete("T2", "S2=" + NODE)
         self.assertEqual(code, 0, said)
-        self.drive_once([self.gaps_done()])
+        self.drive_once([])
         self.assertEqual(self.history()[-1], "ARCHIVED")
         spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
         rows = [line for line in spec.splitlines() if line.startswith("| R") and "| S2 |" in line]

@@ -412,7 +412,7 @@ class Store(
         if wrote:
             dispatch_events.notify(self.directory)
 
-    def publish(
+    def publish(  # noqa: PLR0913
         self,
         scope,
         address,
@@ -659,7 +659,7 @@ class Store(
         dispatch_events.notify(self.directory)
         return envelope
 
-    def read(
+    def read(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         team,
         recipient,
@@ -857,7 +857,7 @@ class Store(
             batch.pop("_undelivered", None)
             return batch
 
-    def task(self, actor, action, arguments, ack=None):
+    def task(self, actor, action, arguments, ack=None):  # noqa: PLR0912
         """Create/list/claim/update tasks for the actor's own team in one transaction."""
         with self.transaction() as db:
             self.authorize(db, actor)

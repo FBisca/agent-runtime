@@ -1,4 +1,4 @@
-"""One idle watchdog over every agent kind: a worker, a reviewer and a gaps reviewer whose turn ended."""
+"""One idle watchdog over every agent kind: a worker and a reviewer whose turn ended."""
 
 import json
 import unittest
@@ -6,30 +6,9 @@ from pathlib import Path
 
 import pytest
 from fixtures import assignment, envelope, resume_id, spawn_id, wait_result
-from test_archive import ArchiveFixture
 from test_gates import REVIEWER, GateFixture
 
 pytestmark = pytest.mark.integration
-
-GAPS = "demo-gaps"
-
-
-class SilentGapsReviewer(ArchiveFixture, unittest.TestCase):
-    """The gaps reviewer is no ticket's agent; its idle turn is still the Lead's business."""
-
-    def silent_gaps(self):
-        """A wait step: the gaps reviewer's turn ended (idle) with no `complete`, its gaps.md on disk."""
-        step = wait_result([assignment(GAPS, "working", "idle")])
-        step["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-        return step
-
-    def test_S8_a_gaps_reviewer_silent_after_writing_its_output_is_accepted(self):
-        """orchestrator-engine/R82: orchestrator-audit-fixes/S8 — its output on disk is its answer."""
-        self.waits(self.ticket_merged() + [self.silent_gaps()] * 10)
-        self.run_driver()
-        self.assertEqual(self.spawned().count(GAPS), 1)
-        self.assertEqual([e["agent"] for e in self.run_events("output-landed")], [GAPS])
-        self.assertTrue(self.ledger()["gaps"]["ended"])
 
 
 class SilentWorker(GateFixture, unittest.TestCase):

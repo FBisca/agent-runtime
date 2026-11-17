@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import evidence, verify, workbench_needs, workbench_totals
+from . import evidence, workbench_needs, workbench_totals
 from . import plan as yaml_plan
 from . import workbench_metrics as metrics
 from .plan import DiscoveryError, PlanError, PlanLayout
@@ -384,23 +384,6 @@ def attempts_of(ticket_id, data):
     return shown
 
 
-def outcome_of(source, repo, data):
-    """The plan's outcome as `verify <plan>` computes it (state and each item's state and reason) from the ledger.
-    Acceptance is verify's word, never inferred from tickets. None for a plan that was never approved: it has no
-    contract to verify."""
-    from . import driver
-
-    approval = source.approval
-    if approval is None:
-        return None
-    result = verify.acceptance(data, digest=approval.digest, tree_of=driver.tree_in(repo))
-    return {
-        "state": result["state"],
-        "integration": (data.get("integration") or {}).get("sha"),
-        "items": result["items"],
-    }
-
-
 def revision_of(model, authored, path, repo, args):
     """(revision object, the model the tickets come from). An approved plan is shown as approved: when the authored
     file changed since, the approved snapshot's tickets are shown with `drift: true`."""
@@ -544,7 +527,6 @@ def plan(args):
         "revision": revision,
         "counts": counts(shown),
         "tickets": shown,
-        "outcome": outcome_of(source, repo, data),
         # A plan nobody drove has no run directory; one that has holds events, and its metrics are read from them.
         "run_dir": str(run_dir) if run_dir.is_dir() else None,
         "metrics": metrics.compute(run_dir, [t["id"] for t in shown]) if run_dir.is_dir() else None,

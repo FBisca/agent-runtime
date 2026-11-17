@@ -15,10 +15,8 @@ TAIL_WINDOW = 64 * 1024
 
 
 def is_final(state):
-    """Whether a plan state ends the plan's story: archived, rejected or accepted (with or without a person)."""
-    return isinstance(state, str) and (
-        state in ("ARCHIVED", "REJECTED") or state.startswith("ACCEPTED")
-    )
+    """Whether a plan state ends the plan's story: archived or accepted."""
+    return isinstance(state, str) and (state == "ARCHIVED" or state.startswith("ACCEPTED"))
 
 
 def group_of(state, markdown, ledger_state):

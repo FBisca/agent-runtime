@@ -1,4 +1,4 @@
-"""verify: the ticket gate's invariants (scope, integrity, covers) and the legacy path for Markdown plans."""
+"""verify: the ticket gate's invariants (scope, integrity, covers, red) and the legacy path for Markdown plans."""
 
 import subprocess
 import tempfile
@@ -15,6 +15,15 @@ IDENTITY = ["-c", "user.name=T", "-c", "user.email=t@example.invalid"]
 PLAN_REL = "docs/plans/2026-11-10-demo.plan.yaml"
 
 OLD_TESTS = "def test_old():\n    assert True\n"
+
+
+def seen_red(covers, scenarios=("S1", "S2", "S3")):
+    """A `red` for every scenario: the first covers node failing, or a failing line for a scenario left unmapped
+    (the covers check names that one; the red check only asks that an excerpt name a node it was given)."""
+    return {
+        sid: "FAILED %s - AssertionError" % ((covers.get(sid) or ["tests/test_x.py::test_x"])[0])
+        for sid in scenarios
+    }
 
 
 def model(**ticket):
@@ -91,7 +100,7 @@ class VerifyFixture(unittest.TestCase):
     AUTO = object()
 
     def gate(self, covers, test_cost=AUTO, **ticket):
-        report = {"contract": 3, "task_id": "t1", "covers": covers}
+        report = {"contract": 3, "task_id": "t1", "covers": covers, "red": seen_red(covers)}
         cost = self.measured(covers) if test_cost is self.AUTO else test_cost
         if cost is not None:
             report["test_cost"] = cost
@@ -329,6 +338,7 @@ class FolderPlanIntegrityTests(VerifyFixture):
         outside = plan_rel is None  # a plan kept outside the repository
         plan_path = Path("/elsewhere/plan.yaml") if outside else self.repo / plan_rel
         report = {"contract": 3, "task_id": "t1", "covers": self.covers}
+        report["red"] = seen_red(self.covers)
         report["test_cost"] = self.measured(self.covers)
         return self.found(
             verify.invariants(

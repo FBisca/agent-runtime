@@ -25,7 +25,6 @@ class AgentRuntimeTiersTests(unittest.TestCase):
         self.assertIn("--impacted", checks.affected)
         self.assertIn("{base}", checks.affected)
         self.assertEqual(checks.full_run, "uv run --frozen --all-packages pytest -n auto")
-        self.assertTrue(checks.full_verify)
 
 
 # The tests load server/ and hooks/ by path and the packages by their installed names, so

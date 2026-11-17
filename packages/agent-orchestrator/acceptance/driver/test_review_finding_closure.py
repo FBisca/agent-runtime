@@ -12,7 +12,7 @@ from test_reuse import ReuseFixture
 pytestmark = pytest.mark.integration
 
 
-class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):
+class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR0904
     def first_block(self, *items):
         self.expected_findings = list(items) or [BLOCKING]
         return super().first_block(*items)

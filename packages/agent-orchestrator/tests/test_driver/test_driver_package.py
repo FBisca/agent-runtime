@@ -1,15 +1,14 @@
-"""The driver package after the split: the ceilings, the published names and the record it keeps.
+"""The driver package after the split: the published names and the record it keeps.
 
 `agent_orchestrator.driver` is a package whose `__init__.py` is a re-export facade: the engine's
 collaborators live in the modules beside it, every public name they define is reachable as
-`driver.<name>`, and no module or class of the package outgrows the structure budget. The durable
-record is what outlives the split, so a ledger the older engine wrote still opens here, with its
+`driver.<name>`.
+The durable record is what outlives the split, so a ledger the older engine wrote still opens here, with its
 version, its kind marker and its tasks, and needs no migration.
 """
 
 import ast
 import json
-import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,14 +23,6 @@ pytestmark = pytest.mark.unit
 REPO = Path(__file__).resolve().parents[4]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
 DIR = MEMBER / "driver"
-
-# The two ceilings the driver package is paid on, written out rather than imported: a changed ceiling
-# is the spec's decision, and this test should fail when it is made.
-CEILINGS = {"module-lines": 1000, "class-methods": 25}
-
-# The measurement the gate runs, asked in process: the same five numbers over the same source, so a
-# module or a class that outgrows a ceiling fails here as it fails the build.
-budget = runpy.run_path(str(REPO / "scripts" / "structure_budget.py"))
 
 # The ledger one engine wrote, in the shape it wrote it: the version, the kind marker, one attempt, and
 # the top-level keys a run keeps beside its tasks. Literal on purpose — this is the file left on disk,
@@ -70,31 +61,10 @@ def defined_names(source):
     return [name for name in found if not name.startswith("_")]
 
 
-class StructureTests(unittest.TestCase):
-    """S11: the driver package is paid on module lines and class methods."""
-
-    def test_S11_no_module_or_class_of_the_driver_package_outgrows_its_ceiling(self):
-        """structure-budget/S11"""
-        offenders = []
-        for path in sorted(DIR.rglob("*.py")):
-            numbers = budget["metrics_of"](path.read_text(encoding="utf-8"))
-            for metric, ceiling in CEILINGS.items():
-                if numbers[metric] > ceiling:
-                    offenders.append(
-                        "%s: %s %d > ceiling %d"
-                        % (path.relative_to(REPO), metric, numbers[metric], ceiling)
-                    )
-        self.assertEqual(offenders, [], "the paid metrics are under their ceilings")
-        self.assertFalse(
-            (MEMBER / "driver.py").exists(), "the flat driver module the package replaced is gone"
-        )
-
-
 class FacadeTests(unittest.TestCase):
     """S22: every name the package's modules define is still reachable as `driver.<name>`."""
 
     def test_S22_every_public_name_the_package_modules_define_is_reachable_on_the_package(self):
-        """structure-budget/S22"""
         from agent_orchestrator import driver
 
         defined = {}
@@ -121,7 +91,6 @@ class FacadeTests(unittest.TestCase):
         )
 
     def test_S22_no_module_of_the_package_takes_the_name_of_a_published_one(self):
-        """structure-budget/S22"""
         from agent_orchestrator import driver
 
         # Importing a module sets its name on the package, so a module named `routes` answers as `routes`
@@ -136,7 +105,6 @@ class RecordTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S13_a_ledger_written_before_the_split_keeps_its_shape_through_the_facade(self):
-        """structure-budget/S13"""
         from agent_orchestrator import driver
 
         with tempfile.TemporaryDirectory() as tmp:

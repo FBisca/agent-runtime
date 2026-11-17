@@ -74,11 +74,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(checks.fast, "pytest -q")
         self.assertEqual(checks.affected, "scripts/affected.sh {base} {paths}")
         self.assertEqual(checks.full_run, "scripts/full.sh")
-        self.assertTrue(checks.full_verify)
-
-    def test_S1_checks_full_verify_false_is_read(self):
-        self.write("checks:\n  full:\n    run: make all\n    verify: false\n")
-        self.assertFalse(config.load(self.root).checks.full_verify)
 
     def test_S1_checks_node_is_absent_by_default_and_each_key_is_optional(self):
         self.assertIsNone(config.load(self.root).checks)
@@ -87,7 +82,6 @@ class ConfigTests(unittest.TestCase):
         self.assertIsNone(checks.fast)
         self.assertIsNone(checks.affected)
         self.assertIsNone(checks.full_run)
-        self.assertTrue(checks.full_verify)
 
     def test_S1_unknown_checks_key_is_refused_naming_its_dotted_path(self):
         for text, dotted in (
@@ -114,7 +108,7 @@ class ConfigTests(unittest.TestCase):
             ("checks:\n  fast: [pytest]\n", "checks.fast"),
             ("checks:\n  full: make\n", "checks.full"),
             ("checks:\n  full:\n    run: 3\n", "checks.full.run"),
-            ("checks:\n  full:\n    run: make\n    verify: maybe\n", "checks.full.verify"),
+            ("checks:\n  full:\n    run: make\n    verify: false\n", "checks.full.verify"),
         ):
             self.write(text)
             with self.assertRaises(config.ConfigError) as caught:

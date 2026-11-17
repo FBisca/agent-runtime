@@ -109,7 +109,7 @@ def run_command(command):
     subprocess.run(command, check=True, capture_output=True)
 
 
-def process(argv, timeout=None):
+def process(argv, timeout=None):  # noqa: PLR0912, PLR0915
     """The answer to one `agent-runtime call <tool> --lead <lead> --json <arguments>` argv (without the program name)."""
     del timeout  # the seam passes one; the fake answers at once, so there is nothing to time out
     if argv[:1] == ["resolve"]:  # `plan approve` asks who the caller is; here a verified Lead

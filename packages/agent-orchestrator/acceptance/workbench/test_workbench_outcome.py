@@ -2,7 +2,7 @@
 
 The workbench read commands show a plan as the orchestrator knows it: the plan's own slug, the exact `blocked_by`
 graph, every attempt with the assignment and the address the runtime returned (null for the driver's fallback),
-and the outcome `verify` computes. They write nothing and print no report
+and the plan's state from its ledger. They write nothing and print no report
 body. The fixture plans run through the real driver with the fake runtime and gh, as the acceptance tests do.
 """
 
@@ -13,7 +13,7 @@ import unittest
 import pytest
 import yaml
 from fixtures import spawn_id
-from test_acceptance import FEATURE_DONE, AcceptanceFixture, plan_data, scenario, ticket
+from test_acceptance import AcceptanceFixture, plan_data, scenario, ticket
 
 pytestmark = pytest.mark.integration
 
@@ -116,9 +116,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertNotIn("tickets", result.stdout)
         self.assertEqual(tree(self.repo, self.state_dir), before)
 
-    def test_an_accepted_plan_maps_its_attempt_to_the_runtime_address_and_says_what_verify_says(
-        self,
-    ):
+    def test_an_accepted_plan_maps_its_attempt_to_the_runtime_address(self):
         self.delivered()
         body = self.view()
         t1 = self.ticket_view(body, "T1")
@@ -127,12 +125,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(attempt["assignment_id"], spawn_id("demo-t1"))
         self.assertEqual(attempt["address"], "term-demo-t1")
         self.assertTrue(attempt["claimed"])
-
-        verify = self.verify()
-        self.assertEqual(verify.returncode, 0, verify.stderr)
-        verdict = json.loads(verify.stdout)
-        self.assertEqual(body["outcome"]["state"], verdict["state"])
-        self.assertEqual(body["outcome"]["items"], verdict["items"])
+        self.assertNotIn("outcome", body, "acceptance is the plan's state, never a second verdict")
 
     def test_the_driver_fallback_address_is_unknown_not_a_terminal(self):
         self.delivered()
@@ -147,37 +140,10 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(attempt["assignment_id"], assignment)
         self.assertIsNone(attempt["address"])
 
-    def hand_merged_failure(self):
-        """T1's gate failed (its covers names a test that does not exist) and a person merged its pull request by
-        hand; what landed fails the repo's whole suite."""
-        self.declare_full(FEATURE_DONE)
-        self.write_plan()
-        sha = self.merged_on_main("almost")
-        self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
-        self.drive([self.worker("almost", covers={"S1": ["src/a/test_feature.py::test_nope"]})])
-
-    def test_control_the_delivered_fixture_is_accepted_by_verify(self):
-        """Holds today: the accepted fixture the workbench reads is accepted by `verify`."""
+    def test_control_the_delivered_fixture_is_accepted(self):
+        """Holds today: the fixture the workbench reads is an accepted plan."""
         self.delivered()
-        result = self.verify()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["state"], "ACCEPTED")
-
-    def test_control_the_hand_merged_failure_is_rejected_by_verify(self):
-        """Holds today: the failure fixture is a complete ticket and `verify` refuses the plan."""
-        self.hand_merged_failure()
-        (status,) = self.status()["tickets"]
-        self.assertEqual(status["state"], "COMPLETE")
-        self.assertNotEqual(self.verify().returncode, 0)
-
-    def test_every_ticket_complete_is_not_an_accepted_plan_when_the_whole_suite_fails(self):
-        self.hand_merged_failure()
-        body = self.view()
-        t1 = self.ticket_view(body, "T1")
-        self.assertEqual(t1["state"], "COMPLETE")
-        self.assertTrue(self.attempt(body, "T1", "t1")["claimed"])
-        self.assertEqual(body["outcome"]["state"], "REJECTED")
-        self.assertEqual(body["outcome"]["items"][0]["scenario"], "full")
+        self.assertIn("ACCEPTED", [h["state"] for h in self.status()["history"]])
 
 
 if __name__ == "__main__":

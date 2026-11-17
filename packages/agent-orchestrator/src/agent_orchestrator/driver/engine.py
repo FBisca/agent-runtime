@@ -19,12 +19,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import approval_recovery, events, narrate, verify
+from .. import approval_recovery, events, narrate
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
 from ..invariants import PARKED
 from ..plan import PlanError
 from ..timeutil import iso as now
+from .acceptance import Acceptance
 from .answers import Answers
 from .archive import Archive, ArchiveSurface
 from .book import Book, BookSurface
@@ -32,7 +33,6 @@ from .briefs import Briefs
 from .coverage import Coverage
 from .findings import Findings
 from .gates import Gates
-from .integration import Integration
 from .lifecycle import Lifecycle
 from .pull import Pull, PullSurface
 from .report import cell
@@ -58,7 +58,7 @@ class Driver(
     Answers,
     Briefs,
     Attention,
-    Integration,
+    Acceptance,
     Lifecycle,
     Findings,
     Coverage,
@@ -337,13 +337,12 @@ class Driver(
             # dispatch, a reopened unit, the archive, a verification of an outcome that may be about to change).
             self.refresh_attention()
             return acted, 0
-        acted += self.integrate(plan)
+        acted += self.accept(plan)
         dispatched = (
             self.reopen_parked(plan)
             + self.dispatch_ready(plan)
             + self.attend_people(plan)
             + self.start_archive(plan)
-            + self.start_gaps(plan)
         )
         self.refresh_attention()
         return acted, dispatched
@@ -409,7 +408,7 @@ class Driver(
             ledgers.record_approval(data, self.held_approval())
             self.resume_plan_state(
                 data
-            )  # a ticket the amendment added reopens a plan that had delivered
+            )  # a ticket the amendment added reopens a plan that was accepted
         self.release_amendment(self.resume_changed(held, plan), plan)
 
     def resume_changed(self, held, plan):
@@ -482,16 +481,5 @@ class Driver(
         """(model, approval) of the approved YAML plan this drive holds."""
         assert self.model is not None and self.approval is not None
         return self.model, self.approval
-
-    def acceptance_of(self, data):
-        return verify.acceptance(data, digest=self.contract()[1].digest, tree_of=self.tree_of)
-
-    def tree_of(self, sha):
-        try:
-            return _engine().run(
-                ["git", "-C", str(self.repo), "rev-parse", "--verify", str(sha) + "^{tree}"]
-            )
-        except ValueError:
-            return None
 
     clock = staticmethod(time.monotonic)

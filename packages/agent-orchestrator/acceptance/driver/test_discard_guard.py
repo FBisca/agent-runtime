@@ -54,7 +54,7 @@ class GuardFixture(FolderArchiveFixture):
             steps[-1].setdefault("write", []).append(
                 [str(self.repo / ".orchestrate" / "config.yaml"), config]
             )
-        self.waits(steps + [self.gaps_done()])
+        self.waits(steps)
         self.alias_state(self.plan)
         return self.in_process(
             load_script(),

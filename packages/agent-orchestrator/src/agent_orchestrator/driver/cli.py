@@ -193,7 +193,7 @@ def _add_run_workers(sub):
     sub.add_argument(
         "--brain-cli",
         choices=("claude", "codex", "pi"),
-        help="The backend the review gates (the reviewer and the gaps reviewer) spawn on, with its "
+        help="The backend the review gate (the reviewer) spawns on, with its "
         "medium model; the implementer stays on --cli",
     )
     sub.add_argument(
@@ -214,15 +214,9 @@ def _add_run_workers(sub):
 
 
 def _add_run_gates(sub):
-    """What every worker must pass, and whether verify runs the repository's whole suite."""
+    """What every worker must pass, and where the run keeps its state."""
     sub.add_argument(
         "--gate", action="append", default=[], help="CI command a worker must pass (repeatable)"
-    )
-    sub.add_argument(
-        "--skip-full",
-        action="store_true",
-        help="Verify does not run the repo's whole suite (`checks.full.run`); CI runs it. "
-        "A repo can say so for every run with `checks.full.verify: false`",
     )
     sub.add_argument(
         "--state-dir",
@@ -258,7 +252,7 @@ def _add_run_routes(sub):
         default=[],
         metavar="STEP=BACKEND/MODEL[@EFFORT]",
         help="An explicit route for one step of the run: 'reviewer=codex/gpt-l@xhigh'. The steps are "
-        "implementer, reviewer and gaps. It wins over the route config and over --brain-cli",
+        "implementer and reviewer. It wins over the route config and over --brain-cli",
     )
 
 
@@ -358,18 +352,6 @@ def add_status_command(commands):
     sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
 
 
-def add_verify_command(commands):
-    """`verify`: whether a delivered plan holds on its pinned default-branch commit."""
-    sub = commands.add_parser(
-        "verify",
-        help="Whether a delivered YAML plan holds on its pinned default-branch commit (integration ran for this "
-        "approval, the whole suite did not fail); exits non-zero when it does not",
-    )
-    sub.add_argument("plan")
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-
-
 def add_complete_command(commands):
     """`complete`: the Lead records a person-owned ticket complete, with its proving nodes."""
     sub = commands.add_parser(
@@ -414,7 +396,6 @@ BUILDERS = (
     add_await_command,
     add_decide_command,
     add_status_command,
-    add_verify_command,
     add_complete_command,
     add_launch_command,
 )

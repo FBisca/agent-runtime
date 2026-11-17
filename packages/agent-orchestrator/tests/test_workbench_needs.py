@@ -66,7 +66,7 @@ class NeedsMeTests(WorkbenchFixture):
         self.running("alive", [start()])
         self.running("finished", [start(0, dead_pid()), {"at": at(5), "kind": "finish"}])
         self.approved("delivered")
-        self.write_ledger("delivered", {"T1": "COMPLETE"}, plan_state="DELIVERED")
+        self.write_ledger("delivered", {"T1": "COMPLETE"}, plan_state="ACCEPTED")
         self.log_events("delivered", [start(0, dead_pid())])
         self.assertEqual(self.kinds(self.listing()), set())
 

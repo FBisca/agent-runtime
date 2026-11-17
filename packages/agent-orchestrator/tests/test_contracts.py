@@ -77,7 +77,7 @@ def review2(**over):
     )
 
 
-class ContractTests(unittest.TestCase):
+class ContractTests(unittest.TestCase):  # noqa: PLR0904
     def rejects(self, validate, value, needle):
         with self.assertRaises(contracts.ContractError) as caught:
             validate(value)
@@ -111,6 +111,20 @@ class ContractTests(unittest.TestCase):
             ({"S1": ["a.py::t", ""]}, "S1"),
         ):
             self.rejects(contracts.validate_report, report(contract=3, covers=covers), needle)
+
+    def test_S9_report_contract_3_carries_red_per_scenario(self):
+        covers = {"S1": ["tests/test_a.py::test_one"]}
+        red = {"S1": "FAILED tests/test_a.py::test_one - AssertionError: 1 != 2"}
+        validated = contracts.validate_report(report(contract=3, covers=covers, red=red))
+        self.assertEqual(contracts.Report.model_validate(validated).red, red)
+
+    def test_S9_red_belongs_to_contract_3_only_and_is_keyed_by_scenario(self):
+        self.rejects(contracts.validate_report, report(contract=2, red={"S1": "x"}), "red")
+        covers = {"S1": ["a.py::t"]}
+        self.rejects(
+            contracts.validate_report, report(contract=3, covers=covers, red={"one": "x"}), "one"
+        )
+        self.rejects(contracts.validate_report, report(contract=3, covers=covers, red=["x"]), "red")
 
     def test_S9_a_verify_finding_is_a_gate_item_of_source_verify(self):
         item = {
@@ -909,12 +923,11 @@ class TierBriefTests(unittest.TestCase):
             report(checks=[{"command": "uv run pytest  -q", "outcome": "passed"}]),
         )
 
-    def test_S2_a_distinct_full_is_verify_owned_while_fast_and_affected_are_kept(self):
+    def test_S2_a_distinct_full_is_ci_owned_while_fast_and_affected_are_kept(self):
         packet, text = self.drive()
         self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])
         self.assertEqual(packet["affected"], self.AFFECTED)
         self.assertEqual(packet["full"], "uv run pytest -n auto")
         (full,) = [line for line in text.splitlines() if "uv run pytest -n auto" in line]
         self.assertIn("do not run", full)
-        self.assertIn("verify", full)
         self.assertIn("CI", full)

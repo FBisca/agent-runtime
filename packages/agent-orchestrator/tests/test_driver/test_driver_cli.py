@@ -2,7 +2,7 @@
 
 `main` was one four-hundred-line function that built the whole parser in one body. It is now one
 builder per command group in `driver/cli.py`, so these are the two things that must not move with it:
-the surface a caller types — the nineteen command names and each group's subcommands — and the entry
+the surface a caller types — its command names and each group's subcommands — and the entry
 points, which import one `run_cli` and must keep reaching the same one.
 """
 
@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parents[4]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
 
 # The commands the parser offered when this refactor was planned, in the order its help printed them,
-# less `accept`, removed with the evidence items it accepted. Literal on purpose: the set is the contract
+# less `accept` and `verify`, removed with the evidence they read. Literal on purpose: the set is the contract
 # a caller has, not something re-derived from the parser under test. A command added since is free; one
 # of these going missing is not.
 COMMANDS = (
@@ -41,7 +41,6 @@ COMMANDS = (
     "await",
     "decide",
     "status",
-    "verify",
     "complete",
     "launch",
 )
@@ -82,7 +81,6 @@ class CliSurfaceTests(unittest.TestCase):
     """S14: the decomposition keeps every command name, every group's subcommands and its help."""
 
     def test_S14_the_parser_still_offers_its_commands(self):
-        """structure-budget/S14"""
         from agent_orchestrator import driver
 
         offered = choices(help_of(driver.build_parser()))
@@ -91,7 +89,6 @@ class CliSurfaceTests(unittest.TestCase):
         self.assertEqual(tuple(name for name in offered if name in COMMANDS), COMMANDS)
 
     def test_S14_each_command_group_still_offers_its_subcommands(self):
-        """structure-budget/S14"""
         from agent_orchestrator import driver
 
         parser = driver.build_parser()
@@ -104,7 +101,6 @@ class CliHomeTests(unittest.TestCase):
     """S10/S14: the entries and the published names reach the one `run_cli` in `driver/cli.py`."""
 
     def test_S14_the_package_entry_and_the_module_entry_reach_the_same_run_cli(self):
-        """structure-budget/S14"""
         import agent_orchestrator
         from agent_orchestrator import __main__ as module_entry
         from agent_orchestrator import driver
@@ -126,7 +122,6 @@ class CliHomeTests(unittest.TestCase):
         )
 
     def test_S10_the_names_the_package_publishes_are_the_cli_modules_own(self):
-        """structure-budget/S10"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import cli
 

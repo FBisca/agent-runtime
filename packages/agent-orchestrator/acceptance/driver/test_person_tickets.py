@@ -10,7 +10,7 @@ It drives `run`, `plan check` and the new `complete` command through the archive
   - the ticket's status becomes `COMPLETE <date> · <note>`; a spawned worker, an agent ticket, an unknown ticket and
     a `--cover` for a scenario the ticket does not satisfy are each refused (non-zero exit)
   - the archive's Coverage row of a scenario lists the person ticket's cover nodes as given
-  - verify starts once every agent ticket is COMPLETE; the archive starts only once every ticket is
+  - the plan is accepted once every agent ticket is COMPLETE; the archive starts only once every ticket is
 
 Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
@@ -163,7 +163,7 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
 
 
 class PersonTicketArchive(PersonFixture, unittest.TestCase):
-    def test_control_verify_runs_once_the_agent_ticket_is_complete(self):
+    def test_control_the_plan_is_accepted_once_the_agent_ticket_is_complete(self):
         self.first_drive()
         self.assertIn("ACCEPTED", self.history())
 
@@ -177,7 +177,7 @@ class PersonTicketArchive(PersonFixture, unittest.TestCase):
         self.assertNotIn("ARCHIVED", self.history())
         code, said = self.complete("T2", "S2=" + NODE)
         self.assertEqual(code, 0, said)
-        self.drive_once([self.gaps_done()])
+        self.drive_once([])
         self.assertEqual(self.history()[-1], "ARCHIVED")
         spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
         rows = [line for line in spec.splitlines() if line.startswith("| R") and "| S2 |" in line]

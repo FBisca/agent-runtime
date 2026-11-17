@@ -113,7 +113,7 @@ def merge_requirements(text, slug):
 
 
 class SpecSections:
-    """The archive's own write, kept off `Driver`'s body: the structure budget holds that class to the
+    """The archive's own write, kept off `Driver`'s body: the ruff limit on public methods holds that class to the
     methods it already carried. The three names below are annotations, not defaults: the drive supplies
     them, and a check needs them here to read a `Driver` as this class."""
 

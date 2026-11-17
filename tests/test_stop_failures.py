@@ -6,17 +6,16 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import test_event_wait as event_helpers
-from test_mcp_server import RUNTIME_SRC, SERVER
+from test_mcp_server import RUNTIME_SRC
 from tools_harness import raw
 
 sys.path.insert(0, str(RUNTIME_SRC))
 import pytest
 from agent_runtime import hc_tools
-from agent_runtime.dispatch_store import Store, StorageError, StoreError
+from agent_runtime.dispatch_store import StorageError, Store, StoreError
 
 pytestmark = pytest.mark.integration
 

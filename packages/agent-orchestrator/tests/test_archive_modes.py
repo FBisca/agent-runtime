@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 import yaml
-from fixtures import load_script
+from fixtures import load_script, red_of
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -63,6 +63,8 @@ class FolderArchiveFixture(GateFixture):
         data.update(over)
         if "test_cost" not in over:
             data["test_cost"] = self.measured(data["covers"])
+        if "red" not in over:
+            data["red"] = red_of(data["covers"])
         return json.dumps(data)
 
     def folder_plan(self, data, root=None, tracked=False):
@@ -118,15 +120,8 @@ class FolderArchiveFixture(GateFixture):
         )
         return [self.worker_done(tests=True), self.reviewer_done()]
 
-    def gaps_done(self):
-        from fixtures import report_wait
-
-        step = report_wait("demo-gaps", "complete")
-        step["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-        return step
-
     def drive(self):
-        self.waits(self.ticket_merged() + [self.gaps_done()])
+        self.waits(self.ticket_merged())
         self.run_driver("--repo", str(self.repo))
 
     def origin_show(self, ref, path):
@@ -154,17 +149,10 @@ class PromoteArchiveTests(FolderArchiveFixture, unittest.TestCase):
         spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
         self.assertIn("(from demo/S1)", spec)
 
-    def test_S10_a_promoted_folder_plan_runs_to_archived_and_verify_exits_0(self):
+    def test_S10_a_promoted_folder_plan_runs_to_archived(self):
         self.drive()
-        self.assertEqual(
-            self.history(),
-            ["APPROVED", "RUNNING", "DELIVERED", "VERIFYING", "ACCEPTED", "ARCHIVED"],
-        )
+        self.assertEqual(self.history(), ["APPROVED", "RUNNING", "ACCEPTED", "ARCHIVED"])
         self.assertEqual(self.origin_files("feat/demo-archive", "docs/plans"), [])
-        result = self.cli(
-            "verify", str(self.plan), "--repo", str(self.repo), "--state-dir", str(self.state_dir)
-        )
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
 
 class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
@@ -194,14 +182,6 @@ class DiscardArchiveTests(FolderArchiveFixture, unittest.TestCase):
             self.git(self.origin, "rev-list", "--count", "main..feat/demo-archive"), "1"
         )
         self.assertEqual(self.history()[-2:], ["ACCEPTED", "ARCHIVED"])
-
-    def test_S5_an_archived_discard_plan_still_starts_the_gaps_reviewer_and_gets_its_gaps_md(self):
-        self.configure(self.root / "plans")
-        self.folder_plan(discard_plan(), root=self.root / "plans")
-        self.drive()
-        self.assertEqual(self.ledger()["plan"]["state"], "ARCHIVED")
-        self.assertIn("demo-gaps", self.spawned())
-        self.assertEqual((self.run_dir / "gaps.md").read_text(encoding="utf-8"), "# Gaps\n- none\n")
 
     def test_S11_a_discard_plan_outside_the_repository_ends_archived_leaving_origin_untouched(self):
         self.configure(self.root / "plans")
@@ -245,7 +225,7 @@ class PlansDirDeletionTests(FolderArchiveFixture, unittest.TestCase):
         steps[-1].setdefault("write", []).append(
             [str(self.repo / ".orchestrate" / "config.yaml"), config]
         )
-        self.waits(steps + [self.gaps_done()] + list(then))
+        self.waits(steps + list(then))
         self.alias_state(self.plan)
         return self.in_process(
             load_script(),

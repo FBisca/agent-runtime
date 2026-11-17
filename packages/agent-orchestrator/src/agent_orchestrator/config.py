@@ -21,7 +21,7 @@ NODES = {
 DEFAULT_TEST_PATTERNS = ("test_*", "*_test.*", "*.test.*", "*.spec.*")
 # the placeholders `checks.affected` may name: the run's base ref and the ticket's paths
 AFFECTED_PLACEHOLDERS = ("base", "paths")
-FULL_KEYS = ("run", "verify")
+FULL_KEYS = ("run",)
 PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 
 
@@ -36,7 +36,6 @@ class Checks:
     fast: str | None
     affected: str | None
     full_run: str | None
-    full_verify: bool
 
 
 @dataclass(frozen=True)
@@ -83,23 +82,17 @@ def _checks(body):
         full = {}
     if not isinstance(full, dict):
         raise ConfigError(
-            f"{CONFIG_PATH}: checks.full must be a mapping — write full: {{run: ..., verify: ...}}"
+            f"{CONFIG_PATH}: checks.full must be a mapping — write full: {{run: ...}}"
         )
     for key in full:
         if key not in FULL_KEYS:
             raise ConfigError(
                 f"{CONFIG_PATH}: checks.full.{key}: unknown key — remove it (known: {', '.join(FULL_KEYS)})"
             )
-    verify = full.get("verify", True)
-    if not isinstance(verify, bool):
-        raise ConfigError(
-            f"{CONFIG_PATH}: checks.full.verify must be true or false — write verify: true or verify: false"
-        )
     return Checks(
         fast=_command(body, "fast", "checks.fast"),
         affected=_command(body, "affected", "checks.affected", placeholders=True),
         full_run=_command(full, "run", "checks.full.run"),
-        full_verify=verify,
     )
 
 

@@ -198,7 +198,6 @@ class ConfigReadByEveryCommandTests(DiscoveryFixture):
                 ("plan", "check"),
                 ("plan", "approve"),
                 ("status",),
-                ("verify",),
                 ("run",),
             ):
                 with self.subTest(config=dotted, verb=verb):

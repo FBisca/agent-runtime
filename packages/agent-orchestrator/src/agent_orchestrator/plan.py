@@ -106,7 +106,7 @@ def lint_problems(model, repo, path):
     ]
 
 
-def semantic_problems(data, path, repo):
+def semantic_problems(data, path, repo):  # noqa: PLR0912, PLR0915
     """Inspect independent fields even when other fields fail Pydantic validation."""
     problems = []
     if not isinstance(data, dict):

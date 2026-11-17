@@ -80,7 +80,7 @@ def in_another_repo(span):
     return "/" in span and not (ROOT / span.split("/", 1)[0]).exists()
 
 
-def stale_citations():
+def stale_citations():  # noqa: PLR0912
     """Each citation, by spec and line, that names a file or a test that does not exist.
 
     A backticked `path.py` sets the file the bare names after it on the same line belong to; `path::Class::name`

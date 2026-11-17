@@ -17,6 +17,7 @@ from fixtures import (
     RunFixture,
     assignment,
     load_script,
+    red_of,
     report_wait,
     resume_id,
     spawn_id,
@@ -151,6 +152,8 @@ class GateFixture(RunFixture):
         )
         if yaml_plan and "test_cost" not in over:
             data["test_cost"] = self.measured(data["covers"])
+        if yaml_plan and "red" not in over:
+            data["red"] = red_of(data.get("covers"))
         return json.dumps(data)
 
     def worker_done(self, task_id="t1", tests=False, report=None, name="demo-t1"):

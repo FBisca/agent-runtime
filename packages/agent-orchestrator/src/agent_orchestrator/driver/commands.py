@@ -1,8 +1,8 @@
 """The handlers behind the command line: one per command that is not a lane of its own.
 
 `driver/cli.py` builds the parser; these are what its subcommands call. `status` reads the plan and the
-ledger, `run` starts and locks a drive, `await` waits on a drive's mark, `verify` and `complete` do
-the work their names say, and `launch` hands a plan to a drive in a fresh process. Each
+ledger, `run` starts and locks a drive, `await` waits on a drive's mark, `complete` records a person's
+ticket, and `launch` hands a plan to a drive in a fresh process. Each
 one takes the parsed arguments and answers the exit code, so the parser stays a description of what a
 caller may type.
 
@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .. import events, evidence, invariants, timeutil, verify, workbench
+from .. import events, evidence, invariants, timeutil, workbench
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
 from ..invariants import checked_write as ledger
@@ -29,7 +29,6 @@ from .answers import decide
 from .archive import report_crash
 from .book import checkpoint, claim, release, task_summary, unit_summary
 from .engine import Driver
-from .integration import tree_in
 from .lifecycle import metrics
 from .records import context_verdict, split_row
 from .report import render_status
@@ -58,7 +57,7 @@ from .state import (
     state_layout,
     take_wake,
 )
-from .watch import ACCEPTED_STATES, read_json
+from .watch import read_json
 
 
 def _engine():
@@ -202,31 +201,6 @@ def _ticket_rows(ids, statuses, data):
             {"id": ticket_id, "state": status, "reason": reason, "pr": prs[-1] if prs else None}
         )
     return rows
-
-
-def verify_plan(args):
-    """`verify <plan>`: whether the delivered plan holds, computed from the ledger alone: its integration ran for this
-    approval digest on the pinned commit, whose tree is the one recorded, and the whole suite did not fail there.
-    Anything else names why, and the command exits non-zero. It runs nothing and writes nothing."""
-    model, repo, _, _, data = _engine().acceptance_context(args)
-    approval = model.approval
-    require(
-        approval is not None, "%s: verify needs an approved plan; run plan approve" % model.slug
-    )
-    result = verify.acceptance(data, digest=approval.digest, tree_of=tree_in(repo))
-    output = {
-        "slug": model.slug,
-        "state": result["state"],
-        "plan_state": (data.get("plan") or {}).get("state"),
-        "integration": (data.get("integration") or {}).get("sha"),
-        "items": result["items"],
-    }
-    errors = verify.acceptance_errors(result)
-    if result["state"] not in ACCEPTED_STATES:
-        errors = errors or ["%s: the plan is %s" % (model.slug, result["state"])]
-    if errors:
-        output["errors"] = errors
-    return output
 
 
 def complete_person_ticket(args):
@@ -619,7 +593,6 @@ def _ledger_command(args):
 # one thing `dispatch` decides, so a command added later names its reader instead of adding a branch.
 _READS = {
     "status": _status_command,
-    "verify": verify_plan,
     "complete": complete_person_ticket,
 }
 _RUNS = {"run": drive, "await": await_wake, "decide": decide}

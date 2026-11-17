@@ -414,11 +414,8 @@ class PlanListTests(WorkbenchFixture):
         self.approved("live")
         self.write_ledger("live", {"T1": "IN PROGRESS"}, plan_state="RUNNING")
         for slug, plan_state in (
-            ("delivered", "DELIVERED"),
-            ("verifying", "VERIFYING"),
             ("done", "ARCHIVED"),
             ("accepted", "ACCEPTED"),
-            ("refused", "REJECTED"),
         ):
             self.approved(slug)
             self.write_ledger(slug, {"T1": "COMPLETE"}, plan_state=plan_state)
@@ -435,15 +432,12 @@ class PlanListTests(WorkbenchFixture):
             groups,
             {
                 "live": "active",
-                "delivered": "active",
-                "verifying": "active",
                 "ready": "active",
                 "sketch": "active",
                 "authoring": "active",
                 "stuck": "active",
                 "done": "older",
                 "accepted": "older",
-                "refused": "older",
                 "gone": "older",
                 "old": "older",
             },

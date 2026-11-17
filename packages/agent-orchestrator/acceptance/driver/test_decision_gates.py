@@ -4,7 +4,7 @@
     that names another version is refused, naming both (S2); a driver that meets a decision it cannot read asks
     the Lead again, naming the reason and the way out (S3);
   - the Lead's `retry` for the archive is refused while the plan is not accepted (S6), and the driver builds no
-    archive while the plan is rejected (S7).
+    archive while the plan is not accepted (S7).
 
 It drives `decide` and the driver through the package's own fixtures: a fake runtime, a fake gh and a real git
 origin.
@@ -219,13 +219,13 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.run_dir / ARCHIVE / "decision.json").exists())
 
-    def test_S6_the_leads_retry_is_refused_while_the_plan_is_rejected(self):
+    def test_S6_the_leads_retry_is_refused_while_the_plan_is_not_accepted(self):
         request = self.open_archive_request()
-        self.write_ledger("REJECTED")
+        self.write_ledger("RUNNING")
         result = self.decide_archive()
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("REJECTED", result.stderr)
-        self.assertRegex(result.stderr, r"(?i)\bverify\b|\baccept\b")
+        self.assertIn("RUNNING", result.stderr)
+        self.assertRegex(result.stderr, r"(?i)\baccepted\b")
         self.assertFalse((self.run_dir / ARCHIVE / "decision.json").exists())
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
 
@@ -241,8 +241,9 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         states = [row["state"] for row in self.ledger()["plan"]["history"]]
         self.assertEqual(states[-1], "ARCHIVED", states)
 
-    def test_S7_the_driver_builds_no_archive_while_the_plan_is_rejected(self):
-        """The Lead's retry is on disk, as an older CLI wrote it, and the plan was rejected before the driver read it."""
+    def test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted(self):
+        """The Lead's retry is on disk, as an older CLI wrote it, and the plan left ACCEPTED before the driver read
+        it."""
         decision = self.run_dir / ARCHIVE / "decision.json"
         reject = wait_result(
             run=[
@@ -250,7 +251,7 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
                     sys.executable,
                     "-c",
                     "import json,sys;p=sys.argv[1];d=json.load(open(p));"
-                    "d['plan']={'state':'REJECTED','history':[{'state':'REJECTED','at':'now'}]};"
+                    "d['plan']={'state':'APPROVED','history':[{'state':'APPROVED','at':'now'}]};"
                     "json.dump(d,open(p,'w'))",
                     str(self.ledger_path()),
                 ]
@@ -289,12 +290,12 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         self.assertNotEqual(states[-1], "ARCHIVED", states)
         self.assertFalse(
             (self.run_dir / ARCHIVE / "report.2.json").exists(),
-            "the driver built the archive again while the plan was rejected",
+            "the driver built the archive again while the plan was not accepted",
         )
         self.assertEqual(len(self.gh_calls("pr", "create")), 1, self.gh_calls("pr", "create"))
         asked = json.loads((self.run_dir / ARCHIVE / "request.2.json").read_text(encoding="utf-8"))
-        self.assertIn("REJECTED", asked["reason"])
-        self.assertRegex(asked["reason"], r"(?i)\bverify\b|\baccept\b")
+        self.assertIn("APPROVED", asked["reason"])
+        self.assertRegex(asked["reason"], r"(?i)\baccepted\b")
         self.assertIn("archive", self.wake_lines("decision")[-1])
 
 

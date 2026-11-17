@@ -166,12 +166,12 @@ class TypedSelectionTests(RunFixture, unittest.TestCase):
             "codex",
             "--step",
             "reviewer=codex/review@high",
-            "--step",
-            "gaps=codex/gaps@medium",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         steps = self.ledger()["routes"]["steps"]
-        self.assertEqual((steps["reviewer"]["backend"], steps["gaps"]["model"]), ("codex", "gaps"))
+        self.assertEqual(
+            (steps["reviewer"]["backend"], steps["reviewer"]["model"]), ("codex", "review")
+        )
 
     def test_S7_a_medium_route_on_the_brain_backend_needs_no_step_routes(self):
         config = self.config_dir() / "mixed.json"

@@ -7,24 +7,19 @@ scope      every file the ticket changed is inside the ticket's paths
 integrity  no ticket touches its plan: a folder plan's folder, or a legacy plan's file and narrative
 covers     every scenario the ticket satisfies maps, in the report's `covers`, to test nodes that exist and
            changed in the ticket; that they pass is the CI green check on the same head
+red        every scenario the ticket satisfies carries, in the report's `red`, the failing output of its
+           covering test from before the fix, naming one of its `covers` nodes: the test was seen red first
 
-Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items.
-
-Once every ticket merged, `acceptance` says whether the plan holds on the one default-branch commit the driver
-pinned for integration: the integration ran for this approval digest on that commit's tree, and the repo's whole
-suite, when it declares one, did not fail there.
+Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items. A plan is accepted once every
+agent ticket is COMPLETE: merged with its gate passed and CI green on its head.
 """
 
 import ast
-import os
 import re
-import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from . import plan as yaml_plan
-from . import runner
 
 HUNK = re.compile(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@")
 NODE_PARAMS = re.compile(r"\[.*\]$")
@@ -173,6 +168,43 @@ def covers(ticket, report, repo, base, files, added):
     return findings
 
 
+def names_node(excerpt, node):
+    """Whether a failing-output excerpt names `node`: its full id, or the test's own name (a runner may print
+    either)."""
+    bare = "::".join(NODE_PARAMS.sub("", part) for part in node.split("::"))
+    return bare in excerpt or bare.rsplit("::", 1)[-1] in excerpt
+
+
+def red_first(ticket, report):
+    """Red first: each scenario the ticket satisfies carries the failing output of a covering test from before the
+    fix. The gate checks the excerpt is there and names a node of that scenario's `covers`; whether the failure is
+    a genuine assertion of the behaviour is the reviewer's to judge."""
+    if report.get("contract") != 3:
+        return []  # `covers` already names the contract a YAML plan ticket reports
+    mapped, red = report.get("covers") or {}, report.get("red") or {}
+    findings = []
+    for scenario in ticket.satisfies:
+        excerpt = red.get(scenario)
+        nodes = mapped.get(scenario) or []
+        if not isinstance(excerpt, str) or not excerpt.strip():
+            findings.append(
+                {
+                    "check": "red",
+                    "excerpt": "%s: no red excerpt; add red {%s: <the covering test's failing output from "
+                    "before the fix, naming its node>}" % (scenario, scenario),
+                }
+            )
+        elif nodes and not any(names_node(excerpt, node) for node in nodes):
+            findings.append(
+                {
+                    "check": "red",
+                    "excerpt": "%s: the red excerpt names none of its covers nodes (%s); paste the failing "
+                    "output of one of them from before the fix" % (scenario, ", ".join(nodes)),
+                }
+            )
+    return findings
+
+
 def seconds(value):
     """A measured cost: a non-negative number, not a bool."""
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
@@ -250,7 +282,7 @@ def test_cost(report, repo, base, files, added):
 
 
 def invariants(model, ticket_id, report, *, repo, base, layout):
-    """The findings of a YAML plan ticket's gate: scope, integrity and covers. Empty means the gate passes."""
+    """The findings of a YAML plan ticket's gate: scope, integrity, covers and red. Empty means the gate passes."""
     ticket = next((t for t in model.tickets if t.id == ticket_id), None)
     if ticket is None:
         raise VerifyError("the plan has no ticket %s" % ticket_id)
@@ -271,6 +303,7 @@ def invariants(model, ticket_id, report, *, repo, base, layout):
     return (
         findings
         + covers(ticket, report, repo, base, files, added)
+        + red_first(ticket, report)
         + test_cost(report, repo, base, files, added)
     )
 
@@ -289,93 +322,4 @@ def items(findings, command, log_path):
             "log_path": str(log_path),
         }
         for number, finding in enumerate(findings, 1)
-    ]
-
-
-# ---- the whole suite: `checks.full.run`, once per verify pass on the pinned default-branch commit -------------------
-
-FULL_TIMEOUT = 3600
-
-
-def run_full(repo, sha, command, log_path, *, timeout=FULL_TIMEOUT, base_env=None):
-    """Run the repo's whole suite once: under bash in a scratch worktree of `sha`, with no virtualenv on PATH and a
-    temporary HOME. Its whole output goes to `log_path`. Returns {"state": "PASS" | "FAIL", "exit", "detail"}; a
-    command that outlives `timeout` is a FAIL."""
-    base_env = dict(os.environ if base_env is None else base_env)
-    scratch = Path(tempfile.mkdtemp(prefix="eec-full-"))
-    tree = None
-    try:
-        env = runner.suite_env(base_env, scratch)
-        tree = runner.worktree(repo, sha, scratch, "tree")
-        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-        code, timed_out = runner.execute(command, tree, env, timeout, log_path)
-    finally:
-        if tree is not None:
-            runner.drop_worktree(repo, tree)
-        shutil.rmtree(scratch, ignore_errors=True)
-    if timed_out:
-        return {"state": "FAIL", "exit": None, "detail": "killed after %ss" % timeout}
-    return {
-        "state": "PASS" if code == 0 else "FAIL",
-        "exit": code,
-        "detail": None if code == 0 else "exited %s" % code,
-    }
-
-
-def full_failure(data, pin):
-    """The item of a whole suite that failed on this integration run, or None. A record of an earlier run (another
-    attempt) does not count: each verify pass runs the suite again."""
-    full = data.get("full") or {}
-    if full.get("state") != "FAIL" or full.get("attempt") != pin.get("attempt"):
-        return None
-    return {
-        "scenario": "full",
-        "state": "FAIL",
-        "reason": "`%s` %s on %s; its output is %s. Fix the failure, or run again with --skip-full to leave the "
-        "whole suite to CI"
-        % (
-            full.get("command"),
-            full.get("detail") or "failed",
-            str(full.get("sha"))[:12],
-            full.get("log"),
-        ),
-    }
-
-
-# ---- acceptance: whether the delivered plan holds on the pinned default-branch commit ------------------------------
-
-
-def acceptance(data, *, digest, tree_of=None):
-    """{"state", "items"} of a delivered plan, from the ledger alone. Each item is {"scenario", "state", "reason"}.
-
-    The plan is ACCEPTED when integration ran for this approval digest on the pinned commit, whose tree is the one
-    recorded, and the whole suite did not fail there; REJECTED otherwise, with an item naming why. Each scenario's
-    proof is its ticket's covering tests, which the gate and CI already held. `tree_of` maps the pinned commit to its
-    tree, so a ledger whose tree was not the commit's is caught too."""
-    pin = data.get("integration") or {}
-    problem = None
-    if not pin:
-        problem = "the plan has not been verified on a pinned default-branch commit"
-    elif pin.get("digest") != digest:
-        problem = "the integration run was for another approval digest; verify the plan again"
-    elif tree_of is not None:
-        actual = tree_of(pin.get("sha"))
-        if actual != pin.get("tree"):
-            problem = "the pinned commit %s holds tree %s, not the recorded %s" % (
-                str(pin.get("sha"))[:12],
-                str(actual)[:12],
-                str(pin.get("tree"))[:12],
-            )
-    items = []
-    if problem:
-        items.append({"scenario": "integration", "state": "UNKNOWN", "reason": problem})
-    elif failed := full_failure(data, pin):
-        items.append(failed)
-    return {"state": "REJECTED" if items else "ACCEPTED", "items": items}
-
-
-def acceptance_errors(result):
-    """One line per item that does not hold, naming it and the reason: what `verify` exits non-zero on."""
-    return [
-        "%s %s: %s" % (item["scenario"], item["state"], item["reason"]) for item in result["items"]
     ]

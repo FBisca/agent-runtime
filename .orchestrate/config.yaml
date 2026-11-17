@@ -3,7 +3,7 @@ plans:
   dir: docs/plans
 archive:
   mode: promote
-# The check tiers: a worker runs the cheap two, verify and CI run the whole suite once.
+# The check tiers: a worker runs the cheap two, CI runs the whole suite.
 checks:
   fast: uv run pytest
   affected: uv run pytest --impacted --impacted-git-mode=branch --impacted-base-branch={base}

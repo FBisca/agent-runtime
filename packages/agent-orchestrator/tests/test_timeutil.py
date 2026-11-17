@@ -30,7 +30,6 @@ def modules_defining_now():
 
 class TimestampDefinitionTests(unittest.TestCase):
     def test_s12_the_utc_timestamp_is_defined_once_and_each_call_site_keeps_its_type(self):
-        """structure-budget/S12"""
         moment = timeutil.now()
         self.assertIsInstance(moment, datetime)
         self.assertEqual(moment.tzinfo, timezone.utc)

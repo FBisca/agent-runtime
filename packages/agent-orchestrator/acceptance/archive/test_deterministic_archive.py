@@ -1,5 +1,4 @@
-"""The deterministic-archive plan's outcome: the driver archives a plan itself, with no agent, and starts the gaps
-reviewer only once the archive has merged.
+"""The deterministic-archive plan's outcome: the driver archives a plan itself, with no agent.
 
 It drives the `run` CLI through the suite's existing archive fixture (fake runtime, fake gh, a real git origin).
 The contract it pins (plan Decisions D1-D6):
@@ -17,8 +16,6 @@ The contract it pins (plan Decisions D1-D6):
         | Requirement | Scenario | Test nodes |
         |---|---|---|
         | R<n> | <id> | `<covers node>`<br>`<covers node>` |
-
-  - `gaps` is spawned only after the archive unit is COMPLETE, and the run does not wait for its report
 
 Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
@@ -48,7 +45,7 @@ SECTION = (
 
 class DriverArchiveFixture(ArchiveFixture):
     def run_to_archive(self):
-        """T1 merges; nothing else is scripted: no archive worker report and no gaps report."""
+        """T1 merges; nothing else is scripted: no archive worker report."""
         self.waits(self.ticket_merged())
         self.run_driver()
 
@@ -113,30 +110,3 @@ class SpecSection(DriverArchiveFixture, unittest.TestCase):
         self.assertEqual(
             self.on_branch("docs/specs/demo.md"), base + "\n## Coverage: demo" + coverage
         )
-
-
-class GapsAfterArchive(DriverArchiveFixture, unittest.TestCase):
-    def test_control_a_run_with_no_finished_ticket_spawns_no_gaps_reviewer(self):
-        self.waits(
-            [self.worker_done(tests=True), self.reviewer_done(), self.decide_step("t1", "skip")]
-        )
-        self.prs(["CLOSED"])
-        self.run_driver()
-        self.assertNotIn("demo-gaps", self.spawned())
-
-    def test_gaps_starts_after_the_archive_merges_and_the_run_does_not_wait_for_it(self):
-        # No gaps report is scripted. The fakes end a run either way, so not waiting is pinned by T2's own test.
-        self.run_to_archive()
-        self.assertIn("demo-gaps", self.spawned())
-        events = self.run_events()
-        done = next(
-            i
-            for i, e in enumerate(events)
-            if e["kind"] == "state"
-            and e.get("unit") == "archive"
-            and (e.get("status") or [0, 0])[1] == "COMPLETE"
-        )
-        gaps = next(
-            i for i, e in enumerate(events) if e["kind"] == "agent" and e.get("name") == "demo-gaps"
-        )
-        self.assertGreater(gaps, done)

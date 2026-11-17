@@ -7,7 +7,7 @@ runtime and the fake gh answering in process) and the engine's CLI contract only
   <repo>/.orchestrate/config.yaml        plans.dir, archive.mode (promote | discard)
   <plans.dir>/<date>-<slug>/plan.yaml    the contract; top-level archive: <mode>
   plans list --json --repo <repo>        rows {path, format, slug}
-  plan approve / status --json / verify / run, each with --repo
+  plan approve / status --json / run, each with --repo
   ledger                                 <state>/<repo-key>/<slug>.json, its plan.state
 
 The `control` tests exercise the legacy layout (X.plan.yaml), with and without a config.
@@ -239,7 +239,6 @@ class PromoteArchive(FolderPlanFixture, unittest.TestCase):
             ),
             "",
         )
-        self.assertEqual(self.verify().returncode, 0)
 
 
 class DiscardArchive(FolderPlanFixture, unittest.TestCase):
@@ -249,13 +248,12 @@ class DiscardArchive(FolderPlanFixture, unittest.TestCase):
         before = self.origin_tree()
         self.approve()
         run_dir = Path(self.status()["run_dir"])
-        worker, reviewer, gaps = self.steps(run_dir)
-        result = self.run_folder([worker, reviewer, gaps])
+        result = self.run_folder(self.steps(run_dir))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.ledger_state(run_dir), "ARCHIVED")
         self.assertLessEqual(
             set(self.spawned()),
-            {"demo-t1", "demo-t1-review", "demo-gaps"},
+            {"demo-t1", "demo-t1-review"},
             "discard spawned an archive worker",
         )
         self.assertFalse(self.folder.exists(), "discard kept the plan folder")

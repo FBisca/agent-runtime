@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fixtures import load_script, report_wait, spawn_id
+from fixtures import load_script, red_of, report_wait, spawn_id
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
 
-LIFECYCLE = ["APPROVED", "RUNNING", "DELIVERED", "VERIFYING", "ACCEPTED", "ARCHIVED"]
+LIFECYCLE = ["APPROVED", "RUNNING", "ACCEPTED", "ARCHIVED"]
 
 
 def plan_yaml():
@@ -68,9 +68,6 @@ class YamlPlanFixture(GateFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
-    def verify(self):
-        return self.cli("verify", str(self.plan), "--state-dir", str(self.state_dir))
-
     def approval(self):
         return yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]
 
@@ -82,12 +79,13 @@ class YamlPlanFixture(GateFixture):
             check=True,
         ).stdout.strip()
 
-    def steps(self, run_dir, content="done", archive=True):
+    def steps(self, run_dir, content="done"):
         """The worker delivers src/a/feature.txt with a covering test; the reviewer passes; the work reaches main."""
         worktree = self.root / "repo.worktrees" / "demo-t1"
         report = json.loads(self.report("t1"))
         report.update(contract=3, covers={"S1": ["src/a/test_feature.py::test_feature"]})
         report["test_cost"] = self.measured(report["covers"])
+        report["red"] = red_of(report["covers"])
         worker = report_wait("demo-t1", "complete", id=spawn_id("demo-t1"))
         worker["write"] = [
             [str(run_dir / "t1" / "report.json"), json.dumps(report)],
@@ -105,12 +103,7 @@ class YamlPlanFixture(GateFixture):
             ["git", "-C", str(worktree), *identity, "commit", "-qm", "feature"],
             ["git", "-C", str(worktree), "push", "-q", "origin", "HEAD:main"],
         ]
-        steps = [worker, reviewer]
-        if archive:
-            gaps = report_wait("demo-gaps", "complete")
-            gaps["write"] = [[str(run_dir / "gaps.md"), "# Gaps\n- none\n"]]
-            steps += [gaps]
-        return steps
+        return [worker, reviewer]
 
     def run_yaml(self, steps):
         self.waits(steps)

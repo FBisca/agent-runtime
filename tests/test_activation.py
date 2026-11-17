@@ -9,8 +9,8 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parents[1]
 REPO = PLUGIN
 sys.path.insert(0, str(PLUGIN / "packages" / "agent-runtime" / "src"))
-import pytest
-from agent_runtime import (
+import pytest  # noqa: E402
+from agent_runtime import (  # noqa: E402
     hc_tools,  # noqa: E402
     mcp_server,  # noqa: E402
 )

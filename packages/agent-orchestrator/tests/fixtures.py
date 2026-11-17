@@ -158,6 +158,15 @@ def report_wait(name, kind="complete", text=None, id=None, **extra):
     return wait_result([entry], [envelope(entry, kind, text)], **extra)
 
 
+def red_of(covers):
+    """The `red` a contract 3 report carries for `covers`: each scenario's first node, seen failing before the fix."""
+    return {
+        scenario: "FAILED %s - AssertionError: the behaviour is not there yet" % nodes[0]
+        for scenario, nodes in (covers or {}).items()
+        if nodes
+    }
+
+
 def plan_data(rows=("T1", "T2", "T3", "T4", "T5")):
     """The fixture plan as a plan/1 mapping: the rows' tickets and three scenarios."""
     return {
@@ -265,7 +274,7 @@ class ClassWorld:
 WORLDS: dict[type, ClassWorld] = {}
 
 
-class RunFixture(_Case):
+class RunFixture(_Case):  # noqa: PLR0904
     """Mixin for TestCase classes: temp repo with an origin, a plan, a fake agent-runtime on PATH.
 
     The world is built, and its plan approved, once per test class (`ClassWorld`)."""

@@ -60,7 +60,7 @@ def status_of(raw, text=None, **kw):
 
 
 def block(name, app_name):
-    return [l.strip() for l in app.last_prompt_block(screen(name), app_name) if l.strip()]
+    return [l.strip() for l in app.last_prompt_block(screen(name), app_name) if l.strip()]  # noqa: E741
 
 
 class PromptBlockTests(unittest.TestCase):
@@ -73,16 +73,16 @@ class PromptBlockTests(unittest.TestCase):
     def test_S13_claude_typed_box_text_is_not_the_task_line(self):
         """agent-runtime-tools/S13"""
         lines = block("claude_interrupted_typed_box.txt", "claude-code")
-        self.assertTrue(any("Working on it" in l for l in lines))
-        self.assertFalse(any("also add logging" in l for l in lines))
+        self.assertTrue(any("Working on it" in l for l in lines))  # noqa: E741
+        self.assertFalse(any("also add logging" in l for l in lines))  # noqa: E741
 
     def test_S13_codex_block_skips_composer_and_suggestion(self):
         """agent-runtime-tools/S13"""
         for name in ("codex_working_interrupted.txt", "codex_suggestion_composer.txt"):
             with self.subTest(name=name):
                 lines = block(name, "codex")
-                self.assertTrue(any("Running npm run build" in l for l in lines))
-                self.assertFalse(any(l.startswith("›") or "gpt-5" in l for l in lines))
+                self.assertTrue(any("Running npm run build" in l for l in lines))  # noqa: E741
+                self.assertFalse(any(l.startswith("›") or "gpt-5" in l for l in lines))  # noqa: E741
 
     def test_S13_unknown_app_or_no_prompt_gives_empty_block(self):
         """agent-runtime-tools/S13"""

@@ -96,7 +96,7 @@ class ReviewBriefTests(unittest.TestCase):
 
     @pytest.mark.integration
     def test_S1_the_brief_names_the_report_whose_claims_the_pass_checks(self):
-        """orchestrator-engine/R145: structure-budget/S24"""
+        """orchestrator-engine/R145"""
         # The unit's directory holds the first attempt's report, stale the moment the unit was
         # re-dispatched; the attempt under review wrote its own, and that is the one the pass checks.
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,6 +128,12 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertIn("Reverting the change makes it fail", text)
         self.assertIn("would pass without the change", text)
         self.assertIn("scenario not really tested", text)
+
+    def test_the_brief_asks_the_reviewer_to_judge_each_red_excerpt(self):
+        text = self.brief()
+        self.assertIn("`red`", text)
+        self.assertIn("genuine assertion failure", text)
+        self.assertIn("cannot fail", text)
 
     def test_S4_the_brief_names_one_review_file(self):
         text = self.brief()

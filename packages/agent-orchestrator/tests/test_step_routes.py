@@ -15,7 +15,6 @@ from test_archive import ArchiveFixture
 
 pytestmark = pytest.mark.integration
 
-GAPS = "demo-gaps"
 REVIEW = "demo-t1-review"
 WORKER = "demo-t1"
 
@@ -86,15 +85,12 @@ class RoutedRunFixture(RunFixture):
     def reviewer(self):
         return self.gate("reviewer", "large", "high")
 
-    def gaps(self):
-        return self.gate("gaps", "medium", "medium")
-
 
 class StepRouteTests(RoutedRunFixture, unittest.TestCase):
-    """A run whose steps are routed one by one: the reviewer and the gaps reviewer, read where the driver settles them."""
+    """A run whose steps are routed one by one: the reviewer, read where the driver settles it."""
 
     def test_S8_each_step_names_its_own_backend_model_and_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the reviewer and the gaps reviewer sit where their own step says."""
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the reviewer sits where its own step says."""
         path = self.routes_file(
             self.config(
                 self.route("small", "pi", "minimax/MiniMax-M3.1-Flash", effort="max"),
@@ -102,19 +98,16 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
                 self.route("large", "claude", "opus"),
                 steps=[
                     self.step("reviewer", "codex", "gpt-l", effort="xhigh"),
-                    self.step("gaps", "pi", "minimax/MiniMax-M3.1-Flash", effort="low"),
                 ],
             )
         )
         self.settle("--routes-file", path)
         self.assertEqual(self.reviewer(), ("codex", "gpt-l", "xhigh"))
-        self.assertEqual(self.gaps(), ("pi", "minimax/MiniMax-M3.1-Flash", "low"))
 
     def test_S3_a_gate_without_a_step_route_keeps_todays_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — no step route, no new effort: the reviewer high, the gaps medium."""
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — no step route, no new effort: the reviewer high."""
         self.settle()
         self.assertEqual(self.reviewer()[2], "high")
-        self.assertEqual(self.gaps()[2], "medium")
 
     def test_S3_a_step_route_names_the_gates_effort(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — the gates' effort comes from their own step, not from a constant."""
@@ -123,22 +116,19 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
                 *self.classes(),
                 steps=[
                     self.step("reviewer", "claude", "opus", effort="xhigh"),
-                    self.step("gaps", "claude", "sonnet", effort="low"),
                 ],
             )
         )
         self.settle("--routes-file", path)
         self.assertEqual(self.reviewer()[2], "xhigh")
-        self.assertEqual(self.gaps()[2], "low")
 
     def test_S9_the_brain_names_one_backend_for_every_gate_step(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — `--brain-cli` still answers for the reviewer and the gaps reviewer alike."""
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — `--brain-cli` still answers for the reviewer."""
         self.settle("--brain-cli", "codex", "--routes-file", self.routes_file(self.brain_config()))
         self.assertEqual(self.reviewer()[:2], ("codex", "gpt-m"))
-        self.assertEqual(self.gaps()[:2], ("codex", "gpt-m"))
 
     def test_S9_a_step_route_overrides_the_brain(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — the reviewer may sit on another backend than the gaps reviewer."""
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S9 — a step route wins over the brain."""
         self.settle(
             "--brain-cli",
             "codex",
@@ -148,7 +138,6 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
             "reviewer=pi/minimax/MiniMax-M3.1-Flash@max",
         )
         self.assertEqual(self.reviewer(), ("pi", "minimax/MiniMax-M3.1-Flash", "max"))
-        self.assertEqual(self.gaps()[:2], ("codex", "gpt-m"))
 
     def test_S10_a_step_route_naming_an_unknown_step_fails_the_run_before_any_worker_is_spawned(
         self,
@@ -159,6 +148,15 @@ class StepRouteTests(RoutedRunFixture, unittest.TestCase):
         )
         result = self.settle("--routes-file", path, expect=2)
         self.assertIn("janitor", result.stderr)
+        self.assertEqual(self.calls("spawn"), [])
+
+    def test_S10_a_step_route_naming_the_removed_gaps_step_is_refused_naming_the_way_out(self):
+        """orchestrator-engine/R4: the gaps reviewer was removed, so a route for it fails the run, naming the fix."""
+        path = self.routes_file(
+            self.config(*self.classes(), steps=[self.step("gaps", "codex", "gpt-l")])
+        )
+        result = self.settle("--routes-file", path, expect=2)
+        self.assertIn("the gaps reviewer was removed; remove the `gaps` step", result.stderr)
         self.assertEqual(self.calls("spawn"), [])
 
     def test_S10_a_step_route_naming_an_unknown_backend_fails_the_run_before_any_worker_is_spawned(
@@ -192,11 +190,10 @@ class StepRouteBoundaryTests(RoutedRunFixture, ArchiveFixture, unittest.TestCase
         return {call["args"]["name"]: call["args"] for call in self.calls("spawn")}
 
     def test_S3_a_gate_without_a_step_route_spawns_on_todays_effort(self):
-        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — the spawns carry the default: the reviewer high, the gaps medium."""
+        """orchestrator-engine/R2: orchestrator-routing-effort-role/S3 — the spawns carry the default: the reviewer high."""
         self.run_driver()
         spawns = self.spawns()
         self.assertEqual(spawns[REVIEW]["effort"], "high")
-        self.assertEqual(spawns[GAPS]["effort"], "medium")
 
     def test_S8_a_step_route_for_the_implementer_overrides_the_class_route(self):
         """orchestrator-engine/R2: orchestrator-routing-effort-role/S8 — the implementer's own step route answers, whatever the class says."""
@@ -206,7 +203,6 @@ class StepRouteBoundaryTests(RoutedRunFixture, ArchiveFixture, unittest.TestCase
                 steps=[
                     self.step("implementer", "pi", "minimax/MiniMax-M3.1-Flash", effort="max"),
                     self.step("reviewer", "codex", "gpt-l", effort="xhigh"),
-                    self.step("gaps", "pi", "minimax/MiniMax-M3.1-Flash", effort="low"),
                 ],
             )
         )
@@ -215,7 +211,6 @@ class StepRouteBoundaryTests(RoutedRunFixture, ArchiveFixture, unittest.TestCase
         for name, want in (
             (WORKER, ("pi", "minimax/MiniMax-M3.1-Flash", "max")),
             (REVIEW, ("codex", "gpt-l", "xhigh")),
-            (GAPS, ("pi", "minimax/MiniMax-M3.1-Flash", "low")),
         ):
             self.assertEqual(
                 (spawns[name]["cli"], spawns[name]["model"], spawns[name]["effort"]), want

@@ -6,7 +6,7 @@ evidence yet.
 placeholder is not a verdict, so a check holding it stays pending for a later poll instead of raising a fix round, and
 the finding that finally quotes a log quotes the failing step's own, never the placeholder.
 
-`driver.py` is already over the structure budget at its base and may not grow, so this reading lives here and the
+`driver.py` is already over the ruff size limits and may not grow, so this reading lives here and the
 driver only calls it: it passes itself for the `gh` seam and for the per-round cache of run logs.
 """
 

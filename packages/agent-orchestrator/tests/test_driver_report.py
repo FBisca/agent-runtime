@@ -36,7 +36,6 @@ class ReportHomeTests(unittest.TestCase):
     """S10: the reporting tables moved into their own module, and every published name resolves."""
 
     def test_S10_the_report_helpers_resolve_from_the_driver_package(self):
-        """structure-budget/S10"""
         from agent_orchestrator import driver
         from agent_orchestrator.driver import report
 

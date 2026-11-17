@@ -4,7 +4,7 @@ No model calls and no shell evaluation. Only `run` starts workers, and only thro
 
 The package is a facade: every engine collaborator lives in the module beside it - the state and its
 locks in `state.py`, the round in `lifecycle.py`, a worker's report and the Lead's answer in
-`answers.py` and `findings.py`, the routing in `routing.py`, the integration run in `integration.py`, what
+`answers.py` and `findings.py`, the routing in `routing.py`, the plan's acceptance in `acceptance.py`, what
 a unit delivered in `coverage.py`, the Lead's attention in `attention.py`, the handlers in
 `commands.py` - and the names below are re-exported so a caller, a test and the entry points keep
 asking `driver.<name>`.
@@ -17,6 +17,7 @@ __all__ = [
     "ARCHIVE_MENU",
     "ARCHIVE_REBUILDS",
     "ATTEMPT_LETTERS",
+    "Acceptance",
     "ATTENTION",
     "Answers",
     "Any",
@@ -40,7 +41,6 @@ __all__ = [
     "FAILURE_LINE",
     "Findings",
     "Gates",
-    "Integration",
     "IntentUnsettled",
     "JsonRefusal",
     "Lifecycle",
@@ -93,7 +93,6 @@ __all__ = [
     "add_run_command",
     "add_status_command",
     "add_task_commands",
-    "add_verify_command",
     "add_workbench_commands",
     "approval_recovery",
     "approval_refusal",
@@ -240,14 +239,12 @@ __all__ = [
     "terminal_gone",
     "time",
     "timeutil",
-    "tree_in",
     "unique_checks",
     "unit_attempt",
     "unit_attempts",
     "unit_summary",
     "unreadable_decision",
     "verify",
-    "verify_plan",
     "whole",
     "without_coverage",
     "workbench",
@@ -284,6 +281,8 @@ from ..plan import PlanError as PlanError
 from ..report_rules import require as require
 from ..report_rules import require_report as require_report
 from ..runtime_client import approval_refusal as approval_refusal
+from .acceptance import Acceptance as Acceptance
+from .acceptance import acceptance_context as acceptance_context
 from .answers import ARCHIVE_MENU as ARCHIVE_MENU
 from .answers import ARCHIVE_REBUILDS as ARCHIVE_REBUILDS
 from .answers import ATTEMPT_LETTERS as ATTEMPT_LETTERS
@@ -345,7 +344,6 @@ from .cli import add_plans_commands as add_plans_commands
 from .cli import add_run_command as add_run_command
 from .cli import add_status_command as add_status_command
 from .cli import add_task_commands as add_task_commands
-from .cli import add_verify_command as add_verify_command
 from .cli import add_workbench_commands as add_workbench_commands
 from .cli import build_parser as build_parser
 from .cli import main as main
@@ -360,7 +358,6 @@ from .commands import legacy_markdown_view as legacy_markdown_view
 from .commands import plan_status as plan_status
 from .commands import rebuild_evidence as rebuild_evidence
 from .commands import rebuild_metrics as rebuild_metrics
-from .commands import verify_plan as verify_plan
 from .coverage import Coverage as Coverage
 from .engine import Driver as Driver
 from .findings import Findings as Findings
@@ -368,9 +365,6 @@ from .gates import STEPS as STEPS
 from .gates import Gates as Gates
 from .gates import step_failed as step_failed
 from .handoff import recover_worker_report as recover_worker_report
-from .integration import Integration as Integration
-from .integration import acceptance_context as acceptance_context
-from .integration import tree_in as tree_in
 from .lifecycle import Lifecycle as Lifecycle
 from .lifecycle import metrics as metrics
 from .lifecycle import sum_usage as sum_usage

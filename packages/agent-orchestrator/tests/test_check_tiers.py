@@ -89,7 +89,7 @@ class CheckTiersBrief(RunFixture, unittest.TestCase):
         self.assertNotIn("full CI gate", brief)
         (full,) = [x for x in brief.splitlines() if "uv run pytest -n 4" in x]
         self.assertIn("do not run", full)
-        self.assertIn("verify", full)
+        self.assertIn("CI", full)
 
     def test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled(self):
         self.declare_tiers()
