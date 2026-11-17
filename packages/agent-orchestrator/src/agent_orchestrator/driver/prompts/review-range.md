@@ -1,0 +1,1 @@
+- Commit range: run `git -C $checkout diff $base...HEAD`

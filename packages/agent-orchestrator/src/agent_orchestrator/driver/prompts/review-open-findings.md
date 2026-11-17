@@ -1,0 +1,1 @@
+- Open blocking findings, not closed yet: $ids. Each stays open until this review closes it with a `resolutions` entry, whatever the delta shows; a passing review that leaves one open is refused. Their payloads are in $payloads.

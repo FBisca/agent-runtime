@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from .prompts import block, render
+
 
 def reference(base, value, role):
     """Resolve a typed reference before it is handed to a reader."""
@@ -108,40 +110,25 @@ def tdd_instruction():
 def task_text(self, _plan, ticket, packet, scenarios, task_dir):
     from . import CHECK_INSTRUCTIONS
 
-    gate = packet["checks"] or ["the repository's full CI gate"]
-    return "\n".join(
-        [
-            "Contract: %s" % (self.run_dir / "contract.md"),
-            "Report: %s" % (task_dir / "report.json"),
-            "",
-            "# %s: %s" % (ticket["#"], ticket["What it delivers"]),
-            "",
-            "Report with task_id `%s`: the driver refuses a report whose task_id is not this one."
-            % packet["task_id"],
-            "",
-            "Plan: %s (read its Decisions and Seams)." % self.plan_path,
-            "Checkout: %s on branch feat/%s (new, from %s). Work only here."
-            % (packet["checkout"], packet["worker"], self.args.base),
-            "Checkout contents: %s" % collection(packet["checkout"]),
-            "Scope contents: %s" % owned_collections(packet["checkout"], packet["owns"]),
-            "Owns (edit nothing else): %s." % owned_scope(packet["checkout"], packet["owns"]),
-            "Shared databases are read-only; schema changes go through migrations in your own branch.",
-            "",
-            "Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists; keep that failing output for the report's `red`.",
-            tdd_instruction(),
-            "",
-            *scenarios,
-            "",
-            "Before you report COMPLETE, run: " + "; ".join(gate) + ".",
-            CHECK_INSTRUCTIONS,
-            *(
-                [
-                    "`%s` is the whole suite: do not run it; CI runs it." % packet["full"],
-                ]
-                if packet.get("full")
-                else []
-            ),
-            "Then open a draft pull request against %s." % self.args.base.partition("/")[2],
-            "",
-        ]
+    task_id, checkout = packet["task_id"], packet["checkout"]
+    return render(
+        "task",
+        contract=self.run_dir / "contract.md",
+        report=task_dir / "report.json",
+        ticket=ticket["#"],
+        delivers=ticket["What it delivers"],
+        task_id=task_id,
+        plan=self.plan_path,
+        checkout=checkout,
+        worker=packet["worker"],
+        base=self.args.base,
+        checkout_contents=collection(checkout),
+        scope_contents=owned_collections(checkout, packet["owns"]),
+        owns=owned_scope(checkout, packet["owns"]),
+        tdd=tdd_instruction(),
+        scenarios="\n".join(scenarios),
+        checks="; ".join(packet["checks"] or ["the repository's full CI gate"]),
+        check_instructions=CHECK_INSTRUCTIONS,
+        full_suite=block("task-full-suite", full=packet["full"]) if packet.get("full") else "",
+        pr_base=self.args.base.partition("/")[2],
     )

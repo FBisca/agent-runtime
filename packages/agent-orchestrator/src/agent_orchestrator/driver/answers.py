@@ -23,6 +23,7 @@ from .. import contracts, narrate
 from ..invariants import next_path
 from ..timeutil import iso as now
 from .book import ARCHIVE, checkpoint
+from .prompts import render
 from .report import cell
 from .state import JsonRefusal, Refused, numbered, write_atomic
 from .watch import (
@@ -738,18 +739,12 @@ class Answers:
         directory = self.run_dir / directory_id
         brief = next_path(directory, "missing", ".md")[0]
         brief.write_text(
-            "\n".join(
-                [
-                    "# Missing responses for %s" % directory_id,
-                    "",
-                    "Your report %s has no response for the answer_required finding(s): %s."
-                    % (report_path, ", ".join(missing)),
-                    "Write %s: a full report (same shape, task_id `%s`) whose `responses` answer them, each "
-                    '`{"id", "status": "fixed|disputed", "commit", "note", "changes_code"?}`.'
-                    % (next_path(directory, "report", ".json")[0], directory_id),
-                    "Change nothing else.",
-                    "",
-                ]
+            render(
+                "missing-responses",
+                directory_id=directory_id,
+                report_path=report_path,
+                missing=", ".join(missing),
+                next_report=next_path(directory, "report", ".json")[0],
             ),
             encoding="utf-8",
         )
