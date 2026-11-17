@@ -16,7 +16,11 @@ from string import Template
 
 
 def _text(name):
-    return files(__package__).joinpath("prompts", name + ".md").read_text(encoding="utf-8")
+    return (
+        files("agent_orchestrator.driver")
+        .joinpath("prompts", name + ".md")
+        .read_text(encoding="utf-8")
+    )
 
 
 def render(name, **values):
