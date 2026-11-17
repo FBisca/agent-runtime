@@ -57,3 +57,9 @@ tickets:
   difficulty: simple
   risk:
   - external
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-17T16:03:08.129028+00:00'
+  base: 08864905f7b5c093c2c13ac40b2a6927730e8be9
+  digest: 65f5f696eb988e707318ce6854cb924fd6c3cd7a54fee083bcb4d7748c1f4689
+  reason: plan/2 conversion

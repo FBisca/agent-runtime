@@ -33,3 +33,9 @@ tickets:
   difficulty: complex
   risk:
   - state
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-17T16:03:07.616045+00:00'
+  base: 08864905f7b5c093c2c13ac40b2a6927730e8be9
+  digest: 9247444a6e9aaed7a7efbf93e58a5e4a49324aae3cecd448c8edd908f97a6942
+  reason: plan/2 conversion
