@@ -221,6 +221,10 @@ A reviewer SHALL hand in its verdict as the text of its agent-runtime `report` c
 ### Requirement: A refused verdict goes back to its reviewer
 The driver SHALL return a verdict whose shape is wrong to the same reviewer at once with the exact errors, and ask the Lead only after the third refusal.
 
+#### Scenario: prose beside the JSON
+- WHEN a reviewer's report text is the verdict JSON followed by prose (a worker's "files changed, checks, decisions, remaining work" block)
+- THEN the verdict is refused like any wrong shape, the review brief and the refusal both tell the reviewer the report text is the verdict JSON alone, and the parser stays strict
+
 #### Scenario: a wrong shape
 - WHEN a verdict is not JSON, has an unknown field, a finding without `quote`, `claim`, `file` or a positive `line`, or blocks with no finding
 - THEN the driver appends a `review-refused` event with the reason and the payload, messages the same reviewer every error, writes no Lead request, and the corrected verdict is read as usual
@@ -313,6 +317,24 @@ A CI failure that does not also fail on the base branch SHALL go back to the uni
 #### Scenario: failing three times
 - WHEN the same gate has failed three times
 - THEN the Lead is asked
+
+### Requirement: Failures are counted per gate
+The driver SHALL ask the Lead for a unit once one gate (one source: verify, review, ci, conflict) has failed more often than the unit's fix-round cap, counting each gate's failures apart from the others.
+
+#### Scenario: different gates do not add up
+- WHEN a unit's review blocks once and a later gate of another source (a conflict) fails once, with a cap of one fix round
+- THEN each failure takes its own fix round, the second round is numbered 2, and no request is raised
+
+#### Scenario: the same gate failing again
+- WHEN one gate fails a unit for the third time under the default cap of two fix rounds
+- THEN the Lead is asked, and the request names the gate and its count
+
+### Requirement: A fix round never reuses a task id
+The driver SHALL name a fix round with a task id the ledger does not hold, and keep that id across a restart of the step.
+
+#### Scenario: the round's number is taken
+- WHEN the ledger already holds a record under `<unit>r<round>` (left by a driver restart)
+- THEN the fix round takes the next free `<unit>r<n>`, the Lead's decisions never fail on "task ID already has a different assignment", and a restart of the step reuses the id it booked
 
 ### Requirement: A failed check that also fails on main asks the Lead once
 A check that fails on the base branch as well as in a ticket SHALL cost the Lead one request for the whole run, not one per ticket.

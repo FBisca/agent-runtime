@@ -86,7 +86,7 @@ class RequestTests(WakeFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assert_request("gate", "failed its gates 3 times")
+        self.assert_request("gate", "failed its verify gate 3 times")
         self.assertEqual(len(self.calls("resume")), 2)  # two fix rounds, no third
 
     def test_S1_a_worker_that_ends_without_a_valid_report_writes_a_request(self):

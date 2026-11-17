@@ -449,7 +449,7 @@ class Gates:
             fix = dict(fix, draft=None)
             self.mark(task_id, fix=fix)
         unit, attempt = packet["unit"], fix["attempt"]
-        new_id = "%sr%d" % (unit, attempt)
+        new_id = self._fix_task_id(task, unit, attempt)
         new_dir = self.run_dir / new_id
         new_dir.mkdir(exist_ok=True, mode=0o700)
         findings, findings_path = self._fix_findings(task_id, fix, attempt, new_dir)
@@ -482,6 +482,21 @@ class Gates:
             "fix round for %s from %s findings" % (packet["worker"], fix["source"]),
             task=new_id,
         )
+
+    def _fix_task_id(self, task, unit, attempt):
+        """The round's task id: `<unit>r<attempt>`, or the next one the ledger does not hold (a restart can leave
+        records under the round's number). Booked on the task before anything is sent, so a restarted step reuses it."""
+        if task.get("fix_task"):
+            return task["fix_task"]
+        with self.book() as data:
+            taken = set(data["tasks"])
+        new_id = next(
+            "%sr%d" % (unit, n)
+            for n in range(attempt, attempt + 1000)
+            if "%sr%d" % (unit, n) not in taken
+        )
+        self.mark(task["packet"]["task_id"], fix_task=new_id)
+        return new_id
 
     def _fix_findings(self, task_id, fix, attempt, new_dir):
         """The round's findings file, written once and read back before anyone works from it. A file the

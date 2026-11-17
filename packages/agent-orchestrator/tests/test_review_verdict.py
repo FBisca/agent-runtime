@@ -104,6 +104,20 @@ class RefusalTests(ReviewerFixture, unittest.TestCase):
         self.assertEqual(self.run_events("round"), [])
 
     @pytest.mark.spec("A refused verdict goes back to its reviewer")
+    def test_prose_after_the_verdict_json_is_refused_and_the_reviewer_is_told_to_send_the_json_alone(
+        self,
+    ):
+        verdict = json.dumps({"verdict": "pass", "findings": []})
+        prose = verdict + "\n\nfiles changed: none\nchecks: none\nremaining work: none"
+        self.waits([self.worker_done(tests=True), self.reviewer_done(prose), self.reviewer_again()])
+        self.run_driver()
+        (refused,) = self.run_events("review-refused")
+        self.assertIn("Extra data", refused["reason"])
+        (told,) = [c["task"] for c in self.reviewer_calls()]
+        self.assertIn("verdict JSON alone", told)
+        self.assertEqual([e["verdict"] for e in self.run_events("review")], ["pass"])
+
+    @pytest.mark.spec("A refused verdict goes back to its reviewer")
     def test_the_third_refusal_asks_the_lead(self):
         self.waits(
             [
