@@ -623,7 +623,7 @@ def report_crash(driver, error):
     print(text, file=sys.stderr, flush=True)
     try:
         if getattr(driver, "run_dir", None) is None:  # it crashed before it knew its run directory
-            driver.run_dir = _engine().locate_state(
+            driver.run_dir = _engine().state_layout(
                 driver.args.state_dir, driver.plan_path, driver.repo, driver.slug
             )[1]
             driver.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

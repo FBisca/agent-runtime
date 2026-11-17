@@ -31,7 +31,7 @@ from .records import is_agent, ready, satisfied, terminal_gone
 from .report import cell, metrics_table, show
 from .routing import CONTRACT, worker_name
 from .runtime import runtime_call
-from .state import enter_plan_state, legacy_imports, locate_state
+from .state import enter_plan_state, legacy_imports, state_layout
 
 
 def metrics(samples):
@@ -138,8 +138,8 @@ class Lifecycle:
         self.slug = plan["slug"]
         self.brain_cli = getattr(self.args, "brain_cli", None)
         # The run directory is only named once the routes are settled: a run that stops here has not started.
-        self.ledger_path, run_dir = locate_state(
-            self.args.state_dir, self.plan_path, self.repo, self.slug, importing=True
+        self.ledger_path, run_dir = state_layout(
+            self.args.state_dir, self.plan_path, self.repo, self.slug
         )
         pinned = self.recorded_routes()
         self.added_steps = {}

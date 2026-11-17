@@ -1,6 +1,5 @@
 """A YAML plan's ledger is keyed by repository and slug: two repositories may run the same slug."""
 
-import argparse
 import json
 import shutil
 import unittest
@@ -61,75 +60,3 @@ class StateKeyTests(StateKeyFixture, unittest.TestCase):
         self.git(self.repo, "worktree", "add", "-q", "--detach", str(worktree))
         self.assertEqual(spec.repo_key(worktree), self.key)
         self.assertTrue(self.key.startswith("repo-"), self.key)
-
-    @pytest.mark.spec("Ledger and status")
-    def test_S8_the_old_ledger_is_imported_once_into_the_repository_that_owns_it(self):
-        """plan-contract/S8: <state>/<slug>.json goes to the repository whose tickets it holds, one time"""
-        self.drive(self.repo2, self.plan2)
-        # What an older driver left: the same files, one level up, under the repository's slug alone.
-        keyed = self.state_dir / self.key2
-        (keyed / "demo.json").rename(self.state_dir / "demo.json")
-        (keyed / "demo").rename(self.state_dir / "demo")
-        shutil.rmtree(keyed)
-        legacy = json.loads((self.state_dir / "demo.json").read_text(encoding="utf-8"))
-        legacy["marker"] = "old"
-        (self.state_dir / "demo.json").write_text(json.dumps(legacy), encoding="utf-8")
-        (self.state_dir / "demo" / "old.txt").write_text("from the old run", encoding="utf-8")
-
-        self.drive(self.repo, self.plan)  # another repository's run does not take it
-        self.assertTrue((self.state_dir / "demo.json").is_file())
-        self.assertNotIn("marker", self.ledger_of(self.key))
-
-        self.drive(self.repo2, self.plan2, expect=1)  # its owner does
-        self.assertFalse((self.state_dir / "demo.json").exists())
-        self.assertFalse((self.state_dir / "demo").exists())
-        self.assertEqual(self.ledger_of(self.key2)["marker"], "old")
-        self.assertEqual(
-            (self.state_dir / self.key2 / "demo" / "old.txt").read_text(encoding="utf-8"),
-            "from the old run",
-        )
-
-        # once: a ledger written under the old key later is not imported over the new one
-        (self.state_dir / "demo.json").write_text(
-            json.dumps(dict(legacy, marker="again")), encoding="utf-8"
-        )
-        self.drive(self.repo2, self.plan2, expect=1)
-        self.assertEqual(self.ledger_of(self.key2)["marker"], "old")
-        self.assertTrue((self.state_dir / "demo.json").is_file())
-
-    def old_key_of_repo2(self):
-        """What an older driver left for repo2: the same files, one level up, under the slug alone."""
-        self.drive(self.repo2, self.plan2)
-        keyed = self.state_dir / self.key2
-        (keyed / "demo.json").rename(self.state_dir / "demo.json")
-        (keyed / "demo").rename(self.state_dir / "demo")
-        shutil.rmtree(keyed)
-
-    @pytest.mark.spec("Ledger and status")
-    def test_S8_a_lead_command_leaves_the_old_ledger_where_a_live_driver_reads_it(self):
-        """plan-contract/S8: only `run` imports; `await`/`decide` resolve the old key in place, run lock held"""
-        self.old_key_of_repo2()
-        spec = load_script()
-        args = argparse.Namespace(plan=str(self.plan2), state_dir=str(self.state_dir), repo=None)
-        with spec.run_lock(self.repo2, "demo", self.plan2):  # the live driver
-            slug, ledger_path, run_dir = spec.plan_home(args)
-            self.assertEqual(spec.run_dir_of(args), run_dir)
-        self.assertEqual(
-            (ledger_path, run_dir), (self.state_dir / "demo.json", self.state_dir / "demo")
-        )
-        self.assertTrue((self.state_dir / "demo.json").is_file())
-        self.assertTrue((self.state_dir / "demo").is_dir())
-        self.assertFalse((self.state_dir / self.key2).exists())
-
-    @pytest.mark.spec("Ledger and status")
-    def test_S8_the_import_refuses_while_a_driver_holds_the_old_ledger(self):
-        """plan-contract/S8: the old ledger's lock is taken before the move; a live holder is named, nothing moves"""
-        self.old_key_of_repo2()
-        spec = load_script()
-        keyed, run_dir = spec.state_layout(self.state_dir, self.plan2, self.repo2, "demo")
-        with spec.ledger(self.state_dir / "demo.json"):  # the old driver mid-update
-            with self.assertRaisesRegex(spec.PlanError, "demo.*live driver"):
-                spec.import_old_ledger(self.state_dir, self.repo2, "demo", keyed, run_dir)
-        self.assertTrue((self.state_dir / "demo.json").is_file())
-        self.assertTrue((self.state_dir / "demo").is_dir())
-        self.assertFalse(keyed.exists())

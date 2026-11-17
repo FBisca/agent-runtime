@@ -20,18 +20,11 @@ class LockHeld(PlanError):
 
 
 def ledger_path(repo, slug, state_dir):
-    """The ledger path of a plan: `<state>/<repo-key>/<slug>.json` (D17).
-
-    A ledger an older driver wrote under `<state>/<slug>.json` is imported first when this repository owns it, so
-    creating the ledger here never hides it."""
+    """The ledger path of a plan: `<state>/<repo-key>/<slug>.json` (D17)."""
     # The driver owns the state key and imports this module, so it is imported late.
     from . import driver
 
-    state = Path(state_dir).expanduser()
-    keyed = state / driver.repo_key(repo)
-    ledger, run_dir = keyed / (slug + ".json"), keyed / slug
-    driver.import_old_ledger(state, repo, slug, ledger, run_dir)
-    return ledger
+    return driver.state_layout(state_dir, None, repo, slug)[0]
 
 
 @contextmanager

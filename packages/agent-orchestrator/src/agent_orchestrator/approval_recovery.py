@@ -79,12 +79,9 @@ def recorded_approval(repo, slug, state_dir):
     # The state key is the driver's, and the driver imports this module.
     from . import driver
 
-    state = Path(state_dir).expanduser()
-    for path in (state / driver.repo_key(repo) / (slug + ".json"), state / (slug + ".json")):
-        approval = (ledgers.snapshot(path) or {}).get("approval")
-        if isinstance(approval, dict) and approval:
-            return approval
-    return None
+    path = driver.state_layout(state_dir, None, repo, slug)[0]
+    approval = (ledgers.snapshot(path) or {}).get("approval")
+    return approval if isinstance(approval, dict) and approval else None
 
 
 def ledger_approval(drive):

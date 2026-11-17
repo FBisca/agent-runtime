@@ -164,7 +164,7 @@ def listing(entry, repo, args):
     if status:
         ledger, run_dir = Path(status["ledger"]), Path(status["run_dir"])
     else:
-        ledger, run_dir = driver.locate_state(args.state_dir, path, repo, entry["slug"])
+        ledger, run_dir = driver.state_layout(args.state_dir, path, repo, entry["slug"])
     group = workbench_needs.group_of(
         shown["state"], markdown, None if status else workbench_needs.ledger_state_of(ledger)
     )
@@ -240,7 +240,7 @@ def totals_source(entry, repo, args):
         slug = status["slug"]
     else:
         slug = entry["slug"]
-        ledger, run_dir = driver.locate_state(args.state_dir, path, repo, slug)
+        ledger, run_dir = driver.state_layout(args.state_dir, path, repo, slug)
         ids = []
     data = {}
     if ledger.is_file():
