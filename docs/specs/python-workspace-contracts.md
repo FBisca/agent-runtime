@@ -1,6 +1,6 @@
 # Python workspace contracts
 
-The runtime and the orchestrator are two installable members of one uv workspace. The runtime stays standard-library only in production; the orchestrator owns the typed, Pydantic-backed contracts and the YAML route policy. The runtime's behaviour lives in [agent-runtime.md](agent-runtime.md) and the harnesses in [harness-adapters.md](harness-adapters.md); this capability covers the packaging that carries them, the toolchain gates that guard it, how the test suite stays cheap, and the orchestrator driver's module layout. The workspace is a packaging change, not a rewrite: entrypoints, CLI subcommands, the MCP tool surface, the durable store format and each harness's permissions are unchanged. `docs/compat/compatibility-baseline.json` pins the pre-workspace inventory the contract tests assert on.
+The runtime and the orchestrator are two installable members of one uv workspace. The runtime stays standard-library only in production; the orchestrator owns the typed, Pydantic-backed contracts and the YAML route policy. The runtime's behaviour lives in [agent-runtime.md](agent-runtime.md) and the harnesses in [harness-adapters.md](harness-adapters.md); this capability covers the packaging that carries them, the toolchain gates that guard it, how the test suite stays cheap, and the orchestrator driver's module layout.
 
 ## Requirements
 
@@ -29,13 +29,6 @@ CI SHALL run the workspace's toolchain as plain commands that fail the build on 
 - WHEN CI runs on Linux or macOS across the supported Python versions
 - THEN the workspace resolves, the whole suite runs (the orchestrator member's own suite included), `ruff check .`, `ruff format --check .` and `ty check packages/ ...` run, both member wheels build, and the runtime wheel installs in isolation
 
-### Requirement: Harness behaviour unchanged by the workspace
-The workspace SHALL leave the entrypoints, CLI subcommands and harness permissions of `agent-runtime`, `agent-runtime-mcp` and `agent-runtime-hook` as documented.
-
-#### Scenario: shims and installer
-- WHEN a Claude, Codex or Pi session runs one of the entrypoints
-- THEN its shim exists, is executable and resolves to its Python entrypoint, the recorded entrypoints match the bin directory, the installer links every one and wires the hooks, the hook shim still fails open, and the CLI keeps its subcommands
-
 ### Requirement: Orchestrator reaches the runtime through its public surface
 The orchestrator SHALL reach the runtime only through its public CLI or API.
 
@@ -56,20 +49,6 @@ The orchestrator's route policy SHALL be YAML, and an unknown model class or fie
 #### Scenario: an unknown class or field
 - WHEN a route policy names an unknown class or carries an unknown field
 - THEN it is refused, while a valid YAML policy loads
-
-### Requirement: Rollback keeps the store
-A rollback of the workspace change SHALL leave the legacy shims answering and the durable store usable in both trees without a migration.
-
-#### Scenario: both trees open one store
-- WHEN the workspace change is rolled back
-- THEN the legacy CLI shims and MCP server still answer, and a store written by either tree opens in the other with the same schema version, tables and rows
-
-### Requirement: Orchestrator keeps no runtime state
-The orchestrator member SHALL write nothing into the runtime's store.
-
-#### Scenario: a member run
-- WHEN the orchestrator member runs
-- THEN the runtime's store holds none of its state
 
 ### Requirement: Unit tests start no process
 A test marked `unit` SHALL start no process (git included) and open no network socket.

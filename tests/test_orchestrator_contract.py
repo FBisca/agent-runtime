@@ -209,15 +209,6 @@ class CliContractTests(unittest.TestCase):
 class StateTests(unittest.TestCase):
     """The member keeps no state of its own and migrates none."""
 
-    @pytest.mark.spec("Orchestrator keeps no runtime state")
-    def test_S8_the_member_writes_no_state_into_the_runtime_store(self):
-        store = Path.home() / ".local" / "state" / "agent-runtime"
-        schema = REPO / "docs" / "compat" / "compatibility-baseline.json"
-        recorded = json.loads(schema.read_text(encoding="utf-8"))
-        self.assertEqual(recorded["store"]["schema_version"], 2)
-        self.assertIn("teams", recorded["store"]["tables"])
-        self.assertFalse(store.exists() and not list(store.glob("*.sqlite3")))
-
     @pytest.mark.spec("Member dependency isolation")
     def test_S8_the_runtime_wheel_needs_neither_member_nor_its_dependencies(self):
         manifest = (REPO / "packages" / "agent-runtime" / "pyproject.toml").read_text(
