@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck install.sh scripts/*.sh bin/*
+      - run: shellcheck install.sh scripts/*.sh bin/* .githooks/*
       # The build refuses a tag that is not the version the checkout ships, so a mistyped tag
       # publishes nothing.
       - name: build the release assets

@@ -49,7 +49,7 @@ Name the file, not how to find it; refuse a pointer that resolves to nothing or 
 - Classify tests by behaviour, not filename. Never weaken or reclassify tests just to improve speed.
 
 [uv](https://docs.astral.sh/uv/) and pytest are the testing workflow. `uv sync --frozen --all-packages`
-sets the environment up from a fresh checkout; `uv run pytest` is the canonical command.
+sets the environment up from a fresh checkout, and `git config core.hooksPath .githooks` turns on the pre-commit hook that runs CI's ruff steps on staged Python; `uv run pytest` is the canonical command.
 
 | Command | What it runs |
 |---|---|
