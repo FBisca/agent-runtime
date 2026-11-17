@@ -71,6 +71,28 @@ def owned_scope(checkout, paths):
     return ", ".join(result)
 
 
+TDD_SKILL_ENV = "AGENT_RUNTIME_TDD_SKILL"
+
+
+TDD_SKILL_PLACES = ("~/.agents/skills/tdd/SKILL.md", "~/.claude/skills/tdd/SKILL.md")
+
+
+def tdd_skill_path(env=None):
+    """The `tdd` skill's SKILL.md: the environment's path, else the places a host installs it.
+
+    A backend with no skill loader still gets the admission and cost rules in the contract; this
+    path is what a Claude or Pi worker reads before its first edit."""
+    env = os.environ if env is None else env
+    named = env.get(TDD_SKILL_ENV)
+    if named:
+        return named
+    for place in TDD_SKILL_PLACES:
+        path = Path(os.path.expanduser(place))
+        if path.is_file():
+            return str(path)
+    return None
+
+
 def tdd_instruction():
     from . import tdd_skill_path
 

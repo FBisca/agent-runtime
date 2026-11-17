@@ -34,6 +34,7 @@ __all__ = [
     "DECISION_KEYS",
     "DRIVER_ID",
     "DRIVER_MARKS",
+    "Dispatch",
     "Driver",
     "FAILURE_LINE",
     "Findings",
@@ -311,6 +312,7 @@ from .book import settle_merged as settle_merged
 from .book import snapshot_of as snapshot_of
 from .book import task_summary as task_summary
 from .book import unit_summary as unit_summary
+from .book import worker_name as worker_name
 from .briefs import Briefs as Briefs
 from .cli import BUILDERS as BUILDERS
 from .cli import add_await_command as add_await_command
@@ -331,14 +333,18 @@ from .cli import add_workbench_commands as add_workbench_commands
 from .cli import build_parser as build_parser
 from .cli import main as main
 from .cli import run_cli as run_cli
+from .commands import CHECKS_WARNING as CHECKS_WARNING
 from .commands import await_wake as await_wake
 from .commands import complete_person_ticket as complete_person_ticket
 from .commands import dispatch as dispatch
 from .commands import drive as drive
 from .commands import drive_locked as drive_locked
+from .commands import forwarded as forwarded
 from .commands import launch as launch
 from .commands import legacy_markdown_view as legacy_markdown_view
+from .commands import live_terminals as live_terminals
 from .commands import plan_status as plan_status
+from .commands import read_repo_config as read_repo_config
 from .commands import rebuild_evidence as rebuild_evidence
 from .commands import rebuild_metrics as rebuild_metrics
 from .engine import Driver as Driver
@@ -350,6 +356,8 @@ from .handoff import recover_worker_report as recover_worker_report
 from .lifecycle import Lifecycle as Lifecycle
 from .lifecycle import metrics as metrics
 from .lifecycle import sum_usage as sum_usage
+from .pointers import TDD_SKILL_ENV as TDD_SKILL_ENV
+from .pointers import TDD_SKILL_PLACES as TDD_SKILL_PLACES
 from .pointers import collection as collection
 from .pointers import named_collection as named_collection
 from .pointers import owned_collections as owned_collections
@@ -357,6 +365,7 @@ from .pointers import owned_scope as owned_scope
 from .pointers import reference as reference
 from .pointers import task_text as task_text
 from .pointers import tdd_instruction as tdd_instruction
+from .pointers import tdd_skill_path as tdd_skill_path
 from .prune import sweep as sweep
 from .pull import CI_EXCERPT_CHARS as CI_EXCERPT_CHARS
 from .pull import Pull as Pull
@@ -400,24 +409,7 @@ from .report import short as short
 from .report import show as show
 from .review import attempt_trail as attempt_trail
 from .review import review_brief as review_brief
-from .routing import CHECKS_WARNING as CHECKS_WARNING
-from .routing import CONTRACT as CONTRACT
-from .routing import MATRIX as MATRIX
-from .routing import TDD_SKILL_ENV as TDD_SKILL_ENV
-from .routing import TDD_SKILL_PLACES as TDD_SKILL_PLACES
 from .routing import Routes as Routes
-from .routing import forwarded as forwarded
-from .routing import is_yaml as is_yaml
-from .routing import live_terminals as live_terminals
-from .routing import load_approved as load_approved
-from .routing import pane_name as pane_name
-from .routing import read_repo_config as read_repo_config
-from .routing import repo_key as repo_key
-from .routing import repo_root as repo_root
-from .routing import require_yaml as require_yaml
-from .routing import snapshot_dir as snapshot_dir
-from .routing import tdd_skill_path as tdd_skill_path
-from .routing import worker_name as worker_name
 from .runtime import TREE_TIMEOUT as TREE_TIMEOUT
 from .runtime import checkout_snapshot as checkout_snapshot
 from .runtime import gh_process as gh_process
@@ -435,21 +427,30 @@ from .state import Refused as Refused
 from .state import await_lock_path as await_lock_path
 from .state import driver_gone as driver_gone
 from .state import enter_plan_state as enter_plan_state
+from .state import is_yaml as is_yaml
 from .state import last_mark as last_mark
 from .state import legacy_imports as legacy_imports
+from .state import load_approved as load_approved
 from .state import lock_held as lock_held
 from .state import numbered as numbered
 from .state import plan_home as plan_home
 from .state import plan_slug as plan_slug
 from .state import read_ledger_file as read_ledger_file
+from .state import repo_key as repo_key
+from .state import repo_root as repo_root
+from .state import require_yaml as require_yaml
 from .state import run_dir_of as run_dir_of
 from .state import run_finished as run_finished
 from .state import run_lock as run_lock
 from .state import run_lock_path as run_lock_path
+from .state import snapshot_dir as snapshot_dir
 from .state import split_status as split_status
 from .state import state_layout as state_layout
 from .state import take_wake as take_wake
 from .state import write_atomic as write_atomic
+from .ticket_dispatch import CONTRACT as CONTRACT
+from .ticket_dispatch import MATRIX as MATRIX
+from .ticket_dispatch import Dispatch as Dispatch
 from .verdict import ATTENTION as ATTENTION
 from .verdict import SILENT as SILENT
 from .verdict import TURN_ENDED as TURN_ENDED
@@ -461,6 +462,7 @@ from .watch import PAYLOAD_WARNINGS as PAYLOAD_WARNINGS
 from .watch import Attention as Attention
 from .watch import archive_retry_allowed as archive_retry_allowed
 from .watch import archive_retry_refusal as archive_retry_refusal
+from .watch import pane_name as pane_name
 from .watch import payload_waits as payload_waits
 from .watch import plan_state_of as plan_state_of
 from .watch import read_json as read_json

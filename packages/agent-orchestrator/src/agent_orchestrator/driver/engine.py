@@ -35,10 +35,11 @@ from .gates import Gates
 from .lifecycle import Lifecycle
 from .pull import Pull, PullSurface
 from .report import cell
-from .routing import Routes, load_approved, require_yaml
+from .routing import Routes
 from .runtime import runtime_call
 from .spawn import Spawning, SpawnSurface
-from .state import state_layout
+from .state import load_approved, require_yaml, state_layout
+from .ticket_dispatch import Dispatch
 from .watch import Attention
 
 
@@ -53,6 +54,7 @@ def _engine():
 
 class Driver(
     Routes,
+    Dispatch,
     Answers,
     Briefs,
     Attention,

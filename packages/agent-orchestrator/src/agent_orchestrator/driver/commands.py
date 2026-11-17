@@ -34,23 +34,16 @@ from .engine import Driver
 from .lifecycle import metrics
 from .records import context_verdict, split_row
 from .report import render_status
-from .routing import (
-    CHECKS_WARNING,
-    forwarded,
-    is_yaml,
-    live_terminals,
-    load_approved,
-    pane_name,
-    read_repo_config,
-    repo_root,
-    require_yaml,
-)
 from .state import (
     Refused,
     await_lock_path,
     driver_gone,
+    is_yaml,
     legacy_imports,
+    load_approved,
     read_ledger_file,
+    repo_root,
+    require_yaml,
     run_dir_of,
     run_finished,
     run_lock,
@@ -58,7 +51,69 @@ from .state import (
     state_layout,
     take_wake,
 )
-from .watch import read_json
+from .watch import pane_name, read_json
+
+CHECKS_WARNING = (
+    "plan check: %s declares no checks node — add checks.fast, checks.affected and checks.full "
+    "to brief workers with the cheap check tiers; until then workers run the repository's full CI "
+    "gate (or the --gate commands)"
+)
+
+
+def live_terminals():
+    """Names of the live Herdr terminals. `hc ls --json` is {"terminals": [{"name"?, "state", …}], …}."""
+    result = subprocess.run(["hc", "ls", "--json"], capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise ValueError(
+            "hc ls failed (exit %d): %s"
+            % (result.returncode, (result.stderr or result.stdout).strip())
+        )
+    try:
+        rows = json.loads(result.stdout or "{}").get("terminals", [])
+    except ValueError as error:
+        raise ValueError("hc ls printed no JSON: %s" % error) from None
+    return {
+        row["name"]
+        for row in rows
+        if isinstance(row, dict) and row.get("name") and row.get("state") == "live"
+    }
+
+
+def forwarded(argv, option):
+    """The value of `option V` or `option=V` among arguments `launch` forwards to `run`, else None."""
+    for index, item in enumerate(argv):
+        if item == option and index + 1 < len(argv):
+            return argv[index + 1]
+        if item.startswith(option + "="):
+            return item[len(option) + 1 :]
+    return None
+
+
+def read_repo_config(args):
+    """Every command that names a plan reads the repo's config, so a bad key refuses before any work.
+
+    A plan outside any repository, with no --repo, has no config to read."""
+    plan = getattr(args, "plan", None)
+    if args.command == "plan" and getattr(args, "plan_command", None) == "schema":
+        return
+    if not plan or args.command not in (
+        "plan",
+        "status",
+        "run",
+        "complete",
+        "launch",
+    ):
+        return None
+    where = Path(args.repo).resolve() if args.repo else Path(plan).resolve().parent
+    found = subprocess.run(
+        ["git", "-C", str(where), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if found.returncode == 0:
+        return yaml_plan.repo_config(Path(found.stdout.strip()).resolve())
+    return None
 
 
 def _engine():

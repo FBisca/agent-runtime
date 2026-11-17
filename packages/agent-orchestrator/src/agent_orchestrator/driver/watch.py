@@ -26,7 +26,6 @@ from ..report_rules import require
 from .handoff import recover_worker_report
 from .records import is_agent, ready
 from .report import cell
-from .routing import pane_name
 from .verdict import ATTENTION, VERDICTS, attention
 
 
@@ -104,6 +103,11 @@ def plan_state_of(ledger_path):
     except (OSError, ValueError):
         return None
     return (data.get("plan") or {}).get("state")
+
+
+def pane_name(slug):
+    """hc names allow a-z 0-9 - _ (1-32), so the pane is `orchestrate-<slug>`, not `orchestrate:<slug>`."""
+    return ("orchestrate-" + slug)[:32].rstrip("-")
 
 
 class Attention:  # noqa: PLR0904
