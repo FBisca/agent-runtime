@@ -1,5 +1,6 @@
 """R248: the ruff PLR09 limits are the one structure gate, and a function over one fails the check."""
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -37,6 +38,11 @@ class RuffSizeLimitTests(unittest.TestCase):
                     "ruff",
                     "check",
                     "--no-cache",
+                    # Codes in JSON, not the text format: preview rules print their names there.
+                    "--output-format",
+                    "json",
+                    "--select",
+                    "PLR0912,PLR0913,PLR0915,PLR0904",
                     "--config",
                     str(ROOT / "pyproject.toml"),
                     str(fixture),
@@ -47,10 +53,21 @@ class RuffSizeLimitTests(unittest.TestCase):
                 timeout=120,
             )
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        for code in ("PLR0912", "PLR0913", "PLR0915", "PLR0904"):
-            self.assertIn(code, done.stdout)
-        for name in ("branchy", "wide", "long", "Wide"):
-            self.assertIn(name, done.stdout)
+        # Each diagnostic sits on the line that defines the offender, where a suppression would go.
+        lines = OVER_THE_LIMITS.splitlines()
+        found = {
+            diagnostic["code"]: lines[diagnostic["location"]["row"] - 1]
+            for diagnostic in json.loads(done.stdout)
+        }
+        self.assertEqual(
+            found,
+            {
+                "PLR0912": "def branchy(x):",
+                "PLR0913": "def wide(a, b, c, d, e, f, g, h):",
+                "PLR0915": "def long():",
+                "PLR0904": "class Wide:",
+            },
+        )
 
 
 if __name__ == "__main__":
