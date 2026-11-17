@@ -86,24 +86,18 @@ class EngineHomeTests(unittest.TestCase):
                 copies.append(path.relative_to(REPO).as_posix())
         self.assertEqual(copies, [])  # the Markdown plan reader is gone: no source defines it
 
-    def test_S3_ci_runs_the_member_suite_and_the_tracked_budgets(self):
+    def test_S3_ci_runs_the_member_suite_and_the_plain_gates(self):
         """orchestrator-engine/R3"""
         workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("uv run pytest -n 4", workflow)
-        self.assertIn("suite_budget.py", workflow)
-        # The suite's cost is held to two absolute ceilings, so the step reads the junit the run
-        # already wrote and takes no base measurement of its own.
-        one_line = " ".join(workflow.split())
-        self.assertIn('python3 scripts/suite_budget.py --junit "$RUNNER_TEMP/suite.xml"', one_line)
-        # The budget's base is a revision of the change, so the checkout must hold the history: a
+        # The checkout must hold the history: a
         # depth-1 checkout resolves neither a pull request's base nor the tip a push replaces.
         after_checkout = workflow.split("uses: actions/checkout@v4", 1)[1]
         self.assertIn("fetch-depth: 0", after_checkout.split("\n      - ", 1)[0])
         workflow = " ".join(workflow.split())
         self.assertIn("uv run ruff check .", workflow)
-        for budget in ("RUFF_FORMAT_BUDGET", "TY_BUDGET"):
-            self.assertIn(budget, workflow)
-        self.assertIn("ty check packages/", workflow)
+        self.assertIn("uv run ruff format --check .", workflow)
+        self.assertIn("uv run ty check packages/ tests/test_workspace_isolation.py", workflow)
         pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn("packages/agent-orchestrator/tests", pyproject)
 
