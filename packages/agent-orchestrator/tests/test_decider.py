@@ -40,11 +40,10 @@ class DeciderFixture(RunFixture):
                     "files": [],
                     "decisions": [],
                     "interfaces": [],
-                    "remaining": [],
                     "checks": [],
                     "review_rounds": 0,
                     "usage": "unknown",
-                    "head": "abc1234",
+                    "head": "@HEAD",
                     "pr": None,
                 },
                 **over,
@@ -101,22 +100,26 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["assignment_id"], resume_id("demo-t1", 1))
         self.assertEqual(self.task("t1r1").get("gate"), None)
 
-    @pytest.mark.spec("One idle watchdog")
+    @pytest.mark.spec("A worker that ends without a report is resumed once")
     def test_S11_a_worker_the_runtime_reports_unreported_or_error_is_one_request_at_once(self):
         """code-driven-orchestrator/S11 — One idle watchdog: only idle and done wait for the watchdog."""
         for runtime_state in ("unreported", "error"):
             with self.subTest(runtime_state=runtime_state):
                 self.setUp()
+                again = assignment("demo-t1", "working", runtime_state, id=resume_id("demo-t1", 1))
                 self.waits(
                     [
                         wait_result([assignment("demo-t1", "working", runtime_state)]),
+                        wait_result([again]),
                         self.decided("skip"),
                     ]
                 )
                 self.run_driver()
                 self.assertEqual(self.spawned(), ["demo-t1"])
+                self.assertEqual(len(self.calls("resume")), 1, "the first end is resumed once")
+                self.assertIn("You ended without a report", self.calls("resume")[0]["args"]["task"])
                 self.assertIn("runtime state " + runtime_state, self.wake_lines()[0])
-                self.assertEqual(len(self.wakes()), 1)
+                self.assertEqual(len(self.wakes()), 1, "only the second end asks the Lead")
 
     @pytest.mark.spec("One idle watchdog")
     def test_S5_a_worker_whose_turn_ended_idle_or_done_is_one_idle_request_from_the_watchdog(self):
@@ -146,17 +149,24 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 self.assertEqual(len(self.wakes()), 1)
                 self.assertIn("cannot reach the database", self.wake_lines()[0])
 
+    @pytest.mark.spec("A worker that ends without a report is resumed once")
     def test_S11_a_failed_worker_is_one_request_by_state_and_message(self):
         """code-driven-orchestrator/S11"""
         self.waits(
             [
                 report_wait("demo-t1", "failed", "worker terminal exited before completion"),
+                report_wait(
+                    "demo-t1",
+                    "failed",
+                    "worker terminal exited again",
+                    id=resume_id("demo-t1", 1),
+                ),
                 self.decided("skip"),
             ]
         )
         self.run_driver()
-        self.assertEqual(len(self.wakes()), 1)
-        self.assertIn("terminal exited", self.wake_lines()[0])
+        self.assertEqual(len(self.wakes()), 1, "the first end is resumed, the second asks the Lead")
+        self.assertIn("terminal exited again", self.wake_lines()[0])
 
     def test_S11_retry_after_a_failed_gate_runs_one_more_fix_round(self):
         """code-driven-orchestrator/S11"""
@@ -194,7 +204,6 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
         for needle in (
             "cannot reach the database",
             "the database is back",
-            str(self.run_dir / "t1d1" / "report.json"),
             str(self.run_dir / "t1" / "task.md"),
             "t1d1",
         ):
@@ -349,7 +358,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
     def test_S12_a_contract_error_raises_a_request_too(self):
         """code-driven-orchestrator/S12
 
-        A report is read after a bounded grace: a report that names a file nobody wrote is warned about twice before the Lead is asked."""
+        A hand-in that is not a report is refused to its sender twice before the Lead is asked."""
         self.waits(
             [
                 *self.repeated(report_wait("demo-t1", "complete")),
@@ -357,7 +366,7 @@ class RequestPauseTests(DeciderFixture, unittest.TestCase):
             ]
         )
         self.run_driver()
-        self.assert_requested("report.json")
+        self.assert_requested("refused 3 times")
 
     def test_S12_a_request_status_stays_one_line(self):
         """code-driven-orchestrator/S12"""

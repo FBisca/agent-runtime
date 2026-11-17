@@ -229,9 +229,7 @@ class EvidenceTests(EnvelopeFixture, unittest.TestCase):
             self.assertIn("FAILED STEP LOG TAIL for run 77", item["excerpt"])
             with open(item["log_path"], encoding="utf-8") as log:
                 self.assertIn("FAILED STEP LOG TAIL for run 77", log.read())
-        self.assertEqual(
-            findings["items"][0]["command"], "gh pr checks https://github.com/o/r/pull/7"
-        )
+        self.assertEqual(findings["items"][0]["command"], "gh run view 77 --log-failed")
 
 
 class FixRoundTests(EnvelopeFixture, unittest.TestCase):
@@ -289,7 +287,7 @@ class FixRoundTests(EnvelopeFixture, unittest.TestCase):
         )
         brief = (self.run_dir / "t1r1" / "missing.md").read_text(encoding="utf-8")
         self.assertIn("Q1", brief)
-        self.assertIn("report.2.json", brief)
+        self.assertIn("Hand in a full report again", brief)
         self.assertEqual(self.ledger_failed(), 1)
         self.assertEqual(len(self.run_events("round")), 1)
         self.assertEqual(self.task("t1r1")["gate"], "done")

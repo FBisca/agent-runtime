@@ -61,8 +61,6 @@ class FolderArchiveFixture(GateFixture):
         data = json.loads(super().report(task_id))
         data.update(contract=3, covers=self.COVERS)
         data.update(over)
-        if "test_cost" not in over:
-            data["test_cost"] = self.measured(data["covers"])
         if "red" not in over:
             data["red"] = red_of(data["covers"])
         return json.dumps(data)

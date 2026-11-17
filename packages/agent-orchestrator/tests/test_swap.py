@@ -57,7 +57,6 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         for needle in (
             str(self.run_dir / "t1r1" / "task.md"),
             str(self.run_dir / "t1" / "task.md"),
-            str(self.run_dir / "t1" / "report.json"),
             str(self.run_dir / "t1r1" / "findings.json"),
             "origin/main...HEAD",
         ):
@@ -99,7 +98,6 @@ class SwapTests(ReuseFixture, unittest.TestCase):
         for needle in (
             str(self.run_dir / "t1-review2" / "task.md"),
             str(self.run_dir / "t1" / "task.md"),
-            str(self.run_dir / "t1r1" / "report.json"),
             str(self.run_dir / "t1r1" / "findings.json"),
             "origin/main...HEAD",
             "%s..HEAD" % base,

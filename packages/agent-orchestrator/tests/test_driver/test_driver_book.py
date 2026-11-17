@@ -28,7 +28,6 @@ SPINE = (
     "claim",
     "bind",
     "checkpoint",
-    "settle_merged",
     "release",
     "unit_summary",
     "task_summary",

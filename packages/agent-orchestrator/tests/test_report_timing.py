@@ -1,18 +1,12 @@
-"""The report timing: a worker that writes its report and whose turn ends before the runtime says so.
-
-S0: WHEN a known orchestration failure is reproduced on an isolated fixture, THEN the test fails before repair and
-passes afterwards under the same fixed acceptance criteria. The failure is the report timing one: the report is on
-disk, the runtime says the turn ended (`runtime state idle`), and the driver parks the ticket as `ended without a
-report` and asks a human about a report it already has. After the repair the driver reads the report and moves on;
-a turn that ended with no report at all is a live worker: only its complete or the idle watchdog moves it (One idle watchdog).
-"""
+"""The report timing: a worker whose turn ends without a report is a live worker: only its complete or the idle
+watchdog moves it (One idle watchdog)."""
 
 import shlex
 import unittest
 from unittest import mock
 
 import pytest
-from fixtures import assignment, envelope, load_script, wait_result
+from fixtures import assignment, load_script, wait_result
 from test_gates import GateFixture
 
 # Every test here runs the driver: these are integration tests.
@@ -24,8 +18,8 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
 
     def turn_ended(self, report=True):
         """A wait step: the worker's turn ended without a message; with `report` its report is on disk."""
-        write = [[str(self.run_dir / "t1" / "report.json"), self.report("t1")]] if report else []
-        return wait_result([assignment("demo-t1", "working", runtime_state="idle")], write=write)
+        del report  # a worker hands its report in with its complete: a turn that ended carries none
+        return wait_result([assignment("demo-t1", "working", runtime_state="idle")])
 
     def worker_done(self, task_id="t1", tests=False, report=None, name="demo-t1"):
         """A wait step: the runtime delivers the worker's completion message."""
@@ -43,97 +37,6 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
     def asked(self):
         """The unit's request, or None: the driver asked nobody anything."""
         return (self.run_dir / "t1" / "request.json").exists()
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S6_a_report_on_disk_when_the_turn_ends_advances_the_worker_as_today(self):
-        """orchestrator-silent-idle/S6 — the report_landed shortcut is kept."""
-        self.waits([self.turn_ended(), self.answer(), self.worker_done()])
-        self.run_driver()
-        self.assertFalse(self.asked())
-        self.assertEqual(len(self.run_events("report-landed")), 1)
-        self.assertEqual((self.task().get("report") or {}).get("task_id"), "t1")
-
-    def test_S0_a_report_on_disk_is_not_a_reason_to_ask_a_human(self):
-        """P3.T2/S0 — the report landed and the turn ended; nobody is asked about it."""
-        self.waits([self.turn_ended(), self.answer(), self.worker_done()])
-        self.run_driver()
-        self.assertFalse(self.asked(), "the driver asked a human about a report it already had")
-        task = self.task()
-        self.assertNotEqual(task.get("gate"), "requested", task)
-        self.assertEqual(
-            (task.get("report") or {}).get("task_id"), "t1", "the driver did not read the report"
-        )
-
-    @pytest.mark.spec("Partial and blocked reports reach the Lead")
-    def test_S1_idle_partial_after_progress_requests_a_decision(self):
-        """idle-partial-handoff/S1: the file, not progress text, supplies the blocker."""
-        worker = assignment("demo-t1", "working", "idle")
-        report = self.report(
-            "t1",
-            contract=3,
-            covers={"S1": ["tests/test_x.py::test_x"]},
-            status="PARTIAL",
-            acceptance_met=False,
-            summary="Git index is read-only",
-            remaining=["Commit and push"],
-            context={"status": "unknown"},
-            test_cost=None,
-            pr=None,
-        )
-        step = wait_result(
-            [worker],
-            [envelope(worker, "progress", "still working")],
-            write=[[str(self.run_dir / "t1" / "report.json"), report]],
-        )
-        self.waits([step, self.skipped()])
-        self.run_driver()
-        request = self.request()
-        self.assertEqual(request["event"], "blocked")
-        self.assertIn("Git index is read-only", request["reason"])
-        self.assertIn("Commit and push", request["reason"])
-        self.assertEqual(len(self.wake_lines("decision")), 1)
-
-    @pytest.mark.spec("Partial and blocked reports reach the Lead")
-    def test_S2_progress_text_and_wrong_task_report_do_not_open_a_blocker(self):
-        """idle-partial-handoff/S2: neither progress text nor another task's file is a handoff."""
-        worker = assignment("demo-t1", "working", "idle")
-        report = self.report(
-            "other",
-            status="PARTIAL",
-            acceptance_met=False,
-            summary="unrelated blocker",
-            remaining=["unrelated work"],
-        )
-        step = wait_result(
-            [worker],
-            [envelope(worker, "progress", "BLOCKED: arbitrary text")],
-            write=[[str(self.run_dir / "t1" / "report.json"), report]],
-        )
-        self.waits([step] + [self.turn_ended(report=False)] * 3 + [self.skipped()])
-        self.run_driver("--idle-minutes", "0")
-        request = self.request()
-        self.assertEqual(request["event"], "idle")
-        self.assertNotIn("arbitrary text", request["reason"])
-        self.assertNotIn("unrelated blocker", request["reason"])
-
-    @pytest.mark.spec("Partial and blocked reports reach the Lead")
-    def test_S1_idle_blocked_report_requests_a_decision(self):
-        """idle-partial-handoff/S1: BLOCKED files take the same recovery path."""
-        report = self.report(
-            "t1",
-            status="BLOCKED",
-            acceptance_met=False,
-            summary="No access",
-            remaining=["Grant access"],
-        )
-        step = wait_result(
-            [assignment("demo-t1", "working", "done")],
-            write=[[str(self.run_dir / "t1" / "report.json"), report]],
-        )
-        self.waits([step, self.skipped()])
-        self.run_driver()
-        self.assertEqual(self.request()["event"], "blocked")
-        self.assertIn("Grant access", self.request()["reason"])
 
     @pytest.mark.spec("One idle watchdog")
     def test_S5_a_worker_whose_turn_ended_without_a_report_stays_pending_until_its_complete(self):
@@ -163,7 +66,6 @@ class ReportTimingTests(GateFixture, unittest.TestCase):
         request = self.request()
         self.assertEqual(request["event"], "idle")
         self.assertIn("demo-t1", request["reason"])
-        self.assertIn(str(self.run_dir / "t1" / "report.json"), request["reason"])
         self.assertIn("decide", request["reason"])
         self.assertEqual(len(self.wake_lines("decision")), 1)
         self.assertEqual(self.task().get("gate"), "skipped", self.task())

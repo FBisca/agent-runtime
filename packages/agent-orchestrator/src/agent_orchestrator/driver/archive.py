@@ -13,7 +13,6 @@ lines, and because what a plan does when it stops is one lane with one home.
 """
 
 import copy
-import json
 import re
 import shutil
 import subprocess
@@ -22,11 +21,11 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
-from .. import approval_recovery, contracts, narrate, spec_blocks
+from .. import approval_recovery, contracts, events, narrate, spec_blocks
 from .. import config as repo_config
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
-from ..invariants import PARKED, next_path
+from ..invariants import PARKED
 from .book import ARCHIVE
 from .records import is_agent, is_done
 from .runtime import TREE_TIMEOUT, head_of
@@ -324,7 +323,6 @@ class Archive:
                 "the archive could not be built: %s. `retry` builds it again from the current base, `skip` "
                 "leaves it to you" % " ".join(str(error).split())[:400],
             )
-        path = next_path(self.run_dir / task_id, "report", ".json")[0]
         report = {
             "contract": contracts.VERSION,
             "task_id": task_id,
@@ -341,15 +339,14 @@ class Archive:
             "files": self._archive_owns(),
             "decisions": [],
             "interfaces": [],
-            "remaining": [],
             "checks": [],
             "review_rounds": 0,
             "usage": "unknown",
             "head": head,
             "pr": url,
         }
-        _engine().write_atomic(path, json.dumps(report, indent=2) + "\n")
-        self.mark(task_id, gate="reported")
+        self.log("report", unit=ARCHIVE, task=task_id, report=report)
+        self.mark(task_id, gate="reported", handed_in=report)
         self.log("archive-built", task=task_id, pr=url, head=head)
         narrate.say("done", "archive", "archive built: %s" % url, task=task_id)
 
@@ -470,7 +467,7 @@ class Archive:
                 if self._archive_mode() == "promote"
                 else "docs(%s): delete the discarded plan folder" % self.slug,
                 "--body",
-                self._archive_body(),
+                self._archive_body() + self._run_notes(),
             ],
             timeout=120,
             cwd=packet["checkout"],
@@ -481,6 +478,23 @@ class Archive:
                 "gh pr create failed: %s" % ((err or out).strip()[:300] or "no url printed")
             )
         return found[-1]
+
+    def _run_notes(self):
+        """What the run recorded without blocking, for the plan's close: the notes workers handed in with a COMPLETE
+        report and the CI failures that passed on a re-run, read from the run's events."""
+        lines = []
+        for event in events.read(self.run_dir / "events.jsonl"):
+            if event["kind"] == "report":
+                lines += [
+                    "- %s: %s" % (event.get("unit"), " ".join(str(note).split()))
+                    for note in event["report"].get("notes") or []
+                ]
+            elif event["kind"] == "flaky":
+                lines.append(
+                    "- flaky CI on %s: %s passed on a re-run"
+                    % (event.get("unit"), event.get("checks"))
+                )
+        return "\n\n## Recorded during the run\n\n" + "\n".join(lines) + "\n" if lines else ""
 
     def _archive_body(self):
         """The archive pull request's description, by what the archive does with the plan."""

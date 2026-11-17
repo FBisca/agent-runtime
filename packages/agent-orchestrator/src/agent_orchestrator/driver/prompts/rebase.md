@@ -1,5 +1,4 @@
 Contract: $contract
-Report: $report
 
 # Rebase $unit (task $task_id): the branch conflicts with its base
 
@@ -11,6 +10,6 @@ Original task: $task_md. Use task_id `$task_id` in your report.
 Same checkout and branch: $checkout on $branch. Work only here; start from: $scope (edit any other file the change needs, except one another unfinished ticket lists in its paths).
 Checkout contents: $checkout_contents
 Scope contents: $scope_contents
-Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: $checks.
+Commit and push to the same branch; open no new pull request. Run before you hand in: $checks.
 $check_instructions
 Report review_rounds 0: the driver counts failed rounds.

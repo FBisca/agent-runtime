@@ -77,7 +77,6 @@ class RunTests(RunFixture, unittest.TestCase):
         task_md = (run_dir / "t1" / "task.md").read_text(encoding="utf-8")
         for needle in (
             "contract.md",
-            str(run_dir / "t1" / "report.json"),
             "S1",
             "WHEN a, THEN b",
             "red-first",
@@ -270,26 +269,6 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertIn("working", stranded["text"])
 
     @pytest.mark.spec("A run does not finish over open work")
-    def test_S2a_a_finished_turn_whose_report_landed_goes_to_the_gates_not_to_finish(self):
-        ""","""
-        for state in ("idle", "done"):
-            with self.subTest(state=state):
-                self.setUp()
-                self.crashed(state)
-                (self.run_dir / "t1" / "report.json").write_text(
-                    self.report("t1"), encoding="utf-8"
-                )
-                (self.worktree / "src" / "a").mkdir(parents=True)
-                (self.worktree / "src" / "a" / "test_a.py").write_text(
-                    'def test_a():\n    """S1"""\n', encoding="utf-8"
-                )
-                self.waits([wait_result(), wait_result(), self.reviewer_done()])
-                self.run_driver()
-                self.assertEqual(self.run_events("orphaned"), [])
-                self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
-                self.assertEqual(self.task()["status"], "COMPLETE")
-
-    @pytest.mark.spec("A run does not finish over open work")
     def test_S2a_a_finished_turn_with_no_landed_report_is_stranded_not_finished(self):
         for state in ("idle", "done"):
             with self.subTest(state=state):
@@ -437,21 +416,6 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.run_driver()
         tasks = self.ledger()["tasks"]
         self.assertEqual((tasks["t1o1"]["status"], tasks["t1o2"]["status"]), ("RELEASED", "ACTIVE"))
-
-    @pytest.mark.spec("Orphaned tasks are recovered")
-    def test_S3_an_orphaned_attempt_whose_report_landed_goes_to_the_gates_and_spawns_nothing(self):
-        self.crashed()
-        (self.run_dir / "t1" / "report.json").write_text(self.report("t1"), encoding="utf-8")
-        (self.worktree / "src" / "a").mkdir(parents=True)
-        (self.worktree / "src" / "a" / "test_a.py").write_text(
-            'def test_a():\n    """S1"""\n', encoding="utf-8"
-        )
-        self.waits([wait_result(), self.reviewer_done()])
-        self.run_driver()
-        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
-        self.assertEqual(self.spawned().count("demo-t1"), 1)
-        self.assertNotIn("t1o1", self.ledger()["tasks"])
-        self.assertEqual(self.task()["status"], "COMPLETE")
 
     @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S3a_dispatch_refuses_a_closed_task_id_before_it_spawns_or_resumes(self):

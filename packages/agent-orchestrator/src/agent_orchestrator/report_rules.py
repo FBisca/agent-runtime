@@ -23,7 +23,7 @@ def require_report(report):
     require(
         isinstance(report.get("summary"), str) and report["summary"].strip(), "summary is required"
     )
-    for key in ("files", "decisions", "interfaces", "remaining", "checks"):
+    for key in ("files", "decisions", "interfaces", "checks"):
         require(isinstance(report.get(key), list), key + " must be a list")
     for check in report["checks"]:
         require(isinstance(check, dict) and isinstance(check.get("command"), str), "invalid check")

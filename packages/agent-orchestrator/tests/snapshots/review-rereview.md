@@ -1,8 +1,13 @@
 # Review T1: the pass, then one verdict
 
-Read these yourself; nothing is pasted here.
+Read these yourself; only the report is pasted here.
 - The task the implementer was given: <ROOT>/run/t1/task.md (its What it delivers, Paths, the scenarios verbatim, the checks it owed)
-- What it reported: <ROOT>/run/t1/report.json, written 2023-11-14T22:13:20Z, claiming head def5678 (its status, files, covers, checks)
+- What it reported (the worker's hand-in, accepted by the driver):
+```json
+{
+  "head": "def5678"
+}
+```
 - Checkout contents: 4 files in <ROOT>/work
 - The rules every task in this run follows: <ROOT>/run/contract.md
 - Plan: <ROOT>/plan.md (its Decisions, Scenarios and Seams)
@@ -15,7 +20,7 @@ Read these yourself; nothing is pasted here.
 1. Read the whole diff (`git -C <ROOT>/work diff origin/main...HEAD`) first: every file, every test it adds or changes, the commit messages. Nothing is skimmed, and nothing is judged before the last file is read.
    This is a re-review, so read the delta `abc1234..HEAD` first and the whole change beside it. Check each earlier finding (resolved or not, with evidence) and raise new blocking items only inside the delta. A blocking item outside the files the delta changes is deferred, not gated, unless it is about an earlier finding: reuse that finding's `id`, or set `finding` to it.
 2. The ticket delivers what it says: `What it delivers` in the task file is in the diff, and each scenario the ticket satisfies is proved by a test the diff adds or changes. A promise the code does not keep, or a scenario with no test of its own, is `blocking`.
-3. Each test proves its scenario: it asserts the behaviour the scenario's THEN promises, on the real code path rather than on a mock of it, and it names its scenario id. Reverting the change makes it fail. A test that would pass without the change, or that asserts a call happened instead of what the behaviour promises, is `blocking`: that is the scenario not really tested. The report's `red` holds, per scenario, the covering test's failing output from before the fix: judge whether it is a genuine assertion failure of that behaviour. An import or collection error, a missing fixture, or a test that cannot fail is no red, and is `blocking`.
+3. Each test proves its scenario: it asserts the behaviour the scenario's THEN promises, on the real code path rather than on a mock of it. Reverting the change makes it fail. A test that would pass without the change, or that asserts a call happened instead of what the behaviour promises, is `blocking`: that is the scenario not really tested. The report's `red` holds, per scenario, the covering test's failing output from before the fix: judge whether it is a genuine assertion failure of that behaviour. An import or collection error, a missing fixture, or a test that cannot fail is no red, and is `blocking`.
 4. The report matches the code: every `covers` node is a test that exists at the commit you review, every `checks` entry is a command with the outcome the log shows, `head` is the commit you are reviewing, and `files` covers the diff. A claim the code contradicts is `blocking`.
 5. The numbered requirements it touches still hold: read the spec the plan names, and raise the `requirement_violation` `blocking` item described below when one does not.
 6. Only then write the review: each correctness bug the pass found, once.

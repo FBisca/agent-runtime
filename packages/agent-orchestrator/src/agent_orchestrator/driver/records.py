@@ -33,33 +33,24 @@ def whole(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-# A report names each required check as the brief spelled it: the driver briefs workers in any repository and
-# behind any shell, so it keeps no list of launchers, wrappers or proxies to strip. Only whitespace is not part
-# of a command's spelling.
-SPELLING_INSTRUCTION = "Report each required check with its command exactly as written above, whatever your shell runs it through."
-
 # A worker that ran a test directory by hand (`pytest pkg/tests -m integration`) held a ticket for twenty minutes:
-# the gate is the cheap tiers by design, and verify and CI own the rest. The driver briefs workers in any
+# the gate is the cheap tiers by design, and CI owns the rest. The driver briefs workers in any
 # repository, so the rule names no runner, flag or file of its own: the repository's instructions supply those.
-TEST_SCOPE_INSTRUCTION = (
-    "Run the checks above, then run only the test files you wrote or changed; leave every other test to verify "
-    "and CI. Run each command in the foreground under a timeout, read its failures from that run's output or "
+CHECK_INSTRUCTIONS = (
+    "Run the checks above, then run only the test files you wrote or changed; leave every other test to CI. "
+    "Run each command in the foreground under a timeout, read its failures from that run's output or "
     "log, and re-run only the tests that failed."
 )
 
 
-# What every brief that carries required checks says about running them, after its required-check line.
-CHECK_INSTRUCTIONS = "\n".join((SPELLING_INSTRUCTION, TEST_SCOPE_INSTRUCTION))
-
-
 def normalise_check(command):
-    """The command as a report must spell it: its words, whitespace collapsed."""
+    """The command as the brief spells it: its words, whitespace collapsed."""
     return " ".join(command.split())
 
 
 def unique_checks(commands):
-    """Each required command once, in the spelling it was declared: tiers that render the same gate add no second
-    requirement, so a worker is never asked to run one command twice, nor told not to run one it must pass."""
+    """Each command once, in the spelling it was declared: tiers that render the same gate add no second
+    command, so a worker is never asked to run one twice."""
     seen, unique = set(), []
     for command in commands:
         key = normalise_check(command)
@@ -69,78 +60,16 @@ def unique_checks(commands):
     return unique
 
 
-def passed_checks(packet, checks):
-    """The required commands one report passed, by their normalised spelling.
-
-    The rendered `affected` check may be `not_run` with a reason: the selection found no test to run. A command
-    another tier also requires is never that, so the allowance is only for a tier that stands alone.
-    """
-    passed = {
-        normalise_check(c["command"])
-        for c in checks
-        if c.get("outcome") == "passed" and isinstance(c.get("command"), str)
-    }
-    affected = packet.get("affected")
-    alone = (
-        isinstance(affected, str)
-        and [normalise_check(c) for c in packet["checks"]].count(normalise_check(affected)) == 1
-    )
-    if alone:
-        passed |= {
-            normalise_check(c["command"])
-            for c in checks
-            if c.get("outcome") == "not_run"
-            and isinstance(c.get("command"), str)
-            and isinstance(c.get("reason"), str)
-            and c["reason"].strip()
-            and normalise_check(c["command"]) == normalise_check(affected)
-        }
-    return passed
-
-
 def require_completable(task, report):
-    """The rules a report meets to be COMPLETE, apart from the ledger's own state. Raises ValueError naming the first
-    that fails; `checkpoint` and the report gate share it, so a report is refused for the same reason in both."""
-    # Total over a schema-valid report: the report gate applies `require_report` first, so a malformed `remaining`
-    # or check is already refused to its sender and never reaches these rules; `checkpoint`'s own ValueError is
-    # still the Lead request `record_report` makes.
-    checks = [c for c in report.get("checks") or [] if isinstance(c, dict)]
+    """The rules a COMPLETE report meets, apart from the ledger's own state. Raises ValueError naming the first
+    that fails; the hand-in and `checkpoint` share it. CI judges the tests, so no check outcome is held here."""
     require(report.get("acceptance_met") is True, "acceptance criteria are not confirmed")
-    require(not report.get("remaining"), "complete result has remaining work")
-    failed = [str(c.get("command")) for c in checks if c.get("outcome") == "failed"]
-    require(not failed, "complete result has failed checks: " + ", ".join(failed))
-    required = {normalise_check(c): c for c in task["packet"]["checks"]}
-    passed = passed_checks(task["packet"], checks)
-    missing = [command for key, command in required.items() if key not in passed]
-    require(
-        not missing,
-        "required checks are not passed: " + ", ".join(sorted(missing)),
-    )
     if routed(task["packet"]):
         require("review_rounds" in report, "a routed task needs review_rounds")
         require(
             isinstance(report.get("usage"), str) and report["usage"].strip(),
             "a routed task needs usage (the runtime's metric line, or unknown)",
         )
-
-
-def report_reader(task_id):
-    """The report one attempt sent, refused when it names another task or is not the complete it claims:
-    the words go back to the worker that wrote it, as every payload refusal does."""
-
-    def read(where):
-        report = contracts.load(where, contracts.validate_report)
-        contracts.need(
-            report["task_id"] == task_id,
-            "report task_id %r is not %s" % (report["task_id"], task_id),
-        )
-        contracts.need(
-            report["status"] == "COMPLETE" and report["acceptance_met"],
-            "the worker said complete but report.json says %s" % report["status"],
-        )
-        return report
-
-    return read
 
 
 def context_verdict(sample, reserve, max_age=300):
@@ -330,10 +259,6 @@ def reported_attempt(data, unit):
     attempt-scoped reader (which report is this attempt's?) still answers only for its own attempt.
     """
     return next(
-        (
-            task
-            for task in unit_attempts(data, unit)
-            if task.get("report_path") or task.get("report")
-        ),
+        (task for task in unit_attempts(data, unit) if task.get("report")),
         None,
     )

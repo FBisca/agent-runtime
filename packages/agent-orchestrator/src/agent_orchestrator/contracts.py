@@ -7,12 +7,14 @@ The driver reads these and nothing else from an agent: a missing or invalid file
 Every model forbids unknown fields at its own level and keeps the fields it is documented to keep
 verbatim: a review item's fields outside the core survive a round trip unchanged.
 
-`report.json`   worker: the ledger checkpoint shape plus `head` (commit sha) and `pr` (URL or null); optional
+The report   worker: the text of its agent-runtime `report` call, no file: the ledger checkpoint shape plus `head` (commit sha) and `pr` (URL or null); optional
                 `responses[] {id, status fixed|disputed, commit, note, changes_code?}` (one per answer_required finding)
                 and `clarifications[] {finding, asked_by, note}`. Contract 3 is a YAML plan ticket's report: it adds
                 `covers {S<n>: [test node ids]}`, the scenarios the ticket satisfies mapped to the tests that prove
                 them, and `red {S<n>: excerpt}`, each covering test's failing output from before the fix; verify
-                checks each node exists and changed in the ticket and each excerpt names one of them.
+                counts a node when its file exists, the ticket changed that file and the scenario's excerpt
+                contains the test's name. `status` is COMPLETE (optional `notes[]`, kept and never blocking) or
+                BLOCKED (`blocker`, the reason, goes to the Lead).
 `review.json`   reviewer: `verdict` pass|block, `items[]`, `checks_run[] {command, exit, at_commit}`, optional
                 `clarifications[]`, `commit` reviewed (must equal the checkout's HEAD). An item has the core `id`, `kind`
                 (blocking|deferred), `summary`, `answer_required`; a blocking item also `file`,
@@ -90,7 +92,10 @@ OPEN_VERSION = 1  # the open-findings record the driver writes and reads
 
 Contract = Literal[1, 2]
 LeadContract = Literal[1, 2, 3]
-Status = Literal["PARTIAL", "BLOCKED", "COMPLETE"]
+Status = Literal[
+    "PARTIAL", "BLOCKED", "COMPLETE"
+]  # the ledger's: a reported unit is PARTIAL until it merges
+ReportStatus = Literal["BLOCKED", "COMPLETE"]  # a hand-in's: finished, or stuck with a reason
 Kind = Literal["blocking", "deferred"]
 Source = Literal["converge", "verify", "review", "ci", "conflict"]
 ReportContract = Literal[1, 2, 3]
@@ -194,31 +199,21 @@ class Check(Open):
     outcome: str = ""
 
 
-class TestCost(Strict):
-    """What the tests a ticket added or changed cost, as the repository's test runner timed them.
-
-    `command` is the command that timed them; `modules` maps each
-    touched test file to its seconds, `tests` maps each covered `path::name` node to its seconds.
-    Verify requires a `test_cost` only when the ticket's diff adds or changes a test, so a report
-    from before the field existed is still read."""
-
-    command: str = Field(min_length=1)
-    modules: dict[str, float] = Field(default_factory=dict)
-    tests: dict[str, float] = Field(default_factory=dict)
-
-
 class Report(Strict):
     """The worker's report: the ledger checkpoint shape plus the commit and the pull request."""
 
     contract: ReportContract
     task_id: str = Field(min_length=1)
-    status: Status
+    status: ReportStatus
     summary: str = Field(min_length=1)
     acceptance_met: bool
     files: list[str] = Field(default_factory=list)
     decisions: list[str] = Field(default_factory=list)
     interfaces: list[str] = Field(default_factory=list)
-    remaining: list[str] = Field(default_factory=list)
+    # What a COMPLETE report records without blocking: the driver keeps it and lists it at plan close.
+    notes: list[str] = Field(default_factory=list)
+    # Why a BLOCKED report stopped; it goes to the Lead.
+    blocker: str | None = None
     checks: list[Check] = Field(default_factory=list)
     head: str = Field(min_length=1)
     pr: str | None = None
@@ -232,8 +227,12 @@ class Report(Strict):
     covers: dict[str, list[str]] | None = None
     # Contract 3: each scenario's covering test seen failing before the fix, as the runner printed it.
     red: dict[str, str] | None = None
-    # The seconds the tests this ticket added or changed cost: verify refuses a test change without it.
-    test_cost: TestCost | None = None
+
+    @model_validator(mode="after")
+    def blocked_names_its_blocker(self):
+        if self.status == "BLOCKED" and not (self.blocker and self.blocker.strip()):
+            raise ValueError("a BLOCKED report needs a blocker: why it stopped")
+        return self
 
 
 class Evidence(Strict):

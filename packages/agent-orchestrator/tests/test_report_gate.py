@@ -1,5 +1,5 @@
-"""The report gate against the ledger: a report the ledger cannot read goes back to the worker that wrote it, and
-the drive books no error for it."""
+"""The hand-in: a report that arrives as the text of the worker's `report` call is validated at once, refused back to
+the worker that sent it with the exact errors, and recorded as an event."""
 
 import json
 import unittest
@@ -11,59 +11,121 @@ from test_gates import GateFixture
 pytestmark = pytest.mark.integration
 
 
-class ReportGateTests(GateFixture, unittest.TestCase):
-    """A worker's payload that `checkpoint` refuses is the sender's to fix, never the drive's to crash on."""
+class HandInTests(GateFixture, unittest.TestCase):
+    def amended(self, **over):
+        return json.dumps(dict(json.loads(self.report("t1")), **over))
 
-    def unreadable(self, task_id="t1"):
-        """A report that fails a COMPLETE rule and carries a check outcome the ledger cannot read: the payload the
-        00c run sent, which `checkpoint` refused from inside `fail_gate` and so ended the drive."""
-        report = json.loads(self.report(task_id))
-        report["checks"] = [{"command": "uv run pytest", "outcome": "green, 394 passed"}]
-        report["remaining"] = ["the other ticket's work"]
-        return json.dumps(report)
+    def corrected(self, task_id="t1", nth=1):
+        """A wait step: the warned worker hands in a report the driver accepts, under the assignment the refusal resumed."""
+        return report_wait(
+            "demo-t1", "complete", text=self.report(task_id), id=resume_id("demo-t1", nth)
+        )
 
-    def corrected(self, task_id="t1"):
-        """A wait step: the warned worker writes the next report — one the driver accepts — and says complete."""
-        step = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 1))
-        step["write"] = [[str(self.run_dir / task_id / "report.2.json"), self.report(task_id)]]
-        return step
+    def request_files(self):
+        return sorted((self.run_dir / "t1").glob("request*.json"))
 
-    @pytest.mark.spec("A refused report goes back to its sender")
-    def test_S1_a_report_the_ledger_cannot_read_is_refused_to_its_sender(self):
-        """The unreadable field is the sender's to fix: the drive books no error, reaches finish, and the report the
-        resumed worker writes is gated as usual."""
+    def refusals(self):
+        return self.run_events("report-refused")
+
+    @pytest.mark.spec("A refused hand-in goes back to its sender")
+    def test_a_report_with_an_unknown_field_is_refused_to_its_sender_with_the_exact_error(self):
+        bad = self.amended(remaining=["the other ticket's work"])
+        self.waits(
+            [self.worker_done(tests=True, report=bad), self.corrected(), self.reviewer_done()]
+        )
+        result = self.run_driver()
+        self.assertEqual(json.loads(result.stdout)["errors"], [])
+        self.assertEqual(self.run_events("error"), [])
+        self.assertEqual(self.request_files(), [], "a refusal never becomes a Lead request")
+        (resume,) = self.calls("resume")
+        self.assertEqual(resume["args"]["name"], "demo-t1")
+        self.assertIn("remaining", resume["args"]["task"])
+        self.assertIn("agent-runtime `report` call", resume["args"]["task"])
+        (refused,) = self.refusals()
+        self.assertIn("remaining", refused["reason"])
+        self.assertIn("remaining", refused["payload"])
+        self.assertEqual(self.task()["gate"], "done", "the corrected hand-in was gated as usual")
+        self.assertEqual([e["report"]["task_id"] for e in self.run_events("report")], ["t1"])
+
+    @pytest.mark.spec("A refused hand-in goes back to its sender")
+    def test_text_that_is_not_json_and_another_tasks_report_are_refused_the_same_way(self):
         self.waits(
             [
-                self.worker_done(tests=True, report=self.unreadable()),
-                self.corrected(),
+                self.worker_done(tests=True, report="complete - see run directory"),
+                report_wait(
+                    "demo-t1", "complete", text=self.report("t9"), id=resume_id("demo-t1", 1)
+                ),
+                self.corrected(nth=2),
                 self.reviewer_done(),
             ]
         )
-        result = self.run_driver()
-        self.assertEqual(
-            json.loads(result.stdout)["errors"], [], "a worker payload ended the drive"
-        )
-        self.assertEqual(self.run_events("error"), [])
-        self.assertTrue(self.run_events("finish"), "the drive did not reach finish")
-        resumed = self.calls("resume")
-        self.assertEqual([r["args"]["name"] for r in resumed], ["demo-t1"])
-        self.assertIn(str(self.run_dir / "t1" / "report.json"), resumed[0]["args"]["task"])
-        self.assertIn("invalid check outcome", resumed[0]["args"]["task"])
-        self.assertIn("checks[].outcome", resumed[0]["args"]["task"], "the field is not named")
-        self.assertEqual(self.task()["gate"], "done", "the corrected report was not gated as usual")
+        self.run_driver()
+        reasons = [r["reason"] for r in self.refusals()]
+        self.assertIn("not the report JSON", reasons[0])
+        self.assertIn("t9", reasons[1])
+        self.assertEqual(self.request_files(), [])
+        self.assertEqual(self.task()["gate"], "done")
 
-    @pytest.mark.spec("A refused report goes back to its sender")
-    def test_S1_a_refusal_the_sender_repeats_asks_the_lead(self):
-        """The resume is bounded: a worker that sends the same unreadable report twice is asked about, not looped."""
+    @pytest.mark.spec("A refused hand-in goes back to its sender")
+    def test_a_report_naming_a_commit_other_than_the_branch_head_is_refused(self):
+        stale = self.amended(head="1234567")
         self.waits(
-            [
-                *self.repeated(self.worker_done(tests=True, report=self.unreadable())),
-                self.skipped(),
-            ]
+            [self.worker_done(tests=True, report=stale), self.corrected(), self.reviewer_done()]
         )
-        result = self.run_driver()
-        self.assertEqual(len(self.calls("resume")), 2, "the sender was warned more than twice")
+        self.run_driver()
+        (refused,) = self.refusals()
+        self.assertIn("1234567", refused["reason"])
+        self.assertIn("HEAD", refused["reason"])
+        self.assertEqual(self.request_files(), [])
+
+    @pytest.mark.spec("A refused hand-in goes back to its sender")
+    def test_the_third_refusal_asks_the_lead(self):
+        bad = self.amended(contract=4)
+        self.waits([*self.repeated(self.worker_done(report=bad)), self.skipped()])
+        self.run_driver()
+        self.assertEqual(len(self.calls("resume")), 2, "the sender was warned twice, no more")
+        self.assertEqual(len(self.refusals()), 3)
         self.assertEqual(self.request()["event"], "report")
-        self.assertIn("invalid check outcome", self.request()["reason"])
-        self.assertIn("checks[].outcome", self.request()["reason"], "the field is not named")
-        self.assertEqual(json.loads(result.stdout)["errors"], [])
+        self.assertIn("contract", self.request()["reason"])
+
+    @pytest.mark.spec("A report is handed in through the runtime")
+    def test_a_failed_check_and_notes_are_accepted_and_the_notes_are_recorded(self):
+        report = self.amended(
+            checks=[{"command": "pytest", "outcome": "failed", "reason": "flaky"}],
+            notes=["the cache is never cleared"],
+        )
+        self.waits([self.worker_done(tests=True, report=report), self.reviewer_done()])
+        self.run_driver()
+        self.assertEqual(self.refusals(), [])
+        self.assertEqual(self.task()["gate"], "done")
+        (event,) = self.run_events("report")
+        self.assertEqual(event["report"]["notes"], ["the cache is never cleared"])
+
+    @pytest.mark.spec("A report is handed in through the runtime")
+    def test_a_blocked_report_goes_to_the_lead_with_its_blocker(self):
+        blocked = self.amended(status="BLOCKED", blocker="needs the staging database")
+        self.waits([self.worker_done(report=blocked), self.skipped()])
+        self.run_driver()
+        self.assertEqual(self.request()["event"], "blocked")
+        self.assertIn("needs the staging database", self.request()["reason"])
+        self.assertEqual(self.refusals(), [])
+
+
+@pytest.mark.spec("A report is handed in through the runtime")
+def test_the_plan_close_lists_the_notes_and_flaky_ci_the_run_recorded(tmp_path):
+    from types import SimpleNamespace
+
+    from agent_orchestrator import events
+    from agent_orchestrator.driver.archive import Archive
+
+    log = tmp_path / "events.jsonl"
+    events.append(log, "report", unit="t1", report={"notes": ["the cache is\nnever cleared"]})
+    events.append(log, "report", unit="t2", report={"notes": []})
+    events.append(log, "flaky", unit="t2", checks=["test"])
+    text = Archive._run_notes(SimpleNamespace(run_dir=tmp_path))  # ty: ignore[invalid-argument-type]
+    assert "- t1: the cache is never cleared" in text
+    assert "- flaky CI on t2: ['test'] passed on a re-run" in text
+    assert (
+        Archive._run_notes(SimpleNamespace(run_dir=tmp_path / "none"))  # ty: ignore[invalid-argument-type]
+        == ""
+    )

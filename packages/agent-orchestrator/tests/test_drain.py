@@ -261,7 +261,9 @@ class DrainTests(DrainFixture, unittest.TestCase):
             )
 
         first = self.edit(satisfy_s2)
-        resumed = report_wait("demo-t1", "complete", id=resume_id("demo-t1"))
+        resumed = report_wait(
+            "demo-t1", "complete", text=self.report("t1"), id=resume_id("demo-t1")
+        )
         resumed["write"] = self.worker_done(tests=True)["write"]
         self.waits(
             [

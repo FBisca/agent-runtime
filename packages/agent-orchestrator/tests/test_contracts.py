@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 from agent_orchestrator import contracts, driver
-from agent_orchestrator.driver.records import SPELLING_INSTRUCTION, TEST_SCOPE_INSTRUCTION
+from agent_orchestrator.driver.records import CHECK_INSTRUCTIONS
 
 pytestmark = pytest.mark.unit
 
@@ -27,7 +27,6 @@ def report(**over):
             "files": [],
             "decisions": [],
             "interfaces": [],
-            "remaining": [],
             "checks": [],
             "head": "abc1234",
             "pr": None,
@@ -777,68 +776,6 @@ class DescribeTests(unittest.TestCase):
         self.assertEqual(driver.describe(lined).splitlines()[0], "C1 (deferred): src/a.py:7 racy")
 
 
-class AffectedNotRunTests(unittest.TestCase):
-    AFFECTED = "pytest --base origin/main src/a/"
-
-    def task(self):
-        return {
-            "packet": {
-                "checks": ["ruff check", self.AFFECTED],
-                "affected": self.AFFECTED,
-                "unit": "t1",
-            }
-        }
-
-    def report(self, affected, fast=None):
-        return report(
-            checks=[
-                fast or {"command": "ruff check", "outcome": "passed"},
-                dict(command=self.AFFECTED, **affected),
-            ]
-        )
-
-    @pytest.mark.spec("An affected check may find no test")
-    def test_S5_affected_not_run_with_a_reason_is_accepted(self):
-        driver.require_completable(
-            self.task(), self.report({"outcome": "not_run", "reason": "no test selected"})
-        )
-
-    @pytest.mark.spec("An affected check may find no test")
-    def test_S5_affected_not_run_without_a_reason_is_refused(self):
-        for affected in ({"outcome": "not_run"}, {"outcome": "not_run", "reason": "  "}):
-            with self.assertRaises(ValueError):
-                driver.require_completable(self.task(), self.report(affected))
-
-    @pytest.mark.spec("An affected check may find no test")
-    def test_S5_fast_not_run_is_still_refused(self):
-        fast = {"command": "ruff check", "outcome": "not_run", "reason": "skipped"}
-        with self.assertRaises(ValueError):
-            driver.require_completable(self.task(), self.report({"outcome": "passed"}, fast=fast))
-
-    @pytest.mark.spec("An affected check may find no test")
-    def test_S1_an_affected_command_another_tier_also_requires_is_never_waived_not_run(self):
-        # A packet written before equivalent tiers were folded together: the same command twice, a launcher
-        # spelling apart, so the `not_run` allowance would waive a required `fast` check.
-        task = {
-            "packet": {
-                "checks": ["uv run pytest -q", "python3 -m pytest -q"],
-                "affected": "python3 -m pytest -q",
-                "unit": "t1",
-            }
-        }
-        skipped = report(
-            checks=[
-                {
-                    "command": "python3 -m pytest -q",
-                    "outcome": "not_run",
-                    "reason": "no test selected",
-                }
-            ]
-        )
-        with self.assertRaisesRegex(ValueError, "required checks"):
-            driver.require_completable(task, skipped)
-
-
 class TierBriefTests(unittest.TestCase):
     """The brief and the required checks a ticket worker gets, from the repo config and `--gate`."""
 
@@ -864,9 +801,9 @@ class TierBriefTests(unittest.TestCase):
         run.run_dir = repo / "run"
         run.plan_path = repo / "plan.yaml"
         run.args = SimpleNamespace(gate=list(gate), base="origin/main")
-        checks, affected, full = run.tier_checks(self.OWNS)
+        checks, full = run.tier_checks(self.OWNS)
         packet = {"task_id": "t1", "worker": "demo-t1", "checkout": "/w", "owns": self.OWNS}
-        packet.update(checks=checks, **({"affected": affected} if affected else {}))
+        packet.update(checks=checks)
         packet.update(**({"full": full} if full else {}))
         ticket = {"#": "T1", "What it delivers": "x"}
         return packet, run.task_text(None, ticket, packet, [], repo / "run" / "t1")
@@ -875,36 +812,19 @@ class TierBriefTests(unittest.TestCase):
     def test_S2_the_brief_lists_fast_and_the_rendered_affected_and_names_full_as_not_run(self):
         packet, text = self.drive()
         self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])
-        self.assertIn(
-            "Before you report COMPLETE, run: uv run ruff check; " + self.AFFECTED + ".", text
-        )
+        self.assertIn("Before you hand in, run: uv run ruff check; " + self.AFFECTED + ".", text)
         others = [line for line in text.splitlines() if "uv run pytest -n auto" in line]
         self.assertEqual(len(others), 1, text)
         self.assertIn("do not run", others[0])
         self.assertNotIn("full CI gate", text)
-
-    @pytest.mark.spec("Required checks are matched by spelling")
-    def test_S3_the_brief_asks_for_each_required_check_as_it_is_spelled(self):
-        packet, text = self.drive()
-        # The required-check line is the ticket's own: it stays as it is.
-        self.assertEqual(
-            [
-                line
-                for line in text.splitlines()
-                if line.startswith("Before you report COMPLETE, run:")
-            ],
-            ["Before you report COMPLETE, run: uv run ruff check; " + self.AFFECTED + "."],
-        )
-        self.assertIn(SPELLING_INSTRUCTION, text.splitlines())
-        self.assertNotIn("rtk", text)
 
     @pytest.mark.spec("Workers run tests in the foreground")
     def test_every_brief_keeps_the_worker_on_targeted_tests_run_in_the_foreground(self):
         """A worker that runs a whole test directory, or backgrounds a run and polls its log, stalls the drive."""
         for gate in ((), ["scripts/checks.sh"]):
             _packet, text = self.drive(gate=gate)
-            self.assertIn(TEST_SCOPE_INSTRUCTION, text.splitlines())
-        rule = TEST_SCOPE_INSTRUCTION
+            self.assertIn(CHECK_INSTRUCTIONS, text.splitlines())
+        rule = CHECK_INSTRUCTIONS
         self.assertIn("run only the test files you wrote or changed", rule)
         self.assertIn("foreground", rule)
         # The driver briefs workers in any repository: the rule names no runner of its own.
@@ -915,7 +835,7 @@ class TierBriefTests(unittest.TestCase):
     def test_S3_a_named_gate_is_the_required_checks_alone_and_the_tiers_are_not_applied(self):
         packet, text = self.drive(gate=["scripts/checks.sh"])
         self.assertEqual(packet["checks"], ["scripts/checks.sh"])
-        self.assertIn("Before you report COMPLETE, run: scripts/checks.sh.", text)
+        self.assertIn("Before you hand in, run: scripts/checks.sh.", text)
         self.assertNotIn("uv run ruff check", text)
         self.assertNotIn("uv run pytest -n auto", text)
 
@@ -926,24 +846,23 @@ class TierBriefTests(unittest.TestCase):
         self.assertEqual(packet["checks"], ["uv run pytest -q"])
         self.assertNotIn("full", packet)
         self.assertEqual(
-            [
-                line
-                for line in text.splitlines()
-                if line.startswith("Before you report COMPLETE, run:")
-            ],
-            ["Before you report COMPLETE, run: uv run pytest -q."],
+            [line for line in text.splitlines() if line.startswith("Before you hand in, run:")],
+            ["Before you hand in, run: uv run pytest -q."],
         )
         self.assertNotIn("do not run", text)
 
-    @pytest.mark.spec("Test changes carry their cost")
-    def test_S4_the_brief_names_the_tdd_skill_and_the_test_cost_report(self):
+    @pytest.mark.spec("Workers are briefed on the tdd skill")
+    def test_the_brief_names_the_tdd_skill_and_the_contract_asks_no_test_cost_or_scenario_names(
+        self,
+    ):
         packet, text = self.drive()
         self.assertIn("Read the `tdd` skill first", text)
         self.assertIn("TDD:", driver.CONTRACT)
-        self.assertIn("test_cost", driver.CONTRACT)
-        self.assertIn("the command that timed the touched tests", driver.CONTRACT)
+        self.assertNotIn("test_cost", driver.CONTRACT)
+        for brief in (text, driver.CONTRACT):
+            self.assertNotIn("S-ID", brief)
 
-    @pytest.mark.spec("Test changes carry their cost")
+    @pytest.mark.spec("Workers are briefed on the tdd skill")
     def test_S4_the_tdd_path_is_the_environment_then_the_hosts_place(self):
         with mock.patch.dict(os.environ, {driver.TDD_SKILL_ENV: "/tmp/tdd/SKILL.md"}):
             self.assertEqual(driver.tdd_skill_path(), "/tmp/tdd/SKILL.md")
@@ -956,18 +875,12 @@ class TierBriefTests(unittest.TestCase):
         )
         packet, text = self.drive(config=config)
         self.assertEqual(packet["checks"], ["uv run pytest -q"])
-        self.assertNotIn("affected", packet)
         self.assertNotIn("do not run", text)
-        driver.require_completable(
-            {"packet": dict(packet, unit="t1")},
-            report(checks=[{"command": "uv run pytest  -q", "outcome": "passed"}]),
-        )
 
     @pytest.mark.spec("Check tiers brief the worker")
     def test_S2_a_distinct_full_is_ci_owned_while_fast_and_affected_are_kept(self):
         packet, text = self.drive()
         self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])
-        self.assertEqual(packet["affected"], self.AFFECTED)
         self.assertEqual(packet["full"], "uv run pytest -n auto")
         (full,) = [line for line in text.splitlines() if "uv run pytest -n auto" in line]
         self.assertIn("do not run", full)

@@ -129,7 +129,7 @@ An existing run SHALL resume with the routes, `--cli` and `--brain-cli` its ledg
 The contract the run writes SHALL describe a report that `Report` accepts, and each unit brief SHALL name the task id the report carries.
 
 #### Scenario: the contract example
-- WHEN a worker writes the report the contract describes, `context` included
+- WHEN a worker hands in the report the contract describes, `context` included
 - THEN `Report` accepts it, and every top-level key of the contract's example is a `Report` field
 
 #### Scenario: the task id
@@ -169,61 +169,64 @@ A second driver SHALL NOT run a plan another live driver runs in the same reposi
 - WHEN a run of another plan in the same repository starts, or a run ended or crashed
 - THEN it is not held up, and no lock stays behind
 
-### Requirement: A report is read after a bounded grace
-The driver SHALL wait a bounded grace for a report's payload and tell the sender before it asks the Lead.
+### Requirement: A review is read after a bounded grace
+The driver SHALL wait a bounded grace for the file a reviewer's report names and tell the reviewer before it asks the Lead.
 
 #### Scenario: a file that lands late
-- WHEN a report reaches the driver before the file it names is usable (absent, half written, or breaking its contract)
+- WHEN a reviewer's report reaches the driver before the review file it names is usable (absent, half written, or breaking its contract)
 - THEN the driver waits a bounded grace and reads the file when it lands, and ends the wait at the deadline when it never does
 
 #### Scenario: a payload that stays unreadable
-- WHEN the payload is still unreadable after the grace
-- THEN the sending agent is told what the driver needs, twice at most, with the gate kept open, and only then is the Lead asked, naming the warnings; an agent that is gone is not warned
+- WHEN the review file is still unreadable after the grace
+- THEN the reviewer is told what the driver needs, twice at most, with the gate kept open, and only then is the Lead asked, naming the warnings; an agent that is gone is not warned
 
-### Requirement: COMPLETE needs the required checks
-`checkpoint()` SHALL accept COMPLETE only when every required check is reported passed, spelled as required, whitespace apart.
+### Requirement: A checkpoint needs its checkout
+`checkpoint()` SHALL refuse a report whose unit has no checkout, and SHALL hold no check outcome against COMPLETE: CI judges the tests.
 
-#### Scenario: the same command
-- WHEN the packet requires a check and the report's passed check spells the same command, whitespace apart
-- THEN `checkpoint()` accepts COMPLETE
-
-#### Scenario: a launcher, another command or none
-- WHEN the report's passed check wraps the required command in a launcher (`bash scripts/checks.sh`, `uv run python -m pytest` for `pytest`, a shell proxy), reports another command, or omits it
-- THEN `checkpoint()` refuses COMPLETE naming the required check, and the driver strips no launcher
-
-#### Scenario: not_run and failed
-- WHEN a COMPLETE report carries a `failed` check, a required check `not_run`, or a `not_run` check with no reason
-- THEN `checkpoint()` refuses it; a non-required `not_run` with a reason is accepted
+#### Scenario: failed or unrun checks
+- WHEN a COMPLETE report carries a `failed` check, a `not_run` check, or omits a command the brief named
+- THEN `checkpoint()` accepts it; the driver compares no reported command with the brief and CI is the judge of the tests
 
 #### Scenario: a PARTIAL checkpoint without a checkout
 - WHEN a PARTIAL checkpoint runs and `packet.checkout` does not exist
 - THEN `checkpoint()` raises
 
-### Requirement: A refused report goes back to its sender
-The driver SHALL return a report that fails the COMPLETE rules to the worker that wrote it, and ask the Lead only at the fix-round cap.
+### Requirement: A report is handed in through the runtime
+A worker SHALL hand in its report as the text of its agent-runtime `report` call, and the driver SHALL validate it the moment it arrives; there is no report file.
 
-#### Scenario: a fix round
-- WHEN a worker reports its unit ready and the report fails the COMPLETE rules
-- THEN the driver messages that worker with the refusal reason, the ticket keeps its gate, one fix round is counted, and no Lead request is written
+#### Scenario: an accepted hand-in
+- WHEN a worker's `complete` carries a report that `Report` accepts, names the task it works, and (COMPLETE) says it met its acceptance and names the commit its branch is at
+- THEN the driver appends a `report` event with the full JSON to `events.jsonl`, the ticket moves to its gates, and the ledger keeps the checkpoint; the reviewer's brief carries the report's content
 
-#### Scenario: the cap
-- WHEN report-time refusals reach the fix-round cap
-- THEN the Lead is asked, as for any capped unit
+#### Scenario: notes never block
+- WHEN a COMPLETE report carries `notes`
+- THEN the driver records them with the `report` event and lists them where it summarises the run at plan close; no rule turns a note into a block
 
-#### Scenario: an unreadable check outcome
-- WHEN a COMPLETE report fails a rule and carries a check outcome the driver cannot read (prose instead of `passed`, `failed` or `not_run`)
-- THEN the refusal goes back to the sender as a resume naming the report and the field, the drive books no error and reaches `finish`, and the corrected report is gated as usual
+#### Scenario: a blocked report
+- WHEN a worker hands in a BLOCKED report
+- THEN its `blocker` goes to the Lead as a request
+
+#### Scenario: no check outcome is held
+- WHEN a COMPLETE report carries a `failed` or `not_run` check
+- THEN it is accepted; CI judges the tests
+
+### Requirement: A refused hand-in goes back to its sender
+The driver SHALL return a hand-in whose shape is wrong to the same worker at once with the exact errors, and ask the Lead only after the third refusal.
+
+#### Scenario: a wrong shape
+- WHEN a hand-in is not JSON, breaks the contract (an unknown field such as `remaining`, a BLOCKED report without a `blocker`), names another task, fails the COMPLETE rules, or names a commit other than the branch head
+- THEN the driver appends a `report-refused` event with the reason and the payload, messages the same agent the exact errors, writes no Lead request and counts no fix round, and the corrected hand-in is gated as usual
+
+#### Scenario: the third refusal
+- WHEN the same task's hand-in is refused for the third time
+- THEN the Lead is asked
 
 ### Requirement: A merged unit completes
-A unit whose pull request merged SHALL complete even when its stored report fails the COMPLETE rules.
-
-#### Scenario: merged with a failing report
-- WHEN a PR is merged and its stored report fails the COMPLETE rules
-- THEN the ledger task is COMPLETE with its original checks, the plan cell is COMPLETE, `deferred.md` has a `[merged-unverified] <task>: <reason>` line, no Lead request is written, and the dependents become dispatchable
+A unit whose pull request merged SHALL complete.
 
 #### Scenario: an early merge
 - WHEN a PR merges early (`merged_early`), including on a drive with a named `--gate`
-- THEN the unit completes the same way and the ledger task keeps the checks of the worker's stored report
+- THEN the unit completes and the ledger task keeps the checks of the worker's stored report
 
 #### Scenario: a missing checkout
 - WHEN a PR is merged and `packet.checkout` no longer exists
@@ -234,11 +237,44 @@ A unit whose pull request merged SHALL complete even when its stored report fail
 - THEN the worktree is kept
 
 ### Requirement: CI findings are capped per job
-A CI fix round SHALL carry each failing job's own capped excerpt and stay small.
+A CI fix round SHALL carry, for each failing job, the job name, the run id and the last 50 lines of each failed step, and stay small.
 
 #### Scenario: several long logs
 - WHEN several CI checks fail with long logs
-- THEN each CI finding carries only its own job's capped excerpt, the full log is at `log_path`, and the fix-round findings file stays under 64 KiB
+- THEN each CI finding carries only its own job's name, its run id and the last lines of each failed step (never the start of the log), the full log is at `log_path`, and the fix-round findings file stays under 64 KiB
+
+### Requirement: A failed check is re-run once
+The driver SHALL re-run the failed jobs of a failing check once before it acts on the failure, treat a failure that then passes as flaky, and ask the Lead when a job fails twice with no step failing.
+
+#### Scenario: a flaky failure
+- WHEN a unit's checks fail and the one automatic `gh run rerun --failed` of those runs ends green
+- THEN the unit proceeds to merge-ready with no fix round and a `flaky` event names the checks; the events are listed in the archive pull request at plan close
+
+#### Scenario: a failure that stays
+- WHEN the checks fail again after the re-run
+- THEN the failure goes back to the worker as a fix round (the re-run is not repeated on that head); a check still running is waited for, never treated as a failure
+
+#### Scenario: an infrastructure failure
+- WHEN a job fails twice and its log holds no failed step (no test or check step failed)
+- THEN the Lead is asked; when the driver cannot tell the two apart it treats the failure as a test failure
+
+### Requirement: A failed check passing on main goes back to the worker
+A CI failure that does not also fail on the base branch SHALL go back to the unit's worker with the evidence and the way to reproduce it.
+
+#### Scenario: the fix round
+- WHEN a check fails that passes on the base branch
+- THEN the worker gets a fix round whose findings carry the failed job names, the run id and the last 50 lines of each failed step, and whose brief tells it to re-run those tests locally to reproduce, fix them and re-run them, and to hand in BLOCKED with an `environment:` blocker when they pass locally and fail in CI
+
+#### Scenario: failing three times
+- WHEN the same gate has failed three times
+- THEN the Lead is asked
+
+### Requirement: A failed check that also fails on main asks the Lead once
+A check that fails on the base branch as well as in a ticket SHALL cost the Lead one request for the whole run, not one per ticket.
+
+#### Scenario: main is red
+- WHEN a ticket's check fails that fails in the base branch's latest completed run (read once per run with `gh run list` and `gh run view`)
+- THEN one `ci` request says main is red, no worker round and no re-run is spent, and every other ticket failing a check that fails on main waits on that request; when the Lead decides it the waiting tickets look again
 
 ### Requirement: A pending CI log is not a finding
 The driver SHALL wait on a failing check whose workflow run is still in progress.
@@ -248,7 +284,7 @@ The driver SHALL wait on a failing check whose workflow run is still in progress
 - THEN the CI state stays pending and the unit is not asked; once the failing step's log is readable the gate fails and the request quotes that log, never the placeholder
 
 ### Requirement: A conflicting pull request is rebased
-A unit whose pull request conflicts SHALL go back to draft and be rebased by a fresh worker, and no ready or update call SHALL run on it meanwhile.
+A unit whose pull request conflicts SHALL go back to draft and be rebased by a fresh worker, and no ready or update call SHALL run on it meanwhile; when another open ticket changes the same files, the rebase waits for that ticket to merge.
 
 #### Scenario: a conflict while waiting for the merge
 - WHEN a unit at `awaiting-merge` has a pull request that turns `DIRTY` or `CONFLICTING`
@@ -273,6 +309,10 @@ A unit whose pull request conflicts SHALL go back to draft and be rebased by a f
 #### Scenario: a disputed change
 - WHEN a disputed answer with `changes_code` sends a unit back from `ready-for-ci` or `awaiting-merge`
 - THEN the unit's readiness is forgotten across its attempts and its checks cleared, the PR is a draft through the delta re-review, and `gh pr ready` runs again on its return
+
+#### Scenario: a conflict with another open ticket
+- WHEN a pull request conflicts and another open ticket's pull request changes a file it changes
+- THEN no rebase round is raised; the unit waits until that ticket has merged and is then rebased onto main
 
 ### Requirement: A pull request that is behind is updated
 A unit whose pull request is behind its base SHALL be updated without a fix round.
@@ -376,39 +416,31 @@ A failed dispatch SHALL wake the Lead once per ticket and reason, and only the e
 - THEN it exits 2, writes no decision, and names the id it expects; an uppercase form of the expected id is accepted, and one shared `attempt_pattern` recognises every suffix
 
 ### Requirement: One idle watchdog
-A quiet agent SHALL cost the Lead one idle request, never an early or repeated one.
+The Lead SHALL be asked about a quiet agent only when its process is gone or it has shown no activity for `--idle-minutes` (default 60), never earlier and never twice.
 
 #### Scenario: a turn that ended while the runtime lists the assignment as working
 - WHEN an agent's turn ends while the runtime still lists its assignment as working (`idle` or `done`)
-- THEN it is a live agent, not an exit: a reviewer advances only on its own `complete`, a worker stays pending unless a valid report for its task is already on disk, an answerer stays working, none is resumed or replaced, and only the timed idle watchdog (a baseline, then two unchanged ticks) asks the Lead, with one `idle` request and one decision wake naming the agent, the file it owes, how long it has been quiet and `decide <plan> <unit> retry | answer | skip`
+- THEN it is a live agent, not an exit: a reviewer advances only on its own `complete`, a worker stays pending, an answerer stays working, none is resumed or replaced, and only the idle watchdog asks the Lead, with one `idle` request and one decision wake naming the agent, the review file a reviewer owes, how long it has been quiet and `decide <plan> <unit> retry | answer | skip`
 
-#### Scenario: failures are handled at once
-- WHEN an agent has failed, exited or gone, is a restart orphan, reports `unreported` or `error`, or a worker reports `blocked` or `decision`
-- THEN the driver handles it at once, not through the watchdog
+#### Scenario: quiet for --idle-minutes
+- WHEN a unit's agent state, gate and CI show nothing new for `--idle-minutes` and its agent is not reported `working`
+- THEN the Lead is asked once; any change restarts the quiet time, and a shorter quiet time asks nobody
 
 #### Scenario: the reviewer brief
 - WHEN a reviewer is briefed
 - THEN the brief says the reviewer writes the review once the diff is read and then reports `complete` with the brief's assignment id
 
 #### Scenario: a complete that cannot be read
-- WHEN a `complete` announces a file the driver cannot read
+- WHEN a reviewer's `complete` announces a review file the driver cannot read
 - THEN the grace and capped recovery apply, and each recovery message names the file to write or repair and says to report complete under the current assignment
 
 #### Scenario: a working agent
 - WHEN `wait` reports a unit's agent with `runtime_state: working`
-- THEN the idle tick does not count it until it has been `working` for `--working-minutes`, when the request says how long; the window is in memory and starts empty at each drive start
+- THEN the idle watchdog does not count it until it has been `working` for `--working-minutes`, when the request says how long; the window is in memory and starts empty at each drive start
 
 #### Scenario: a skipped unit
-- WHEN the idle tick skips a unit (its gate is `requested`, `awaiting-merge` or parked)
-- THEN that unit's working window is cleared, so a unit that returns to `working` starts a fresh one and is not asked until another `--working-minutes` have passed
-
-#### Scenario: an unchanged signature that is not working
-- WHEN a unit's signature is unchanged for two ticks and its agent is not reported `working` (CI waiting, or no runtime observation)
-- THEN the Lead is asked
-
-#### Scenario: the file a worker owes
-- WHEN the idle request names the file a worker owes
-- THEN it names the next write-once path of its task directory (`report.2.json` on a second try), never the newest file already on disk
+- WHEN the idle watchdog skips a unit (its gate is `requested`, `awaiting-merge` or parked)
+- THEN that unit's working window and quiet time are cleared, so a unit that returns to `working` starts fresh
 
 #### Scenario: a late reviewer complete
 - WHEN a reviewer whose idle request is still undecided reports `complete`
@@ -429,12 +461,16 @@ The drive SHALL act on the runtime's `not_started` attention verdict on the wait
 - WHEN a resumed attempt advances its turn and reports
 - THEN no request is raised; a verdict on an assignment no step of the drive owns ends nothing, and the drive does not re-derive the verdict from screen or output freshness
 
-### Requirement: Partial and blocked reports reach the Lead
-A PARTIAL or BLOCKED report from an ended turn SHALL open a blocked request for the Lead.
+### Requirement: A worker that ends without a report is resumed once
+A worker whose process ended or whose turn needs a person without a report SHALL be resumed once with the reminder to hand it in, and the Lead SHALL be asked only when it happens again.
 
-#### Scenario: an ended turn with a valid report
-- WHEN a worker's turn ends and its valid report belongs to the current task attempt
-- THEN a PARTIAL or BLOCKED report opens a blocked request containing its summary and remaining work, COMPLETE recovery keeps its acceptance checks, progress message text alone is never a handoff, and the same holds when reconciling an idle or lost worker
+#### Scenario: the first end
+- WHEN a worker's agent fails, exits or reports `unreported` or `error` without having handed in a report
+- THEN the same agent is resumed with "You ended without a report; hand it in", and no request is written
+
+#### Scenario: the second end
+- WHEN the resumed worker ends without a report again
+- THEN the Lead is asked
 
 ### Requirement: The ledger lock is bounded
 The driver and every Lead command SHALL take the ledger lock through one helper and one deadline rule.
@@ -572,7 +608,7 @@ A ticket worker's required checks SHALL be the repository's check tiers, or the 
 
 #### Scenario: tiers
 - WHEN a ticket worker is briefed in a repo whose config declares check tiers and the run names no `--gate`
-- THEN its required checks are `checks.fast` and `checks.affected` with `{base}` rendered as the run's `--base` ref as given and `{paths}` as the ticket's paths, each shell-quoted and space-joined; the "Before you report COMPLETE, run:" line lists exactly those, one other line names `checks.full` as the check CI runs, and the brief no longer asks for the repository's full CI gate
+- THEN its required checks are `checks.fast` and `checks.affected` with `{base}` rendered as the run's `--base` ref as given and `{paths}` as the ticket's paths, each shell-quoted and space-joined; the "Before you hand in, run:" line lists exactly those, one other line names `checks.full` as the check CI runs, and the brief no longer asks for the repository's full CI gate
 
 #### Scenario: a named gate
 - WHEN a run names `--gate` in a repo whose config declares check tiers
@@ -580,18 +616,11 @@ A ticket worker's required checks SHALL be the repository's check tiers, or the 
 
 #### Scenario: overlapping tiers
 - WHEN `checks.fast`, the rendered `checks.affected` and `checks.full.run` render the same command, whitespace apart
-- THEN the required checks list it once, the brief neither lists it twice nor tells the worker not to run it, and COMPLETE validation is decided by that same set
+- THEN the required checks list it once, the brief neither lists it twice nor tells the worker not to run it
 
 #### Scenario: a distinct full
 - WHEN `checks.fast` and the rendered `checks.affected` differ from `checks.full.run`
 - THEN the assignment keeps `fast` and the rendered `affected` as its required checks, and a distinct `full` is named only as the whole suite CI runs
-
-### Requirement: An affected check may find no test
-A COMPLETE report SHALL be accepted with the rendered `affected` check `not_run` and a reason.
-
-#### Scenario: no test selected
-- WHEN a COMPLETE report gives the rendered `affected` check `not_run` with a non-blank reason
-- THEN the report is accepted; a `fast` check or any other required check reported `not_run` is still refused, and the allowance never waives a command another tier also requires
 
 ### Requirement: This repository declares check tiers
 An orchestrate run in this repository SHALL be briefed with check tiers.
@@ -599,21 +628,6 @@ An orchestrate run in this repository SHALL be briefed with check tiers.
 #### Scenario: the repo config
 - WHEN an orchestrate run starts in this repository
 - THEN its config declares `fast` as the unit suite, `affected` selecting through pytest-impacted from `{base}`, and `full` as the whole suite in parallel, and `plan check` prints no tiers warning
-
-### Requirement: Required checks are matched by spelling
-The contract and every brief SHALL tell a worker to report each required check as written.
-
-#### Scenario: the contract
-- WHEN a worker reads the contract the run wrote
-- THEN it says a required check is matched by its spelling, whitespace apart, and names no launcher, proxy or test runner flag
-
-#### Scenario: the brief
-- WHEN a worker receives a brief that carries its required checks (the task, an answer, a redo, a fix or a rebase)
-- THEN it tells the worker to report each required check exactly as written, whatever its shell runs the command through, and the required-check line is unchanged
-
-#### Scenario: a proxied check
-- WHEN a worker's report names a required check through a shell proxy or launcher (`rtk proxy uv run pytest -q` for `uv run pytest -q`)
-- THEN the report is refused naming the required check
 
 ### Requirement: Workers run tests in the foreground
 A brief that carries required checks SHALL say how to run them.
@@ -664,7 +678,7 @@ The first-review brief SHALL give the reviewer's pass as numbered steps in one o
 
 #### Scenario: the pass
 - WHEN a reviewer receives the brief for a unit's first review
-- THEN the brief gives the pass as numbered steps — read the whole diff first; the ticket delivers what the task file's `What it delivers` says, each satisfied scenario proved by a test the diff adds or changes that asserts the THEN's behaviour on the real code path, names its scenario and fails when the change is reverted (a test that would pass without the change is blocking); the implementer's report matches the code at the reviewed commit (`covers` nodes that exist, `checks` outcomes the log shows, `head`, `files`); the requirements the change touches still hold; the repository's rules hold — and only after that judges severity
+- THEN the brief gives the pass as numbered steps — read the whole diff first; the ticket delivers what the task file's `What it delivers` says, each satisfied scenario proved by a test the diff adds or changes that asserts the THEN's behaviour on the real code path, carries its spec tag and fails when the change is reverted (a test that would pass without the change is blocking); the implementer's report matches the code at the reviewed commit (`covers` nodes that exist, `checks` outcomes the log shows, `head`, `files`); the requirements the change touches still hold; the repository's rules hold — and only after that judges severity
 
 #### Scenario: the reviewer reads and reports correctness bugs only
 - WHEN a reviewer receives the brief
@@ -688,12 +702,12 @@ The reviewer's assignment SHALL name the absolute path of the review file it wri
 - WHEN the driver starts the reviewer of a unit
 - THEN the assignment names the absolute path of the review file, beside the brief it must read
 
-### Requirement: Test changes carry their cost
-A worker that changes a covered test SHALL report its cost.
+### Requirement: Workers are briefed on the tdd skill
+A worker's contract SHALL name the `tdd` skill and inline its admission rules for a backend with no skill loader.
 
 #### Scenario: the worker
-- WHEN a YAML plan's worker changes a test it covers in `covers`
-- THEN its packet names the `tdd` skill and inlines that skill's admission and cost rules for a backend with no skill loader, its report carries `test_cost` with the command that timed the touched tests, each touched test file's seconds and each covered node's seconds, and verify refuses the report without those rows
+- WHEN a YAML plan's worker is briefed
+- THEN its packet names the `tdd` skill and inlines that skill's admission and cost rules for a backend with no skill loader; its report carries no test cost and no scenario ID names a test
 
 ### Requirement: A drive parks on a plan it cannot use
 A live drive SHALL park, not give up the plan, when it reads a plan it cannot use.

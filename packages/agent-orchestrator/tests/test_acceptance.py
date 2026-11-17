@@ -149,7 +149,6 @@ class AcceptanceFixture(SnapshotFixture, GateFixture):
         report = json.loads(self.report("t1"))
         report["covers"] = covers or self.COVERS
         if report.get("contract") == 3:
-            report["test_cost"] = self.measured(report["covers"])
             report["red"] = red_of(report["covers"])
         step = report_wait("demo-t1", "complete", id=spawn_id("demo-t1"))
         step["write"] = [

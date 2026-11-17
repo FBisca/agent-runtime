@@ -1,5 +1,4 @@
 Contract: <ROOT>/run/contract.md
-Report: <ROOT>/run/t1r2/report.json
 
 # Fix round 2 for T1 (task t1r2): review findings
 
@@ -19,7 +18,6 @@ Items marked answer_required need an answer: add `responses` to your report, one
 
 The Lead's answer: keep the public name
 
-Commit and push to the same branch; open no new pull request. Run before you report COMPLETE: uv run pytest -m unit.
-Report each required check with its command exactly as written above, whatever your shell runs it through.
-Run the checks above, then run only the test files you wrote or changed; leave every other test to verify and CI. Run each command in the foreground under a timeout, read its failures from that run's output or log, and re-run only the tests that failed.
+Commit and push to the same branch; open no new pull request. Run before you hand in: uv run pytest -m unit.
+Run the checks above, then run only the test files you wrote or changed; leave every other test to CI. Run each command in the foreground under a timeout, read its failures from that run's output or log, and re-run only the tests that failed.
 Report review_rounds 0: the driver counts failed rounds.

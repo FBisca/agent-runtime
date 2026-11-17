@@ -11,6 +11,7 @@ It lives beside `__init__.py` rather than in it because no module of the package
 and because everything that reaches the runtime to start or resume a worker is one rule with one home.
 """
 
+import json
 import subprocess
 import sys
 import uuid
@@ -377,7 +378,7 @@ class Spawning:
                 "You are a fresh agent replacing %s, which ran short of context. You have no earlier transcript; read:"
                 % name,
                 "- The unit's task: %s" % (self.run_dir / unit / "task.md"),
-                "- Its last report: %s" % (report or "none yet"),
+                "- Its last report: %s" % (json.dumps(report) if report else "none yet"),
                 "- Its last findings: %s" % (findings or "none yet"),
                 "- Checkout contents: %s" % collection(checkout),
                 "- Commit range: `git -C %s diff %s...HEAD`%s"

@@ -117,8 +117,6 @@ class FolderPlanFixture(YamlPlanFixture):
         data = json.loads(super().report(task_id, **over))
         data.setdefault("covers", self.COVERS)
         data["contract"] = 3
-        if "test_cost" not in over:
-            data["test_cost"] = self.measured(data["covers"])
         return json.dumps(data)
 
     def approve(self, expect_ok=True):

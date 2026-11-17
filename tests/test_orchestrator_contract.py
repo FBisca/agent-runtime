@@ -109,7 +109,7 @@ class BoundaryTests(unittest.TestCase):
             "files": [],
             "decisions": [],
             "interfaces": [],
-            "remaining": [],
+            "notes": [],
             "checks": [],
             "head": "abc1234",
             "pr": None,

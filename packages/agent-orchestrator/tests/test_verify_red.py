@@ -1,7 +1,7 @@
 """verify's red-first proof: each satisfied scenario's covering test was seen failing before the fix.
 
 The report carries, under `red`, the failing output of each scenario's covering test from before the fix. The gate
-checks only that the excerpt is there and names a node the scenario's `covers` maps; whether it is a genuine
+checks only that the excerpt is there (that it names the covering test is the covers gate's); whether it is a genuine
 assertion failure of the behaviour is the reviewer's judgement.
 """
 
@@ -34,13 +34,6 @@ class RedFirstProof(unittest.TestCase):
         findings = gate(None)
         self.assertEqual([f["check"] for f in findings], ["red"])
         self.assertIn("S1: no red excerpt", findings[0]["excerpt"])
-
-    @pytest.mark.spec("Scenario evidence")
-    def test_a_red_excerpt_that_names_another_node_fails_naming_the_scenario_and_its_nodes(self):
-        findings = gate({"S1": "FAILED tests/test_b.py::test_other - AssertionError"})
-        self.assertEqual([f["check"] for f in findings], ["red"])
-        self.assertIn("S1", findings[0]["excerpt"])
-        self.assertIn(NODE, findings[0]["excerpt"])
 
     @pytest.mark.spec("Scenario evidence")
     def test_a_red_excerpt_that_names_the_covering_node_passes(self):

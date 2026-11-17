@@ -16,26 +16,11 @@ class SilentWorker(GateFixture, unittest.TestCase):
         return wait_result([assignment("demo-t1", "working", "idle")], write=write)
 
     @pytest.mark.spec("One idle watchdog")
-    def test_S11_the_idle_request_names_the_next_write_once_report_not_the_newest(self):
-        """orchestrator-audit-fixes/S11"""
-        unfinished = self.report("t1", acceptance_met=False)
-        self.waits(
-            [self.silent_worker(write=[[str(self.run_dir / "t1" / "report.json"), unfinished]])]
-            + [self.silent_worker()] * 4
-            + [self.skipped()]
-        )
-        self.run_driver("--idle-minutes", "0")
-        reason = self.request()["reason"]
-        self.assertEqual(self.request()["event"], "idle")
-        self.assertIn(str(self.run_dir / "t1" / "report.2.json"), reason)
-        self.assertNotIn(str(self.run_dir / "t1" / "report.json"), reason)
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S11_a_first_try_is_asked_for_report_json(self):
+    def test_the_idle_request_names_the_worker(self):
         """orchestrator-audit-fixes/S11"""
         self.waits([self.silent_worker()] * 5 + [self.skipped()])
         self.run_driver("--idle-minutes", "0")
-        self.assertIn(str(self.run_dir / "t1" / "report.json"), self.request()["reason"])
+        self.assertIn("demo-t1", self.request()["reason"])
 
 
 class LateReviewerComplete(GateFixture, unittest.TestCase):

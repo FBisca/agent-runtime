@@ -18,10 +18,9 @@ from typing import Any
 
 from .. import contracts, invariants, narrate, timeutil
 from ..invariants import next_path
-from ..report_rules import require_report
 from .book import ARCHIVE, release
 from .prompts import render
-from .records import check_commit, merge_state, report_reader, require_completable
+from .records import check_commit, merge_state
 from .report import cell
 from .runtime import head_of
 
@@ -192,27 +191,13 @@ class Gates:
         self.mark(task_id, gate="decided", decision={"path": request["decision"]})
 
     def step_reported(self, task_id):
+        """The hand-in the driver already accepted (shape, task id, head): the gates read what it says."""
         task = self.task(task_id)
-        path = self.report_file(task_id)
-        report = self.read_payload(task_id, "report", path, report_reader(task_id))
-        if report is None:
-            return  # the gate keeps waiting: the worker was warned, or the Lead is asked
-        # A report whose shape the ledger refuses is the sender's to fix, never the drive's to crash on: the same
-        # words `checkpoint` would raise with go back to the worker that wrote it.
-        try:
-            require_report(report)
-        except ValueError as error:
-            self.warn_sender(task_id, "report", path, str(error), accept=True)
-            return
-        self.log_clarifications(task_id, "report", report, path)
+        report = task["handed_in"]
+        self.log_clarifications(task_id, "report", report, "report:%s" % task_id)
         missing = contracts.missing_responses(report, task.get("answer_ids") or [])
         if missing:
-            return self.chase_responses(task_id, path, missing)
-        # The merge completes the unit by the same rules, so a report they refuse is the worker's to fix now, while
-        # it can still act: a fix round, not a Lead request, until the cap.
-        item = self._uncompletable(task, report, path)
-        if item is not None:
-            return self.fail_gate(task_id, report, self.gate_name(), [item])
+            return self.chase_responses(task_id, missing)
         verdict, lines = self.gate(task_id, task["packet"], report)
         if verdict == "error":
             return self.request(task_id, self.gate_name(), lines[0])
@@ -232,24 +217,6 @@ class Gates:
             gate="converged",
             delta={"from": reviewed, "findings": findings} if reviewed else None,
         )
-
-    def _uncompletable(self, task, report, path):
-        """The failure item a report takes when it breaks a rule the merge will hold it to: a fix round
-        while the worker can still act, and the Lead only past the cap. None when the report meets them."""
-        try:
-            require_completable(task, dict(report, review_rounds=0))
-        except ValueError as error:
-            return {
-                "id": "R1",
-                "kind": "blocking",
-                "source": self.gate_name(),
-                "check": "report",
-                "command": "the COMPLETE rules for %s" % path.name,
-                "exit": 1,
-                "excerpt": str(error),
-                "log_path": str(path),
-            }
-        return None
 
     def step_converged(self, task_id):
         task = self.task(task_id)
@@ -319,7 +286,7 @@ class Gates:
 
         def read_review(where):
             review = contracts.load(where, contracts.validate_review)
-            report = contracts.load(task["report_path"], contracts.validate_report)
+            report = task["report"]
             check_commit(review["commit"], head_of(packet["checkout"]), where)
             self.check_resolutions(packet["unit"], review)
             return review, report
@@ -363,35 +330,17 @@ class Gates:
     def step_answers(self, task_id):
         task = self.task(task_id)
         answers = task["answers"]
-        path = self.report_file(answers["id"])
-        report = self._answers_report(task_id, answers, path)
-        if report is None:
-            return
-        self.log_clarifications(task_id, "report", report, path)
+        report = answers["report"]
+        self.log_clarifications(task_id, "report", report, "report:%s" % answers["id"])
         unit = task["packet"]["unit"]
         missing = contracts.missing_responses(report, answers["ids"])
-        if self._answers_missing(task_id, task, answers, path, missing):
+        if self._answers_missing(task_id, task, answers, missing):
             return
         if self._answers_changed(task_id, task, answers, report, unit):
             return
         self.mark(task_id, answers=dict(answers, state="done"))
 
-    def _answers_report(self, task_id, answers, path):
-        """The answerer's report, or None when it cannot be read: the attempt records that its answers
-        failed and the Lead hears the contract error, as for any other unreadable payload."""
-        try:
-            report = contracts.load(path, contracts.validate_report)
-            contracts.need(
-                report["task_id"] == answers["id"],
-                "report task_id %r is not %s" % (report["task_id"], answers["id"]),
-            )
-        except contracts.ContractError as error:
-            self.mark(task_id, answers=dict(answers, state="failed"))
-            self.contract_error(task_id, "answers", error)
-            return None
-        return report
-
-    def _answers_missing(self, task_id, task, answers, path, missing):
+    def _answers_missing(self, task_id, task, answers, missing):
         """A response the reviewer asked for and the report lacks: the first miss resumes the worker at
         no round cost, the second is a request. True when the answers step is over."""
         if not missing:
@@ -399,7 +348,7 @@ class Gates:
         if answers["tries"] >= 1:
             self.mark(task_id, answers=dict(answers, state="failed"))
             self.contract_error(
-                task_id, "responses", "%s still has no response for %s" % (path, ", ".join(missing))
+                task_id, "responses", "the report still has no response for %s" % ", ".join(missing)
             )
             return True
         self.log(
@@ -408,10 +357,10 @@ class Gates:
             task=task_id,
             where="responses",
             missing=missing,
-            error="%s has no response for answer_required finding(s) %s"
-            % (path, ", ".join(missing)),
+            error="the report has no response for answer_required finding(s) %s"
+            % ", ".join(missing),
         )
-        assignment_id = self.resume_for_responses(task, answers["id"], path, missing)
+        assignment_id = self.resume_for_responses(task, answers["id"], missing)
         self.mark(
             task_id, answers=dict(answers, state="working", tries=1, assignment_id=assignment_id)
         )
@@ -501,10 +450,7 @@ class Gates:
         Lead when `gh` could not read them, another poll while they run. False as long as it waits."""
         state = task.get("ci_state")
         if state == "failed":
-            report = contracts.load(self.task(task_id)["report_path"], contracts.validate_report)
-            return self.fail_gate(
-                task_id, report, "ci", self.ci_items(task_id, url, task.get("ci_rows") or [])
-            )
+            return self.driver.pull.ci_failed(task_id, url, task)
         if state == "error":
             return self.request(task_id, "ci", "gh pr checks failed for %s" % url)
         narrate.say("wait", "ci", "waiting for CI on %s" % url, task=task_id)
@@ -522,11 +468,13 @@ class Gates:
             self.mark(task_id, pr_ready=True)
             narrate.say("done", "ci", "CI green; %s ready for review" % url, task=task_id)
         unit = self.unit_of(task_id)
+        rerun = task.get("ci_rerun")
+        if rerun and rerun.get("head") == task.get("ci_head") and not task.get("flaky_logged"):
+            # the checks failed, then passed on the one automatic re-run: proceed, and list it at the plan's close
+            self.log("flaky", unit=unit, task=task_id, pr=url, checks=rerun["failed"])
+            self.mark(task_id, flaky_logged=True)
         # an update-branch moves the head without a new report: the live head keys the wake, so it is sent again
-        head = (
-            view.get("headRefOid")
-            or contracts.load(self.task(task_id)["report_path"], contracts.validate_report)["head"]
-        )
+        head = view.get("headRefOid") or self.task(task_id)["report"]["head"]
         self.wake("pr-ready", unit, "pr-ready %s: %s" % (unit, url), key="%s:%s" % (unit, head))
         self.put_status(task_id, "IN PROGRESS · awaiting merge (%s)" % url)
         self.mark(task_id, gate="awaiting-merge", pr=url, updated_from=None)
@@ -548,16 +496,12 @@ class Gates:
                 return moved
             task = self.task(task_id)
             if task.get("ci_state") == "failed":
-                report = contracts.load(task["report_path"], contracts.validate_report)
-                return self.fail_gate(
-                    task_id, report, "ci", self.ci_items(task_id, url, task.get("ci_rows") or [])
-                )
+                return self.driver.pull.ci_failed(task_id, url, task)
             return False
         stored = self.task(task_id)["report"]
         report = dict(
             stored,
             status="COMPLETE",
-            remaining=[],
             acceptance_met=True,
             review_rounds=stored.get("review_rounds", 0),
         )
@@ -727,6 +671,12 @@ class Gates:
         held = task.get("held") or []
         asked = task.get("request") or {}
         self.release_intents(asked.get("intent"), "the Lead decided %s" % action)
+        with self.book() as data:
+            if (data.get("main_red") or {}).get("task") == task_id:
+                del data[
+                    "main_red"
+                ]  # the Lead has answered for main: the waiting tickets look again
+                self.driver.main_failed = None
         if action in ("mark blocked", "skip"):
             return self._decide_paused(task_id, action, reason, held, unit)
         if unit == ARCHIVE:
@@ -736,9 +686,10 @@ class Gates:
             return
         self._decide_answerer(task_id, task, asked, action, unit)
         finished = next((m for m in held if m["kind"] == "complete"), None)
-        if finished and self.report_is_valid(task_id):
+        if finished:
             self.log("held-acted", unit=unit, task=task_id, held="complete", acted="reported")
-            return self.mark(task_id, gate="reported", held=[])
+            self.mark(task_id, gate=None, held=[])
+            return self.take_report(task_id, finished["text"])
         if action == "answer":
             return self._decide_answer(task_id, task, asked, decision)
         return self._decide_handoff(task_id, task, action, decision, reason)

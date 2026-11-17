@@ -1,9 +1,7 @@
 """The reviewer's brief keeps it on targeted tests: a reviewer that reruns a whole suite serially stalls the gate."""
 
-import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -17,16 +15,15 @@ pytestmark = pytest.mark.unit
 class AttemptRecord:
     """The record of the attempt under review, as the brief reads it: its report file and the head it claims."""
 
-    def __init__(self, report=None, head=None):
-        self.report = Path(report) if report else None
+    def __init__(self, task_id=None, head=None):
+        self.task_id = task_id
         self.head = head
 
     def task(self, task_id):
         """One attempt, as the ledger holds it."""
         return {
             "packet": {"task_id": task_id},
-            "report_path": str(self.report) if self.report else None,
-            "report": {"head": self.head} if self.head else {},
+            "report": {"task_id": self.task_id, "head": self.head} if self.head else {},
         }
 
 
@@ -94,31 +91,18 @@ class ReviewBriefTests(unittest.TestCase):
     @pytest.mark.spec("The reviewer brief gives one pass")
     @pytest.mark.integration
     @pytest.mark.spec("Reviewer packet names the attempt under review")
-    def test_S1_the_brief_names_the_report_whose_claims_the_pass_checks(self):
-        # The unit's directory holds the first attempt's report, stale the moment the unit was
-        # re-dispatched; the attempt under review wrote its own, and that is the one the pass checks.
+    def test_the_brief_carries_the_report_of_the_attempt_under_review(self):
+        # An earlier attempt's report is stale the moment the unit was re-dispatched; the attempt under review's own
+        # hand-in is the one the pass checks, and the brief carries its content: there is no file to name.
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
-            (run / "t1").mkdir()
-            (run / "t1" / "report.json").write_text("{}", encoding="utf-8")
-            report = run / "t1o1" / "report.json"
-            report.parent.mkdir()
-            report.write_text("{}", encoding="utf-8")
-            written = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc).timestamp()
-            os.utime(report, (written, written))
-            text = self.brief(run=run, attempt=AttemptRecord(report, "c0ffee1"))
-        # The task file and the run's contract, by path.
+            text = self.brief(run=run, attempt=AttemptRecord("t1o1", "c0ffee1"))
         self.assertIn(str(run / "t1" / "task.md"), text)
         self.assertIn(str(run / "contract.md"), text)
-        # The attempt under review's own report, when it was written, and the head it claims.
-        self.assertIn(str(report), text)
-        self.assertIn("2026-11-16T10:00:00", text)
-        self.assertIn("c0ffee1", text)
-        # Never the glob a stale report in the unit's directory would answer with, and never a file read
-        # under another name as a fallback for the review the driver asked for.
+        self.assertIn('"head": "c0ffee1"', text)
+        self.assertIn('"task_id": "t1o1"', text)
         self.assertNotIn("report*.json", text)
-        self.assertNotIn(str(run / "t1" / "report.json"), text)
-        self.assertNotIn("written under another name", text)
+        self.assertNotIn("report.json", text)
 
     @pytest.mark.spec("The reviewer brief gives one pass")
     def test_S1_the_brief_says_what_makes_a_test_prove_its_scenario(self):

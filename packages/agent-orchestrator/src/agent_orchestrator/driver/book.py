@@ -212,21 +212,6 @@ def checkpoint(data, task_id, report, merged=False):
     return task
 
 
-def settle_merged(data, task_id, report):
-    """A merged unit is COMPLETE whatever its report says: the merge is final. The checks stay as the worker reported
-    them; the caller records why the rules were not met."""
-    task = data["tasks"][task_id]
-    require(task["status"] not in ("COMPLETE", "RELEASED"), "assignment is closed")
-    task["finished_at"] = timeutil.iso()
-    task.update(
-        status="COMPLETE",
-        report=report,
-        updated_at=timeutil.iso(),
-        checkout_at_checkpoint=merged_snapshot_of(task["packet"]["checkout"]),
-    )
-    return task
-
-
 def release(data, task_id, reason, cutoff=False):
     """Let one attempt go, with the reason it was let go: a released attempt stays readable."""
     task = data["tasks"][task_id]

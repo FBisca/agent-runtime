@@ -147,15 +147,6 @@ class GateFixture(RunFixture):
     extra_files = None  # worktree path -> text the worker also writes
     COVERS = {"S1": ["src/a/test_a.py::test_a"]}
 
-    def measured(self, covers):
-        """The `test_cost` a YAML ticket reports: its command, its modules and its covered nodes."""
-        nodes = [node for nodes in covers.values() for node in nodes]
-        return {
-            "command": "uv run pytest src/a --durations=0 -q",
-            "modules": {node.split("::")[0]: 0.2 for node in nodes},
-            "tests": {node: 0.2 for node in nodes},
-        }
-
     def report(self, task_id, **over):
         yaml_plan = self.plan.name.endswith(".plan.yaml")
         data = dict(
@@ -170,32 +161,28 @@ class GateFixture(RunFixture):
                 "files": [],
                 "decisions": [],
                 "interfaces": [],
-                "remaining": [],
                 "checks": [],
                 "review_rounds": 0,
                 "usage": "unknown",
-                "head": "abc1234",
+                "head": "@HEAD",
                 "pr": "https://github.com/o/r/pull/7",
             },
             **over,
         )
-        if yaml_plan and "test_cost" not in over:
-            data["test_cost"] = self.measured(data["covers"])
         if yaml_plan and "red" not in over:
             data["red"] = red_of(data.get("covers"))
         return json.dumps(data)
 
     def worker_done(self, task_id="t1", tests=False, report=None, name="demo-t1"):
-        """A wait step: the worker wrote its report (and, with tests, a tagged test) and says complete."""
+        """A wait step: the worker hands in its report through the runtime (and, with tests, writes a tagged test)."""
         fix_round = int(task_id.split("r")[1]) if "r" in task_id else 0
         step = report_wait(
-            name, "complete", id=resume_id(name, fix_round) if fix_round else spawn_id(name)
+            name,
+            "complete",
+            text=None if report is False else report or self.report(task_id),
+            id=resume_id(name, fix_round) if fix_round else spawn_id(name),
         )
         step["write"] = []
-        if report is not False:
-            step["write"].append(
-                [str(self.run_dir / task_id / "report.json"), report or self.report(task_id)]
-            )
         if tests:
             step["write"].append(
                 [str(self.worktree / "src" / "a" / "test_a.py"), 'def test_a():\n    """S1"""\n']
@@ -391,7 +378,6 @@ class GateTests(GateFixture, unittest.TestCase):
         task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
         for needle in (
             "S1: test node src/a/test_a.py::test_a does not exist",
-            str(self.run_dir / "t1r1" / "report.json"),
             "t1r1",
             "findings.json",
         ):
@@ -451,38 +437,6 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual((request["task"], request["status"]), ("t1r2", "resolved"))
         self.assertEqual(self.task("t1r2")["gate"], "skipped")
 
-    FAILED_CHECK = [{"command": "pytest", "outcome": "failed", "reason": "2 tests failed"}]
-
-    def refused(self, task_id):
-        """A wait step: the worker reports a unit ready with a failed check, which COMPLETE refuses."""
-        return self.worker_done(task_id, report=self.report(task_id, checks=self.FAILED_CHECK))
-
-    @pytest.mark.spec("A refused report goes back to its sender")
-    def test_S5_a_ready_report_that_fails_the_complete_rules_goes_back_to_its_worker(self):
-        self.waits([self.refused("t1")])
-        self.run_driver()
-        resumes = self.calls("resume")
-        self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
-        findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
-        self.assertEqual(findings["attempt"], 1)
-        self.assertIn("complete result has failed checks: pytest", findings["items"][0]["excerpt"])
-        task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("complete result has failed checks: pytest", task_md)
-        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
-        self.assertEqual(self.spawned(), ["demo-t1"])  # no reviewer: the unit never left its gate
-        self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 1)
-        self.assertEqual(self.task("t1r1")["status"], "ACTIVE")
-
-    @pytest.mark.spec("A refused report goes back to its sender")
-    def test_S5a_report_refusals_at_the_fix_round_cap_ask_the_lead(self):
-        self.waits([self.refused("t1"), self.refused("t1r1"), self.refused("t1r2"), self.skipped()])
-        self.run_driver()
-        self.assertEqual(len(self.calls("resume")), 2)
-        request = self.request()
-        self.assertEqual((request["task"], request["event"]), ("t1r2", "gate"))
-        self.assertIn("complete result has failed checks: pytest", request["reason"])
-        self.assertEqual(self.ledger_unit("t1")["failed_reviews"], 3)
-
     def test_S6_passing_converge_spawns_a_fresh_large_reviewer_with_paths_only(self):
         """code-driven-orchestrator/S6"""
         self.waits([self.worker_done(tests=True)])
@@ -511,7 +465,7 @@ class GateTests(GateFixture, unittest.TestCase):
         task = self.task()
         self.assertEqual(
             (task["status"], task["gate"], task["report"]["head"]),
-            ("PARTIAL", "reviewing", "abc1234"),
+            ("PARTIAL", "reviewing", self.git(self.worktree, "rev-parse", "HEAD")),
         )
         self.assertEqual(self.calls("resume"), [])
 
@@ -542,7 +496,7 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
         task = self.task()
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
-        self.assertEqual(task["report_path"], str(self.run_dir / "t1" / "report.json"))
+        self.assertEqual(task["report"]["task_id"], "t1")
         self.assertTrue(self.ticket_status("T1").startswith("COMPLETE "))
 
     def test_S7_a_fix_round_for_a_dead_pane_spawns_a_fresh_worker_with_the_original_task(self):
@@ -577,50 +531,6 @@ class GateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.calls("resume"), [])
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])
 
-    def test_S6a_a_missing_report_does_not_advance_the_ticket(self):
-        """code-driven-orchestrator/S6a
-
-        A report is read after a bounded grace: the worker that announced a report without writing it is told once, twice, and only then the Lead is
-        asked. The ticket never advances on a payload that is not there."""
-        self.waits(
-            [
-                *self.repeated(self.worker_done(report=False)),
-                self.skipped(),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.spawned(), ["demo-t1"])
-        warned = self.calls("resume")
-        self.assertEqual(len(warned), 2, [c["args"]["task"] for c in warned])
-        for call in warned:
-            self.assertIn("report.json", call["args"]["task"])
-        self.assertEqual(self.request()["event"], "report")
-        self.assertIn("2 warning(s)", self.request()["reason"])
-        self.assertNotIn("report", self.task())
-
-    def test_S6a_an_invalid_report_does_not_advance_the_ticket(self):
-        """code-driven-orchestrator/S6a"""
-        self.waits(
-            [*self.repeated(self.worker_done(report=self.report("t1", contract=4))), self.skipped()]
-        )
-        self.run_driver()
-        self.assertEqual(self.spawned(), ["demo-t1"])
-        self.assertEqual(self.request()["event"], "report")
-        self.assertIn("contract", self.request()["reason"])
-        self.assertEqual(
-            len(self.calls("resume")), 2, "the worker was warned twice before the Lead was asked"
-        )
-
-    def test_S6a_a_report_for_another_task_does_not_advance_the_ticket(self):
-        """code-driven-orchestrator/S6a"""
-        self.waits([*self.repeated(self.worker_done(report=self.report("t9"))), self.skipped()])
-        self.run_driver()
-        self.assertEqual(self.request()["event"], "report")
-        self.assertIn("t9", self.request()["reason"])
-        self.assertEqual(
-            len(self.calls("resume")), 2, "the worker that misnamed its report was warned twice"
-        )
-
     def test_S6a_an_invalid_review_does_not_start_a_fix_round(self):
         """code-driven-orchestrator/S6a"""
         broken = self.review(verdict="pass", major=[MAJOR])
@@ -641,7 +551,7 @@ class GateTests(GateFixture, unittest.TestCase):
     def test_S6a_a_missing_review_does_not_advance_the_ticket(self):
         """code-driven-orchestrator/S6a
 
-        A report is read after a bounded grace moved the first answer from the Lead to the agent that sent the report: the gate waits, the reviewer is
+        A review is read after a bounded grace moved the first answer from the Lead to the agent that sent the report: the gate waits, the reviewer is
         told its file is not on disk, and the ticket does not advance. The request comes after the warnings."""
         self.waits(
             [
@@ -759,7 +669,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         reason = request["reason"]
         self.assertIn(REVIEWER, reason)
         self.assertIn(str(self.run_dir / "t1" / "review.json"), reason)
-        self.assertIn("20 minutes", reason)
+        self.assertIn("10 minutes", reason)
         self.assertIn("decide %s t1 retry | answer | skip" % self.plan, reason)
         self.assertEqual(len(self.wake_lines("decision")), 1)
 
@@ -776,7 +686,7 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
         self.run_driver()
         warned = self.reviewer_resumes()
         self.assertEqual(
-            len(warned), 2, "the A report is read after a bounded grace cap still applies"
+            len(warned), 2, "the A review is read after a bounded grace cap still applies"
         )
         path = str(self.run_dir / "t1" / "review.json")
         for call in warned:
@@ -858,9 +768,9 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
 
 
 class PayloadTests(GateFixture, unittest.TestCase):
-    """A report is read after a bounded grace: a report is the news, the file it names is the payload, and the driver waits for the payload."""
+    """A review is read after a bounded grace: a report is the news, the file it names is the payload, and the driver waits for the payload."""
 
-    @pytest.mark.spec("A report is read after a bounded grace")
+    @pytest.mark.spec("A review is read after a bounded grace")
     def test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead(self):
         """orchestrator-payload-race/S2"""
         self.waits(
@@ -877,7 +787,7 @@ class PayloadTests(GateFixture, unittest.TestCase):
         self.assertIn("Write or repair that file", warned[0]["task"])
         self.assertEqual(self.task()["gate"], "skipped")
 
-    @pytest.mark.spec("A report is read after a bounded grace")
+    @pytest.mark.spec("A review is read after a bounded grace")
     def test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead(self):
         """orchestrator-payload-race/S3"""
         self.states({"demo-t1-review": "exited"})
@@ -931,8 +841,8 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.calls("resume"), [])
 
     def test_S9_a_node_that_does_not_exist_is_a_fix_round_naming_scenario_node_and_reason(self):
-        covers = {"S1": ["src/a/test_a.py::test_nope"]}
-        report = self.report("t1", covers=covers)
+        covers = {"S1": ["src/a/test_gone.py::test_nope"]}
+        report = self.report("t1", covers=covers, red={"S1": "FAILED test_nope"})
         self.waits([self.worker_done(tests=True, report=report)])
         self.run_driver()
         self.assertEqual(
@@ -940,8 +850,8 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
             [
                 (
                     "covers",
-                    "S1: test node src/a/test_a.py::test_nope does not exist"
-                    " (no test_nope in src/a/test_a.py)",
+                    "S1: test node src/a/test_gone.py::test_nope does not exist"
+                    " (no file src/a/test_gone.py)",
                 )
             ],
         )

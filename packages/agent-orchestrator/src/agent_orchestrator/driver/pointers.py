@@ -114,7 +114,6 @@ def task_text(self, _plan, ticket, packet, scenarios, task_dir):
     return render(
         "task",
         contract=self.run_dir / "contract.md",
-        report=task_dir / "report.json",
         ticket=ticket["#"],
         delivers=ticket["What it delivers"],
         task_id=task_id,

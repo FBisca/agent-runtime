@@ -136,7 +136,7 @@ def short(item):
         return str(item)
     if item.get("source") in ("converge", "verify", "ci"):
         return (
-            item["excerpt"].splitlines()[0]
+            " ".join(item["excerpt"].splitlines()[:2])
             if item["excerpt"]
             else "%s %s failed" % (item["source"], item["check"])
         )

@@ -1,5 +1,4 @@
 Contract: <ROOT>/run/contract.md
-Report: <ROOT>/run/t1a1/report.json
 
 # Answers only for T1 (task t1a1)
 

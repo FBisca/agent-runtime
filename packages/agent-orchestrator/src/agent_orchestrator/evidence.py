@@ -99,17 +99,12 @@ def elapsed(started, finished):
 
 
 def claimed(task):
-    """Whether the attempt claims a completion: a complete report that says it met its acceptance and passed every
-    check. That is the worker's word, not evidence (a receipt is). An attempt that ended without such a report claims
-    nothing; an attempt still running is unknown (`None`)."""
+    """Whether the attempt claims a completion: a hand-in that is not BLOCKED and says it met its acceptance. The
+    ledger keeps the driver's checkpoint of it (PARTIAL until the merge). That is the worker's word, not evidence (a
+    receipt is). An attempt that ended without a report claims nothing; an attempt still running is unknown (`None`)."""
     report = task.get("report")
     if report:
-        checks = report.get("checks") or []
-        return bool(
-            report.get("status") == "COMPLETE"
-            and report.get("acceptance_met") is True
-            and all(check.get("outcome") == "passed" for check in checks)
-        )
+        return bool(report.get("status") != "BLOCKED" and report.get("acceptance_met") is True)
     if task.get("status") in TERMINAL:
         return False
     return None

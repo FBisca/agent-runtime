@@ -10,12 +10,10 @@ from unittest import mock
 import pytest
 from agent_orchestrator import driver
 from fixtures import (
-    assignment,
     load_script,
     recorded_idles,
     report_wait,
     resume_id,
-    wait_result,
 )
 from test_gates import MAJOR, GateFixture
 
@@ -124,39 +122,6 @@ class MergeTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review", "demo-t2"])
         self.assertEqual(self.ticket_status("T2"), "IN PROGRESS")
 
-    def refused_then_merged(self, failed):
-        """Wait steps: the report-time refusal releases t1 into a fix round, then the PR is merged by hand."""
-        merged = wait_result([assignment("demo-t1", "working", None, id=resume_id("demo-t1"))])
-        merged["write"] = [[str(self.home / "view-early.json"), json.dumps(["MERGED"])]]
-        return [
-            self.worker_done(
-                tests=True, report=self.report("t1", checks=[failed], review_rounds=0)
-            ),
-            merged,
-        ]
-
-    @pytest.mark.spec("A merged unit completes")
-    def test_S6_a_merged_pr_completes_a_unit_whose_report_fails_the_rules(self):
-        self.set_plan(("T1", "T2"))
-        failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
-        self.waits(self.refused_then_merged(failed))
-        self.run_driver()
-        # The refusal released t1 into a fix round before the merge: a merge completes the newest attempt.
-        self.assertEqual(self.task("t1")["status"], "RELEASED")
-        task = self.task("t1r1")
-        self.assertEqual(task["status"], "COMPLETE")
-        self.assertEqual(task["report"]["checks"], [failed])  # the evidence stays honest
-        status = self.ticket_status("T1")
-        self.assertIn("COMPLETE 2026-", status)
-        self.assertIn("merged " + PR, status)
-        deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
-        line = [x for x in deferred.splitlines() if "[merged-unverified]" in x]
-        self.assertEqual(len(line), 1, deferred)
-        self.assertTrue(line[0].startswith("- [merged-unverified] t1r1: "), line[0])
-        self.assertIn("pytest", line[0])  # the reason names the failed check
-        self.assertFalse((self.run_dir / "t1r1" / "request.json").exists())
-        self.assertIn("demo-t2", self.spawned())
-
     def on_merged_view(self, act):
         """Run `act` when the driver first reads the PR as MERGED: the world as it is at the merge, not before."""
         real, fired = self.gh_process, []
@@ -185,20 +150,6 @@ class MergeTests(GateFixture, unittest.TestCase):
         ]
         self.assertTrue(logged, "no log line names the missing checkout")
         self.assertNotEqual(task["gate"], "awaiting-merge")
-
-    @pytest.mark.spec("A merged unit completes")
-    def test_S8_a_merged_pr_that_fails_the_rules_completes_when_the_checkout_is_gone(self):
-        gone = str(self.worktree)
-        failed = {"command": "pytest", "outcome": "failed", "reason": "one test broke"}
-        self.on_merged_view(lambda: shutil.rmtree(gone))
-        self.waits(self.refused_then_merged(failed))
-        self.run_driver()
-        task = self.task("t1r1")
-        self.assertEqual(task["status"], "COMPLETE")
-        self.assertIsNone(task["checkout_at_checkpoint"])
-        deferred = (self.run_dir / "deferred.md").read_text(encoding="utf-8")
-        self.assertIn("- [merged-unverified] t1r1: ", deferred)
-        self.assertFalse((self.run_dir / "t1r1" / "request.json").exists())
 
     @pytest.mark.spec("A merged unit completes")
     def test_S9_cleanup_keeps_a_worktree_a_sibling_under_another_worker_still_uses(self):

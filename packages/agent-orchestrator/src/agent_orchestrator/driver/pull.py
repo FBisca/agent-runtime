@@ -23,7 +23,7 @@ from typing import Any
 from .. import contracts, narrate, timeutil
 from ..ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from ..invariants import PARKED, next_path
-from .book import ARCHIVE, checkpoint, settle_merged
+from .book import ARCHIVE, checkpoint
 from .records import merge_state, open_attempt, reported_attempt, unit_attempt
 from .report import item_text
 from .runtime import head_of
@@ -40,15 +40,25 @@ def _engine():
     return sys.modules[__name__.rpartition(".")[0]]
 
 
-# The tail of a failing job's log that a fix round shows; the full log is at log_path.
-CI_EXCERPT_CHARS = 2048
+# What a fix round shows of a failing step: the last lines of its log, never the start; the full log is at log_path.
+CI_STEP_LINES = 50
+CI_EXCERPT_CHARS = 8192
+# How long a re-run's answer is not trusted: GitHub may still show the failed attempt for a moment.
+RERUN_GRACE = 60
 
 
-def job_log(run_log, job):
-    """The lines of a `gh run view --log-failed` log that belong to one job: each opens with the job's name and a tab.
-    A log with no such line is taken whole (it names no job)."""
-    lines = [line for line in run_log.splitlines() if line.split("\t", 1)[0] == job]
-    return "\n".join(lines) if lines else run_log
+def failed_steps(run_log, job):
+    """{step: its lines} of one job in a `gh run view --log-failed` log, whose lines are `job<TAB>step<TAB>text`. A log
+    that names no such job is taken whole; an empty log has no failed step at all: the runner broke, not the code."""
+    steps = {}
+    for line in run_log.splitlines():
+        name, _, rest = line.partition("\t")
+        if name == job:
+            step, _, text = rest.partition("\t")
+            steps.setdefault(step, []).append(text)
+    if not steps and run_log.strip():
+        steps[""] = run_log.splitlines()
+    return steps
 
 
 def log_tail(text, limit=CI_EXCERPT_CHARS):
@@ -124,14 +134,8 @@ class Pull:  # noqa: PLR0904
     def pr_url(self, task_id):
         """The unit's pull request: a fix round opens none, so fall back to an earlier attempt's report."""
         task = self.task(task_id)
-        reports = []
-        if task.get("report_path"):
-            try:
-                reports.append(contracts.load(task["report_path"], contracts.validate_report))
-            except contracts.ContractError:
-                pass
         with self.book() as data:
-            reports += [
+            reports = [
                 t["report"]
                 for t in data["tasks"].values()
                 if t["packet"].get("unit") == task["packet"]["unit"] and t.get("report")
@@ -149,7 +153,7 @@ class Pull:  # noqa: PLR0904
             )
         match = re.fullmatch(r"https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)/?", url or "")
         if match is None:
-            raise ValueError("report.json names no pull request URL to check (pr: %r)" % url)
+            raise ValueError("the report names no pull request URL to check (pr: %r)" % url)
         return url, "%s#%s" % match.groups()
 
     def pr_of(self, task_id):
@@ -313,8 +317,7 @@ class Pull:  # noqa: PLR0904
         it can merge as it is and the caller goes on; True when the gate moved, False when nothing moves yet."""
         kind = merge_state(view)
         if kind == "conflict":
-            self.conflict(task_id, url, view)
-            return True
+            return self.conflict(task_id, url, view) is not False
         if kind == "unknown":
             if view.get("error"):
                 narrate.say(
@@ -378,6 +381,15 @@ class Pull:  # noqa: PLR0904
         """The pull request conflicts with its base: a fix round of its own, where a fresh worker rebases and the
         result goes to a delta re-review. The evidence is what `gh` said: the merge state, or the failed update."""
         unit = self.unit_of(task_id)
+        blocker = self._conflicting_ticket(task_id, url)
+        if blocker:  # a rebase now would be redone when that ticket merges
+            narrate.say(
+                "wait",
+                "merge",
+                "%s conflicts with %s's files; waiting for it to merge" % (url, blocker),
+                task=task_id,
+            )
+            return False
         status = "mergeStateStatus %s, mergeable %s" % (
             view.get("mergeStateStatus"),
             view.get("mergeable"),
@@ -393,7 +405,7 @@ class Pull:  # noqa: PLR0904
         log = next_path(self.run_dir / task_id, check, ".log")[0]
         log.write_text(excerpt + "\n", encoding="utf-8")
         self.log("conflict", unit=unit, task=task_id, pr=url, state=status)
-        report = contracts.load(self.task(task_id)["report_path"], contracts.validate_report)
+        report = self.task(task_id)["report"]
         item = {
             "id": "BR1",
             "kind": "blocking",
@@ -406,25 +418,77 @@ class Pull:  # noqa: PLR0904
         }
         return self.fail_gate(task_id, report, "conflict", [item], rebase=True)
 
+    def _pr_files(self, url):
+        """The paths a pull request changes, or None when `gh` cannot say."""
+        code, out, _ = self.gh(["pr", "view", url, "--json", "files"])
+        try:
+            return {f["path"] for f in json.loads(out)["files"]} if code == 0 else None
+        except (ValueError, LookupError, TypeError):
+            return None
+
+    def _conflicting_ticket(self, task_id, url):
+        """The unit of another open ticket whose pull request changes a file this one changes, or None: that ticket
+        merges first, and the rebase follows it."""
+        mine = self._pr_files(url)
+        if not mine:
+            return None
+        own = self.unit_of(task_id)
+        for unit, task in self.units().items():
+            other = self.pr_of(task["packet"]["task_id"]) if unit != own else None
+            if other and other != url and mine & (self._pr_files(other) or set()):
+                return unit
+        return None
+
     def ci_items(self, task_id, url, rows):
-        """The failing CI checks as evidence items. Each carries the capped tail of its own job's log (`gh run view
-        --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
+        """The failing CI checks as evidence items: the job, the run id and the last lines of each failed step (`gh run
+        view --log-failed`, fetched once per run); the job's whole log is written to its `log_path`."""
         failing = [row for row in rows if str(row.get("bucket") or "").lower() in FAILED_BUCKETS]
         items = []
         for number, row in enumerate(failing, 1):
             name = row.get("name") or "ci"
             text = str(row.get("description") or "").strip()
+            excerpt = text
             run = re.search(r"/runs/(\d+)", str(row.get("link") or ""))
             if run:
-                logged = job_log(read_log(self.driver, run.group(1)), name)
-                text = text if placeholder(logged) else logged or text
-            items.append(self._ci_item(task_id, url, "CI%d" % number, name, text))
+                logged = read_log(self.driver, run.group(1))
+                steps = failed_steps(logged, name)
+                if placeholder(logged):
+                    pass
+                elif steps:
+                    text = "\n".join(ln for lns in steps.values() for ln in lns)
+                    excerpt = "\n".join(
+                        "%s%s (run %s):\n%s"
+                        % (
+                            name,
+                            " / " + step if step else "",
+                            run.group(1),
+                            "\n".join(lns[-CI_STEP_LINES:]),
+                        )
+                        for step, lns in steps.items()
+                    )
+                else:
+                    excerpt = "%s (run %s) failed with no failed step in its log: %s" % (
+                        name,
+                        run.group(1),
+                        text or "no description",
+                    )
+            items.append(
+                self._ci_item(
+                    task_id,
+                    "CI%d" % number,
+                    name,
+                    text,
+                    excerpt,
+                    run.group(1) if run else None,
+                    url,
+                )
+            )
         if not items:
-            items.append(self._ci_item(task_id, url, "CI1", "ci", "the checks failed"))
+            items.append(self._ci_item(task_id, "CI1", "ci", "the checks failed", "", None, url))
         return items
 
-    def _ci_item(self, task_id, url, item_id, check, text):
-        """One CI finding: the job's full text at `log_path`, its capped tail as the excerpt."""
+    def _ci_item(self, task_id, item_id, check, text, excerpt, run, url):
+        """One CI finding: the job's full text at `log_path`, the tail of each failed step as the excerpt."""
         log = next_path(self.run_dir / task_id, "ci", ".log")[0]
         log.write_text(text + "\n", encoding="utf-8")
         return {
@@ -432,11 +496,105 @@ class Pull:  # noqa: PLR0904
             "kind": "blocking",
             "source": "ci",
             "check": check,
-            "command": "gh pr checks %s" % url,
+            "command": "gh run view %s --log-failed" % run if run else "gh pr checks %s" % url,
             "exit": 1,
-            "excerpt": log_tail(text) or "the check failed",
+            "excerpt": log_tail(excerpt or text) or "the check failed",
             "log_path": str(log),
         }
+
+    def ci_failed(self, task_id, url, task):
+        """What a pull request whose checks failed asks for, in order: the Lead once per run when the same checks fail
+        on the base branch; one automatic re-run of the failed jobs (a failure that passes is flaky); the Lead when a job
+        failed with no step failing twice; else a fix round carrying each failed step's last lines. False while it waits."""
+        rows = task.get("ci_rows") or []
+        failing = [r for r in rows if str(r.get("bucket") or "").lower() in FAILED_BUCKETS]
+        names = sorted({r.get("name") or "ci" for r in failing})
+        on_main = sorted(set(names) & self.main_failures())
+        if on_main:
+            return self._main_red(task_id, on_main)
+        head, rerun = task.get("ci_head"), task.get("ci_rerun")
+        if not rerun or rerun.get("head") != head:
+            if self._rerun(task_id, failing, names, head):
+                return False
+        elif self.clock() - self.driver.rerun_at.get(task_id, float("-inf")) < RERUN_GRACE:
+            return False  # the failure may be the attempt the re-run replaced
+        items = self.ci_items(task_id, url, rows)
+        if any("failed with no failed step" in item["excerpt"] for item in items):
+            return self.request(
+                task_id,
+                "ci",
+                "%s failed twice with no failing test or check step in its log (a CI infrastructure problem): %s"
+                % (", ".join(names), url),
+            )
+        return self.fail_gate(task_id, task["report"], "ci", items)
+
+    def _rerun(self, task_id, failing, names, head):
+        """Re-run the failed jobs of the head's runs once. False when `gh` cannot, and the failure goes on."""
+        links = " ".join(str(r.get("link") or "") for r in failing)
+        runs = list(dict.fromkeys(re.findall(r"/runs/(\d+)", links)))
+        if not runs or any(self.gh(["run", "rerun", run, "--failed"])[0] != 0 for run in runs):
+            return False
+        self.mark(task_id, ci_rerun={"head": head, "failed": names}, ci_state=None)
+        self.driver.rerun_at[task_id] = self.clock()
+        self.log("ci-rerun", unit=self.unit_of(task_id), task=task_id, runs=runs, checks=names)
+        narrate.say(
+            "wait", "ci", "re-running the failed checks (%s) once" % ", ".join(names), task=task_id
+        )
+        return True
+
+    def main_failures(self):
+        """The checks failing in the base branch's latest completed run, asked once per run: a check that fails there
+        is not the ticket's to fix. Empty when `gh` cannot say."""
+        if self.driver.main_failed is None:
+            branch = self.args.base.partition("/")[2]
+            names = set()
+            code, out, _ = self.gh(
+                [
+                    "run",
+                    "list",
+                    "--branch",
+                    branch,
+                    "--status",
+                    "completed",
+                    "--limit",
+                    "1",
+                    "--json",
+                    "databaseId",
+                ]
+            )
+            try:
+                run = json.loads(out)[0]["databaseId"] if code == 0 else None
+                code, out, _ = (
+                    self.gh(["run", "view", str(run), "--json", "jobs"]) if run else (1, "", "")
+                )
+                jobs = json.loads(out)["jobs"] if code == 0 else []
+                names = {j["name"] for j in jobs if j.get("conclusion") in ("failure", "timed_out")}
+            except (ValueError, LookupError, TypeError):
+                pass
+            self.driver.main_failed = names
+        return self.driver.main_failed
+
+    def _main_red(self, task_id, names):
+        """The base branch fails what this ticket's CI fails: one Lead request for the whole run, the other tickets
+        wait on it."""
+        with self.book() as data:
+            asked = data.get("main_red")
+            if not asked:
+                data["main_red"] = {"task": task_id, "checks": names}
+        if asked:
+            narrate.say(
+                "wait",
+                "ci",
+                "%s also fail on main; waiting for the Lead" % ", ".join(names),
+                task=task_id,
+            )
+            return False
+        return self.request(
+            task_id,
+            "ci",
+            "main is red: %s also fail(s) on %s, so no ticket can pass them. Fix main, then decide `retry`; "
+            "the other tickets wait on this request." % (", ".join(names), self.args.base),
+        )
 
     def put_status(self, task_id, status):
         """The ticket's Status cell; the archive unit has no row."""
@@ -455,28 +613,18 @@ class Pull:  # noqa: PLR0904
                 _engine().enter_plan_state(data, "ARCHIVED")
 
     def complete_merged(self, task_id, report):
-        """The ledger's COMPLETE for a merged unit. A merge is final, so a report that fails the COMPLETE rules does
-        not hold it back: the unit completes with the checks as reported, deferred.md says what went unverified, and no
-        Lead is asked. False when the ledger refuses for another reason (a closed task); the Lead is asked then."""
-        unverified = None
+        """The ledger's COMPLETE for a merged unit. A merge is final, so a checkout that is gone does not hold it
+        back. False when the ledger refuses (a closed task); the Lead is asked then."""
         gone = self.task(task_id)["packet"]["checkout"]
         if not Path(gone).exists():
             self.log("merged-checkout-missing", task=task_id, checkout=gone)
             narrate.say("warn", "merge", "merged, but its checkout %s is gone" % gone, task=task_id)
         try:
             with self.book() as data:
-                try:
-                    checkpoint(data, task_id, report, merged=True)
-                except ValueError as error:
-                    unverified = " ".join(str(error).split())
-                    settle_merged(data, task_id, report)
+                checkpoint(data, task_id, report, merged=True)
         except ValueError as error:
             self.request(task_id, "merge", "merged, but the ledger rejected COMPLETE: %s" % error)
             return False
-        if unverified:
-            unit = self.unit_of(task_id)
-            self._defer_unverified(task_id, unverified)
-            self.log("merged-unverified", unit=unit, task=task_id, reason=unverified)
         return True
 
     def merged_early(self, task_id, state):
@@ -525,7 +673,6 @@ class Pull:  # noqa: PLR0904
             "files": [],
             "decisions": [],
             "interfaces": [],
-            "remaining": [],
             "checks": self._reported_checks(task_id),
             "review_rounds": 0,
             "usage": "unknown",
@@ -567,11 +714,6 @@ class Pull:  # noqa: PLR0904
                     "- %s %s [merged-early]: %s (%s)\n"
                     % (unit.upper(), item.get("id", "?"), item_text(item), source)
                 )
-
-    def _defer_unverified(self, task_id, reason):
-        """A unit that merged without meeting the COMPLETE rules: the human reads what went unverified."""
-        with self._deferred_file().open("a", encoding="utf-8") as stream:
-            stream.write("- [merged-unverified] %s: %s\n" % (task_id, reason))
 
     def keep(self, task_id, reason):
         self.mark(task_id, gate="done", cleanup="kept: " + reason)
@@ -655,7 +797,7 @@ class PullSurface:
         return self.pull.conflict(task_id, url, view, evidence)
 
     def ci_items(self, task_id, url, rows):
-        """The failing CI checks as evidence items, each with the tail of its own job's log."""
+        """The failing CI checks as evidence items, each with the last lines of its failed steps."""
         return self.pull.ci_items(task_id, url, rows)
 
     def put_status(self, task_id, status):
