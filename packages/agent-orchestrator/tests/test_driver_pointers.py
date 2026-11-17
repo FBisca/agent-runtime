@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from test_gates import QUESTION, GateFixture
+from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).resolve().parents[3]
@@ -43,11 +43,12 @@ def test_S9_repository_instructions_name_the_rule(tmp_path):
     driver = SimpleNamespace(
         run_dir=tmp_path,
         plan_path=tmp_path / "plan.yaml",
+        repo=tmp_path,
         args=SimpleNamespace(base="main"),
-        book=SimpleNamespace(task=lambda _: {}),
+        book=SimpleNamespace(task=lambda _: {"report": {"head": "abc1234"}}),
     )
     packet = {"checkout": str(tmp_path), "unit": "t1", "task_id": "t1"}
-    brief = review_brief(driver, packet, tmp_path / "review.json")
+    brief = review_brief(driver, packet)
     assert str(rules) in brief
     assert "test_driver_pointers.py" in rules.read_text()
 
@@ -58,34 +59,11 @@ def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
 
     from agent_orchestrator import driver
 
-    notices = []
-    reader = SimpleNamespace(warn_sender=lambda *args: notices.append(args))
-    monkeypatch.setattr(driver, "payload_waits", lambda paths: any(Path(p).exists() for p in paths))
     expected = tmp_path / "report.json"
-    other = tmp_path / "alternate.json"
-    other.write_text("other")
-    for alternatives in ((), (other,)):
-        notices.clear()
-        result = driver.Driver.read_payload(
-            cast(Any, reader), "t1", "review", expected, Path.read_text, alternatives
-        )
-        assert result is None
-        assert str(expected) in str(notices)
-        assert "file" in str(notices).lower()
-        assert "write" in str(notices).lower() or "repair" in str(notices).lower()
-    expected.write_text("expected")
-    notices.clear()
-    assert (
-        driver.Driver.read_payload(
-            cast(Any, reader), "t1", "review", expected, Path.read_text, (other,)
-        )
-        is None
-    )
-    assert str(expected) in str(notices) and str(other) in str(notices)
-    expected.unlink()
     stub = SimpleNamespace(
         run_dir=tmp_path,
         plan_path=tmp_path / "plan.yaml",
+        repo=tmp_path,
         args=SimpleNamespace(base="main"),
     )
     packet = {"checkout": str(tmp_path), "unit": "t1", "task_id": "t1"}
@@ -146,13 +124,13 @@ class PointerRun(GateFixture, unittest.TestCase):
             [
                 self.worker_done(),
                 self.worker_done("t1r1", tests=True),
-                self.reviewer_done(self.review2(items=[QUESTION])),
+                self.reviewer_done(),
                 self.skipped(),
             ]
         )
         self.run_driver("--idle-minutes", "0")
         artifacts = list(self.run_dir.rglob("task.md"))
-        assert {"t1", "t1r1", "t1-review", "t1a1"} <= {p.parent.name for p in artifacts}
+        assert {"t1", "t1r1", "t1-review"} <= {p.parent.name for p in artifacts}
         rendered = [(str(path), path.read_text()) for path in artifacts]
         rendered.extend(self.other_outputs())
         from agent_orchestrator.driver.records import CHECK_INSTRUCTIONS
@@ -288,7 +266,10 @@ class TestRenderedPointers:
             "task_id": "t1",
         }
         driver = SimpleNamespace(
-            run_dir=tmp_path, plan_path=existing, args=SimpleNamespace(base="origin/main")
+            repo=tmp_path,
+            run_dir=tmp_path,
+            plan_path=existing,
+            args=SimpleNamespace(base="origin/main"),
         )
         task = task_text(
             driver, None, {"#": "T1", "What it delivers": "work"}, packet, [], tmp_path

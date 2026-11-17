@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 from agent_orchestrator import driver
-from agent_orchestrator.driver import Driver, Gates
-from agent_orchestrator.driver.review import review_brief
+from agent_orchestrator.driver import Driver
+from agent_orchestrator.driver.review import rereview_text, review_brief
 
 pytestmark = pytest.mark.integration
 
@@ -19,22 +19,27 @@ SNAPSHOTS = Path(__file__).parent / "snapshots"
 STAMP = 1_700_000_000  # 2023-11-14T22:13:20Z
 
 BLOCKING = {
-    "id": "B1",
+    "id": "R1",
     "kind": "blocking",
-    "summary": "retry loop never ends",
+    "source": "review",
     "file": "src/a/one.py",
     "line": 12,
-    "fix": "stop after three tries",
-    "answer_required": True,
-    "evidence": {
-        "command": "pytest tests/test_one.py",
-        "exit": 1,
-        "log_path": "/logs/one.log",
-        "excerpt": "FAILED test_one",
-    },
+    "quote": "while True:",
+    "claim": "the retry loop never ends",
+    "rule": "A failure surfaces as an error a caller can act on.",
 }
-PLAIN = {"id": "N1", "summary": "name the helper", "file": "src/a/two.py"}
+PLAIN = {
+    "id": "R2",
+    "kind": "blocking",
+    "source": "review",
+    "file": "src/a/two.py",
+    "line": 3,
+    "quote": "cache = {}",
+    "claim": "the cache is never cleared",
+}
 CI = {
+    "id": "CI1",
+    "kind": "blocking",
     "source": "ci",
     "check": "lint",
     "excerpt": "E501 line too long",
@@ -43,7 +48,6 @@ CI = {
     "log_path": "/logs/ci.log",
 }
 CONFLICT = dict(CI, source="conflict", check="merge", excerpt="CONFLICT in src/a/one.py")
-CHECKS_RUN = [{"command": "uv run pytest -m unit", "exit": 0, "at_commit": "abc1234"}]
 
 
 def assert_snapshot(name, text, root):
@@ -75,6 +79,8 @@ class World:
         self.driver = object.__new__(Driver)
         self.driver.run_dir = self.run_dir
         self.driver.plan_path = root / "plan.md"
+        self.driver.repo = root / "repo"
+        (self.driver.repo / ".orchestrate").mkdir(parents=True)
         self.driver.args = SimpleNamespace(base="origin/main", gate=[])
         self.driver.hand_over = lambda *args, **kwargs: (None, "assignment-1")
         self.driver.approved_digest = lambda: "0123456789abcdef0123"
@@ -126,48 +132,55 @@ def test_task_amended_note(world, tmp_path):
     assert_snapshot("amended-note", note, tmp_path)
 
 
-def reviewer_world(tmp_path, monkeypatch, rules, reported):
+def reviewer_world(tmp_path, monkeypatch, rules, rulebook=False):
     world = World(tmp_path, monkeypatch)
     if rules:
         (world.checkout / "AGENTS.md").write_text("rules")
         (world.checkout / "CLAUDE.md").write_text("rules")
-    report = world.run_dir / "t1" / "report.json"
-    report.parent.mkdir()
-    report.write_text("{}")
-    os.utime(report, (STAMP, STAMP))
-    task = {"report_path": str(report), "report": {"head": "def5678"}} if reported else {}
+    if rulebook:
+        (world.driver.repo / ".orchestrate" / "config.yaml").write_text(
+            "rulebook: docs/rulebook.md\n"
+        )
+        (world.checkout / "docs").mkdir()
+        (world.checkout / "docs" / "rulebook.md").write_text("rules")
+    task = {"report": {"head": "def5678", "task_id": "t1", "status": "COMPLETE"}}
     world.driver.book = SimpleNamespace(task=lambda _: task)
     return world
 
 
 def test_review_first(tmp_path, monkeypatch):
-    world = reviewer_world(tmp_path, monkeypatch, rules=False, reported=False)
-    path = world.run_dir / "t1-review" / "review.json"
-    assert_snapshot("review", review_brief(world.driver, world.packet(), path), tmp_path)
+    world = reviewer_world(tmp_path, monkeypatch, rules=False)
+    assert_snapshot("review", review_brief(world.driver, world.packet()), tmp_path)
 
 
-def test_review_rereview(tmp_path, monkeypatch):
-    world = reviewer_world(tmp_path, monkeypatch, rules=True, reported=True)
-    path = world.run_dir / "t1-review" / "review.json"
-    delta = {"from": "abc1234", "findings": str(world.run_dir / "t1r1" / "findings.json")}
-    text = review_brief(world.driver, world.packet(), path, delta, [{"id": "B1"}, {"id": "B2"}])
-    assert_snapshot("review-rereview", text, tmp_path)
+def test_review_with_a_rulebook_and_rules_files(tmp_path, monkeypatch):
+    world = reviewer_world(tmp_path, monkeypatch, rules=True, rulebook=True)
+    assert_snapshot("review-rulebook", review_brief(world.driver, world.packet()), tmp_path)
 
 
-def test_review_rereview_without_earlier_findings(tmp_path, monkeypatch):
-    world = reviewer_world(tmp_path, monkeypatch, rules=False, reported=True)
-    path = world.run_dir / "t1-review" / "review.json"
-    text = review_brief(world.driver, world.packet(), path, {"from": "abc1234"})
-    assert_snapshot("review-rereview-bare", text, tmp_path)
+def test_rereview_after_a_block(tmp_path, monkeypatch):
+    world = reviewer_world(tmp_path, monkeypatch, rules=False)
+    delta = {
+        "from": "abc1234",
+        "findings": str(world.run_dir / "t1r1" / "findings.json"),
+        "blocked": True,
+    }
+    assert_snapshot(
+        "rereview",
+        rereview_text(world.driver, world.packet(), delta, world.run_dir / "t1-review" / "task.md"),
+        tmp_path,
+    )
 
 
-def test_review_answer(world, tmp_path):
-    review_dir = world.run_dir / "t1-review"
-    review_dir.mkdir()
-    review = {"dir": str(review_dir), "path": str(review_dir / "review.json")}
-    decision = {"reason": "go on", "answer": "use the second flag"}
-    brief = Gates(world.driver)._review_answer_brief(world.task(), review, "t1", "2", decision)
-    assert_snapshot("review-answer", brief.read_text(encoding="utf-8"), tmp_path)
+def test_rereview_after_a_pass(tmp_path, monkeypatch):
+    world = reviewer_world(tmp_path, monkeypatch, rules=False)
+    text = rereview_text(
+        world.driver,
+        world.packet(),
+        {"from": "abc1234", "blocked": False},
+        world.run_dir / "t1-review" / "task.md",
+    )
+    assert_snapshot("rereview-after-pass", text, tmp_path)
 
 
 def test_answer(world, tmp_path):
@@ -195,13 +208,8 @@ def test_redo_without_an_answer_or_checks(world, tmp_path):
     assert_snapshot("redo-bare", text, tmp_path)
 
 
-def test_fix_with_checks_answers_and_a_lead_answer(world, tmp_path):
-    findings = {
-        "source": "review",
-        "attempt": 2,
-        "items": [BLOCKING, PLAIN],
-        "checks_run": CHECKS_RUN,
-    }
+def test_fix_with_review_and_ci_findings_and_a_lead_answer(world, tmp_path):
+    findings = {"source": "review", "attempt": 2, "items": [BLOCKING, PLAIN, CI]}
     task = world.task(fix={"answer": "keep the public name"})
     text = world.driver.fix_text(task, "t1r2", world.run_dir / "t1r2", findings)
     assert_snapshot("fix", text, tmp_path)
@@ -221,17 +229,3 @@ def test_fix_of_a_conflict_is_the_rebase_brief(world, tmp_path):
     text = world.driver.fix_text(task, "t1r1", new_dir, findings)
     assert text == world.driver.rebase_text(task, "t1r1", new_dir, findings)
     assert_snapshot("rebase", text, tmp_path)
-
-
-def test_answers_only(world, tmp_path):
-    findings_path = world.run_dir / "t1a1" / "findings.json"
-    text = world.driver._answers_brief(world.task(), "t1a1", [BLOCKING, PLAIN], findings_path)
-    assert_snapshot("answers-only", text, tmp_path)
-
-
-def test_missing_responses(world, tmp_path):
-    (world.run_dir / "t1r1").mkdir()
-    task = {"packet": world.packet()}
-    world.driver.resume_for_responses(task, "t1r1", ["B1", "B2"])
-    text = (world.run_dir / "t1r1" / "missing.md").read_text(encoding="utf-8")
-    assert_snapshot("missing-responses", text, tmp_path)

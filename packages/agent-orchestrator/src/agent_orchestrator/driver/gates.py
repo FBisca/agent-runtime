@@ -14,15 +14,12 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 from .. import contracts, invariants, narrate, timeutil
-from ..invariants import next_path
 from .book import ARCHIVE, release
-from .prompts import render
-from .records import check_commit, merge_state
-from .report import cell
-from .runtime import head_of
+from .records import merge_state, unit_attempts
+from .report import cell, short
+from .review import rereview_text
 
 
 def _engine():
@@ -84,7 +81,7 @@ class Gates:
             self.drain
         ):  # a fix round and a retry start a worker attempt: they wait for the drain to end
             del steps["fix-pending"], steps["redo-pending"]
-        return self._settle_answers() + self._run_steps(steps)
+        return self._run_steps(steps)
 
     def _poll_quietly(self):
         """One non-blocking look at every pull request before the gates move. A poll that fails is the
@@ -95,46 +92,6 @@ class Gates:
             self.errors.append("poll: %s" % error)
             self.log("error", gate="poll", error=str(error)[:500])
             narrate.say("fail", None, "could not poll the pull requests: %s" % error)
-
-    def _settle_answers(self):
-        """The workers that answered the findings they were asked about: one answers step per task,
-        its refusal kept on the attempt, and a count of the steps that ran."""
-        # `send` raises the package's class, so this module must catch that one.
-        from . import IntentUnsettled
-
-        acted = 0
-        with self.book() as data:
-            answered = [
-                task_id
-                for task_id, task in data["tasks"].items()
-                if (task.get("answers") or {}).get("state") == "reported"
-                and task["status"] not in ("COMPLETE", "RELEASED")
-            ]
-        for task_id in answered:
-            try:
-                self.step_answers(task_id)
-                acted += 1
-            except IntentUnsettled as error:
-                self.hold_intent(
-                    task_id, error
-                )  # the answers wait; the Lead decides what the resume becomes
-            except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.mark(task_id, answers=dict(self.task(task_id)["answers"], state="failed"))
-                self.errors.append("%s: %s" % (task_id, error))
-                self.log(
-                    "error",
-                    unit=self.unit_of(task_id),
-                    task=task_id,
-                    gate="answers",
-                    error=str(error)[:500],
-                )
-                narrate.say(
-                    "fail",
-                    "review",
-                    "handling the worker's answers failed: %s" % error,
-                    task=task_id,
-                )
-        return acted
 
     def _run_steps(self, steps):
         """Every gated task's step, in one pass over the record: a step that is not ready yet is left
@@ -195,9 +152,6 @@ class Gates:
         task = self.task(task_id)
         report = task["handed_in"]
         self.log_clarifications(task_id, "report", report, "report:%s" % task_id)
-        missing = contracts.missing_responses(report, task.get("answer_ids") or [])
-        if missing:
-            return self.chase_responses(task_id, missing)
         verdict, lines = self.gate(task_id, task["packet"], report)
         if verdict == "error":
             return self.request(task_id, self.gate_name(), lines[0])
@@ -215,26 +169,43 @@ class Gates:
         self.mark(
             task_id,
             gate="converged",
-            delta={"from": reviewed, "findings": findings} if reviewed else None,
+            delta={"from": reviewed, "findings": findings, "blocked": self.last_blocked(task)}
+            if reviewed
+            else None,
         )
 
+    def last_blocked(self, task):
+        """Whether the unit's newest verdict blocked: a re-review that blocks again goes to the Lead."""
+        with self.book() as data:
+            verdicts = [
+                t["verdict"]
+                for t in unit_attempts(data, task["packet"]["unit"])
+                if t.get("verdict")
+            ]
+        return bool(verdicts) and verdicts[0]["verdict"] == "block"
+
     def step_converged(self, task_id):
+        """The report is accepted: the reviewer starts, and CI is already running against the same commit. The first
+        review gets the whole brief; a re-review resumes the reviewer that holds the change and sends it the fix diff
+        only (a reviewer whose pane is gone gets the whole brief again)."""
         task = self.task(task_id)
-        packet = task["packet"]
+        packet, delta = task["packet"], task.get("delta")
         unit, name = packet["unit"], _engine().worker_name(self.slug, packet["unit"][1:], "-review")
         review = self._review_slot(task_id, task.get("review"), unit, name)
         review_dir = Path(review["dir"])
         review_dir.mkdir(exist_ok=True, mode=0o700)
         task_md = review_dir / "task.md"
+        again = bool(delta) and self.pane_alive(name)
         if not task_md.exists():
-            task_md.write_text(
-                self.review_text(
-                    packet, review["path"], task.get("delta"), self.open_blockers(unit)
-                ),
-                encoding="utf-8",
-            )
+            task_md.write_text(self.review_text(packet), encoding="utf-8")
         backend, model = self.gate_step("reviewer", "large")
-        effort = self.step_effort("reviewer", "high")
+        if again:
+            text = rereview_text(self, packet, delta, task_md)
+        else:
+            text = (
+                "Read %s and follow it. Hand in the verdict as the text of your `report` call."
+                % task_md
+            )
         _, assignment_id = self.ensure_agent(
             name,
             "reviewer",
@@ -242,175 +213,77 @@ class Gates:
             {
                 "kind": "worker",
                 "name": name,
-                "task": "Read %s and follow it. Write the review to %s (JSON, contract 2)."
-                % (task_md, review["path"]),
+                "task": text,
                 "cwd": packet["checkout"],
                 "cli": backend,
                 "model": model,
-                "effort": effort,
+                "effort": self.step_effort("reviewer", "high"),
             },
-            attempt=Path(review["dir"]).name,
+            attempt=review_dir.name,
         )
         self.mark(task_id, gate="reviewing", review=dict(review, assignment_id=assignment_id))
         narrate.say(
             "start",
             "review",
-            "started reviewer %s · %s · %s · %s"
-            % (name, self.gate_label("reviewer", "large"), model, effort),
+            "%s reviewer %s · %s · %s · %s"
+            % (
+                "resumed" if again else "started",
+                name,
+                self.gate_label("reviewer", "large"),
+                model,
+                self.step_effort("reviewer", "high"),
+            ),
             task=task_id,
         )
 
     def _review_slot(self, task_id, review, unit, name):
-        """The review file this pass writes and the record that names it. Write-once: a file that already
-        holds a review is never handed to another pass, so a rework that keeps the task id (an answered
-        worker) writes the next one, and the record keeps the paths it superseded, newest first, so a
-        resolution can still close a blocker an earlier review raised."""
-        if review and review.get("path") and not Path(review["path"]).exists():
+        """The directory of this pass's brief. A pass the driver died in is repeated in the same one; a rework that
+        keeps the task id (a Lead's answer) takes the next."""
+        if review and "assignment_id" not in review:
             return review
-        superseded = invariants.carried_reviews(review)
-        path, index = next_path(self.run_dir / unit, "review", ".json")
-        record: dict[str, Any] = {
+        number = next(
+            n
+            for n in range(1, 1000)
+            if not (self.run_dir / (unit + "-review" + ("" if n == 1 else str(n)))).exists()
+        )
+        record = {
             "name": name,
-            "path": str(path),
-            "dir": str(self.run_dir / (unit + "-review" + ("" if index == 1 else str(index)))),
+            "dir": str(self.run_dir / (unit + "-review" + ("" if number == 1 else str(number)))),
         }
-        if superseded:
-            record["earlier"] = superseded
         self.mark(task_id, review=record)
         return record
 
     def step_reviewed(self, task_id):
+        """The verdict is in; the worker hears nothing until CI is in too, and then hears it once: the review's
+        findings and the CI failures together. CI's deadline is the idle watchdog's, as every wait on a check."""
         task = self.task(task_id)
-        packet = task["packet"]
-        review_path = Path(task["review"]["path"])
-
-        def read_review(where):
-            review = contracts.load(where, contracts.validate_review)
-            report = task["report"]
-            check_commit(review["commit"], head_of(packet["checkout"]), where)
-            self.check_resolutions(packet["unit"], review)
-            return review, report
-
-        loaded = self.read_payload(task_id, "review", review_path, read_review)
-        if loaded is None:
-            return  # the gate keeps waiting: the reviewer was warned, or the Lead is asked
-        review, report = loaded
-        head = head_of(packet["checkout"])
-        self.log_clarifications(task_id, "review", review, review_path)
-        self.mark(
-            task_id, reviewed_commit=head
-        )  # what a later re-review's delta starts from, whatever the verdict
-        blocking, rest = contracts.review_items(review)
-        if task.get("delta"):
-            blocking, outside = self.scope_filter(task_id, packet, task["delta"], blocking)
-            rest = rest + outside
-        asks = [i for i in blocking + rest if i.get("answer_required") is True]
-        self.defer(task_id, [i for i in rest if i not in asks], review_path)
-        # The unit's open set after this review, written before the gate moves: a restart reads it back.
-        open_items = self.record_blockers(packet["unit"], review_path, review, blocking)
-        if blocking:
-            # a fix round holds only blocking and answer_required items, and the reviewer's checks; an earlier blocker
-            # the reviewer neither resolved nor re-raised goes with them, or the round would drop it
-            return self.fail_gate(
+        packet, verdict = task["packet"], task["verdict"]
+        try:
+            url = self.pr_url(task_id)[0]
+        except (contracts.ContractError, ValueError) as error:
+            return self.request(task_id, "ci", str(error))
+        state, head = task.get("ci_state"), task.get("ci_head")
+        # CI counts when it ran on the commit that was reviewed: GitHub can still show the previous head's checks.
+        if state not in ("green", "failed", "error") or (
+            head and not head.startswith(task["report"]["head"][:7])
+        ):
+            narrate.say("wait", "ci", "review is in; waiting for CI on %s" % url, task=task_id)
+            return False
+        found = contracts.review_items(verdict)
+        if found and (task.get("delta") or {}).get("blocked"):
+            return self.request(
                 task_id,
-                report,
                 "review",
-                open_items + [i for i in rest if i in asks],
-                checks_run=review.get("checks_run") or [],
-                answer_ids=[i["id"] for i in asks],
+                "%s is still blocked after its re-review; last: %s"
+                % (packet["unit"], "; ".join(short(i) for i in found)),
             )
-        if (
-            open_items
-        ):  # it passed, but a blocker is still open: only a supported resolution closes one
-            return self.hold_open_findings(task_id, task, open_items)
-        if asks:  # a question costs no round: CI goes on while the implementer answers
-            self.start_answers(task_id, asks, review)
+        if state == "error":
+            return self.request(task_id, "ci", "gh pr checks failed for %s" % url)
+        if state == "failed":
+            return self.driver.pull.ci_failed(task_id, url, task, found)
+        if found:
+            return self.fail_gate(task_id, task["report"], "review", found)
         self.mark(task_id, gate="ready-for-ci")
-
-    def step_answers(self, task_id):
-        task = self.task(task_id)
-        answers = task["answers"]
-        report = answers["report"]
-        self.log_clarifications(task_id, "report", report, "report:%s" % answers["id"])
-        unit = task["packet"]["unit"]
-        missing = contracts.missing_responses(report, answers["ids"])
-        if self._answers_missing(task_id, task, answers, missing):
-            return
-        if self._answers_changed(task_id, task, answers, report, unit):
-            return
-        self.mark(task_id, answers=dict(answers, state="done"))
-
-    def _answers_missing(self, task_id, task, answers, missing):
-        """A response the reviewer asked for and the report lacks: the first miss resumes the worker at
-        no round cost, the second is a request. True when the answers step is over."""
-        if not missing:
-            return False
-        if answers["tries"] >= 1:
-            self.mark(task_id, answers=dict(answers, state="failed"))
-            self.contract_error(
-                task_id, "responses", "the report still has no response for %s" % ", ".join(missing)
-            )
-            return True
-        self.log(
-            "contract-error",
-            unit=task["packet"]["unit"],
-            task=task_id,
-            where="responses",
-            missing=missing,
-            error="the report has no response for answer_required finding(s) %s"
-            % ", ".join(missing),
-        )
-        assignment_id = self.resume_for_responses(task, answers["id"], missing)
-        self.mark(
-            task_id, answers=dict(answers, state="working", tries=1, assignment_id=assignment_id)
-        )
-        return True
-
-    def _answers_changed(self, task_id, task, answers, report, unit):
-        """The disputes that carry code changes, logged whatever the gate: at CI or awaiting the merge
-        they go to a delta re-review before the unit goes on, and the pull request goes back to draft.
-        True when the unit was moved back."""
-        for response in report["responses"]:
-            self.log(
-                "response",
-                unit=unit,
-                task=task_id,
-                finding=response["id"],
-                status=response["status"],
-                changes_code=response.get("changes_code"),
-                commit=response.get("commit"),
-            )
-        changing = [
-            r["id"]
-            for r in report["responses"]
-            if r["status"] == "disputed" and r.get("changes_code") is True
-        ]
-        if not changing or task.get("gate") not in ("ready-for-ci", "awaiting-merge"):
-            return False
-        # the new commits go to a delta re-review before the unit goes on to CI again; the PR goes back to
-        # draft (the poll's ensure_draft, once readiness is forgotten) and is readied again on its return
-        self.unready(self.unit_of(task_id))
-        reviewed = task.get("reviewed_commit")
-        held = invariants.carried_reviews(task.get("review"))
-        self.mark(
-            task_id,
-            answers=dict(answers, state="done"),
-            gate="converged",
-            review={"earlier": held} if held else None,
-            ci_green=None,
-            ci_state=None,
-            ci_rows=None,
-            ci_head=None,
-            delta={"from": reviewed, "findings": answers["findings"]},
-        )
-        narrate.say(
-            "info",
-            "review",
-            "worker disputed %s with code changes; re-reviewing the delta from %s"
-            % (", ".join(changing), (reviewed or "the base")[:7]),
-            task=task_id,
-        )
-        return True
 
     def step_ci(self, task_id):
         """The unit's merge state, then its checks. A conflict, a branch behind its base or a merge state GitHub has
@@ -439,9 +312,6 @@ class Gates:
             narrate.say(
                 "wait", "ci", "waiting for CI on the updated branch of %s" % url, task=task_id
             )
-            return False
-        waiting = (task.get("answers") or {}).get("state") in ("working", "reported")
-        if waiting:  # green, but the implementer's answers may still change the code: pr-ready waits for them
             return False
         return self._ci_ready(task_id, task, url, view)
 
@@ -609,7 +479,6 @@ class Gates:
             fresh=fix.get("fresh") or fix.get("up") or fix.get("rebase"),
             answer=fix.get("answer"),
         )
-        self.mark(new_id, answer_ids=list(fix.get("answer_ids") or []))
         self.mark(task_id, gate="superseded", fix_task=new_id, held=[])
         self.replay_held(task, new_id)
         narrate.say(
@@ -628,8 +497,6 @@ class Gates:
                 fix["source"],
                 attempt,
                 fix["items"],
-                fix.get("checks_run"),
-                version=contracts.findings_contract(fix["items"]),
             )
             if not findings_path.exists():
                 findings_path.write_text(json.dumps(findings, indent=2) + "\n", encoding="utf-8")
@@ -684,7 +551,6 @@ class Gates:
         self.write_status(unit.upper(), "IN PROGRESS")
         if self._decide_intent(task_id, asked, action):
             return
-        self._decide_answerer(task_id, task, asked, action, unit)
         finished = next((m for m in held if m["kind"] == "complete"), None)
         if finished:
             self.log("held-acted", unit=unit, task=task_id, held="complete", acted="reported")
@@ -728,23 +594,6 @@ class Gates:
         return self.write_status(
             unit.upper(), ("BLOCKED" if blocked else "SKIPPED") + " · " + cell(reason)
         )
-
-    def _decide_answerer(self, task_id, task, asked, action, unit):
-        """A decision on a request that named the silent answerer: the hand-over below puts that pane on a
-        new assignment, so its old answers assignment can never report. Left `working`, pr-ready would
-        wait on it for ever; `failed` is what the old exit path recorded. Any other request leaves a busy
-        answerer alone: its complete is still received (One idle watchdog)."""
-        answers = task.get("answers") or {}
-        named = asked.get("answerer")
-        if answers.get("state") != "working" or named != answers.get("assignment_id"):
-            return
-        self.mark(task_id, answers=dict(answers, state="failed"))
-        why = (
-            "the Lead decided %r on a request that named the answerer %s, so its assignment is replaced "
-            "and pr-ready no longer waits on the answers" % (action, task["packet"]["worker"])
-        )
-        narrate.say("warn", "decide", "answers dropped: %s" % why, task=task_id)
-        self.log("answers-dropped", unit=unit, task=task_id, assignment_id=named, why=why)
 
     def _decide_handoff(self, task_id, task, action, decision, reason):
         """A retry, a one-class-up retry or a fresh worker: a fix round already raised takes the flags on
@@ -796,75 +645,18 @@ class Gates:
         narrate.say("info", "decide", "answer sent; %s resumed" % packet["worker"], task=task_id)
 
     def step_review_answer(self, task_id, decision):
-        """The Lead's `answer` to a request raised while the reviewer owed its review: the reviewer goes on with the
-        review it owes, under the same review file, and the implementer is left alone. A reviewer whose pane is gone is
-        replaced by a fresh one whose brief carries the answer."""
+        """The Lead's `answer` to a request raised while the reviewer owed its verdict: the reviewer goes on with the
+        review it owes, and the implementer is left alone. A reviewer whose pane is gone is replaced by one told
+        where its brief is."""
         task = self.task(task_id)
-        packet, review = task["packet"], task["review"]
-        unit, name = packet["unit"], review["name"]
-        review_dir = Path(review["dir"])
-        review_dir.mkdir(exist_ok=True, mode=0o700)
-        # named after the decision file, so a driver that died after the resume writes nothing twice
-        suffix = Path(task["decision"]["path"]).name.removeprefix("decision").removesuffix(".json")
-        brief = self._review_answer_brief(task, review, unit, suffix, decision)
-        backend, model = self.gate_step("reviewer", "large")
-        text = (
-            "Read %s and follow it. The Lead answered what stopped your review of %s; the review you owe is still "
-            "%s (brief: %s). The Lead's answer: %s"
-            % (brief, unit.upper(), review["path"], review_dir / "task.md", decision["answer"])
-        )
-        # a pane that is gone gets a fresh reviewer with the same brief and the answer
-        alive = self.pane_alive(name)
-        _, assignment_id = self.ensure_agent(
-            name,
-            "reviewer",
-            unit,
-            {
-                "kind": "worker",
-                "name": name,
-                "task": text,
-                "cwd": packet["checkout"],
-                "cli": backend,
-                "model": model,
-                "effort": self.step_effort("reviewer", "high"),
-            },
-            fresh=not alive,
-            attempt=review_dir.name + "-answer" + suffix,
-        )
-        self.mark(
+        unit = task["packet"]["unit"]
+        self.resume_reviewer(
             task_id,
-            gate="reviewing",
-            review=dict(review, assignment_id=assignment_id),
-            held=[],
-            updated_at=timeutil.iso(),
+            "The Lead answered what stopped your review of %s. Their answer: %s. Hand in your verdict."
+            % (unit.upper(), decision["answer"]),
         )
-        narrate.say(
-            "info",
-            "decide",
-            "answer sent; %s %s" % (name, "resumed" if alive else "replaced by a fresh reviewer"),
-            task=task_id,
-        )
-
-    def _review_answer_brief(self, task, review, unit, suffix, decision):
-        """The Lead's answer written where the reviewer reads it, once: the review it still owes, and the
-        assignment id its report must carry. A driver that died after the resume writes nothing twice."""
-        review_dir = Path(review["dir"])
-        brief = review_dir / ("answer%s.md" % suffix)
-        if brief.exists():
-            return brief
-        brief.write_text(
-            render(
-                "review-answer",
-                unit=unit.upper(),
-                reason=task["event"]["reason"],
-                instruction=decision["reason"],
-                answer=decision["answer"],
-                brief=review_dir / "task.md",
-                review_path=review["path"],
-            ),
-            encoding="utf-8",
-        )
-        return brief
+        self.mark(task_id, held=[], updated_at=timeutil.iso())
+        narrate.say("info", "decide", "answer sent to %s" % task["review"]["name"], task=task_id)
 
     def step_redo(self, task_id):
         """Hand the unit back to a worker after the Lead's `retry`: a new task directory with the event and the reason."""

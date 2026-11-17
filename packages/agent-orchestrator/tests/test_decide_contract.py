@@ -8,9 +8,7 @@ from unittest import mock
 
 import pytest
 from agent_orchestrator import contracts
-from fixtures import ROWS, assignment, report_wait, resume_id, wait_result
-from test_drain import DrainFixture
-from test_gates import BLOCKING
+from fixtures import wait_result
 from test_wake import WakeFixture
 
 pytestmark = pytest.mark.integration
@@ -207,49 +205,3 @@ class OnlyParked(WakeFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.task()["gate"], "blocked")
         self.assertEqual([e["kind"] for e in self.run_events("finish", "crash")], ["finish"])
-
-
-class ReapprovalKeepsOpenBlockers(DrainFixture, unittest.TestCase):
-    """Open blocking findings persist: adopting a re-approval does not clear a blocker; the same reviewer must close it with evidence."""
-
-    def idle(self, **extra):
-        """A wait step with both workers running and their turns unbroken."""
-        return wait_result(
-            [assignment("demo-t1", "working", "idle"), assignment("demo-t3")],
-            reason="timeout",
-            **extra,
-        )
-
-    def with_t5(self):
-        return self.edit(lambda data: data["tickets"].append(dict(id="T5", **ROWS["T5"])))
-
-    def resumed_report(self):
-        step = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 1))
-        step["write"] = [[str(self.run_dir / "t1r1" / "report.json"), self.report("t1r1")]]
-        return step
-
-    def re_review(self):
-        step = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review", 1))
-        step["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review2()]]
-        return step
-
-    @pytest.mark.spec("Re-approval under a live driver")
-    def test_an_adopted_reapproval_leaves_the_open_blocker_open_until_it_is_resolved(self):
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.reviewer_done(self.review2(verdict="block", items=[BLOCKING])),
-                # the fix round runs while the Lead edits the plan and re-approves it
-                self.idle(write=self.writes(self.with_t5())),
-                self.idle(run=[self.reapprove_argv()]),
-                self.idle(),
-                self.resumed_report(),
-                self.re_review(),
-            ]
-        )
-        self.run_driver("--idle-minutes", "9999")
-        self.assertTrue(self.run_events("amended"), "the re-approval was never adopted")
-        self.assertEqual([item["id"] for item in self.open_record("t1")["items"]], ["B1"])
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
-        self.assertNotEqual(self.task("t1r1")["gate"], "done")
-        self.assertIn("B1", (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8"))

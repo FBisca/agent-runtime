@@ -3,6 +3,8 @@ plans:
   dir: docs/plans
 archive:
   mode: promote
+# The rulebook: implementers follow it and reviewers judge against it.
+rulebook: docs/rulebook.md
 # The check tiers: a worker runs the cheap two, CI runs the whole suite.
 checks:
   fast: uv run pytest

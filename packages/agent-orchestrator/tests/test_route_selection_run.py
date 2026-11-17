@@ -151,9 +151,7 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
                 "pr": "https://github.com/o/r/pull/%d" % pr,
             }
         )
-        review = json.dumps(
-            {"contract": 2, "verdict": "pass", "items": [], "checks_run": [], "commit": "@HEAD"}
-        )
+        review = json.dumps({"verdict": "pass", "findings": []})
         done = report_wait(worker, "complete", id=spawn_id(worker))
         done["write"] = [
             [str(run_dir / "t1" / "report.json"), report],
@@ -162,8 +160,7 @@ class RouteSelectionRunTests(RunFixture, unittest.TestCase):
                 'def test_a():\n    """S1"""\n',
             ],
         ]
-        seen = report_wait(reviewer, "complete")
-        seen["write"] = [[str(run_dir / "t1" / "review.json"), review]]
+        seen = report_wait(reviewer, "complete", text=review)
         self.waits([done, seen])
         self.prs(["MERGED"])
         self.checks(["green"])

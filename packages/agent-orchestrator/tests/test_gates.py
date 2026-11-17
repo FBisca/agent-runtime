@@ -1,7 +1,6 @@
 """The gates after a worker reports: converge, a fresh reviewer, fix rounds, a fresh worker for a dead pane."""
 
 import io
-import itertools
 import json
 import os
 import sys
@@ -17,7 +16,6 @@ from agent_orchestrator import plan as yaml_plan
 from fixtures import (
     RunFixture,
     added,
-    assignment,
     keep_scenarios,
     load_script,
     red_of,
@@ -38,35 +36,11 @@ MAJOR = {
     "problem": "drops the last row",
     "fix": "include the final row",
 }
-DEFERRED = {"id": "D1", "note": "rename the helper someday"}
-EVIDENCE = {
-    "command": "pytest -k last",
-    "exit": 1,
-    "excerpt": "AssertionError: 3 != 4",
-    "log_path": "/run/t1/pytest.log",
-}
 BLOCKING = {
-    "id": "B1",
     "kind": "blocking",
     "summary": "drops the last row",
-    "answer_required": False,
     "file": "src/a/x.py",
     "line": 7,
-    "fix": "include the final row",
-    "evidence": EVIDENCE,
-}
-QUESTION = {
-    "id": "Q1",
-    "kind": "deferred",
-    "summary": "should empty input raise?",
-    "answer_required": True,
-}
-NIT = {"id": "N1", "kind": "deferred", "summary": "rename the helper", "answer_required": False}
-CONCERN = {
-    "id": "K1",
-    "kind": "deferred",
-    "summary": "the cache is never cleared",
-    "answer_required": False,
 }
 
 
@@ -253,63 +227,25 @@ class GateFixture(RunFixture):
         path = self.run_dir / "t1r1" / "findings.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def closure(self, *items, status="fixed"):
-        """The `resolutions` and the `checks_run` entry that close each item with supported current-commit
-        evidence: `@HEAD` becomes the checkout's HEAD when the fake runtime writes the file."""
-        ran = {"command": "pytest -k last", "exit": 0, "at_commit": "@HEAD"}
-        resolutions = [
-            {
-                "id": item["id"],
-                "status": status,
-                "commit": "@HEAD",
-                "note": "the fix holds" if status == "fixed" else "the finding was wrong",
-                "evidence": {
-                    "command": "pytest -k last",
-                    "exit": 0,
-                    "excerpt": "1 passed",
-                    "log_path": "/run/fix.log",
-                },
-            }
-            for item in items
-        ]
-        return {"resolutions": resolutions, "checks_run": [ran]}
-
-    def open_record(self, unit="t1"):
-        """The unit's open blocking findings, as the driver wrote them."""
-        path = self.run_dir / unit / "open-findings.json"
-        return json.loads(path.read_text(encoding="utf-8"))
-
     def review(self, **over):
-        return json.dumps(
-            dict(
-                {"contract": 1, "verdict": "pass", "major": [], "deferred": [], "commit": "@HEAD"},
-                **over,
-            )
-        )
+        """The verdict a reviewer hands in: a pass, or a block naming one finding per blocking item or major."""
+        found = [
+            {
+                "file": item["file"],
+                "line": item["line"],
+                "quote": "x = 1",
+                "claim": item.get("summary") or item["problem"],
+            }
+            for item in [*over.get("items", []), *over.get("major", [])]
+            if item.get("kind", "blocking") == "blocking"
+        ]
+        return json.dumps({"verdict": "block" if found else "pass", "findings": found})
 
-    def review2(self, **over):
-        """A contract 2 review.json: pass with no items unless told otherwise."""
-        return json.dumps(
-            dict(
-                {
-                    "contract": 2,
-                    "verdict": "pass",
-                    "items": [],
-                    "checks_run": [],
-                    "commit": "@HEAD",
-                },
-                **over,
-            )
-        )
+    review2 = review
 
     def reviewer_done(self, review=None, write=None):
-        step = report_wait("demo-t1-review", "complete")
-        step["write"] = (
-            [[str(self.run_dir / "t1" / "review.json"), review or self.review()]]
-            if write is None
-            else write
-        )
-        return step
+        """A wait step in which the reviewer reports complete with its verdict as the text."""
+        return report_wait("demo-t1-review", "complete", text=review or self.review())
 
     def task(self, task_id="t1"):
         return self.ledger()["tasks"][task_id]
@@ -327,35 +263,6 @@ class GateFixture(RunFixture):
 
 
 class GateTests(GateFixture, unittest.TestCase):
-    def test_S5_an_open_blocker_holds_only_the_unit_that_has_it(self):
-        """Open blocking findings persist: the open set is the unit's own; another unit's review passes and reaches CI untouched."""
-        self.set_plan(("T1", "T3"))
-        t3_review = report_wait("demo-t3-review", "complete")
-        t3_review["write"] = [[str(self.run_dir / "t3" / "review.json"), self.review2()]]
-        t3 = self.worker_done(
-            "t3",
-            name="demo-t3",
-            report=self.report("t3", covers={"S3": ["src/c/test_c.py::test_c"]}),
-        )
-        t3["write"].append(
-            [
-                str(self.root / "repo.worktrees" / "demo-t3" / "src" / "c" / "test_c.py"),
-                "def test_c():\n    pass\n",
-            ]
-        )
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                t3,
-                self.reviewer_done(self.review2(verdict="block", items=[BLOCKING])),
-                t3_review,
-            ]
-        )
-        self.run_driver()
-        self.assertEqual([i["id"] for i in self.open_record("t1")["items"]], ["B1"])
-        self.assertFalse((self.run_dir / "t3" / "open-findings.json").exists())
-        self.assertEqual(self.task("t3")["gate"], "done")
-
     def test_S5_failing_verify_resumes_the_worker_in_a_new_task_directory(self):
         """code-driven-orchestrator/S5"""
         self.waits([self.worker_done()])
@@ -449,17 +356,16 @@ class GateTests(GateFixture, unittest.TestCase):
         )
         self.assertEqual(
             args["task"],
-            "Read %s and follow it. Write the review to %s (JSON, contract 2)."
-            % (self.run_dir / "t1-review" / "task.md", self.run_dir / "t1" / "review.json"),
+            "Read %s and follow it. Hand in the verdict as the text of your `report` call."
+            % (self.run_dir / "t1-review" / "task.md"),
         )
         text = (self.run_dir / "t1-review" / "task.md").read_text(encoding="utf-8")
         for needle in (
             str(self.run_dir / "t1" / "task.md"),
             str(self.plan),
-            "origin/main...HEAD",
+            "origin/main...",
             str(self.worktree),
-            str(self.run_dir / "t1" / "review.json"),
-            "Report only what a user or caller would hit",
+            "Name what a user or caller would hit",
         ):
             self.assertIn(needle, text)
         task = self.task()
@@ -469,22 +375,20 @@ class GateTests(GateFixture, unittest.TestCase):
         )
         self.assertEqual(self.calls("resume"), [])
 
-    def test_S6_a_blocking_review_sends_only_its_major_items_as_a_fix_round(self):
+    def test_S6_a_blocking_review_sends_its_findings_as_a_fix_round(self):
         """code-driven-orchestrator/S6"""
-        review = self.review(verdict="block", major=[MAJOR], deferred=[DEFERRED])
+        review = self.review(major=[MAJOR])
         self.waits([self.worker_done(tests=True), self.reviewer_done(review)])
         self.run_driver()
         resumes = self.calls("resume")
         self.assertEqual([r["args"]["name"] for r in resumes], ["demo-t1"])
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
-        self.assertEqual((findings["source"], findings["items"]), ("review", [MAJOR]))
+        self.assertEqual(findings["source"], "review")
+        (item,) = findings["items"]
+        self.assertEqual((item["id"], item["file"], item["line"]), ("R1", "src/a/x.py", 7))
         task_md = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
         self.assertIn("drops the last row", task_md)
         self.assertIn("src/a/x.py", task_md)
-        self.assertNotIn("rename the helper", task_md)
-        self.assertIn(
-            "rename the helper someday", (self.run_dir / "deferred.md").read_text(encoding="utf-8")
-        )
         self.assertEqual(self.task()["report"]["review_rounds"], 1)
         self.assertEqual(self.task("t1r1")["status"], "ACTIVE")
 
@@ -530,274 +434,6 @@ class GateTests(GateFixture, unittest.TestCase):
         self.run_driver()
         self.assertEqual(self.calls("resume"), [])
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1"])
-
-    def test_S6a_an_invalid_review_does_not_start_a_fix_round(self):
-        """code-driven-orchestrator/S6a"""
-        broken = self.review(verdict="pass", major=[MAJOR])
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                *self.repeated(self.reviewer_done(broken)),
-                self.skipped(),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(
-            len(self.calls("resume")), 2, "the reviewer was warned twice before the Lead was asked"
-        )
-        self.assertEqual(self.request()["event"], "review")
-        self.assertIn("review.json", self.request()["reason"])
-
-    def test_S6a_a_missing_review_does_not_advance_the_ticket(self):
-        """code-driven-orchestrator/S6a
-
-        A review is read after a bounded grace moved the first answer from the Lead to the agent that sent the report: the gate waits, the reviewer is
-        told its file is not on disk, and the ticket does not advance. The request comes after the warnings."""
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                *self.repeated(self.reviewer_done(write=[])),
-                self.skipped(),
-            ]
-        )
-        self.run_driver()
-        warned = self.calls("resume")
-        self.assertEqual(len(warned), 2, [c["args"]["task"] for c in warned])
-        for call in warned:
-            self.assertIn("review.json", call["args"]["task"])
-            self.assertIn("Write or repair that file", call["args"]["task"])
-        self.assertEqual(self.request()["event"], "review")
-        self.assertIn("2 warning(s)", self.request()["reason"])
-        self.assertNotIn(
-            "reviewed_commit", self.task(), "no verdict was recorded from a missing file"
-        )
-
-
-REVIEWER = "demo-t1-review"
-
-
-class SilentReviewerTests(GateFixture, unittest.TestCase):
-    """One idle watchdog: a reviewer whose turn ended is still a live reviewer. The driver waits for its complete under the
-    assignment it was given, and only the timed idle watchdog asks the Lead."""
-
-    def silent(self, runtime_state="idle", write=()):
-        """A wait step: the reviewer's turn ended under its original assignment; no report."""
-        return wait_result([assignment(REVIEWER, "working", runtime_state)], write=write)
-
-    def review_file(self):
-        return [[str(self.run_dir / "t1" / "review.json"), self.review()]]
-
-    def reviewer_resumes(self):
-        return [c for c in self.calls("resume") if c["args"].get("name") == REVIEWER]
-
-    def payload_trouble(self):
-        return [
-            e
-            for e in self.run_events("payload-warning", "contract-error")
-            if e.get("where") == "review"
-        ]
-
-    def gates(self):
-        return [e["gate"][1] for e in self.run_events("state") if e["task"] == "t1"]
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S1_a_reviewer_that_ends_its_turn_idle_then_reports_complete_is_accepted(self):
-        """orchestrator-silent-idle/S1"""
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.silent("idle"),
-                self.silent("done"),
-                self.silent("idle"),
-                self.reviewer_done(),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.reviewer_resumes(), [], "a silent reviewer was resumed")
-        self.assertEqual(self.payload_trouble(), [])
-        self.assertFalse((self.run_dir / "t1" / "request.json").exists(), "the Lead was asked")
-        task = self.task()
-        self.assertEqual(task["review"]["assignment_id"], "a-" + REVIEWER)
-        self.assertIn("reviewed_commit", task)
-        self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S2_a_review_file_on_disk_without_a_complete_report_is_not_a_verdict(self):
-        """orchestrator-silent-idle/S2"""
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.silent("idle", write=self.review_file()),
-                self.silent("done"),
-                self.silent("idle"),
-                self.silent("idle"),
-                self.silent("idle"),
-                self.skipped(),
-            ]
-        )
-        self.run_driver("--idle-minutes", "0")
-        self.assertNotIn("reviewed", self.gates(), "the gate left reviewing without a report")
-        self.assertNotIn("reviewed_commit", self.task())
-        self.assertEqual(self.request()["event"], "idle")
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S3_idle_observations_between_ticks_consume_no_ticks_and_raise_no_request(self):
-        """orchestrator-silent-idle/S3"""
-        spec = load_script()
-        self.waits(
-            [self.worker_done(tests=True)] + [self.silent("idle")] * 8 + [self.reviewer_done()]
-        )
-        with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: 0)):
-            self.run_driver("--idle-minutes", "10")
-        self.assertEqual([e for e in self.run_events("idle") if e.get("unit")], [])
-        self.assertFalse((self.run_dir / "t1" / "request.json").exists())
-        self.assertEqual(self.reviewer_resumes(), [])
-        self.assertEqual(self.task()["gate"], "done")
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S4_a_reviewer_that_never_reports_is_asked_about_once_by_the_idle_watchdog(self):
-        """orchestrator-silent-idle/S4"""
-        spec = load_script()
-        moments = itertools.count(0, 600)  # the init reading, then ten minutes per tick
-        self.waits([self.worker_done(tests=True)] + [self.silent("idle")] * 6 + [self.skipped()])
-        with mock.patch.object(spec.Driver, "clock", staticmethod(lambda: next(moments))):
-            self.run_driver("--idle-minutes", "10")
-        self.assertEqual(self.reviewer_resumes(), [], "a warning preceded the request")
-        self.assertEqual(self.payload_trouble(), [], "a payload error preceded the request")
-        request = self.request()
-        self.assertEqual(request["event"], "idle")
-        reason = request["reason"]
-        self.assertIn(REVIEWER, reason)
-        self.assertIn(str(self.run_dir / "t1" / "review.json"), reason)
-        self.assertIn("10 minutes", reason)
-        self.assertIn("decide %s t1 retry | answer | skip" % self.plan, reason)
-        self.assertEqual(len(self.wake_lines("decision")), 1)
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S9_a_missing_review_is_recovered_with_text_that_does_not_claim_a_read_report(self):
-        """orchestrator-silent-idle/S9"""
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                *self.repeated(self.reviewer_done(write=[])),
-                self.skipped(),
-            ]
-        )
-        self.run_driver()
-        warned = self.reviewer_resumes()
-        self.assertEqual(
-            len(warned), 2, "the A review is read after a bounded grace cap still applies"
-        )
-        path = str(self.run_dir / "t1" / "review.json")
-        for call in warned:
-            text = call["args"]["task"]
-            self.assertIn(path, text)
-            self.assertIn("Write or repair that file", text)
-            self.assertIn("report complete under this assignment", text)
-            self.assertNotIn("reached the driver", text)
-        self.assertEqual(self.request()["event"], "review")
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S10_a_reviewer_the_runtime_reports_failed_goes_straight_to_the_lead(self):
-        """orchestrator-silent-idle/S10"""
-        self.states({REVIEWER: "exited"})
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                wait_result([assignment(REVIEWER, "failed")]),
-                self.skipped(),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.reviewer_resumes(), [], "a failed reviewer cannot write the file")
-        self.assertEqual(self.request()["event"], "review")
-        self.assertIn("no agent left to write it", self.request()["reason"])
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S10_a_restart_orphaned_reviewer_with_a_valid_review_is_still_accepted(self):
-        """orchestrator-silent-idle/S10"""
-        self.waits([self.worker_done(tests=True)])
-        self.run_driver()
-        self.assertEqual(self.task()["gate"], "reviewing")
-        self.gone(REVIEWER)
-        head = self.git(self.worktree, "rev-parse", "HEAD")
-        (self.run_dir / "t1" / "review.json").write_text(
-            self.review().replace("@HEAD", head), encoding="utf-8"
-        )
-        self.waits([wait_result()])
-        self.run_driver()
-        self.assertEqual(self.reviewer_resumes(), [])
-        self.assertIn("reviewed_commit", self.task())
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S10_a_restart_orphaned_reviewer_without_a_review_goes_straight_to_the_lead(self):
-        """orchestrator-silent-idle/S10"""
-        self.waits([self.worker_done(tests=True)])
-        self.run_driver()
-        self.gone(REVIEWER)
-        self.waits([wait_result(), self.skipped()])
-        self.run_driver()
-        self.assertEqual(self.reviewer_resumes(), [])
-        self.assertEqual(self.request()["event"], "review")
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S11_a_reviewer_the_runtime_reports_unreported_or_error_is_handled_at_once(self):
-        """orchestrator-silent-idle/S11 — as before, not deferred to the idle watchdog."""
-        for runtime_state in ("unreported", "error"):
-            with self.subTest(runtime_state=runtime_state):
-                self.setUp()
-                recovered = report_wait(REVIEWER, "complete", id=resume_id(REVIEWER, 1))
-                recovered["write"] = self.review_file()
-                self.waits([self.worker_done(tests=True), self.silent(runtime_state), recovered])
-                self.run_driver()  # the default idle watchdog could not have fired
-                self.assertEqual(len(self.reviewer_resumes()), 1, "no recovery at once")
-                self.assertEqual(len(self.run_events("payload-warning")), 1)
-                self.assertEqual(self.task()["gate"], "done")
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S12_the_reviewer_brief_names_the_report_order(self):
-        """orchestrator-silent-idle/S12"""
-        self.waits([self.worker_done(tests=True), self.reviewer_done()])
-        self.run_driver()
-        brief = (self.run_dir / "t1-review" / "task.md").read_text(encoding="utf-8")
-        for needle in (
-            "Write the review once the diff is read",
-            "report complete with the assignment id",
-        ):
-            self.assertIn(needle, brief)
-
-
-class PayloadTests(GateFixture, unittest.TestCase):
-    """A review is read after a bounded grace: a report is the news, the file it names is the payload, and the driver waits for the payload."""
-
-    @pytest.mark.spec("A review is read after a bounded grace")
-    def test_S2_a_payload_that_never_lands_warns_the_sender_before_the_lead(self):
-        """orchestrator-payload-race/S2"""
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                *self.repeated(self.reviewer_done(write=[])),
-                self.skipped(),
-            ]
-        )
-        self.run_driver()
-        warned = [c["args"] for c in self.calls("resume")]
-        self.assertEqual(len(warned), 2, "one warning per report, capped")
-        self.assertEqual(warned[0]["name"], "demo-t1-review")
-        self.assertIn("Write or repair that file", warned[0]["task"])
-        self.assertEqual(self.task()["gate"], "skipped")
-
-    @pytest.mark.spec("A review is read after a bounded grace")
-    def test_S3_a_sender_that_cannot_be_warned_goes_straight_to_the_lead(self):
-        """orchestrator-payload-race/S3"""
-        self.states({"demo-t1-review": "exited"})
-        self.waits([self.worker_done(tests=True), self.reviewer_done(write=[]), self.skipped()])
-        self.run_driver()
-        self.assertEqual(
-            self.calls("resume"), [], "a dead reviewer cannot write the file: no warning is sent"
-        )
-        self.assertEqual(self.request()["event"], "review")
-        self.assertIn("no agent left to write it", self.request()["reason"])
 
 
 class CheckoutTimeoutTests(GateFixture, unittest.TestCase):

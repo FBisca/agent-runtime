@@ -169,17 +169,6 @@ A second driver SHALL NOT run a plan another live driver runs in the same reposi
 - WHEN a run of another plan in the same repository starts, or a run ended or crashed
 - THEN it is not held up, and no lock stays behind
 
-### Requirement: A review is read after a bounded grace
-The driver SHALL wait a bounded grace for the file a reviewer's report names and tell the reviewer before it asks the Lead.
-
-#### Scenario: a file that lands late
-- WHEN a reviewer's report reaches the driver before the review file it names is usable (absent, half written, or breaking its contract)
-- THEN the driver waits a bounded grace and reads the file when it lands, and ends the wait at the deadline when it never does
-
-#### Scenario: a payload that stays unreadable
-- WHEN the review file is still unreadable after the grace
-- THEN the reviewer is told what the driver needs, twice at most, with the gate kept open, and only then is the Lead asked, naming the warnings; an agent that is gone is not warned
-
 ### Requirement: A checkpoint needs its checkout
 `checkpoint()` SHALL refuse a report whose unit has no checkout, and SHALL hold no check outcome against COMPLETE: CI judges the tests.
 
@@ -220,6 +209,66 @@ The driver SHALL return a hand-in whose shape is wrong to the same worker at onc
 #### Scenario: the third refusal
 - WHEN the same task's hand-in is refused for the third time
 - THEN the Lead is asked
+
+### Requirement: A verdict is handed in through the runtime
+A reviewer SHALL hand in its verdict as the text of its agent-runtime `report` call, and the driver SHALL validate it the moment it arrives; there is no review file.
+
+#### Scenario: an accepted verdict
+- WHEN a reviewer's `complete` carries `{"verdict": "pass"|"block", "findings": [{"file", "line", "quote", "claim", "rule"?}]}` that `Verdict` accepts (`block` exactly when it names a finding)
+- THEN the driver appends a `review` event with the commit reviewed, the verdict and the findings to `events.jsonl`, the unit moves to `reviewed`, and `rule` is recorded and never read by the driver: a finding with it and one without it block equally
+
+
+### Requirement: A refused verdict goes back to its reviewer
+The driver SHALL return a verdict whose shape is wrong to the same reviewer at once with the exact errors, and ask the Lead only after the third refusal.
+
+#### Scenario: a wrong shape
+- WHEN a verdict is not JSON, has an unknown field, a finding without `quote`, `claim`, `file` or a positive `line`, or blocks with no finding
+- THEN the driver appends a `review-refused` event with the reason and the payload, messages the same reviewer every error, writes no Lead request, and the corrected verdict is read as usual
+
+#### Scenario: the third refusal
+- WHEN the same review's verdict is refused for the third time
+- THEN the Lead is asked
+
+
+### Requirement: A reviewer that ends without a verdict is resumed once
+A reviewer whose turn ended or whose process exited without a verdict SHALL be answered by the driver at once, and the Lead SHALL be asked only when it happens again.
+
+#### Scenario: the first end
+- WHEN a reviewer's agent exits, fails or its turn ends while the unit waits at `reviewing`
+- THEN the driver appends a `review-ended` event with the reason, resumes the same reviewer with "You ended without a verdict; hand it in", and writes no request
+
+#### Scenario: the second end
+- WHEN the resumed reviewer ends without a verdict again
+- THEN the Lead is asked
+
+
+### Requirement: Review and CI run together
+A reported commit SHALL be reviewed while its CI runs, and the worker SHALL hear both once.
+
+#### Scenario: both are in
+- WHEN a report is accepted
+- THEN the reviewer starts at once, CI is polled meanwhile, the worker is told nothing, and when the verdict is in and CI has settled on the reported commit the worker gets one fix round carrying the review's findings and the CI failures together, or the unit goes on to the pull request's readiness when the verdict passes and CI is green
+
+#### Scenario: CI is not in yet
+- WHEN the verdict is in and CI is pending, absent or not yet on the reported commit
+- THEN the unit waits at `reviewed`, no fix round is raised, and the idle watchdog is the deadline
+
+#### Scenario: no skip
+- WHEN any ticket reports
+- THEN it gets the same review
+
+
+### Requirement: A repository names its rulebook
+A repository SHALL name one rulebook file in `.orchestrate/config.yaml` that both its implementer's and its reviewer's briefs point at.
+
+#### Scenario: a named rulebook
+- WHEN the config names `rulebook: <path>`
+- THEN the worker's task brief and the reviewer's brief each name that file, which must exist in the checkout, and a finding that breaks one of its rules names the rule's title in `rule`
+
+#### Scenario: no rulebook
+- WHEN the config has no `rulebook` key
+- THEN neither brief has a rulebook line
+
 
 ### Requirement: A merged unit completes
 A unit whose pull request merged SHALL complete.
@@ -305,10 +354,6 @@ A unit whose pull request conflicts SHALL go back to draft and be rebased by a f
 #### Scenario: an update-branch failure without a conflict
 - WHEN `gh pr update-branch` fails and a fresh `gh pr view` shows no conflict
 - THEN no conflict round is raised and the Lead is asked with the `gh` error and the way out
-
-#### Scenario: a disputed change
-- WHEN a disputed answer with `changes_code` sends a unit back from `ready-for-ci` or `awaiting-merge`
-- THEN the unit's readiness is forgotten across its attempts and its checks cleared, the PR is a draft through the delta re-review, and `gh pr ready` runs again on its return
 
 #### Scenario: a conflict with another open ticket
 - WHEN a pull request conflicts and another open ticket's pull request changes a file it changes
@@ -420,19 +465,11 @@ The Lead SHALL be asked about a quiet agent only when its process is gone or it 
 
 #### Scenario: a turn that ended while the runtime lists the assignment as working
 - WHEN an agent's turn ends while the runtime still lists its assignment as working (`idle` or `done`)
-- THEN it is a live agent, not an exit: a reviewer advances only on its own `complete`, a worker stays pending, an answerer stays working, none is resumed or replaced, and only the idle watchdog asks the Lead, with one `idle` request and one decision wake naming the agent, the review file a reviewer owes, how long it has been quiet and `decide <plan> <unit> retry | answer | skip`
+- THEN it is a live agent, not an exit: a worker stays pending and is not resumed or replaced, and only the idle watchdog asks the Lead, with one `idle` request and one decision wake naming the agent, how long it has been quiet and `decide <plan> <unit> retry | answer | skip`; a reviewer whose turn ended is answered by the driver (A reviewer that ends without a verdict is resumed once)
 
 #### Scenario: quiet for --idle-minutes
 - WHEN a unit's agent state, gate and CI show nothing new for `--idle-minutes` and its agent is not reported `working`
 - THEN the Lead is asked once; any change restarts the quiet time, and a shorter quiet time asks nobody
-
-#### Scenario: the reviewer brief
-- WHEN a reviewer is briefed
-- THEN the brief says the reviewer writes the review once the diff is read and then reports `complete` with the brief's assignment id
-
-#### Scenario: a complete that cannot be read
-- WHEN a reviewer's `complete` announces a review file the driver cannot read
-- THEN the grace and capped recovery apply, and each recovery message names the file to write or repair and says to report complete under the current assignment
 
 #### Scenario: a working agent
 - WHEN `wait` reports a unit's agent with `runtime_state: working`
@@ -444,11 +481,7 @@ The Lead SHALL be asked about a quiet agent only when its process is gone or it 
 
 #### Scenario: a late reviewer complete
 - WHEN a reviewer whose idle request is still undecided reports `complete`
-- THEN the review is taken as for any reviewer (the unit goes on to `reviewed`) and the request closes as resolved by the worker with a decision that says so; once the Lead has decided, a late `complete` is ignored
-
-#### Scenario: the answers record
-- WHEN the Lead decides a request that did not name a busy answerer, such as a `ci` request answered `fresh worker`
-- THEN the answers record is not failed and the answerer's later `complete` is received; when a decision does fail the record because the request named the answerer, an `answers-dropped` event says why `pr-ready` stopped waiting on the answers
+- THEN its verdict is taken as for any reviewer and the request closes as resolved by the worker with a decision that says so; once the Lead has decided, a late `complete` is ignored
 
 ### Requirement: Not-started attempts reach the Lead
 The drive SHALL act on the runtime's `not_started` attention verdict on the wait that delivers it.
@@ -549,15 +582,8 @@ A gate failure SHALL be booked in one ledger write before any git or gh call.
 A ledger write SHALL refuse a state that breaks an invariant.
 
 #### Scenario: a broken ledger
-- WHEN a ledger is written, or captured and read with `ledger check`, with two open attempts naming one review file, a park carrying no release key, or a gate the driver does not know
+- WHEN a ledger is written, or captured and read with `ledger check`, with a park carrying no release key, or a gate the driver does not know
 - THEN the write is refused naming the invariant, the task and the way out, `agent-orchestrator ledger check` reports the same on a captured ledger with exit 2, and a ledger the driver itself finishes on passes
-
-### Requirement: A reworked unit writes a new review
-A unit reviewed before and worked again SHALL write its next review to the next write-once file.
-
-#### Scenario: a second review
-- WHEN a unit that was already reviewed is worked again after the Lead answers its request (the same task id)
-- THEN the next review is written to the next write-once review file, the ledger's review names it, and the earlier review stays on disk with the blocker ids it named
 
 ### Requirement: Request files are repaired
 The driver SHALL rewrite an unusable request file from the ledger before it waits on the Lead.
@@ -636,71 +662,35 @@ A brief that carries required checks SHALL say how to run them.
 - WHEN a worker receives a brief that carries its required checks
 - THEN it tells the worker to run those checks and only the test files it wrote or changed, each in the foreground under a timeout, to read failures from that run and to re-run only the tests that failed, naming no runner, flag or file of any one repository
 
-### Requirement: Review items assert violations as blocking
-A contract-2 review item that asserts a requirement violation SHALL be blocking, and older contracts SHALL read as before.
-
-#### Scenario: a violation item
-- WHEN a contract-2 review item carries `requirement_violation` with `source`, `id`, `expected` and `observed` (each nonempty text)
-- THEN its `kind` must be blocking with the item's `file`, `line`, `fix` and `evidence`; an item that is not blocking, whose metadata is missing, blank or not text, or whose `requirement_violation` is neither an object nor `null` is refused by `validate_review` and `ReviewV2` naming the item, before the unit can advance to CI; an explicit `null` reads as absent; the reviewer brief asks for the blocking item and its metadata
-
-#### Scenario: no violation
-- WHEN a review item carries no `requirement_violation`, or a clean contract-2 or a contract-1 review is read
-- THEN a `deferred` item does not block, the unit goes on to CI, and both readers still read the older contract unchanged
-
-### Requirement: Open blocking findings persist
-An earlier blocking finding SHALL stay open until a supported resolution closes it, held by a record and not by process memory.
-
-#### Scenario: an omitted finding
-- WHEN an earlier blocking finding is omitted, downgraded, or lies outside a later fix delta without an explicit supported resolution
-- THEN its stable id stays open with its first payload at `<run>/<unit>/open-findings.json` as `{contract: 1, unit, items[]}`; a review that passes while one is open is refused before CI naming the ids, the record and the way out, and a blocking review hands every open item to the fix round with the new ones
-
-#### Scenario: a restart
-- WHEN the driver restarts after recording a blocking finding and processes a passing re-review that omits it
-- THEN the persisted open finding still holds the unit before CI or delivery, and a missing record is rebuilt from the unit's own reviews
-
-#### Scenario: a legacy item
-- WHEN a legacy `major` item is carried by an open set into a contract-2 round
-- THEN it keeps its payload there and the findings file is written as contract 2, so the round reads instead of becoming a Lead request
-
-### Requirement: Only a supported resolution closes a finding
-A reviewer SHALL close an open blocking finding only with a top-level `resolutions` entry backed by evidence.
-
-#### Scenario: a valid resolution
-- WHEN a contract-2 review has a `resolutions` entry for the id with `status` fixed or disproven, the reviewed commit, a nonempty note, and evidence whose command ran with exit 0 and appears in `checks_run` with that command, that exit and the reviewed commit
-- THEN the finding closes
-
-#### Scenario: an invalid resolution
-- WHEN a resolution is a bare acknowledgment, has an unsupported status or a blank note, names an unknown, duplicate or conflicting id, also raises the id blocking, names a commit other than the one reviewed, or has failed or unmatched evidence, or a contract-1 review carries `resolutions`
-- THEN `validate_review` and `ReviewV2` refuse it naming the resolution and the finding stays open
-
 ### Requirement: The reviewer brief gives one pass
 The first-review brief SHALL give the reviewer's pass as numbered steps in one order, with every path it works from named.
 
 #### Scenario: the pass
 - WHEN a reviewer receives the brief for a unit's first review
-- THEN the brief gives the pass as numbered steps — read the whole diff first; the ticket delivers what the task file's `What it delivers` says, each satisfied scenario proved by a test the diff adds or changes that asserts the THEN's behaviour on the real code path, carries its spec tag and fails when the change is reverted (a test that would pass without the change is blocking); the implementer's report matches the code at the reviewed commit (`covers` nodes that exist, `checks` outcomes the log shows, `head`, `files`); the requirements the change touches still hold; the repository's rules hold — and only after that judges severity
+- THEN the brief names the ticket's scenarios (the task file), the diff `base...head`, the implementer's report, the plan and the repository's rules files, and gives the pass in order: read the whole diff first; name what a user or caller would hit (wrong behaviour, data loss, a lost wake, a run that cannot finish or restart, a satisfied scenario no test proves, a test that still passes with the change reverted); read a library's or tool's documentation when a claim depends on it; make each finding one checkable claim about one quoted line
 
-#### Scenario: the reviewer reads and reports correctness bugs only
+#### Scenario: the reviewer reads and judges only
 - WHEN a reviewer receives the brief
-- THEN it asks for a correctness bug a user or caller would hit, or a test that would still pass without the change, judged by reading the diff, the test and the report's `red` output; the reviewer runs no test and no command other than git reads, and CI and the red-first gate are the executed evidence
+- THEN it is told to run no command other than git reads, to leave formatting, lint, failing tests and conflicts to CI, and to hand in the verdict as the text of its `report` call
 
 #### Scenario: the paths
-- WHEN the steps are printed
-- THEN they follow the paths they work from: the implementer's task file, the report path the ledger recorded for the attempt under review (its exact path, mtime and claimed head), the run's `contract.md`, the plan and the repository's own rules files, with no glob over the unit's run directory and no fallback file read under another name
+- WHEN the brief is printed
+- THEN every path it names is a file that exists or a collection with its number of files, with no glob over the unit's run directory
 
-### Requirement: The re-review brief starts at the delta
-A re-review brief SHALL print the same pass starting at the delta.
+### Requirement: A re-review resumes the reviewer on the fix
+A re-review SHALL go to the reviewer session that holds the change, with the fix diff and what the fix was asked to answer, and nothing else.
 
-#### Scenario: a re-review
-- WHEN the brief is for a re-review
-- THEN its first step reads the delta `<from>..HEAD` with the whole change beside it, checks each earlier finding (resolved or not, with evidence), raises new blocking items only inside the delta, defers a blocking item outside the changed files unless it is about an earlier finding (reusing that finding's `id` or setting `finding` to it), and states that rule once, in that step
+#### Scenario: the same session
+- WHEN a unit that was reviewed reports again and its reviewer's pane is live
+- THEN the same reviewer is resumed with `since..head` (the last reviewed commit to the reported head), the worker's report and the findings file of the round it answers; the message holds no instruction to re-read the whole change, and when the last verdict blocked it says to check each earlier finding against the fix
 
-### Requirement: The review file path is named
-The reviewer's assignment SHALL name the absolute path of the review file it writes.
+#### Scenario: a reviewer that is gone
+- WHEN the reviewer's pane is gone at a re-review
+- THEN a fresh reviewer gets the first-review brief
 
-#### Scenario: the assignment
-- WHEN the driver starts the reviewer of a unit
-- THEN the assignment names the absolute path of the review file, beside the brief it must read
+#### Scenario: still blocked
+- WHEN a re-review of a unit whose last verdict blocked blocks again
+- THEN the Lead is asked with the findings, and no further fix round is raised
 
 ### Requirement: Workers are briefed on the tdd skill
 A worker's contract SHALL name the `tdd` skill and inline its admission rules for a backend with no skill loader.

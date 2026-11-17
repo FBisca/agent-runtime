@@ -17,8 +17,9 @@ lists the agents that finished their turn with a `complete` message, and `runtim
 observed for them (`idle` when the turn ended without a message). The ids come from the assignments the runtime gave
 out, so a step keeps naming the right agent after a resume.
 
-A worker hands its report in as the text of its `complete` message: a step's `write` of a path named
-`report.json` or `report.<n>.json` is not written to disk, its text becomes the text of the step's `complete`
+A resume of a worker (a fix round) replaces `checks.json` with `checks-fixed.json` when scripted, so CI turns
+green once the fix is pushed. A worker hands its report, and a reviewer its verdict, in as the text of its `complete` message: a step's `write` of a path named
+`report.json`, `review.json` or `report.<n>.json` is not written to disk, its text becomes the text of the step's `complete`
 messages, with `@HEAD` read as the sha the checkout is at once the step's commands ran.
 """
 
@@ -162,7 +163,9 @@ def process(argv, timeout=None):  # noqa: PLR0912, PLR0915
         # A worker hands its report in as the text of its `complete`, so a step that "writes" a task's
         # `report*.json` has the worker say that text; nothing is written to disk.
         handed = [
-            w for w in writes if re.fullmatch(r"report(\.\d+)?\.json", os.path.basename(w[0]))
+            w
+            for w in writes
+            if re.fullmatch(r"(report|review)(\.\d+)?\.json", os.path.basename(w[0]))
         ]
         writes = [w for w in writes if w not in handed]
         for path, text in writes:
@@ -239,6 +242,9 @@ def process(argv, timeout=None):  # noqa: PLR0912, PLR0915
             )
         assignment = answer(args["name"], "r%d-%s" % (nth, args["name"]))
         remember_assignment(home, args["name"], assignment["assignment_id"])
+        fixed = os.path.join(home, "checks-fixed.json")  # the checks a worker's fix leaves behind
+        if os.path.exists(fixed) and not args["name"].endswith("-review"):
+            os.replace(fixed, os.path.join(home, "checks.json"))
         return Completed(argv, 0, json.dumps(assignment))
     return Completed(argv, 0, json.dumps({}))
 

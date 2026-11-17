@@ -111,9 +111,9 @@ def claimed(task):
 
 
 def assignments(task):
-    """The assignment ids an attempt used: its worker, its reviewer, its decider and its answerer."""
+    """The assignment ids an attempt used: its worker, its reviewer and its decider."""
     found = [task.get("assignment_id")]
-    for key in ("review", "decision", "answers"):
+    for key in ("review", "decision"):
         part = task.get(key)
         if isinstance(part, dict):
             found.append(part.get("assignment_id"))

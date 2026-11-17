@@ -1,37 +1,24 @@
 """The agent -> driver handoff files: versioned JSON, validated here with Pydantic v2.
 
-The driver writes contract 2 (a request and a decision are contract 3) and still reads contract 1 (`major[]` and `deferred[]` in review.json, text lines in
-findings.json), so a run dir left by the previous version keeps working.
+The driver writes contract 2 (a request and a decision are contract 3).
 The driver reads these and nothing else from an agent: a missing or invalid file counts as no report.
 
 Every model forbids unknown fields at its own level and keeps the fields it is documented to keep
-verbatim: a review item's fields outside the core survive a round trip unchanged.
+verbatim.
 
 The report   worker: the text of its agent-runtime `report` call, no file: the ledger checkpoint shape plus `head` (commit sha) and `pr` (URL or null); optional
-                `responses[] {id, status fixed|disputed, commit, note, changes_code?}` (one per answer_required finding)
-                and `clarifications[] {finding, asked_by, note}`. Contract 3 is a YAML plan ticket's report: it adds
+                `clarifications[] {finding, asked_by, note}`. Contract 3 is a YAML plan ticket's report: it adds
                 `covers {S<n>: [test node ids]}`, the scenarios the ticket satisfies mapped to the tests that prove
                 them, and `red {S<n>: excerpt}`, each covering test's failing output from before the fix; verify
                 counts a node when its file exists, the ticket changed that file and the scenario's excerpt
                 contains the test's name. `status` is COMPLETE (optional `notes[]`, kept and never blocking) or
                 BLOCKED (`blocker`, the reason, goes to the Lead).
-`review.json`   reviewer: `verdict` pass|block, `items[]`, `checks_run[] {command, exit, at_commit}`, optional
-                `clarifications[]`, `commit` reviewed (must equal the checkout's HEAD). An item has the core `id`, `kind`
-                (blocking|deferred), `summary`, `answer_required`; a blocking item also `file`,
-                `line`, `fix` and `evidence {command, exit, excerpt, log_path}`. An item that asserts a
-                `requirement_violation {source, id, expected, observed}` (each nonempty text) must be blocking: a
-                requirement breach never passes as an optional observation. An explicit `null` asserts nothing and is
-                read as absent. Any other field is kept verbatim.
-                Optional `resolutions[] {id, status fixed|disproven, commit, note, evidence {command, exit, excerpt,
-                log_path}}` close a previously open blocking finding: each names an id the unit had open, the reviewed
-                commit, a nonempty note and a passing command whose `checks_run` entry agrees on command, exit and
-                commit. One resolution per id; a resolution never both closes and re-raises the same id.
-                Block iff there is a blocking item.
-`open-findings.json` driver -> the unit: `{contract, unit, items[]}` holding the original blocking payloads that are
-                still open, oldest first. It is the unit's authoritative open set across fix rounds and restarts.
-`findings.json` driver -> fix round: `source`, `attempt`, the blocking and answer_required `items` (converge, verify,
-                CI and conflict items carry `kind`, `source`, `check`, `command`, `exit`, `excerpt`, `log_path`) and the
-                reviewer's `checks_run`.
+The verdict    reviewer: the text of its agent-runtime `report` call, no file: `{"verdict": "pass"|"block", "findings": [{file,
+                line, quote, claim, rule?}]}`. `rule` is the bold title of the rulebook rule the finding breaks, absent for
+                the reviewer's own judgment; the driver only records it. Block iff there is a finding.
+`findings.json` driver -> fix round: `source`, `attempt`, and the `items` the worker fixes: a review finding (`id`, `kind`,
+                `source` review, `file`, `line`, `quote`, `claim`, `rule?`) or a converge, verify, CI or conflict item (`kind`,
+                `source`, `check`, `command`, `exit`, `excerpt`, `log_path`).
 `request.json`  driver -> Lead: why a unit needs a decision, the evidence paths and the action menu; `status` open|resolved.
                 Contract 3: each menu option is `{action, summary, inputs}`, `inputs` mapping an input name to
                 `{type, required}`, so an agent Lead reads what it may do and what each action takes. Contracts 1 and 2
@@ -44,12 +31,12 @@ The report   worker: the text of its agent-runtime `report` call, no file: the l
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 VERSION = 2  # what the driver writes
-SUPPORTED = (1, 2)  # what it reads
+SUPPORTED = (2,)  # what it reads
 LIMIT = 65536
 STATUSES = ("PARTIAL", "BLOCKED", "COMPLETE")
 REPORT_SUPPORTED = (1, 2, 3)  # a report may also be contract 3 (`covers`); no other file is
@@ -72,11 +59,6 @@ SUMMARIES = {
     "skip": "Release the unit without building it.",
     "answer": "Answer what the worker asked; the same worker resumes with your answer.",
 }  # what each action does, as the typed menu says it
-MAJOR_FIELDS = ("id", "file", "line", "problem", "fix")  # contract 1
-KINDS = ("blocking", "deferred")
-CORE_FIELDS = ("id", "kind", "summary", "answer_required")
-VIOLATION_FIELDS = ("source", "id", "expected", "observed")  # a requirement violation's metadata
-EVIDENCE_FIELDS = ("command", "exit", "excerpt", "log_path")
 GATE_ITEM_FIELDS = (
     "kind",
     "source",
@@ -86,9 +68,6 @@ GATE_ITEM_FIELDS = (
     "excerpt",
     "log_path",
 )  # converge, verify and CI findings
-RESPONSE_STATUSES = ("fixed", "disputed")
-RESOLUTION_STATUSES = ("fixed", "disproven")  # how a reviewer closes an open blocking finding
-OPEN_VERSION = 1  # the open-findings record the driver writes and reads
 
 Contract = Literal[1, 2]
 LeadContract = Literal[1, 2, 3]
@@ -96,12 +75,9 @@ Status = Literal[
     "PARTIAL", "BLOCKED", "COMPLETE"
 ]  # the ledger's: a reported unit is PARTIAL until it merges
 ReportStatus = Literal["BLOCKED", "COMPLETE"]  # a hand-in's: finished, or stuck with a reason
-Kind = Literal["blocking", "deferred"]
 Source = Literal["converge", "verify", "review", "ci", "conflict"]
 ReportContract = Literal[1, 2, 3]
 Action = Literal["retry", "retry one class up", "fresh worker", "mark blocked", "skip", "answer"]
-ResponseStatus = Literal["fixed", "disputed"]
-ResolutionStatus = Literal["fixed", "disproven"]
 
 
 class ContractError(ValueError):
@@ -129,45 +105,6 @@ def versioned(value, what):
     )
 
 
-def violation_problem(item):
-    """Why an item's asserted `requirement_violation` is inconsistent, or None when none is asserted or it is well
-    formed. A non-null `requirement_violation` asserts a violation of a named requirement, so the item blocks and
-    names the source, the requirement, what it promised and what it did instead: a real breach never passes as an
-    optional observation. A null asserts nothing, so it is read as absent."""
-    violation = item.get("requirement_violation")
-    if violation is None:
-        return None
-    label = "item %s" % item["id"]
-    if item.get("kind") != "blocking":
-        return "%s asserts requirement_violation, so kind must be blocking" % label
-    if not isinstance(violation, dict):
-        return "%s requirement_violation must be an object {%s}" % (
-            label,
-            ", ".join(VIOLATION_FIELDS),
-        )
-    for key in VIOLATION_FIELDS:
-        if not text(violation.get(key)):
-            return "%s requirement_violation needs nonempty %s text" % (label, key)
-    return None
-
-
-def check_violation(model):
-    """A review-item model, refused when its asserted requirement violation is inconsistent: one rule for both
-    item shapes, so the Pydantic reader refuses what `validate_item` refuses."""
-    problem = violation_problem({"id": model.id, "kind": model.kind, **(model.model_extra or {})})
-    if problem:
-        raise ValueError(problem)
-    return model
-
-
-def check_resolutions(model):
-    """A review model, refused when its resolutions are not supported closure evidence: one rule for both readers,
-    so the Pydantic reader refuses what `validate_resolutions` refuses."""
-    if model.resolutions:
-        validate_resolutions(model.model_dump())
-    return model
-
-
 class Strict(BaseModel):
     """A boundary model: unknown fields are an error, and the error names the field."""
 
@@ -184,14 +121,6 @@ class Clarification(Strict):
     finding: str = Field(min_length=1)
     asked_by: str = Field(min_length=1)
     note: str = Field(min_length=1)
-
-
-class Response(Strict):
-    id: str = Field(min_length=1)
-    status: ResponseStatus
-    note: str = Field(min_length=1)
-    commit: str | None = None
-    changes_code: bool | None = None
 
 
 class Check(Open):
@@ -219,7 +148,6 @@ class Report(Strict):
     pr: str | None = None
     review_rounds: int = 0
     usage: str = "unknown"
-    responses: list[Response] = Field(default_factory=list)
     clarifications: list[Clarification] = Field(default_factory=list)
     # CONTRACT asks for it: the worker's context telemetry, `{"status": "unknown"}` when it has none.
     context: dict[str, Any] | None = None
@@ -235,103 +163,43 @@ class Report(Strict):
         return self
 
 
-class Evidence(Strict):
-    command: str = Field(min_length=1)
-    exit: int
-    excerpt: str
-    log_path: str = Field(min_length=1)
+class ReviewFinding(Strict):
+    """One finding of a reviewer's verdict: where, the line it quotes, what is wrong, and the rulebook rule it breaks."""
+
+    file: str = Field(min_length=1)
+    line: int = Field(ge=1)
+    quote: str = Field(min_length=1)
+    claim: str = Field(min_length=1)
+    rule: str | None = None
 
 
-class ReviewItem(Open):
-    """One review item (contract 2). The core fields are required; the rest is kept verbatim.
+class Verdict(Strict):
+    """The reviewer's hand-in: it blocks exactly when it names a finding."""
 
-    `requirement_violation` is kept verbatim too and validated here: a non-null one asserts a violation."""
-
-    id: str = Field(min_length=1)
-    kind: Kind
-    summary: str = Field(min_length=1)
-    answer_required: bool
+    verdict: Literal["pass", "block"]
+    findings: list[ReviewFinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def violation_blocks(self):
-        return check_violation(self)
+    def blocks_exactly_when_it_finds(self):
+        if (self.verdict == "block") != bool(self.findings):
+            raise ValueError("verdict block needs at least one finding, and pass has none")
+        return self
 
 
-class BlockingReviewItem(Open):
-    """A blocking review item: the core fields plus where the fix goes and the evidence."""
+class ReviewItem(ReviewFinding):
+    """A review finding as a fix round carries it, with the id the worker answers to."""
 
     id: str = Field(min_length=1)
     kind: Literal["blocking"]
-    summary: str = Field(min_length=1)
-    answer_required: bool
-    file: str = Field(min_length=1)
-    line: int = Field(ge=1)
-    fix: str = Field(min_length=1)
-    evidence: Evidence
-
-    @model_validator(mode="after")
-    def violation_names_its_requirement(self):
-        return check_violation(self)
-
-
-class ChecksRun(Strict):
-    command: str = Field(min_length=1)
-    exit: int
-    at_commit: str = Field(min_length=1)
-
-
-class Resolution(Strict):
-    """One review resolution: the supported way a previously open blocking finding is closed."""
-
-    id: str = Field(min_length=1)
-    status: ResolutionStatus
-    commit: str = Field(min_length=1)
-    note: str = Field(min_length=1)
-    evidence: Evidence
-
-
-class ReviewV2(Strict):
-    contract: Literal[2]
-    verdict: Literal["pass", "block"]
-    commit: str = Field(min_length=1)
-    items: list[ReviewItem] = Field(default_factory=list)
-    checks_run: list[ChecksRun] = Field(default_factory=list)
-    clarifications: list[Clarification] = Field(default_factory=list)
-    resolutions: list[Resolution] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def resolutions_close_with_current_evidence(self):
-        return check_resolutions(self)
-
-
-class MajorItem(Strict):
-    """A contract 1 major item: the blocking item of the previous version."""
-
-    id: str = Field(min_length=1)
-    file: str = Field(min_length=1)
-    line: int = Field(ge=1)
-    problem: str = Field(min_length=1)
-    fix: str = Field(min_length=1)
-
-
-class DeferredItem(Strict):
-    id: str = Field(min_length=1)
-    note: str = Field(min_length=1)
-
-
-class ReviewV1(Strict):
-    contract: Literal[1]
-    verdict: Literal["pass", "block"]
-    commit: str = Field(min_length=1)
-    major: list[MajorItem] = Field(default_factory=list)
-    deferred: list[DeferredItem] = Field(default_factory=list)
+    source: Literal["review"]
 
 
 class GateItem(Strict):
     """A converge, verify, CI or conflict finding: the evidence the driver filled in."""
 
+    id: str = Field(min_length=1)
     kind: Literal["blocking"]
-    source: Source
+    source: Literal["converge", "verify", "ci", "conflict"]
     check: str = Field(min_length=1)
     command: str = Field(min_length=1)
     exit: int
@@ -339,19 +207,13 @@ class GateItem(Strict):
     log_path: str = Field(min_length=1)
 
 
-class FindingsV2(Strict):
+class Findings(Strict):
     contract: Literal[2]
     source: Source
     attempt: int = Field(ge=1)
-    items: list[GateItem | ReviewItem] = Field(min_length=1)
-    checks_run: list[ChecksRun] = Field(default_factory=list)
-
-
-class FindingsV1(Strict):
-    contract: Literal[1]
-    source: Source
-    attempt: int = Field(ge=1)
-    items: list[Any] = Field(min_length=1)
+    items: list[Annotated[GateItem | ReviewItem, Field(discriminator="source")]] = Field(
+        min_length=1
+    )
 
 
 class Decision(Strict):
@@ -450,40 +312,8 @@ def validate_report(report):
     )
     validate_covers(report)
     _check(Report, report, "report")
-    for response in report.get("responses", []):
-        validate_response(response)
     validate_clarifications(report, "report")
     return report
-
-
-def validate_response(response):
-    need(
-        isinstance(response, dict) and text(response.get("id")), "report: each response needs an id"
-    )
-    where = "report: response %s" % response["id"]
-    need(
-        response.get("status") in RESPONSE_STATUSES,
-        "%s: status must be one of %s" % (where, ", ".join(RESPONSE_STATUSES)),
-    )
-    need(text(response.get("note")), "%s: note is required" % where)
-    need(
-        response.get("commit") is None or text(response["commit"]),
-        "%s: commit must be a sha or null" % where,
-    )
-    need(
-        "changes_code" not in response or isinstance(response["changes_code"], bool),
-        "%s: changes_code must be true or false" % where,
-    )
-    need(
-        response.get("status") != "fixed" or text(response.get("commit")),
-        "%s: a fixed response names its commit" % where,
-    )
-
-
-def missing_responses(report, ids):
-    """The answer_required ids (in order) that the report has no response for."""
-    answered = {r["id"] for r in report.get("responses") or []}
-    return [i for i in ids if i not in answered]
 
 
 def validate_clarifications(value, what):
@@ -497,263 +327,34 @@ def validate_clarifications(value, what):
         )
 
 
-def validate_major(item, where):
-    need(isinstance(item, dict), "%s: each major item (in items) must be an object" % where)
-    for key in MAJOR_FIELDS:
-        need(key in item and item[key] not in (None, ""), "%s: major item lacks %s" % (where, key))
-    need(
-        text(item["id"]) and text(item["file"]) and text(item["problem"]) and text(item["fix"]),
-        "%s: major id, file, problem and fix must be text" % where,
-    )
-    need(whole(item["line"], 1), "%s: major line must be a positive whole number" % where)
-
-
-def validate_item(item, where, position=0):
-    """One review item (contract 2). Every failure names the item and the field."""
-    need(isinstance(item, dict), "%s: item #%d must be an object" % (where, position))
-    label = "item %s" % item["id"] if text(item.get("id")) else "item #%d" % position
-    for key in CORE_FIELDS:
-        need(key in item and item[key] not in (None, ""), "%s: %s lacks %s" % (where, label, key))
-    need(item["kind"] in KINDS, "%s: %s kind must be one of %s" % (where, label, ", ".join(KINDS)))
-    need(
-        text(item["id"]) and text(item["summary"]),
-        "%s: %s id and summary must be text" % (where, label),
-    )
-    need(
-        isinstance(item["answer_required"], bool),
-        "%s: %s answer_required must be true or false" % (where, label),
-    )
-    problem = violation_problem(item)
-    need(problem is None, "%s: %s" % (where, problem))
-    if item["kind"] == "blocking":
-        for key in ("file", "line", "fix", "evidence"):
-            need(
-                key in item and item[key] not in (None, ""), "%s: %s lacks %s" % (where, label, key)
+def validate_verdict(verdict):
+    """A verdict the reviewer may hand in. Every error is named, so one refusal tells the reviewer all it must fix."""
+    need(isinstance(verdict, dict), "verdict must be a JSON object")
+    try:
+        Verdict.model_validate(verdict)
+    except ValidationError as error:
+        raise ContractError(
+            "verdict: "
+            + "; ".join(
+                "%s %s"
+                % (".".join(map(str, e["loc"])) or "value", e["msg"].removeprefix("Value error, "))
+                for e in error.errors()
             )
-        need(
-            text(item["file"]) and text(item["fix"]),
-            "%s: %s file and fix must be text" % (where, label),
-        )
-        need(whole(item["line"], 1), "%s: %s line must be a positive whole number" % (where, label))
-        evidence = item["evidence"]
-        need(isinstance(evidence, dict), "%s: %s evidence must be an object" % (where, label))
-        for key in EVIDENCE_FIELDS:
-            need(
-                key in evidence and evidence[key] is not None,
-                "%s: %s evidence lacks %s" % (where, label, key),
-            )
-        need(
-            text(evidence["command"])
-            and text(evidence["log_path"])
-            and isinstance(evidence["excerpt"], str)
-            and isinstance(evidence["exit"], int)
-            and not isinstance(evidence["exit"], bool),
-            "%s: %s evidence needs command and log_path text, an excerpt and a whole exit"
-            % (where, label),
-        )
+        ) from None
+    return verdict
 
 
-def validate_resolutions(review):
-    """A review's `resolutions`: the supported closure of a previously open blocking finding. Structural here (the
-    driver matches each id to its unit's open findings): fixed or disproven, a nonempty note, the reviewed commit, and
-    a passing command whose `checks_run` entry agrees on command, exit and commit. One per id."""
-    resolutions = review.get("resolutions", [])
-    need(isinstance(resolutions, list), "review: resolutions must be a list")
-    seen = set()
-    for position, resolution in enumerate(resolutions, 1):
-        need(isinstance(resolution, dict), "review: resolution #%d must be an object" % position)
-        label = (
-            "resolution %s" % resolution["id"]
-            if text(resolution.get("id"))
-            else "resolution #%d" % position
-        )
-        need(text(resolution.get("id")), "review: %s needs an id" % label)
-        need(
-            resolution["id"] not in seen,
-            "review: %s is resolved twice; give one resolution per finding" % label,
-        )
-        seen.add(resolution["id"])
-        need(
-            resolution.get("status") in RESOLUTION_STATUSES,
-            "review: %s status must be one of %s" % (label, ", ".join(RESOLUTION_STATUSES)),
-        )
-        need(
-            text(resolution.get("note")) and resolution["note"].strip(),
-            "review: %s needs a nonempty note saying what changed or why the finding was wrong"
-            % label,
-        )
-        need(text(resolution.get("commit")), "review: %s needs the reviewed commit" % label)
-        need(
-            resolution["commit"] == review["commit"],
-            "review: %s names commit %s, not the reviewed commit %s"
-            % (label, resolution["commit"], review["commit"]),
-        )
-        evidence = resolution.get("evidence")
-        need(
-            isinstance(evidence, dict),
-            "review: %s needs evidence {%s}" % (label, ", ".join(EVIDENCE_FIELDS)),
-        )
-        for key in EVIDENCE_FIELDS:
-            need(evidence.get(key) is not None, "review: %s evidence lacks %s" % (label, key))
-        need(
-            text(evidence["command"])
-            and text(evidence["log_path"])
-            and isinstance(evidence["excerpt"], str)
-            and whole(evidence["exit"], 0),
-            "review: %s evidence needs command and log_path text, an excerpt and a whole exit"
-            % label,
-        )
-        need(
-            evidence["exit"] == 0,
-            "review: %s evidence exited %s; only a passing command closes a finding"
-            % (label, evidence["exit"]),
-        )
-        need(
-            any(
-                isinstance(run, dict)
-                and run.get("command") == evidence["command"]
-                and run.get("exit") == evidence["exit"]
-                and run.get("at_commit") == review["commit"]
-                for run in review.get("checks_run") or []
-            ),
-            "review: %s needs a checks_run entry for `%s` exit 0 at the reviewed commit"
-            % (label, evidence["command"]),
-        )
-    blocking = {
-        item.get("id")
-        for item in review.get("items") or []
-        if isinstance(item, dict) and item.get("kind") == "blocking"
-    }
-    for resolution in resolutions:
-        need(
-            resolution["id"] not in blocking,
-            "review: %s is both resolved and raised blocking in the same review" % resolution["id"],
-        )
-
-
-def validate_checks_run(value, what):
-    checks = value.get("checks_run", [])
-    need(isinstance(checks, list), "%s: checks_run must be a list" % what)
-    for run in checks:
-        need(isinstance(run, dict), "%s: each checks_run entry must be an object" % what)
-        for key in ("command", "exit", "at_commit"):
-            need(
-                run.get(key) is not None and run.get(key) != "",
-                "%s: checks_run entry lacks %s" % (what, key),
-            )
-        need(
-            text(run["command"])
-            and text(run["at_commit"])
-            and isinstance(run["exit"], int)
-            and not isinstance(run["exit"], bool),
-            "%s: checks_run needs command, at_commit text and a whole exit" % what,
-        )
-
-
-def validate_review(review):
-    versioned(review, "review")
-    need(review.get("verdict") in ("pass", "block"), "review: verdict must be pass or block")
-    need(text(review.get("commit")), "review: commit (the sha reviewed) is required")
-    if review["contract"] == 1:
-        return validate_review_v1(review)
-    need(isinstance(review.get("items"), list), "review: items must be a list")
-    for position, item in enumerate(review["items"], 1):
-        validate_item(item, "review", position)
-    validate_checks_run(review, "review")
-    validate_resolutions(review)
-    validate_clarifications(review, "review")
-    need(
-        (review["verdict"] == "block") == any(i["kind"] == "blocking" for i in review["items"]),
-        "review: verdict block needs a blocking item, and pass must have none",
-    )
-    return review
-
-
-def validate_review_v1(review):
-    # Closure is a contract 2 rule, validated there. A producer that writes it on the older contract would otherwise
-    # close an open finding with no evidence at all, so it is refused rather than silently ignored.
-    need(
-        review.get("resolutions") is None,
-        "review: resolutions are contract 2; a contract 1 review closes nothing",
-    )
-    need(isinstance(review.get("major"), list), "review: major must be a list")
-    need(isinstance(review.get("deferred"), list), "review: deferred must be a list")
-    for item in review["major"]:
-        validate_major(item, "review")
-    for item in review["deferred"]:
-        need(
-            isinstance(item, dict) and text(item.get("id")) and text(item.get("note")),
-            "review: each deferred item needs an id and a note",
-        )
-    need(
-        (review["verdict"] == "block") == bool(review["major"]),
-        "review: verdict block needs major items, and pass must have none",
-    )
-    return review
-
-
-def review_items(review):
-    """A validated review as (blocking items, the other items), verbatim, whatever contract wrote it. In contract 1
-    `major[]` are the blocking items and `deferred[]` the others, so a run dir left by the previous version reads the same."""
-    if review["contract"] == 1:
-        return list(review["major"]), list(review["deferred"])
-    return (
-        [i for i in review["items"] if i["kind"] == "blocking"],
-        [i for i in review["items"] if i["kind"] != "blocking"],
-    )
+def review_items(verdict):
+    """A verdict's findings as the items a fix round carries, numbered R1... in the order the reviewer wrote them."""
+    return [
+        dict(finding, id="R%d" % number, kind="blocking", source="review")
+        for number, finding in enumerate(verdict["findings"], 1)
+    ]
 
 
 def validate_findings(findings):
     versioned(findings, "findings")
-    need(findings.get("source") in SOURCES, "findings: source must be one of " + ", ".join(SOURCES))
-    need(whole(findings.get("attempt"), 1), "findings: attempt must be a positive whole number")
-    items = findings.get("items")
-    need(isinstance(items, list) and items, "findings: items must be a non-empty list")
-    if findings["contract"] == 1:
-        if findings["source"] == "review":
-            for item in items:
-                validate_major(item, "findings")
-        else:
-            need(
-                all(text(item) for item in items),
-                "findings: items must be non-empty lines of text for " + findings["source"],
-            )
-        return findings
-    validate_checks_run(findings, "findings")
-    for position, item in enumerate(items, 1):
-        if findings["source"] == "review":
-            if isinstance(item, dict) and "kind" not in item:
-                # A contract 1 major item an open set carried into a contract 2 round: its original payload is kept,
-                # so the round reads as a major item rather than being refused and turned into a Lead request.
-                validate_major(item, "findings")
-                continue
-            validate_item(item, "findings", position)
-            need(
-                item["kind"] == "blocking" or item["answer_required"],
-                "findings: item %s is neither blocking nor answer_required" % item["id"],
-            )
-        else:
-            need(isinstance(item, dict), "findings: item #%d must be an object" % position)
-            for key in GATE_ITEM_FIELDS:
-                need(
-                    key in item and item[key] is not None,
-                    "findings: item #%d lacks %s" % (position, key),
-                )
-            need(
-                item["kind"] == "blocking" and item["source"] == findings["source"],
-                "findings: item #%d must be a blocking item of source %s"
-                % (position, findings["source"]),
-            )
-            need(
-                text(item["check"])
-                and text(item["command"])
-                and text(item["log_path"])
-                and isinstance(item["excerpt"], str)
-                and isinstance(item["exit"], int),
-                "findings: item #%d has a malformed check, command, exit, excerpt or log_path"
-                % position,
-            )
-    return findings
+    return _check(Findings, findings, "findings")
 
 
 def validate_decision(decision):
@@ -875,58 +476,11 @@ def make_request(unit, task, event, reason, evidence, created_at=None, menu=None
     )
 
 
-def validate_open_findings(record):
-    """The unit's open blocking findings `<run>/<unit>/open-findings.json`: the original review payloads, one per id."""
-    need(isinstance(record, dict), "open-findings must be a JSON object")
-    need(
-        record.get("contract") == OPEN_VERSION,
-        "open-findings: contract must be %d" % OPEN_VERSION,
+def make_findings(source, attempt, items):
+    """The findings.json of a fix round."""
+    return validate_findings(
+        {"contract": VERSION, "source": source, "attempt": attempt, "items": list(items)}
     )
-    need(text(record.get("unit")), "open-findings: unit is required")
-    items = record.get("items")
-    need(isinstance(items, list), "open-findings: items must be a list")
-    seen = set()
-    for position, item in enumerate(items, 1):
-        if isinstance(item, dict) and "kind" in item:
-            validate_item(item, "open-findings", position)
-            need(
-                item["kind"] == "blocking",
-                "open-findings: item %s must be blocking" % item.get("id"),
-            )
-        else:  # a contract 1 major item, entered before this record existed
-            validate_major(item, "open-findings")
-        need(
-            item["id"] not in seen,
-            "open-findings: %s appears twice; one payload per open finding" % item["id"],
-        )
-        seen.add(item["id"])
-    return record
-
-
-def make_open_findings(unit, items):
-    """The open-findings record the driver writes for a unit: the blocking payloads still open, oldest first."""
-    return validate_open_findings({"contract": OPEN_VERSION, "unit": unit, "items": list(items)})
-
-
-def make_findings(source, attempt, items, checks_run=None, version=VERSION):
-    """The findings.json of a fix round. `version=1` writes the previous shape (text lines, or review items without a
-    `kind`), for a retry of a round the previous version left in a ledger."""
-    row = {"contract": version, "source": source, "attempt": attempt, "items": list(items)}
-    if version != 1:
-        row["checks_run"] = list(checks_run or [])
-    return validate_findings(row)
-
-
-def legacy_items(items):
-    """True for findings items written by contract 1: text lines, or review items without a `kind`."""
-    return any(not isinstance(i, dict) or "kind" not in i for i in items)
-
-
-def findings_contract(items):
-    """The contract a fix round's findings.json is written as: contract 1 when every item is legacy (a retry of a round
-    the previous version left), contract 2 otherwise, which also reads a legacy major item an open set carried into the
-    round beside a review item."""
-    return 1 if items and all(legacy_items([item]) for item in items) else VERSION
 
 
 def load(path, validate):

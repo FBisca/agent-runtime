@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+from .. import config
 from .prompts import block, render
 
 
@@ -73,6 +74,13 @@ def owned_scope(checkout, paths):
     return ", ".join(result)
 
 
+def rulebook(repo, checkout):
+    """The repository's rulebook as a file of the checkout, or None when its config names none. The reader of the
+    config and the reader of the file are the same name, so a rulebook that is not there is refused, not skipped."""
+    name = config.load(repo).rulebook
+    return reference(checkout, name, "read") if name else None
+
+
 TDD_SKILL_ENV = "AGENT_RUNTIME_TDD_SKILL"
 
 
@@ -128,6 +136,9 @@ def task_text(self, _plan, ticket, packet, scenarios, task_dir):
         scenarios="\n".join(scenarios),
         checks="; ".join(packet["checks"] or ["the repository's full CI gate"]),
         check_instructions=CHECK_INSTRUCTIONS,
+        rulebook=block("task-rulebook", rulebook=book)
+        if (book := rulebook(self.repo, checkout))
+        else "",
         full_suite=block("task-full-suite", full=packet["full"]) if packet.get("full") else "",
         pr_base=self.args.base.partition("/")[2],
     )

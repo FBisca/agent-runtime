@@ -86,42 +86,11 @@ class Briefs:
             source=findings["source"],
             findings_path=new_dir / "findings.json",
             items=bullets(map(describe, findings["items"])),
-            reviewer_checks=self._fix_checks(findings),
-            ci_instructions=block("fix-ci") if findings["source"] == "ci" else "",
-            answer_required=self._fix_answers(findings),
+            ci_instructions=block("fix-ci")
+            if any(item.get("source") == "ci" for item in findings["items"])
+            else "",
             lead_answer=block("fix-lead-answer", answer=answer) if answer else "",
         )
-
-    def _answers_brief(self, task, answer_id, asks, findings_path):
-        """The answerer's task file: which findings it answers, what a response is, and where it works."""
-        return render(
-            "answers-only",
-            **_worker_values(self.run_dir, task),
-            task_id=answer_id,
-            findings_path=findings_path,
-            items=bullets(map(describe, asks)),
-        )
-
-    def _fix_checks(self, findings):
-        """The reviewer's checks, for a fix round to re-run only what it touches, then the final gate."""
-        if not findings.get("checks_run"):
-            return ""
-        return block(
-            "fix-reviewer-checks",
-            checks=bullets(
-                "`%s` exit %s at %s" % (c["command"], c["exit"], c["at_commit"])
-                for c in findings["checks_run"]
-            ),
-        )
-
-    def _fix_answers(self, findings):
-        """What a fix round is told when the reviewer wants an answer per item."""
-        wants = any(
-            item.get("answer_required") is True
-            for item in findings["items"]
-            if isinstance(item, dict)
-        )
-        return block("fix-answer-required") if wants else ""
 
     def rebase_text(self, task, new_id, new_dir, findings):
         """The brief of a rebase round: the branch conflicts with its base, so the worker rebases it."""
