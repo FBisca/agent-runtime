@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fixtures import RunFixture, assignment, load_script, plan_data, wait_result
+from fixtures import (
+    RunFixture,
+    assignment,
+    load_script,
+    plan_data,
+    report_wait,
+    spawn_id,
+    wait_result,
+)
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -344,36 +352,18 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.task()["gate"], "reviewing")
         self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review"])
         self.gone("demo-t1-review")
-        self.waits([wait_result(), self.skipped()])
-        self.run_driver()
-        self.assertEqual(self.run_events("orphaned")[0]["task"], "t1")
-        self.assertEqual(self.request()["event"], "review")
-        self.assertEqual(self.spawned(), ["demo-t1", "demo-t1-review"])
-        self.assertNotIn("t1o1", self.ledger()["tasks"])
-
-    @pytest.mark.spec("Orphaned tasks are recovered")
-    def test_S2c_an_orphaned_answerer_takes_the_path_of_an_answerer_that_exited(self):
-        self.run_driver()
-        data = self.ledger()
-        data["tasks"]["t1"].update(
-            gate="reviewing",
-            review={},
-            answers={
-                "id": "t1a1",
-                "dir": str(self.run_dir / "t1a1"),
-                "assignment_id": "r1-demo-t1",
-                "ids": ["Q1"],
-                "state": "working",
-                "tries": 0,
-            },
+        self.waits(
+            [
+                wait_result(),
+                report_wait("demo-t1-review", "failed", "exited", id=spawn_id("demo-t1-review", 2)),
+                self.skipped(),
+            ]
         )
-        (self.state_dir / "demo.json").write_text(json.dumps(data), encoding="utf-8")
-        self.gone("demo-t1")
-        self.waits([wait_result(), self.skipped()])
         self.run_driver()
         self.assertEqual(self.run_events("orphaned")[0]["task"], "t1")
-        self.assertEqual(self.request()["event"], "answers")
-        self.assertEqual(self.spawned(), ["demo-t1"])
+        self.assertEqual(len(self.run_events("review-ended")), 2)
+        self.assertEqual(self.request()["event"], "review")
+        self.assertNotIn("t1o1", self.ledger()["tasks"])
 
     @pytest.mark.spec("Orphaned tasks are recovered")
     def test_S3_an_orphaned_attempt_without_a_report_is_dispatched_again_as_a_new_attempt(self):

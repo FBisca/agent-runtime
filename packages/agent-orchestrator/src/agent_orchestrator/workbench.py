@@ -313,7 +313,7 @@ def fallbacks_of(data):
     for task in (data.get("tasks") or {}).values():
         names.add(task.get("assignment_id"))
         names.add((task.get("packet") or {}).get("worker"))
-        for part in ("review", "decision", "answers"):
+        for part in ("review", "decision"):
             if isinstance(task.get(part), dict):
                 names.add(task[part].get("assignment_id"))
     names.discard(None)

@@ -31,7 +31,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fixtures import DRIVER, assignment, report_wait, resume_id, wait_result  # noqa: E402
-from test_gates import BLOCKING, GateFixture  # noqa: E402
+from test_gates import GateFixture  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
@@ -131,19 +131,8 @@ class S1ControlTests(InvariantFixture, unittest.TestCase):
 class S2LedgerTests(InvariantFixture, unittest.TestCase):
     @pytest.mark.spec("Ledger invariants")
     def test_S2_the_ledger_refuses_the_states_that_stalled_the_run(self):
-        """Two attempts naming one review file, and an unknown gate, are each refused by name."""
-        shared = {
-            "version": 1,
-            "kind": "agent-orchestrator/ledger",
-            "tasks": {
-                "t1": task(gate="reviewing", review={"path": "/run/t1/review.json"}),
-                "t1r1": task(gate="reviewing", review={"path": "/run/t1/review.json"}),
-            },
-        }
-        for name, tasks, invariant in (
-            ("shared", shared, "review-file-shared"),
-            ("unknown", {"t1": task(gate="reviewer")}, "unknown-gate"),
-        ):
+        """An unknown gate is refused by name."""
+        for name, tasks, invariant in (("unknown", {"t1": task(gate="reviewer")}, "unknown-gate"),):
             with self.subTest(invariant=invariant):
                 data = (
                     tasks
@@ -157,61 +146,11 @@ class S2LedgerTests(InvariantFixture, unittest.TestCase):
 
     @pytest.mark.spec("Ledger invariants")
     def test_S2_control_a_finished_run_leaves_a_coherent_ledger(self):
-        """What the driver itself writes is coherent: one file per open review."""
+        """What the driver itself writes is coherent: `ledger check` passes it."""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
-        tasks = self.ledger()["tasks"]
-        self.assertTrue(tasks, "the run wrote no task")
-        paths = [t["review"]["path"] for t in tasks.values() if t.get("review", {}).get("path")]
-        self.assertEqual(len(paths), len(set(paths)), "two attempts name one review file")
-
-
-class S3ReviewWriteOnceTests(InvariantFixture, unittest.TestCase):
-    """The rework that overwrote `t1/review.json` in the 00c run, driven through the same `answer`."""
-
-    def setUp(self):
-        super().setUp()
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.snapshot("first"),
-                self.reviewer_done(
-                    write=[[str(self.run_dir / "t1" / "review.json"), self.blocking()]]
-                ),
-                self.decide_step(
-                    "t1", "answer", answer="the guard is per target", reason="rule on it"
-                ),
-                self.second_report(),
-                self.snapshot("second"),
-                self.reviewer_done(
-                    write=[[str(self.run_dir / "t1" / "review.2.json"), self.review2()]]
-                ),
-                self.skipped(),
-            ]
-        )
-        self.prs(["MERGED"])
-
-    def blocking(self):
-        return json.dumps(
-            {
-                "contract": 2,
-                "verdict": "block",
-                "commit": "@HEAD",
-                "items": [dict(BLOCKING, id="U1")],
-                "checks_run": [],
-            }
-        )
-
-    @pytest.mark.spec("A reworked unit writes a new review")
-    def test_S3_a_rework_writes_the_next_review_and_the_earlier_review_keeps_its_id(self):
-        """After an answer the drive allocates the next review file; the first review and U1 stay readable."""
-        self.run_driver("--max-fix-rounds", "0")
-        first, second = self.review_path("first"), self.review_path("second")
-        self.assertIsNotNone(first, "the first review was never allocated")
-        self.assertNotEqual(first, second, "the rework reused the first review file")
-        self.assertTrue(Path(first).exists(), "the first review is gone from disk")
-        review = json.loads((self.run_dir / "t1" / "review.json").read_text(encoding="utf-8"))
-        self.assertEqual(review["items"][0]["id"], "U1", "the first review lost its blocker")
+        result = self.ledger_check(self.state_dir / "demo.json")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
 
 class S4CiPendingTests(InvariantFixture, unittest.TestCase):

@@ -275,8 +275,8 @@ The driver SHALL hand the Lead's decision to the worker it concerns, and SHALL a
 - THEN the unit gets a new request naming the failure and the way out; a `complete` from the unit's worker that lands while that request is open is held, and the next decision acts on it without handing the unit over again
 
 #### Scenario: an answer to the reviewer
-- WHEN the Lead answers a request raised while the reviewer owed its review
-- THEN the answer resumes the reviewer on its review, not the implementer; a reviewer whose pane is gone is replaced by a fresh reviewer whose brief carries the answer
+- WHEN the Lead answers a request raised while the reviewer owed its verdict
+- THEN the answer resumes the reviewer on its verdict, not the implementer; a reviewer whose pane is gone is replaced by a fresh reviewer told the answer and where its brief is
 
 ### Requirement: A new attempt keeps the higher class
 A new attempt of a unit SHALL run on the higher of its last attempt's class and the class the routes compute now.

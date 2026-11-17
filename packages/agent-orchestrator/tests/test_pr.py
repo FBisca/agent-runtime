@@ -75,7 +75,7 @@ class DraftTests(PrFixture, unittest.TestCase):
                 self.worker_done(tests=True),
                 self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
                 self.worker_done("t1r1"),
-                self.reviewer_done_again(self.review2(**self.closure(MAJOR))),
+                self.reviewer_done_again(self.review2()),
             ]
         )
         self.run_driver()
@@ -136,11 +136,17 @@ class ChecksTests(PrFixture, unittest.TestCase):
 
     def test_S21_a_failed_check_after_the_review_is_a_ci_fix_round_with_the_failed_log(self):
         """orchestrate-lean-loop/S21"""
-        self.checks([("fail", "unit tests"), "green"])
+        self.checks([("fail", "unit tests")])
+        self.checks_after_fix(["green"])
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
         self.waits(
-            [self.worker_done(tests=True), self.reviewer_done(), self.worker_done("t1r1"), again]
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.worker_done("t1r1"),
+                again,
+            ]
         )
         self.run_driver()
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
@@ -157,7 +163,8 @@ class ChecksTests(PrFixture, unittest.TestCase):
         """driver-invariants/S4"""
         placeholder = "run 77 is still in progress; logs will be available when it is complete"
         real = "unit tests\tRun pytest\t2026-11-10T10:00:00Z assert 1 == 2"
-        self.checks([("fail", "unit tests"), ("fail", "unit tests"), "green"])
+        self.checks([("fail", "unit tests"), ("fail", "unit tests")])
+        self.checks_after_fix(["green"])
         (self.home / "run-view.json").write_text(
             json.dumps([[0, placeholder, ""]] * ci_log.ATTEMPTS + [[0, real, ""]]),
             encoding="utf-8",
@@ -199,12 +206,18 @@ class ChecksTests(PrFixture, unittest.TestCase):
             "unit tests\tRun pytest\t2026-11-10T10:00:00Z assert 1 == 2\n"
             "unit tests\tRun pytest\t2026-11-10T10:00:00Z run 77 is still in progress; logs will be available when it is complete"
         )
-        self.checks([("fail", "unit tests"), "green"])
+        self.checks([("fail", "unit tests")])
+        self.checks_after_fix(["green"])
         (self.home / "run-view.json").write_text(json.dumps([[0, real, ""]]), encoding="utf-8")
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
         self.waits(
-            [self.worker_done(tests=True), self.reviewer_done(), self.worker_done("t1r1"), again]
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.worker_done("t1r1"),
+                again,
+            ]
         )
         self.run_driver()
         self.assertEqual([e["state"] for e in self.run_events("ci")][:1], ["failed"])
@@ -228,11 +241,17 @@ class ChecksTests(PrFixture, unittest.TestCase):
                 return fake_gh.Completed(argv, 0, run_log)
             return real(argv, timeout=timeout)
 
-        self.checks([("fail", "unit tests", "lint"), "green"])
+        self.checks([("fail", "unit tests", "lint")])
+        self.checks_after_fix(["green"])
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
         self.waits(
-            [self.worker_done(tests=True), self.reviewer_done(), self.worker_done("t1r1"), again]
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.worker_done("t1r1"),
+                again,
+            ]
         )
         with mock.patch.object(fake_gh, "process", side_effect=answer):
             self.run_driver()
@@ -374,8 +393,8 @@ class BranchTests(PrFixture, unittest.TestCase):
             [e["source"] for e in self.run_events("round")], ["conflict"]
         )  # the conflict counts as a round
         self.assertEqual(self.ledger()["rounds"]["t1"], 1)
-        re_review = (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("This is a re-review", re_review)
+        (resumed,) = [c for c in self.calls("resume") if c["args"]["name"] == "demo-t1-review"]
+        self.assertIn("Re-review T1", resumed["args"]["task"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 
     @pytest.mark.spec("A conflicting pull request is rebased")
@@ -439,8 +458,8 @@ class MergeStateTests(PrFixture, unittest.TestCase):
         self.assertNotIn("update-branch", brief)
         self.assertEqual(self.unit_spawned(), ["demo-t1", "demo-t1-review", "demo-t1"])
         self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1-review"])
-        re_review = (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("This is a re-review", re_review)
+        (resumed,) = [c for c in self.calls("resume") if c["args"]["name"] == "demo-t1-review"]
+        self.assertIn("Re-review T1", resumed["args"]["task"])
         self.assertEqual([e["source"] for e in self.run_events("round")], ["conflict"])
         self.assertEqual(self.task("t1r1")["status"], "COMPLETE")
 

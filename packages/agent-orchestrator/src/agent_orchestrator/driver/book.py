@@ -326,7 +326,7 @@ class Book:
         """Tickets whose PR is not merged yet, or whose request the Lead has not answered: the run stays up."""
         with self() as data:
             return any(
-                t.get("gate") in ("ready-for-ci", "awaiting-merge", "requested")
+                t.get("gate") in ("reviewed", "ready-for-ci", "awaiting-merge", "requested")
                 for t in data["tasks"].values()
             )
 

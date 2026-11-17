@@ -36,14 +36,14 @@ def test_a_missing_variable_fails_loudly():
 
 
 def test_an_empty_block_takes_its_line_and_a_full_one_does_not():
-    full = prompts.render("review", **_review(open_findings="- open: B1"))
-    bare = prompts.render("review", **_review(open_findings=""))
-    assert "- open: B1\n- Repo rules" in full
-    assert "- Plan: p (its Decisions, Scenarios and Seams)\n- Repo rules" in bare
+    full = prompts.render("review", **_review(rulebook="- Rulebook: r"))
+    bare = prompts.render("review", **_review(rulebook=""))
+    assert "- Checkout contents: x\n- Rulebook: r\n- Repo rules" in full
+    assert "- Checkout contents: x\n- Repo rules" in bare
 
 
 def _review(**more):
     names = Template(
         files("agent_orchestrator.driver").joinpath("prompts", "review.md").read_text("utf-8")
     ).get_identifiers()
-    return dict({name: "p" if name == "plan" else "x" for name in names}, range="", **more)
+    return dict({name: "p" if name == "plan" else "x" for name in names}, **more)

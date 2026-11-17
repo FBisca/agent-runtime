@@ -64,9 +64,9 @@ class Dispatch:
         Driver's own, and only what this module owns lives here."""
         raise AttributeError(name)
 
-    def review_text(self, packet, review_path, delta=None, open_items=None):
+    def review_text(self, packet):
         """The reviewer's brief: the paths it works from, the pass in one order and the schema of its verdict."""
-        return review_brief(self, packet, review_path, delta, open_items)
+        return review_brief(self, packet)
 
     def dispatch(self, plan, ticket, task_id=None, note=""):
         """Hand one ticket to a worker: its route, its packet, its worktree, its prompt and its agent."""

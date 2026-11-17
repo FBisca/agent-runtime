@@ -7,8 +7,8 @@ The Lead's instruction: continue
 The Lead's answer: use the second flag
 
 Findings still open:
-- B1 (blocking), answer required: src/a/one.py:12 retry loop never ends. Fix: stop after three tries. Evidence: `pytest tests/test_one.py` exited 1 (log /logs/one.log): FAILED test_one
-- N1: src/a/two.py name the helper
+- R1: src/a/one.py:12 `while True:` - the retry loop never ends (rule: A failure surfaces as an error a caller can act on.)
+- R2: src/a/two.py:3 `cache = {}` - the cache is never cleared
 
 This is the same attempt, not a new one: keep using task_id `t1` in your report.
 Original task: <ROOT>/run/t1/task.md. Same checkout and branch: <ROOT>/work on feat/demo-t1. Work only here; start from: src/a/: 2 files in <ROOT>/work/src/a, write <ROOT>/work/docs/note.md (edit any other file the change needs, except one another unfinished ticket lists in its paths).

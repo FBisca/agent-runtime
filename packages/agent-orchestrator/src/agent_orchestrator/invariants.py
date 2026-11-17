@@ -1,8 +1,8 @@
 """The ledger's state invariants: checked where the driver writes it, readable as `ledger check`.
 
-Two states stalled a run and each was found by hand afterwards: two open attempts naming one review file, and a
-gate the driver does not know. Each is refused by name — the invariant, the task
-and the way out — at the write and on a captured ledger, so the next spelling is refused instead of discovered. A
+A state stalled a run and was found by hand afterwards: a gate the driver does not know. It is refused by name — the
+invariant, the task and the way out — at the write and on a captured ledger, so the next spelling is refused instead
+of discovered. A
 `LedgerInvariant` is a `ValueError`, so a gate step's own handler turns it into a request that names the way out.
 Standard library only: the plugin ships without dependencies."""
 
@@ -33,12 +33,9 @@ SETTLED = (
     "superseded",
 )  # the unit has left the gates: a later attempt owns whatever comes next
 
-REVIEW_FILE_SHARED = "review-file-shared"
 UNKNOWN_GATE = "unknown-gate"
 
 WAY_OUT = {
-    REVIEW_FILE_SHARED: "give each open attempt its own review file: the rework writes the next free "
-    "<unit>/review.<n>.json, and the attempt that no longer runs is released",
     UNKNOWN_GATE: "name a gate the driver knows (%s), or release the task and let the drive write it again"
     % ", ".join(GATES + PARKED + SETTLED),
 }
@@ -83,37 +80,6 @@ def next_path(directory, stem, suffix):
     raise ValueError("too many %s files in %s" % (stem, directory))
 
 
-def carried_reviews(review):
-    """The review paths a record supersedes, newest first, kept when the next review file is allocated.
-
-    A review written to a fixed path would be lost to the next pass: its blockers would stop being nameable. The
-    record therefore hands them on, and every place that asks for a new file carries them instead of dropping the
-    record it replaces.
-    """
-    review = review or {}
-    return [path for path in [review.get("path"), *(review.get("earlier") or [])] if path]
-
-
-def review_paths(task):
-    """The review files one attempt wrote, oldest first: the path it holds now, and the ones a rework superseded
-    (the record's `earlier` names its immediate predecessor first, so the list is walked backwards)."""
-    review = record(task).get("review") or {}
-    earlier = [path for path in review.get("earlier") or [] if path]
-    return [*reversed(earlier), review.get("path")]
-
-
-def review_file(task):
-    """The review file this attempt names, or None when it names none."""
-    review = record(task).get("review")
-    return review.get("path") if isinstance(review, dict) else None
-
-
-def open_attempt(task):
-    """True while the attempt can still act: neither released nor settled leaves a review file to a later attempt."""
-    task = record(task)
-    return task.get("status") not in ("COMPLETE", "RELEASED") and task.get("gate") not in SETTLED
-
-
 def shape(data):
     """What the invariants read, as one comparable value: a writer compares it before and after its block, so a block
     that changed none of it costs a comparison instead of a scan."""
@@ -122,32 +88,15 @@ def shape(data):
             task_id,
             record(task).get("gate"),
             record(task).get("status"),
-            review_file(task),
         )
         for task_id, task in sorted((data.get("tasks") or {}).items())
     )
 
 
 def violations(data):
-    """Every illegal state the ledger holds, in a stable order: one review file per open attempt, a gate the driver
-    knows."""
-    tasks = sorted((data.get("tasks") or {}).items())
-    found, holders = [], {}
-    for task_id, task in tasks:
-        path = review_file(task)
-        if not path or not open_attempt(task):
-            continue
-        if path in holders:
-            found.append(
-                LedgerInvariant(
-                    REVIEW_FILE_SHARED,
-                    task_id,
-                    "names the review file %s that %s holds open too" % (path, holders[path]),
-                )
-            )
-        else:
-            holders[path] = task_id
-    for task_id, task in tasks:
+    """Every illegal state the ledger holds, in a stable order: a gate the driver does not know."""
+    found = []
+    for task_id, task in sorted((data.get("tasks") or {}).items()):
         gate = record(task).get("gate")
         if gate is not None and gate not in GATES + PARKED + SETTLED:
             found.append(LedgerInvariant(UNKNOWN_GATE, task_id, "names the gate %r" % (gate,)))
@@ -195,7 +144,6 @@ def ledger_commands(commands):
     ).add_subparsers(dest="ledger_command", required=True)
     checked = ledger.add_parser(
         "check",
-        help="Refuse the states the driver's invariants forbid (two open attempts on one review file, a park with no "
-        "release key, an unknown gate); exit 2 names the invariant, the task and the way out",
+        help="Refuse the states the driver's invariants forbid (a park with no release key, an unknown gate); exit 2 names the invariant, the task and the way out",
     )
     checked.add_argument("path", help="A captured ledger (<state>/<slug>.json)")

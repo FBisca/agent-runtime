@@ -1,13 +1,12 @@
-"""A run dir written by the previous driver (contract 1 review.json, no events.jsonl) keeps working."""
+"""A run dir written by the previous driver (no events.jsonl) keeps working."""
 
 import json
 import subprocess
 import unittest
 
 import pytest
-from agent_orchestrator import contracts
 from fixtures import DRIVER
-from test_gates import DEFERRED, MAJOR, GateFixture
+from test_gates import MAJOR, GateFixture
 
 pytestmark = pytest.mark.integration
 
@@ -23,36 +22,17 @@ class CompatTests(GateFixture, unittest.TestCase):
         data.pop("agents", None)
         (self.state_dir / "demo.json").write_text(json.dumps(data), encoding="utf-8")
 
-    def test_S34_v1_major_items_are_blocking_and_v1_deferred_items_are_deferred(self):
-        """orchestrate-lean-loop/S34"""
-        review = {
-            "contract": 1,
-            "verdict": "block",
-            "major": [MAJOR],
-            "deferred": [DEFERRED],
-            "commit": "abc1234",
-        }
-        blocking, deferred = contracts.review_items(contracts.validate_review(review))
-        self.assertEqual((blocking, deferred), ([MAJOR], [DEFERRED]))
-        blocking, deferred = contracts.review_items(
-            contracts.validate_review(dict(review, verdict="pass", major=[]))
-        )
-        self.assertEqual((blocking, deferred), ([], [DEFERRED]))
-
     def test_S34_in_flight_units_continue_on_a_run_dir_without_events(self):
         """orchestrate-lean-loop/S34"""
         self.v1_run_dir()
-        review = self.review(verdict="block", major=[MAJOR], deferred=[DEFERRED])
+        review = self.review(major=[MAJOR])
         self.waits([self.reviewer_done(review)])
         self.run_driver()
         self.assertEqual([r["args"]["name"] for r in self.calls("resume")], ["demo-t1"])
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
-        self.assertEqual(findings["items"], [MAJOR])
-        self.assertIn(
-            "rename the helper someday", (self.run_dir / "deferred.md").read_text(encoding="utf-8")
-        )
+        self.assertEqual([i["id"] for i in findings["items"]], ["R1"])
         kinds = [(e["finding_kind"], e["id"]) for e in self.run_events("finding")]
-        self.assertEqual(kinds, [("deferred", "D1"), ("blocking", "M1")])
+        self.assertEqual(kinds, [("blocking", "R1")])
         self.assertEqual(self.run_events()[0]["kind"], "import")
 
     def test_S34_metrics_of_a_run_dir_without_events_come_from_the_ledger(self):

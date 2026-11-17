@@ -8,7 +8,6 @@ import uuid
 import pytest
 from fake_runtime import Completed
 from fixtures import report_wait, resume_id, spawn_id, wait_result
-from test_envelope import RESPONSE, EnvelopeFixture
 from test_gates import GateFixture
 from test_pr import PR, PrFixture
 
@@ -175,47 +174,6 @@ class IntentBooking(OperationRuntime, unittest.TestCase):
         self.assertTrue(self.refusals, "the driver never sent the keyed spawn")
         self.assertEqual(self.keyed("spawn"), [], "a spawn went out without its operation id")
         self.assertTrue(self.wake_lines("not-dispatched"), "the Lead was not told")
-
-
-class ChaseAndAnswersKeys(OperationRuntime, EnvelopeFixture, unittest.TestCase):
-    @pytest.mark.spec("Intents before sends")
-    def test_S14_a_chase_for_missing_responses_resumes_under_its_own_key(self):
-        """orchestrator-audit-fixes/S14"""
-        self.waits(
-            self.to_fix_round()
-            + [
-                self.fix_round_report(),
-                self.fix_round_report(name="report.2.json", nth=2, responses=[RESPONSE]),
-                self.re_review(),
-            ]
-        )
-        self.run_driver()
-        calls = self.keyed()
-        self.assert_keyed(calls)
-        paths = {row["path"] for row in self.ledger()["intents"].values()}
-        self.assertIn("t1/t1r1/resume", paths)
-        self.assertEqual(len([c for c, _ in calls if c["args"]["name"] == "demo-t1"]), 3)
-
-    @pytest.mark.spec("Intents before sends")
-    def test_S14_the_answers_resume_carries_a_key_too(self):
-        """orchestrator-audit-fixes/S14"""
-        from test_gates import NIT, QUESTION
-
-        answers = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 1))
-        answers["write"] = [
-            [str(self.run_dir / "t1a1" / "report.json"), self.report("t1a1", responses=[RESPONSE])]
-        ]
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.reviewer_done(self.review2(items=[QUESTION, NIT])),
-                answers,
-            ]
-        )
-        self.run_driver("--idle-minutes", "0")
-        calls = self.keyed()
-        self.assert_keyed(calls)
-        self.assertIn("t1/t1a1/resume", {row["path"] for row in self.ledger()["intents"].values()})
 
 
 class IntentRestart(OperationRuntime, unittest.TestCase):

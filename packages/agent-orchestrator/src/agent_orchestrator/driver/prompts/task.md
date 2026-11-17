@@ -9,6 +9,7 @@ Checkout: $checkout on branch feat/$worker (new, from $base). Work only here.
 Checkout contents: $checkout_contents
 Scope contents: $scope_contents
 Owns (edit nothing else): $owns.
+$rulebook
 Shared databases are read-only; schema changes go through migrations in your own branch.
 
 Scenarios, verbatim. Work red-first: a test per scenario, seen failing before the code exists; keep that failing output for the report's `red`.

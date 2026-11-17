@@ -1,4 +1,4 @@
-"""A worker's hand-in: the report JSON its agent-runtime `report` call carries.
+"""A hand-in: the JSON an agent's agent-runtime `report` call carries, a worker's report or a reviewer's verdict.
 
 The text is validated the moment it arrives, with the contract and the rules the merge holds a COMPLETE to, so a
 hand-in whose shape is wrong goes straight back to its sender with the exact errors and never reaches the Lead.
@@ -13,6 +13,18 @@ from .records import check_commit, require_completable
 from .runtime import head_of
 
 FENCE = re.compile(r"\A```[a-z]*\s*(.*?)\s*```\Z", re.DOTALL)
+
+
+def read_verdict(text):
+    """(the verdict, None) when the text is the reviewer's verdict JSON, else (None, the errors the reviewer reads)."""
+    try:
+        value = json.loads(FENCE.sub(r"\1", (text or "").strip()))
+    except ValueError as error:
+        return None, "the report call's text is not the verdict JSON: %s" % error
+    try:
+        return contracts.validate_verdict(value), None
+    except contracts.ContractError as error:
+        return None, str(error)
 
 
 def read_hand_in(task, task_id, text):

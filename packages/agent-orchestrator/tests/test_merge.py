@@ -47,11 +47,17 @@ class MergeTests(GateFixture, unittest.TestCase):
 
     def test_S8_a_failing_check_sends_the_failed_log_to_the_worker_as_a_fix_round(self):
         """code-driven-orchestrator/S8"""
-        self.checks([("fail", "unit tests"), "green"])
+        self.checks([("fail", "unit tests")])
+        self.checks_after_fix(["green"])
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
         self.waits(
-            [self.worker_done(tests=True), self.reviewer_done(), self.worker_done("t1r1"), again]
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.worker_done("t1r1"),
+                again,
+            ]
         )
         self.run_driver()
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
@@ -227,20 +233,6 @@ class MergeTests(GateFixture, unittest.TestCase):
         )
         self.run_driver()
         self.assertEqual(self.task()["report"]["review_rounds"], 0)
-
-    def test_D5_a_review_of_another_commit_is_a_contract_error(self):
-        """code-driven-orchestrator/S6a"""
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                *self.repeated(self.reviewer_done(self.review(commit="deadbee"))),
-                self.skipped(),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.request()["event"], "review")
-        self.assertIn("deadbee", self.request()["reason"])
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
 
     def test_a_blocking_review_never_reaches_the_ci_gate(self):
         """code-driven-orchestrator/S8"""

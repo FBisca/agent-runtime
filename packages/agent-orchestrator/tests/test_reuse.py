@@ -1,16 +1,12 @@
-"""One reviewer per unit: a fix round of any source is re-reviewed as a delta by the same reviewer, a blocking item
-outside the delta is deferred, and the unit's panes stop when it merges or pauses."""
+"""The unit's panes stop when it merges or pauses."""
 
-import json
 import unittest
 
 import pytest
 from fixtures import report_wait, resume_id
-from test_gates import BLOCKING, MAJOR, GateFixture
+from test_gates import BLOCKING, GateFixture
 
 pytestmark = pytest.mark.integration
-
-OFF_SCOPE = dict(BLOCKING, id="B2", file="src/zzz/other.py", summary="unrelated code is wrong")
 
 
 class ReuseFixture(GateFixture):
@@ -18,13 +14,6 @@ class ReuseFixture(GateFixture):
         wt = str(self.worktree)
         git = ["git", "-C", wt, "-c", "user.name=T", "-c", "user.email=t@example.invalid"]
         return [git + ["add", "."], git + ["commit", "-q", "-m", message]]
-
-    def first_block(self, *items):
-        """Steps: the worker reports, the first review blocks with `items`."""
-        return [
-            self.worker_done(tests=True),
-            self.reviewer_done(self.review2(verdict="block", items=list(items) or [BLOCKING])),
-        ]
 
     def fix_report(self, task_id="t1r1", nth=1, commit=True):
         """The worker's fix-round report; the fix is a committed change to src/a/x.py."""
@@ -37,240 +26,17 @@ class ReuseFixture(GateFixture):
             step["run"] = self.git_commit()
         return step
 
-    def re_review(self, review=None, index=2, nth=1):
-        """The unit's reviewer, resumed for the `nth` time, writes review.<index>.json."""
-        step = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review", nth))
-        name = "review.json" if index == 1 else "review.%d.json" % index
-        step["write"] = [[str(self.run_dir / "t1" / name), review or self.review2()]]
-        return step
+    def re_review(self, review=None, nth=1):
+        """The unit's reviewer, resumed for the `nth` time, hands in its verdict."""
+        return report_wait(
+            "demo-t1-review",
+            "complete",
+            text=review or self.review(),
+            id=resume_id("demo-t1-review", nth),
+        )
 
     def blocking(self):
         return BLOCKING
-
-    def states_of(self, task_id):
-        gates = [e["gate"] for e in self.run_events("state") if e["task"] == task_id]
-        return [new for old, new in gates if new and new != old]
-
-
-class ReviewerReuseTests(ReuseFixture, unittest.TestCase):
-    def test_S8_a_fix_round_resumes_the_same_reviewer_with_the_delta(self):
-        """orchestrate-lean-loop/S8"""
-        self.waits(
-            self.first_block()
-            + [self.fix_report(), self.re_review(self.review2(**self.closure(BLOCKING)))]
-        )
-        self.run_driver()
-        base = self.git(self.repo, "rev-parse", "HEAD")
-        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
-        spawns = {c["args"]["name"]: c["args"] for c in self.calls("spawn")}
-        self.assertEqual(spawns["demo-t1"]["agent"], "implementer")
-        self.assertNotIn("agent", spawns["demo-t1-review"])
-        self.assertEqual(self.spawned().count("demo-t1-review"), 1)
-        resumes = [(c["args"]["name"], c["args"]["task"]) for c in self.calls("resume")]
-        self.assertEqual([n for n, _ in resumes], ["demo-t1", "demo-t1-review"])
-        task_md = self.run_dir / "t1-review2" / "task.md"
-        self.assertEqual(
-            resumes[1][1],
-            "Read %s and follow it. Write the review to %s (JSON, contract 2)."
-            % (task_md, self.run_dir / "t1" / "review.2.json"),
-        )
-        text = task_md.read_text(encoding="utf-8")
-        self.assertIn("%s..HEAD" % base, text)  # the commit the first review covered, up to HEAD
-        self.assertIn(str(self.run_dir / "t1r1" / "findings.json"), text)
-        self.assertEqual(self.task("t1r1")["gate"], "done")
-
-    def test_S8_a_converge_fix_round_is_reviewed_by_a_reviewer_spawned_once(self):
-        """orchestrate-lean-loop/S8"""
-        self.waits(
-            [
-                self.worker_done(),
-                self.worker_done("t1r1", tests=True),
-                self.reviewer_done(self.review2()),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
-        self.assertEqual(self.spawned().count("demo-t1-review"), 1)
-        self.assertEqual(self.states_of("t1r1")[:3], ["reported", "converged", "reviewing"])
-        self.assertEqual(set(self.checks_log()), {"https://github.com/o/r/pull/7"})
-
-    def test_S8_a_ci_fix_round_is_re_reviewed_before_ci_runs_again(self):
-        """orchestrate-lean-loop/S8"""
-        self.checks([("fail", "unit tests"), "green"])
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.reviewer_done(),
-                self.fix_report(),
-                self.re_review(),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
-        self.assertEqual(self.spawned().count("demo-t1-review"), 1)
-        self.assertEqual(
-            [c["args"]["name"] for c in self.calls("resume")], ["demo-t1", "demo-t1-review"]
-        )
-        self.assertEqual(
-            self.states_of("t1r1")[:4], ["reported", "converged", "reviewing", "reviewed"]
-        )
-        self.assertGreaterEqual(len(self.checks_log()), 2)
-        self.assertIn(
-            str(self.run_dir / "t1r1" / "findings.json"),
-            (self.run_dir / "t1-review2" / "task.md").read_text(encoding="utf-8"),
-        )
-
-    def test_S8_a_blocking_re_review_keeps_the_unit_out_of_ci(self):
-        """orchestrate-lean-loop/S8"""
-        blocked = self.review2(verdict="block", items=[dict(BLOCKING, id="B3", file="src/a/x.py")])
-        self.waits(self.first_block() + [self.fix_report(), self.re_review(blocked)])
-        self.run_driver()
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
-        self.assertEqual(self.task("t1r1")["gate"], "superseded")
-        self.assertTrue((self.run_dir / "t1r2" / "findings.json").exists())
-
-
-class ScopeFilterTests(ReuseFixture, unittest.TestCase):
-    def blocked_again(self, *items, **over):
-        return self.review2(verdict="block", items=list(items), **over)
-
-    def test_S9_a_blocking_item_outside_the_delta_with_no_earlier_finding_is_deferred(self):
-        """orchestrate-lean-loop/S9"""
-        # The earlier blocker is closed with evidence, so only the new out-of-delta item is at issue.
-        closure = self.closure(BLOCKING)
-        self.waits(
-            self.first_block()
-            + [
-                self.fix_report(),
-                self.re_review(self.blocked_again(OFF_SCOPE, **closure)),
-            ]
-        )
-        self.run_driver()
-        scopes = self.run_events("scope")
-        self.assertEqual(
-            [(e["unit"], e["id"], e["file"]) for e in scopes], [("t1", "B2", "src/zzz/other.py")]
-        )
-        self.assertIn("B2", (self.run_dir / "deferred.md").read_text(encoding="utf-8"))
-        self.assertIn(
-            "unrelated code is wrong", (self.run_dir / "deferred.md").read_text(encoding="utf-8")
-        )
-        self.assertFalse((self.run_dir / "t1r2").exists())  # no further fix round
-        self.assertIn(
-            "ready-for-ci", [e["gate"][1] for e in self.run_events("state")]
-        )  # the gate did not hold
-        self.assertEqual(self.task("t1r1")["gate"], "done")
-
-    def test_S9_a_blocking_item_in_a_changed_file_still_gates(self):
-        """orchestrate-lean-loop/S9"""
-        inside = dict(OFF_SCOPE, id="B4", file="src/a/x.py")
-        self.waits(
-            self.first_block()
-            + [
-                self.fix_report(),
-                self.re_review(self.blocked_again(inside, **self.closure(BLOCKING))),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.run_events("scope"), [])
-        self.assertTrue((self.run_dir / "t1r2" / "findings.json").exists())
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
-
-    def test_S9_a_blocking_item_that_references_an_earlier_finding_still_gates(self):
-        """orchestrate-lean-loop/S9"""
-        again = dict(OFF_SCOPE, id="B5", finding="B1")
-        self.waits(
-            self.first_block()
-            + [
-                self.fix_report(),
-                self.re_review(self.blocked_again(again, **self.closure(BLOCKING))),
-            ]
-        )
-        self.run_driver()
-        self.assertEqual(self.run_events("scope"), [])
-        self.assertEqual(
-            [
-                i["id"]
-                for i in json.loads((self.run_dir / "t1r2" / "findings.json").read_text())["items"]
-            ],
-            ["B5"],
-        )
-
-    def test_S9_only_the_out_of_scope_item_is_dropped_from_a_mixed_re_review(self):
-        """orchestrate-lean-loop/S9"""
-        inside = dict(OFF_SCOPE, id="B4", file="src/a/x.py")
-        self.waits(
-            self.first_block()
-            + [
-                self.fix_report(),
-                self.re_review(self.blocked_again(OFF_SCOPE, inside, **self.closure(BLOCKING))),
-            ]
-        )
-        self.run_driver()
-        items = json.loads((self.run_dir / "t1r2" / "findings.json").read_text())["items"]
-        self.assertEqual([i["id"] for i in items], ["B4"])
-        self.assertEqual([e["id"] for e in self.run_events("scope")], ["B2"])
-
-    def test_S9_a_first_review_is_not_filtered(self):
-        """orchestrate-lean-loop/S9"""
-        self.waits(self.first_block(OFF_SCOPE))
-        self.run_driver()
-        self.assertEqual(self.run_events("scope"), [])
-        self.assertTrue((self.run_dir / "t1r1" / "findings.json").exists())
-
-
-class OpenBlockerTests(ReuseFixture, unittest.TestCase):
-    """A blocker stays open across a delta re-review, a restart and a replayed review until a reviewer resolves it."""
-
-    def record(self):
-        return json.loads((self.run_dir / "t1" / "open-findings.json").read_text(encoding="utf-8"))
-
-    def held(self):
-        self.assertEqual(self.record()["items"], [BLOCKING])
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
-        self.assertNotEqual(self.task("t1r1")["gate"], "done")
-
-    def test_S5_an_open_blocker_outside_the_new_delta_stays_open(self):
-        outside = dict(BLOCKING, file="src/zzz/other.py")
-        self.waits(self.first_block(outside) + [self.fix_report(), self.re_review()])
-        self.run_driver()
-        self.assertEqual(self.record()["items"], [outside])
-        self.assertNotIn("ready-for-ci", [e["gate"][1] for e in self.run_events("state")])
-        self.assertNotEqual(self.task("t1r1")["gate"], "done")
-
-    def test_S7_a_restart_holds_the_unit_on_the_persisted_record(self):
-        self.waits(self.first_block())
-        self.run_driver()  # the run ends with the fix round still to come
-        self.assertEqual(self.record()["items"], [BLOCKING])
-        self.waits([self.fix_report(), self.re_review()])
-        self.run_driver()  # a new run of the same ledger: the record, not memory, decides
-        self.held()
-
-    def test_S5_a_legacy_major_and_a_new_blocker_reach_one_fix_round(self):
-        """Open blocking findings persist: the round carries both payloads, so it is a fix round and not a Lead request."""
-        second = dict(BLOCKING, id="B2", summary="a second violation", file="src/a/x.py")
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                self.reviewer_done(self.review(verdict="block", major=[MAJOR])),
-                self.fix_report(),
-                self.re_review(self.review2(verdict="block", items=[second])),
-            ]
-        )
-        self.run_driver()
-        findings = json.loads((self.run_dir / "t1r2" / "findings.json").read_text())
-        self.assertEqual(findings["contract"], 2)
-        self.assertEqual([i["id"] for i in findings["items"]], ["M1", "B2"])
-        self.assertFalse((self.run_dir / "t1r2" / "request.json").exists())
-
-    def test_S7_a_missing_record_is_rebuilt_from_the_units_reviews(self):
-        self.waits(self.first_block())
-        self.run_driver()
-        (
-            self.run_dir / "t1" / "open-findings.json"
-        ).unlink()  # a ledger written before the record existed
-        self.waits([self.fix_report(), self.re_review()])
-        self.run_driver()
-        self.held()
 
 
 class PaneStopTests(ReuseFixture, unittest.TestCase):
@@ -294,32 +60,20 @@ class PaneStopTests(ReuseFixture, unittest.TestCase):
 
     def test_S11_a_unit_the_lead_blocks_stops_its_implementer_and_reviewer(self):
         """orchestrate-lean-loop/S11"""
-        broken = self.review2(
-            verdict="pass", items=[BLOCKING]
-        )  # breaks its contract: the unit pauses for the Lead
+        stuck = report_wait("demo-t1-review", "blocked", "I cannot read the diff")
         self.waits(
-            [
-                self.worker_done(tests=True),
-                *self.repeated(self.reviewer_done(broken)),
-                self.decide_step("t1", "mark blocked"),
-            ]
-        )
+            [self.worker_done(tests=True), stuck, self.decide_step("t1", "mark blocked")]
+        )  # the reviewer is stuck: the unit pauses for the Lead
         self.run_driver()
         self.assertEqual(sorted(self.stopped()), ["demo-t1", "demo-t1-review"])
         self.assertEqual(self.task()["gate"], "blocked")
 
     def test_S11_a_unit_waiting_for_the_lead_keeps_its_panes_for_the_decision(self):
         """orchestrate-lean-loop/S11"""
-        broken = self.review2(verdict="pass", items=[BLOCKING])
-        self.waits(
-            [
-                self.worker_done(tests=True),
-                *self.repeated(self.reviewer_done(broken)),
-                self.skipped(),
-            ]
-        )
+        stuck = report_wait("demo-t1-review", "blocked", "I cannot read the diff")
+        self.waits([self.worker_done(tests=True), stuck, self.skipped()])
         self.run_driver()
-        self.assertEqual(self.request()["event"], "review")
+        self.assertEqual(self.request()["event"], "reviewer")
         kinds = [e["kind"] for e in self.run_events("decision", "stop")]
         self.assertEqual(
             kinds[0], "decision"

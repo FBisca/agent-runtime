@@ -333,9 +333,7 @@ class Lifecycle:
                 gate, packet = task.get("gate"), task["packet"]
                 if task["status"] in ("COMPLETE", "RELEASED") or gate in PARKED:
                     continue
-                answers, review = task.get("answers") or {}, task.get("review") or {}
-                if answers.get("state") == "working" and answers.get("assignment_id"):
-                    found.append((task_id, "answerer", packet["worker"], answers["assignment_id"]))
+                review = task.get("review") or {}
                 if gate == "reviewing" and review.get("assignment_id"):
                     found.append((task_id, "reviewer", review["name"], review["assignment_id"]))
                 if not gate and task["status"] == "ACTIVE" and task.get("assignment_id"):

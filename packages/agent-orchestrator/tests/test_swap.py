@@ -87,7 +87,7 @@ class SwapTests(ReuseFixture, unittest.TestCase):
             sample(195000),
         )
         again = with_id(
-            self.re_review(self.review2(**self.closure(self.blocking()))),
+            self.re_review(self.review2()),
             spawn_id("demo-t1-review", 2),
         )
         self.waits([self.worker_done(tests=True), first, self.fix_report(), again])

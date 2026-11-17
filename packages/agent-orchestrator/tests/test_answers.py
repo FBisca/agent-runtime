@@ -1,88 +1,14 @@
-"""The implementer's answers and the attempt ids a Lead's answer may name."""
+"""The attempt ids a Lead's answer may name."""
 
 import json
 import unittest
 
 import pytest
 from agent_orchestrator import contracts
-from fixtures import assignment, load_script, report_wait, resume_id, wait_result
-from test_envelope import RESPONSE, EnvelopeFixture
+from fixtures import load_script
+from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
-
-
-class OpenAnswers(EnvelopeFixture, unittest.TestCase):
-    """The answers are working when a request that does not name them is decided."""
-
-    def answerer(self):
-        """A wait step: the implementer's turn on the answers ended."""
-        return wait_result([assignment("demo-t1", "working", "idle", id=resume_id("demo-t1", 1))])
-
-    def answers_complete(self):
-        step = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 1))
-        step["write"] = [
-            [str(self.run_dir / "t1a1" / "report.json"), self.report("t1a1", responses=[RESPONSE])]
-        ]
-        return step
-
-    def passing_with_question(self):
-        from test_gates import NIT, QUESTION
-
-        return [
-            self.worker_done(tests=True),
-            self.reviewer_done(self.review2(items=[QUESTION, NIT])),
-        ]
-
-    def broken_checks(self, then_green=False):
-        """`gh pr checks` fails once with a code it does not use for a state: the unit asks the Lead about CI."""
-        rows = [[2, "", "gh is down"]] + ([[0, json.dumps(self.GREEN), ""]] if then_green else [])
-        (self.home / "checks.json").write_text(json.dumps(rows), encoding="utf-8")
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S12_a_fresh_worker_on_a_ci_request_does_not_fail_the_answerer_record(self):
-        """orchestrator-audit-fixes/S12"""
-        self.broken_checks()
-        self.waits(self.passing_with_question() + [self.decide_step("t1", "fresh worker")])
-        self.run_driver("--idle-minutes", "0")
-        self.assertEqual([e["cause"] for e in self.run_events("escalation")], ["ci"])
-        self.assertEqual(self.task()["answers"]["state"], "working", "the record was failed")
-        self.assertEqual(self.run_events("answers-dropped"), [])
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S12_an_answerer_complete_after_a_decision_that_did_not_name_it_is_received(self):
-        """orchestrator-audit-fixes/S12"""
-        self.broken_checks(then_green=True)
-        worker = report_wait("demo-t1", "complete", id=resume_id("demo-t1", 2))
-        worker["write"] = [[str(self.run_dir / "t1" / "report.2.json"), self.report("t1")]]
-        self.waits(
-            self.passing_with_question()
-            + [
-                self.decide_step("t1", "answer", answer="carry on"),
-                self.answers_complete(),
-                worker,
-                self.re_review(),
-            ]
-        )
-        self.run_driver("--idle-minutes", "0")
-        self.assertEqual([e["cause"] for e in self.run_events("escalation")], ["ci"])
-        self.assertEqual(self.run_events("answers-dropped"), [])
-        self.assertEqual(
-            self.task()["answers"]["state"], "done", "the answerer's complete was not received"
-        )
-
-    @pytest.mark.spec("One idle watchdog")
-    def test_S12_a_decision_on_a_request_that_named_the_answerer_drops_it_and_says_why(self):
-        """orchestrator-audit-fixes/S12 — the event is why pr-ready stopped waiting."""
-        self.waits(
-            self.passing_with_question() + [self.answerer()] * 5 + [self.decide_step("t1", "retry")]
-        )
-        self.run_driver("--idle-minutes", "0")
-        self.assertEqual([e["event"] for e in self.requests()][:1], ["idle"])
-        self.assertEqual(self.task()["answers"]["state"], "failed")
-        (dropped,) = self.run_events("answers-dropped")
-        self.assertEqual(dropped["task"], "t1")
-        self.assertIn("pr-ready", dropped["why"])
-        self.assertIn("retry", dropped["why"])
 
 
 class AttemptIds(unittest.TestCase):
@@ -119,7 +45,7 @@ class AttemptIds(unittest.TestCase):
         self.assertEqual(sorted(spec.ATTEMPT_LETTERS), sorted("rdopa"))
 
 
-class AnswerRefusal(EnvelopeFixture, unittest.TestCase):
+class AnswerRefusal(GateFixture, unittest.TestCase):
     def open_request(self, task):
         path = self.run_dir / "t1" / "request.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,26 +80,3 @@ class AnswerRefusal(EnvelopeFixture, unittest.TestCase):
         self.assertIn("t1a2", result.stderr)
         self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
         self.assertEqual(path.read_text(encoding="utf-8"), before)
-
-
-class OpenBlockerAnswers(EnvelopeFixture, unittest.TestCase):
-    """A blocker outlives a passing review that only asks a question: no answers round closes it."""
-
-    @pytest.mark.spec("Open blocking findings persist")
-    def test_S5_a_generic_worker_answer_does_not_close_an_open_blocker(self):
-        from test_gates import BLOCKING, QUESTION
-
-        ask = dict(QUESTION, id="Q2", summary="why is the last row skipped?")
-        self.waits(
-            self.to_fix_round()
-            + [
-                self.fix_round_report(responses=[RESPONSE]),
-                self.re_review(self.review2(items=[ask])),
-            ]
-        )
-        self.run_driver()
-        self.assertFalse(
-            (self.run_dir / "t1a1").exists(), "an answers round opened while a blocker was open"
-        )
-        self.assertEqual(self.read("t1", "open-findings.json")["items"], [BLOCKING])
-        self.assertNotEqual(self.task("t1r1")["gate"], "done")

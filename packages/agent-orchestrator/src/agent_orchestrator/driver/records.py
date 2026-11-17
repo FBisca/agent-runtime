@@ -198,7 +198,7 @@ def merge_state(view):
     return "open"
 
 
-def check_commit(claimed, head, what="review.json"):
+def check_commit(claimed, head, what="report"):
     """A claimed commit is at least 7 hex characters and is the checkout's HEAD (or an abbreviation of it)."""
     contracts.need(
         re.fullmatch(r"[0-9a-f]{7,40}", claimed or "") is not None,

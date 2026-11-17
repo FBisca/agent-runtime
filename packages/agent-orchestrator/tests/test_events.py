@@ -8,7 +8,7 @@ import pytest
 from fixtures import DRIVER, load_script, report_wait, resume_id
 from test_archive import ArchiveFixture
 from test_decider import DeciderFixture
-from test_gates import DEFERRED, MAJOR
+from test_gates import MAJOR
 
 pytestmark = pytest.mark.unit
 
@@ -60,11 +60,11 @@ class EventTests(ArchiveFixture, unittest.TestCase):
     @pytest.mark.integration
     def test_S27_findings_are_logged_with_their_kind_and_source(self):
         """orchestrate-lean-loop/S27"""
-        review = self.review(verdict="block", major=[MAJOR], deferred=[DEFERRED])
+        review = self.review(major=[MAJOR])
         self.waits([self.worker_done(tests=True), self.reviewer_done(review)])
         self.run_driver()
         findings = [(e["source"], e["finding_kind"], e["id"]) for e in self.run_events("finding")]
-        self.assertEqual(findings, [("review", "deferred", "D1"), ("review", "blocking", "M1")])
+        self.assertEqual(findings, [("review", "blocking", "R1")])
         self.assertEqual(
             [(e["unit"], e["source"]) for e in self.run_events("round")], [("t1", "review")]
         )
@@ -96,9 +96,7 @@ class EventTests(ArchiveFixture, unittest.TestCase):
         reviewer = self.reviewer_done(self.review(verdict="block", major=[MAJOR]))
         fix = self.worker_done("t1r1")
         again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
-        again["write"] = [
-            [str(self.run_dir / "t1" / "review.2.json"), self.review2(**self.closure(MAJOR))]
-        ]
+        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review2()]]
         # Every assignment reports, so the ticket total is a sum and not null.
         for step in (reviewer, fix, again):
             step["assignments"][0]["usage"] = {"input_tokens": 0, "output_tokens": 0}

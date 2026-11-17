@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 from fixtures import assignment, envelope, resume_id, spawn_id, wait_result
-from test_gates import REVIEWER, GateFixture
+from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
+
+REVIEWER = "demo-t1-review"
 
 
 class SilentWorker(GateFixture, unittest.TestCase):
@@ -27,7 +29,7 @@ class LateReviewerComplete(GateFixture, unittest.TestCase):
     """An escalated reviewer's `complete` while its idle request is open (supersedes orchestrator-silent-idle/S13)."""
 
     def silent(self):
-        return wait_result([assignment(REVIEWER, "working", "idle")])
+        return wait_result([assignment(REVIEWER, "working")])
 
     def gates(self):
         return [e["gate"][1] for e in self.run_events("state") if e["task"] == "t1"]
@@ -55,7 +57,9 @@ class LateReviewerComplete(GateFixture, unittest.TestCase):
         """orchestrator-audit-fixes/S10 — the decision and the complete reach the driver in
         one wait, the decision first: the request is no longer undecided."""
         entry = assignment(REVIEWER, "complete")
-        late = self.decide_step("t1", "mark blocked", messages=[envelope(entry, "complete")])
+        late = self.decide_step(
+            "t1", "mark blocked", messages=[envelope(entry, "complete", text=self.review())]
+        )
         late["write"] = [[str(self.run_dir / "t1" / "review.json"), self.review()]]
         self.waits([self.worker_done(tests=True)] + [self.silent()] * 4 + [late])
         self.run_driver("--idle-minutes", "0")
@@ -71,7 +75,7 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
     ANSWER = "the cache is cleared on logout, so K1 is not a defect"
 
     def silent(self):
-        return wait_result([assignment(REVIEWER, "working", "idle")])
+        return wait_result([assignment(REVIEWER, "working")])
 
     def answered(self, then, lost=False):
         """Waits up to the Lead's `answer` on the reviewer's idle request, then `then`; with `lost`, the reviewer's pane
@@ -89,7 +93,9 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
         """engine-gaps/S9"""
         finished = self.reviewer_done()
         finished["assignments"] = [assignment(REVIEWER, "complete", id=resume_id(REVIEWER))]
-        finished["messages"] = [envelope(finished["assignments"][0], "complete")]
+        finished["messages"] = [
+            envelope(finished["assignments"][0], "complete", text=self.review())
+        ]
         self.waits(self.answered([finished]))
         self.run_driver("--idle-minutes", "0")
         self.assertEqual(self.request()["event"], "idle")
@@ -102,9 +108,12 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
 
     def brief_text(self):
-        """What the answered reviewer can read: the files the resume names, under the review's directory."""
+        """What the answered reviewer is told: the messages the runtime was given for it, and its brief."""
         folder = Path(self.task()["review"]["dir"])
-        return "".join(p.read_text(encoding="utf-8") for p in sorted(folder.glob("*.md")))
+        sent = "".join(
+            c["args"].get("task", "") for c in self.calls() if c["args"].get("name") == REVIEWER
+        )
+        return sent + "".join(p.read_text(encoding="utf-8") for p in sorted(folder.glob("*.md")))
 
     @pytest.mark.spec("A decision reaches its worker")
     def test_S9_a_reviewer_whose_pane_is_gone_is_replaced_by_one_whose_brief_carries_the_answer(
@@ -113,7 +122,7 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
         """engine-gaps/S9"""
         late = self.reviewer_done()
         late["assignments"] = [assignment(REVIEWER, "complete", id=spawn_id(REVIEWER, 2))]
-        late["messages"] = [envelope(late["assignments"][0], "complete")]
+        late["messages"] = [envelope(late["assignments"][0], "complete", text=self.review())]
         self.waits(self.answered([late], lost=True))
         self.run_driver("--idle-minutes", "0")
         self.assertEqual(self.resumed("demo-t1"), [])
@@ -133,7 +142,9 @@ class ReviewerAnswer(GateFixture, unittest.TestCase):
         again["write"] = [[str(self.home / "refuse_resume.json"), "{}"]]
         finished = self.reviewer_done()
         finished["assignments"] = [assignment(REVIEWER, "complete", id=resume_id(REVIEWER, 2))]
-        finished["messages"] = [envelope(finished["assignments"][0], "complete")]
+        finished["messages"] = [
+            envelope(finished["assignments"][0], "complete", text=self.review())
+        ]
         self.waits(self.answered([again, finished]))
         self.run_driver("--idle-minutes", "0")
         second = self.request_file(2)

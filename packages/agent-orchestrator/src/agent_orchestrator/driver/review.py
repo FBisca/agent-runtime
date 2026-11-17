@@ -1,4 +1,4 @@
-"""The reviewer's packet: one home for the brief a review is read from and the trail it is given.
+"""The reviewer's packet: the brief a review is read from, and the trail it is given.
 
 A review is opened on one attempt's report, so the brief carries that report's content instead of a glob
 over the unit's directory, which a stale attempt answers once the unit has been re-dispatched. The trail behind the review is read in the order
@@ -11,7 +11,7 @@ lines, and because the one reading of "which report is this" has one home.
 import json
 from pathlib import Path
 
-from .pointers import collection
+from .pointers import collection, rulebook
 from .prompts import block, render
 from .records import reported_attempt, unit_attempts
 
@@ -25,46 +25,41 @@ def _reported(driver, packet):
     return "```json\n%s\n```" % json.dumps(report, indent=2)
 
 
-def review_brief(driver, packet, review_path, delta=None, open_items=None):
-    """The reviewer's brief: the paths it works from, the pass in one order, and the schema the verdict is written
-    in. Every path is named exactly, so no step sends the reviewer to a file the brief left it to find."""
+def review_brief(driver, packet):
+    """The first review's brief: what the reviewer reads, the pass in one order and the verdict it hands in. Every
+    path is named exactly, so no step sends the reviewer to a file the brief left it to find."""
     checkout = Path(packet["checkout"])
     rules = [str(checkout / n) for n in ("AGENTS.md", "CLAUDE.md") if (checkout / n).exists()]
-    unit_dir = driver.run_dir / packet["unit"]
-    base = driver.args.base
-    if delta:
-        range_ = block(
-            "review-delta-range",
-            checkout=checkout,
-            base=base,
-            findings=delta.get("findings") or "none",
-            since=delta["from"],
-        )
-        rereview = block("review-rereview", since=delta["from"])
-    else:
-        range_, rereview = block("review-range", checkout=checkout, base=base), ""
+    book = rulebook(driver.repo, checkout)
     return render(
         "review",
         unit=packet["unit"].upper(),
-        task_md=unit_dir / "task.md",
+        task_md=driver.run_dir / packet["unit"] / "task.md",
         reported=_reported(driver, packet),
         checkout=checkout,
         checkout_contents=collection(checkout),
-        contract=driver.run_dir / "contract.md",
         plan=driver.plan_path,
-        base=base,
-        range=range_,
-        open_findings=block(
-            "review-open-findings",
-            ids=", ".join(item["id"] for item in open_items),
-            payloads=unit_dir / "open-findings.json",
-        )
-        if open_items
-        else "",
+        base=driver.args.base,
+        head=driver.book.task(packet["task_id"])["report"]["head"],
+        rulebook=block("review-rulebook", rulebook=book) if book else "",
         rules=", ".join(rules) or "none found; follow the code's own conventions",
-        rereview=rereview,
-        review_path=review_path,
-        review_prose=Path(review_path).with_name("review.md"),
+    )
+
+
+def rereview_text(driver, packet, delta, brief):
+    """What the reviewer that still holds the change is told: the fix diff, the worker's report and what the fix was
+    asked to answer. A re-review never re-reads the whole change."""
+    task = driver.book.task(packet["task_id"])
+    return render(
+        "rereview",
+        unit=packet["unit"].upper(),
+        checkout=packet["checkout"],
+        since=delta["from"],
+        head=task["report"]["head"],
+        reported=_reported(driver, packet),
+        findings=delta.get("findings") or "none",
+        earlier=block("rereview-earlier") if delta.get("blocked") else "",
+        brief=brief,
     )
 
 

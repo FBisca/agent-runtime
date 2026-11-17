@@ -1,4 +1,4 @@
-"""The repo config, `<repo>/.orchestrate/config.yaml`: where plans live, how they archive, and its check tiers.
+"""The repo config, `<repo>/.orchestrate/config.yaml`: where plans live, how they archive, its check tiers and its rulebook.
 
 Only these nodes are read. A missing file means the defaults; reading never creates anything."""
 
@@ -17,6 +17,7 @@ NODES = {
     "checks": ("fast", "affected", "full"),
     "tests": ("patterns",),
 }
+SCALARS = ("rulebook",)  # a key whose value is one repo-relative path
 # file-name globs that mark a test file; a directory named `tests` marks one whatever these say
 DEFAULT_TEST_PATTERNS = ("test_*", "*_test.*", "*.test.*", "*.spec.*")
 # the placeholders `checks.affected` may name: the run's base ref and the ticket's paths
@@ -44,6 +45,7 @@ class RepoConfig:
     archive_mode: str
     checks: Checks | None = None
     test_patterns: tuple = DEFAULT_TEST_PATTERNS
+    rulebook: str | None = None
 
 
 def _path(root, value, dotted):
@@ -123,12 +125,14 @@ def load(root):
         data = {} if data is None else data
     if not isinstance(data, dict):
         raise ConfigError(
-            f"{CONFIG_PATH}: must be a mapping of nodes — use plans, archive, checks, tests"
+            f"{CONFIG_PATH}: must be a mapping of nodes — use plans, archive, checks, tests, rulebook"
         )
     for node, body in data.items():
+        if node in SCALARS:
+            continue
         if node not in NODES:
             raise ConfigError(
-                f"{CONFIG_PATH}: {node}: unknown key — remove it (known: {', '.join(NODES)})"
+                f"{CONFIG_PATH}: {node}: unknown key — remove it (known: {', '.join((*NODES, *SCALARS))})"
             )
         if not isinstance(body, dict):
             raise ConfigError(
@@ -147,4 +151,9 @@ def load(root):
         )
     checks = _checks(data["checks"]) if "checks" in data else None
     patterns = _test_patterns(data.get("tests", {}))
-    return RepoConfig(plans, mode, checks, patterns)
+    rulebook = data.get("rulebook")
+    if rulebook is not None and not (isinstance(rulebook, str) and rulebook.strip()):
+        raise ConfigError(
+            f"{CONFIG_PATH}: rulebook must be a non-empty path — write rulebook: docs/rulebook.md"
+        )
+    return RepoConfig(plans, mode, checks, patterns, rulebook)

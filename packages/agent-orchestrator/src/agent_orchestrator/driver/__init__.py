@@ -50,7 +50,6 @@ __all__ = [
     "PARKED",
     "PARK_ASK_EVERY",
     "PARK_ASK_FIRST",
-    "PAYLOAD_GRACE",
     "PAYLOAD_WARNINGS",
     "Path",
     "PlanError",
@@ -166,7 +165,6 @@ __all__ = [
     "owned_paths",
     "owned_scope",
     "pane_name",
-    "payload_waits",
     "plan_home",
     "plan_slug",
     "plan_state_of",
@@ -174,6 +172,7 @@ __all__ = [
     "re",
     "read_decision",
     "read_hand_in",
+    "read_verdict",
     "read_json",
     "read_ledger_file",
     "read_repo_config",
@@ -196,6 +195,8 @@ __all__ = [
     "require_yaml",
     "resolve_runtime",
     "review_brief",
+    "rereview_text",
+    "rulebook",
     "routed",
     "routes",
     "run",
@@ -354,6 +355,7 @@ from .gates import Gates as Gates
 from .gates import step_failed as step_failed
 from .handoff import FENCE as FENCE
 from .handoff import read_hand_in as read_hand_in
+from .handoff import read_verdict as read_verdict
 from .lifecycle import Lifecycle as Lifecycle
 from .lifecycle import metrics as metrics
 from .lifecycle import sum_usage as sum_usage
@@ -364,6 +366,7 @@ from .pointers import named_collection as named_collection
 from .pointers import owned_collections as owned_collections
 from .pointers import owned_scope as owned_scope
 from .pointers import reference as reference
+from .pointers import rulebook as rulebook
 from .pointers import task_text as task_text
 from .pointers import tdd_instruction as tdd_instruction
 from .pointers import tdd_skill_path as tdd_skill_path
@@ -410,6 +413,7 @@ from .report import render_status as render_status
 from .report import short as short
 from .report import show as show
 from .review import attempt_trail as attempt_trail
+from .review import rereview_text as rereview_text
 from .review import review_brief as review_brief
 from .routing import Routes as Routes
 from .runtime import TREE_TIMEOUT as TREE_TIMEOUT
@@ -459,13 +463,11 @@ from .verdict import TURN_ENDED as TURN_ENDED
 from .verdict import VERDICTS as VERDICTS
 from .verdict import attention as attention
 from .watch import ACCEPTED_STATES as ACCEPTED_STATES
-from .watch import PAYLOAD_GRACE as PAYLOAD_GRACE
 from .watch import PAYLOAD_WARNINGS as PAYLOAD_WARNINGS
 from .watch import Attention as Attention
 from .watch import archive_retry_allowed as archive_retry_allowed
 from .watch import archive_retry_refusal as archive_retry_refusal
 from .watch import pane_name as pane_name
-from .watch import payload_waits as payload_waits
 from .watch import plan_state_of as plan_state_of
 from .watch import read_json as read_json
 

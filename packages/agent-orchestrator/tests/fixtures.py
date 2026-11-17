@@ -439,10 +439,9 @@ class RunFixture(_Case):  # noqa: PLR0904
         {"name": "unit", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/55/job/8"}
     ]
 
-    def checks(self, answers, pr=None, ready=False):
-        """What `gh pr checks` answers on its next calls (the last repeats): "green", "pending", "none" (no checks
-        reported yet), "fail" or ("fail", <check name>). With `pr` (a number) only that PR is answered this way; with
-        `ready`, only a PR that is ready (not a draft)."""
+    def check_rows(self, answers):
+        """The `gh pr checks` answers for "green", "pending", "none" (no checks reported yet), "fail" or
+        ("fail", <check name>)."""
         rows = []
         for answer in answers:
             kind, *names = answer if isinstance(answer, tuple) else (answer, "unit tests")
@@ -463,10 +462,28 @@ class RunFixture(_Case):  # noqa: PLR0904
                     "fail": [1, json.dumps(fails + [self.GREEN[0]]), ""],
                 }[kind]
             )
+        return rows
+
+    def checks(self, answers, pr=None, ready=False):
+        """What `gh pr checks` answers on its next calls (the last repeats); the answers are those of `check_rows`.
+        With `pr` (a number) only that PR is answered this way; with `ready`, only a PR that is ready (not a draft)."""
+        rows = self.check_rows(answers)
         name = (
             "checks-ready.json" if ready else "checks.json" if pr is None else "checks-%s.json" % pr
         )
         (self.home / name).write_text(json.dumps(rows), encoding="utf-8")
+
+    def checks_after_rerun(self, answers):
+        """The checks the one automatic re-run answers from then on."""
+        (self.home / "checks-rerun.json").write_text(
+            json.dumps(self.check_rows(answers)), encoding="utf-8"
+        )
+
+    def checks_after_fix(self, answers):
+        """The checks once the worker has been resumed for a fix round: a fix pushed after a failure turns them green."""
+        (self.home / "checks-fixed.json").write_text(
+            json.dumps(self.check_rows(answers)), encoding="utf-8"
+        )
 
     def prs(self, states):
         """The PR's states once `gh pr ready` has run: names or objects (mergeStateStatus ...); the last repeats."""
@@ -568,8 +585,6 @@ class RunFixture(_Case):  # noqa: PLR0904
         """The fake `gh`'s answer, in process."""
         return fake_gh.process(argv, timeout=timeout)  # the fake has no working directory
 
-    payload_grace = 0.05  # the payload wait, shortened so a test does not pay the real grace
-
     def repeated(self, step, times=3):
         """The same agent reporting again, `times` times, each under the assignment the previous warning resumed.
 
@@ -609,7 +624,6 @@ class RunFixture(_Case):  # noqa: PLR0904
                     redirect_stdout(out),
                     redirect_stderr(err),
                     mock.patch.object(driver_runtime, "runtime_process", self.runtime_process),
-                    mock.patch.object(spec, "PAYLOAD_GRACE", self.payload_grace),
                     mock.patch.object(spec, "gh_process", self.gh_process),
                 ):
                     codes.append(spec.run_cli(argv))

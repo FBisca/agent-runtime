@@ -13,9 +13,10 @@ ledger status changed), `route` (the route a worker was dispatched on: `unit`, `
 (the run ended; `orchestrate.py await` reads it), `contract-error` (a handoff file broke its contract: `where`, `error`),
 `report` (a worker's hand-in was accepted: `unit`, `task`, the full `report`), `report-refused` (a hand-in was refused back to its sender:
 `unit`, `task`, `reason`, `payload`), `flaky` (a CI failure passed on one re-run: `unit`, `task`, `pr`, `checks`),
-`clarification` (an agent listed a question in `clarifications[]`: `finding`, `asked_by`, `note`, `source`), `answers`
-(the implementer was resumed for the answer_required items of a passing review), `response` (one per answered finding),
-`scope` (a re-review's blocking item outside the delta, about no earlier finding, was deferred: `id`, `file`),
+`clarification` (an agent listed a question in `clarifications[]`: `finding`, `asked_by`, `note`, `source`),
+`review` (a reviewer's verdict was accepted: `unit`, `task`, `commit`, `verdict` pass|block, `findings`), `review-refused`
+(a verdict was refused back to its reviewer: `unit`, `task`, `reason`, `payload`), `review-ended` (the reviewer's turn
+ended with no verdict: `unit`, `task`, `reason`),
 `swap` (an agent below the context reserve was replaced by a fresh one: `name`, `role`, `remaining_tokens`) and
 `context` (`context: unknown`: no usable usage measurement, so the agent was resumed).
 `ci` (a pull request's checks were polled: `unit`, `task`, `gate`, `state` green|pending|none|failed, `pr`),

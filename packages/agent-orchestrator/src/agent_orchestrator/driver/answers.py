@@ -22,8 +22,7 @@ from .. import contracts, narrate
 from ..invariants import next_path
 from ..timeutil import iso as now
 from .book import ARCHIVE, checkpoint
-from .handoff import read_hand_in
-from .prompts import render
+from .handoff import read_hand_in, read_verdict
 from .report import cell
 from .state import JsonRefusal, Refused, numbered, write_atomic
 from .watch import (
@@ -306,24 +305,6 @@ def decided(args, source):
     }
 
 
-def _payload_sender(task, where):
-    """The record of whoever sent the payload: the reviewer's, or the worker's packet."""
-    record = task.get(where) or {}
-    if where == "review":
-        return record
-    return dict(
-        task["packet"],
-        name=task["packet"]["worker"],
-        role="worker",
-        assignment_id=task.get("assignment_id"),
-    )
-
-
-def _payload_warnings(task, where):
-    """How many times the driver already asked this sender for this payload."""
-    return int((task.get("payload_warnings") or {}).get(where) or 0)
-
-
 def _applying(task, gate, drive):
     """What a step was applying, or None when it was not applying a decision and nothing is owed."""
     if task.get("gate") != gate:
@@ -405,8 +386,7 @@ class Answers:
             return None
 
     def request(self, task_id, kind, reason, **asks):
-        """The unit needs the Lead. A unit that already has an open request keeps it. `answerer` is the assignment of
-        a busy answerer the request names: only a decision on such a request replaces that assignment. `menu` narrows
+        """The unit needs the Lead. A unit that already has an open request keeps it. `menu` narrows
         the actions the Lead may take, and `intent` names the intents the decision settles."""
         with self.book() as data:
             unit = self.book_request(data, task_id, kind, reason, **asks)
@@ -426,8 +406,6 @@ class Answers:
             "kind": kind,
             "from_gate": asks.get("from_gate") or task.get("gate"),
         }
-        if asks.get("answerer"):
-            asked["answerer"] = asks["answerer"]
         if asks.get("menu"):
             asked["menu"] = list(asks["menu"])
         if asks.get("intent"):
@@ -558,54 +536,42 @@ class Answers:
             dict(report, status="PARTIAL", **dict({"review_rounds": 0}, **changes)),
         )
 
-    def take_report(self, task_id, text, answerer=False):
-        """The hand-in one agent's `report` call carried, read the moment it arrives: accepted, or refused back to
-        that agent with the exact errors. The Lead is asked only for a BLOCKED report, or when the same agent has
+    def take_report(self, task_id, text):
+        """The hand-in one worker's `report` call carried, read the moment it arrives: accepted, or refused back to
+        that worker with the exact errors. The Lead is asked only for a BLOCKED report, or when the same worker has
         been refused `PAYLOAD_WARNINGS` times already."""
-        task = self.task(task_id)
-        answers = task.get("answers") or {}
-        owner = answers["id"] if answerer else task_id
-        report, error = read_hand_in(task, owner, text)
+        report, error = read_hand_in(self.task(task_id), task_id, text)
         unit = self.unit_of(task_id)
         if error:
             self.log("report-refused", unit=unit, task=task_id, reason=error, payload=text)
-            return self.refuse_report(task_id, error, answerer)
+            return self.refuse_report(task_id, error)
         self.log("report", unit=unit, task=task_id, report=report)
         if report["status"] == "BLOCKED":
-            if answerer:
-                self.mark(task_id, answers=dict(answers, state="failed"))
             return self.request(
                 task_id, "blocked", "%s: %s" % (report["summary"], report["blocker"])
             )
-        if answerer:
-            return self.mark(task_id, answers=dict(answers, state="reported", report=report))
         self.mark(task_id, gate="reported", handed_in=report)
 
-    def refuse_report(self, task_id, error, answerer=False):
-        """Tell the agent what its hand-in got wrong, in its own session; a third refusal is the Lead's."""
-        task = self.task(task_id)
-        refused = int(task.get("refused") or 0)
+    def refuse_report(self, task_id, error):
+        """Tell the worker what its hand-in got wrong, in its own session; a third refusal is the Lead's."""
+        refused = int(self.task(task_id).get("refused") or 0)
         if refused >= PAYLOAD_WARNINGS:
             return self.contract_error(
-                task_id,
-                "report",
-                "refused %d times: %s" % (refused + 1, error),
+                task_id, "report", "refused %d times: %s" % (refused + 1, error)
             )
         self.mark(task_id, refused=refused + 1)
         return self.nudge(
             task_id,
             "Your hand-in was refused: %s. Fix it and hand it in again: your agent-runtime `report` call "
             "carries the whole report JSON as its text." % error,
-            answerer,
         )
 
-    def nudge(self, task_id, text, answerer=False):
+    def nudge(self, task_id, text):
         """Put `text` to the task's worker in its own session: the live pane is resumed, a gone one replaced. The
         new assignment is the one whose report the task then waits for."""
         task = self.task(task_id)
-        sender = _payload_sender(task, "report")
-        answers = task.get("answers") or {}
-        name = sender["worker"]
+        packet = task["packet"]
+        name = packet["worker"]
         _, assignment_id = self.ensure_agent(
             name,
             "worker",
@@ -614,150 +580,85 @@ class Answers:
                 "kind": "worker",
                 "name": name,
                 "task": text,
-                "cwd": sender["checkout"],
-                "cli": sender.get("backend") or self.args.cli,
-                "model": sender.get("model"),
-                "effort": sender.get("effort"),
+                "cwd": packet["checkout"],
+                "cli": packet.get("backend") or self.args.cli,
+                "model": packet.get("model"),
+                "effort": packet.get("effort"),
             },
-            attempt="%s-nudge%d"
-            % (answers["id"] if answerer else task_id, int(task.get("nudges") or 0)),
+            attempt="%s-nudge%d" % (task_id, int(task.get("nudges") or 0)),
         )
         self.nudged = True
         self.mark(task_id, nudges=int(task.get("nudges") or 0) + 1)
-        if answerer:
-            self.mark(task_id, answers=dict(answers, state="working", assignment_id=assignment_id))
-        else:
-            self.mark(task_id, assignment_id=assignment_id, gate=None)
+        self.mark(task_id, assignment_id=assignment_id, gate=None)
 
-    def read_payload(self, task_id, where, path, load, alternates=()):
-        """The payload a report named, read and validated; None when the agent that sent it still owes it.
-
-        A worker's report can reach the driver before the file it announces, and a file can be half written when
-        it does. The report is the news and the file is the payload, so a payload that is missing or unusable is
-        not a verdict: the sending agent is told once or twice, and only then the Lead is asked. A file that never
-        arrives while nobody is left to write it goes straight to the Lead: warning a dead agent buys nothing.
-
-        The named path is authoritative. Alternatives cannot substitute for it, and multiple files are
-        ambiguous: ask the sender to resolve the names instead of selecting one by existence or order.
-        """
-        candidates = [path, *[a for a in alternates if a]]
-        _engine().payload_waits(candidates)
-        present = [p for p in candidates if Path(p).is_file()]
-        if len(present) > 1:
-            self.warn_sender(
-                task_id,
-                where,
-                path,
-                "multiple files match %s; keep only the expected file and report again"
-                % ", ".join(map(str, present)),
-            )
-            return None
-        if not Path(path).is_file():
-            self.warn_sender(task_id, where, path, "expected this file; write it and report again")
-            return None
-        try:
-            return load(path)
-        except (contracts.ContractError, ValueError) as error:
-            self.warn_sender(task_id, where, path, str(error))
-            return None
-
-    def warn_sender(self, task_id, where, path, reason, accept=False):
-        """Tell the agent that sent the report what the driver still needs from it. False when the Lead must ask.
-
-        A payload that agent can still fix is its own news; a payload from an agent that is gone, or one it was
-        already warned about `PAYLOAD_WARNINGS` times, belongs to the Lead. `accept=True` is a file that reads but
-        cannot be accepted as it stands, so the warning says so rather than calling it unreadable.
-        """
-        verb = "accept" if accept else "read"
+    def take_verdict(self, task_id, text):
+        """The verdict one reviewer's `report` call carried, read the moment it arrives: accepted and booked on the
+        task, or refused back to that reviewer with the exact errors. The Lead is asked only after
+        `PAYLOAD_WARNINGS` refusals. A verdict is the reviewer's reading of the commit the worker reported."""
         task, unit = self.task(task_id), self.unit_of(task_id)
-        sender = _payload_sender(task, where)
-        warned = _payload_warnings(task, where)
-        if warned >= PAYLOAD_WARNINGS or not sender.get("assignment_id"):
-            return self._payload_given_up(task_id, where, path, verb, reason, warned)
-        name = sender.get("name") or sender.get("worker")
-        if not name or not self.agent_live(name):
-            return self._payload_orphaned(task_id, where, path, verb, reason)
-        asked = {"where": where, "path": path, "verb": verb, "reason": reason, "name": name}
-        return self._payload_warned(task_id, unit, asked, sender, warned, task)
+        verdict, error = read_verdict(text)
+        if error:
+            self.log("review-refused", unit=unit, task=task_id, reason=error, payload=text)
+            return self.refuse_verdict(task_id, error)
+        self.log("review", unit=unit, task=task_id, commit=task["report"]["head"], **verdict)
+        self.mark(task_id, gate="reviewed", verdict=verdict, reviewed_commit=task["report"]["head"])
 
-    def _payload_given_up(self, task_id, where, path, verb, reason, warned):
-        """The agent was asked `PAYLOAD_WARNINGS` times or holds no assignment: the Lead is asked instead."""
-        self.contract_error(
+    def refuse_verdict(self, task_id, error):
+        """Tell the reviewer what its verdict got wrong, in its own session; a third refusal is the Lead's."""
+        review = self.task(task_id)["review"]
+        refused = int(review.get("refused") or 0)
+        if refused >= PAYLOAD_WARNINGS:
+            return self.contract_error(
+                task_id, "review", "verdict refused %d times: %s" % (refused + 1, error)
+            )
+        self.mark(task_id, review=dict(review, refused=refused + 1))
+        return self.resume_reviewer(
             task_id,
-            where,
-            "cannot %s %s: %s, after %d warning(s) to the agent that sent the report"
-            % (verb, path, reason, warned),
+            "Your verdict was refused: %s. Fix it and hand it in again: your agent-runtime `report` call "
+            "carries the whole verdict JSON as its text." % error,
         )
-        return False
 
-    def _payload_orphaned(self, task_id, where, path, verb, reason):
-        """No named agent is live to write the file: the unit's request names the file instead."""
-        self.contract_error(
+    def review_ended(self, task_id, reason):
+        """The reviewer's turn ended with no verdict: it is told so once, and the Lead is asked when it happens again."""
+        review = self.task(task_id)["review"]
+        self.log("review-ended", unit=self.unit_of(task_id), task=task_id, reason=reason)
+        if review.get("ended"):
+            return self.request(task_id, "review", reason)
+        self.mark(task_id, review=dict(review, ended=True))
+        return self.resume_reviewer(
             task_id,
-            where,
-            "cannot %s %s: %s, and no agent left to write it" % (verb, path, reason),
+            "You ended without a verdict; hand it in: your agent-runtime `report` call carries the verdict JSON as "
+            "its text.",
         )
-        return False
 
-    def _payload_warned(self, task_id, unit, asked, sender, warned, task):
-        """Ask the agent that sent the payload for it again, as a new assignment, and count the warning."""
-        where, path, name, reason = (
-            asked["where"],
-            asked["path"],
-            asked["name"],
-            asked["reason"],
-        )
-        assignment_id = self._warn_spawn(task_id, unit, asked, sender, task)
-        # The warned agent comes back as a new assignment: the record the next report is matched against must be
-        # the one that will speak, or the report lands on no gate at all.
-        if where == "review" and assignment_id:
-            self.mark(task_id, review=dict(task["review"], assignment_id=assignment_id))
-        elif assignment_id:
-            self.mark(task_id, assignment_id=assignment_id)
-        self.mark(
-            task_id,
-            payload_warnings=dict(task.get("payload_warnings") or {}, **{where: warned + 1}),
-        )
-        self.mark(task_id, gate="reviewing" if where == "review" else None)
-        self.log(
-            "payload-warning",
-            unit=unit,
-            task=task_id,
-            where=where,
-            warnings=warned + 1,
-            reason=reason[:200],
-        )
-        narrate.say(
-            "warn",
-            "review" if where == "review" else "build",
-            "asked %s to fix %s: %s" % (name, path, reason),
-            task=task_id,
-        )
-        return True
-
-    def _warn_spawn(self, task_id, unit, asked, sender, task):
-        """The warned reviewer's new assignment, in the checkout and on the route it was already running."""
-        where, path, name = asked["where"], asked["path"], asked["name"]
-        text = (
-            "The driver cannot %s %s: %s. Write or repair that file, then report complete under this assignment."
-            % (asked["verb"], path, asked["reason"])
-        )
+    def resume_reviewer(self, task_id, text):
+        """Put `text` to the unit's reviewer in its own session (a gone pane is replaced, and told where its brief
+        is); the new assignment is the one whose verdict the task then waits for."""
+        task = self.task(task_id)
+        packet, review = task["packet"], task["review"]
+        backend, model = self.gate_step("reviewer", "large")
+        sent = int(review.get("sent") or 0) + 1
         _, assignment_id = self.ensure_agent(
-            name,
-            sender.get("role") or ("reviewer" if where == "review" else "worker"),
-            unit,
+            review["name"],
+            "reviewer",
+            packet["unit"],
             {
                 "kind": "worker",
-                "name": name,
-                "task": text,
-                "cwd": sender.get("checkout") or task["packet"]["checkout"],
-                "cli": sender.get("backend") or self.args.cli,
-                "model": sender.get("model") or task["packet"].get("model"),
-                "effort": sender.get("effort") or task["packet"].get("effort"),
+                "name": review["name"],
+                "task": "%s Your brief: %s." % (text, Path(review["dir"]) / "task.md"),
+                "cwd": packet["checkout"],
+                "cli": backend,
+                "model": model,
+                "effort": self.step_effort("reviewer", "high"),
             },
-            attempt=task_id,
+            attempt="%s-%d" % (Path(review["dir"]).name, sent),
         )
-        return assignment_id
+        self.nudged = True
+        self.mark(
+            task_id,
+            gate="reviewing",
+            review=dict(self.task(task_id)["review"], assignment_id=assignment_id, sent=sent),
+        )
 
     def contract_error(self, task_id, where, error):
         """A handoff file broke its contract: log it, and the Lead decides."""
@@ -787,82 +688,3 @@ class Answers:
             )
         with self.book() as data:
             data["tasks"][task_id].setdefault("clarified", []).append(key)
-
-    def resume_for_responses(self, task, directory_id, missing):
-        """Resume the task's worker once with the ids it left unanswered; it hands in the report again."""
-        directory = self.run_dir / directory_id
-        brief = next_path(directory, "missing", ".md")[0]
-        brief.write_text(
-            render("missing-responses", directory_id=directory_id, missing=", ".join(missing)),
-            encoding="utf-8",
-        )
-        text = "Read %s and follow it." % brief
-        return self.hand_over(task, dict(task["packet"], task_id=directory_id), brief, text)[1]
-
-    def chase_responses(self, task_id, missing):
-        """A fix-round report lacks a response the reviewer asked for. The first time, resume the worker with the
-        missing ids at no round cost; the next report that still lacks them is a request."""
-        task = self.task(task_id)
-        message = "the report has no response for answer_required finding(s) %s" % ", ".join(
-            missing
-        )
-        if task.get("chased"):
-            return self.contract_error(
-                task_id, "responses", "the next report still lacks it: " + message
-            )
-        self.log(
-            "contract-error",
-            unit=self.unit_of(task_id),
-            task=task_id,
-            where="responses",
-            error=message[:500],
-            missing=missing,
-        )
-        assignment_id = self.resume_for_responses(task, task_id, missing)
-        self.mark(task_id, gate=None, assignment_id=assignment_id, chased=missing)
-
-    def start_answers(self, task_id, asks, review):
-        task = self.task(task_id)
-        packet, unit = task["packet"], task["packet"]["unit"]
-        if (task.get("answers") or {}).get("review") == task["review"]["path"]:
-            return  # the driver died after starting them
-        number = next(
-            n for n in range(1, 1000) if not (self.run_dir / ("%sa%d" % (unit, n))).exists()
-        )
-        answer_id = "%sa%d" % (unit, number)
-        directory = self.run_dir / answer_id
-        directory.mkdir(exist_ok=True, mode=0o700)
-        findings_path = directory / "findings.json"
-        write_atomic(
-            findings_path,
-            json.dumps(
-                contracts.make_findings("review", number, asks, review.get("checks_run") or []),
-                indent=2,
-            )
-            + "\n",
-        )
-        task_md = directory / "task.md"
-        task_md.write_text(
-            self._answers_brief(task, answer_id, asks, findings_path), encoding="utf-8"
-        )
-        text = (
-            "Read %s and follow it. Answers only: the review passed; nothing else changes."
-            % task_md
-        )
-        _, assignment_id = self.hand_over(task, dict(packet, task_id=answer_id), task_md, text)
-        self.log(
-            "answers", unit=unit, task=task_id, answer_task=answer_id, ids=[i["id"] for i in asks]
-        )
-        self.mark(
-            task_id,
-            answers={
-                "id": answer_id,
-                "dir": str(directory),
-                "assignment_id": assignment_id,
-                "ids": [i["id"] for i in asks],
-                "state": "working",
-                "tries": 0,
-                "review": task["review"]["path"],
-                "findings": str(findings_path),
-            },
-        )

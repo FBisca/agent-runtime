@@ -117,15 +117,14 @@ class RequestTests(WakeFixture, unittest.TestCase):
         self.assert_request("idle", "demo-t1", whole=False)
         self.assertIn("decide", self.request()["reason"])
 
-    def test_S1_a_reviewer_that_ends_without_a_review_writes_an_idle_request_with_no_warnings(self):
+    def test_S1_a_quiet_reviewer_writes_an_idle_request_with_no_warnings(self):
         """orchestrate-lean-loop/S1
 
-        One idle watchdog: an idle reviewer is a live reviewer: no warning resume replaces its assignment, and the watchdog asks
-        the Lead once, naming the reviewer and the review file."""
+        One idle watchdog: a reviewer that shows nothing new is asked about once, naming the reviewer."""
         self.waits(
             [
                 self.worker_done(tests=True),
-                *[wait_result([assignment("demo-t1-review", "working", "idle")])] * 4,
+                *[wait_result([assignment("demo-t1-review", "working")])] * 4,
                 self.decide_step("t1", "skip"),
             ]
         )

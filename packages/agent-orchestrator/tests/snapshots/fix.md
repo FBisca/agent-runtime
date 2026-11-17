@@ -8,16 +8,14 @@ Checkout contents: 2 files in <ROOT>/work
 Scope contents: src/a/: 2 files in <ROOT>/work/src/a
 Findings, verbatim, also in <ROOT>/run/t1r2/findings.json. Fix only these:
 
-- B1 (blocking), answer required: src/a/one.py:12 retry loop never ends. Fix: stop after three tries. Evidence: `pytest tests/test_one.py` exited 1 (log /logs/one.log): FAILED test_one
-- N1: src/a/two.py name the helper
+- R1: src/a/one.py:12 `while True:` - the retry loop never ends (rule: A failure surfaces as an error a caller can act on.)
+- R2: src/a/two.py:3 `cache = {}` - the cache is never cleared
+- ci lint: E501 line too long (exit 1 of `ruff check`; full log /logs/ci.log)
 
-The reviewer already ran these; re-run only what your fix touches, then the final gate:
-- `uv run pytest -m unit` exit 0 at abc1234
-
-Items marked answer_required need an answer: add `responses` to your report, one `{"id", "status": "fixed|disputed", "commit", "note", "changes_code"?}` each. Without them the driver asks you once more.
-
+These are CI failures; each finding names the failed job, the run id and the last lines of its failed step. Re-run those tests locally to reproduce each failure, fix it, and re-run them. When they pass locally and still fail in CI, hand in BLOCKED with a blocker that starts `environment:` and says what differs.
 The Lead's answer: keep the public name
 
+Fix each finding you agree with. A finding you disagree with: leave the code and say why in your report's `notes`; the re-review judges it.
 Commit and push to the same branch; open no new pull request. Run before you hand in: uv run pytest -m unit.
 Run the checks above, then run only the test files you wrote or changed; leave every other test to CI. Run each command in the foreground under a timeout, read its failures from that run's output or log, and re-run only the tests that failed.
 Report review_rounds 0: the driver counts failed rounds.

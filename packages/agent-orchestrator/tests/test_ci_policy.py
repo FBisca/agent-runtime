@@ -38,7 +38,8 @@ class CiPolicyTests(PrFixture, unittest.TestCase):
 
     @pytest.mark.spec("A failed check is re-run once")
     def test_a_failure_that_passes_on_the_one_re_run_proceeds_and_is_recorded_as_flaky(self):
-        self.checks([("fail", "unit tests"), "green"])
+        self.checks([("fail", "unit tests")])
+        self.checks_after_rerun(["green"])
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         with self.quiet_clock():
             self.run_driver()
@@ -52,7 +53,8 @@ class CiPolicyTests(PrFixture, unittest.TestCase):
     def test_a_failure_after_the_re_run_goes_back_with_the_last_fifty_lines_of_the_failed_step(
         self,
     ):
-        self.checks([("fail", "unit tests"), ("fail", "unit tests"), "green"])
+        self.checks([("fail", "unit tests"), ("fail", "unit tests")])
+        self.checks_after_fix(["green"])
         self.log(["line %d" % n for n in range(1, 81)])
         self.waits(
             [

@@ -87,57 +87,38 @@ def show(value):
 
 
 def item_text(item):
-    """What a finding says, whichever contract wrote it: a contract 2 `summary`, a contract 1 `problem` or deferred
-    `note`, a converge or CI `excerpt`."""
-    return next(
-        (str(item[k]) for k in ("summary", "problem", "note", "excerpt") if item.get(k)), ""
-    )
+    """What a finding says: a review finding's `claim`, or a gate item's `excerpt`."""
+    return next((str(item[k]) for k in ("claim", "excerpt") if item.get(k)), "")
 
 
 def describe(item):
-    """The lines a fix round shows for one findings item (text lines of contract 1 are shown as they are)."""
-    if not isinstance(item, dict):
-        return str(item)
-    if item.get("source") in ("converge", "verify", "ci", "conflict"):
-        return "%s %s: %s (exit %s of `%s`; full log %s)" % (
-            item["source"],
-            item["check"],
-            item["excerpt"],
-            item["exit"],
-            item["command"],
-            item["log_path"],
+    """The lines a fix round shows for one findings item."""
+    if item.get("source") == "review":
+        rule = " (rule: %s)" % item["rule"] if item.get("rule") else ""
+        return "%s: %s:%s `%s` - %s%s" % (
+            item["id"],
+            item["file"],
+            item["line"],
+            item["quote"],
+            item["claim"],
+            rule,
         )
-    # Only a blocking item must carry a line; a deferred item may name just its file.
-    place = "%s:%s" % (item["file"], item["line"]) if item.get("line") else item.get("file")
-    where = place + " " if place else ""
-    line = "%s%s%s: %s%s" % (
-        item["id"],
-        " (%s)" % item["kind"] if item.get("kind") else "",
-        ", answer required" if item.get("answer_required") else "",
-        where,
-        item_text(item),
+    return "%s %s: %s (exit %s of `%s`; full log %s)" % (
+        item["source"],
+        item["check"],
+        item["excerpt"],
+        item["exit"],
+        item["command"],
+        item["log_path"],
     )
-    if item.get("fix"):
-        line += ". Fix: %s" % item["fix"]
-    evidence = item.get("evidence")
-    if isinstance(evidence, dict):
-        line += ". Evidence: `%s` exited %s (log %s): %s" % (
-            evidence["command"],
-            evidence["exit"],
-            evidence["log_path"],
-            cell(evidence["excerpt"], 300),
-        )
-    return line
 
 
 def short(item):
     """A finding in a few words, for a request's reason and a ledger `remaining` line."""
-    if not isinstance(item, dict):
-        return str(item)
-    if item.get("source") in ("converge", "verify", "ci"):
-        return (
-            " ".join(item["excerpt"].splitlines()[:2])
-            if item["excerpt"]
-            else "%s %s failed" % (item["source"], item["check"])
-        )
-    return "%s: %s" % (item.get("id"), item_text(item))
+    if item.get("source") == "review":
+        return "%s: %s" % (item["id"], item["claim"])
+    return (
+        " ".join(item["excerpt"].splitlines()[:2])
+        if item["excerpt"]
+        else "%s %s failed" % (item["source"], item["check"])
+    )

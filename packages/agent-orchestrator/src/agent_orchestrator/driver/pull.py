@@ -502,7 +502,7 @@ class Pull:  # noqa: PLR0904
             "log_path": str(log),
         }
 
-    def ci_failed(self, task_id, url, task):
+    def ci_failed(self, task_id, url, task, review_items=()):
         """What a pull request whose checks failed asks for, in order: the Lead once per run when the same checks fail
         on the base branch; one automatic re-run of the failed jobs (a failure that passes is flaky); the Lead when a job
         failed with no step failing twice; else a fix round carrying each failed step's last lines. False while it waits."""
@@ -526,7 +526,10 @@ class Pull:  # noqa: PLR0904
                 "%s failed twice with no failing test or check step in its log (a CI infrastructure problem): %s"
                 % (", ".join(names), url),
             )
-        return self.fail_gate(task_id, task["report"], "ci", items)
+        # A review that was waiting for CI hands its findings over in the same round: the worker hears once.
+        return self.fail_gate(
+            task_id, task["report"], "review" if review_items else "ci", [*review_items, *items]
+        )
 
     def _rerun(self, task_id, failing, names, head):
         """Re-run the failed jobs of the head's runs once. False when `gh` cannot, and the failure goes on."""
