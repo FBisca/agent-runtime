@@ -594,3 +594,13 @@ failure names the behaviour it broke and not a line number in a file that moved.
 | Requirement | Scenario | Tests |
 |---|---|---|
 | R173 | S3, S7, S8, S9 | `packages/agent-orchestrator/tests/test_driver_pointers.py::TestRenderedPointers::test_S3_rendered_instructions_name_their_files`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S7_unresolvable_pointers_are_refused`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S8_spec_names_the_pointer_rule_and_its_guard`<br>`packages/agent-orchestrator/tests/test_driver_pointers.py::test_S9_repository_instructions_name_the_rule` |
+
+## Requirements: launch-environment
+
+- **R174** WHEN launch starts the driver THEN the driver runs with the Lead's environment, minus the pane and session variables (the terminal id, `CLAUDECODE`, `CLAUDE_CODE_*`), and no value is written to argv or logs (the environment travels in a mode 0600 file the pane deletes at start)
+
+## Coverage: launch-environment
+
+| Requirement | Scenario | Tests |
+|---|---|---|
+| R174 | - | `packages/agent-orchestrator/tests/test_launch_env.py::LaunchEnvTests::test_R_the_lead_environment_reaches_the_driver_but_not_argv`<br>`packages/agent-orchestrator/tests/test_launch_env.py::LaunchEnvTests::test_R_the_pane_bootstrap_applies_the_file_deletes_it_and_runs_the_driver` |
