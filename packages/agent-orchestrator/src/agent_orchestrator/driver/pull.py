@@ -43,8 +43,6 @@ def _engine():
 # What a fix round shows of a failing step: the last lines of its log, never the start; the full log is at log_path.
 CI_STEP_LINES = 50
 CI_EXCERPT_CHARS = 8192
-# How long a re-run's answer is not trusted: GitHub may still show the failed attempt for a moment.
-RERUN_GRACE = 60
 
 
 def failed_steps(run_log, job):
@@ -504,46 +502,19 @@ class Pull:  # noqa: PLR0904
 
     def ci_failed(self, task_id, url, task, review_items=()):
         """What a pull request whose checks failed asks for, in order: the Lead once per run when the same checks fail
-        on the base branch; one automatic re-run of the failed jobs (a failure that passes is flaky); the Lead when a job
-        failed with no step failing twice; else a fix round carrying each failed step's last lines. False while it waits."""
+        on the base branch; else a fix round carrying each failed step's last lines. The driver never re-runs a check:
+        the worker reads the failure and decides whether it is a real one. False while it waits."""
         rows = task.get("ci_rows") or []
         failing = [r for r in rows if str(r.get("bucket") or "").lower() in FAILED_BUCKETS]
         names = sorted({r.get("name") or "ci" for r in failing})
         on_main = sorted(set(names) & self.main_failures())
         if on_main:
             return self._main_red(task_id, on_main)
-        head, rerun = task.get("ci_head"), task.get("ci_rerun")
-        if not rerun or rerun.get("head") != head:
-            if self._rerun(task_id, failing, names, head):
-                return False
-        elif self.clock() - self.driver.rerun_at.get(task_id, float("-inf")) < RERUN_GRACE:
-            return False  # the failure may be the attempt the re-run replaced
         items = self.ci_items(task_id, url, rows)
-        if any("failed with no failed step" in item["excerpt"] for item in items):
-            return self.request(
-                task_id,
-                "ci",
-                "%s failed twice with no failing test or check step in its log (a CI infrastructure problem): %s"
-                % (", ".join(names), url),
-            )
         # A review that was waiting for CI hands its findings over in the same round: the worker hears once.
         return self.fail_gate(
             task_id, task["report"], "review" if review_items else "ci", [*review_items, *items]
         )
-
-    def _rerun(self, task_id, failing, names, head):
-        """Re-run the failed jobs of the head's runs once. False when `gh` cannot, and the failure goes on."""
-        links = " ".join(str(r.get("link") or "") for r in failing)
-        runs = list(dict.fromkeys(re.findall(r"/runs/(\d+)", links)))
-        if not runs or any(self.gh(["run", "rerun", run, "--failed"])[0] != 0 for run in runs):
-            return False
-        self.mark(task_id, ci_rerun={"head": head, "failed": names}, ci_state=None)
-        self.driver.rerun_at[task_id] = self.clock()
-        self.log("ci-rerun", unit=self.unit_of(task_id), task=task_id, runs=runs, checks=names)
-        narrate.say(
-            "wait", "ci", "re-running the failed checks (%s) once" % ", ".join(names), task=task_id
-        )
-        return True
 
     def main_failures(self):
         """The checks failing in the base branch's latest completed run, asked once per run: a check that fails there

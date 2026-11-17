@@ -7,7 +7,7 @@ Every call is logged with the plan and events as they stand. `pr view` answers `
 otherwise a draft answers the next `view-draft.json` state (OPEN when there is none) and the next `prs.json` state is
 used after that PR is made ready. Each queue's last answer repeats. `pr checks` uses `checks-ready.json` while the PR
 is ready, when scripted, then `checks-<number>.json`, falling back to `checks.json`. Draft flags are per PR.
-`run list` answers `runs-main.json`, `run view --json` answers `main-jobs.json`, `run rerun` answers `rerun.json` ([exit, stderr]; it refuses unless scripted, so a failed check goes straight to the worker; a re-run replaces `checks.json` with `checks-rerun.json` when scripted), `pr view --json files` answers `files-<number>.json`; `pr ready --undo` uses `undo.json`, `pr update-branch` uses `update.json`, `pr create` prints the url in `create.json` (default pull/9); `run view --log-failed` answers `run-view.json` when scripted (a log string, or [exit, stdout, stderr], the last repeating), else a canned failed log. A draft that is never made ready
+`run list` answers `runs-main.json`, `run view --json` answers `main-jobs.json`, `pr view --json files` answers `files-<number>.json`; `pr ready --undo` uses `undo.json`, `pr update-branch` uses `update.json`, `pr create` prints the url in `create.json` (default pull/9); `run view --log-failed` answers `run-view.json` when scripted (a log string, or [exit, stdout, stderr], the last repeating), else a canned failed log. A draft that is never made ready
 raises after 100 polls, exposing a missing transition without hanging the suite.
 """
 
@@ -116,14 +116,6 @@ def process(argv, timeout=None, cwd=None):  # noqa: PLR0912, PLR0915
         "list",
     ]:  # the base branch's latest run: `runs-main.json` ([{"databaseId": n}])
         return Completed(argv, 0, json.dumps(pop(home, "runs-main.json", [])))
-    if argv[:2] == ["run", "rerun"]:
-        code, err = (pop(home, "rerun.json", [1, "fake gh: the run cannot be re-run"]) + [""])[:2]
-        after = os.path.join(
-            home, "checks-rerun.json"
-        )  # what the re-run's attempt answers from then on
-        if code == 0 and os.path.exists(after):
-            os.replace(after, os.path.join(home, "checks.json"))
-        return Completed(argv, code, "", err)
     if argv[:2] == ["run", "view"] and "--json" in argv:  # that run's jobs: `main-jobs.json`
         return Completed(argv, 0, json.dumps(pop(home, "main-jobs.json", {"jobs": []})))
     if argv[:2] == ["run", "view"]:

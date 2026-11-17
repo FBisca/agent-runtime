@@ -1,5 +1,5 @@
-"""What the driver does with a failed check: re-run it once, ask the Lead when main fails it too, else hand the
-worker the last lines of each failed step; and a conflict with another open ticket waits for that ticket."""
+"""What the driver does with a failed check: ask the Lead when main fails it too, else hand the worker the last
+lines of each failed step, with no re-run of its own; and a conflict with another open ticket waits for that ticket."""
 
 import itertools
 import json
@@ -16,12 +16,8 @@ pytestmark = pytest.mark.integration
 
 
 class CiPolicyTests(PrFixture, unittest.TestCase):
-    def setUp(self):
-        super().setUp()
-        (self.home / "rerun.json").write_text(json.dumps([[0, ""]]), encoding="utf-8")
-
     def quiet_clock(self):
-        """Every reading is ten minutes later than the last, so no re-run is still inside its grace."""
+        """Every reading is ten minutes later than the last."""
         moments = itertools.count(0, 600)
         return mock.patch.object(load_script().Driver, "clock", staticmethod(lambda: next(moments)))
 
@@ -36,24 +32,9 @@ class CiPolicyTests(PrFixture, unittest.TestCase):
         again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
         return again
 
-    @pytest.mark.spec("A failed check is re-run once")
-    def test_a_failure_that_passes_on_the_one_re_run_proceeds_and_is_recorded_as_flaky(self):
-        self.checks([("fail", "unit tests")])
-        self.checks_after_rerun(["green"])
-        self.waits([self.worker_done(tests=True), self.reviewer_done()])
-        with self.quiet_clock():
-            self.run_driver()
-        self.assertEqual(self.gh_calls("run", "rerun"), [["run", "rerun", "77", "--failed"]])
-        self.assertEqual(self.run_events("round"), [])
-        (flaky,) = self.run_events("flaky")
-        self.assertEqual(flaky["checks"], ["unit tests"])
-        self.assertEqual(self.task()["status"], "COMPLETE")
-
     @pytest.mark.spec("A failed check passing on main goes back to the worker")
-    def test_a_failure_after_the_re_run_goes_back_with_the_last_fifty_lines_of_the_failed_step(
-        self,
-    ):
-        self.checks([("fail", "unit tests"), ("fail", "unit tests")])
+    def test_a_failure_goes_back_at_once_with_the_last_fifty_lines_of_the_failed_step(self):
+        self.checks([("fail", "unit tests")])
         self.checks_after_fix(["green"])
         self.log(["line %d" % n for n in range(1, 81)])
         self.waits(
@@ -66,7 +47,7 @@ class CiPolicyTests(PrFixture, unittest.TestCase):
         )
         with self.quiet_clock():
             self.run_driver()
-        self.assertEqual(len(self.gh_calls("run", "rerun")), 1, "one automatic re-run, no more")
+        self.assertEqual(self.gh_calls("run", "rerun"), [], "the driver never re-runs a check")
         findings = json.loads((self.run_dir / "t1r1" / "findings.json").read_text(encoding="utf-8"))
         (item,) = findings["items"]
         self.assertEqual((findings["source"], item["check"]), ("ci", "unit tests"))
@@ -76,8 +57,31 @@ class CiPolicyTests(PrFixture, unittest.TestCase):
         self.assertIn("line 31", item["excerpt"])
         self.assertNotIn("line 30\n", item["excerpt"] + "\n")
         brief = (self.run_dir / "t1r1" / "task.md").read_text(encoding="utf-8")
-        self.assertIn("Re-run those tests locally", brief)
+        self.assertIn("reproduce", brief)
+        self.assertIn("gh run rerun <run id> --failed", brief)
         self.assertIn("environment:", brief)
+
+    @pytest.mark.spec("A failed check is never re-run by the driver")
+    def test_a_failure_is_not_re_run_and_a_hand_in_on_the_same_head_reads_ci_afresh(self):
+        # The worker only re-ran CI: its head is the one the failure was read on, and CI is green for it now.
+        self.checks([("fail", "unit tests")])
+        self.checks_after_fix(["green"])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(),
+                self.worker_done("t1r1"),
+                self.rereview(),
+            ]
+        )
+        with self.quiet_clock():
+            self.run_driver()
+        self.assertEqual(self.gh_calls("run", "rerun"), [])
+        self.assertEqual(len(self.run_events("round")), 1)
+        first, second = (e["report"]["head"] for e in self.run_events("report"))
+        self.assertEqual(first, second, "the fix round's hand-in left the head unchanged")
+        self.assertEqual(self.run_events("ci")[-1]["state"], "green")
+        self.assertEqual(self.task()["status"], "RELEASED")
 
     @pytest.mark.spec("A failed check that also fails on main asks the Lead once")
     def test_a_check_that_also_fails_on_main_is_one_lead_request_and_no_worker_round(self):
@@ -101,18 +105,6 @@ class CiPolicyTests(PrFixture, unittest.TestCase):
         self.assertEqual(self.run_events("round"), [])
         self.assertEqual(self.calls("resume"), [])
         self.assertEqual(len(self.gh_calls("run", "list")), 1, "main is asked about once per run")
-
-    @pytest.mark.spec("A failed check is re-run once")
-    def test_a_job_that_fails_twice_with_no_failed_step_asks_the_lead(self):
-        self.checks([("fail", "unit tests"), ("fail", "unit tests")])
-        (self.home / "run-view.json").write_text(json.dumps([[0, "", ""]]), encoding="utf-8")
-        self.waits(
-            [self.worker_done(tests=True), self.reviewer_done(), self.working(), self.skipped()]
-        )
-        with self.quiet_clock():
-            self.run_driver()
-        self.assertIn("infrastructure", self.request()["reason"])
-        self.assertEqual(self.run_events("round"), [])
 
 
 class ConflictWaitTests(unittest.TestCase):

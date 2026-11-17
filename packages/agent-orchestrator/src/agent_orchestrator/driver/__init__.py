@@ -31,7 +31,6 @@ __all__ = [
     "CHECK_INSTRUCTIONS",
     "CI_EXCERPT_CHARS",
     "CI_STEP_LINES",
-    "RERUN_GRACE",
     "CONTRACT",
     "FENCE",
     "DECISION_KEYS",
@@ -376,7 +375,6 @@ from .prompts import render as render
 from .prune import sweep as sweep
 from .pull import CI_EXCERPT_CHARS as CI_EXCERPT_CHARS
 from .pull import CI_STEP_LINES as CI_STEP_LINES
-from .pull import RERUN_GRACE as RERUN_GRACE
 from .pull import Pull as Pull
 from .pull import PullSurface as PullSurface
 from .pull import failed_steps as failed_steps

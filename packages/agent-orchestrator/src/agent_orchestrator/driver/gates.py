@@ -338,11 +338,6 @@ class Gates:
             self.mark(task_id, pr_ready=True)
             narrate.say("done", "ci", "CI green; %s ready for review" % url, task=task_id)
         unit = self.unit_of(task_id)
-        rerun = task.get("ci_rerun")
-        if rerun and rerun.get("head") == task.get("ci_head") and not task.get("flaky_logged"):
-            # the checks failed, then passed on the one automatic re-run: proceed, and list it at the plan's close
-            self.log("flaky", unit=unit, task=task_id, pr=url, checks=rerun["failed"])
-            self.mark(task_id, flaky_logged=True)
         # an update-branch moves the head without a new report: the live head keys the wake, so it is sent again
         head = view.get("headRefOid") or self.task(task_id)["report"]["head"]
         self.wake("pr-ready", unit, "pr-ready %s: %s" % (unit, url), key="%s:%s" % (unit, head))

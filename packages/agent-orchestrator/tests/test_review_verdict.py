@@ -26,12 +26,8 @@ def block(*findings):
 
 
 class ReviewerFixture(PrFixture):
-    def setUp(self):
-        super().setUp()
-        (self.home / "rerun.json").write_text(json.dumps([[0, ""]]), encoding="utf-8")
-
     def quiet_clock(self):
-        """Every reading is ten minutes later than the last, so no CI re-run is still inside its grace."""
+        """Every reading is ten minutes later than the last."""
         moments = itertools.count(0, 600)
         return mock.patch.object(load_script().Driver, "clock", staticmethod(lambda: next(moments)))
 
@@ -164,7 +160,7 @@ class EndedTests(ReviewerFixture, unittest.TestCase):
 class TogetherTests(ReviewerFixture, unittest.TestCase):
     @pytest.mark.spec("Review and CI run together")
     def test_the_review_findings_and_the_ci_failures_reach_the_worker_in_one_round(self):
-        self.checks([("fail", "unit tests"), ("fail", "unit tests"), "green"])
+        self.checks([("fail", "unit tests"), "green"])
         self.waits(
             [
                 self.worker_done(tests=True),

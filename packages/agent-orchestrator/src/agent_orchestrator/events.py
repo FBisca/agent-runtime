@@ -12,8 +12,7 @@ ledger status changed), `route` (the route a worker was dispatched on: `unit`, `
 `held`, `held-acted` and `held-dropped` (a worker message that arrived while its unit had an open request), `finish`
 (the run ended; `orchestrate.py await` reads it), `contract-error` (a handoff file broke its contract: `where`, `error`),
 `report` (a worker's hand-in was accepted: `unit`, `task`, the full `report`), `report-refused` (a hand-in was refused back to its sender:
-`unit`, `task`, `reason`, `payload`), `flaky` (a CI failure passed on one re-run: `unit`, `task`, `pr`, `checks`),
-`clarification` (an agent listed a question in `clarifications[]`: `finding`, `asked_by`, `note`, `source`),
+`unit`, `task`, `reason`, `payload`), `clarification` (an agent listed a question in `clarifications[]`: `finding`, `asked_by`, `note`, `source`),
 `review` (a reviewer's verdict was accepted: `unit`, `task`, `commit`, `verdict` pass|block, `findings`), `review-refused`
 (a verdict was refused back to its reviewer: `unit`, `task`, `reason`, `payload`), `review-ended` (the reviewer's turn
 ended with no verdict: `unit`, `task`, `reason`),
