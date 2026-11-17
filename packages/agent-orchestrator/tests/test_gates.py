@@ -845,15 +845,13 @@ class SilentReviewerTests(GateFixture, unittest.TestCase):
                 self.assertEqual(self.task()["gate"], "done")
 
     @pytest.mark.spec("One idle watchdog")
-    def test_S12_the_reviewer_brief_allows_background_jobs_and_names_the_report_order(self):
+    def test_S12_the_reviewer_brief_names_the_report_order(self):
         """orchestrator-silent-idle/S12"""
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         brief = (self.run_dir / "t1-review" / "task.md").read_text(encoding="utf-8")
         for needle in (
-            "background jobs",
-            "Ending a turn does not finish the review",
-            "after the jobs it needs finish",
+            "Write the review once the diff is read",
             "report complete with the assignment id",
         ):
             self.assertIn(needle, brief)

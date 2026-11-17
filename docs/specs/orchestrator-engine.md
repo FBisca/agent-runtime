@@ -388,7 +388,7 @@ A quiet agent SHALL cost the Lead one idle request, never an early or repeated o
 
 #### Scenario: the reviewer brief
 - WHEN a reviewer is briefed
-- THEN the brief says the reviewer may wait on background jobs, that ending a turn does not finish the review, and that it writes the review after those jobs finish and then reports `complete` with the brief's assignment id
+- THEN the brief says the reviewer writes the review once the diff is read and then reports `complete` with the brief's assignment id
 
 #### Scenario: a complete that cannot be read
 - WHEN a `complete` announces a file the driver cannot read
@@ -665,6 +665,10 @@ The first-review brief SHALL give the reviewer's pass as numbered steps in one o
 #### Scenario: the pass
 - WHEN a reviewer receives the brief for a unit's first review
 - THEN the brief gives the pass as numbered steps — read the whole diff first; the ticket delivers what the task file's `What it delivers` says, each satisfied scenario proved by a test the diff adds or changes that asserts the THEN's behaviour on the real code path, names its scenario and fails when the change is reverted (a test that would pass without the change is blocking); the implementer's report matches the code at the reviewed commit (`covers` nodes that exist, `checks` outcomes the log shows, `head`, `files`); the requirements the change touches still hold; the repository's rules hold — and only after that judges severity
+
+#### Scenario: the reviewer reads and reports correctness bugs only
+- WHEN a reviewer receives the brief
+- THEN it asks for a correctness bug a user or caller would hit, or a test that would still pass without the change, judged by reading the diff, the test and the report's `red` output; the reviewer runs no test and no command other than git reads, and CI and the red-first gate are the executed evidence
 
 #### Scenario: the paths
 - WHEN the steps are printed

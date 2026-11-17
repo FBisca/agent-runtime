@@ -134,12 +134,11 @@ def _limits():
         "id, what it promises and what the code does instead, each nonempty, beside the item's own file, line, "
         "fix and evidence. A rare or post-launch failure is still a violation: rarity does not make it an "
         "observation, and the driver refuses a requirement_violation on a nonblocking item.",
-        "Touch nothing in the repository.",
-        "Run targeted tests only: name the test files or node ids the change touches. The implementer's checks "
-        "and CI already ran the suites; read their results in the report and the pull request's checks.",
-        "You may wait on background jobs (a long test run, a queued job). Ending a turn does not finish the "
-        "review: write the review after the jobs it needs finish, then report complete with the assignment id "
-        "this brief came with.",
+        "Touch nothing in the repository and run no test and no command other than git reads (`git diff`, `git show`, "
+        "`git log`). CI and the red-first gate are the executed evidence: read their results in the report and the "
+        "pull request's checks, and judge whether a test would pass without the change by reading it against the diff "
+        "and the report's `red` output. Write the review once the diff is read, then report complete with the "
+        "assignment id this brief came with.",
     ]
 
 
