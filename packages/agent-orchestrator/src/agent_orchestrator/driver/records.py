@@ -1,7 +1,7 @@
 """The driver's record helpers: one reading of a record, defined once.
 
 A record is what the engine reads between two steps — a worker's packet, its report, a plan ticket's
-row, the runtime's reply, a review receipt. The helpers here answer a question about one without
+row, the runtime's reply, a review verdict. The helpers here answer a question about one without
 reading a file, starting a process or changing a ledger, so a collaborator the package is split into
 can ask the same question the driver does and get the same answer.
 
@@ -267,18 +267,6 @@ def merge_state(view):
     if status == "BEHIND":
         return "behind"
     return "open"
-
-
-def is_flaky(receipt, prior):
-    """A FAIL, then a PASS on the same tree, is not a pass (D16): the check is flaky, so nobody can rely on it. Only
-    under the same approval digest: an amended contract runs other oracle bytes, and a FAIL under the old ones says
-    nothing about the new."""
-    return receipt["result"] == "PASS" and any(
-        r.get("tree") == receipt["tree"]
-        and r.get("digest") == receipt.get("digest")
-        and r.get("result") == "FAIL"
-        for r in prior
-    )
 
 
 def check_commit(claimed, head, what="review.json"):

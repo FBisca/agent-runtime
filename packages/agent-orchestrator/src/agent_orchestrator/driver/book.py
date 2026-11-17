@@ -337,7 +337,7 @@ class Book:
             return any(
                 t.get("gate") in ("ready-for-ci", "awaiting-merge", "requested")
                 for t in data["tasks"].values()
-            ) or any(r.get("state") == "reviewing" for r in (data.get("mutation") or {}).values())
+            )
 
 
 class BookSurface:

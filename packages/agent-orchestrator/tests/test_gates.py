@@ -68,6 +68,22 @@ CONCERN = {
 class GateFixture(RunFixture):
     """One ticket, scripted worker and reviewer steps; shared by the gate and merge tests."""
 
+    def approved_yaml_plan(
+        self, rows=("T1",), repo=None, name="demo.plan.yaml", mutate=None, state_dir=None
+    ):
+        """The fixture plan with only the scenarios its rows satisfy: each scenario needs a ticket whose tests prove
+        it, and a scenario no ticket satisfies would hold a delivered plan's archive on a missing test node."""
+
+        def satisfied_only(data):
+            if mutate:
+                mutate(data)
+            wanted = {sid for ticket in data["tickets"] for sid in ticket["satisfies"]}
+            data["scenarios"] = [s for s in data["scenarios"] if s["id"] in wanted]
+
+        return super().approved_yaml_plan(
+            rows, repo=repo, name=name, mutate=satisfied_only, state_dir=state_dir
+        )
+
     def setUp(self):
         super().setUp()
         self.expose_package_to_children()
@@ -156,28 +172,16 @@ class GateFixture(RunFixture):
             step["write"].append([str(self.worktree / name_), text])
         return step
 
-    def use_yaml_plan(self, paths=("src/a/",), oracle=False, lint=True, unproven=False):
-        """Replace the plan with an approved one-ticket plan (and, with `oracle`, an oracle placed
-        under src/a/). With `lint=False` the plan is approved as one approved before the lint existed. With
-        `unproven` the ticket also satisfies S2, which has no evidence, so only a covers node can prove it."""
-        evidence = {"human": "confirm"}
-        if oracle:
-            directory = self.plan.parent / "demo.oracle"
-            directory.mkdir()
-            (directory / "test_oracle.py.oracle").write_text("def test_o():\n    pass\n")
-            evidence = {
-                "check": "true",
-                "baseline": "pass",
-                "oracle": ["test_oracle.py.oracle"],
-                "place": "src/a/",
-            }
+    def use_yaml_plan(self, paths=("src/a/",), lint=True, unproven=False):
+        """Replace the plan with an approved one-ticket plan. With `lint=False` the plan is approved as one approved
+        before the lint existed. With `unproven` the ticket also satisfies S2, which the default covers leave
+        unmapped."""
         data = {
             "schema": "plan/1",
             "slug": "demo",
             "goal": "deliver",
             "spec": "docs/specs/demo.md",
-            "outcome": ["S1"],
-            "scenarios": [dict(id="S1", when="a", then="b", evidence=evidence)]
+            "scenarios": [dict(id="S1", when="a", then="b")]
             + ([dict(id="S2", when="c", then="d")] if unproven else []),
             "tickets": [
                 dict(
@@ -194,8 +198,7 @@ class GateFixture(RunFixture):
         self.plan.unlink()
         self.plan = self.plan.with_suffix(".yaml")
         self.plan.write_text(yaml.safe_dump(data, sort_keys=False))
-        # Approving a plan with a check runs its baseline and writes a receipt under the repo key: the alias the run
-        # uses must exist before that directory does.
+        # The run uses the repo key's alias: it must exist before the run's directory does.
         self.alias_state(self.plan)
         out = io.StringIO()
         with (
@@ -228,9 +231,9 @@ class GateFixture(RunFixture):
         return json.loads(path.read_text(encoding="utf-8"))
 
     def closure(self, *items, status="fixed"):
-        """The `resolutions` and the `checks_run` receipt that close each item with supported current-commit
+        """The `resolutions` and the `checks_run` entry that close each item with supported current-commit
         evidence: `@HEAD` becomes the checkout's HEAD when the fake runtime writes the file."""
-        receipt = {"command": "pytest -k last", "exit": 0, "at_commit": "@HEAD"}
+        ran = {"command": "pytest -k last", "exit": 0, "at_commit": "@HEAD"}
         resolutions = [
             {
                 "id": item["id"],
@@ -246,7 +249,7 @@ class GateFixture(RunFixture):
             }
             for item in items
         ]
-        return {"resolutions": resolutions, "checks_run": [receipt]}
+        return {"resolutions": resolutions, "checks_run": [ran]}
 
     def open_record(self, unit="t1"):
         """The unit's open blocking findings, as the driver wrote them."""
@@ -306,10 +309,21 @@ class GateTests(GateFixture, unittest.TestCase):
         self.set_plan(("T1", "T3"))
         t3_review = report_wait("demo-t3-review", "complete")
         t3_review["write"] = [[str(self.run_dir / "t3" / "review.json"), self.review2()]]
+        t3 = self.worker_done(
+            "t3",
+            name="demo-t3",
+            report=self.report("t3", covers={"S3": ["src/c/test_c.py::test_c"]}),
+        )
+        t3["write"].append(
+            [
+                str(self.root / "repo.worktrees" / "demo-t3" / "src" / "c" / "test_c.py"),
+                "def test_c():\n    pass\n",
+            ]
+        )
         self.waits(
             [
                 self.worker_done(tests=True),
-                self.worker_done("t3", name="demo-t3", report=self.report("t3", covers={})),
+                t3,
                 self.reviewer_done(self.review2(verdict="block", items=[BLOCKING])),
                 t3_review,
             ]
@@ -923,13 +937,16 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         first = request["menu"][0]
         self.assertEqual(first["action"] if isinstance(first, dict) else first, "retry")
 
-    def test_S9_a_satisfied_scenario_a_person_checks_goes_to_review_with_no_node(self):
-        # The fixture's scenarios carry `human` evidence; a scenario no test file or person proves is refused
-        # unmapped (test_verify.CoversTests), and a covers finding is a fix round (the node tests here).
+    def test_S9_a_satisfied_scenario_left_unmapped_is_a_fix_round_naming_it(self):
+        """An implementation provides its evidence: nothing in the plan exempts a scenario from its node."""
         report = self.report("t1", covers={})
-        self.waits([self.worker_done(tests=True, report=report), self.reviewer_done()])
+        self.waits([self.worker_done(tests=True, report=report)])
         self.run_driver()
-        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
+        self.assertEqual(
+            self.found(),
+            [("covers", "S1: no test node in covers; map the scenario to the tests that prove it")],
+        )
+        self.assertNotIn("demo-t1-review", self.spawned())
 
     def test_S9_a_report_that_is_not_contract_3_is_refused_by_name(self):
         report = json.loads(self.report("t1", contract=2))
@@ -959,21 +976,10 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
             [
                 (
                     "integrity",
-                    "docs/plans/demo.plan.yaml is the plan; a ticket never edits its contract",
+                    "docs/plans/demo.plan.yaml is in the plan; a ticket never edits the plan that gates it",
                 )
             ],
         )
-
-    def test_S10_an_oracle_place_is_integrity(self):
-        self.use_yaml_plan(oracle=True)
-        self.extra_files = {"src/a/test_oracle.py": "def test_o(): pass\n"}
-        self.waits([self.worker_done(tests=True)])
-        self.run_driver()
-        self.assertEqual(
-            [c for c, _ in self.found()],
-            ["integrity"],
-        )
-        self.assertIn("src/a/test_oracle.py is an oracle place", self.found()[0][1])
 
 
 class IsolationTests(GateFixture, unittest.TestCase):

@@ -1,8 +1,8 @@
 """The handlers behind the command line: one per command that is not a lane of its own.
 
 `driver/cli.py` builds the parser; these are what its subcommands call. `status` reads the plan and the
-ledger, `run` starts and locks a drive, `await` waits on a drive's mark, `verify`, `accept` and
-`complete` do the work their names say, and `launch` hands a plan to a drive in a fresh process. Each
+ledger, `run` starts and locks a drive, `await` waits on a drive's mark, `verify` and `complete` do
+the work their names say, and `launch` hands a plan to a drive in a fresh process. Each
 one takes the parsed arguments and answers the exit code, so the parser stays a description of what a
 caller may type.
 
@@ -25,12 +25,11 @@ from ..invariants import checked_write as ledger
 from ..plan import PlanError
 from ..report_rules import require
 from ..runtime_client import approval_refusal
-from ..timeutil import iso as now
 from .answers import decide
 from .archive import report_crash
 from .book import checkpoint, claim, release, task_summary, unit_summary
 from .engine import Driver
-from .evidence_runs import acceptance, tree_in
+from .integration import tree_in
 from .lifecycle import metrics
 from .records import context_verdict, split_row
 from .report import render_status
@@ -49,7 +48,6 @@ from .state import (
     Refused,
     await_lock_path,
     driver_gone,
-    enter_plan_state,
     legacy_imports,
     old_ledger_of,
     read_ledger_file,
@@ -200,32 +198,22 @@ def _ticket_rows(ids, statuses, data):
             for task in (data.get("tasks") or {}).values()
             if (task.get("packet") or {}).get("unit") == ticket_id.lower() and task.get("pr")
         ]
-        row = {"id": ticket_id, "state": status, "reason": reason, "pr": prs[-1] if prs else None}
-        if ticket_id in (data.get("unverified") or {}):
-            row["unverified"] = (
-                True  # merged with its evidence failed or never run: integration must pass it
-            )
-        rows.append(row)
+        rows.append(
+            {"id": ticket_id, "state": status, "reason": reason, "pr": prs[-1] if prs else None}
+        )
     return rows
 
 
 def verify_plan(args):
-    """`verify <plan>`: whether the plan's outcome holds, computed from its receipts and the ledger alone. A receipt
-    that is missing, was produced for another tree or approval digest, or no longer matches the sha256 the ledger
-    holds does not count: its item is UNKNOWN, naming the scenario and why, and the command exits non-zero. It runs
-    nothing and writes nothing."""
-    model, repo, _, run_dir, data = _engine().acceptance_context(args)
+    """`verify <plan>`: whether the delivered plan holds, computed from the ledger alone: its integration ran for this
+    approval digest on the pinned commit, whose tree is the one recorded, and the whole suite did not fail there.
+    Anything else names why, and the command exits non-zero. It runs nothing and writes nothing."""
+    model, repo, _, _, data = _engine().acceptance_context(args)
     approval = model.approval
     require(
         approval is not None, "%s: verify needs an approved plan; run plan approve" % model.slug
     )
-    result = acceptance(
-        model,
-        data,
-        run_dir / "receipts",
-        digest=approval.digest,
-        tree_of=tree_in(repo),
-    )
+    result = verify.acceptance(data, digest=approval.digest, tree_of=tree_in(repo))
     output = {
         "slug": model.slug,
         "state": result["state"],
@@ -318,120 +306,6 @@ def _record_person_ticket(ledger_path, seen, ticket, covers, status):
     except ledgers.LedgerStale as error:
         raise Refused("complete: %s" % error) from None
     return covers
-
-
-def accept_item(args):
-    """`accept <plan> <S-id> --note TEXT`: a person accepts an item that did not pass (or a human item). It is
-    HUMAN_ACCEPTED with the person, time, scope and tree; the plan can then be ACCEPTED_WITH_HUMAN, never ACCEPTED.
-    Evidence a person merged past unverified cannot be accepted: it has to pass at integration."""
-    caller = _engine().resolve_runtime()
-    if isinstance(caller, dict) and caller.get("role") == "worker":
-        raise Refused(
-            "accept: caller is a spawned worker, parent %s — accepting is the Lead's (the person in their own "
-            "session); ask the Lead to run accept" % caller.get("parent", "unknown")
-        )
-    require(args.note.strip(), "accept needs a --note saying what you checked")
-    model, repo, ledger_path, run_dir, seen = _engine().acceptance_context(args)
-    scenario = verify.scenario_of(model, args.scenario)
-    if scenario is None or scenario.evidence is None:
-        raise Refused("accept: %s is not a scenario with evidence" % args.scenario)
-    require(ledger_path.is_file(), "accept: %s has no run yet; run it first" % model.slug)
-    who = (
-        subprocess.run(
-            ["git", "-C", str(repo), "config", "user.email"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        ).stdout.strip()
-        or os.environ.get("USER")
-        or "unknown"
-    )
-    try:
-        with ledger(ledger_path, snapshot=seen, keys=ACCEPT_READS) as data:
-            return accepted(args, model, repo, run_dir, scenario, who, data)
-    except ledgers.LedgerStale as error:
-        raise Refused("accept: %s" % error) from None
-
-
-ACCEPT_READS = ("plan", "integration", "unverified", "acceptance", "mutation", "receipts")
-
-
-def accepted(args, model, repo, run_dir, scenario, who, data):
-    """The write half of `accept`, on the ledger under its lock."""
-    state = (data.get("plan") or {}).get("state")
-    pin = data.get("integration") or {}
-    _accept_guard(args, model, data, scenario)
-    item = _acceptance_item(args, model, repo, run_dir, data)
-    if item["state"] == "PASS":
-        raise Refused(
-            "accept: %s passes at integration; there is nothing to accept" % args.scenario
-        )
-    if item["state"] == "HUMAN_ACCEPTED":
-        raise Refused("accept: %s is already accepted: %s" % (args.scenario, item["reason"]))
-    data.setdefault("acceptance", {})[args.scenario] = _accepted_record(
-        args, model, scenario, who, item, pin
-    )
-    outcome = acceptance(
-        model,
-        data,
-        run_dir / "receipts",
-        digest=model.approval.digest,
-        tree_of=tree_in(repo),
-    )
-    if outcome["state"] == "ACCEPTED_WITH_HUMAN":
-        enter_plan_state(data, "ACCEPTED_WITH_HUMAN")
-    return {
-        "scenario": args.scenario,
-        "state": "HUMAN_ACCEPTED",
-        "by": who,
-        "plan_state": outcome["state"] if outcome["state"] == "ACCEPTED_WITH_HUMAN" else state,
-        "left": verify.acceptance_errors(outcome),
-    }
-
-
-def _accept_guard(args, model, data, scenario):
-    """A person accepts an item only on a plan integration ran for this contract, and never an unverified merge."""
-    state = (data.get("plan") or {}).get("state")
-    pin = data.get("integration") or {}
-    if state not in ("VERIFYING", "REJECTED") or pin.get("digest") != model.approval.digest:
-        raise Refused(
-            "accept: the plan is %s; a person accepts an item once integration ran for this contract "
-            "(verified or rejected)" % (state or "not started")
-        )
-    flagged = verify.unverified_scenarios(data).get(args.scenario)
-    if flagged and scenario.evidence.check:
-        raise Refused(
-            "accept: %s merged with %s's evidence unverified, so it must pass at integration; fix it and run "
-            "again — a person cannot accept it" % (flagged, args.scenario)
-        )
-
-
-def _acceptance_item(args, model, repo, run_dir, data):
-    """The scenario's item as the outcome run on the recorded base reads it."""
-    result = acceptance(
-        model,
-        data,
-        run_dir / "receipts",
-        digest=model.approval.digest,
-        tree_of=tree_in(repo),
-    )
-    return next(i for i in result["items"] if i["scenario"] == args.scenario)
-
-
-def _accepted_record(args, model, scenario, who, item, pin):
-    """The acceptance the ledger records: who accepted, for what, on which tree and against which digest."""
-    return {
-        "state": "HUMAN_ACCEPTED",
-        "by": who,
-        "at": now(),
-        "scope": "%s: THEN %s (%s at integration on %s)"
-        % (args.scenario, scenario.then, item["state"], pin["sha"][:12]),
-        "tree": pin["tree"],
-        "sha": pin["sha"],
-        "digest": model.approval.digest,
-        "note": args.note.strip(),
-        "previous": {"result": item["state"], "reason": item["reason"]},
-    }
 
 
 def launch(args, run_args):
@@ -746,7 +620,6 @@ def _ledger_command(args):
 _READS = {
     "status": _status_command,
     "verify": verify_plan,
-    "accept": accept_item,
     "complete": complete_person_ticket,
 }
 _RUNS = {"run": drive, "await": await_wake, "decide": decide}

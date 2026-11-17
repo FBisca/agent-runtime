@@ -52,7 +52,7 @@ class DiscoveryTests(DiscoveryFixture):
     def test_S5_one_directory_lists_its_plans_and_the_explicit_plan(self):
         docs = self.track("docs/plans/2026-01-01-a.plan.yaml")
         self.track("docs/plans/2026-01-02-b.plan.md")
-        self.track("docs/plans/2026-01-03-c.oracle/test_x.py.oracle")
+        self.track("docs/plans/2026-01-03-c.notes/test_x.py")
         self.assertEqual(
             self.listing(str(docs)),
             [
@@ -228,8 +228,6 @@ class ExternalPlanTests(DiscoveryFixture):
         self.outside.write_text(
             "# kept outside\n" + yaml.safe_dump(contract(), sort_keys=False), encoding="utf-8"
         )
-        self.oracles = self.outside.with_name("demo.oracle")
-        self.oracles.mkdir()
         self.state = self.root / "state"
 
     def test_S6_check_and_approve_work_outside_the_repository(self):

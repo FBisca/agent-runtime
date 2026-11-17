@@ -166,12 +166,7 @@ class SpecSections:
             "|---|---|---|",
         ]
         for scenario in self.plan_model().scenarios:
-            human = scenario.evidence.human if scenario.evidence else None
-            cellular = (
-                "human: " + self.flat(human).replace("|", "\\|")
-                if human
-                else "<br>".join("`%s`" % node for node in nodes[scenario.id])
-            )
+            cellular = "<br>".join("`%s`" % node for node in nodes[scenario.id])
             parts.append("| %s | %s | %s |" % (numbered[scenario.id], scenario.id, cellular))
         return "\n".join(parts) + "\n"
 

@@ -1,4 +1,4 @@
-"""The ledger module the driver and the evidence runner share: one bounded lock, unlocked snapshots whose writes
+"""The ledger module the driver and the Lead's commands share: one bounded lock, unlocked snapshots whose writes
 revalidate, and the kind marker."""
 
 import contextlib
@@ -16,10 +16,6 @@ from unittest import mock
 import pytest
 from agent_orchestrator import driver as app
 from agent_orchestrator import ledger as ledgers
-from agent_orchestrator import runner
-from fixtures import load_script
-from test_acceptance import AcceptanceFixture, check_item
-from test_acceptance import scenario as acceptance_scenario
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
@@ -154,36 +150,6 @@ class BoundedLockTests(LedgerCase):
         self.assertEqual(code, 1)
         self.assertIn("ledger busy", err.getvalue())
 
-    def test_S6_the_runner_and_the_driver_take_the_lock_through_one_helper_and_one_deadline(self):
-        """orchestrator-engine/R73"""
-        self.assertEqual(runner.LEDGER_WAIT, ledgers.DEADLINE)
-        with mock.patch.object(ledgers, "locked", wraps=ledgers.locked) as spy:
-            with app.ledger(self.path) as data:
-                data["tasks"]["t1"] = {}
-            runner.record_receipts(self.path, [])
-        self.assertEqual(spy.call_count, 2)
-        self.assertEqual(
-            {call.kwargs.get("wait") for call in spy.call_args_list} - {None}, {ledgers.DEADLINE}
-        )
-
-    def test_S6_the_runner_waits_for_a_busy_ledger_as_the_driver_does(self):
-        """orchestrator-engine/R73"""
-        lock = self.hold()
-        threading.Timer(0.5, lock.close).start()
-        started = time.monotonic()
-        runner.record_receipts(self.path, [])
-        self.assertGreaterEqual(time.monotonic() - started, 0.4)
-        self.assertEqual(self.read()["version"], 1)
-
-    def test_S6_the_runner_refuses_a_ledger_that_stays_busy_naming_it(self):
-        """orchestrator-engine/R73"""
-        self.hold()
-        with mock.patch.object(runner, "LEDGER_WAIT", 0.3):
-            with self.assertRaises(runner.RunnerError) as caught:
-                runner.record_receipts(self.path, [])
-        self.assertIn("busy", str(caught.exception))
-        self.assertIn(str(self.path), str(caught.exception))
-
 
 class KindMarkerTests(LedgerCase):
     def test_S7_a_ledger_the_orchestrator_creates_carries_the_marker_beside_version_1(self):
@@ -191,11 +157,6 @@ class KindMarkerTests(LedgerCase):
         with ledgers.locked(self.path) as data:
             data["tasks"]["t1"] = {}
         self.assertEqual(list(self.read())[:2], ["version", "kind"])
-        self.assertEqual((self.read()["version"], self.read()["kind"]), (1, MARKER))
-
-    def test_S7_the_runner_creating_a_ledger_writes_the_marker(self):
-        """orchestrator-engine/R74"""
-        runner.record_receipts(self.path, [])
         self.assertEqual((self.read()["version"], self.read()["kind"]), (1, MARKER))
 
     def test_S7_the_next_locked_write_to_a_ledger_without_the_marker_adds_it(self):
@@ -249,6 +210,8 @@ class RunMarkerTests(GateFixture, unittest.TestCase):
                 seen.append((path.name, kind))
             return original(path, *args, **kwargs)
 
+        # T4 is a person's ticket left to do: the archive waits for it, so the run ends once T1 is delivered.
+        self.set_plan(("T1", "T4"))
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         with mock.patch.object(Path, "write_text", spy):
             self.run_driver()
@@ -327,39 +290,3 @@ class SnapshotTests(LedgerCase):
             mock.patch.object(app.evidence, "attempts", return_value=[]),
         ):
             self.assertEqual(app.rebuild_evidence(mock.Mock(plan=str(plan))), [])
-
-
-class AcceptsRevalidateTests(AcceptanceFixture, unittest.TestCase):
-    def test_S5_accept_refuses_when_the_ledger_moved_after_it_was_read(self):
-        """orchestrator-engine/R75: the read half of `accept` is a snapshot; the write takes the lock and revalidates."""
-        self.COVERS = {
-            "S1": ["src/a/test_feature.py::test_feature"],
-            "S2": ["src/a/test_feature.py::test_feature"],
-        }
-        scenarios = [
-            acceptance_scenario("S1", check_item()),
-            acceptance_scenario("S2", {"human": "a person confirms the panel"}),
-        ]
-        self.delivered(lands="done", scenarios=scenarios)
-        spec = load_script()
-        read = spec.acceptance_context
-
-        def moved_after_the_read(args):
-            found = read(args)
-            with ledgers.locked(found[2]) as data:  # another Lead command accepts something else
-                data["integration"] = dict(data["integration"], moved="by another command")
-            return found
-
-        err = io.StringIO()
-        with (
-            mock.patch.object(spec, "acceptance_context", moved_after_the_read),
-            mock.patch.object(spec, "resolve_runtime", return_value={"role": "lead"}),
-            contextlib.redirect_stderr(err),
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            code = spec.run_cli(
-                ["accept", str(self.plan), "S2", "--note", "x", "--state-dir", str(self.state_dir)]
-            )
-        self.assertEqual(code, 2, err.getvalue())
-        self.assertIn("changed since", err.getvalue())
-        self.assertNotIn("acceptance", self.ledger())

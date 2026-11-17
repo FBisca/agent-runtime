@@ -1,7 +1,6 @@
 """Acceptance for the engine-gaps plan: a discard deletes a plan folder only when it sits directly under the repo
 config's `plans.dir`.
 
-Frozen at approval; placed at packages/agent-orchestrator/acceptance/driver/ by the runner; never edited by a ticket.
 It drives `plan check` and `run` through the archive fixture of the folder-plan tests (fake runtime, fake gh, a real
 git origin). The contract it pins (plan Decisions D2, D3):
 
@@ -9,7 +8,7 @@ git origin). The contract it pins (plan Decisions D2, D3):
     naming the folder and `plans.dir`; a symlink into `plans.dir` does not count
   - at archive, the same rule deletes nothing and leaves the plan short of ARCHIVED, naming `plans.dir`
 
-Each class has a control case that passes at base and after.
+Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
 
 import os
@@ -23,7 +22,7 @@ from test_archive_modes import FOLDER, FolderArchiveFixture, discard_plan
 
 pytestmark = pytest.mark.integration
 
-PARTS = ("plan.yaml", "plan.md", "acceptance/test_probe.py", "negatives/break.patch")
+PARTS = ("plan.yaml", "plan.md")
 
 
 class GuardFixture(FolderArchiveFixture):
@@ -36,12 +35,7 @@ class GuardFixture(FolderArchiveFixture):
     def write_folder(self, parent, name=FOLDER):
         """A discarding folder plan written under `parent`, not approved."""
         folder = parent / name
-        (folder / "acceptance").mkdir(parents=True)
-        (folder / "negatives").mkdir()
-        (folder / "acceptance" / "test_probe.py").write_text(
-            "def test_probe():\n    pass\n", encoding="utf-8"
-        )
-        (folder / "negatives" / "break.patch").write_text("# a patch\n", encoding="utf-8")
+        folder.mkdir(parents=True)
         (folder / "plan.md").write_text("# demo\n", encoding="utf-8")
         (folder / "plan.yaml").write_text(
             yaml.safe_dump(discard_plan(), sort_keys=False), encoding="utf-8"

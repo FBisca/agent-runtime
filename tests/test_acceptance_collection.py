@@ -47,10 +47,9 @@ def test_S13_root_config_collects_the_root_acceptance_dir_with_the_root_tests_im
     assert ROOT_TESTS in ini["pythonpath"]
 
 
-def test_S13_repo_config_names_plans_acceptance_and_promote():
+def test_S13_repo_config_names_plans_and_promote():
     data = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     assert data["plans"]["dir"] == "docs/plans"
-    assert data["acceptance"]["dir"] == "acceptance"
     assert data["archive"]["mode"] == "promote"
 
 

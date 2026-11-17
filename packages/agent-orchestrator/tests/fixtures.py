@@ -159,16 +159,13 @@ def report_wait(name, kind="complete", text=None, id=None, **extra):
 
 
 def plan_data(rows=("T1", "T2", "T3", "T4", "T5")):
-    """The fixture plan as a plan/1 mapping: the rows' tickets and three scenarios (human evidence only)."""
+    """The fixture plan as a plan/1 mapping: the rows' tickets and three scenarios."""
     return {
         "schema": "plan/1",
         "slug": "demo",
         "goal": "deliver",
         "spec": "docs/specs/demo.md",
-        "outcome": ["S1"],
-        "scenarios": [
-            dict(id=sid, when="a", then="b", evidence={"human": "confirm"}) for sid in SCENARIOS
-        ],
+        "scenarios": [dict(id=sid, when="a", then="b") for sid in SCENARIOS],
         "tickets": [dict(id=name, **ROWS[name]) for name in rows],
     }
 
@@ -486,7 +483,7 @@ class RunFixture(_Case):
     def env(self):
         """The environment of a subprocess the test starts: a home of its own, so a command that falls back to the
         default state dir (`~/.local/state/orchestrate`) never writes into the real one (yaml-eec D27); the real uv
-        cache, so a placed oracle's `uv run` does not rebuild from nothing."""
+        cache, so a command's `uv run` does not rebuild from nothing."""
         return dict(
             os.environ,
             HOME=str(self.root / "home"),
@@ -761,7 +758,7 @@ class RunFixture(_Case):
         )
         return [r for r in rows if not kinds or r["kind"] in kinds]
 
-    # The name the outcome oracle reads the run's events by. An assignment, not a method: the workbench acceptance
+    # The name the plan-level tests read the run's events by. An assignment, not a method: the workbench acceptance
     # suite gives `events` another meaning of its own.
     events: Any = run_events
 

@@ -1,5 +1,10 @@
 # Brief: Protocol and reliability
 
+> **2026-11-17:** plan/1 no longer carries scenario evidence: the `evidence:` blocks and the plan folder's
+> `acceptance/` files were removed. Each ticket's own tests are its evidence: a scenario it satisfies needs a
+> covering test the ticket changes, mapped in its report's `covers`. Read any evidence or acceptance-file
+> guidance below as the tests the implementing ticket writes.
+
 Slug: `03-agent-review-protocol-reliability`. Contract: `plan.yaml`. Lane: **Full** (protocol + persistence integration).
 
 ## What changes

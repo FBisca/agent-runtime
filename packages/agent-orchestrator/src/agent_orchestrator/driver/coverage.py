@@ -20,7 +20,7 @@ from .book import ARCHIVE
 class Coverage:
     """What each unit delivered, mixed into the Driver: the archive's spec section is cited from here.
 
-    A member reads the record's reports and the plan's oracles through the driver it belongs to.
+    A member reads the record's reports through the driver it belongs to.
     """
 
     def __getattr__(self, name) -> Any:
@@ -64,15 +64,10 @@ class Coverage:
         return found
 
     def scenario_nodes(self):
-        """{scenario id: its test nodes}: the tickets' `covers`, then the scenario's own placed oracle paths."""
+        """{scenario id: its test nodes}: the tickets' `covers` and the nodes a person recorded."""
         covers = self.ticket_covers()
-        placed = {
-            scenario.id: [rel for rel, _ in self.scenario_targets(scenario)]
-            for scenario in self.plan_model().scenarios
-        }
         return {
-            s.id: list(dict.fromkeys(covers.get(s.id, []) + placed.get(s.id, [])))
-            for s in self.plan_model().scenarios
+            s.id: list(dict.fromkeys(covers.get(s.id, []))) for s in self.plan_model().scenarios
         }
 
     @staticmethod

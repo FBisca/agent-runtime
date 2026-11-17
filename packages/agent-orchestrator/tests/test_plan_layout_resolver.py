@@ -1,7 +1,6 @@
-"""One resolver answers for both plan layouts: the kind, the folder or oracle dir, the contract files, a path's place
+"""One resolver answers for both plan layouts: the kind, the folder, the contract files, a path's place
 relative to the repository, whether a path belongs to the plan and whether the folder may be deleted."""
 
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,23 +37,17 @@ class ResolverTests(ResolverFixture):
         self.assertTrue(self.folder().is_folder)
         self.assertFalse(self.legacy().is_folder)
 
-    def test_S1_a_folder_plan_has_a_folder_and_no_oracle_dir(self):
+    def test_S1_a_folder_plan_has_a_folder(self):
         layout = self.folder()
         self.assertEqual(layout.folder, self.folder_plan.parent)
-        self.assertIsNone(layout.oracle_dir)
         self.assertEqual(layout.contract_files, [self.folder_plan])
 
-    def test_S1_a_legacy_plan_has_an_oracle_dir_beside_it_and_no_folder(self):
+    def test_S1_a_legacy_plan_has_its_narrative_beside_it_and_no_folder(self):
         layout = self.legacy()
         self.assertIsNone(layout.folder)
-        self.assertEqual(layout.oracle_dir, self.repo / "docs/plans/2026-11-13-demo.oracle")
         self.assertEqual(
             layout.contract_files,
-            [
-                self.legacy_plan,
-                self.repo / "docs/plans/2026-11-13-demo.plan.md",
-                self.repo / "docs/plans/2026-11-13-demo.oracle",
-            ],
+            [self.legacy_plan, self.repo / "docs/plans/2026-11-13-demo.plan.md"],
         )
 
     def test_S1_a_paths_place_is_relative_to_the_repository_or_none_outside_it(self):
@@ -71,17 +64,16 @@ class ResolverTests(ResolverFixture):
 
     def test_S1_a_folder_plan_owns_every_file_in_its_folder_and_nothing_beside_it(self):
         layout = self.folder()
-        for name in ("plan.yaml", "plan.md", "acceptance/test_a.py", "negatives/x.patch"):
+        for name in ("plan.yaml", "plan.md", "notes/design.md"):
             self.assertTrue(layout.owns("docs/plans/2026-11-13-demo/" + name), name)
         self.assertFalse(layout.owns("docs/plans/2026-11-13-demo-two/plan.yaml"))
         self.assertFalse(layout.owns("docs/plans/other.py"))
 
-    def test_S1_a_legacy_plan_owns_its_file_and_its_oracle_dir_only(self):
+    def test_S1_a_legacy_plan_owns_its_file_only(self):
         layout = self.legacy()
         self.assertTrue(layout.owns("docs/plans/2026-11-13-demo.plan.yaml"))
-        self.assertTrue(layout.owns("docs/plans/2026-11-13-demo.oracle/probe.txt.oracle"))
         self.assertFalse(layout.owns("docs/plans/2026-11-13-demo.plan.md"))
-        self.assertFalse(layout.owns("docs/plans/2026-11-13-demo.oracle-two/x"))
+        self.assertFalse(layout.owns("docs/plans/2026-11-13-demo.plan.yaml.bak"))
 
     def test_S1_a_folder_plan_outside_the_repository_owns_no_repository_path(self):
         outside = self.root / "elsewhere" / "plan.yaml"
@@ -124,99 +116,13 @@ class NoRepositoryTests(ResolverFixture):
                 ask()
 
 
-class PackageCopyTests(unittest.TestCase):
-    """S23: what belongs to the package is what git reports for it, not what a walk of the disk finds."""
-
-    def setUp(self):
-        scratch = tempfile.TemporaryDirectory()
-        self.addCleanup(scratch.cleanup)
-        self.repo = Path(scratch.name).resolve() / "repo"
-        self.folder = self.repo / "docs" / "plans" / "2026-11-15-demo"
-        (self.folder / "acceptance").mkdir(parents=True)
-        (self.folder / "acceptance" / "probe.txt").write_text("probe\n")
-        (self.repo / "pkg").mkdir()
-        (self.repo / ".gitignore").write_text(".worktrees/\n")
-        self.git("init", "-q", "-b", "main")
-        self.commit("the plan, its acceptance file and the package")
-
-    def git(self, *args):
-        done = subprocess.run(
-            ["git", "-C", str(self.repo), *args], check=True, capture_output=True, text=True
-        )
-        return done.stdout
-
-    def commit(self, message):
-        self.git("add", "-A")
-        self.git("-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", message)
-
-    def problems(self):
-        """The plan check's problems for a promote plan whose acceptance file lands in the package."""
-        data = {
-            "domain": "flows",
-            "archive": "promote",
-            "spec": "docs/specs/demo.md",
-            "scenarios": [
-                {
-                    "id": "S1",
-                    "when": "it runs",
-                    "then": "it passes",
-                    "evidence": {
-                        "check": "true",
-                        "baseline": "pass",
-                        "acceptance": ["probe.txt"],
-                        "package": "pkg",
-                    },
-                }
-            ],
-            "tickets": [],
-        }
-        return yaml_plan.folder_problems(
-            data, self.folder / "plan.yaml", self.repo, data["scenarios"]
-        )
-
-    @pytest.mark.integration
-    def test_S23_a_copy_git_ignores_is_no_module_of_the_package_and_a_committed_one_is_named(self):
-        """structure-budget/S23: a nested checkout's or an ignored tree's copy is no module of the package."""
-        ignored = self.repo / "pkg" / ".worktrees" / "wt" / "acceptance" / "probe.txt"
-        ignored.parent.mkdir(parents=True)
-        ignored.write_text("probe\n")
-        self.assertEqual(
-            self.problems(), [], "a copy in an ignored tree is no module of the package"
-        )
-        nested = self.repo / "pkg" / "checkout"
-        (nested / "acceptance").mkdir(parents=True)
-        self.nested_checkout(nested)
-        self.assertEqual(
-            self.problems(), [], "a copy in a nested worktree is no module of the package"
-        )
-        tracked = self.repo / "pkg" / "tests" / "probe.txt"
-        tracked.parent.mkdir()
-        tracked.write_text("already here")
-        self.commit("a module of that basename")
-        message = "\n".join(self.problems())
-        self.assertIn(
-            "pkg/tests/probe.txt", message, "the refusal names the copy, not only a basename"
-        )
-
-    def nested_checkout(self, path):
-        """`path` as another checkout: its own repository, holding a copy of the plan folder."""
-        (path / "acceptance" / "probe.txt").write_text("probe\n")
-        for args in (
-            ("init", "-q", "-b", "main"),
-            ("add", "-A"),
-            ("-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "the copy"),
-        ):
-            subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
-
-
 class AskedByTests(ResolverFixture):
     def test_S1_verifys_integrity_rule_asks_the_resolver(self):
-        folder = verify.integrity(None, self.folder(), "docs/plans/2026-11-13-demo/plan.md")
-        self.assertIn("is in the plan folder", folder)
-        legacy = verify.integrity(None, self.legacy(), "docs/plans/2026-11-13-demo.plan.yaml")
-        self.assertIn("is the plan", legacy)
-        oracle = verify.integrity(None, self.legacy(), "docs/plans/2026-11-13-demo.oracle/a")
-        self.assertIn("is an oracle file", oracle)
+        folder = verify.integrity(self.folder(), "docs/plans/2026-11-13-demo/plan.md")
+        self.assertIn("is in the plan", folder)
+        legacy = verify.integrity(self.legacy(), "docs/plans/2026-11-13-demo.plan.yaml")
+        self.assertIn("is in the plan", legacy)
+        self.assertIsNone(verify.integrity(self.legacy(), "src/a.py"))
 
     def test_S1_no_module_asks_a_file_name_for_the_layout(self):
         source = Path(yaml_plan.__file__).parent

@@ -1,7 +1,6 @@
 """`workbench plans` says what waits on the person: a `needs_me` list of {plan, ticket, kind} for the active plans, built
 from the ledger and the run's events, without printing a word a worker or the driver wrote."""
 
-import json
 import os
 
 import pytest
@@ -80,15 +79,6 @@ class NeedsMeTests(WorkbenchFixture):
         self.running("old", [start(0), error, start(10)])
         self.running("new", [start(0), error])
         self.assertEqual(self.kinds(self.listing()), {("new", None, "error")})
-
-    def test_S28_an_unverified_merge_needs_the_person(self):
-        self.approved("merged")
-        path = self.write_ledger("merged", {"T1": "COMPLETE"}, plan_state="RUNNING")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["unverified"] = {"T1": {"reason": "a gate never ran"}}
-        path.write_text(json.dumps(data), encoding="utf-8")
-        self.log_events("merged", [start()])
-        self.assertEqual(self.kinds(self.listing()), {("merged", "T1", "unverified")})
 
     def test_S28_the_last_escalation_of_a_unit_with_no_later_decision_or_merge_is_lead_pending(
         self,

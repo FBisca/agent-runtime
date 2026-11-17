@@ -16,6 +16,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+# Less `accept`, removed with the evidence items it accepted.
 COMMANDS = (
     "plan",
     "plans",
@@ -34,7 +35,6 @@ COMMANDS = (
     "decide",
     "status",
     "verify",
-    "accept",
     "complete",
     "launch",
 )
@@ -69,7 +69,7 @@ def help_of(*argv):
 
 
 class CliSurfaceTests(unittest.TestCase):
-    def test_the_top_level_offers_the_same_twenty_commands(self):
+    def test_the_top_level_offers_the_same_commands(self):
         """structure-budget/S14"""
         # A command added after approval is not a loss: the claim is that the names
         # offered at the base are all still offered, and a superset keeps every one.

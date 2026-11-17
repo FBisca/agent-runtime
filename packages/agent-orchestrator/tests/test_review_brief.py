@@ -108,13 +108,10 @@ class ReviewBriefTests(unittest.TestCase):
             report.write_text("{}", encoding="utf-8")
             written = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc).timestamp()
             os.utime(report, (written, written))
-            (run / "receipts").mkdir()
-            (run / "receipts" / "check.json").write_text("{}")
             text = self.brief(run=run, attempt=AttemptRecord(report, "c0ffee1"))
-        # The task file, the run's contract and its evidence, by path.
+        # The task file and the run's contract, by path.
         self.assertIn(str(run / "t1" / "task.md"), text)
         self.assertIn(str(run / "contract.md"), text)
-        self.assertIn("1 files in " + str(run / "receipts"), text)
         # The attempt under review's own report, when it was written, and the head it claims.
         self.assertIn(str(report), text)
         self.assertIn("2026-11-16T10:00:00", text)

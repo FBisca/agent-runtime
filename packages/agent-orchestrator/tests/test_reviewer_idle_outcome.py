@@ -1,4 +1,4 @@
-"""Outcome oracle for the orchestrator-silent-idle plan (issue #94).
+"""The orchestrator-silent-idle plan's outcome (issue #94).
 
 A live reviewer whose turn ends while a background job runs is not finished: the driver waits for its `complete`
 report under the assignment it was spawned with, and only the timed idle watchdog asks the Lead. The `control`

@@ -1,25 +1,19 @@
-"""Outcome oracle for the plan-layout plan: a plan lives in its own folder, a repo config names where plans live and
-how they archive, and archive either promotes the acceptance tests or discards the plan.
+"""The plan-layout plan's behaviour: a plan lives in its own folder, a repo config names where plans live and how they
+archive, and archive either promotes the plan into its spec (deleting the folder) or discards it.
 
-Frozen at approval; placed into packages/agent-orchestrator/tests/ by the runner; never edited by a ticket.
 It drives the real driver through the suite's existing seam (GateFixture: a temp repo with an origin, the fake
 runtime and the fake gh answering in process) and the engine's CLI contract only:
 
-  <repo>/.orchestrate/config.yaml        plans.dir, acceptance.dir, archive.mode (promote | discard)
-  <plans.dir>/<date>-<slug>/plan.yaml    the contract; acceptance files in <folder>/acceptance/
-  evidence: acceptance: [files], package: <dir | .>; top-level domain: <slug>, archive: <mode>
-  destination                            <package>/<acceptance.dir>/<domain>/<file>
+  <repo>/.orchestrate/config.yaml        plans.dir, archive.mode (promote | discard)
+  <plans.dir>/<date>-<slug>/plan.yaml    the contract; top-level archive: <mode>
   plans list --json --repo <repo>        rows {path, format, slug}
   plan approve / status --json / verify / run, each with --repo
   ledger                                 <state>/<repo-key>/<slug>.json, its plan.state
 
-Domain, package and acceptance dir all differ from the slug and the defaults, so a destination built from anything
-but them misses. The control cases exercise the legacy layout (X.plan.yaml beside X.oracle/), with and without a
-config: they pass before and after the implementation.
+The `control` tests exercise the legacy layout (X.plan.yaml), with and without a config.
 """
 
 import json
-import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -27,18 +21,16 @@ from pathlib import Path
 import pytest
 import yaml
 from fixtures import load_script
-from test_yaml_eec import GOOD_CHECK, LIFECYCLE, PROBE, YamlPlanFixture, plan_yaml
+from test_yaml_eec import LIFECYCLE, YamlPlanFixture, plan_yaml
 
 pytestmark = pytest.mark.integration
 
 FOLDER = "2026-11-12-demo"
-PLACED = "pkg/accept/flows/probe.txt"
-CHECK = "grep -qx done src/a/feature.txt && test -f " + PLACED
 
 
 def config(plans, mode="promote"):
     return yaml.safe_dump(
-        {"plans": {"dir": plans}, "acceptance": {"dir": "accept"}, "archive": {"mode": mode}},
+        {"plans": {"dir": plans}, "archive": {"mode": mode}},
         sort_keys=False,
     )
 
@@ -48,19 +40,11 @@ def folder_plan(spec=True):
         "schema": "plan/1",
         "slug": "demo",
         "goal": "The feature file says done.",
-        "domain": "flows",
-        "outcome": ["S1"],
         "scenarios": [
             {
                 "id": "S1",
                 "when": "the feature is delivered",
                 "then": "src/a/feature.txt reads done",
-                "evidence": {
-                    "check": CHECK,
-                    "baseline": "fail",
-                    "acceptance": ["probe.txt"],
-                    "package": "pkg",
-                },
             }
         ],
         "tickets": [
@@ -94,7 +78,6 @@ class FolderPlanFixture(YamlPlanFixture):
 
     def setUp(self):
         super().setUp()
-        shutil.rmtree(self.oracle_dir)
         (self.repo / "pkg").mkdir()
         (self.repo / "pkg" / "README.md").write_text("pkg\n", encoding="utf-8")
         self.publish("pkg")
@@ -106,23 +89,19 @@ class FolderPlanFixture(YamlPlanFixture):
 
     def write_folder(self, plans_dir, spec=True):
         self.folder = plans_dir / FOLDER
-        (self.folder / "acceptance").mkdir(parents=True)
-        (self.folder / "acceptance" / "probe.txt").write_text(PROBE, encoding="utf-8")
+        self.folder.mkdir(parents=True)
+        (self.folder / "brief.md").write_text("# The narrative\n", encoding="utf-8")
         self.plan = self.folder / "plan.yaml"
         self.plan.write_text(folder_plan(spec), encoding="utf-8")
 
     def write_legacy(self):
-        """The parent fixture's legacy plan, tracked: X.plan.yaml beside X.oracle/."""
-        self.oracle_dir.mkdir()
-        (self.oracle_dir / "probe.txt.oracle").write_text(PROBE, encoding="utf-8")
-        legacy = self.oracle_dir.with_name("2026-11-10-demo.plan.yaml")
+        """The parent fixture's legacy plan, tracked: X.plan.yaml."""
+        legacy = self.repo / "docs" / "plans" / "2026-11-10-demo.plan.yaml"
         legacy.write_text(
-            yaml.safe_dump(
-                dict(yaml.safe_load(plan_yaml(GOOD_CHECK)), slug="legacy-demo"), sort_keys=False
-            ),
+            yaml.safe_dump(dict(yaml.safe_load(plan_yaml()), slug="legacy-demo"), sort_keys=False),
             encoding="utf-8",
         )
-        self.git(self.repo, "add", str(legacy), str(self.oracle_dir))
+        self.git(self.repo, "add", str(legacy))
         return legacy
 
     def report(self, task_id, **over):
@@ -237,7 +216,7 @@ class ConfiguredDiscovery(FolderPlanFixture, unittest.TestCase):
 
 
 class PromoteArchive(FolderPlanFixture, unittest.TestCase):
-    def test_promote_moves_the_acceptance_into_its_domain_and_deletes_the_plan_folder(self):
+    def test_promote_deletes_the_plan_folder_and_writes_the_spec(self):
         self.write_config("docs/plans")
         self.write_folder(self.repo / "docs" / "plans")
         self.publish(".orchestrate", "docs/plans")
@@ -246,7 +225,9 @@ class PromoteArchive(FolderPlanFixture, unittest.TestCase):
         result = self.run_folder(self.steps(run_dir))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.status()["plan"]["history"], LIFECYCLE)
-        self.assertEqual(self.git(self.origin, "show", "feat/demo-archive:" + PLACED) + "\n", PROBE)
+        self.assertIn(
+            "(from demo/S1)", self.git(self.origin, "show", "feat/demo-archive:docs/specs/demo.md")
+        )
         self.assertEqual(
             self.git(
                 self.origin,
@@ -257,14 +238,6 @@ class PromoteArchive(FolderPlanFixture, unittest.TestCase):
                 "docs/plans/" + FOLDER,
             ),
             "",
-        )
-        self.assertTrue(
-            [
-                r
-                for r in self.receipts(run_dir, "archive")
-                if r["scenario"] == "S1" and r["result"] == "PASS"
-            ],
-            "the outcome was not re-verified on the archive head",
         )
         self.assertEqual(self.verify().returncode, 0)
 

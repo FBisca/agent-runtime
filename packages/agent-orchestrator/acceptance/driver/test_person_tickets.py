@@ -2,7 +2,6 @@
 reach the archive's Coverage table, and a promoting archive waits until every ticket, person tickets included, is
 COMPLETE.
 
-Frozen at approval; placed at packages/agent-orchestrator/acceptance/driver/ by the runner; never edited by a ticket.
 It drives `run`, `plan check` and the new `complete` command through the archive fixture of the folder-plan tests
 (fake runtime, fake gh, a real git origin). The contract it pins (plan Decisions D4, D5):
 
@@ -13,7 +12,7 @@ It drives `run`, `plan check` and the new `complete` command through the archive
   - the archive's Coverage row of a scenario lists the person ticket's cover nodes as given
   - verify starts once every agent ticket is COMPLETE; the archive starts only once every ticket is
 
-Each class has a control case that passes at base and after.
+Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
 
 import json

@@ -1,8 +1,8 @@
-"""The fixture the plan-layout tests build on: a one-ticket YAML plan with an oracle, a temp repo with an origin, and
-the fake runtime and gh answering in process (`YamlPlanFixture`, on `GateFixture`).
+"""The fixture the plan-layout tests build on: a one-ticket YAML plan, a temp repo with an origin, and the fake runtime
+and gh answering in process (`YamlPlanFixture`, on `GateFixture`).
 
-Its lifecycle and rejection cases are kept by `test_acceptance.py`, `test_archive.py`, `test_runner.py`,
-`test_plan.py` and `test_status_json.py` (plan-contract R22, R23)."""
+Its lifecycle and rejection cases are kept by `test_acceptance.py`, `test_archive.py`, `test_plan.py` and
+`test_status_json.py` (plan-contract R22, R23)."""
 
 import json
 import subprocess
@@ -16,28 +16,20 @@ from test_gates import GateFixture
 pytestmark = pytest.mark.integration
 
 LIFECYCLE = ["APPROVED", "RUNNING", "DELIVERED", "VERIFYING", "ACCEPTED", "ARCHIVED"]
-PROBE = "probe\n"
 
 
-def plan_yaml(check):
+def plan_yaml():
     return yaml.safe_dump(
         {
             "schema": "plan/1",
             "slug": "demo",
             "goal": "The feature file says done.",
             "spec": "docs/specs/demo.md",
-            "outcome": ["S1"],
             "scenarios": [
                 {
                     "id": "S1",
                     "when": "the feature is delivered",
                     "then": "src/a/feature.txt reads done",
-                    "evidence": {
-                        "check": check,
-                        "oracle": ["probe.txt.oracle"],
-                        "place": "checks/",
-                        "baseline": "fail",
-                    },
                 }
             ],
             "tickets": [
@@ -55,21 +47,15 @@ def plan_yaml(check):
     )
 
 
-GOOD_CHECK = "grep -qx done src/a/feature.txt && test -f checks/probe.txt"
-
-
 class YamlPlanFixture(GateFixture):
     def setUp(self):
         super().setUp()
         self.plan.unlink()
         self.plan = self.repo / "docs" / "plans" / "2026-11-10-demo.plan.yaml"
-        self.oracle_dir = self.repo / "docs" / "plans" / "2026-11-10-demo.oracle"
-        self.oracle_dir.mkdir()
-        (self.oracle_dir / "probe.txt.oracle").write_text(PROBE, encoding="utf-8")
         self.archive_tree = self.root / "repo.worktrees" / "demo-archive"
 
-    def write_plan(self, check=GOOD_CHECK):
-        self.plan.write_text(plan_yaml(check), encoding="utf-8")
+    def write_plan(self):
+        self.plan.write_text(plan_yaml(), encoding="utf-8")
 
     def approve(self, expect_ok=True):
         result = self.cli("plan", "approve", str(self.plan), "--repo", str(self.repo))
@@ -87,13 +73,6 @@ class YamlPlanFixture(GateFixture):
 
     def approval(self):
         return yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]
-
-    def receipts(self, run_dir, phase=None):
-        found = [
-            json.loads(p.read_text(encoding="utf-8"))
-            for p in sorted((run_dir / "receipts").glob("*.json"))
-        ]
-        return [r for r in found if phase in (None, r.get("phase"))]
 
     def origin_tree(self):
         return subprocess.run(

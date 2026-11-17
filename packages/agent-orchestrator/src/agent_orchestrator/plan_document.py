@@ -2,7 +2,8 @@
 
 The models refuse an unknown key and a wrong type; `read_yaml` adds the duplicate-key and location
 diagnostics the models cannot see, both as a `PlanError` the CLI exits 2 on before dispatch. Nothing
-here reads the repository or runs a check.
+here reads the repository or runs a check. A scenario is its WHEN and THEN; the ticket that satisfies it
+provides its evidence, as the tests its report's `covers` maps it to.
 """
 
 from pathlib import Path
@@ -47,63 +48,10 @@ class Mapping(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=False)
 
 
-class Evidence(Mapping):
-    human: Text | None = None
-    check: Text | None = None
-    baseline: Literal["pass", "fail"] | None = None
-    oracle: list[RepoPath] = Field(default_factory=list)
-    place: RepoPath | None = None
-    acceptance: list[RepoPath] = Field(
-        default_factory=list,
-        description="Folder plans: test files in the plan folder's acceptance/, placed for the check at "
-        "<package>/<acceptance.dir>/<domain>/<file>",
-    )
-    package: RepoPath | None = Field(
-        default=None,
-        description="Folder plans: the repository directory (or .) whose acceptance dir the files are placed in",
-    )
-    timeout: Annotated[int, Field(gt=0)] = 600
-    env: list[Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]] = Field(
-        default_factory=list
-    )
-    negative: RepoPath | None = Field(
-        default=None,
-        description="A patch that must make the check fail; a legacy plan names an oracle file, a folder plan a "
-        "path relative to the plan folder",
-    )
-    promote: bool = True
-
-    @property
-    def has_tests(self):
-        """Whether the item brings test files of its own: legacy oracles or a folder plan's acceptance files."""
-        return bool(self.oracle or self.acceptance)
-
-    @model_validator(mode="after")
-    def evidence_kind(self):
-        if bool(self.human) == bool(self.check):
-            raise ValueError("choose exactly one of human or check + baseline")
-        if self.check and self.baseline is None:
-            raise ValueError("check requires baseline: pass or fail")
-        if self.human and self.model_fields_set - {"human"}:
-            raise ValueError("human evidence may only contain human; remove check options")
-        return self
-
-    @field_validator("place", "negative", "package")
-    @classmethod
-    def paths(cls, value):
-        return literal_path(value) if value is not None else value
-
-    @field_validator("oracle", "acceptance")
-    @classmethod
-    def oracle_paths(cls, values):
-        return [literal_path(v) for v in values]
-
-
 class Scenario(Mapping):
     id: ScenarioId
     when: Text
     then: Text
-    evidence: Evidence | None = None
 
 
 class Ticket(Mapping):
@@ -118,7 +66,6 @@ class Ticket(Mapping):
     risk: list[
         Literal["security", "concurrency", "retry-idempotency", "migration", "external", "state"]
     ] = Field(default_factory=list)
-    evidence_waiver: Text | None = None
     max_fix_rounds: Annotated[int, Field(ge=0)] | None = None
     repo: Text | None = None
 
@@ -167,17 +114,11 @@ class Plan(Mapping):
         default=None,
         description="The living spec the archive writes; required unless the plan is a folder plan that discards",
     )
-    domain: Annotated[str, Field(pattern=r"^[a-z0-9-]+$")] | None = Field(
-        default=None,
-        description="Folder plans: the slug of the folder under <package>/<acceptance.dir>/ that promoted tests "
-        "join; required to promote",
-    )
     archive: Literal["promote", "discard"] | None = Field(
         default=None,
         description="Folder plans: what archive does with the plan folder; the repo config's archive.mode when "
         "absent",
     )
-    outcome: Annotated[list[ScenarioId], Field(min_length=1)]
     scenarios: Annotated[list[Scenario], Field(min_length=1)]
     tickets: Annotated[list[Ticket], Field(min_length=1)]
     approval: Approval | None = None

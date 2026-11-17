@@ -418,7 +418,6 @@ class PlanListTests(WorkbenchFixture):
             ("verifying", "VERIFYING"),
             ("done", "ARCHIVED"),
             ("accepted", "ACCEPTED"),
-            ("humanok", "ACCEPTED_WITH_HUMAN"),
             ("refused", "REJECTED"),
         ):
             self.approved(slug)
@@ -444,7 +443,6 @@ class PlanListTests(WorkbenchFixture):
                 "stuck": "active",
                 "done": "older",
                 "accepted": "older",
-                "humanok": "older",
                 "refused": "older",
                 "gone": "older",
                 "old": "older",

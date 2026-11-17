@@ -1,4 +1,4 @@
-"""One idle watchdog over every agent kind: a reviewer, a mutation reviewer and a gaps reviewer whose turn ended."""
+"""One idle watchdog over every agent kind: a worker, a reviewer and a gaps reviewer whose turn ended."""
 
 import json
 import unittest
@@ -6,85 +6,30 @@ from pathlib import Path
 
 import pytest
 from fixtures import assignment, envelope, resume_id, spawn_id, wait_result
-from test_acceptance import AcceptanceFixture
+from test_archive import ArchiveFixture
 from test_gates import REVIEWER, GateFixture
 
 pytestmark = pytest.mark.integration
 
-MUTATOR = "demo-mut-s1-1"
 GAPS = "demo-gaps"
-PATCH = "--- a/src/a/feature.txt\n+++ b/src/a/feature.txt\n@@ -1 +1 @@\n-done\n+nope\n"
 
 
-class SilentSupportReviewers(AcceptanceFixture, unittest.TestCase):
-    """The mutation and gaps reviewers are no ticket's agent; their idle turn is still the Lead's business."""
+class SilentGapsReviewer(ArchiveFixture, unittest.TestCase):
+    """The gaps reviewer is no ticket's agent; its idle turn is still the Lead's business."""
 
-    def silent_mutator(self, write=True):
-        """A wait step: the mutation reviewer's turn ended (idle) with no `complete`; with `write`, its patch is on disk."""
-        step = wait_result([assignment(MUTATOR, "working", "idle")])
-        if write:
-            step["write"] = [[str(self.run_dir / "mutation" / "S1.1.patch"), PATCH]]
-        return step
-
-    def silent_gaps(self, write=True):
-        """A wait step: the gaps reviewer's turn ended with no `complete`; with `write`, gaps.md is on disk."""
+    def silent_gaps(self):
+        """A wait step: the gaps reviewer's turn ended (idle) with no `complete`, its gaps.md on disk."""
         step = wait_result([assignment(GAPS, "working", "idle")])
-        if write:
-            step["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
+        step["write"] = [[str(self.run_dir / "gaps.md"), "# Gaps\n- none\n"]]
         return step
 
-    def idle_wakes(self, name):
-        return [w for w in self.wakes() if name in w.get("text", "") and "idle" in w["text"]]
-
-    def landed(self):
-        return self.run_events("output-landed")
-
-    def test_S8_a_mutation_reviewer_silent_after_writing_its_patch_is_accepted(self):
-        """orchestrator-engine/R82: orchestrator-audit-fixes/S8"""
-        self.write_plan()
-        self.merged_on_main("done")
-        self.waits([self.worker("done"), self.reviewer(), self.silent_mutator()])
-        self.run_driver("--repo", str(self.repo))
-        self.assertEqual([e["agent"] for e in self.landed()], [MUTATOR])
-        (receipt,) = self.receipts("mutation")
-        self.assertTrue(receipt["mutation"]["killed"], "the patch is validated as for a report")
-        self.assertIn("ACCEPTED", self.history())
-        self.assertNotIn("demo-mut-s1-2", self.spawned())
-
-    def test_S8_a_mutation_reviewer_silent_with_a_bad_patch_is_judged_as_a_reported_one(self):
-        """orchestrator-engine/R82: orchestrator-audit-fixes/S8 — output that fails validation is an ineffective
-        attempt, exactly as when the reviewer reports it."""
-        self.write_plan()
-        self.merged_on_main("done")
-        step = self.silent_mutator(write=False)
-        step["write"] = [[str(self.run_dir / "mutation" / "S1.1.patch"), "not a patch\n"]]
-        self.waits([self.worker("done"), self.reviewer(), step, self.default_mutator(attempt=2)])
-        self.run_driver("--repo", str(self.repo))
-        self.assertIn("demo-mut-s1-2", self.spawned())
-        self.assertEqual(self.ledger()["mutation"]["S1"]["history"][0]["outcome"], "invalid")
-
-    def test_S9_a_mutation_reviewer_silent_with_no_patch_gets_an_idle_request(self):
-        """orchestrator-engine/R82: orchestrator-audit-fixes/S9"""
-        self.write_plan()
-        self.merged_on_main("done")
-        steps = [self.worker("done"), self.reviewer()] + [self.silent_mutator(write=False)] * 6
-        self.waits(steps + [self.default_mutator()])
-        self.run_driver("--repo", str(self.repo), "--idle-minutes", "0")
-        (wake,) = self.idle_wakes(MUTATOR)
-        self.assertIn(str(self.run_dir / "mutation" / "S1.1.patch"), wake["text"])
-        self.assertNotIn("demo-mut-s1-2", self.spawned(), "the silent reviewer was ended at once")
-        (receipt,) = self.receipts("mutation")
-        self.assertTrue(receipt["mutation"]["killed"], "its late complete is still accepted")
-        self.assertIn("ACCEPTED", self.history())
-
-    def test_S9_a_silent_reviewer_that_writes_nothing_is_asked_about_once(self):
-        """orchestrator-engine/R82: orchestrator-audit-fixes/S9 — one wake per attempt, however long it stays quiet."""
-        self.write_plan()
-        self.merged_on_main("done")
-        steps = [self.worker("done"), self.reviewer()] + [self.silent_mutator(write=False)] * 12
-        self.waits(steps + [self.default_mutator()])
-        self.run_driver("--repo", str(self.repo), "--idle-minutes", "0")
-        self.assertEqual(len(self.idle_wakes(MUTATOR)), 1)
+    def test_S8_a_gaps_reviewer_silent_after_writing_its_output_is_accepted(self):
+        """orchestrator-engine/R82: orchestrator-audit-fixes/S8 — its output on disk is its answer."""
+        self.waits(self.ticket_merged() + [self.silent_gaps()] * 10)
+        self.run_driver()
+        self.assertEqual(self.spawned().count(GAPS), 1)
+        self.assertEqual([e["agent"] for e in self.run_events("output-landed")], [GAPS])
+        self.assertTrue(self.ledger()["gaps"]["ended"])
 
 
 class SilentWorker(GateFixture, unittest.TestCase):

@@ -5,7 +5,6 @@ goal: >-
   verified by evidence the driver runs against the exact integrated tree before the plan can be archived; converge no
   longer exists as a separate mechanism.
 spec: docs/specs/plan-contract.md
-outcome: [S22, S23, S24]
 
 scenarios:
   # T1: the contract, check, approve
@@ -89,30 +88,12 @@ scenarios:
   - id: S22
     when: verification meets a check that passes at base, a plan or oracle edited after approval, a missing receipt, a receipt for another tree, and a plan whose tickets all completed but whose outcome evidence fails
     then: each is refused with its reason, no worker runs on the edited contract, and none of those plans is ACCEPTED or archived
-    evidence:
-      check: >-
-        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_yaml_eec.py
-        -m integration -k "rejects or control" -q --junitxml="$EEC_JUNIT"
-      oracle: [test_yaml_eec.py.oracle]
-      place: packages/agent-orchestrator/tests/
-      baseline: fail
-      timeout: 900
   - id: S23
     when: a one-ticket YAML plan with an oracle-backed outcome is approved, launched and its work reaches the default branch
     then: "status history is APPROVED → RUNNING → DELIVERED → VERIFYING → ACCEPTED → ARCHIVED; the integration receipt is PASS for the default branch's tree and the approval digest; the outcome is re-verified on the archive head; the oracle is promoted byte-identical; plan.yaml is unchanged since approval; `verify` exits 0"
-    evidence:
-      check: >-
-        uv run --frozen --all-packages pytest packages/agent-orchestrator/tests/test_yaml_eec.py
-        -m integration -k "lifecycle or control" -q --junitxml="$EEC_JUNIT"
-      oracle: [test_yaml_eec.py.oracle]
-      place: packages/agent-orchestrator/tests/
-      baseline: fail
-      timeout: 900
   - id: S24
     when: a small real YAML plan in a scratch repository is planned with start-planning, approved, orchestrated with real agents, verified and archived
     then: "`status --json` shows it ARCHIVED, its receipts exist, and `plan check` still accepts its approval digest"
-    evidence:
-      human: "Run the scratch plan end to end; confirm `status --json`, the receipts and `plan check` after archive"
 
   # T8: archive
   - id: S25
@@ -123,17 +104,9 @@ scenarios:
   - id: S26
     when: the orchestrate shim is asked for `plan check`, `plan approve`, `plans list`, `verify`, `accept` or `status`
     then: it hands them to the member unchanged, and the agent-skills tree carries no converge skill
-    evidence:
-      human: >-
-        Read the shim and the agent-skills tree: every command is handed to the
-        member unchanged and no converge skill is left
   - id: S30
     when: start-planning writes a Python oracle for a repository whose formatter is configured (ruff format in pyproject.toml)
     then: "the oracle is formatted as that formatter formats its promoted path (`ruff format --stdin-filename <place>/<name>.py`) before `plan check` and `plan approve`, so the byte-identical copy promoted at archive passes the repository's format gate"
-    evidence:
-      human: >-
-        Write an oracle in a repository whose formatter is configured and
-        confirm the promoted copy passes the repository's format gate
 
   # Removal
   - id: S28
@@ -157,7 +130,6 @@ tickets:
     size: regular
     difficulty: complex
     risk: [security]
-    evidence_waiver: "Built outside the driver (D21), so no gate can run ticket evidence; S22 re-verifies the digest refusal at integration"
   - id: T2
     delivers: "Plan discovery and `plans list --json`, shared by driver, skills and panel"
     satisfies: [S5, S6]
@@ -180,7 +152,6 @@ tickets:
     size: regular
     difficulty: complex
     risk: [state]
-    evidence_waiver: "S23 asserts plan.yaml byte-identity and the status history through a whole run at integration"
   - id: T4
     delivers: "verify: scope, integrity and covers invariants replace the converge gate; report contract 3; converge.py becomes verify's legacy path"
     satisfies: [S9, S10, S11]
@@ -211,7 +182,6 @@ tickets:
     size: regular
     difficulty: complex
     risk: [security]
-    evidence_waiver: "S22 and S23 exercise the runner, the baseline refusal and receipt binding end to end; before T6 nothing consumes a receipt"
   - id: T6
     delivers: "Evidence routing at ticket gates, integration verification on a pinned default-branch SHA, acceptance states, `accept`, `verify <plan>`"
     satisfies: [S16, S17, S18, S19, S20, S22]

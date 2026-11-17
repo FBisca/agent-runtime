@@ -17,21 +17,15 @@ pytestmark = pytest.mark.integration
 
 
 def contract():
-    """Two tickets and two scenarios: T1 satisfies S1 (a check on status.txt), T2 satisfies S2 (a person's)."""
+    """Two tickets and two scenarios: T1 satisfies S1, T2 satisfies S2."""
     return {
         "schema": "plan/1",
         "slug": "demo",
         "goal": "deliver",
         "spec": "docs/specs/demo.md",
-        "outcome": ["S1", "S2"],
         "scenarios": [
-            {
-                "id": "S1",
-                "when": "a",
-                "then": "b",
-                "evidence": {"check": "grep -q alive status.txt", "baseline": "pass"},
-            },
-            {"id": "S2", "when": "c", "then": "d", "evidence": {"human": "confirm d"}},
+            {"id": "S1", "when": "a", "then": "b"},
+            {"id": "S2", "when": "c", "then": "d"},
         ],
         "tickets": [
             {
@@ -59,7 +53,6 @@ class AmendFixture(RunFixture, unittest.TestCase):
         super().setUp()
         shutil.rmtree(self.state_dir)  # the fixture's own approval is not this test's
         self.plan = self.plan.with_suffix(".yaml")
-        self.plan.with_name("demo.oracle").mkdir()
         self.push("status.txt", "alive\n")
         self.write(contract())
         self.env_patch = mock.patch.dict(
@@ -115,8 +108,14 @@ class AmendFixture(RunFixture, unittest.TestCase):
 
     def complete(self, *tickets):
         """The ledger marks `tickets` COMPLETE, as a driver does when their pull requests merge."""
-        (ledger,) = (self.state_dir).glob("*/demo.json")
-        data = json.loads(ledger.read_text())
+        keyed = self.state_dir / load_script().repo_key(self.repo)
+        keyed.mkdir(parents=True, exist_ok=True)
+        ledger = keyed / "demo.json"
+        data = (
+            json.loads(ledger.read_text())
+            if ledger.is_file()
+            else {"version": 1, "kind": "agent-orchestrator/ledger", "tasks": {}}
+        )
         data["ticket_status"] = {t: "COMPLETE" for t in tickets}
         ledger.write_text(json.dumps(data))
 
@@ -167,7 +166,6 @@ class AmendRefusalTests(AmendFixture):
         dropped = self.read()
         dropped["tickets"] = dropped["tickets"][1:]
         dropped["scenarios"] = dropped["scenarios"][1:]
-        dropped["outcome"] = ["S2"]
         for case, edit in (("changed", changed), ("dropped", dropped)):
             with self.subTest(case):
                 self.write(edit)
@@ -179,9 +177,7 @@ class AmendRefusalTests(AmendFixture):
                 self.assertIn("add a new ticket", message)
                 self.assertEqual(self.plan.read_bytes(), before)
 
-    def test_S7_a_change_to_a_complete_tickets_scenario_is_refused_but_its_evidence_may_change(
-        self,
-    ):
+    def test_S7_a_change_to_a_complete_tickets_scenario_is_refused(self):
         self.approve()
         self.complete("T1")
         edit = self.read()
@@ -193,7 +189,6 @@ class AmendRefusalTests(AmendFixture):
         self.assertIn("T1", message)
         self.assertIn("add a new ticket", message)
         edit["scenarios"][0]["then"] = "b"
-        edit["scenarios"][0]["evidence"]["check"] = "grep -q ali status.txt"
         # a change to a ticket the ledger does not mark COMPLETE rides along
         edit["tickets"][1]["delivers"] = "second, changed"
         self.write(edit)
@@ -202,11 +197,11 @@ class AmendRefusalTests(AmendFixture):
 
 
 class AmendTests(AmendFixture):
-    def test_S8_baselines_run_at_the_approvals_base_never_at_origin_main(self):
+    def test_S8_the_amendment_keeps_the_approvals_base_never_origin_main(self):
         first = self.approve()
-        self.push(
+        moved = self.push(
             "status.txt", "dead\n"
-        )  # a ticket merged: S1's `baseline: pass` is red on origin/main now
+        )  # a ticket merged: origin/main moved past the base
         edit = self.read()
         edit["tickets"].append(
             {
@@ -219,11 +214,7 @@ class AmendTests(AmendFixture):
             }
         )
         self.write(edit)
-        # the same edit approved fresh at origin/main is still refused
-        code, message = self.command("approve")
-        self.assertEqual(code, 2, message)
-        self.assertIn("S1", message)
-        self.assertEqual(self.read().get("approval"), first)
+        self.assertNotEqual(moved, first["base"])
         code, message = self.amend()
         self.assertEqual(code, 0, message)
         approval = self.read()["approval"]

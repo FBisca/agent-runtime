@@ -477,7 +477,6 @@ class Pull:
             unit = self.unit_of(task_id)
             self._defer_unverified(task_id, unverified)
             self.log("merged-unverified", unit=unit, task=task_id, reason=unverified)
-        self.flag_unverified_evidence(task_id)
         return True
 
     def merged_early(self, task_id, state):
@@ -499,11 +498,6 @@ class Pull:
             "COMPLETE %s · merged %s%s"
             % (timeutil.iso()[:10], url, " (%s)" % commit[:7] if commit else ""),
         )
-        if unit == ARCHIVE:
-            verdict, lines = self.archive_evidence(task_id, task["packet"])
-            self.log(
-                "archive-evidence-merged-early", task=task_id, verdict=verdict, items=len(lines)
-            )
         self.mark_merged(task_id, pr=url, merge_commit=commit)
         self.stop_unit_agents(unit, "merged")
         narrate.say("done", "merge", "merged early: %s" % url, task=task_id)

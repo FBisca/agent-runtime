@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import approval_recovery, events, narrate
+from .. import approval_recovery, events, narrate, verify
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
 from ..invariants import PARKED
@@ -30,13 +30,13 @@ from .archive import Archive, ArchiveSurface
 from .book import Book, BookSurface
 from .briefs import Briefs
 from .coverage import Coverage
-from .evidence_runs import Evidence, acceptance
 from .findings import Findings
 from .gates import Gates
+from .integration import Integration
 from .lifecycle import Lifecycle
 from .pull import Pull, PullSurface
 from .report import cell
-from .routing import Routes, load_approved, require_yaml, snapshot_dir
+from .routing import Routes, load_approved, require_yaml
 from .runtime import runtime_call
 from .spawn import Spawning, SpawnSurface
 from .spec import SpecSections
@@ -58,7 +58,7 @@ class Driver(
     Answers,
     Briefs,
     Attention,
-    Evidence,
+    Integration,
     Lifecycle,
     Findings,
     Coverage,
@@ -336,8 +336,8 @@ class Driver(
             # A drain: running attempts, reviews and the merge bookkeeping go on, and no worker starts (a first
             # dispatch, a reopened unit, the archive, a verification of an outcome that may be about to change).
             self.refresh_attention()
-            return acted + self.advance_mutations(), 0
-        acted += self.integrate(plan) + self.advance_mutations()
+            return acted, 0
+        acted += self.integrate(plan)
         dispatched = (
             self.reopen_parked(plan)
             + self.dispatch_ready(plan)
@@ -473,9 +473,6 @@ class Driver(
         with self.book() as data:
             return (data.get("plan") or {}).get("state")
 
-    def receipts_dir(self):
-        return self.run_dir / "receipts"
-
     def plan_model(self):
         """The approved plan/1 model; an archive only runs for a YAML plan, which holds one."""
         assert self.model is not None
@@ -487,21 +484,7 @@ class Driver(
         return self.model, self.approval
 
     def acceptance_of(self, data):
-        model, approval = self.contract()
-        return acceptance(
-            model, data, self.receipts_dir(), digest=approval.digest, tree_of=self.tree_of
-        )
-
-    def oracles(self):
-        """The approved test and negative bytes: the approval snapshot's, never the authored directory's."""
-        snapshot = snapshot_dir(self.contract()[1], self.args.state_dir)
-        return yaml_plan.snapshot_files(snapshot, self.plan_path)
-
-    def inputs(self, item):
-        """(oracles, place, negative) the runner takes for `item`, from the approved bytes."""
-        return yaml_plan.runner_inputs(
-            self.plan_path, self.contract()[0], item, self.oracles(), self.repo
-        )
+        return verify.acceptance(data, digest=self.contract()[1].digest, tree_of=self.tree_of)
 
     def tree_of(self, sha):
         try:

@@ -15,7 +15,7 @@ P0-D1..P0-D4):
   - the report names both revisions, the question configuration, the model and the usage, and the same frozen input
     and configuration produce the same report (S4, D26, D53)
 
-Each class has a control case that passes at base and after.
+Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
 
 import json

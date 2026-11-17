@@ -242,9 +242,9 @@ class DrainTests(DrainFixture, unittest.TestCase):
         self.approved = self.plan.read_text(encoding="utf-8")
 
         def satisfy_s2(data):
-            # S2 drops the fixture's `human` evidence, so a test node must prove it
+            # S2 joins the plan for T1 to satisfy, so a test node must prove it
             data["tickets"][0].update(satisfies=["S1", "S2"])
-            data["scenarios"][1].pop("evidence")
+            data["scenarios"].append({"id": "S2", "when": "c", "then": "d"})
 
         first = self.edit(satisfy_s2)
         resumed = report_wait("demo-t1", "complete", id=resume_id("demo-t1"))
@@ -344,6 +344,7 @@ class AmendTests(DrainFixture, unittest.TestCase):
     def test_S14_a_changed_satisfies_or_delivers_resumes_the_worker_on_the_next_packet(self):
         def satisfies(data):
             data["tickets"][0]["satisfies"] = ["S1", "S2"]
+            data["scenarios"].append({"id": "S2", "when": "c", "then": "d"})
 
         def delivers(data):
             data["tickets"][0]["delivers"] = "first, and then some"

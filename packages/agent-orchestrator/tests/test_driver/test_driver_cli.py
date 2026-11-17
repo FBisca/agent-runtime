@@ -2,7 +2,7 @@
 
 `main` was one four-hundred-line function that built the whole parser in one body. It is now one
 builder per command group in `driver/cli.py`, so these are the two things that must not move with it:
-the surface a caller types — the twenty command names and each group's subcommands — and the entry
+the surface a caller types — the nineteen command names and each group's subcommands — and the entry
 points, which import one `run_cli` and must keep reaching the same one.
 """
 
@@ -20,9 +20,10 @@ pytestmark = pytest.mark.unit
 REPO = Path(__file__).resolve().parents[4]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
 
-# The twenty commands the parser offered when this refactor was planned, in the order its help printed
-# them. Literal on purpose: the set is the contract a caller has, not something re-derived from the
-# parser under test. A command added since is free; one of these going missing is not.
+# The commands the parser offered when this refactor was planned, in the order its help printed them,
+# less `accept`, removed with the evidence items it accepted. Literal on purpose: the set is the contract
+# a caller has, not something re-derived from the parser under test. A command added since is free; one
+# of these going missing is not.
 COMMANDS = (
     "plan",
     "plans",
@@ -41,7 +42,6 @@ COMMANDS = (
     "decide",
     "status",
     "verify",
-    "accept",
     "complete",
     "launch",
 )
@@ -81,7 +81,7 @@ def group_help(parser, group):
 class CliSurfaceTests(unittest.TestCase):
     """S14: the decomposition keeps every command name, every group's subcommands and its help."""
 
-    def test_S14_the_parser_still_offers_the_twenty_commands(self):
+    def test_S14_the_parser_still_offers_its_commands(self):
         """structure-budget/S14"""
         from agent_orchestrator import driver
 

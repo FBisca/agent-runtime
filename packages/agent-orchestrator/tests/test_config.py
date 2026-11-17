@@ -24,17 +24,13 @@ class ConfigTests(unittest.TestCase):
     def test_S1_missing_file_means_the_defaults(self):
         loaded = config.load(self.root)
         self.assertEqual(loaded.plans_dir, self.root / "docs" / "plans")
-        self.assertEqual(loaded.acceptance_dir, "acceptance")
         self.assertEqual(loaded.archive_mode, "promote")
         self.assertFalse((self.root / ".orchestrate").exists())
 
     def test_S1_relative_path_is_under_the_repo_root(self):
-        self.write(
-            "plans:\n  dir: work/plans\nacceptance:\n  dir: accept\narchive:\n  mode: discard\n"
-        )
+        self.write("plans:\n  dir: work/plans\narchive:\n  mode: discard\n")
         loaded = config.load(self.root)
         self.assertEqual(loaded.plans_dir, self.root / "work" / "plans")
-        self.assertEqual(loaded.acceptance_dir, "accept")
         self.assertEqual(loaded.archive_mode, "discard")
 
     def test_S1_tilde_and_absolute_paths_are_allowed(self):

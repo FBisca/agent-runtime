@@ -25,11 +25,8 @@ def driver_with(scenarios, covers, slug="demo"):
     return driver
 
 
-def scenario(sid, when="a", then="b", human=None, place=None, oracle=()):
-    evidence = SimpleNamespace(human=human, promote=True, place=place, oracle=list(oracle))
-    return SimpleNamespace(
-        id=sid, when=when, then=then, evidence=evidence if (human or place) else None
-    )
+def scenario(sid, when="a", then="b"):
+    return SimpleNamespace(id=sid, when=when, then=then)
 
 
 class SpecSectionUnit(unittest.TestCase):
@@ -48,29 +45,24 @@ class SpecSectionUnit(unittest.TestCase):
         self.assertNotIn("## Requirements", text)
         self.assertIn("| R9 | S1 | `t.py::t` |", text)
 
-    def test_S2_the_nodes_are_the_covers_then_the_placed_oracle_joined_by_br(self):
-        driver = driver_with(
-            [scenario("S1", place="src/", oracle=["o.py.oracle"])], {"S1": ["a::b", "c::d"]}
-        )
-        self.assertIn("| `a::b`<br>`c::d`<br>`src/o.py` |", driver.spec_section("", {}))
+    def test_S2_the_nodes_are_the_covers_joined_by_br(self):
+        driver = driver_with([scenario("S1")], {"S1": ["a::b", "c::d"]})
+        self.assertIn("| `a::b`<br>`c::d` |", driver.spec_section("", {}))
 
-    def test_S3_a_human_scenario_reads_its_evidence_and_needs_no_node(self):
-        driver = driver_with([scenario("S1", human="check | by hand")], {})
-        self.assertIn("| S1 | human: check \\| by hand |", driver.spec_section("", {}))
-        self.assertEqual(driver.archive_missing(), [])
-
-    def test_S4_a_scenario_with_no_node_and_no_oracle_is_missing(self):
-        driver = driver_with(
-            [scenario("S1"), scenario("S2", human="x"), scenario("S3")], {"S1": ["a::b"]}
-        )
-        self.assertEqual(driver.archive_missing(), ["S3"])
+    def test_S4_every_scenario_with_no_node_is_missing(self):
+        """An implementation provides its evidence: no scenario is exempt from its test node."""
+        driver = driver_with([scenario("S1"), scenario("S2"), scenario("S3")], {"S1": ["a::b"]})
+        self.assertEqual(driver.archive_missing(), ["S2", "S3"])
 
 
 def failing_once():
-    """The archive's outcome evidence fails once, so the archive asks the Lead with `retry` and `skip`."""
-    real, calls = load_script().Driver.archive_evidence, []
+    """The archive's gate fails once, so the archive asks the Lead with `retry` and `skip`. The archive's own gate
+    passes (its pull request's CI is its gate); a failure stands in for anything that stops it."""
+    real, calls = load_script().Driver.gate, []
 
-    def evidence(driver, task_id, packet):
+    def gate(driver, task_id, packet, report):
+        if packet["unit"] != "archive":
+            return real(driver, task_id, packet, report)
         calls.append(task_id)
         if len(calls) == 1:
             return "FAIL", [
@@ -78,16 +70,16 @@ def failing_once():
                     "id": "E1",
                     "kind": "blocking",
                     "source": "verify",
-                    "check": "evidence S1",
+                    "check": "archive",
                     "command": "x",
                     "exit": 1,
                     "excerpt": "S1 boom",
                     "log_path": "/nowhere",
                 }
             ]
-        return real(driver, task_id, packet)
+        return real(driver, task_id, packet, report)
 
-    return mock.patch.object(load_script().Driver, "archive_evidence", evidence)
+    return mock.patch.object(load_script().Driver, "gate", gate)
 
 
 class DriverArchive(ArchiveFixture, unittest.TestCase):
@@ -112,7 +104,7 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
         self.assertEqual((task, kind), ("archive", "archive"))
         self.assertRegex(reason, r"S1.*`retry`.*`skip`")
 
-    def test_S5_a_failing_outcome_asks_the_lead_with_retry_and_skip_and_spawns_no_worker(self):
+    def test_S5_a_failing_archive_gate_asks_the_lead_with_retry_and_skip_and_spawns_no_worker(self):
         self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
         with failing_once():
             self.run_driver()
@@ -158,8 +150,8 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
                 load_script().contracts.make_request(
                     "archive",
                     "archive",
-                    "outcome",
-                    "the archive failed its outcome gate",
+                    "archive",
+                    "the archive failed its gate",
                     [str(self.run_dir / "archive" / "task.md")],
                     menu=("retry", "skip"),
                 )

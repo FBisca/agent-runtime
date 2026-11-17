@@ -23,7 +23,7 @@ def is_final(state):
 
 def group_of(state, markdown, ledger_state):
     """`active` or `older`. A plan that loads is by its state; one that does not is by its ledger's state, so an
-    archived plan whose oracle was promoted away stops asking to be fixed. A Markdown plan is never run: older."""
+    archived plan whose folder was deleted stops asking to be fixed. A Markdown plan is never run: older."""
     if markdown:
         return "older"
     if state is None:
@@ -160,7 +160,7 @@ def alive(pid):
 
 def needs_of(plan, state, tickets, run):
     """The `{plan, ticket, kind}` items an active plan holds for the person. `state` is None for a plan that does not
-    load; `tickets` are the ledger's rows (id, state, unverified); `run` is `scan`'s answer or None."""
+    load; `tickets` are the ledger's rows (id, state); `run` is `scan`'s answer or None."""
 
     def item(ticket, kind):
         return {"plan": plan, "ticket": ticket, "kind": kind}
@@ -173,8 +173,6 @@ def needs_of(plan, state, tickets, run):
     for ticket in tickets:
         if ticket["state"] == "needs you":
             items.append(item(ticket["id"], "needs_you"))
-        if ticket.get("unverified"):
-            items.append(item(ticket["id"], "unverified"))
     if state == "APPROVED" and not (run and run["started"]):
         items.append(item(None, "ready_to_drive"))
     if run:

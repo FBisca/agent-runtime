@@ -10,9 +10,7 @@ goal: >-
   "the unit's newest report" is answered once, and the rule itself stands in the
   living spec as a numbered requirement with the guard that holds it.
 spec: docs/specs/orchestrator-engine.md
-domain: driver
 archive: promote
-outcome: [S1, S2]
 scenarios:
   - id: S1
     when: >-
@@ -23,15 +21,6 @@ scenarios:
       that attempt, prints that file's mtime in UTC whole seconds and the head
       its report claims, and names no directory to search and no glob to match,
       so a reviewer cannot read an earlier attempt's report by mistake
-    evidence:
-      check: >-
-        uv run --frozen --all-packages pytest
-        packages/agent-orchestrator/acceptance/driver/test_review_packet_names_its_report.py
-        -q -k "test_S1_ or test_control_" --junitxml="$EEC_JUNIT"
-      baseline: fail
-      acceptance: [test_review_packet_names_its_report.py]
-      package: packages/agent-orchestrator
-      timeout: 900
   - id: S2
     when: >-
       a reviewer writes its review under another name inside the run directory
@@ -40,15 +29,6 @@ scenarios:
       the gate does not read that file: the reviewer is asked for the file the
       driver named, nothing is copied into the driver's path, and the unit does
       not advance, so one question has exactly one answer
-    evidence:
-      check: >-
-        uv run --frozen --all-packages pytest
-        packages/agent-orchestrator/acceptance/driver/test_review_packet_names_its_report.py
-        -q -k "test_S2_ or test_control_" --junitxml="$EEC_JUNIT"
-      baseline: fail
-      acceptance: [test_review_packet_names_its_report.py]
-      package: packages/agent-orchestrator
-      timeout: 900
   - id: S3
     when: >-
       the engine renders any instruction for a reader — the attempt's task, the
@@ -181,14 +161,3 @@ tickets:
     difficulty: complex
     blocked_by: [T1]
     risk: [state]
-    evidence_waiver: >-
-      The ordering decides which attempt's report the merge trusts, so it is
-      verified where the ledger is real: the unit tests this ticket writes drive
-      claim, report and release through the engine's own book and read the
-      answer back, with a control that a unit whose newest attempt has no report
-      yet answers none rather than an earlier attempt's file.
-approval:
-  by: felippe.bisca@gmail.com
-  at: '2026-11-16T12:31:13.471692+00:00'
-  base: 555251fe070476c0481aeaf405a3bce30a388158
-  digest: 75505f8c569a0a72a1578ddcff84fbbf573766ccc5f8c053b788bd3ac16b94bb

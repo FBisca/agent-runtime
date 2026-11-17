@@ -1,7 +1,6 @@
-"""Outcome oracle for the deterministic-archive plan: the driver archives a plan itself, with no agent, and starts
-the gaps reviewer only once the archive has merged.
+"""The deterministic-archive plan's outcome: the driver archives a plan itself, with no agent, and starts the gaps
+reviewer only once the archive has merged.
 
-Frozen at approval; placed into packages/agent-orchestrator/tests/ by the runner; never edited by a ticket.
 It drives the `run` CLI through the suite's existing archive fixture (fake runtime, fake gh, a real git origin).
 The contract it pins (plan Decisions D1-D6):
 
@@ -17,17 +16,18 @@ The contract it pins (plan Decisions D1-D6):
 
         | Requirement | Scenario | Test nodes |
         |---|---|---|
-        | R<n> | <id> | `<covers node>`<br>`<placed oracle path>` |
+        | R<n> | <id> | `<covers node>`<br>`<covers node>` |
 
   - `gaps` is spawned only after the archive unit is COMPLETE, and the run does not wait for its report
 
-Each class has a control case that passes at base and after, so a class selection always has a passing case.
+Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
 
 import json
 import unittest
 
 import pytest
+import yaml
 from test_archive import ARCHIVE, ArchiveFixture
 from test_archive_yaml import commit_spec
 
@@ -42,7 +42,7 @@ SECTION = (
     "\n"
     "| Requirement | Scenario | Test nodes |\n"
     "|---|---|---|\n"
-    "| R{n} | S1 | `src/a/test_a.py::test_a`<br>`src/a/test_oracle.py` |\n"
+    "| R{n} | S1 | `src/a/test_a.py::test_a` |\n"
 )
 
 
@@ -65,8 +65,9 @@ class DriverArchiveFixture(ArchiveFixture):
 
 
 class NoAgentArchive(DriverArchiveFixture, unittest.TestCase):
-    def test_control_the_plan_has_one_outcome_scenario_with_an_oracle(self):
-        self.assertTrue((self.plan.parent / "demo.oracle" / "test_oracle.py.oracle").is_file())
+    def test_control_the_plan_has_one_scenario(self):
+        scenarios = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["scenarios"]
+        self.assertEqual([s["id"] for s in scenarios], ["S1"])
 
     def test_the_driver_opens_the_archive_pr_itself_and_the_plan_is_archived(self):
         self.run_to_archive()
@@ -76,18 +77,14 @@ class NoAgentArchive(DriverArchiveFixture, unittest.TestCase):
         self.assertEqual((task["status"], task["gate"]), ("COMPLETE", "done"))
         history = [h["state"] for h in self.ledger()["plan"]["history"]]
         self.assertEqual(history[-2:], ["ACCEPTED", "ARCHIVED"])
-        # The url gh printed is the unit's PR: CI is polled on it, and the outcome evidence re-ran on its head.
+        # The url gh printed is the unit's PR: CI is polled on it.
         pr = "https://github.com/o/r/pull/9"
         report = json.loads((self.run_dir / "archive" / "report.json").read_text(encoding="utf-8"))
         self.assertEqual(report["pr"], pr)
         self.assertIn(pr, self.checks_log())
-        self.assertIn("S1.archive.1", self.ledger()["receipts"])
 
-    def test_the_archive_branch_carries_the_plan_files_and_the_placed_oracle_byte_identical(self):
+    def test_the_archive_branch_carries_the_plan_file_byte_identical(self):
         self.run_to_archive()
-        oracle = (self.plan.parent / "demo.oracle" / "test_oracle.py.oracle").read_text()
-        self.assertEqual(self.on_branch("src/a/test_oracle.py"), oracle)
-        self.assertEqual(self.on_branch("docs/plans/demo.oracle/test_oracle.py.oracle"), oracle)
         self.assertEqual(self.on_branch("docs/plans/" + self.plan.name), self.plan.read_text())
 
 

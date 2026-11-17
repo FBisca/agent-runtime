@@ -359,27 +359,13 @@ def add_status_command(commands):
 
 
 def add_verify_command(commands):
-    """`verify`: whether a plan's outcome holds on its receipts."""
+    """`verify`: whether a delivered plan holds on its pinned default-branch commit."""
     sub = commands.add_parser(
         "verify",
-        help="Whether a YAML plan's outcome holds on its receipts; exits non-zero when it does not",
+        help="Whether a delivered YAML plan holds on its pinned default-branch commit (integration ran for this "
+        "approval, the whole suite did not fail); exits non-zero when it does not",
     )
     sub.add_argument("plan")
-    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
-    sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
-
-
-def add_accept_command(commands):
-    """`accept`: a person takes an evidence item that did not pass."""
-    sub = commands.add_parser(
-        "accept",
-        help="A person accepts an evidence item that did not pass (or a human item): HUMAN_ACCEPTED",
-    )
-    sub.add_argument("plan")
-    sub.add_argument("scenario", help="The scenario id of the item, such as S3")
-    sub.add_argument(
-        "--note", required=True, help="What you checked: kept with your name, the time and the tree"
-    )
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
     sub.add_argument("--state-dir", default=yaml_plan.DEFAULT_STATE)
 
@@ -429,7 +415,6 @@ BUILDERS = (
     add_decide_command,
     add_status_command,
     add_verify_command,
-    add_accept_command,
     add_complete_command,
     add_launch_command,
 )

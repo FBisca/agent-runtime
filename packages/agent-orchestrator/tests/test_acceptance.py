@@ -1,7 +1,7 @@
-"""Evidence at the ticket gate, integration on a pinned default-branch SHA, the acceptance states, `accept` and
-`verify <plan>`: a YAML plan is accepted only on receipts the driver wrote for the exact tree and contract."""
+"""Integration on a pinned default-branch SHA, the acceptance states and `verify <plan>`: a YAML plan whose every
+ticket merged is accepted only when its integration ran for the exact tree and contract and the whole suite, when the
+repo declares one, did not fail there."""
 
-import hashlib
 import io
 import json
 import os
@@ -15,25 +15,24 @@ from unittest import mock
 
 import pytest
 import yaml
-from agent_orchestrator import plan as yaml_plan
 from agent_orchestrator import verify
 from fixtures import WORLDS, RunFixture, load_script, report_wait, spawn_id
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
 
-PROBE = "probe\n"
-GOOD = "grep -qx done src/a/feature.txt && test -f checks/probe.txt"
 STATES = ["APPROVED", "RUNNING", "DELIVERED", "VERIFYING"]
 SNAPSHOTS: dict[
     type, dict[str, Path]
 ] = {}  # test class -> the worlds its tests start from, by what built them
 
 
-def scenario(sid, evidence=None):
-    return dict(
-        id=sid, when="a %s" % sid, then="b %s" % sid, **({"evidence": evidence} if evidence else {})
-    )
+# A whole suite that holds only when the feature file says done: a plan whose merge lands anything else is rejected.
+FEATURE_DONE = 'test "$(cat src/a/feature.txt)" = done'
+
+
+def scenario(sid):
+    return dict(id=sid, when="a %s" % sid, then="b %s" % sid)
 
 
 def ticket(tid="T1", satisfies=("S1",), **over):
@@ -50,65 +49,15 @@ def ticket(tid="T1", satisfies=("S1",), **over):
     )
 
 
-def check_item(check=GOOD):
-    return {"check": check, "oracle": ["probe.txt.oracle"], "place": "checks/", "baseline": "fail"}
-
-
-def plan_data(scenarios, tickets, outcome=("S1",)):
+def plan_data(scenarios, tickets):
     return {
         "schema": "plan/1",
         "slug": "demo",
         "goal": "The feature file says done.",
         "spec": "docs/specs/demo.md",
-        "outcome": list(outcome),
         "scenarios": scenarios,
         "tickets": tickets,
     }
-
-
-def model(scenarios, tickets, outcome=("S1",)):
-    return yaml_plan.Plan.model_validate(plan_data(scenarios, tickets, outcome))
-
-
-class RoutingTests(unittest.TestCase):
-    """Which scenarios' evidence runs at a ticket's gate (unit: no process, no repository)."""
-
-    def routed(self, plan, ticket_id, done=()):
-        return verify.gate_scenarios(plan, ticket_id, set(done))
-
-    def test_S16_a_risk_tagged_ticket_runs_the_evidence_of_the_scenarios_it_satisfies(self):
-        plan = model(
-            [scenario("S1", check_item()), scenario("S2", check_item("true")), scenario("S3")],
-            [
-                ticket("T1", ("S2", "S3"), risk=["state"]),
-                ticket("T2", ("S1",)),
-            ],
-        )
-        self.assertEqual(self.routed(plan, "T1"), ["S2"])
-
-    def test_S16_a_ticket_without_risk_that_does_not_complete_an_outcome_runs_no_evidence(self):
-        plan = model(
-            [scenario("S1", check_item()), scenario("S2", check_item("true"))],
-            [ticket("T1", ("S2",)), ticket("T2", ("S1",))],
-        )
-        self.assertEqual(self.routed(plan, "T1"), [])
-
-    def test_S16_the_ticket_that_completes_an_outcomes_satisfies_set_runs_it_whatever_its_risk(
-        self,
-    ):
-        plan = model(
-            [scenario("S1", check_item())],
-            [ticket("T1", ("S1",)), ticket("T2", ("S1",), blocked_by=["T1"])],
-        )
-        self.assertEqual(self.routed(plan, "T1"), [], "T2 still has to deliver its part")
-        self.assertEqual(self.routed(plan, "T2", done=["T1"]), ["S1"])
-        self.assertEqual(self.routed(plan, "T1", done=["T2"]), ["S1"])
-
-    def test_S16_human_evidence_never_runs_at_a_gate(self):
-        plan = model(
-            [scenario("S1", {"human": "confirm"})], [ticket("T1", ("S1",), risk=["state"])]
-        )
-        self.assertEqual(self.routed(plan, "T1"), [])
 
 
 if (
@@ -151,13 +100,10 @@ class AcceptanceFixture(SnapshotFixture, GateFixture):
         super().setUp()
         self.plan.unlink()
         self.plan = self.repo / "docs" / "plans" / "2026-11-10-demo.plan.yaml"
-        self.oracle_dir = self.repo / "docs" / "plans" / "2026-11-10-demo.oracle"
-        self.oracle_dir.mkdir()
-        (self.oracle_dir / "probe.txt.oracle").write_text(PROBE, encoding="utf-8")
         self.COVERS = {"S1": ["src/a/test_feature.py::test_feature"]}
 
     def write_plan(self, scenarios=None, tickets=None):
-        scenarios = scenarios or [scenario("S1", check_item())]
+        scenarios = scenarios or [scenario("S1")]
         tickets = tickets or [ticket("T1", [s["id"] for s in scenarios])]
         self.plan.write_text(
             yaml.safe_dump(plan_data(scenarios, tickets), sort_keys=False), encoding="utf-8"
@@ -184,6 +130,19 @@ class AcceptanceFixture(SnapshotFixture, GateFixture):
                 ]
             )
         self.assertEqual(code, 0, out.getvalue())
+
+    def declare_full(self, run, verify=None):
+        """The repo's `checks.full`: the whole suite integration runs once on the pinned commit."""
+        config = self.repo / ".orchestrate" / "config.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["checks:", "  full:", "    run: '%s'" % run.replace("'", "''")]
+        if verify is not None:
+            lines.append("    verify: %s" % ("true" if verify else "false"))
+        config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def declared(self):
+        config = self.repo / ".orchestrate" / "config.yaml"
+        return config.read_text(encoding="utf-8") if config.exists() else None
 
     def land(self, content):
         """A person's merge: `content` reaches the default branch of origin, from a clone of their own."""
@@ -224,38 +183,24 @@ class AcceptanceFixture(SnapshotFixture, GateFixture):
         step["write"] = [[str(self.run_dir / "t1" / "review.json"), self.review2()]]
         return step
 
-    def default_mutator(self, attempt=1, patch=None):
-        """A wait step: the fresh mutation reviewer of an uncalibrated oracle writes a behavioural patch."""
-        step = report_wait("demo-mut-s1-%d" % attempt, "complete")
-        step["write"] = [
-            [
-                str(self.run_dir / "mutation" / ("S1.%d.patch" % attempt)),
-                patch
-                or "--- a/src/a/feature.txt\n+++ b/src/a/feature.txt\n@@ -1 +1 @@\n-done\n+nope\n",
-            ]
-        ]
-        return step
-
     def drive(self, steps):
         self.waits(steps)
         return self.run_driver("--repo", str(self.repo))
 
     def delivered(self, gate="done", lands="done", scenarios=None, tickets=None):
+        """Every ticket merged and the plan driven to the end. A merge that lands anything but `done` is rejected
+        by the whole suite the plan's repo declares, which holds only when the feature file says done."""
+
         def build():
+            if lands != "done":
+                self.declare_full(FEATURE_DONE)
             self.write_plan(scenarios, tickets)
             if lands:
                 self.merged_on_main(lands)
-            self.drive([self.worker(gate), self.reviewer(), self.default_mutator()])
+            self.drive([self.worker(gate), self.reviewer()])
 
-        key = self.snapshot_key("delivered", gate, lands, scenarios, tickets)
+        key = self.snapshot_key("delivered", gate, lands, scenarios, tickets, self.declared())
         self.from_snapshot(key, build)
-
-    def receipts(self, phase=None):
-        found = [
-            json.loads(p.read_text(encoding="utf-8"))
-            for p in sorted((self.run_dir / "receipts").glob("*.json"))
-        ]
-        return [r for r in found if phase in (None, r["phase"])]
 
     def status(self):
         result = self.cli("status", str(self.plan), "--state-dir", str(self.state_dir), "--json")
@@ -264,18 +209,6 @@ class AcceptanceFixture(SnapshotFixture, GateFixture):
 
     def verify(self, *extra):
         return self.cli("verify", str(self.plan), "--state-dir", str(self.state_dir), *extra)
-
-    def accept(self, sid, note="looked at it", *extra):
-        return self.cli(
-            "accept",
-            str(self.plan),
-            sid,
-            "--note",
-            note,
-            "--state-dir",
-            str(self.state_dir),
-            *extra,
-        )
 
     def origin_tree(self):
         return self.git(self.origin, "rev-parse", "main^{tree}")
@@ -292,19 +225,22 @@ class DeliveredSnapshotTests(unittest.TestCase):
         seen = []
 
         class Readers(AcceptanceFixture, unittest.TestCase):
+            def changed(self):
+                return (self.run_dir / "changed-by-a-test").exists()
+
             def test_first(self):
                 self.delivered()
-                seen.append(len(self.receipts("integration")))
-                for path in (self.run_dir / "receipts").glob("*.json"):
-                    path.unlink()  # a test that changes the plan: the next one must not see it
+                seen.append(self.changed())
+                # a test that changes the plan's world: the next one must not see it
+                (self.run_dir / "changed-by-a-test").write_text("x", encoding="utf-8")
 
             def test_second(self):
                 self.delivered()
-                seen.append(len(self.receipts("integration")))
+                seen.append(self.changed())
 
             def test_third(self):
                 self.delivered()
-                seen.append(len(self.receipts("integration")))
+                seen.append(self.changed())
 
         real = AcceptanceFixture.drive
         with mock.patch.object(
@@ -316,87 +252,20 @@ class DeliveredSnapshotTests(unittest.TestCase):
         self.assertEqual(
             drive.call_count, 1, "the delivered plan was driven again for a later test"
         )
-        self.assertEqual(seen, [1, 1, 1], "a test saw what an earlier test changed")
+        self.assertEqual(seen, [False, False, False], "a test saw what an earlier test changed")
 
 
 class TicketGateTests(AcceptanceFixture, unittest.TestCase):
-    def test_S16_the_completing_ticket_runs_its_evidence_at_its_head_after_the_invariants(self):
-        """The worker's work is not committed yet: the evidence runs on the tree the ticket holds."""
-        self.delivered()
-        (receipt,) = self.receipts("ticket")
-        self.assertEqual((receipt["scenario"], receipt["result"]), ("S1", "PASS"))
-        self.assertEqual(
-            receipt["digest"],
-            yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]["digest"],
-        )
-        self.assertIn(
-            "demo-t1-review", self.spawned(), "a passing ticket evidence goes on to the reviewer"
-        )
-        stem = "S1.ticket.1"
-        recorded = self.ledger()["receipts"][stem]
-        raw = (self.run_dir / "receipts" / (stem + ".json")).read_bytes()
-        self.assertEqual(
-            recorded, hashlib.sha256(raw).hexdigest(), "the ledger holds the receipt's sha256"
-        )
-
-    def test_S16_a_failing_evidence_is_a_fix_round_carrying_the_command_and_the_log_tail(self):
-        check = "echo the-feature-says-$(cat src/a/feature.txt) >&2; grep -qx done src/a/feature.txt && test -f checks/probe.txt"
-        self.write_plan([scenario("S1", check_item(check))])
-        self.drive([self.worker("almost")])
-        (receipt,) = self.receipts("ticket")
-        self.assertEqual(receipt["result"], "FAIL")
-        items = self.first_findings()["items"]
-        self.assertEqual(len(items), 1, items)
-        self.assertEqual(items[0]["command"], check)
-        self.assertIn("the-feature-says-almost", items[0]["excerpt"])
-        self.assertEqual(self.first_findings()["source"], "verify")
-        self.assertTrue(Path(items[0]["log_path"]).is_file())
-        self.assertNotIn("demo-t1-review", self.spawned(), "a failing evidence is not reviewed")
-
-    def test_S16_an_unknown_evidence_is_a_fix_round_too(self):
-        check = "if [ -f src/a/feature.txt ]; then sleep 30; else exit 1; fi"
-        item = dict(check_item(check), timeout=1)
-        self.write_plan([scenario("S1", item)])
-        self.drive([self.worker("done")])
-        (receipt,) = self.receipts("ticket")
-        self.assertEqual((receipt["result"], receipt["reason"]), ("UNKNOWN", "timeout"))
-        (finding,) = self.first_findings()["items"]
-        self.assertIn("UNKNOWN", finding["excerpt"])
-
-    def test_the_gate_says_it_picked_up_a_report_and_each_evidence_run_as_it_starts_and_ends(self):
-        """A gate runs for minutes in a scratch tree: the pane must not look idle while it does."""
+    def test_the_gate_says_it_picked_up_a_report(self):
+        """The invariants read the checkout before the reviewer is spawned: the pane says the report was taken."""
         self.write_plan()
         self.merged_on_main("done")
-        result = self.drive([self.worker("done"), self.reviewer(), self.default_mutator()])
-        lines = result.stderr.splitlines()
-        picked = next(i for i, line in enumerate(lines) if "checking its report" in line)
-        started = next(i for i, line in enumerate(lines) if "running S1 evidence" in line)
-        ended = next(i for i, line in enumerate(lines) if "S1 evidence PASS" in line)
-        self.assertLess(picked, started)
-        self.assertLess(started, ended)
-        self.assertIn("ticket", lines[started])
-
-    def test_a_failing_evidence_run_is_said_as_a_failure(self):
-        check = "grep -qx done src/a/feature.txt && test -f checks/probe.txt"
-        self.write_plan([scenario("S1", check_item(check))])
-        result = self.drive([self.worker("almost")])
+        result = self.drive([self.worker("done"), self.reviewer()])
         self.assertTrue(
-            any("S1 evidence FAIL" in line and "✗" in line for line in result.stderr.splitlines()),
+            any("checking its report" in line for line in result.stderr.splitlines()),
             result.stderr,
         )
-
-    def test_S16_a_ticket_that_routes_no_evidence_runs_none(self):
-        self.write_plan(
-            [
-                scenario("S1", check_item()),
-                scenario("S2", {"check": "test -f src/a/feature.txt", "baseline": "fail"}),
-            ],
-            [ticket("T1", ("S2",)), ticket("T2", ("S1",), blocked_by=["T1"])],
-        )
-        self.COVERS = {"S2": ["src/a/test_feature.py::test_feature"]}
-        self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
-        self.run_driver("--repo", str(self.repo))
-        self.assertEqual(self.receipts("ticket"), [])
+        self.assertIn("demo-t1-review", self.spawned(), "a ticket that passes verify is reviewed")
 
 
 class IntegrationTests(AcceptanceFixture, unittest.TestCase):
@@ -405,15 +274,10 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
     ):
         self.delivered()
         self.assertEqual(self.history(), STATES + ["ACCEPTED", "ARCHIVED"])
-        (receipt,) = [r for r in self.receipts("integration") if r["scenario"] == "S1"]
         digest = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]["digest"]
-        self.assertEqual(
-            (receipt["result"], receipt["tree"], receipt["digest"]),
-            ("PASS", self.origin_tree(), digest),
-        )
         pin = self.ledger()["integration"]
         self.assertEqual(pin["sha"], self.git(self.origin, "rev-parse", "main"))
-        self.assertEqual(pin["tree"], self.origin_tree())
+        self.assertEqual((pin["tree"], pin["digest"]), (self.origin_tree(), digest))
         self.assertEqual(len(self.gh_calls("pr", "create")), 1, "an accepted plan is archived")
         self.assertEqual(self.verify().returncode, 0)
 
@@ -421,10 +285,9 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.delivered(lands="almost")
         self.assertEqual(self.history(), STATES + ["REJECTED"])
         self.assertEqual(self.status()["tickets"][0]["state"], "COMPLETE")
-        self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL"])
         self.assertEqual(self.gh_calls("pr", "create"), [], "a rejected plan is not archived")
         (wake,) = [w for w in self.wakes() if w["kind"] == "plan-rejected"]
-        for way_out in ("S1", "ticket", "run", "accept"):
+        for way_out in ("full", "ticket", "run"):
             self.assertIn(way_out, wake["text"])
         self.assertNotEqual(self.verify().returncode, 0)
 
@@ -442,13 +305,13 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
             "HEAD^{tree}",
         )
         self.prs([{"state": "MERGED", "mergeCommit": {"oid": orphan}}])
-        self.drive([self.worker("done"), self.reviewer(), self.default_mutator()])
+        self.drive([self.worker("done"), self.reviewer()])
         self.assertEqual(
             self.history(),
             ["APPROVED", "RUNNING"],
             "nothing is delivered until a commit holds the merge",
         )
-        self.assertEqual(self.receipts("integration"), [])
+        self.assertNotIn("integration", self.ledger())
         (wake,) = [w for w in self.wakes() if w["kind"] == "integration-waits"]
         self.assertIn("T1", wake["text"])
 
@@ -456,44 +319,36 @@ class IntegrationTests(AcceptanceFixture, unittest.TestCase):
         self.write_plan()
         self.prs([{"state": "MERGED", "mergeCommit": {"oid": "f" * 40}}])
         self.drive(
-            [self.worker("done"), self.reviewer(), self.default_mutator()]
+            [self.worker("done"), self.reviewer()]
         )  # gh answers a merge commit that exists nowhere
         self.assertEqual(self.history(), ["APPROVED", "RUNNING"])
-        self.assertEqual(self.receipts("integration"), [])
+        self.assertNotIn("integration", self.ledger())
         self.assertTrue([w for w in self.wakes() if w["kind"] == "integration-waits"])
 
     def test_S17_a_ticket_complete_without_a_known_merge_commit_makes_integration_wait(self):
         self.write_plan()
         self.merged_on_main("done")
         self.prs([{"state": "MERGED", "mergeCommit": None}])  # gh names no merge commit
-        self.drive([self.worker("done"), self.reviewer(), self.default_mutator()])
+        self.drive([self.worker("done"), self.reviewer()])
         self.assertEqual(
             self.history(),
             ["APPROVED", "RUNNING"],
             "a ticket whose merge is unknown is not contained by any commit",
         )
-        self.assertEqual(self.receipts("integration"), [])
+        self.assertNotIn("integration", self.ledger())
         (wake,) = [w for w in self.wakes() if w["kind"] == "integration-waits"]
         self.assertIn("T1", wake["text"])
 
     def test_S17_a_new_run_verifies_a_rejected_plan_again(self):
         self.delivered(lands="almost")
         subprocess.run(self.land("done"), check=True, capture_output=True)
-        self.drive([self.default_mutator()])
+        self.drive([])
         self.assertEqual(self.history()[-1], "ARCHIVED")
-        self.assertEqual([r["result"] for r in self.receipts("integration")], ["FAIL", "PASS"])
+        self.assertEqual(self.ledger()["integration"]["attempt"], 2)
 
 
 class WholeSuiteTests(AcceptanceFixture, unittest.TestCase):
     """`checks.full.run` at verify: once per pass on the pinned commit, or left to CI (check-tiers S6, S7)."""
-
-    def declare_full(self, run, verify=None):
-        config = self.repo / ".orchestrate" / "config.yaml"
-        config.parent.mkdir(parents=True, exist_ok=True)
-        lines = ["checks:", "  full:", "    run: '%s'" % run.replace("'", "''")]
-        if verify is not None:
-            lines.append("    verify: %s" % ("true" if verify else "false"))
-        config.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def full_events(self):
         return self.run_events("full")
@@ -502,12 +357,10 @@ class WholeSuiteTests(AcceptanceFixture, unittest.TestCase):
         def build():
             self.write_plan()
             self.merged_on_main("done")
-            self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
+            self.waits([self.worker("done"), self.reviewer()])
             self.run_driver("--repo", str(self.repo), *extra)
 
-        config = self.repo / ".orchestrate" / "config.yaml"
-        declared = config.read_text(encoding="utf-8") if config.exists() else None
-        self.from_snapshot(self.snapshot_key("deliver", extra, declared), build)
+        self.from_snapshot(self.snapshot_key("deliver", extra, self.declared()), build)
 
     def test_S6_a_failing_whole_suite_on_the_integrated_commit_rejects_the_plan(self):
         self.declare_full("test -f src/a/never.txt")
@@ -561,160 +414,17 @@ class WholeSuiteTests(AcceptanceFixture, unittest.TestCase):
         self.assertFalse(Path(ran_in).exists(), "the scratch checkout is removed afterwards")
         self.assertIn("whole-suite-output", (self.run_dir / "full.log").read_text(encoding="utf-8"))
 
-    def test_S6_a_failing_whole_suite_still_runs_the_plans_evidence(self):
-        self.declare_full("test -f src/a/never.txt")
-        self.deliver()
-        self.assertEqual([r["result"] for r in self.receipts("integration")], ["PASS"])
-
-    def test_S7_skip_full_still_lets_the_plans_failing_evidence_reject_the_plan(self):
-        self.declare_full("true")
-        self.write_plan()
-        self.merged_on_main("almost")
-        self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
-        self.run_driver("--repo", str(self.repo), "--skip-full")
-        self.assertEqual(self.history(), STATES + ["REJECTED"])
-        (event,) = self.full_events()
-        self.assertEqual(event["state"], "skipped")
-
     def test_S7_a_run_without_a_declared_full_records_no_skip(self):
         self.deliver("--skip-full")
         self.assertEqual(self.full_events(), [])
 
-    def test_control_a_plan_whose_evidence_holds_is_accepted_without_a_config(self):
+    def test_control_a_delivered_plan_is_accepted_without_a_config(self):
         self.deliver()
         self.assertEqual(self.history()[: len(STATES) + 1], STATES + ["ACCEPTED"])
         self.assertEqual(self.full_events(), [])
 
 
-class HumanTests(AcceptanceFixture, unittest.TestCase):
-    SCENARIOS = None
-
-    def two(self):
-        return [
-            scenario("S1", check_item()),
-            scenario("S2", {"human": "a person confirms the panel"}),
-        ]
-
-    def delivered_with_human(self, lands="done"):
-        self.COVERS = {
-            "S1": ["src/a/test_feature.py::test_feature"],
-            "S2": ["src/a/test_feature.py::test_feature"],
-        }
-        self.delivered(lands=lands, scenarios=self.two())
-
-    def test_S18_a_human_item_waits_for_a_person_and_the_archive_waits_for_it(self):
-        self.delivered_with_human()
-        self.assertEqual(self.history(), STATES)
-        self.assertEqual(self.gh_calls("pr", "create"), [])
-        self.assertTrue([w for w in self.wakes() if w["kind"] == "plan-needs-accept"])
-        self.assertNotEqual(self.verify().returncode, 0)
-
-    def test_S18_accept_records_the_person_time_scope_and_tree_and_the_plan_is_accepted_with_human(
-        self,
-    ):
-        self.delivered_with_human()
-        done = self.accept("S2", "checked the panel")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        record = self.ledger()["acceptance"]["S2"]
-        self.assertEqual(record["state"], "HUMAN_ACCEPTED")
-        self.assertEqual(record["tree"], self.origin_tree())
-        for key in ("by", "at", "scope", "note", "digest"):
-            self.assertTrue(record[key], key)
-        self.assertIn("S2", record["scope"])
-        self.assertEqual(self.history()[-1], "ACCEPTED_WITH_HUMAN")
-        self.assertNotIn("ACCEPTED", self.history())
-        verified = self.verify()
-        self.assertEqual(verified.returncode, 0, verified.stderr)
-        self.assertEqual(json.loads(verified.stdout)["state"], "ACCEPTED_WITH_HUMAN")
-
-    def test_S18_a_run_after_accept_archives_the_plan(self):
-        self.delivered_with_human()
-        self.assertEqual(self.accept("S2").returncode, 0)
-        self.drive([])
-        self.assertEqual(len(self.gh_calls("pr", "create")), 1)
-
-    def test_S18_the_lead_human_accepts_a_rejected_item(self):
-        self.delivered(lands="almost")
-        done = self.accept("S1", "the oracle is wrong about the file; verified by hand")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.history()[-2:], ["REJECTED", "ACCEPTED_WITH_HUMAN"])
-        self.assertEqual(self.ledger()["acceptance"]["S1"]["previous"]["result"], "FAIL")
-
-    def test_S25_a_plan_accepted_with_human_over_a_failing_outcome_archives_without_a_fix_round(
-        self,
-    ):
-        self.delivered(lands="almost")
-        self.assertEqual(self.accept("S1").returncode, 0)
-        self.drive([])
-        self.assertEqual(self.history()[-2:], ["ACCEPTED_WITH_HUMAN", "ARCHIVED"])
-        self.assertEqual(len(self.gh_calls("pr", "create")), 1)
-        self.assertEqual(self.receipts("archive"), [], "an item a person accepted is not re-run")
-
-    def test_S18_accept_refuses_an_item_that_passes_and_a_spawned_worker(self):
-        self.delivered_with_human()
-        refused = self.accept("S1")
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("passes", refused.stderr)
-        self.assertNotIn("acceptance", self.ledger())
-        out = io.StringIO()
-        with (
-            mock.patch.object(
-                load_script(), "resolve_runtime", return_value={"role": "worker", "parent": "p"}
-            ),
-            redirect_stdout(out),
-            redirect_stderr(out),
-        ):
-            code = load_script().run_cli(
-                ["accept", str(self.plan), "S2", "--note", "x", "--state-dir", str(self.state_dir)]
-            )
-        self.assertEqual(code, 2, out.getvalue())
-        self.assertIn("Lead", out.getvalue())
-        self.assertNotIn("acceptance", self.ledger())
-
-    def test_S18_accept_needs_a_note(self):
-        self.delivered_with_human()
-        result = self.cli("accept", str(self.plan), "S2", "--state-dir", str(self.state_dir))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("--note", result.stderr)
-
-
-class UnverifiedTests(AcceptanceFixture, unittest.TestCase):
-    def test_S19_a_person_merges_a_ticket_whose_evidence_failed_and_the_plan_cannot_be_accepted(
-        self,
-    ):
-        """The ticket evidence failed at its gate (a fix round was open) and the pull request was merged by hand."""
-        check = "grep -qx done src/a/feature.txt && test -f checks/probe.txt"
-        self.write_plan(
-            [scenario("S1", check_item(check))], [ticket("T1", ("S1",), risk=["state"])]
-        )
-        sha = self.merged_on_main("almost")
-        self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
-        self.drive([self.worker("almost")])
-        status = self.status()
-        self.assertEqual(status["tickets"][0]["state"], "COMPLETE")
-        self.assertTrue(status["tickets"][0]["unverified"])
-        self.assertEqual(self.ledger()["unverified"]["T1"]["scenarios"], ["S1"])
-        self.assertEqual(self.receipts("ticket")[0]["result"], "FAIL")
-        self.assertEqual(self.history()[-1], "REJECTED", "the evidence still fails at integration")
-        refused = self.accept("S1")
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("unverified", refused.stderr)
-        self.assertNotEqual(self.verify().returncode, 0)
-
-    def test_S19_a_ticket_merged_after_its_evidence_passed_is_not_flagged(self):
-        self.delivered()
-        self.assertNotIn("unverified", self.status()["tickets"][0])
-        self.assertNotIn("unverified", self.ledger())
-
-
 class VerifyTests(AcceptanceFixture, unittest.TestCase):
-    def receipt_path(self, phase="integration"):
-        return next(
-            p
-            for p in sorted((self.run_dir / "receipts").glob("*.json"))
-            if json.loads(p.read_text(encoding="utf-8"))["phase"] == phase
-        )
-
     def reasons(self, result):
         return [e for e in json.loads(result.stdout)["errors"]]
 
@@ -724,84 +434,47 @@ class VerifyTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         body = json.loads(result.stdout)
         self.assertEqual(body["state"], "ACCEPTED")
-        self.assertEqual([(i["scenario"], i["state"]) for i in body["items"]], [("S1", "PASS")])
+        self.assertEqual(body["items"], [])
+        self.assertEqual(body["integration"], self.git(self.origin, "rev-parse", "main"))
 
-    def test_S20_a_missing_receipt_does_not_count(self):
+    def test_S20_an_integration_run_for_another_digest_or_tree_does_not_count(self):
         self.delivered()
-        path = self.receipt_path()
-        shutil.move(str(path), str(path) + ".gone")
-        result = self.verify()
-        self.assertNotEqual(result.returncode, 0)
-        (reason,) = self.reasons(result)
-        self.assertIn("S1", reason)
-        self.assertIn("missing", reason)
-        self.assertEqual(json.loads(result.stdout)["items"][0]["state"], "UNKNOWN")
-
-    def test_S20_a_receipt_for_another_tree_or_digest_does_not_count(self):
-        self.delivered()
-        path = self.receipt_path()
-        original = path.read_text(encoding="utf-8")
-        for field, why in (("tree", "another tree"), ("digest", "another approval digest")):
-            forged = (
-                json.dumps(
-                    dict(json.loads(original), **{field: "0" * 40}), indent=2, sort_keys=True
-                )
-                + "\n"
-            )
-            path.write_text(forged, encoding="utf-8")
-            data = self.ledger()
-            data["receipts"][path.stem] = hashlib.sha256(
-                forged.encode()
-            ).hexdigest()  # the ledger agrees: still stale
-            (self.state_dir / "demo.json").write_text(json.dumps(data), encoding="utf-8")
+        original = self.ledger()
+        for field, why in (("digest", "another approval digest"), ("tree", "holds tree")):
+            forged = json.loads(json.dumps(original))
+            forged["integration"][field] = "0" * 40
+            (self.state_dir / "demo.json").write_text(json.dumps(forged), encoding="utf-8")
             result = self.verify()
             self.assertNotEqual(result.returncode, 0, field)
             (reason,) = self.reasons(result)
-            self.assertIn("S1", reason)
+            self.assertIn("integration", reason)
             self.assertIn(why, reason)
-        path.write_text(original, encoding="utf-8")
+            self.assertEqual(json.loads(result.stdout)["items"][0]["state"], "UNKNOWN")
+        (self.state_dir / "demo.json").write_text(json.dumps(original), encoding="utf-8")
 
-    def test_S20_a_receipt_that_no_longer_matches_the_ledger_hash_does_not_count(self):
-        self.delivered()
-        path = self.receipt_path()
-        path.write_text(
-            path.read_text(encoding="utf-8").replace('"PASS"', '"PASS" '), encoding="utf-8"
-        )
+    def test_S20_a_failing_whole_suite_names_its_command_and_log(self):
+        self.delivered(lands="almost")
         result = self.verify()
         self.assertNotEqual(result.returncode, 0)
         (reason,) = self.reasons(result)
-        self.assertIn("S1", reason)
-        self.assertIn("sha256", reason)
-
-    def test_S3_a_receipt_rewritten_in_place_keeping_digest_tree_and_result_does_not_count(self):
-        """A Pi worker has no hooks: it can rewrite a receipt, keeping its digest, tree and result, and the ledger must still refuse it."""
-        self.delivered()
-        path = self.receipt_path()
-        original = json.loads(path.read_text(encoding="utf-8"))
-        rewritten = json.dumps(original, indent=4, sort_keys=False) + "\n\n"
-        self.assertNotEqual(rewritten, path.read_text(encoding="utf-8"))
-        path.write_text(rewritten, encoding="utf-8")
-        for field in ("digest", "tree", "result"):
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))[field], original[field])
-        result = self.verify()
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        (reason,) = self.reasons(result)
-        self.assertIn("S1", reason)
-        self.assertIn("sha256", reason)
-        self.assertEqual(json.loads(result.stdout)["items"][0]["state"], "UNKNOWN")
+        self.assertIn("full FAIL", reason)
+        self.assertIn(FEATURE_DONE, reason)
 
     def test_S20_a_plan_that_never_reached_integration_is_not_accepted(self):
         self.write_plan()
         result = self.verify()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("S1", self.reasons(result)[0])
+        self.assertIn("pinned default-branch commit", self.reasons(result)[0])
 
     def test_S20_acceptance_is_computed_the_same_from_the_ledger_data(self):
-        """The pure function `verify` and the driver share: a human acceptance never turns a stale receipt into PASS."""
-        plan = model([scenario("S1", check_item())], [ticket("T1")])
-        data = {"integration": {"sha": "a" * 40, "tree": "t", "digest": "d"}, "receipts": {}}
-        got = verify.acceptance(plan, data, Path("/nonexistent"), digest="d")
+        """The pure function `verify` and the driver share: the pin's tree must be the commit's."""
+        data = {"integration": {"sha": "a" * 40, "tree": "t", "digest": "d", "attempt": 1}}
+        self.assertEqual(verify.acceptance(data, digest="d")["state"], "ACCEPTED")
+        got = verify.acceptance(data, digest="d", tree_of=lambda sha: "other")
         self.assertEqual((got["state"], got["items"][0]["state"]), ("REJECTED", "UNKNOWN"))
+        failed = dict(data, full={"state": "FAIL", "attempt": 1, "command": "x", "sha": "a" * 40})
+        got = verify.acceptance(failed, digest="d")
+        self.assertEqual((got["state"], got["items"][0]["scenario"]), ("REJECTED", "full"))
 
 
 class RejectionTests(AcceptanceFixture, unittest.TestCase):

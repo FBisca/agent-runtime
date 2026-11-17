@@ -1,32 +1,25 @@
 """Where a plan lays its files out, and what a repository's listing says about them.
 
-A plan in its own folder is `<folder>/plan.yaml`, a legacy plan `<stem>.plan.yaml` beside its narrative
-and its oracle directory. Every command that reads, snapshots, places, guards or copies a plan's files
-asks `PlanLayout`, so the file name is read in that class only. The git facts it is built on are here
-too: an oracle's basename clashes with what the package already holds, and a folder that may be
-deleted sits directly under plans.dir.
+A plan in its own folder is `<folder>/plan.yaml`, a legacy plan `<stem>.plan.yaml` beside its narrative.
+Every command that reads, snapshots, guards or copies a plan's files asks `PlanLayout`, so the file name
+is read in that class only. The git facts it is built on are here too: a folder that may be deleted
+sits directly under plans.dir.
 """
 
 import functools
-import os
-import posixpath
 import subprocess
 from pathlib import Path
 
 from .plan_document import PlanError
 
-# A plan in its own folder is always named this; a legacy plan is `<name>.plan.yaml` beside `<name>.oracle/`.
+# A plan in its own folder is always named this; a legacy plan is `<name>.plan.yaml` beside `<name>.plan.md`.
 FOLDER_PLAN = "plan.yaml"
-
-
-# What git lists for a tree: the files it tracks and the new ones it would carry, minus what it ignores.
-LISTED = ("ls-files", "-z", "--cached", "--others", "--exclude-standard")
 
 
 class PlanLayout:
     """The one place that knows how a plan lays out its files, for a plan in its own folder (`<folder>/plan.yaml`)
-    and a legacy plan (`<stem>.plan.yaml` beside `<stem>.plan.md` and `<stem>.oracle/`). Built from the plan path and
-    the repository; every command that reads, snapshots, places, guards or copies a plan's files asks it, so the
+    and a legacy plan (`<stem>.plan.yaml` beside `<stem>.plan.md`). Built from the plan path and
+    the repository; every command that reads, snapshots, guards or copies a plan's files asks it, so the
     file name is read in this class only. `repo` may be left out where only the path is asked."""
 
     YAML = ".plan.yaml"
@@ -74,22 +67,17 @@ class PlanLayout:
         return self.path.parent if self.is_folder else None
 
     @property
-    def oracle_dir(self):
-        """A legacy plan's oracle directory beside it, or None for a folder plan."""
-        return None if self.is_folder else self.path.with_name(self.stem + ".oracle")
-
-    @property
     def narrative(self):
         """A legacy plan's Markdown narrative beside it, or None for a folder plan."""
         return None if self.is_folder else self.path.with_name(self.stem + self.MARKDOWN)
 
     @property
     def contract_files(self):
-        """The paths that are the plan's contract: the folder plan's plan.yaml (the rest of its folder is read from
-        `owns`), a legacy plan's file, narrative and oracle directory."""
+        """The paths that are the plan's: the folder plan's plan.yaml (the rest of its folder is read from `owns`), a
+        legacy plan's file and narrative."""
         if self.is_folder:
             return [self.path]
-        return [self.path, self.narrative, self.oracle_dir]
+        return [self.path, self.narrative]
 
     @property
     def repository(self):
@@ -117,13 +105,11 @@ class PlanLayout:
 
     def owns(self, name):
         """Whether the repository path `name` belongs to the plan: anything in a folder plan's folder, or a legacy
-        plan's file or oracle directory. A folder plan kept outside the repository owns no repository path."""
+        plan's file. A folder plan kept outside the repository owns no repository path."""
         if self.is_folder:
             folder = self.place(self.folder)
             return folder is not None and name.startswith(folder + "/")
-        plan = self.plan_place
-        oracles = posixpath.dirname(plan) + "/" + self.oracle_dir.name
-        return name == plan or name.startswith(oracles + "/")
+        return name == self.plan_place
 
     def holds_repo(self):
         folder = self.folder
@@ -186,24 +172,6 @@ def _toplevel(directory):
 def _identity(repo):
     common = Path(git(repo, "rev-parse", "--git-common-dir"))
     return str((Path(repo) / common).resolve())
-
-
-def package_files(package, skip):
-    """{basename: first path} of every file of `package` outside the `skip` trees: pytest imports a test module by
-    its basename, so a promoted file needs a name no other module in the package has. What belongs to the package
-    is what git lists: another checkout's or an ignored directory's copy is no module of it, and a tree outside a
-    repository, which has no index to ask, is walked instead."""
-    try:
-        listed = git(package, *LISTED).split("\0")
-        # An untracked directory git does not descend into is one entry ending in `/`, and holds no file.
-        paths = [Path(package, name) for name in listed if name and not name.endswith("/")]
-    except PlanError:
-        paths = [Path(here, name) for here, _, names in os.walk(package) for name in names]
-    return {
-        path.name: path
-        for path in paths
-        if not any(t in (path.resolve(), *path.resolve().parents) for t in skip)
-    }
 
 
 def not_under_plans_dir(folder, plans_dir):

@@ -34,7 +34,7 @@ class FullSuiteAtVerify(AcceptanceFixture, unittest.TestCase):
     def deliver(self, *extra):
         self.write_plan()
         self.merged_on_main("done")
-        self.waits([self.worker("done"), self.reviewer(), self.default_mutator()])
+        self.waits([self.worker("done"), self.reviewer()])
         self.run_driver("--repo", str(self.repo), *extra)
 
     def test_S6_a_failing_whole_suite_on_the_integrated_commit_rejects_the_plan(self):
@@ -80,7 +80,7 @@ class FullSuiteAtVerify(AcceptanceFixture, unittest.TestCase):
             (event["state"], event["reason"]), ("skipped", "checks.full.verify: false")
         )
 
-    def test_control_a_plan_whose_evidence_holds_is_accepted_without_a_config(self):
+    def test_control_a_delivered_plan_is_accepted_without_a_config(self):
         self.deliver()
         self.assertEqual(self.history()[: len(STATES) + 1], STATES + ["ACCEPTED"])
         self.assertEqual(self.full_events(), [])

@@ -4,9 +4,8 @@ A drive that can go no further parks. The ledger keeps one record of it - its ki
 approval the drive holds, since when, the units and the way out - `attention.md` shows that record
 beside the tickets that need a person, the Lead is woken with it, and a park with nothing in flight
 asks again until it is answered. A plan whose tickets are all done is archived: a discard deletes its
-folder, a promote places the oracles, copies the plan files, writes the spec section with its Coverage
-table, commits, pushes and opens the pull request, and the outcome's evidence is run again on that
-head. A park the Lead answers is reopened from the plan, and the guard that catches an escaping error
+folder, a promote deletes the folder (or copies a legacy plan's files), writes the spec section with its
+Coverage table, commits, pushes and opens the pull request. A park the Lead answers is reopened from the plan, and the guard that catches an escaping error
 logs it, wakes the Lead and says it on stderr.
 
 It lives beside `__init__.py` rather than in it because no module of the package may pass a thousand
@@ -23,7 +22,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
-from .. import approval_recovery, contracts, narrate, runner, timeutil, verify
+from .. import approval_recovery, contracts, narrate, timeutil
 from .. import config as repo_config
 from .. import ledger as ledgers
 from .. import plan as yaml_plan
@@ -57,7 +56,7 @@ DRIVER_ID = "driver"
 # What the archive's worker is held to: the spec section and the approved bytes, in the worker's words.
 YAML_ARCHIVE_ACCEPTANCE = [
     "Every scenario is a requirement `(from <slug>/S<n>)` in the plan's spec, and the spec's Coverage table lists the test node ids that prove it; no new spec file is created",
-    "plan.yaml, its Markdown narrative and its oracle directory are byte-identical to the approved copies; the oracles the driver placed are untouched; no test is renamed and no Status is written into plan.yaml",
+    "plan.yaml and its Markdown narrative are byte-identical to the approved copies; no test is renamed and no Status is written into plan.yaml",
 ]
 
 
@@ -235,86 +234,15 @@ class Archive:
     # ---- the archive -------------------------------------------------------------------------------------------------
     # the driver's own unit, no agent: the branch, the spec, the pull request
 
-    def _archive_mismatches(self, checkout, model):
-        """Placed oracles on the archive head that are not the approval snapshot's bytes. Read before the runner
-        re-places anything, so an edit cannot be masked by the re-run. The copied plan files are the reviewer's."""
-        files = self.oracles()
-        root = Path(checkout)
-        bad = []
-        for rel, name in self._oracle_targets(model):
-            path = root / rel
-            if not path.is_file() or path.read_bytes() != files[name]:
-                bad.append(rel)
-        return bad
-
-    def archive_evidence(self, task_id, packet):
-        """The outcome's evidence, run again on the archive head: the promoted oracles and the spec must not have
-        changed what the plan delivered. Only the outcome items that passed at integration are re-run, the set
-        verify.mark_archive checks: an item a person accepted over a FAIL cannot pass here, and no fix round can
-        change that. ("PASS" | "FAIL" | "error", items); FAIL and UNKNOWN are both a fix round.
-        A discarded plan promoted nothing and wrote no spec, so there is nothing to hold on its archive head."""
-        if self._archive_mode() == "discard":
-            return "PASS", []
-        try:
-            commit = verify.snapshot_commit(packet["checkout"])
-            tree = self.tree_of(commit)
-            model = self.contract()[0]
-            log = self.run_dir / task_id / "approved-bytes.log"
-            items = self._approved_bytes_items(
-                self._archive_mismatches(packet["checkout"], model), log
-            )
-            with self.book() as data:
-                held = {
-                    i["scenario"] for i in self.acceptance_of(data)["items"] if i["state"] == "PASS"
-                }
-            for scenario in verify.check_scenarios(model):
-                if scenario.id not in model.outcome or scenario.id not in held:
-                    continue
-                result = self.run_evidence(scenario.id, "archive", commit, task=task_id)
-                if result.receipt["result"] != "PASS":
-                    items.append(self.evidence_item(len(items) + 1, scenario.id, result))
-            with self.book() as data:
-                data["archive"] = {
-                    "sha": commit,
-                    "tree": tree,
-                    "digest": self.contract()[1].digest,
-                    "at": timeutil.iso(),
-                }
-        except (runner.RunnerError, verify.VerifyError) as error:
-            return "error", [str(error)[:500]]
-        return ("FAIL", items) if items else ("PASS", [])
-
-    def _approved_bytes_items(self, mismatched, log):
-        """A blocking item per file whose bytes on the archive head differ from the approval snapshot's, and the log
-        that names each difference beside them."""
-        if mismatched:
-            log.parent.mkdir(parents=True, exist_ok=True)
-            log.write_text(
-                "\n".join("differs: " + rel for rel in mismatched) + "\n", encoding="utf-8"
-            )
-        return [
-            {
-                "id": "E%d" % (number + 1),
-                "kind": "blocking",
-                "source": "verify",
-                "check": "approved bytes",
-                "command": "cmp",
-                "exit": 1,
-                "excerpt": "%s differs from the approved bytes; restore it byte-identical" % rel,
-                "log_path": str(log),
-            }
-            for number, rel in enumerate(mismatched)
-        ]
-
     def start_archive(self, plan):
-        """The archive's own unit, started once every ticket is done and the outcome holds: a discard deletes the folder, a promote claims the unit that builds the branch."""
+        """The archive's own unit, started once every ticket is done and the plan is accepted: a discard deletes the folder, a promote claims the unit that builds the branch."""
         agents = [t for t in plan["tickets"] if is_agent(t)]
         # Verify starts on the agent tickets; the archive waits for every ticket, a person's included, because a
         # scenario only a person can prove has its test node from that person's `complete`.
         if not agents or not all(is_done(t) for t in plan["tickets"]) or ARCHIVE in self.failed:
             return 0
         if self.plan_state() not in _engine().ACCEPTED_STATES:
-            return 0  # the outcome is archived only once its evidence holds (D29), or a person accepted what failed
+            return 0  # a plan is archived only once its integration accepted it
         with self.book() as data:
             held = data["tasks"].get(ARCHIVE)
         if not self._claimable(held):
@@ -409,13 +337,11 @@ class Archive:
             shutil.rmtree(Path(checkout) / rel, ignore_errors=True)
 
     def _archive_owns(self):
-        """What the archive unit writes: the spec, the files it copies or places, and the plan folder it deletes."""
+        """What the archive unit writes: the spec, the files it copies, and the plan folder it deletes."""
         model = self.plan_model()
         owns = [model.spec] if model.spec and self._archive_mode() == "promote" else []
         if self._archive_mode() == "promote":
-            owns += [rel for rel, _ in self.yaml_copies()] + [
-                rel for rel, _ in self.yaml_places(model)
-            ]
+            owns += [rel for rel, _ in self.yaml_copies()]
         folder = self._plan_folder_rel()
         return owns + ([folder + "/"] if folder else [])
 
@@ -437,7 +363,7 @@ class Archive:
             "backend": self.args.cli,
             "owns": self._archive_owns(),
             "acceptance": YAML_ARCHIVE_ACCEPTANCE,
-            "checks": [],  # no local gate: the pull request's CI and the outcome re-run are the gates
+            "checks": [],  # no local gate: the pull request's CI is the gate
             "depends_on": [],
             "unit": ARCHIVE,
             "size": "small",
@@ -481,9 +407,9 @@ class Archive:
             "status": "COMPLETE",
             "summary": "the driver archived the plan: %s"
             % (
-                "oracles placed, plan files copied, spec section appended"
+                "plan files copied, spec section appended"
                 if self._archive_mode() == "promote" and not self.layout.is_folder
-                else "acceptance files moved into their domain, plan folder deleted, spec section appended"
+                else "plan folder deleted, spec section appended"
                 if self._archive_mode() == "promote"
                 else "the discarded plan folder deleted"
             ),
@@ -512,17 +438,14 @@ class Archive:
             )
 
     def archive_missing(self):
-        """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no placed oracle."""
+        """The scenarios with no test node: every scenario needs one, from a ticket's `covers` or a person's
+        `complete --cover`."""
         nodes = self.scenario_nodes()
-        return [
-            s.id
-            for s in self.plan_model().scenarios
-            if not (s.evidence and s.evidence.human) and not nodes[s.id]
-        ]
+        return [s.id for s in self.plan_model().scenarios if not nodes[s.id]]
 
     def _archive_branch(self, task_id):
-        """The archive branch, rebuilt from the current base: oracles placed, plan files copied, the spec section
-        appended, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
+        """The archive branch, rebuilt from the current base: the plan folder deleted or the plan files copied, the
+        spec section appended, one commit, pushed. The branch is the driver's own, so a rebuild replaces what was pushed."""
         packet = self.task(task_id)["packet"]
         path, branch = Path(packet["checkout"]), "feat/" + packet["worker"]
         remote = self.args.base.partition("/")[0]
@@ -536,8 +459,7 @@ class Archive:
             ["git", "-C", str(path), "checkout", "-q", "-B", branch, self.args.base],
             timeout=TREE_TIMEOUT,
         )
-        # A plan in its own folder leaves the tree: its acceptance files go to their domain, a discarded plan's go
-        # nowhere. Deleted first, so a destination inside the folder is written after it.
+        # A plan in its own folder leaves the tree, whether it promotes or discards.
         self.remove_plan_folder(path)
         message = "docs(%s): delete the discarded plan folder" % self.slug
         if self._archive_mode() == "promote":
@@ -555,8 +477,7 @@ class Archive:
         return head_of(path)
 
     def _promote_into(self, path):
-        """What a promote archive puts on its branch: the oracles placed, the plan files copied, the spec written."""
-        self._place_oracles(path)
+        """What a promote archive puts on its branch: the plan files copied, the spec written."""
         for rel, source in self.yaml_copies():
             self._copy_plan_file(path, rel, source)
         self._write_spec(path)
@@ -654,13 +575,12 @@ class Archive:
         if self.layout.is_folder:
             where = reference(self.repo, self.layout.folder, "collection")
             return (
-                "Archives the plan %s into the living spec: its acceptance files move to their domain, the folder "
-                "is deleted and the spec section with its Coverage table is written by the driver. Spec snapshot: `%s`."
-                % (where, spec)
+                "Archives the plan %s into the living spec: the folder is deleted and the spec section with its "
+                "Coverage table is written by the driver. Spec snapshot: `%s`." % (where, spec)
             )
         return (
-            "Archives `%s` into the living spec: the plan files, the promoted oracles and the spec section "
-            "with its Coverage table, written by the driver. Spec snapshot: `%s`."
+            "Archives `%s` into the living spec: the plan files and the spec section with its Coverage table, "
+            "written by the driver. Spec snapshot: `%s`."
             % (reference(self.repo, self.plan_path, "read"), spec)
         )
 
@@ -688,59 +608,16 @@ class Archive:
         self.mark(task_id, status="ACTIVE", gate=None, ci_state=None, ci_rows=None, ci_head=None)
         self.build_archive(task_id)
 
-    def scenario_targets(self, scenario):
-        """(repo-relative place, the file's name in the approval snapshot) for each file a scenario's evidence
-        promotes. A legacy oracle keeps its source name without the `.oracle` suffix: only the promoted name is
-        collected as a test. A folder plan's acceptance file is placed in its domain under its own name."""
-        evidence = scenario.evidence
-        if not evidence:
-            return []
-        if getattr(
-            evidence, "acceptance", None
-        ):  # only a folder plan's evidence has acceptance files
-            placed = yaml_plan.placed_files(self.plan_path, self.plan_model(), evidence, self.repo)
-            return [(rel, "acceptance/" + name) for rel, name in zip(placed, evidence.acceptance)]
-        if evidence.promote and evidence.place:
-            return [
-                (evidence.place.rstrip("/") + "/" + name.removesuffix(".oracle"), name)
-                for name in evidence.oracle
-            ]
-        return []
-
-    def _oracle_targets(self, model):
-        """(repo-relative place, snapshot file name) for each promoted file. One derivation for the placing, the
-        comparison and the brief, so they cannot disagree."""
-        return [
-            target for scenario in model.scenarios for target in self.scenario_targets(scenario)
-        ]
-
-    def _place_oracles(self, checkout):
-        """Copy each promote oracle byte-identical, from the approval snapshot, to its place in the archive worktree.
-        The worker starts after this, so it never has to copy a test it is not allowed to change."""
-        files = self.oracles()
-        for rel, name in self._oracle_targets(self.contract()[0]):
-            target = Path(checkout) / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(files[name])
-
     def yaml_copies(self):
         """(repo-relative destination, approved source) for the plan files the archive copies byte-identical.
         The narrative is copied only when the plan has one."""
         layout = self.layout
         if layout.is_folder:
-            return []  # a plan folder is deleted, never copied: its acceptance files are placed instead
+            return []  # a plan folder is deleted, never copied
         copies = [(layout.plan_place, layout.path)]
         if layout.narrative.exists():
             copies.append((self._beside_plan(layout.narrative), layout.narrative))
-        copies.append((self._beside_plan(layout.oracle_dir) + "/", layout.oracle_dir))
         return copies
-
-    def yaml_places(self, model):
-        """(repo-relative destination, approved source) for each promote oracle file, at its place."""
-        return [
-            (rel, yaml_plan.file_path(self.plan_path, name))
-            for rel, name in self._oracle_targets(model)
-        ]
 
     def _beside_plan(self, path):
         """The destination of a plan file: the same directory as the plan, inside the archive checkout even when
@@ -892,13 +769,8 @@ class ArchiveSurface:
         or started."""
         return self.archive.park_for_amendment(task_id, task, reason)
 
-    def archive_evidence(self, task_id, packet):
-        """The outcome's evidence, run again on the archive head: the promoted oracles and the spec
-        must not have changed what the plan delivered."""
-        return self.archive.archive_evidence(task_id, packet)
-
     def start_archive(self, plan):
-        """The archive's own unit, started once every ticket is done and the outcome holds: a discard
+        """The archive's own unit, started once every ticket is done and the plan is accepted: a discard
         deletes the folder, a promote claims the unit that builds the branch."""
         return self.archive.start_archive(plan)
 
@@ -917,8 +789,7 @@ class ArchiveSurface:
         return self.archive.build_archive(task_id)
 
     def archive_missing(self):
-        """The scenarios that need a test node and have none: not `human` evidence, no `covers`, no
-        placed oracle."""
+        """The scenarios with no test node: every scenario needs one."""
         return self.archive.archive_missing()
 
     def undraft_archive(self, task_id):
@@ -930,19 +801,10 @@ class ArchiveSurface:
         """The Lead's `retry`: the archive branch is rebuilt from the current base and pushed again."""
         return self.archive.retry_archive(task_id)
 
-    def scenario_targets(self, scenario):
-        """(repo-relative place, the file's name in the approval snapshot) for each file a scenario's
-        evidence promotes."""
-        return self.archive.scenario_targets(scenario)
-
     def yaml_copies(self):
         """(repo-relative destination, approved source) for the plan files the archive copies byte-
         identical."""
         return self.archive.yaml_copies()
-
-    def yaml_places(self, model):
-        """(repo-relative destination, approved source) for each promote oracle file, at its place."""
-        return self.archive.yaml_places(model)
 
     def reopen_parked(self, plan):
         """The user answers a pause through the plan (S4)."""

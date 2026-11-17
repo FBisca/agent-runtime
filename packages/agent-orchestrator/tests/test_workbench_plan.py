@@ -6,7 +6,6 @@ test_workbench.py, beside this module, because those modules reach `WorkbenchFix
 `at`, `dead_pid` and `state_event` at that path. Nothing moved here is over a ceiling: the longest test is 48
 lines, against the 50-line function ceiling, and the widest class declares 16 methods, against 25."""
 
-import hashlib
 import json
 
 import pytest
@@ -108,61 +107,6 @@ class PlanTests(WorkbenchFixture):
             [(t["id"], t["delivers"]) for t in approved["tickets"]],
         )
         self.assertNotIn("EDITED", json.dumps(shown))
-
-    def test_S6_a_changed_oracle_is_drift_too(self):
-        path = self.write_plan(graph([]))
-        oracle = path.with_name(path.name.removesuffix(".plan.yaml") + ".oracle")
-        oracle.mkdir()
-        (oracle / "check.py.oracle").write_text("assert True\n", encoding="utf-8")
-        shown = self.view(path)
-        self.assertTrue(shown["revision"]["drift"])
-        self.assertEqual([t["id"] for t in shown["tickets"]], ["T1"])
-
-    def write_folder_plan(self):
-        """An approved plan in its own folder: one acceptance file, placed at acceptance/flows/probe.txt."""
-        data = graph([])
-        data["domain"] = "flows"
-        data["scenarios"][0]["evidence"] = {
-            "check": "test -f acceptance/flows/probe.txt",
-            "baseline": "pass",
-            "acceptance": ["probe.txt"],
-            "package": ".",
-        }
-        folder = self.plans / "2026-11-12-bench"
-        (folder / "acceptance").mkdir(parents=True)
-        (folder / "acceptance" / "probe.txt").write_text("probe\n", encoding="utf-8")
-        path = self.write_plan(data, name="2026-11-12-bench/plan.yaml", approve=False)
-        code, out, err = self.run_cli(
-            "plan",
-            "approve",
-            str(path),
-            "--repo",
-            str(self.repo),
-            "--state-dir",
-            str(self.state_dir),
-        )
-        self.assertEqual(code, 0, out + err)
-        return path
-
-    def test_S7_an_approved_folder_plan_is_not_drift_until_an_acceptance_file_is_edited(self):
-        path = self.write_folder_plan()
-        approved = self.view(path)
-        self.assertFalse(approved["revision"]["drift"])
-        self.assertEqual(
-            approved["revision"]["approved_digest"], approved["revision"]["current_digest"]
-        )
-        (path.parent / "acceptance" / "probe.txt").write_text("edited\n", encoding="utf-8")
-        shown = self.view(path)
-        self.assertTrue(shown["revision"]["drift"])
-        self.assertNotEqual(
-            shown["revision"]["approved_digest"], shown["revision"]["current_digest"]
-        )
-        self.assertEqual([t["id"] for t in shown["tickets"]], ["T1"])
-
-    def test_S7_an_added_acceptance_file_is_drift_in_a_folder_plan(self):
-        path = self.write_folder_plan()
-        (path.parent / "acceptance" / "extra.txt").write_text("more\n", encoding="utf-8")
-        self.assertTrue(self.view(path)["revision"]["drift"])
 
     def drifted_ledger(self):
         path = self.write_plan(graph([], []))
@@ -342,56 +286,32 @@ class AttemptTests(WorkbenchFixture):
         found = {a["task_id"]: a["address"] for a in self.attempts(tasks)}
         self.assertEqual(found, {"t1": "t1sf", "t1r1": None})
 
-    def test_S9_a_worker_that_reported_complete_over_failed_evidence_is_claimed_not_verified(self):
+    def test_S9_a_worker_that_reported_complete_on_a_ticket_still_in_progress_is_claimed_not_verified(
+        self,
+    ):
         path = self.write_plan(graph([], ["T1"]))
-        ledger = self.write_ledger(
+        self.write_ledger(
             "bench",
-            {"T1": "COMPLETE", "T2": "TO-DO"},
+            {"T1": "IN PROGRESS", "T2": "TO-DO"},
             tasks={"t1": attempt_task("t1", report=complete_report(summary=BODY))},
         )
-        data = json.loads(ledger.read_text(encoding="utf-8"))
-        data["ticket_evidence"] = {
-            "T1": {"S1": {"result": "FAIL", "receipt": "S1.ticket.1", "commit": "abc"}}
-        }
-        data["unverified"] = {
-            "T1": {"scenarios": ["S1"], "reason": "merged with its evidence failed", "at": "t"}
-        }
-        receipts = ledger.with_suffix("") / "receipts"
-        receipts.mkdir(parents=True)
-        text = json.dumps({"result": "FAIL", "reason": "exit", "label": "FAIL (exit 1)"})
-        (receipts / "S1.ticket.1.json").write_text(text, encoding="utf-8")
-        data["receipts"] = {"S1.ticket.1": hashlib.sha256(text.encode()).hexdigest()}
-        ledger.write_text(json.dumps(data), encoding="utf-8")
         shown = self.view(path)
         t1, t2 = shown["tickets"]
-        self.assertEqual(t1["state"], "COMPLETE")
         self.assertIs(t1["verified"], False)
-        self.assertIs(t1["unverified"], True)
-        self.assertEqual(
-            t1["gates"],
-            [{"scenario": "S1", "phase": "ticket", "result": "FAIL", "reason": "FAIL (exit 1)"}],
-        )
         self.assertIs(t1["attempts"][0]["claimed"], True)
         self.assertNotIn(BODY, json.dumps(shown))
         self.assertIs(t2["verified"], False)
-        self.assertEqual(t2["gates"], [])
 
-    def test_S9_a_ticket_whose_gates_passed_and_nothing_was_merged_past_is_verified(self):
+    def test_S9_a_completed_ticket_is_verified(self):
+        """A ticket completes only through verify's invariants and its pull request's CI: complete is verified."""
         path = self.write_plan(graph([]))
-        ledger = self.write_ledger(
+        self.write_ledger(
             "bench", {"T1": "COMPLETE"}, tasks={"t1": attempt_task("t1", report=complete_report())}
         )
-        data = json.loads(ledger.read_text(encoding="utf-8"))
-        data["ticket_evidence"] = {"T1": {"S1": {"result": "PASS", "receipt": "S1.ticket.1"}}}
-        ledger.write_text(json.dumps(data), encoding="utf-8")
         (t1,) = self.view(path)["tickets"]
         self.assertIs(t1["verified"], True)
-        self.assertIs(t1["unverified"], False)
-        self.assertEqual(
-            t1["gates"],
-            [{"scenario": "S1", "phase": "ticket", "result": "PASS", "reason": None}],
-            "a gate whose receipt cannot be read has an unknown reason: null",
-        )
+        self.assertNotIn("gates", t1)
+        self.assertNotIn("unverified", t1)
 
     def test_S9_an_attempt_still_running_claims_nothing_yet(self):
         found = self.attempts({"t1": attempt_task("t1", "ACTIVE")})

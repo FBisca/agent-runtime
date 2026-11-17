@@ -2,7 +2,6 @@
 worker's complete that lands meanwhile is acted on, and an `answer` to a request about an idle reviewer reaches the
 reviewer.
 
-Frozen at approval; placed at packages/agent-orchestrator/acceptance/driver/ by the runner; never edited by a ticket.
 It drives `run` and `decide` through the gate fixture (fake runtime, fake gh). The contract it pins (plan Decisions
 D6-D8):
 
@@ -15,7 +14,7 @@ D6-D8):
   - `answer` to a request raised while the reviewer owed its review resumes the reviewer with the answer, not the
     implementer
 
-Each class has a control case that passes at base and after.
+Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
 
 import json

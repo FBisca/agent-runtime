@@ -1,7 +1,6 @@
 """Acceptance for the parked-drive plan: a parked unit names the key it is released by, a parked drive says so and
 names a way out that works, and a plan that lost its approval span is recovered instead of stranding the drive.
 
-Frozen at approval; placed at packages/agent-orchestrator/acceptance/park/ by the runner; never edited by a ticket.
 It drives `run` and `decide` through the gate fixture (fake runtime, fake gh), the seams the engine's own tests use.
 
 The three cases are the plan's outcome, one per class:
@@ -13,7 +12,7 @@ The three cases are the plan's outcome, one per class:
   - S4: a plan that lost its `approval:` span but is the plan the drive holds is recovered: the drive keeps running
     and does not drain
 
-Each class has a control case that holds today and must keep holding: a park is released only by an approval the
+Each class has a `control` test that holds whatever the change: a park is released only by an approval the
 drive does not hold, a healthy drive records no park, and a plan that was genuinely edited still drains.
 """
 
@@ -25,8 +24,8 @@ from unittest import mock
 import pytest
 import yaml
 
-# The evidence runner runs this check in a fresh worktree whose venv holds no workspace member: the package under
-# test is importable from its source, so the fixtures can import it.
+# A fresh worktree's venv holds no workspace member: the package under test is importable from its source, so the
+# fixtures can import it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from fixtures import DRIVER, assignment, load_script, report_wait, resume_id, wait_result  # noqa: E402

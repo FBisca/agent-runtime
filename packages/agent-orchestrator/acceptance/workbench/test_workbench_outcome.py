@@ -1,8 +1,8 @@
-"""Outcome oracle for the agent-workbench plan.
+"""The agent-workbench plan's outcome.
 
 The workbench read commands show a plan as the orchestrator knows it: the plan's own slug, the exact `blocked_by`
-graph, every attempt with the assignment and the address the runtime returned (null for the driver's fallback), a
-ticket that was claimed but not verified, and the outcome `verify` computes. They write nothing and print no report
+graph, every attempt with the assignment and the address the runtime returned (null for the driver's fallback),
+and the outcome `verify` computes. They write nothing and print no report
 body. The fixture plans run through the real driver with the fake runtime and gh, as the acceptance tests do.
 """
 
@@ -13,7 +13,7 @@ import unittest
 import pytest
 import yaml
 from fixtures import spawn_id
-from test_acceptance import AcceptanceFixture, check_item, plan_data, scenario, ticket
+from test_acceptance import FEATURE_DONE, AcceptanceFixture, plan_data, scenario, ticket
 
 pytestmark = pytest.mark.integration
 
@@ -83,7 +83,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
 
     def test_the_graph_is_exactly_blocked_by_layered_and_stable_and_reading_writes_nothing(self):
         self.write_plan(
-            [scenario("S1", check_item()), scenario("S2"), scenario("S3")],
+            [scenario("S1"), scenario("S2"), scenario("S3")],
             [
                 ticket("T1", ("S2",)),
                 ticket("T2", ("S1",), blocked_by=["T1"]),
@@ -132,10 +132,7 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(verify.returncode, 0, verify.stderr)
         verdict = json.loads(verify.stdout)
         self.assertEqual(body["outcome"]["state"], verdict["state"])
-        self.assertEqual(
-            [(i["scenario"], i["state"]) for i in body["outcome"]["items"]],
-            [(i["scenario"], i["state"]) for i in verdict["items"]],
-        )
+        self.assertEqual(body["outcome"]["items"], verdict["items"])
 
     def test_the_driver_fallback_address_is_unknown_not_a_terminal(self):
         self.delivered()
@@ -151,11 +148,13 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertIsNone(attempt["address"])
 
     def hand_merged_failure(self):
-        """T1's evidence failed at its gate and a person merged its pull request by hand."""
-        self.write_plan([scenario("S1", check_item())], [ticket("T1", ("S1",), risk=["state"])])
+        """T1's gate failed (its covers names a test that does not exist) and a person merged its pull request by
+        hand; what landed fails the repo's whole suite."""
+        self.declare_full(FEATURE_DONE)
+        self.write_plan()
         sha = self.merged_on_main("almost")
         self.early([{"state": "MERGED", "mergeCommit": {"oid": sha}}])
-        self.drive([self.worker("almost")])
+        self.drive([self.worker("almost", covers={"S1": ["src/a/test_feature.py::test_nope"]})])
 
     def test_control_the_delivered_fixture_is_accepted_by_verify(self):
         """Holds today: the accepted fixture the workbench reads is accepted by `verify`."""
@@ -165,25 +164,20 @@ class WorkbenchOutcomeTests(AcceptanceFixture, unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["state"], "ACCEPTED")
 
     def test_control_the_hand_merged_failure_is_rejected_by_verify(self):
-        """Holds today: the failure fixture is a complete, unverified ticket and `verify` refuses the plan."""
+        """Holds today: the failure fixture is a complete ticket and `verify` refuses the plan."""
         self.hand_merged_failure()
         (status,) = self.status()["tickets"]
         self.assertEqual(status["state"], "COMPLETE")
-        self.assertTrue(status["unverified"])
         self.assertNotEqual(self.verify().returncode, 0)
 
-    def test_a_ticket_claimed_done_whose_evidence_failed_is_not_verified_and_the_plan_not_accepted(
-        self,
-    ):
+    def test_every_ticket_complete_is_not_an_accepted_plan_when_the_whole_suite_fails(self):
         self.hand_merged_failure()
         body = self.view()
         t1 = self.ticket_view(body, "T1")
         self.assertEqual(t1["state"], "COMPLETE")
-        self.assertFalse(t1["verified"])
-        self.assertIn("FAIL", [g["result"] for g in t1["gates"]])
         self.assertTrue(self.attempt(body, "T1", "t1")["claimed"])
-        self.assertNotIn(body["outcome"]["state"], ("ACCEPTED", "ACCEPTED_WITH_HUMAN"))
-        self.assertNotEqual(body["outcome"]["items"][0]["state"], "PASS")
+        self.assertEqual(body["outcome"]["state"], "REJECTED")
+        self.assertEqual(body["outcome"]["items"][0]["scenario"], "full")
 
 
 if __name__ == "__main__":

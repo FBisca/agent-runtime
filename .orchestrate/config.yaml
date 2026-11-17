@@ -1,8 +1,6 @@
-# The repo's plan engine config: where plans live, where promoted acceptance tests go, how a plan archives.
+# The repo's plan engine config: where plans live and how a plan archives.
 plans:
   dir: docs/plans
-acceptance:
-  dir: acceptance
 archive:
   mode: promote
 # The check tiers: a worker runs the cheap two, verify and CI run the whole suite once.

@@ -17,7 +17,7 @@ def document(backend, prefix):
     }
 
 
-class RoutingMigrationOracle(RunFixture, unittest.TestCase):
+class RoutingMigrationOutcome(RunFixture, unittest.TestCase):
     def profile(self, name, backend, prefix):
         directory = self.root / "home" / ".config" / "orchestrate"
         directory.mkdir(parents=True, exist_ok=True)
