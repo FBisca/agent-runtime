@@ -128,12 +128,9 @@ class ConflictWaitTests(unittest.TestCase):
             pr_of=lambda task_id: "pr-" + task_id,
         )
         lane = Pull(driver)
-        lane.gh, lane.unit_of, lane.units, lane.pr_of = (
-            gh,
-            driver.unit_of,
-            driver.units,
-            driver.pr_of,
-        )
+        # Set by name: the lane resolves these through its driver, which a type checker cannot see.
+        for name in ("gh", "unit_of", "units", "pr_of"):
+            setattr(lane, name, getattr(driver, name))
         return lane
 
     @pytest.mark.spec("A conflicting pull request is rebased")
