@@ -28,9 +28,7 @@ STEPS = (
     "merge",
     "cleanup",
     "verify",
-    "mutation",
     "archive",
-    "gaps",
     "setup",
 )
 STEP_OF = {

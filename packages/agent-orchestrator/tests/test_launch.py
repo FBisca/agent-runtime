@@ -158,10 +158,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
                     "slug": "demo",
                     "goal": "deliver",
                     "spec": "docs/specs/demo.md",
-                    "outcome": ["S1"],
-                    "scenarios": [
-                        {"id": "S1", "when": "a", "then": "b", "evidence": {"human": "confirm"}}
-                    ],
+                    "scenarios": [{"id": "S1", "when": "a", "then": "b"}],
                     "tickets": [
                         {
                             "id": "T1",

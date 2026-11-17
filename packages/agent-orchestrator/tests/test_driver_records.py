@@ -1,7 +1,7 @@
 """The driver's record helpers have one home: `driver/records.py`, published by the package.
 
 A record is what the engine reads between two steps — a worker's packet, its report, a plan ticket's
-row, the runtime's reply, a review receipt. Each helper here answers a question about one without
+row, the runtime's reply, a review verdict. Each helper here answers a question about one without
 reading a file, starting a process or changing a ledger, which is what lets a collaborator split off
 the driver ask the same question the driver does.
 """
@@ -19,7 +19,7 @@ DRIVER = MEMBER / "driver"
 RECORDS = DRIVER / "records.py"
 
 # Every pure reading of a record the engine keeps: the packet's route, the report's rules, the plan
-# ticket's row, the runtime's reply, the review's receipt.
+# ticket's row, the runtime's reply, the review's verdict.
 HELPERS = (
     "ROUTE",
     "routed",
@@ -38,7 +38,6 @@ HELPERS = (
     "terminal_gone",
     "assignment_of",
     "merge_state",
-    "is_flaky",
     "check_commit",
 )
 

@@ -1,4 +1,4 @@
-"""verify: the ticket gate's invariants (scope, integrity, covers) and the legacy path for Markdown plans."""
+"""verify: the ticket gate's invariants (scope, integrity, covers, red) and the legacy path for Markdown plans."""
 
 import subprocess
 import tempfile
@@ -17,6 +17,15 @@ PLAN_REL = "docs/plans/2026-11-10-demo.plan.yaml"
 OLD_TESTS = "def test_old():\n    assert True\n"
 
 
+def seen_red(covers, scenarios=("S1", "S2", "S3")):
+    """A `red` for every scenario: the first covers node failing, or a failing line for a scenario left unmapped
+    (the covers check names that one; the red check only asks that an excerpt name a node it was given)."""
+    return {
+        sid: "FAILED %s - AssertionError" % ((covers.get(sid) or ["tests/test_x.py::test_x"])[0])
+        for sid in scenarios
+    }
+
+
 def model(**ticket):
     return yaml_plan.Plan.model_validate(
         {
@@ -24,33 +33,17 @@ def model(**ticket):
             "slug": "demo",
             "goal": "deliver",
             "spec": "docs/specs/demo.md",
-            "outcome": ["S1"],
             "scenarios": [
-                {
-                    "id": "S1",
-                    "when": "a",
-                    "then": "b",
-                    "evidence": {
-                        "check": "pytest",
-                        "baseline": "fail",
-                        "oracle": ["test_oracle.py.oracle"],
-                        "place": "tests/",
-                    },
-                },
+                {"id": "S1", "when": "a", "then": "b"},
                 {"id": "S2", "when": "c", "then": "d"},
-                {
-                    "id": "S3",
-                    "when": "e",
-                    "then": "f",
-                    "evidence": {"human": "a person checks the PR"},
-                },
+                {"id": "S3", "when": "e", "then": "f"},
             ],
             "tickets": [
                 dict(
                     {
                         "id": "T1",
                         "delivers": "x",
-                        "satisfies": ["S1", "S2", "S3"],
+                        "satisfies": ["S1", "S2"],
                         "paths": ["src/a/", "tests/test_a.py"],
                         "size": "small",
                         "difficulty": "simple",
@@ -107,7 +100,7 @@ class VerifyFixture(unittest.TestCase):
     AUTO = object()
 
     def gate(self, covers, test_cost=AUTO, **ticket):
-        report = {"contract": 3, "task_id": "t1", "covers": covers}
+        report = {"contract": 3, "task_id": "t1", "covers": covers, "red": seen_red(covers)}
         cost = self.measured(covers) if test_cost is self.AUTO else test_cost
         if cost is not None:
             report["test_cost"] = cost
@@ -201,14 +194,11 @@ class CoversTests(VerifyFixture):
             [("covers", "S2: no test node in covers; map the scenario to the tests that prove it")],
         )
 
-    def test_S9_a_report_without_covers_leaves_unmapped_each_scenario_no_test_file_or_person_proves(
-        self,
-    ):
-        # S1's evidence places its own test file, which the ticket's evidence gate runs: a ticket never changes it.
-        # S3's evidence is a person's check, which no test node can stand for.
-        findings = self.gate({})
+    def test_S9_a_report_without_covers_names_every_satisfied_scenario_left_unmapped(self):
+        # An implementation provides its evidence: no scenario is exempt from needing a covering node.
+        findings = self.gate({}, satisfies=["S1", "S2", "S3"])
         self.assertEqual(
-            [e.split(":")[0] for c, e in self.found(findings) if c == "covers"], ["S2"]
+            [e.split(":")[0] for c, e in self.found(findings) if c == "covers"], ["S1", "S2", "S3"]
         )
 
 
@@ -310,40 +300,14 @@ class ScopeAndIntegrityTests(VerifyFixture):
         self.write(PLAN_REL, "schema: plan/1\n")
         found = self.found(self.gate(self.covers, paths=["docs/", "tests/test_a.py"]))
         self.assertEqual(
-            found, [("integrity", "%s is the plan; a ticket never edits its contract" % PLAN_REL)]
-        )
-
-    def test_S10_touching_an_oracle_file_is_an_integrity_failure(self):
-        oracle = "docs/plans/2026-11-10-demo.oracle/test_oracle.py.oracle"
-        self.write(oracle, "def test_o(): pass\n")
-        found = self.found(self.gate(self.covers, paths=["docs/", "tests/test_a.py"]))
-        self.assertEqual(
-            found, [("integrity", "%s is an oracle file; a ticket never edits one" % oracle)]
-        )
-
-    def test_S10_touching_an_oracle_place_is_an_integrity_failure(self):
-        self.write("tests/test_oracle.py", "def test_o(): pass\n")
-        found = self.found(self.gate(self.covers, paths=["tests/"]))
-        self.assertEqual(
             found,
             [
                 (
                     "integrity",
-                    "tests/test_oracle.py is an oracle place; the driver places the oracle there, a ticket never does",
+                    "%s is in the plan; a ticket never edits the plan that gates it" % PLAN_REL,
                 )
             ],
         )
-
-    def test_S10_a_deleted_or_renamed_oracle_place_counts_as_touching_it(self):
-        self.git("stash", "-q", "-u")
-        self.git("checkout", "-q", "main")
-        self.write("tests/test_oracle.py", "def test_o(): pass\n")
-        self.commit("placed on base")
-        self.git("checkout", "-q", "-b", "other")
-        self.git("stash", "pop", "-q")
-        (self.repo / "tests" / "test_oracle.py").unlink()
-        found = self.found(self.gate(self.covers, paths=["tests/"]))
-        self.assertEqual([c for c, _ in found], ["integrity"])
 
     def test_S10_every_failing_rule_is_reported_in_one_gate(self):
         self.write("src/b/other.py", "x = 1\n")
@@ -359,19 +323,8 @@ FOLDER_PLAN_REL = FOLDER + "/plan.yaml"
 
 
 def folder_model(**ticket):
-    """A plan in its own folder: its acceptance file is placed at pkg/acceptance/billing/test_probe.py."""
-    data = model(**ticket).model_dump(by_alias=True, exclude_none=True)
-    evidence = data["scenarios"][0]["evidence"]
-    for key in ("oracle", "place"):
-        evidence.pop(key, None)
-    evidence.update(acceptance=["test_probe.py"], package="pkg")
-    for scenario in data["scenarios"]:
-        if "human" in scenario.get(
-            "evidence", {}
-        ):  # the dump adds the check defaults a human item refuses
-            scenario["evidence"] = {"human": scenario["evidence"]["human"]}
-    data["domain"] = "billing"
-    return yaml_plan.Plan.model_validate(data)
+    """A plan in its own folder."""
+    return model(**ticket)
 
 
 class FolderPlanIntegrityTests(VerifyFixture):
@@ -385,6 +338,7 @@ class FolderPlanIntegrityTests(VerifyFixture):
         outside = plan_rel is None  # a plan kept outside the repository
         plan_path = Path("/elsewhere/plan.yaml") if outside else self.repo / plan_rel
         report = {"contract": 3, "task_id": "t1", "covers": self.covers}
+        report["red"] = seen_red(self.covers)
         report["test_cost"] = self.measured(self.covers)
         return self.found(
             verify.invariants(
@@ -398,7 +352,7 @@ class FolderPlanIntegrityTests(VerifyFixture):
         )
 
     def test_S7_touching_a_file_of_the_plan_folder_is_an_integrity_failure_naming_it(self):
-        for name in ("plan.yaml", "plan.md", "acceptance/test_probe.py", "negatives/probe.patch"):
+        for name in ("plan.yaml", "plan.md", "brief.md", "notes/design.md"):
             with self.subTest(name):
                 self.write("%s/%s" % (FOLDER, name), "x\n")
                 found = self.folder_gate(paths=["docs/", "tests/test_a.py"])
@@ -407,48 +361,17 @@ class FolderPlanIntegrityTests(VerifyFixture):
                     [
                         (
                             "integrity",
-                            "%s/%s is in the plan folder; a ticket never edits the plan or its "
-                            "acceptance files" % (FOLDER, name),
+                            "%s/%s is in the plan; a ticket never edits the plan that gates it"
+                            % (FOLDER, name),
                         )
                     ],
                 )
                 (self.repo / FOLDER / name).unlink()
 
-    def test_S7_touching_an_acceptance_destination_is_an_integrity_failure_naming_it(self):
-        self.write("pkg/acceptance/billing/test_probe.py", "def test_p(): pass\n")
-        found = self.folder_gate(paths=["pkg/", "tests/test_a.py"])
-        self.assertEqual(
-            found,
-            [
-                (
-                    "integrity",
-                    "pkg/acceptance/billing/test_probe.py is an acceptance destination; the driver "
-                    "places the acceptance file there, a ticket never does",
-                )
-            ],
-        )
-
-    def test_S7_the_destination_follows_the_repo_config_not_the_default(self):
-        (self.repo / ".orchestrate").mkdir()
-        self.write(".orchestrate/config.yaml", "acceptance:\n  dir: accept\n")
-        self.write("pkg/acceptance/billing/test_probe.py", "def test_p(): pass\n")
-        self.write("pkg/accept/billing/test_probe.py", "def test_p(): pass\n")
-        found = self.folder_gate(paths=["pkg/", ".orchestrate/", "tests/test_a.py"])
-        self.assertEqual(
-            [(c, e.split(" ")[0]) for c, e in found],
-            [("integrity", "pkg/accept/billing/test_probe.py")],
-        )
-
-    def test_S7_a_plan_outside_the_repository_protects_no_folder_and_still_protects_destinations(
-        self,
-    ):
+    def test_S7_a_plan_outside_the_repository_protects_no_folder(self):
         self.write("docs/plans/plan.yaml", "x: 1\n")
-        self.write("pkg/acceptance/billing/test_probe.py", "def test_p(): pass\n")
-        found = self.folder_gate(plan_rel=None, paths=["docs/", "pkg/", "tests/test_a.py"])
-        self.assertEqual(
-            [(c, e.split(" ")[0]) for c, e in found],
-            [("integrity", "pkg/acceptance/billing/test_probe.py")],
-        )
+        found = self.folder_gate(plan_rel=None, paths=["docs/", "tests/test_a.py"])
+        self.assertEqual(found, [])
 
     def test_S7_a_file_beside_the_plan_folder_is_only_a_scope_matter(self):
         self.write("docs/plans/2026-11-12-demo-two/plan.yaml", "x: 1\n")

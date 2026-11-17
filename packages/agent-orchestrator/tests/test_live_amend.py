@@ -52,7 +52,7 @@ class LiveAmend(GateFixture, unittest.TestCase):
 
     def logged(self, *kinds):
         """The run's events.jsonl, optionally only the given kinds. Read here, not through the fixture: its reader
-        was renamed (#235), and the oracle must collect on both sides of that rename."""
+        was renamed (#235), and this test must collect on both sides of that rename."""
         path = self.run_dir_of() / "events.jsonl"
         rows = (
             [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]

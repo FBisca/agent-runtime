@@ -1,8 +1,8 @@
-"""The refusals an authoring command makes about a plan's paths and its proof.
+"""The refusals an authoring command makes about a plan's paths.
 
 `plan check`, `plan approve` and `plan amend` make them; the driver's load never runs them, so a plan
-approved before a rule existed keeps running. A path decides whether it can hold a test, a discarding
-folder whether it may be deleted, and a scenario without evidence whether anything can prove it.
+approved before a rule existed keeps running. A path decides whether it can hold a test, and a discarding
+folder whether it may be deleted.
 """
 
 import fnmatch
@@ -36,41 +36,3 @@ def discard_problems(model, path, repo):
     if layout.directly_under(cfg.plans_dir):
         return []
     return [not_under_plans_dir(layout.folder, cfg.plans_dir)]
-
-
-def person_only_problems(model, repo):
-    """The scenarios nothing can prove: no evidence, and only person-owned tickets satisfy them.
-
-    A scenario with evidence is proven by it (a `human` item by a person, a `check` by the driver). A scenario an
-    agent ticket satisfies is proven by that ticket's report, whose `covers` names the node. A scenario that
-    carries no evidence and that only a person's ticket satisfies has no proof at all: the acceptance never asks
-    for it, and the archive asks for a node at the very end. The lint refuses it early and names every way out:
-    `human` evidence, an agent ticket, or a node the person records with `complete --cover`.
-
-    A person-owned ticket that holds no test is out of the lint's reach: its work is not a test, so its proof is a
-    node the person records by hand, wherever it lives (R57) — the lint cannot judge that node, and the
-    person-ticket flow it would break is the one that flow is for. A person-owned ticket that could hold a test
-    is in the lint's reach: the plan says how that scenario is proven."""
-    patterns = repo_config(repo).test_patterns
-    problems = []
-    for scenario in model.scenarios:
-        if scenario.evidence is not None:
-            continue
-        tickets = [t for t in model.tickets if scenario.id in t.satisfies]
-        if not tickets or any(t.owner.strip().lower() == "agent" for t in tickets):
-            continue
-        if all(holds_no_test(ticket.paths, patterns) for ticket in tickets):
-            continue
-        problems.append(
-            "%s: no evidence and only person-owned tickets satisfy it (%s), so nothing can prove it — attach "
-            "`human` evidence to %s, let an agent ticket satisfy %s, or record a test node with "
-            "`complete --cover %s=<node>`"
-            % (
-                scenario.id,
-                ", ".join(t.id for t in tickets),
-                scenario.id,
-                scenario.id,
-                scenario.id,
-            )
-        )
-    return problems

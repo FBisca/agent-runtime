@@ -40,21 +40,18 @@ class Findings:
         raise AttributeError(name)
 
     def gate(self, task_id, packet, report):
-        """The gate for a unit's report: ("PASS" | "FAIL" | "error", evidence items or the reason)."""
-        # The checks below run silently for as long as the evidence takes: say the report was picked up.
+        """The gate for a unit's report: ("PASS" | "FAIL" | "error", findings as items or the reason)."""
+        # Say the report was picked up before the invariants read the checkout.
         narrate.say(
             "info",
             "verify",
             "%s reported %s: checking its report" % (task_id, report.get("status") or "?"),
             task=task_id,
         )
-        # The archive's gate is its own; a ticket is gated by verify's invariants, then its evidence.
+        # The archive is the driver's own unit: its pull request's CI is its gate. A ticket is gated by verify.
         if packet["unit"] == ARCHIVE:
-            return self.archive_evidence(task_id, packet)
-        verdict, lines = self.verify_ticket(task_id, packet, report)
-        if verdict != "PASS":
-            return verdict, lines
-        return self.ticket_evidence(task_id, packet)
+            return "PASS", []
+        return self.verify_ticket(task_id, packet, report)
 
     def verify_ticket(self, task_id, packet, report):
         """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
@@ -67,7 +64,6 @@ class Findings:
                 repo=packet["checkout"],
                 base=self.args.base,
                 layout=self.layout,
-                layout_repo=self.repo,
             )
         except verify.VerifyError as error:
             return "error", [str(error)[:500]]

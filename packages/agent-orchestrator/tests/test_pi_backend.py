@@ -10,7 +10,6 @@ from test_step_routes import RoutedRunFixture
 pytestmark = pytest.mark.integration
 
 PI_MODEL = "minimax/MiniMax-M3.1-Flash"
-GAPS = "demo-gaps"
 REVIEW = "demo-t1-review"
 WORKER = "demo-t1"
 
@@ -80,7 +79,6 @@ class PiBackendTests(ArchiveFixture, unittest.TestCase):
         self.run_driver("--cli", "claude")
         spawns = self.spawns()
         self.assertEqual((spawns[REVIEW]["cli"], spawns[REVIEW]["model"]), ("claude", "opus"))
-        self.assertEqual((spawns[GAPS]["cli"], spawns[GAPS]["model"]), ("claude", "sonnet"))
         self.assertEqual((spawns[WORKER]["cli"], spawns[WORKER]["model"]), ("claude", "haiku"))
 
 
@@ -100,11 +98,6 @@ class PiBackendRoutingTests(RoutedRunFixture, unittest.TestCase):
         """orchestrator-engine/R2: pi-worker-driver/S3 — the merge gate runs on the brain, on the brain's medium model."""
         self.settle("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.pi_codex_routes())
         self.assertEqual(self.reviewer(), ("codex", "gpt-m", "high"))
-
-    def test_S4_the_gaps_reviewer_spawns_on_the_brain_backend(self):
-        """orchestrator-engine/R2: pi-worker-driver/S4 — the gaps review is a gate too."""
-        self.settle("--cli", "pi", "--brain-cli", "codex", "--routes-file", self.pi_codex_routes())
-        self.assertEqual(self.gaps(), ("codex", "gpt-m", "medium"))
 
     def test_S6_a_codex_run_keeps_every_tier_where_it_is(self):
         """orchestrator-engine/R2: pi-worker-driver/S6 — the same for the Codex column."""

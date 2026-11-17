@@ -1,5 +1,10 @@
 # Brief: Frozen historical evaluation
 
+> **2026-11-17:** plan/1 no longer carries scenario evidence: the `evidence:` blocks and the plan folder's
+> `acceptance/` files were removed. Each ticket's own tests are its evidence: a scenario it satisfies needs a
+> covering test the ticket changes, mapped in its report's `covers`. Read any evidence or acceptance-file
+> guidance below as the tests the implementing ticket writes.
+
 Slug: `04-agent-review-evaluation`. Contract: `plan.yaml`. Lane: **Full** (two tickets, risk-tagged, an evidence
 review). Archive: **discard** until reviewed.
 

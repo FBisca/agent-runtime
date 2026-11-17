@@ -21,7 +21,7 @@ A route file is JSON (or YAML when PyYAML is installed) with a route for each of
 ```
 
 `effort` is optional: without it the size and difficulty matrix decides. `steps` is optional and names the
-`implementer`, `reviewer` and `gaps` steps; the archive has no agent, so it has no route. A Pi model is
+`implementer` and `reviewer` steps; the archive has no agent, so it has no route. A Pi model is
 `provider/model`.
 
 ## Which file a new run reads

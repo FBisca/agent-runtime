@@ -233,7 +233,7 @@ class SafeguardFixture(unittest.TestCase):
 
 
 class FixtureControlTests(SafeguardFixture):
-    """What every check's selection carries so the oracle cannot read green without a scenario behind it.
+    """What every check's selection carries so the test cannot read green without a scenario behind it.
 
     These pass at base and after: they prove the scratch repository and the pinned history are what the
     scenario tests think they are, never that a safeguard works.

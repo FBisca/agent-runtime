@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from agent_orchestrator import driver, events, runner, timeutil, workbench
+from agent_orchestrator import driver, events, timeutil, workbench
 
 pytestmark = pytest.mark.unit
 
@@ -39,7 +39,6 @@ class TimestampDefinitionTests(unittest.TestCase):
         # The modules that returned an ISO string still return one from the same definition...
         self.assertIs(driver.now, timeutil.iso)
         self.assertIs(events.now, timeutil.iso)
-        self.assertIs(runner.now, timeutil.iso)
         # ...and the module that returned a datetime still returns one.
         self.assertIs(workbench.now, timeutil.now)
 

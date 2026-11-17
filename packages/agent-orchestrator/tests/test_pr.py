@@ -39,7 +39,7 @@ class PrFixture(GateFixture):
         return [e for e in self.run_events("round") if e.get("source") == source]
 
     def unit_spawned(self):
-        """The agents of this unit: the archive and the gaps review are other units' business."""
+        """The agents of this unit: the archive is another unit's business."""
         return [name for name in self.spawned() if name.startswith("demo-t1")]
 
 

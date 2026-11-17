@@ -1,8 +1,8 @@
 """The plan's state paths and the locks that keep an approval, an amendment and a driver apart.
 
 Each lock is one non-blocking flock under `<git common dir>/agent-orchestrator/`, and the file names
-its holder, so a refusal can name the process the caller is waiting for. The receipts and the ledger
-live under the state directory beside it.
+its holder, so a refusal can name the process the caller is waiting for. The ledger lives under the
+state directory beside it.
 """
 
 import fcntl
@@ -15,8 +15,8 @@ from .plan_document import PlanError
 from .plan_layout import git
 
 
-def state_paths(repo, slug, state_dir):
-    """(ledger path, receipts directory) of a plan: `<state>/<repo-key>/<slug>.json` and `.../<slug>/receipts` (D17).
+def ledger_path(repo, slug, state_dir):
+    """The ledger path of a plan: `<state>/<repo-key>/<slug>.json` (D17).
 
     A ledger an older driver wrote under `<state>/<slug>.json` is imported first when this repository owns it, so
     creating the ledger here never hides it."""
@@ -27,7 +27,7 @@ def state_paths(repo, slug, state_dir):
     keyed = state / driver.repo_key(repo)
     ledger, run_dir = keyed / (slug + ".json"), keyed / slug
     driver.import_old_ledger(state, repo, slug, ledger, run_dir)
-    return ledger, run_dir / "receipts"
+    return ledger
 
 
 @contextmanager

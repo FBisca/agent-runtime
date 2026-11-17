@@ -14,7 +14,7 @@ nothing. Requirements: `docs/specs/agent-workbench.md`.
 | `ui.js`, `views/` | draw what the model hands them: state colours and neutrals from `theme()`, data colours from the fixed palette in `ui.js` | no: they import Herdr |
 | `main.js` | the `View`: follows the shown space, timers, the watcher | no |
 | `test/` | `*.test.js`, one test per scenario named with its S-ID, and `fixtures.js` (answers as the CLI prints them) | |
-| `acceptance/` | the promoted plan acceptance tests (`*.test.js`); the pytest runner runs them beside `test/` | yes |
+| `acceptance/` | the plan-level acceptance tests (`*.test.js`); the pytest runner runs them beside `test/` | yes |
 
 The mod renders; it never recomputes. Layers, order, edges, verified and nulls are the orchestrator's. What the mod
 decides is how an answer, or the lack of one, reads (`readPlans`, `notice`).

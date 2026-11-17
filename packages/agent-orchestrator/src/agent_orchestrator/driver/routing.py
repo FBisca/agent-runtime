@@ -54,11 +54,11 @@ CONTRACT = """# Contract for every task in this run
 - Write your result to the report path your task.md names, as JSON in this shape. The driver validates it; a missing or invalid file counts as no report:
   {"contract":1,"task_id","status":"COMPLETE|PARTIAL|BLOCKED","summary","acceptance_met":bool,"files":[],"decisions":[],"interfaces":[],"remaining":[],"checks":[{"command","outcome":"passed|failed|not_run","reason?"}],"review_rounds":0,"usage":"unknown","head":"<commit sha>","pr":"<url or null>","context":{"status":"unknown"},"test_cost":null}
   BLOCKED needs "blocker" and a next action in "remaining". In a fix round report "review_rounds":0: the driver counts failed rounds.
-- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. verify refuses a node that does not exist or that this ticket did not add or change, and a satisfied scenario with no node, unless the plan's evidence for it brings its own test files (acceptance files or oracles) or is `human` (a person checks it): map such a scenario only to tests this ticket changes, never to a test written to stand in for the check.
+- A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. The implementation provides its evidence: each scenario it satisfies needs a covering test this ticket adds or changes. The report also adds `"red":{"S<n>":"<excerpt>"}`: for each of those scenarios, the failing output of its covering test from before the fix, as the runner printed it, naming the node and its assertion failure. verify refuses a satisfied scenario with no node or no red excerpt, a node that does not exist or that this ticket did not add or change, and an excerpt that names none of the scenario's nodes.
 - COMPLETE checks: every required check must be reported `passed`, its command spelled as the task gives it (whitespace apart). Each required command is required once, and the one `not_run` allowance (`affected` with a `reason`, when no test was selected) never waives a command another tier also requires. A non-required check may be `not_run` with a `reason`. A `failed` check, or a required check not `passed`, refuses COMPLETE.
 - Prose, if any, goes in report.md beside it. Files are write-once: a later attempt writes report.2.json.
 - Your agent-runtime `report` call carries ONE line: status + report path. Use kind=complete, blocked or decision.
-- Red-first: one test per scenario, named with its S-ID, seen failing before the code exists.
+- Red-first: one test per scenario, named with its S-ID, seen failing before the code exists; its failing output goes in the report's `red`.
 - TDD: before your first edit read the `tdd` skill's `SKILL.md` and its `rules.md`; your task names the path. Codex has no skill loader, so these rules are the whole skill here: one behaviour per test at the cheapest level that shows it; build expensive setup once per class and let readers share it; wait on an event or an injected clock, never a sleep; admit a test only when it protects a requirement or a credible failure, is not already covered at the same boundary, and would fail on a regression someone could ship. Name the seams and the admission answers in report.md.
 - Test cost: a YAML ticket whose diff adds or changes a test reports `"test_cost": {"command": "<the command that timed the touched tests>", "modules": {"<test file>": <seconds>}, "tests": {"<path::test>": <seconds>}}`. verify refuses the report without a row for every touched test file and every covered node.
 - Fix the class, not the instance: when you fix a defect, search for every other place with the same pattern.
@@ -170,9 +170,7 @@ def read_repo_config(args):
     if not plan or args.command not in (
         "plan",
         "status",
-        "verify",
         "run",
-        "accept",
         "complete",
         "launch",
     ):
@@ -287,7 +285,7 @@ class Routes:
         """A record whose medium route is not the brain backend cannot spawn its gates, and the refusal names why."""
         if not self.brain_cli:
             return
-        wanted = [s for s in ("reviewer", "gaps") if s not in self.step_routes]
+        wanted = [s for s in ("reviewer",) if s not in self.step_routes]
         medium = self.routes["medium"]
         if wanted and medium.backend != self.brain_cli:
             raise PlanError(
@@ -338,7 +336,7 @@ class Routes:
         brain = self.brain_cli
         if not brain:
             return
-        wanted = [step for step in ("reviewer", "gaps") if step not in self.step_routes]
+        wanted = [step for step in ("reviewer",) if step not in self.step_routes]
         medium = self.routes["medium"]
         if wanted and medium.backend != brain:
             raise PlanError(
@@ -392,7 +390,7 @@ class Routes:
         """The backend and model one gate spawns on: the step's own route, or the brain's answer.
 
         A step route wins over the brain: the reviewer may sit on another backend, and on another
-        model, than the gaps reviewer."""
+        model, than the implementer."""
         route = self.step_route(step)
         if route:
             return route.backend, route.model
@@ -627,7 +625,7 @@ class Routes:
     def tier_checks(self, owns):
         """The checks a worker runs: the named `--gate` alone, else the repo's `fast` and rendered `affected` tiers.
         Each required command appears once. Returns (checks, the rendered affected command when it is a
-        requirement of its own, the `full` command the worker leaves to verify when it is not one of them)."""
+        requirement of its own, the `full` command the worker leaves to CI when it is not one of them)."""
         if self.args.gate:
             return unique_checks(self.args.gate), None, None
         tiers = repo_config.load(self.repo).checks
@@ -695,7 +693,7 @@ def _explicit_routes(args, pinned, chosen, chosen_steps, classes, steps, via):
 def _gate_steps(pinned, steps, brain):
     """The gate steps the command line adds, for a record whose own routes cannot reach its gates."""
     gates = (
-        [s for s in ("reviewer", "gaps") if s not in pinned.steps]
+        [s for s in ("reviewer",) if s not in pinned.steps]
         if brain and pinned.classes["medium"].backend != brain
         else []
     )

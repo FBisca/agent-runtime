@@ -25,11 +25,8 @@ def driver_with(scenarios, covers, slug="demo"):
     return driver
 
 
-def scenario(sid, when="a", then="b", human=None, place=None, oracle=()):
-    evidence = SimpleNamespace(human=human, promote=True, place=place, oracle=list(oracle))
-    return SimpleNamespace(
-        id=sid, when=when, then=then, evidence=evidence if (human or place) else None
-    )
+def scenario(sid, when="a", then="b"):
+    return SimpleNamespace(id=sid, when=when, then=then)
 
 
 class SpecSectionUnit(unittest.TestCase):
@@ -48,29 +45,24 @@ class SpecSectionUnit(unittest.TestCase):
         self.assertNotIn("## Requirements", text)
         self.assertIn("| R9 | S1 | `t.py::t` |", text)
 
-    def test_S2_the_nodes_are_the_covers_then_the_placed_oracle_joined_by_br(self):
-        driver = driver_with(
-            [scenario("S1", place="src/", oracle=["o.py.oracle"])], {"S1": ["a::b", "c::d"]}
-        )
-        self.assertIn("| `a::b`<br>`c::d`<br>`src/o.py` |", driver.spec_section("", {}))
+    def test_S2_the_nodes_are_the_covers_joined_by_br(self):
+        driver = driver_with([scenario("S1")], {"S1": ["a::b", "c::d"]})
+        self.assertIn("| `a::b`<br>`c::d` |", driver.spec_section("", {}))
 
-    def test_S3_a_human_scenario_reads_its_evidence_and_needs_no_node(self):
-        driver = driver_with([scenario("S1", human="check | by hand")], {})
-        self.assertIn("| S1 | human: check \\| by hand |", driver.spec_section("", {}))
-        self.assertEqual(driver.archive_missing(), [])
-
-    def test_S4_a_scenario_with_no_node_and_no_oracle_is_missing(self):
-        driver = driver_with(
-            [scenario("S1"), scenario("S2", human="x"), scenario("S3")], {"S1": ["a::b"]}
-        )
-        self.assertEqual(driver.archive_missing(), ["S3"])
+    def test_S4_every_scenario_with_no_node_is_missing(self):
+        """An implementation provides its evidence: no scenario is exempt from its test node."""
+        driver = driver_with([scenario("S1"), scenario("S2"), scenario("S3")], {"S1": ["a::b"]})
+        self.assertEqual(driver.archive_missing(), ["S2", "S3"])
 
 
 def failing_once():
-    """The archive's outcome evidence fails once, so the archive asks the Lead with `retry` and `skip`."""
-    real, calls = load_script().Driver.archive_evidence, []
+    """The archive's gate fails once, so the archive asks the Lead with `retry` and `skip`. The archive's own gate
+    passes (its pull request's CI is its gate); a failure stands in for anything that stops it."""
+    real, calls = load_script().Driver.gate, []
 
-    def evidence(driver, task_id, packet):
+    def gate(driver, task_id, packet, report):
+        if packet["unit"] != "archive":
+            return real(driver, task_id, packet, report)
         calls.append(task_id)
         if len(calls) == 1:
             return "FAIL", [
@@ -78,16 +70,16 @@ def failing_once():
                     "id": "E1",
                     "kind": "blocking",
                     "source": "verify",
-                    "check": "evidence S1",
+                    "check": "archive",
                     "command": "x",
                     "exit": 1,
                     "excerpt": "S1 boom",
                     "log_path": "/nowhere",
                 }
             ]
-        return real(driver, task_id, packet)
+        return real(driver, task_id, packet, report)
 
-    return mock.patch.object(load_script().Driver, "archive_evidence", evidence)
+    return mock.patch.object(load_script().Driver, "gate", gate)
 
 
 class DriverArchive(ArchiveFixture, unittest.TestCase):
@@ -112,7 +104,7 @@ class DriverArchive(ArchiveFixture, unittest.TestCase):
         self.assertEqual((task, kind), ("archive", "archive"))
         self.assertRegex(reason, r"S1.*`retry`.*`skip`")
 
-    def test_S5_a_failing_outcome_asks_the_lead_with_retry_and_skip_and_spawns_no_worker(self):
+    def test_S5_a_failing_archive_gate_asks_the_lead_with_retry_and_skip_and_spawns_no_worker(self):
         self.waits(self.ticket_merged() + [{}, self.decide_step("archive", "skip")])
         with failing_once():
             self.run_driver()
@@ -158,8 +150,8 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
                 load_script().contracts.make_request(
                     "archive",
                     "archive",
-                    "outcome",
-                    "the archive failed its outcome gate",
+                    "archive",
+                    "the archive failed its gate",
                     [str(self.run_dir / "archive" / "task.md")],
                     menu=("retry", "skip"),
                 )
@@ -169,7 +161,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         return path
 
     def test_S6_the_lead_s_retry_for_the_archive_is_refused_while_the_plan_is_not_accepted(self):
-        request = self.seed_request("REJECTED")
+        request = self.seed_request("RUNNING")
         result = self.cli(
             "decide",
             str(self.plan),
@@ -181,7 +173,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
             str(self.state_dir),
         )
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("REJECTED", result.stderr)
+        self.assertIn("RUNNING", result.stderr)
         self.assertIn("run` again", result.stderr)  # the way out
         self.assertFalse((self.run_dir / "archive" / "decision.json").exists())
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
@@ -206,7 +198,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "resolved")
 
     def test_S6_the_json_form_refuses_the_archive_retry_while_the_plan_is_not_accepted(self):
-        request = self.seed_request("REJECTED")
+        request = self.seed_request("RUNNING")
         path = self.root / "decision-in.json"
         path.write_text(json.dumps({"action": "retry", "reason": "again"}), encoding="utf-8")
         result = self.cli(
@@ -220,7 +212,7 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2, result.stderr)
         refusal = json.loads(result.stderr)
-        self.assertIn("REJECTED", refusal["reason"])
+        self.assertIn("RUNNING", refusal["reason"])
         self.assertTrue(refusal["way_out"])
         self.assertFalse((self.run_dir / "archive" / "decision.json").exists())
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
@@ -228,7 +220,8 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
     def test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted(self):
         """A retry the Lead's own CLI would have refused, written as an older CLI wrote it: the driver asks again."""
         self.waits(
-            self.ticket_merged() + [{}, self.reject_the_plan(), self.write_the_retry(), self.skip()]
+            self.ticket_merged()
+            + [{}, self.unaccept_the_plan(), self.write_the_retry(), self.skip()]
         )
         with failing_once():
             self.run_driver()
@@ -236,25 +229,25 @@ class ArchiveRetryRefusal(ArchiveFixture, unittest.TestCase):
         self.assertNotEqual(states[-1], "ARCHIVED", states)
         self.assertFalse(
             (self.run_dir / "archive" / "report.2.json").exists(),
-            "the driver built the archive again while the plan was rejected",
+            "the driver built the archive again while the plan was not accepted",
         )
         self.assertEqual(len(self.gh_calls("pr", "create")), 1, self.gh_calls("pr", "create"))
         asked = json.loads(
             (self.run_dir / "archive" / "request.2.json").read_text(encoding="utf-8")
         )
-        self.assertIn("REJECTED", asked["reason"])
-        self.assertRegex(asked["reason"], r"(?i)\bverify\b|\baccept\b")
+        self.assertIn("APPROVED", asked["reason"])
+        self.assertRegex(asked["reason"], r"(?i)\baccepted\b")
         self.assertIn("archive", self.wake_lines("decision")[-1])
 
-    def reject_the_plan(self):
-        """A wait step in which the plan's state becomes REJECTED, as a rejected verification leaves it."""
+    def unaccept_the_plan(self):
+        """A wait step in which the plan's state leaves ACCEPTED for a state the driver does not accept from."""
         return wait_result(
             run=[
                 [
                     sys.executable,
                     "-c",
                     "import json,sys;p=sys.argv[1];d=json.load(open(p));"
-                    "d['plan']={'state':'REJECTED','history':[{'state':'REJECTED','at':'now'}]};"
+                    "d['plan']={'state':'APPROVED','history':[{'state':'APPROVED','at':'now'}]};"
                     "json.dump(d,open(p,'w'))",
                     str(self.state_dir / "demo.json"),
                 ]
@@ -329,7 +322,7 @@ class ArchiveRouteRefusal(ArchiveFixture, unittest.TestCase):
 
     def test_S7_the_other_step_routes_still_work(self):
         routes = load_script().routes
-        self.assertEqual(routes.step_override("gaps=claude/haiku").step, "gaps")
+        self.assertEqual(routes.step_override("reviewer=claude/haiku").step, "reviewer")
         self.assertIsNone(re.search("archive", ",".join(routes.STEPS)))
 
 
@@ -337,7 +330,7 @@ class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
     def first_drive(self):
         self.from_snapshot(self.snapshot_key("first_drive"), super().first_drive)
 
-    def test_control_verify_runs_once_the_agent_ticket_is_complete(self):
+    def test_control_the_plan_is_accepted_once_the_agent_ticket_is_complete(self):
         self.first_drive()
         self.assertIn("ACCEPTED", self.history())
 
@@ -359,7 +352,7 @@ class PersonTicketArchive(SnapshotFixture, PersonFixture, unittest.TestCase):
         self.first_drive()
         code, said = self.complete("T2", "S2=" + NODE)
         self.assertEqual(code, 0, said)
-        self.drive_once([self.gaps_done()])
+        self.drive_once([])
         self.assertEqual(self.history()[-1], "ARCHIVED")
         spec = self.origin_show("feat/demo-archive", "docs/specs/demo.md").decode()
         rows = [line for line in spec.splitlines() if line.startswith("| R") and "| S2 |" in line]

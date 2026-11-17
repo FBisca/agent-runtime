@@ -11,7 +11,8 @@ verbatim: a review item's fields outside the core survive a round trip unchanged
                 `responses[] {id, status fixed|disputed, commit, note, changes_code?}` (one per answer_required finding)
                 and `clarifications[] {finding, asked_by, note}`. Contract 3 is a YAML plan ticket's report: it adds
                 `covers {S<n>: [test node ids]}`, the scenarios the ticket satisfies mapped to the tests that prove
-                them; verify checks each node exists and changed in the ticket.
+                them, and `red {S<n>: excerpt}`, each covering test's failing output from before the fix; verify
+                checks each node exists and changed in the ticket and each excerpt names one of them.
 `review.json`   reviewer: `verdict` pass|block, `items[]`, `checks_run[] {command, exit, at_commit}`, optional
                 `clarifications[]`, `commit` reviewed (must equal the checkout's HEAD). An item has the core `id`, `kind`
                 (blocking|concern|question|nit|deferred), `summary`, `answer_required`; a blocking item also `file`,
@@ -236,6 +237,8 @@ class Report(Strict):
     context: dict[str, Any] | None = None
     # Contract 3: each scenario the ticket satisfies, mapped to the test nodes (`path::name`) that prove it.
     covers: dict[str, list[str]] | None = None
+    # Contract 3: each scenario's covering test seen failing before the fix, as the runner printed it.
+    red: dict[str, str] | None = None
     # The seconds the tests this ticket added or changed cost: verify refuses a test change without it.
     test_cost: TestCost | None = None
 
@@ -413,14 +416,27 @@ def _check(model, value, what):
 
 
 def validate_covers(report):
-    """Contract 3 carries `covers {S<n>: [node, ...]}`; no other contract does."""
+    """Contract 3 carries `covers {S<n>: [node, ...]}` and may carry `red {S<n>: excerpt}`; no other contract does.
+    Whether `red` is there for every scenario is verify's to say, as a fix round."""
     covers = report.get("covers")
     if report["contract"] != 3:
-        need(
-            covers is None,
-            "report: covers needs contract 3, this report is contract %s" % report["contract"],
-        )
+        for field in ("covers", "red"):
+            need(
+                report.get(field) is None,
+                "report: %s needs contract 3, this report is contract %s"
+                % (field, report["contract"]),
+            )
         return
+    red = report.get("red")
+    need(
+        red is None or isinstance(red, dict),
+        "report: red must map each scenario id to its failing output",
+    )
+    for scenario in red or {}:
+        need(
+            isinstance(scenario, str) and re.fullmatch(r"S\d+[a-z]?", scenario),
+            "report: red key %r is not a scenario id like S3" % (scenario,),
+        )
     need(isinstance(covers, dict), "report: contract 3 needs covers {S<n>: [test node ids]}")
     for scenario, nodes in covers.items():
         need(

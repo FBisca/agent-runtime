@@ -1,5 +1,10 @@
 # Brief: a pointer names the thing, not how to find it
 
+> **2026-11-17:** plan/1 no longer carries scenario evidence: the `evidence:` blocks and the plan folder's
+> `acceptance/` files were removed. Each ticket's own tests are its evidence: a scenario it satisfies needs a
+> covering test the ticket changes, mapped in its report's `covers`. Read any evidence or acceptance-file
+> guidance below as the tests the implementing ticket writes. Its stale approval was dropped: run `plan approve`.
+
 Slug: `locator-invariants`. Contract: `plan.yaml`. Lane: Full, regular·complex over three tickets;
 it also repeals a numbered requirement another plan's frozen acceptance test proved, which a person
 should see before approving.

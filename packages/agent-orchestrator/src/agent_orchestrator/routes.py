@@ -32,10 +32,14 @@ BACKENDS = (
     "pi",
 )  # the worker backends; each of them runs a worker, so each of them may be routed to
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-STEPS = ("implementer", "reviewer", "gaps")
+STEPS = ("implementer", "reviewer")
 # The archive has no agent, so it has no route: naming it is refused with the way out.
 ARCHIVE_ROUTE_REFUSAL = (
     "the route names the step 'archive': the archive has no agent; remove the `archive` route"
+)
+# The advisory gaps reviewer was removed, so a route for it is refused with the way out.
+GAPS_ROUTE_REFUSAL = (
+    "the route names the step 'gaps': the gaps reviewer was removed; remove the `gaps` step"
 )
 ROUTE_FIELDS = ("class", "backend", "model", "effort")
 # What a route field may name, and what to call it when it names something else.
@@ -102,11 +106,11 @@ class RouteEntry(BaseModel):
 class StepEntry(BaseModel):
     """One step of a config: the step, the backend it runs on, the model and the effort.
 
-    A step is one spawn site of a run: the implementer, the reviewer or the gaps reviewer. A step route is the run's answer for that step, whatever the class routes say."""
+    A step is one spawn site of a run: the implementer or the reviewer. A step route is the run's answer for that step, whatever the class routes say."""
 
     model_config = ConfigDict(extra="forbid")
 
-    step: Literal["implementer", "reviewer", "gaps"]
+    step: Literal["implementer", "reviewer"]
     backend: Literal["claude", "codex", "pi"]
     model: str = Field(min_length=1)
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
@@ -197,6 +201,8 @@ def validate(data):
     named = [e.get("step") for e in data.get("steps") or [] if isinstance(e, dict)]
     if "archive" in named:
         raise RouteError(ARCHIVE_ROUTE_REFUSAL)
+    if "gaps" in named:
+        raise RouteError(GAPS_ROUTE_REFUSAL)
     try:
         document = RouteDocument.model_validate(data)
     except ValidationError as error:
@@ -356,10 +362,12 @@ def overrides(texts):
 def step_override(text):
     """One explicit step override, read from the command line: `step=backend/model[@effort]`.
 
-    A step is one spawn site of a run: `implementer`, `reviewer` or `gaps`."""
+    A step is one spawn site of a run: `implementer` or `reviewer`."""
     step, backend, model, effort = _override_parts(text, "step", "step")
     if step == "archive":
         raise RouteError("the step override %r: %s" % (text, ARCHIVE_ROUTE_REFUSAL))
+    if step == "gaps":
+        raise RouteError("the step override %r: %s" % (text, GAPS_ROUTE_REFUSAL))
     if step not in STEPS:
         raise RouteError(
             "the step override %r names the step '%s', which is not a step (%s)"

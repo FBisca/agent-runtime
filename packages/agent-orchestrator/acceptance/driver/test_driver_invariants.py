@@ -1,8 +1,7 @@
 """Acceptance for the driver-invariants plan: a worker's payload never ends the drive, the ledger refuses the
 states that stalled a run, a rework after a review writes a new review, and a check whose run still runs is pending.
 
-Frozen at approval; placed at packages/agent-orchestrator/acceptance/driver/ by the runner; never edited by a
-ticket. It drives `run` and `ledger check` through the gate fixture (fake runtime, fake gh), the seams the
+It drives `run` and `ledger check` through the gate fixture (fake runtime, fake gh), the seams the
 engine's own tests use.
 
 The four cases are the plan's outcome:
@@ -27,8 +26,8 @@ from pathlib import Path
 
 import pytest
 
-# The evidence runner runs this check in a fresh worktree whose venv holds no workspace member: the package under
-# test is importable from its source, so the fixtures can import it.
+# A fresh worktree's venv holds no workspace member: the package under test is importable from its source, so the
+# fixtures can import it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from fixtures import DRIVER, assignment, report_wait, resume_id, wait_result  # noqa: E402

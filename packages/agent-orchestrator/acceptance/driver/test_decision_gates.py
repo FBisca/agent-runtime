@@ -1,16 +1,13 @@
-"""Acceptance for the lead-decision-gates plan (issue #306, claims 1, 2 and 4):
+"""Acceptance for the lead-decision-gates plan (issue #306, claims 1 and 2):
 
   - a decision answers the request it was asked in, in the request's own contract version (S1); a JSON decision
     that names another version is refused, naming both (S2); a driver that meets a decision it cannot read asks
     the Lead again, naming the reason and the way out (S3);
-  - `plan check` refuses a scenario that only a person ticket satisfies and that carries no evidence (S4), and
-    accepts the plans around it (S5);
   - the Lead's `retry` for the archive is refused while the plan is not accepted (S6), and the driver builds no
-    archive while the plan is rejected (S7).
+    archive while the plan is not accepted (S7).
 
-Frozen at approval; placed at packages/agent-orchestrator/acceptance/driver/ by the runner; never edited by a
-ticket. It drives `decide`, `plan check`, `plan approve` and the driver through the package's own fixtures: a
-fake runtime, a fake gh and a real git origin.
+It drives `decide` and the driver through the package's own fixtures: a fake runtime, a fake gh and a real git
+origin.
 """
 
 import json
@@ -19,9 +16,8 @@ import unittest
 from unittest import mock
 
 import pytest
-import yaml
 from agent_orchestrator import contracts
-from fixtures import RunFixture, load_script, plan_data, wait_result
+from fixtures import load_script, wait_result
 from test_archive import ArchiveFixture
 from test_wake import WakeFixture
 
@@ -57,10 +53,13 @@ with open(newest, "w") as stream:
 
 
 def failing_once():
-    """The archive's evidence fails once, so the archive asks the Lead with `retry` and `skip`."""
-    real, calls = load_script().Driver.archive_evidence, []
+    """The archive's gate fails once, so the archive asks the Lead with `retry` and `skip`. The archive's own gate
+    passes (its pull request's CI is its gate); a failure stands in for anything that stops it."""
+    real, calls = load_script().Driver.gate, []
 
-    def evidence(driver, task_id, packet):
+    def gate(driver, task_id, packet, report):
+        if packet["unit"] != ARCHIVE:
+            return real(driver, task_id, packet, report)
         calls.append(task_id)
         if len(calls) == 1:
             return "FAIL", [
@@ -68,16 +67,16 @@ def failing_once():
                     "id": "E1",
                     "kind": "blocking",
                     "source": "verify",
-                    "check": "evidence S1",
+                    "check": "archive",
                     "command": "x",
                     "exit": 1,
                     "excerpt": "S1 boom",
                     "log_path": "/nowhere",
                 }
             ]
-        return real(driver, task_id, packet)
+        return real(driver, task_id, packet, report)
 
-    return mock.patch.object(load_script().Driver, "archive_evidence", evidence)
+    return mock.patch.object(load_script().Driver, "gate", gate)
 
 
 class DecisionContract(WakeFixture, unittest.TestCase):
@@ -161,89 +160,6 @@ class DecisionContract(WakeFixture, unittest.TestCase):
         self.assertIn("restart", asked["reason"])
 
 
-class PersonTicketLint(RunFixture, unittest.TestCase):
-    """`plan check` refuses a scenario only a person ticket satisfies, when it carries no evidence."""
-
-    def a_plan(self, human=False, agent=False):
-        """The fixture plan plus a scenario only a person ticket satisfies."""
-        data = plan_data(("T1", "T4"))
-        data["slug"] = "lint"
-        data["scenarios"].append(
-            dict(id="S4", when="a person runs the runbook step", then="it is recorded")
-        )
-        data["tickets"].append(
-            dict(
-                id="T6",
-                delivers="the runbook step, run by hand",
-                satisfies=["S4"],
-                paths=["docs/"],
-                owner="fbisca",
-                repo="../other-repo",
-            )
-        )
-        if human:
-            data["scenarios"][3]["evidence"] = {"human": "the person confirms the step"}
-        if agent:
-            data["tickets"].append(
-                dict(
-                    id="T7",
-                    delivers="the runbook step, built",
-                    satisfies=["S4"],
-                    paths=["src/b/"],
-                    size="small",
-                    difficulty="simple",
-                )
-            )
-        return data
-
-    def write(self, data):
-        path = self.repo / "docs" / "plans" / "lint.plan.yaml"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-        return path
-
-    def check(self, data):
-        path = self.write(data)
-        result = self.cli(
-            "plan", "check", str(path), "--repo", str(self.repo), "--state-dir", str(self.state_dir)
-        )
-        return result.returncode, result.stdout + result.stderr
-
-    def approve(self, data):
-        path = self.write(data)
-        result = self.cli(
-            "plan",
-            "approve",
-            str(path),
-            "--repo",
-            str(self.repo),
-            "--state-dir",
-            str(self.state_dir),
-        )
-        return result.returncode, result.stdout + result.stderr, path
-
-    def test_control_a_plan_whose_scenario_an_agent_ticket_satisfies_is_accepted(self):
-        code, said = self.check(self.a_plan(agent=True))
-        self.assertEqual(code, 0, said)
-
-    def test_S4_a_scenario_only_a_person_ticket_satisfies_without_evidence_is_refused(self):
-        code, said = self.check(self.a_plan())
-        self.assertEqual(code, 2, said)
-        self.assertIn("S4", said)
-        self.assertIn("T6", said)
-        for way_out in ("human", "agent", "cover"):
-            self.assertIn(way_out, said)
-
-    def test_S4_the_refusal_writes_no_approval(self):
-        code, said, path = self.approve(self.a_plan())
-        self.assertEqual(code, 2, said)
-        self.assertNotIn("approval", yaml.safe_load(path.read_text(encoding="utf-8")))
-
-    def test_S5_a_person_only_scenario_with_human_evidence_is_accepted(self):
-        code, said = self.check(self.a_plan(human=True))
-        self.assertEqual(code, 0, said)
-
-
 class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
     """The archive waits for an accepted plan: the Lead's retry is refused, and no archive is built."""
 
@@ -303,20 +219,13 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.run_dir / ARCHIVE / "decision.json").exists())
 
-    def test_control_an_accepted_with_human_plan_answers_the_archive_retry(self):
-        self.open_archive_request()
-        self.write_ledger("ACCEPTED_WITH_HUMAN")
-        result = self.decide_archive()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.run_dir / ARCHIVE / "decision.json").exists())
-
-    def test_S6_the_leads_retry_is_refused_while_the_plan_is_rejected(self):
+    def test_S6_the_leads_retry_is_refused_while_the_plan_is_not_accepted(self):
         request = self.open_archive_request()
-        self.write_ledger("REJECTED")
+        self.write_ledger("RUNNING")
         result = self.decide_archive()
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("REJECTED", result.stderr)
-        self.assertRegex(result.stderr, r"(?i)\bverify\b|\baccept\b")
+        self.assertIn("RUNNING", result.stderr)
+        self.assertRegex(result.stderr, r"(?i)\baccepted\b")
         self.assertFalse((self.run_dir / ARCHIVE / "decision.json").exists())
         self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["status"], "open")
 
@@ -332,8 +241,9 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         states = [row["state"] for row in self.ledger()["plan"]["history"]]
         self.assertEqual(states[-1], "ARCHIVED", states)
 
-    def test_S7_the_driver_builds_no_archive_while_the_plan_is_rejected(self):
-        """The Lead's retry is on disk, as an older CLI wrote it, and the plan was rejected before the driver read it."""
+    def test_S7_the_driver_builds_no_archive_while_the_plan_is_not_accepted(self):
+        """The Lead's retry is on disk, as an older CLI wrote it, and the plan left ACCEPTED before the driver read
+        it."""
         decision = self.run_dir / ARCHIVE / "decision.json"
         reject = wait_result(
             run=[
@@ -341,7 +251,7 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
                     sys.executable,
                     "-c",
                     "import json,sys;p=sys.argv[1];d=json.load(open(p));"
-                    "d['plan']={'state':'REJECTED','history':[{'state':'REJECTED','at':'now'}]};"
+                    "d['plan']={'state':'APPROVED','history':[{'state':'APPROVED','at':'now'}]};"
                     "json.dump(d,open(p,'w'))",
                     str(self.ledger_path()),
                 ]
@@ -380,12 +290,12 @@ class ArchiveRetryGate(ArchiveFixture, unittest.TestCase):
         self.assertNotEqual(states[-1], "ARCHIVED", states)
         self.assertFalse(
             (self.run_dir / ARCHIVE / "report.2.json").exists(),
-            "the driver built the archive again while the plan was rejected",
+            "the driver built the archive again while the plan was not accepted",
         )
         self.assertEqual(len(self.gh_calls("pr", "create")), 1, self.gh_calls("pr", "create"))
         asked = json.loads((self.run_dir / ARCHIVE / "request.2.json").read_text(encoding="utf-8"))
-        self.assertIn("REJECTED", asked["reason"])
-        self.assertRegex(asked["reason"], r"(?i)\bverify\b|\baccept\b")
+        self.assertIn("APPROVED", asked["reason"])
+        self.assertRegex(asked["reason"], r"(?i)\baccepted\b")
         self.assertIn("archive", self.wake_lines("decision")[-1])
 
 

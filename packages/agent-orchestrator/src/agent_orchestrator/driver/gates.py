@@ -221,7 +221,7 @@ class Gates:
             self.record_report(task_id, report)
         except ValueError as error:
             return self.request(task_id, "report", "the ledger rejected the report: %s" % error)
-        # The archive is gated by the outcome evidence alone. Every other report, a fix round of any source included, goes to
+        # The archive is gated by its pull request's CI alone. Every other report, a fix round of any source included, goes to
         # the unit's reviewer: a delta re-review once the unit has been reviewed, else the first review.
         if task["packet"]["unit"] == ARCHIVE:
             return self.mark(task_id, gate="ready-for-ci")

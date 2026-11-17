@@ -16,7 +16,7 @@
     "finished_at": "when the attempt ended (ISO 8601), or null while it runs",
     "elapsed_seconds": "the seconds between the two, or null when one of them is missing",
     "outcome": "the attempt's final status (COMPLETE, RELEASED, BLOCKED, ...)",
-    "claimed": "true when the attempt's report claims a completed, accepted and checked task (the worker's word, not a receipt), false when it does not, null while it is unknown",
+    "claimed": "true when the attempt's report claims a completed, accepted and checked task (the worker's word, not the gate's), false when it does not, null while it is unknown",
     "counters": "tool_calls, model_calls (both summed from the assignments' usage), tool_loops, retries, interventions and human_rescues; a count that was not measured, or that any assignment did not report, is null",
     "tokens": "the input, output, cached, cache_write and reasoning token figures, labelled, summed over the attempt's assignments; a figure any assignment did not report is null",
     "cost_usd": "the dollar cost the CLIs reported, summed over the attempt's assignments; null when any assignment did not report it (never computed from a rate)",

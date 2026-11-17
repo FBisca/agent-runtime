@@ -26,10 +26,8 @@ class RunTests(RunFixture, unittest.TestCase):
         self.run_driver()
         spawns = self.calls("spawn")
         self.assertTrue(spawns)
-        workers = [
-            s["args"] for s in spawns if not s["args"]["name"].endswith(("-review", "-gaps"))
-        ]
-        reviewers = [s["args"] for s in spawns if s["args"]["name"].endswith(("-review", "-gaps"))]
+        workers = [s["args"] for s in spawns if not s["args"]["name"].endswith("-review")]
+        reviewers = [s["args"] for s in spawns if s["args"]["name"].endswith("-review")]
         self.assertTrue(workers)
         for spawn in workers:
             self.assertEqual(spawn.get("agent"), "implementer")

@@ -218,7 +218,7 @@ class FindingClosureAcceptance(ReuseFixture, unittest.TestCase):  # noqa: PLR090
         evidence = dict(self.resolution()["evidence"], exit=1)
         self.close_with([self.resolution(evidence=evidence)], [self.check(exit=1)])
 
-    def test_S6_missing_check_receipt_is_not_closure(self):
+    def test_S6_a_missing_check_run_is_not_closure(self):
         self.close_with([self.resolution()], [])
 
     def test_S6_different_command_is_not_closure(self):

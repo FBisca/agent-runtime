@@ -105,7 +105,7 @@ def task_text(self, _plan, ticket, packet, scenarios, task_dir):
             "Owns (edit nothing else): %s." % owned_scope(packet["checkout"], packet["owns"]),
             "Shared databases are read-only; schema changes go through migrations in your own branch.",
             "",
-            "Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists.",
+            "Scenarios, verbatim. Work red-first: one test per scenario, named with its S-ID, seen failing before the code exists; keep that failing output for the report's `red`.",
             tdd_instruction(),
             "",
             *scenarios,
@@ -114,8 +114,7 @@ def task_text(self, _plan, ticket, packet, scenarios, task_dir):
             CHECK_INSTRUCTIONS,
             *(
                 [
-                    "`%s` is the whole suite: do not run it; verify and CI run it."
-                    % packet["full"],
+                    "`%s` is the whole suite: do not run it; CI runs it." % packet["full"],
                 ]
                 if packet.get("full")
                 else []

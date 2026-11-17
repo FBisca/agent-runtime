@@ -239,14 +239,14 @@ class RouteResumeTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
             route("small", "codex", "gpt-s", effort="high"),
             route("medium", "claude", "sonnet"),
             route("large", "claude", "opus", effort="max"),
-            steps=[{"step": "gaps", "backend": "claude", "model": "opus", "effort": "high"}],
+            steps=[{"step": "reviewer", "backend": "claude", "model": "opus", "effort": "high"}],
         )
         self.run_driver("--routes-file", path)
         self.assertEqual((self.worker()["cli"], self.worker()["model"]), ("codex", "gpt-s"))
         record = self.ledger()["routes"]
         self.assertEqual(sorted(record["classes"]), ["large", "medium", "small"])
         self.assertEqual(record["classes"]["large"]["effort"], "max")
-        self.assertEqual(record["steps"]["gaps"]["model"], "opus")
+        self.assertEqual(record["steps"]["reviewer"]["model"], "opus")
         self.assertEqual(record["path"], path)
 
     def test_S3_a_routes_file_completes_an_incomplete_record(self):
@@ -299,15 +299,13 @@ class RouteResumeTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.refused("--brain-cli", "codex", mention=("--step", "reviewer"))
         self.run_driver(
             "--step",
-            "reviewer=codex/gpt-m",
-            "--step",
-            "gaps=codex/gpt-m@high",
+            "reviewer=codex/gpt-m@high",
             "--brain-cli",
             "codex",
         )
         steps = self.ledger()["routes"]["steps"]
         self.assertEqual(steps["reviewer"]["model"], "gpt-m")
-        self.assertEqual(steps["gaps"]["effort"], "high")
+        self.assertEqual(steps["reviewer"]["effort"], "high")
 
     def test_S3_a_step_argument_may_not_replace_a_step_while_adding_the_missing_ones(self):
         """orchestrator-engine/R94: S3 — only a step the record lacks is added; a recorded one still conflicts."""
@@ -315,7 +313,11 @@ class RouteResumeTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         record["brain_cli"] = "codex"
         self.seed(record)
         self.refused(
-            "--step", "reviewer=codex/gpt-m", "--step", "gaps=codex/gpt-m", mention=("reviewer",)
+            "--step",
+            "reviewer=codex/gpt-m",
+            "--step",
+            "implementer=codex/gpt-m",
+            mention=("reviewer",),
         )
 
 

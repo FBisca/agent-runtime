@@ -1,9 +1,8 @@
-"""The archive of a YAML plan: where its plan files and oracles land, and the spec the tests commit."""
+"""The archive of a YAML plan: where its plan files land, and the spec the tests commit."""
 
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -31,23 +30,6 @@ class YamlArchiveDestinationTests(unittest.TestCase):
         driver.repo = Path(repo)
         return driver
 
-    def model(self):
-        evidence = SimpleNamespace(promote=True, place="src/a/", oracle=["test_oracle.py.oracle"])
-        return SimpleNamespace(scenarios=[SimpleNamespace(evidence=evidence)])
-
-    def test_S29_placed_oracle_drops_the_oracle_suffix(self):
-        driver = self.driver_for("/repo/docs/plans/demo.plan.yaml", "/repo")
-        places = driver.yaml_places(self.model())
-        self.assertEqual(
-            places,
-            [
-                (
-                    "src/a/test_oracle.py",
-                    Path("/repo/docs/plans/demo.oracle/test_oracle.py.oracle"),
-                )
-            ],
-        )
-
     def test_S29_plan_outside_repo_lands_inside_the_checkout(self):
         with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as repo:
             plans = Path(outside) / "plans"
@@ -56,7 +38,6 @@ class YamlArchiveDestinationTests(unittest.TestCase):
             (plans / "demo.plan.md").write_text("# demo\n", encoding="utf-8")
             driver = self.driver_for(plans / "demo.plan.yaml", repo)
             destinations = [rel for rel, _ in driver.yaml_copies()]
-            destinations += [rel for rel, _ in driver.yaml_places(self.model())]
         for rel in destinations:
             self.assertFalse(Path(rel).is_absolute(), rel)
             self.assertNotIn("..", Path(rel).parts, rel)
@@ -65,8 +46,6 @@ class YamlArchiveDestinationTests(unittest.TestCase):
             [
                 "docs/plans/demo.plan.yaml",
                 "docs/plans/demo.plan.md",
-                "docs/plans/demo.oracle/",
-                "src/a/test_oracle.py",
             ],
         )
 

@@ -4,7 +4,7 @@ No model calls and no shell evaluation. Only `run` starts workers, and only thro
 
 The package is a facade: every engine collaborator lives in the module beside it - the state and its
 locks in `state.py`, the round in `lifecycle.py`, a worker's report and the Lead's answer in
-`answers.py` and `findings.py`, the routing in `routing.py`, the evidence in `evidence_runs.py`, what
+`answers.py` and `findings.py`, the routing in `routing.py`, the plan's acceptance in `acceptance.py`, what
 a unit delivered in `coverage.py`, the Lead's attention in `attention.py`, the handlers in
 `commands.py` - and the names below are re-exported so a caller, a test and the entry points keep
 asking `driver.<name>`.
@@ -12,12 +12,12 @@ asking `driver.<name>`.
 
 __all__ = [
     "ACCEPTED_STATES",
-    "ACCEPT_READS",
     "AMENDING",
     "ARCHIVE",
     "ARCHIVE_MENU",
     "ARCHIVE_REBUILDS",
     "ATTEMPT_LETTERS",
+    "Acceptance",
     "ATTENTION",
     "Answers",
     "Any",
@@ -38,7 +38,6 @@ __all__ = [
     "DRIVER_ID",
     "DRIVER_MARKS",
     "Driver",
-    "Evidence",
     "FAILURE_LINE",
     "Findings",
     "Gates",
@@ -46,7 +45,6 @@ __all__ = [
     "JsonRefusal",
     "Lifecycle",
     "MATRIX",
-    "MUTATION_ATTEMPTS",
     "NO_TEST_MENU",
     "PACKET_TEXT",
     "PARKED",
@@ -80,11 +78,7 @@ __all__ = [
     "Unreadable",
     "VERDICTS",
     "YAML_ARCHIVE_ACCEPTANCE",
-    "accept_item",
-    "acceptance",
     "acceptance_context",
-    "accepted",
-    "add_accept_command",
     "add_await_command",
     "add_complete_command",
     "add_context_command",
@@ -99,7 +93,6 @@ __all__ = [
     "add_run_command",
     "add_status_command",
     "add_task_commands",
-    "add_verify_command",
     "add_workbench_commands",
     "approval_recovery",
     "approval_refusal",
@@ -148,7 +141,6 @@ __all__ = [
     "invariants",
     "is_agent",
     "is_done",
-    "is_flaky",
     "is_yaml",
     "item_text",
     "job_log",
@@ -223,7 +215,6 @@ __all__ = [
     "run_finished",
     "run_lock",
     "run_lock_path",
-    "runner",
     "runtime_call",
     "runtime_process",
     "satisfied",
@@ -248,14 +239,12 @@ __all__ = [
     "terminal_gone",
     "time",
     "timeutil",
-    "tree_in",
     "unique_checks",
     "unit_attempt",
     "unit_attempts",
     "unit_summary",
     "unreadable_decision",
     "verify",
-    "verify_plan",
     "whole",
     "without_coverage",
     "workbench",
@@ -281,7 +270,6 @@ from .. import ledger as ledgers
 from .. import narrate as narrate
 from .. import plan as yaml_plan
 from .. import routes as routes
-from .. import runner as runner
 from .. import timeutil as timeutil
 from .. import verify as verify
 from .. import workbench as workbench
@@ -293,6 +281,8 @@ from ..plan import PlanError as PlanError
 from ..report_rules import require as require
 from ..report_rules import require_report as require_report
 from ..runtime_client import approval_refusal as approval_refusal
+from .acceptance import Acceptance as Acceptance
+from .acceptance import acceptance_context as acceptance_context
 from .answers import ARCHIVE_MENU as ARCHIVE_MENU
 from .answers import ARCHIVE_REBUILDS as ARCHIVE_REBUILDS
 from .answers import ATTEMPT_LETTERS as ATTEMPT_LETTERS
@@ -340,7 +330,6 @@ from .book import task_summary as task_summary
 from .book import unit_summary as unit_summary
 from .briefs import Briefs as Briefs
 from .cli import BUILDERS as BUILDERS
-from .cli import add_accept_command as add_accept_command
 from .cli import add_await_command as add_await_command
 from .cli import add_complete_command as add_complete_command
 from .cli import add_context_command as add_context_command
@@ -355,14 +344,10 @@ from .cli import add_plans_commands as add_plans_commands
 from .cli import add_run_command as add_run_command
 from .cli import add_status_command as add_status_command
 from .cli import add_task_commands as add_task_commands
-from .cli import add_verify_command as add_verify_command
 from .cli import add_workbench_commands as add_workbench_commands
 from .cli import build_parser as build_parser
 from .cli import main as main
 from .cli import run_cli as run_cli
-from .commands import ACCEPT_READS as ACCEPT_READS
-from .commands import accept_item as accept_item
-from .commands import accepted as accepted
 from .commands import await_wake as await_wake
 from .commands import complete_person_ticket as complete_person_ticket
 from .commands import dispatch as dispatch
@@ -373,14 +358,8 @@ from .commands import legacy_markdown_view as legacy_markdown_view
 from .commands import plan_status as plan_status
 from .commands import rebuild_evidence as rebuild_evidence
 from .commands import rebuild_metrics as rebuild_metrics
-from .commands import verify_plan as verify_plan
 from .coverage import Coverage as Coverage
 from .engine import Driver as Driver
-from .evidence_runs import MUTATION_ATTEMPTS as MUTATION_ATTEMPTS
-from .evidence_runs import Evidence as Evidence
-from .evidence_runs import acceptance as acceptance
-from .evidence_runs import acceptance_context as acceptance_context
-from .evidence_runs import tree_in as tree_in
 from .findings import Findings as Findings
 from .gates import STEPS as STEPS
 from .gates import Gates as Gates
@@ -410,7 +389,6 @@ from .records import check_commit as check_commit
 from .records import context_verdict as context_verdict
 from .records import is_agent as is_agent
 from .records import is_done as is_done
-from .records import is_flaky as is_flaky
 from .records import merge_state as merge_state
 from .records import newest_attempts as newest_attempts
 from .records import normalise_check as normalise_check

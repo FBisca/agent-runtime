@@ -1,7 +1,7 @@
 """The snapshot that proves a plan is still the approved one, and the approval a lost span is recovered with.
 
 A hand edit can drop the `approval` span and leave the contract alone. The snapshot the approval's digest names
-proves whether it did — the plan's bytes and its files, exactly — and the ledger keeps the approval the drive held,
+proves whether it did — the plan's bytes, exactly — and the ledger keeps the approval the drive held,
 which is the record a restart survives. So a span-less plan whose approval is still provable is read with it
 restored, and one nobody holds a record of is still refused as unapproved.
 
@@ -43,18 +43,11 @@ def verify_snapshot(path, model, repo, state_dir):
     if errors or not isinstance(snap_data, dict):
         raise yaml_plan.PlanError(f"approval: invalid snapshot {snap} — {way_out}")
     old_plan = snap.read_bytes()
-    old_files = yaml_plan.snapshot_files(snap.parent, path)
     live_data, _ = yaml_plan.read_yaml(path)
-    live_files = yaml_plan.approved_files(path, live_data)
     changed = []
     if yaml_plan.canonical(live_data) != old_plan:
         changed.append(str(path))
-    changed += [
-        str(yaml_plan.file_path(path, n))
-        for n in sorted(old_files.keys() | live_files.keys())
-        if old_files.get(n) != live_files.get(n)
-    ]
-    held = yaml_plan.digest(yaml_plan.identity(repo), model.approval.base, old_plan, old_files)
+    held = yaml_plan.digest(yaml_plan.identity(repo), model.approval.base, old_plan)
     if held != model.approval.digest:
         changed.append(f"repo identity/base or snapshot {snap.parent}")
     if changed:
@@ -113,7 +106,7 @@ def recover_approval(path, record, *, repo=None, state_dir=None):
     approval's plan.
 
     A hand edit can drop the `approval` span and leave the contract alone. The snapshot the digest names proves
-    whether it did — the plan's bytes and its files, exactly — so a caller repairs the span instead of treating the
+    whether it did — the plan's bytes, exactly — so a caller repairs the span instead of treating the
     plan as edited. A plan whose contract moved, or that does not load, is the edit it looks like and stays one."""
     restored = approval_block(record)
     if restored is None:
@@ -190,8 +183,8 @@ def say_restored(drive):
 
 def load_approved(path, *, repo, state_dir, recover=False, **kwargs):
     """yaml_plan.load that finds a snapshot approved under the default state dir when the run uses another. With
-    `recover`, a plan whose `approval` span was lost is read with the approval the ledger keeps, when its bytes and
-    its files are the ones that approval's snapshot holds."""
+    `recover`, a plan whose `approval` span was lost is read with the approval the ledger keeps, when its bytes are
+    the ones that approval's snapshot holds."""
     try:
         return yaml_plan.load(path, repo=repo, state_dir=state_dir, **kwargs)
     except yaml_plan.PlanError as error:

@@ -1,8 +1,8 @@
 """The plan's end of life has one home: `driver/archive.py`, and an `Archive` the Driver holds.
 
 A run that can go no further parks — the ledger keeps one record, attention.md shows it, the Lead is
-woken and asked again — and a plan whose tickets are all done is archived: its oracles placed, its
-files copied, its spec section written, its pull request opened and its folder deleted. Reopening a park
+woken and asked again — and a plan whose tickets are all done is archived: its files copied, its
+spec section written, its pull request opened and its folder deleted. Reopening a park
 the Lead answered and the report a crashed drive wakes the Lead with belong to the same lane, so the
 plan's last states are read in one module instead of six thousand lines apart. The park still writes
 through the Book, so a ledger the engine wrote before the package was split opens in the engine after
@@ -41,9 +41,8 @@ PARK = (
 )
 
 # The archive: what a plan's last ticket builds, and what the gate steps, the pull request lane and the
-# suite ask of it — the unit it starts, the branch, the spec, the pull request, the evidence re-run.
+# suite ask of it — the unit it starts, the branch, the spec, the pull request.
 ARCHIVED = (
-    "archive_evidence",
     "start_archive",
     "discard_plan",
     "remove_plan_folder",
@@ -51,9 +50,7 @@ ARCHIVED = (
     "archive_missing",
     "undraft_archive",
     "retry_archive",
-    "scenario_targets",
     "yaml_copies",
-    "yaml_places",
 )
 
 # The names the lane answers for itself: no other module and no test asks the Driver for them, so the
@@ -63,7 +60,6 @@ INTERNAL = (
     "park_record",
     "book_park",
     "parked_units",
-    "archive_mismatches",
     "archive_mode",
     "plan_folder_rel",
     "folder_tracked",
@@ -73,8 +69,6 @@ INTERNAL = (
     "archive_body",
     "archive_branch",
     "archive_pr",
-    "oracle_targets",
-    "place_oracles",
     "beside_plan",
 )
 

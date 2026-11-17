@@ -13,7 +13,6 @@ ARCHIVE_MODES = ("promote", "discard")
 # node -> its keys: the whole accepted shape, so an unknown key is refused by its dotted path.
 NODES = {
     "plans": ("dir",),
-    "acceptance": ("dir",),
     "archive": ("mode",),
     "checks": ("fast", "affected", "full"),
     "tests": ("patterns",),
@@ -22,7 +21,7 @@ NODES = {
 DEFAULT_TEST_PATTERNS = ("test_*", "*_test.*", "*.test.*", "*.spec.*")
 # the placeholders `checks.affected` may name: the run's base ref and the ticket's paths
 AFFECTED_PLACEHOLDERS = ("base", "paths")
-FULL_KEYS = ("run", "verify")
+FULL_KEYS = ("run",)
 PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 
 
@@ -37,13 +36,11 @@ class Checks:
     fast: str | None
     affected: str | None
     full_run: str | None
-    full_verify: bool
 
 
 @dataclass(frozen=True)
 class RepoConfig:
     plans_dir: Path
-    acceptance_dir: str
     archive_mode: str
     checks: Checks | None = None
     test_patterns: tuple = DEFAULT_TEST_PATTERNS
@@ -85,23 +82,17 @@ def _checks(body):
         full = {}
     if not isinstance(full, dict):
         raise ConfigError(
-            f"{CONFIG_PATH}: checks.full must be a mapping — write full: {{run: ..., verify: ...}}"
+            f"{CONFIG_PATH}: checks.full must be a mapping — write full: {{run: ...}}"
         )
     for key in full:
         if key not in FULL_KEYS:
             raise ConfigError(
                 f"{CONFIG_PATH}: checks.full.{key}: unknown key — remove it (known: {', '.join(FULL_KEYS)})"
             )
-    verify = full.get("verify", True)
-    if not isinstance(verify, bool):
-        raise ConfigError(
-            f"{CONFIG_PATH}: checks.full.verify must be true or false — write verify: true or verify: false"
-        )
     return Checks(
         fast=_command(body, "fast", "checks.fast"),
         affected=_command(body, "affected", "checks.affected", placeholders=True),
         full_run=_command(full, "run", "checks.full.run"),
-        full_verify=verify,
     )
 
 
@@ -132,7 +123,7 @@ def load(root):
         data = {} if data is None else data
     if not isinstance(data, dict):
         raise ConfigError(
-            f"{CONFIG_PATH}: must be a mapping of nodes — use plans, acceptance, archive"
+            f"{CONFIG_PATH}: must be a mapping of nodes — use plans, archive, checks, tests"
         )
     for node, body in data.items():
         if node not in NODES:
@@ -149,9 +140,6 @@ def load(root):
                     f"{CONFIG_PATH}: {node}.{key}: unknown key — remove it (known: {', '.join(NODES[node])})"
                 )
     plans = _path(root, data.get("plans", {}).get("dir", "docs/plans"), "plans.dir")
-    acceptance = data.get("acceptance", {}).get("dir", "acceptance")
-    if not isinstance(acceptance, str) or not acceptance:
-        raise ConfigError(f"{CONFIG_PATH}: acceptance.dir must be a non-empty directory name")
     mode = data.get("archive", {}).get("mode", "promote")
     if mode not in ARCHIVE_MODES:
         raise ConfigError(
@@ -159,4 +147,4 @@ def load(root):
         )
     checks = _checks(data["checks"]) if "checks" in data else None
     patterns = _test_patterns(data.get("tests", {}))
-    return RepoConfig(plans, acceptance, mode, checks, patterns)
+    return RepoConfig(plans, mode, checks, patterns)

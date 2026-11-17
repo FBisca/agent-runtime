@@ -6,7 +6,6 @@ from unittest import mock
 
 import pytest
 from agent_orchestrator import plan as yaml_plan
-from agent_orchestrator import runner
 from fixtures import RunFixture
 
 pytestmark = pytest.mark.integration
@@ -58,15 +57,8 @@ class FixtureCostTests(unittest.TestCase):
         self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
         self.assertEqual(seen, [False, False, False])
 
-    def test_S8_path_stays_put_so_tool_versions_hits_its_cache(self):
-        """test-cost/S8: the per-test home no longer changes PATH, so `tool_versions` is looked up once per class."""
+    def test_S8_path_stays_put_across_the_class(self):
+        """test-cost/S8: the per-test home does not change PATH, so every test of a class sees one PATH."""
         result, seen = run_class(lambda case: case.env()["PATH"])
         self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
         self.assertEqual(len(set(seen)), 1, seen)
-
-        runner.tool_versions.cache_clear()
-        with mock.patch.object(runner.subprocess, "run") as run:
-            run.return_value = mock.Mock(returncode=0, stdout="v1\n", stderr="")
-            for path in seen:
-                runner.tool_versions(path)
-        self.assertEqual(run.call_count, len(runner.TOOLS))

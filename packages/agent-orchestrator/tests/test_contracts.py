@@ -112,6 +112,20 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         ):
             self.rejects(contracts.validate_report, report(contract=3, covers=covers), needle)
 
+    def test_S9_report_contract_3_carries_red_per_scenario(self):
+        covers = {"S1": ["tests/test_a.py::test_one"]}
+        red = {"S1": "FAILED tests/test_a.py::test_one - AssertionError: 1 != 2"}
+        validated = contracts.validate_report(report(contract=3, covers=covers, red=red))
+        self.assertEqual(contracts.Report.model_validate(validated).red, red)
+
+    def test_S9_red_belongs_to_contract_3_only_and_is_keyed_by_scenario(self):
+        self.rejects(contracts.validate_report, report(contract=2, red={"S1": "x"}), "red")
+        covers = {"S1": ["a.py::t"]}
+        self.rejects(
+            contracts.validate_report, report(contract=3, covers=covers, red={"one": "x"}), "one"
+        )
+        self.rejects(contracts.validate_report, report(contract=3, covers=covers, red=["x"]), "red")
+
     def test_S9_a_verify_finding_is_a_gate_item_of_source_verify(self):
         item = {
             "kind": "blocking",
@@ -533,7 +547,7 @@ CLOSURE = {
     "excerpt": "1 passed",
     "log_path": "/run/fix.log",
 }
-RECEIPT = {"command": "pytest -k last", "exit": 0, "at_commit": "abc1234"}
+CHECK_RUN = {"command": "pytest -k last", "exit": 0, "at_commit": "abc1234"}
 
 
 def resolution(**over):
@@ -564,7 +578,7 @@ class ResolutionTests(unittest.TestCase):
 
     def closing(self, *resolutions, checks=None):
         return review2(
-            resolutions=list(resolutions), checks_run=[RECEIPT] if checks is None else checks
+            resolutions=list(resolutions), checks_run=[CHECK_RUN] if checks is None else checks
         )
 
     def test_S6_a_fixed_or_disproven_resolution_with_current_commit_evidence_reads(self):
@@ -586,19 +600,19 @@ class ResolutionTests(unittest.TestCase):
     def test_S6_closure_evidence_must_pass_and_match_a_current_commit_checks_run_entry(self):
         self.rejects(
             self.closing(
-                resolution(evidence=dict(CLOSURE, exit=1)), checks=[dict(RECEIPT, exit=1)]
+                resolution(evidence=dict(CLOSURE, exit=1)), checks=[dict(CHECK_RUN, exit=1)]
             ),
             "B1",
             "exit",
         )
         self.rejects(self.closing(resolution(), checks=[]), "B1", "checks_run")
         self.rejects(
-            self.closing(resolution(), checks=[dict(RECEIPT, command="pytest -k unrelated")]),
+            self.closing(resolution(), checks=[dict(CHECK_RUN, command="pytest -k unrelated")]),
             "B1",
             "checks_run",
         )
         self.rejects(
-            self.closing(resolution(), checks=[dict(RECEIPT, at_commit="deadbee")]),
+            self.closing(resolution(), checks=[dict(CHECK_RUN, at_commit="deadbee")]),
             "B1",
             "checks_run",
         )
@@ -629,7 +643,7 @@ class ResolutionTests(unittest.TestCase):
             verdict="block",
             items=[BLOCKING],
             resolutions=[resolution()],
-            checks_run=[RECEIPT],
+            checks_run=[CHECK_RUN],
         )
         self.rejects(review, "B1", "blocking")
 
@@ -721,34 +735,6 @@ class ContractParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class EvidenceReasonTests(unittest.TestCase):
-    """A request's reason is the excerpt's first line, so it names the failing test, not a bare header."""
-
-    def item(self, log, detail=None):
-        from types import SimpleNamespace
-
-        from agent_orchestrator import driver
-
-        receipt = {"label": "FAIL", "check": "pytest", "exit": 1, "detail": detail}
-        result = SimpleNamespace(receipt=receipt, log=log, path=Path("/r/S23.ticket.1.json"))
-        return driver, driver.Driver.__new__(driver.Driver).evidence_item(1, "S23", result)
-
-    def test_the_reason_names_the_failing_test(self):
-        log = "collected 3\n_ test_x _\nE   AssertionError: 1 != 2\nFAILED t.py::test_x - AssertionError\n1 failed\n"
-        driver, item = self.item(log)
-        self.assertEqual(
-            driver.short(item), "S23 FAIL: FAILED t.py::test_x - AssertionError — log tail:"
-        )
-
-    def test_a_receipt_detail_still_wins(self):
-        driver, item = self.item("FAILED t.py::test_x\n", detail="snapshot missing")
-        self.assertEqual(driver.short(item), "S23 FAIL: snapshot missing — log tail:")
-
-    def test_a_log_without_a_failure_line_keeps_the_header(self):
-        driver, item = self.item("nothing useful\n")
-        self.assertEqual(driver.short(item), "S23 FAIL — log tail:")
 
 
 class DescribeTests(unittest.TestCase):
@@ -937,12 +923,11 @@ class TierBriefTests(unittest.TestCase):
             report(checks=[{"command": "uv run pytest  -q", "outcome": "passed"}]),
         )
 
-    def test_S2_a_distinct_full_is_verify_owned_while_fast_and_affected_are_kept(self):
+    def test_S2_a_distinct_full_is_ci_owned_while_fast_and_affected_are_kept(self):
         packet, text = self.drive()
         self.assertEqual(packet["checks"], ["uv run ruff check", self.AFFECTED])
         self.assertEqual(packet["affected"], self.AFFECTED)
         self.assertEqual(packet["full"], "uv run pytest -n auto")
         (full,) = [line for line in text.splitlines() if "uv run pytest -n auto" in line]
         self.assertIn("do not run", full)
-        self.assertIn("verify", full)
         self.assertIn("CI", full)

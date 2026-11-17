@@ -30,8 +30,7 @@ def contract():
         "slug": "demo",
         "goal": "deliver",
         "spec": "docs/specs/demo.md",
-        "outcome": ["S1"],
-        "scenarios": [{"id": "S1", "when": "a", "then": "b", "evidence": {"human": "confirm b"}}],
+        "scenarios": [{"id": "S1", "when": "a", "then": "b"}],
         "tickets": [
             {
                 "id": "T1",
@@ -50,8 +49,6 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         super().setUp()
         shutil.rmtree(self.state_dir)  # the fixture's own approval is not this test's
         self.plan = self.plan.with_suffix(".yaml")
-        self.oracles = self.plan.with_name("demo.oracle")
-        self.oracles.mkdir()
         self.write(contract())
         self.env_patch = mock.patch.dict(
             os.environ, {"XDG_STATE_HOME": str(self.root / "xdg"), "HC_TERMINAL_ID": "lead-test"}
@@ -121,7 +118,6 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
             copy.deepcopy(data["scenarios"][0]),
             {"id": "S2", "when": "x", "then": "y", "evidence": {}},
         ]
-        data["outcome"] += ["S2", "S9"]
         data["tickets"][0].update(
             size="big", blocked_by=["T9", "T1"], satisfies=["S9"], risk=["state"]
         )
@@ -134,13 +130,10 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
             "goal",
             "scenarios[1].id",
             "scenarios[2].evidence",
-            "outcome[1]",
-            "outcome[2]",
             "tickets[0].size",
             "tickets[0].blocked_by[0]",
             "tickets[0].blocked_by",
             "tickets[0].satisfies[0]",
-            "tickets[0].risk",
             "tickets[1].id",
         ):
             self.assertIn(path, message)
@@ -280,72 +273,7 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertIn("digest", self.approve())
         self.assertEqual(self.asked[0][-2:], ["resolve", "--json"])
 
-    def test_S17_check_and_approve_refuse_an_env_naming_home_path_or_xdg(self):
-        for name in ("HOME", "PATH", "XDG_CACHE_HOME"):
-            with self.subTest(name=name):
-                data = contract()
-                data["scenarios"][0]["evidence"] = {
-                    "check": "true",
-                    "baseline": "pass",
-                    "env": [name],
-                }
-                self.write(data)
-                for verb in ("check", "approve"):
-                    code, message = self.command(verb)
-                    self.assertEqual(code, 2, message)
-                    self.assertIn(name, message)
-                    self.assertIn("scratch", message)
-                    self.assertIn("drop", message)
-
-    def test_S1_oracle_placement_and_missing_payloads(self):
-        for place in ("/tmp/out", "../out", "escape"):
-            with self.subTest(place=place):
-                if place == "escape":
-                    (self.repo / "escape").symlink_to(self.root)
-                data = contract()
-                data["scenarios"][0]["evidence"] = {
-                    "check": "true",
-                    "baseline": "pass",
-                    "oracle": ["missing.py.oracle"],
-                    "negative": "missing.patch.oracle",
-                    "place": place,
-                }
-                self.write(data)
-                code, message = self.command("check")
-                self.assertEqual(code, 2, message)
-                for path in (
-                    "scenarios[0].evidence.place",
-                    "scenarios[0].evidence.oracle[0]",
-                    "scenarios[0].evidence.negative",
-                ):
-                    self.assertIn(path, message)
-        (self.oracles / "x.py.oracle").write_text("x")
-        (self.repo / "x.py").write_text("occupied")
-        data["scenarios"][0]["evidence"].update(oracle=["x.py.oracle"], negative=None, place=".")
-        self.write(data)
-        self.assertIn("already exists", self.command("check")[1])
-
-    def test_S24_an_archived_plan_whose_oracle_was_promoted_still_checks(self):
-        (self.oracles / "x.py.oracle").write_text("def test_x():\n    assert True\n")
-        data = contract()
-        data["scenarios"][0]["evidence"] = {
-            "check": "true",
-            "baseline": "pass",
-            "oracle": ["x.py.oracle"],
-            "place": ".",
-        }
-        self.write(data)
-        self.approve()
-        # the archive promotes the oracle byte for byte onto its place
-        shutil.copyfile(self.oracles / "x.py.oracle", self.repo / "x.py")
-        code, message = self.command("check")
-        self.assertEqual(code, 0, message)
-        (self.repo / "x.py").write_text("edited after promotion")
-        self.assertIn("already exists", self.command("check")[1])
-
     def test_S2_digest_snapshot_comments_and_idempotence(self):
-        (self.oracles / "z.oracle").write_bytes(b"z\x00")
-        (self.oracles / "a.oracle").write_bytes(b"a")
         before = self.plan.read_text()
         approval = self.approve()
         self.assertTrue(self.plan.read_text().startswith(before))
@@ -357,10 +285,6 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
             str(identity.resolve()).encode(),
             self.base.encode(),
             canonical,
-            b"a.oracle",
-            b"a",
-            b"z.oracle",
-            b"z\x00",
         ]
         expected = hashlib.sha256(
             b"".join(len(p).to_bytes(8, "big") + p for p in parts)
@@ -368,7 +292,8 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(approval["digest"], expected)
         snapshot = self.state_dir / "approvals" / expected
         self.assertEqual((snapshot / "plan.yaml").read_bytes(), canonical)
-        self.assertEqual((snapshot / "oracle" / "z.oracle").read_bytes(), b"z\x00")
+        # The plan alone is the contract: the snapshot holds plan.yaml and nothing beside it.
+        self.assertEqual(sorted(p.name for p in snapshot.iterdir()), ["plan.yaml"])
         self.assertEqual(self.command("check")[0], 0)
         self.assertEqual(self.approve()["digest"], expected)
         self.assertEqual(self.plan.read_text().count("\napproval:"), 1)
@@ -390,23 +315,6 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
         code, message = self.command("check")
         self.assertEqual(code, 2)
         self.assertIn("snapshot", message)
-
-    def test_S2_oracle_add_edit_remove_are_named_and_can_be_reapproved(self):
-        payload = self.oracles / "p.oracle"
-        payload.write_text("first")
-        self.approve()
-        for action in ("edit", "remove", "add"):
-            if action == "remove":
-                payload.unlink()
-            else:
-                payload.write_text(action)
-            code, message = self.command("check")
-            self.assertEqual(code, 2, message)
-            self.assertIn("p.oracle", message)
-            self.assertIn("plan approve", message)
-            self.run_driver("--repo", str(self.repo), expect=2)
-            self.assertFalse(self.calls("spawn"))
-            self.approve()
 
     def test_S2_approve_base_and_repo_identity_are_bound(self):
         self.approve()
@@ -460,49 +368,40 @@ class PlanTests(RunFixture, unittest.TestCase):  # noqa: PLR0904
                 self.approve()
                 self.assertEqual(self.command("check")[0], 0)
 
-    def test_S1_unsafe_oracle_filename_is_a_path_refusal(self):
+    def test_S1_a_scenario_evidence_block_is_refused_naming_the_way_out(self):
         data = contract()
-        data["scenarios"][0]["evidence"] = {
-            "check": "true",
-            "baseline": "pass",
-            "oracle": ["/outside.py.oracle"],
-            "place": ".",
-        }
+        data["scenarios"][0]["evidence"] = {"check": "pytest", "baseline": "fail"}
         self.write(data)
-        code, message = self.command("check")
-        self.assertEqual(code, 2, message)
-        self.assertIn("scenarios[0].evidence.oracle[0]", message)
+        before = self.plan.read_bytes()
+        for verb in ("check", "approve"):
+            with self.subTest(verb=verb):
+                code, message = self.command(verb)
+                self.assertEqual(code, 2, message)
+                # The refusal is the last line, as JSON: read it back so its dash is a dash.
+                message = json.loads(message.strip().splitlines()[-1])["error"]
+                self.assertIn(
+                    "scenarios[0].evidence: scenario evidence is gone; the ticket's tests are its "
+                    "evidence — delete the block",
+                    message,
+                )
+                self.assertNotIn("Extra inputs are not permitted", message)
+        self.assertEqual(self.plan.read_bytes(), before)
+        self.assertFalse((self.state_dir / "approvals").exists())
 
-    def test_S1_risk_tagged_baseline_pass_needs_a_negative(self):
-        (self.oracles / "x.patch.oracle").write_text("--- a\n+++ b\n")
-
-        def risky(evidence, ticket_extra=None, risk=("state",)):
-            data = contract()
-            data["scenarios"][0]["evidence"] = evidence
-            data["tickets"][0].update(ticket_extra or {})
-            if risk:
-                data["tickets"][0]["risk"] = list(risk)
-            return data
-
-        baseline_pass = {"check": "true", "baseline": "pass"}
-        self.write(risky(baseline_pass))
-        code, message = self.command("check")
-        self.assertEqual(code, 2, message)
-        self.assertIn("scenarios[0].evidence", message)
-        self.assertIn("negative", message)
-
-        valid = {
-            "negative_present": risky(dict(baseline_pass, negative="x.patch.oracle")),
-            "baseline_fail": risky({"check": "true", "baseline": "fail"}),
-            "human": risky({"human": "confirm b"}, risk=("state",)),
-            "untagged": risky(baseline_pass, risk=()),
-            "waiver": risky(baseline_pass, ticket_extra={"evidence_waiver": "verified by outcome"}),
-        }
-        for name, data in valid.items():
-            with self.subTest(case=name):
-                self.write(data)
-                code, message = self.command("check")
-                self.assertEqual(code, 0, message)
+    def test_S2_approve_runs_nothing_and_spawns_no_worktree(self):
+        """A stripped plan (scenarios and tickets only) is approved by writing its block and its snapshot: no check
+        runs at the base, so no scratch worktree is ever added to the repository."""
+        approval = self.approve()
+        self.assertEqual(sorted(approval), ["at", "base", "by", "digest"])
+        snapshot = self.state_dir / "approvals" / approval["digest"]
+        self.assertEqual(sorted(p.name for p in snapshot.iterdir()), ["plan.yaml"])
+        listed = self.git(self.repo, "worktree", "list", "--porcelain")
+        trees = [
+            line[len("worktree ") :] for line in listed.splitlines() if line.startswith("worktree ")
+        ]
+        self.assertEqual([Path(t).resolve() for t in trees], [self.repo.resolve()])
+        self.assertEqual(list(self.state_dir.rglob("receipts")), [])
+        self.assertEqual(self.command("check")[0], 0)
 
     def test_S2_plan_schema_is_a_closed_plan_v1_schema(self):
         out, err = io.StringIO(), io.StringIO()

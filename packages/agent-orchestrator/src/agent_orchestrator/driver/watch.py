@@ -40,7 +40,7 @@ def _engine():
     return sys.modules[__name__.rpartition(".")[0]]
 
 
-ACCEPTED_STATES = ("ACCEPTED", "ACCEPTED_WITH_HUMAN")
+ACCEPTED_STATES = ("ACCEPTED",)
 
 
 def read_json(path):
@@ -82,19 +82,18 @@ def archive_retry_refusal(state):
 
     The archive waits for an accepted plan: a retry over a plan that is not accepted would build a branch and open a
     pull request nobody may merge. The reason names the plan's state; the way out names how the plan gets accepted."""
-    reason = (
-        "the plan's state is %s, not ACCEPTED or ACCEPTED_WITH_HUMAN: the archive's retry is refused"
-        % (state or "unknown")
+    reason = "the plan's state is %s, not ACCEPTED: the archive's retry is refused" % (
+        state or "unknown"
     )
     way_out = (
-        "the archive waits for an accepted plan: `run` again to verify the plan, or `accept <plan> <S-id> --note ...` "
-        "for an item a person has checked (the plan is then ACCEPTED_WITH_HUMAN)"
+        "the archive waits for an accepted plan: a plan is accepted once every agent ticket is COMPLETE; "
+        "`run` again once they are"
     )
     return reason, way_out
 
 
 def archive_retry_allowed(state):
-    """Whether the archive may be rebuilt: only over a plan the outcome accepted."""
+    """Whether the archive may be rebuilt: only over an accepted plan."""
     return state in ACCEPTED_STATES
 
 
@@ -130,8 +129,7 @@ class Attention:  # noqa: PLR0904
 
     def idle_ticks(self, assignments):
         """Every `--idle-minutes`, look at each agent the run waits on: did it show anything new, did its CI move?
-        An agent that shows nothing at two consecutive ticks needs the Lead. One watch covers a unit's task, a mutation
-        reviewer and the gaps reviewer: they differ in who is asked and with what, not in when."""
+        An agent that shows nothing at two consecutive ticks needs the Lead."""
         moment = self.clock()
         if moment - self.last_tick < self.args.idle_minutes * 60:
             return
@@ -168,7 +166,6 @@ class Attention:  # noqa: PLR0904
                     self.idle_reason(task, unit, streak, minutes, working, owed),
                     answerer=owed[3] if owed and owed[0] == "implementer" else None,
                 )
-        self.watch_support(assignments, moment)
 
     def watch(self, key, mine, shown, assignments, moment):
         """One step of the idle watchdog for one watched thing. `mine` is its assignment ids and `shown` what it
@@ -200,75 +197,6 @@ class Attention:  # noqa: PLR0904
                 for a in (data.get("agents") or {}).values()
                 if a.get("unit") == unit
             }
-
-    def watch_support(self, assignments, moment):
-        """The mutation reviewers and the gaps reviewer that have not finished: they belong to no unit, so the Lead
-        is told by one `idle` wake per attempt, which names the file the agent owes."""
-        for key, role, name, assignment_id, owed, shown in self.support_watched():
-            seen = self.watch(key, {assignment_id}, shown, assignments, moment)
-            if seen is None:
-                continue
-            streak, minutes, working = seen
-            self.log("idle", agent=name, waiting="agent", ticks=streak)
-            if streak < 2:
-                continue
-            self.wake(
-                "idle",
-                role,
-                self.support_idle_text(role, name, streak, minutes, working, owed),
-                key="%s:%s" % (name, assignment_id),
-            )
-
-    def support_watched(self):
-        """(key, role, name, assignment_id, the file it owes, the ticks it showed) of the reviewers a run owes."""
-        with self.book() as data:
-            mutation = {
-                sid: copy.deepcopy(record)
-                for sid, record in (data.get("mutation") or {}).items()
-                if record.get("state") == "reviewing"
-                and not record.get("ended")
-                and record.get("assignment_id")
-            }
-            gaps = copy.deepcopy(data.get("gaps") or {})
-        watched = [
-            (
-                "mutation:%s" % sid,
-                "mutation reviewer",
-                record["name"],
-                record["assignment_id"],
-                self.mutation_patch(sid, record["attempt"]),
-                [record["attempt"]],
-            )
-            for sid, record in mutation.items()
-        ]
-        if gaps.get("assignment_id") and not gaps.get("ended"):
-            watched.append(
-                (
-                    "gaps",
-                    "gaps reviewer",
-                    gaps["name"],
-                    gaps["assignment_id"],
-                    Path(gaps["path"]),
-                    [],
-                )
-            )
-        return watched
-
-    def support_idle_text(self, role, name, streak, minutes, working, owed):
-        """What the Lead reads about a reviewer that has shown nothing new for two ticks."""
-        return (
-            "idle: %s %s showed no new state for %d ticks (%d minutes)%s; it is live but has not reported "
-            "complete or written %s: look at its terminal and tell it to finish; if it is gone, "
-            "closing its terminal ends the attempt"
-            % (
-                role,
-                name,
-                streak,
-                minutes,
-                ", working for %d minutes" % working if working is not None else "",
-                owed,
-            )
-        )
 
     def owed(self, task):
         """(role, agent name, file, assignment id) of the agent a unit waits on, or None: the file is the next
@@ -347,20 +275,6 @@ class Attention:  # noqa: PLR0904
                 self.hold(held[0], assignment_id, "complete", held[1])
         self.check_ended(result.get("assignments") or [])
 
-    def support_complete(self, data, assignment_id):
-        """Whether the complete ends the gaps or a mutation reviewer: nothing waits on either any more."""
-        if (data.get("gaps") or {}).get("assignment_id") == assignment_id:
-            data["gaps"]["ended"] = True
-            return True
-        records = [
-            record
-            for record in (data.get("mutation") or {}).values()
-            if record.get("state") == "reviewing" and record.get("assignment_id") == assignment_id
-        ]
-        for record in records:
-            record["ended"] = True
-        return bool(records)
-
     def step_outcome(self, task, assignment_id, text):
         """What one complete does to one task: ("answers", state), ("gate", name), ("closing", id),
         ("held", (id, text)), or None when the complete is not this task's."""
@@ -384,8 +298,6 @@ class Attention:  # noqa: PLR0904
         """(the request it resolved, the request it held) after one agent's complete, booked in one write."""
         closing = held = None
         with self.book() as data:
-            if self.support_complete(data, assignment_id):
-                return None, None
             for task in data["tasks"].values():
                 outcome = self.step_outcome(task, assignment_id, text)
                 if outcome is None:
@@ -492,29 +404,10 @@ class Attention:  # noqa: PLR0904
         return hit
 
     def unclaimed_attention(self, assignment_id, kind, text, quiet=False, silent=False):
-        """An assignment no open step holds: a support reviewer's, or one that was already handled."""
-        if kind in VERDICTS:
-            # A verdict on an assignment no step of the drive owns: nothing here waits on it, and its attempt
-            # is not ended by silence — only an exit ends a support reviewer's attempt.
+        """An assignment no open step holds: one that was already handled."""
+        if kind in VERDICTS or silent:
+            # A verdict or a silent turn on an assignment no step of the drive owns: nothing here waits on it.
             return None
-        if silent:
-            return self.support_silent(assignment_id)
-        if self.mutation_ended(assignment_id):
-            return narrate.say(
-                "warn",
-                "mutation",
-                "mutation reviewer %s: %s" % (ATTENTION[kind], text or "no patch yet"),
-            )
-        with self.book() as data:
-            if (data.get("gaps") or {}).get("assignment_id") == assignment_id:
-                data["gaps"]["ended"] = (
-                    True  # the gaps review is advisory: it never blocks or pauses anything
-                )
-                return narrate.say(
-                    "warn",
-                    "gaps",
-                    "gaps reviewer %s: %s" % (ATTENTION[kind], text or "no gaps.md"),
-                )
         if not quiet:
             narrate.say(
                 "info",

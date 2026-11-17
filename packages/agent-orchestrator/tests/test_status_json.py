@@ -22,6 +22,8 @@ PR = "https://github.com/o/r/pull/7"
 
 
 class StatusFixture(GateFixture):
+    HOLD = False  # the run goes on to its archive: the Status of the one ticket is what is read
+
     def setUp(self):
         super().setUp()
         self.plan = self.approved_yaml_plan(("T1",))
@@ -84,7 +86,7 @@ class StatusJsonTests(StatusFixture, unittest.TestCase):
             (self.state_dir / self.key / "demo.json").exists()
         )  # reading creates nothing
 
-        # gh names a merge commit no repository has, so the plan stays RUNNING: this test is about the Status.
+        # The run goes on to archive the plan: this test is about the Status.
         self.prs([{"state": "MERGED", "mergeCommit": {"oid": "f" * 40}}])
         self.waits(
             [
@@ -112,7 +114,7 @@ class StatusJsonTests(StatusFixture, unittest.TestCase):
 
         done = self.status()
         self.assertEqual(done["run_dir"], idle["run_dir"])
-        self.assertEqual(done["state"], "RUNNING")
+        self.assertEqual(done["state"], "ARCHIVED")
         self.assertEqual(done["history"][:2], paused["history"])
         (ticket,) = done["tickets"]
         self.assertEqual((ticket["state"], ticket["pr"]), ("COMPLETE", PR))

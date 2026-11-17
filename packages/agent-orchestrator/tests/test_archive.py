@@ -1,4 +1,4 @@
-"""The archive unit the driver builds itself, the gaps reviewer, the outcome evidence on the archive head, and the run metrics."""
+"""The archive unit the driver builds itself, and the run metrics."""
 
 import json
 import unittest
@@ -6,7 +6,7 @@ import unittest
 import fake_gh
 import pytest
 from agent_orchestrator.driver import ARCHIVE_REBUILDS
-from fixtures import load_script, report_wait
+from fixtures import report_wait
 from test_acceptance import SnapshotFixture
 from test_gates import GateFixture
 
@@ -24,9 +24,11 @@ TESTS = "".join('def test_%s():\n    """demo/R%d"""\n\n' % (n, i) for i, n in en
 
 
 class ArchiveFixture(SnapshotFixture, GateFixture):
+    HOLD = False  # the archive is what these tests are about
+
     def setUp(self):
         super().setUp()
-        self.use_yaml_plan(oracle=True)
+        self.use_yaml_plan()
         self.archive_tree = self.root / "repo.worktrees" / ARCHIVE
 
     def ticket_merged(self):
@@ -157,7 +159,7 @@ class MetricsTests(ArchiveFixture, unittest.TestCase):
 
 
 class PromotionTests(ArchiveFixture, unittest.TestCase):
-    """A YAML plan archives by promotion: the driver places the oracles and writes the spec."""
+    """A YAML plan archives by promotion: the driver copies the plan files and writes the spec."""
 
     def archive_run(self):
         def build():
@@ -166,109 +168,30 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
 
         self.from_snapshot(self.snapshot_key("archive_run"), build)
 
-    def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_receipts_and_a_valid_digest(
-        self,
-    ):
+    def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_a_valid_digest(self):
         self.archive_run()
         argv = ["--repo", str(self.repo), "--state-dir", str(self.state_dir)]
         status = self.cli("status", str(self.plan), "--json", *argv)
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertEqual(json.loads(status.stdout)["plan"]["state"], "ARCHIVED")
-        stems = list(self.ledger()["receipts"])
-        self.assertTrue(stems)
-        for stem in stems:
-            self.assertTrue((self.run_dir / "receipts" / (stem + ".json")).is_file(), stem)
         check = self.cli("plan", "check", str(self.plan), *argv)
         self.assertEqual(check.returncode, 0, check.stderr + check.stdout)
 
-    def test_S25_the_driver_places_each_promote_oracle_in_the_archive_worktree(self):
+    def test_S25_the_driver_copies_the_plan_file_onto_the_archive_branch(self):
         self.archive_run()
-        oracle = (self.plan.parent / "demo.oracle" / "test_oracle.py.oracle").read_text()
-        # the worktree is gone after the merge: the pushed branch is what holds the placed file
-        self.assertEqual(
-            self.git(self.origin, "show", "feat/demo-archive:src/a/test_oracle.py") + "\n", oracle
-        )
-
-    def test_S25_the_driver_reruns_outcome_evidence_on_the_archive_head(self):
-        self.archive_run()
-        ledger = self.ledger()
-        stems = [s for s in ledger["receipts"] if s.startswith("S1.archive.")]
-        self.assertEqual(stems, ["S1.archive.1"])
-        receipt = json.loads(
-            (self.run_dir / "receipts" / "S1.archive.1.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(receipt["result"], "PASS")
-        self.assertEqual(receipt["digest"], ledger["integration"]["digest"])
+        # the worktree is gone after the merge: the pushed branch is what holds the copied plan
+        copied = self.git(self.origin, "show", "feat/demo-archive:docs/plans/demo.plan.yaml")
+        self.assertEqual(copied + "\n", self.plan.read_text(encoding="utf-8"))
 
     def test_S25_the_plan_is_archived_when_the_archive_pr_merges(self):
         self.archive_run()
         history = [h["state"] for h in self.ledger()["plan"]["history"]]
         self.assertEqual(history[-2:], ["ACCEPTED", "ARCHIVED"])
 
-    def test_S23_a_plan_goes_approved_to_archived_and_verify_holds_on_the_archive_head(self):
+    def test_S23_a_plan_goes_approved_to_archived(self):
         self.archive_run()
-        ledger = self.ledger()
         self.assertEqual(
-            [h["state"] for h in ledger["plan"]["history"]],
-            ["APPROVED", "RUNNING", "DELIVERED", "VERIFYING", "ACCEPTED", "ARCHIVED"],
+            [h["state"] for h in self.ledger()["plan"]["history"]],
+            ["APPROVED", "RUNNING", "ACCEPTED", "ARCHIVED"],
         )
-        verify = load_script().verify
-        model = load_script().yaml_plan.load(
-            self.plan, repo=self.repo, state_dir=self.state_dir, verify=False
-        )
-        result = verify.acceptance(
-            model,
-            ledger,
-            self.run_dir / "receipts",
-            digest=ledger["integration"]["digest"],
-        )
-        self.assertEqual(result["state"], "ACCEPTED")
-        # The archive's outcome receipt is part of the verdict: take it away and the outcome is unknown.
-        stripped = {
-            **ledger,
-            "receipts": {k: v for k, v in ledger["receipts"].items() if ".archive." not in k},
-        }
-        again = verify.acceptance(
-            model, stripped, self.run_dir / "receipts", digest=ledger["integration"]["digest"]
-        )
-        self.assertEqual(again["state"], "REJECTED")
-
-
-GAPS = "demo-gaps"
-
-
-class GapsAfterArchiveTests(ArchiveFixture, unittest.TestCase):
-    def test_S6_before_the_archive_merges_no_gaps_reviewer_exists(self):
-        """orchestrator-engine/R2: deterministic-archive/S6 — the archive PR is closed unmerged, so nothing gaps."""
-        real = self.gh_process
-
-        def closed_archive(argv, timeout=None, cwd=None):
-            if argv[:3] == ["pr", "view", "https://github.com/o/r/pull/9"]:
-                row = {"state": "CLOSED", "isDraft": False, "mergeStateStatus": "UNKNOWN"}
-                row.update(mergeable="UNKNOWN", mergeCommit=None)
-                return fake_gh.Completed(argv, 0, json.dumps(row))
-            return real(argv, timeout=timeout, cwd=cwd)
-
-        self.gh_process = closed_archive
-        self.waits(self.ticket_merged() + [{}, {}, self.decide_step("archive", "skip")])
-        self.run_driver()
-        self.assertNotIn(GAPS, self.spawned())
-        self.assertFalse(self.task("archive").get("merge_commit"))
-
-    def test_S6_once_the_archive_merges_the_gaps_reviewer_starts_and_is_the_only_one(self):
-        """orchestrator-engine/R2: deterministic-archive/S6 — the merged archive spawns the reviewer exactly once."""
-        self.waits(self.ticket_merged())
-        self.run_driver()
-        self.assertEqual(self.task("archive")["gate"], "done")
-        self.assertEqual(self.spawned().count(GAPS), 1)
-
-    def test_S6_the_run_ends_while_the_gaps_reviewer_is_still_open(self):
-        """orchestrator-engine/R2: deterministic-archive/S6 — its assignment stays open in the runtime; the run ends."""
-        held = {"agents": [GAPS]}  # the reviewer holds its assignment open and never reports
-        self.waits(self.ticket_merged() + [held] * 10)  # more waits than the run needs
-        self.run_driver()
-        self.assertEqual(self.spawned().count(GAPS), 1)
-        self.assertEqual(self.task("archive")["gate"], "done")
-        self.assertFalse(self.ledger()["gaps"]["ended"])
-        left = json.loads((self.home / "waits.json").read_text(encoding="utf-8"))
-        self.assertTrue(left, "the run drained every held wait: it waited on gaps")
+        self.assertNotIn("integration", self.ledger())

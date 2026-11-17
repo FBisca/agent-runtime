@@ -1,12 +1,11 @@
-"""Outcome oracle for the orchestrator-audit-fixes plan.
+"""The orchestrator-audit-fixes plan's outcome.
 
 A fixture plan is driven through the real driver, run as the Lead runs it (a process of its own), with the fake
 runtime and gh on PATH: a Lead command holds the ledger lock across a booking and the drive survives it; a drive that
-crashes or is killed is reported by `await` instead of polled forever; a mutation reviewer that goes silent after
-writing its output is accepted, and one that goes silent with nothing written is asked about; a restart over a resume
-the runtime may or may not have delivered asks the Lead and sends nothing again; the evidence runner keeps its scratch
-HOME and never writes through a symlink; and `plan approve` refuses a worker at the CLI. The `control` tests hold today
-and must keep holding: they prove each fixture is real.
+crashes or is killed is reported by `await` instead of polled forever; an answer naming another attempt is refused;
+a restart over a resume the runtime may or may not have delivered asks the Lead and sends nothing again; and `plan
+approve` refuses a worker at the CLI. The `control` tests hold today and must keep holding: they prove each fixture
+is real.
 """
 
 import json
@@ -20,15 +19,14 @@ from unittest import mock
 
 import pytest
 import yaml
-from agent_orchestrator import contracts, runner
-from fixtures import DRIVER, TESTS, RunFixture, assignment, wait_result
+from agent_orchestrator import contracts
+from fixtures import DRIVER, TESTS, RunFixture, wait_result
 from test_acceptance import AcceptanceFixture
 from test_gates import GateFixture
 
 pytestmark = pytest.mark.integration
 
 SLUG = "orchestrator-audit-fixes"
-MUTATOR = "demo-mut-s1-1"
 
 # A Lead command, as far as the ledger can tell: a process that takes `<ledger>.lock`, says so, holds it for the given
 # seconds and lets go. It forks so the wait step that starts it returns while the lock is still held.
@@ -311,56 +309,7 @@ class LedgerContentionOutcome(Drives, GateFixture, unittest.TestCase):
         )
 
 
-class SilentReviewerOutcome(Drives, AcceptanceFixture, unittest.TestCase):
-    PATCH = "--- a/src/a/feature.txt\n+++ b/src/a/feature.txt\n@@ -1 +1 @@\n-done\n+nope\n"
-
-    def silent_mutator(self, write=True):
-        """A wait step: the mutation reviewer's turn ended (idle) with no `complete`; with `write`, its patch is on disk."""
-        step = wait_result([assignment(MUTATOR, "working", "idle")])
-        if write:
-            step["write"] = [[str(self.run_dir / "mutation" / "S1.1.patch"), self.PATCH]]
-        return step
-
-    def mutation_receipts(self):
-        return self.receipts("mutation")
-
-    def test_a_mutation_reviewer_silent_after_writing_its_patch_is_accepted(self):
-        """orchestrator-audit-fixes/S8: its output is validated exactly as for a reported completion."""
-        self.write_plan()
-        self.merged_on_main("done")
-        steps = [self.worker("done"), self.reviewer(), self.silent_mutator()] + [
-            self.silent_mutator(write=False)
-        ] * 3
-        code, out, err = self.drive_process(steps, 30, "--repo", str(self.repo))
-        self.assertIsNotNone(code, "the plan hung in VERIFYING on a silent mutation reviewer")
-        self.assertEqual(code, 0, err[-800:])
-        receipts = self.mutation_receipts()
-        self.assertEqual(len(receipts), 1, "the silent reviewer's patch was never run")
-        self.assertTrue(receipts[0]["mutation"]["killed"])
-        self.assertIn("ACCEPTED", self.history())
-
-    def test_a_mutation_reviewer_silent_with_no_patch_gets_an_idle_request(self):
-        """orchestrator-audit-fixes/S9: the same idle request as a silent task agent; no hang, not ended at once."""
-        self.write_plan()
-        self.merged_on_main("done")
-        steps = [self.worker("done"), self.reviewer()] + [self.silent_mutator(write=False)] * 8
-
-        def asked():
-            return [w for w in self.wakes() if MUTATOR in w.get("text", "")]
-
-        code, out, err = self.drive_process(
-            steps, 25, "--repo", str(self.repo), "--idle-minutes", "0", until=asked
-        )
-        self.assertTrue(
-            asked(), "no idle request named the silent mutation reviewer: %s" % err[-600:]
-        )
-        (wake,) = asked()[:1]
-        self.assertIn("idle", wake["text"])
-        self.assertNotIn(
-            "demo-mut-s1-2", self.spawned(), "the silent reviewer was treated as ended at once"
-        )
-        self.assertEqual(self.mutation_receipts(), [], "a patch that was never written was applied")
-
+class ForeignAnswerOutcome(Drives, AcceptanceFixture, unittest.TestCase):
     def decide(self, *args):
         return self.cli("decide", str(self.plan), *args, "--state-dir", str(self.state_dir))
 
@@ -392,21 +341,6 @@ class SilentReviewerOutcome(Drives, AcceptanceFixture, unittest.TestCase):
         result = self.decide("t1", "answer", "--reason", "x", "--answer", "use t1r1")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertFalse((self.run_dir / "t1" / "decision.json").exists())
-
-    def test_control_a_mutation_reviewer_that_reports_is_accepted(self):
-        """Holds today: the process-run drive accepts the plan on the reviewer's reported patch."""
-        self.write_plan()
-        self.merged_on_main("done")
-        code, out, err = self.drive_process(
-            [self.worker("done"), self.reviewer(), self.default_mutator()],
-            60,
-            "--repo",
-            str(self.repo),
-        )
-        self.assertEqual(code, 0, err[-800:])
-        (receipt,) = self.mutation_receipts()
-        self.assertTrue(receipt["mutation"]["killed"])
-        self.assertIn("ACCEPTED", self.history())
 
 
 class IntentRestartOutcome(Drives, GateFixture, unittest.TestCase):
@@ -471,182 +405,6 @@ class IntentRestartOutcome(Drives, GateFixture, unittest.TestCase):
         self.assertEqual(self.task("t1r1")["gate"], "done")
 
 
-class RunnerContainmentOutcome(RunFixture, unittest.TestCase):
-    def setUp(self):
-        super().setUp()
-        self.outside = self.root / "outside"
-        self.outside.mkdir()
-        self.plan = self.repo / "docs" / "plans" / "demo.plan.yaml"
-
-    def evidence(self, **over):
-        values = dict(
-            scenario="S1",
-            phase="ticket",
-            digest="d" * 64,
-            check="true",
-            oracles={"probe.txt.oracle": b"probe\n"},
-            place="checks/",
-        )
-        values.update(over)
-        return runner.run_evidence(self.repo, "HEAD", **values)
-
-    def commit(self, message):
-        self.git(self.repo, "add", "-A")
-        self.git(self.repo, "commit", "-q", "-m", message)
-
-    def outside_files(self):
-        return sorted(p.name for p in self.outside.rglob("*"))
-
-    def write_plan(self, env):
-        data = {
-            "schema": "plan/1",
-            "slug": "demo",
-            "goal": "deliver",
-            "spec": "docs/specs/demo.md",
-            "outcome": ["S1"],
-            "scenarios": [
-                {
-                    "id": "S1",
-                    "when": "a",
-                    "then": "b",
-                    "evidence": {"check": "true", "baseline": "pass", "env": list(env)},
-                }
-            ],
-            "tickets": [
-                {
-                    "id": "T1",
-                    "delivers": "first",
-                    "satisfies": ["S1"],
-                    "paths": ["src/a/"],
-                    "size": "small",
-                    "difficulty": "simple",
-                }
-            ],
-        }
-        self.plan.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-
-    def plan_check(self):
-        return self.cli(
-            "plan",
-            "check",
-            str(self.plan),
-            "--repo",
-            str(self.repo),
-            "--state-dir",
-            str(self.state_dir),
-        )
-
-    def test_plan_check_refuses_evidence_env_naming_home_path_or_xdg(self):
-        """orchestrator-audit-fixes/S17: the refusal names the variable and the way out."""
-        wrong = []
-        for name in ("HOME", "PATH", "XDG_STATE_HOME", "XDG_CONFIG_HOME"):
-            self.write_plan(["MY_TOKEN", name])
-            result = self.plan_check()
-            if result.returncode == 0:
-                wrong.append("%s: accepted" % name)
-            elif name not in result.stderr or "scratch" not in result.stderr:
-                wrong.append(
-                    "%s: the refusal names neither it nor the way out: %s"
-                    % (name, result.stderr[-300:])
-                )
-        self.assertEqual(wrong, [], "plan check let a reserved env name through")
-
-    def test_plan_approve_refuses_evidence_env_naming_home(self):
-        """orchestrator-audit-fixes/S17: approve refuses too, and writes no approval."""
-        self.write_plan(["HOME"])
-        before = self.plan.read_text(encoding="utf-8")
-        result = subprocess.run(
-            [
-                *DRIVER,
-                "plan",
-                "approve",
-                str(self.plan),
-                "--repo",
-                str(self.repo),
-                "--state-dir",
-                str(self.state_dir),
-            ],
-            capture_output=True,
-            text=True,
-            env=plain_env(self.root),
-            timeout=120,
-        )
-        self.assertNotEqual(result.returncode, 0, "plan approve accepted env HOME")
-        self.assertIn("HOME", result.stderr)
-        self.assertEqual(self.plan.read_text(encoding="utf-8"), before, "an approval was written")
-
-    def test_the_scratch_home_wins_over_a_declared_home(self):
-        """orchestrator-audit-fixes/S18: HOME and XDG_STATE_HOME are the scratch values whatever the plan declares."""
-        seen = self.root / "seen-env"
-        declared = {
-            "HOME": str(self.root / "declared-home"),
-            "XDG_STATE_HOME": str(self.root / "declared-state"),
-        }
-        run = self.evidence(
-            check='printf "%%s\\n%%s\\n" "$HOME" "$XDG_STATE_HOME" > %s' % seen,
-            oracles={},
-            place=None,
-            env_names=["HOME", "XDG_STATE_HOME"],
-            base_env=dict(os.environ, **declared),
-        )
-        self.assertTrue(seen.exists(), "the check never ran: %s" % run.receipt["label"])
-        home, state = seen.read_text(encoding="utf-8").splitlines()
-        self.assertNotEqual(home, declared["HOME"], "the declared HOME overrode the scratch HOME")
-        self.assertNotEqual(state, declared["XDG_STATE_HOME"], "the declared XDG_STATE_HOME won")
-
-    def test_an_oracle_placed_through_a_committed_symlink_is_an_evidence_error(self):
-        """orchestrator-audit-fixes/S19: nothing is written outside the scratch tree, and the receipt names the path."""
-        os.symlink(str(self.outside), str(self.repo / "checks"))
-        self.commit("a directory that is a link out of the tree")
-        run = self.evidence()
-        self.assertEqual(self.outside_files(), [], "the oracle was written through the symlink")
-        self.assertNotEqual(run.receipt["result"], "PASS")
-        self.assertIn(
-            "checks", (run.receipt.get("detail") or "") + (run.receipt.get("reason") or "")
-        )
-
-    def test_an_oracle_placed_through_a_symlink_the_patch_adds_is_an_evidence_error(self):
-        """orchestrator-audit-fixes/S19: the patch under test adds the link; the oracle still stays in scratch."""
-        os.symlink(str(self.outside), str(self.repo / "checks"))
-        self.git(self.repo, "add", "checks")
-        patch = subprocess.run(
-            ["git", "-C", str(self.repo), "diff", "--cached", "--binary"],
-            capture_output=True,
-            check=True,
-        ).stdout
-        self.git(self.repo, "rm", "-q", "--cached", "checks")
-        os.unlink(self.repo / "checks")
-        run = runner.run_mutation(
-            self.repo,
-            "HEAD",
-            scenario="S1",
-            digest="d" * 64,
-            check="true",
-            patch=patch,
-            oracles={"probe.txt.oracle": b"probe\n"},
-            place="checks/",
-        )
-        self.assertEqual(
-            self.outside_files(), [], "the oracle was written through the patch's symlink"
-        )
-        self.assertNotEqual(run.receipt["result"], "PASS")
-        self.assertIn(
-            "checks", (run.receipt.get("detail") or "") + (run.receipt.get("reason") or "")
-        )
-
-    def test_control_an_ordinary_env_name_and_place_pass(self):
-        """Holds today: plan check accepts an ordinary env name, and an oracle placed in a real directory runs."""
-        self.write_plan(["MY_TOKEN"])
-        result = self.plan_check()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        (self.repo / "checks").mkdir()
-        (self.repo / "checks" / "keep.txt").write_text("x\n", encoding="utf-8")
-        self.commit("a real directory")
-        run = self.evidence(check="test -f checks/probe.txt")
-        self.assertEqual(run.receipt["result"], "PASS", run.log)
-        self.assertEqual(self.outside_files(), [])
-
-
 def plain_env(root, markers=None):
     """A terminal with no host markers: no hc, Herdr or agent-runtime variables, its own HOME and state."""
     env = {
@@ -671,10 +429,7 @@ class ApproveGateOutcome(RunFixture, unittest.TestCase):
             "slug": "demo",
             "goal": "deliver",
             "spec": "docs/specs/demo.md",
-            "outcome": ["S1"],
-            "scenarios": [
-                {"id": "S1", "when": "a", "then": "b", "evidence": {"human": "confirm b"}}
-            ],
+            "scenarios": [{"id": "S1", "when": "a", "then": "b"}],
             "tickets": [
                 {
                     "id": "T1",

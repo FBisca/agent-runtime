@@ -128,7 +128,7 @@ class EvidenceTests(unittest.TestCase):
 
     @pytest.mark.unit
     def test_an_attempts_completion_is_claimed_never_verified_and_the_schema_says_so(self):
-        """Only the driver's receipt verifies; the record keeps what the worker's report claimed."""
+        """Only the driver's gate verifies; the record keeps what the worker's report claimed."""
         evidence = load_evidence()
         data = {"version": 1, "tasks": {"t1": task(status="COMPLETE")}}
         record = evidence.attempts(data, [], "demo")[0]
@@ -257,6 +257,11 @@ class EvidenceTests(unittest.TestCase):
 
 
 class EvidenceRunTests(GateFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # T4 is a person's ticket left to do: the archive waits for it, so a run ends once T1 is delivered.
+        self.set_plan(("T1", "T4"))
+
     def attempts(self):
         path = self.run_dir / "attempts.jsonl"
         rows = (
