@@ -134,3 +134,9 @@ tickets:
   - T1
   risk:
   - state
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-17T16:03:07.132528+00:00'
+  base: 08864905f7b5c093c2c13ac40b2a6927730e8be9
+  digest: 35f4c0fc513b350de4419c6cfb86bac5287726c9fe13337bc45729777b255577
+  reason: plan/2 conversion
