@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from .. import events, evidence, invariants, timeutil, verify, workbench
@@ -463,8 +464,38 @@ def _launch_repo(args, plan_path):
     ).resolve()
 
 
+# Pane and session variables stay out of what the driver inherits: the pane sets its own terminal id, and a Claude
+# session's variables must not leak into Herdr tabs.
+_NOT_FORWARDED = ("HC_TERMINAL_ID", "CLAUDECODE", "CLAUDE_CODE_")
+
+# Runs in the pane: loads the env file (the first argument), deletes it, then execs the driver.
+_ENV_BOOTSTRAP = (
+    "import json, os, sys; p = sys.argv[1]; e = json.load(open(p)); os.unlink(p); os.environ.update(e); "
+    "os.execv(sys.argv[2], sys.argv[2:])"
+)
+
+
+def _forwardable_env():
+    return {k: v for k, v in os.environ.items() if not k.startswith(_NOT_FORWARDED)}
+
+
 def _launched(name, repo, plan_path, run_args):
-    """Run `agent-orchestrator run` in its own Herdr pane, handing the Lead's terminal over to it."""
+    """Run `agent-orchestrator run` in its own Herdr pane, handing the Lead's terminal over to it. The pane gets the
+    Herdr server's environment, so the Lead's goes through a mode 0600 file the pane deletes at start: a value on argv
+    would show in `ps`."""
+    fd, env_path = tempfile.mkstemp(prefix="agent-orchestrator-env-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(_forwardable_env(), handle)
+        # The pane starts after the launcher returns, before its bootstrap opens the file: on success the bootstrap
+        # owns the deletion.
+        return _launch_pane(name, repo, plan_path, run_args, env_path)
+    except BaseException:
+        Path(env_path).unlink(missing_ok=True)
+        raise
+
+
+def _launch_pane(name, repo, plan_path, run_args, env_path):
     argv = [
         "hc",
         "run",
@@ -475,6 +506,10 @@ def _launched(name, repo, plan_path, run_args):
         str(repo),
         "--json",
         "--",
+        sys.executable,
+        "-c",
+        _ENV_BOOTSTRAP,
+        env_path,
         sys.executable,
         "-m",
         "agent_orchestrator",
