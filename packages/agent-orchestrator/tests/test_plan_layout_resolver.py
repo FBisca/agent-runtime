@@ -62,6 +62,7 @@ class ResolverTests(ResolverFixture):
         self.assertEqual(self.legacy(outside).plan_place, "docs/plans/2026-11-13-demo.plan.yaml")
         self.assertEqual(self.legacy().plan_place, "docs/plans/2026-11-13-demo.plan.yaml")
 
+    @pytest.mark.spec("Plan layouts")
     def test_S1_a_folder_plan_owns_every_file_in_its_folder_and_nothing_beside_it(self):
         layout = self.folder()
         for name in ("plan.yaml", "plan.md", "notes/design.md"):
@@ -104,6 +105,7 @@ class ResolverTests(ResolverFixture):
 
 
 class NoRepositoryTests(ResolverFixture):
+    @pytest.mark.spec("Plan layouts")
     def test_S1_a_question_about_the_repository_without_one_is_refused_naming_the_way_out(self):
         layout = PlanLayout(self.folder_plan)
         self.assertEqual(layout.kind, "folder")
@@ -117,6 +119,7 @@ class NoRepositoryTests(ResolverFixture):
 
 
 class AskedByTests(ResolverFixture):
+    @pytest.mark.spec("Plan layouts")
     def test_S1_verifys_integrity_rule_asks_the_resolver(self):
         folder = verify.integrity(self.folder(), "docs/plans/2026-11-13-demo/plan.md")
         self.assertIn("is in the plan", folder)
@@ -124,6 +127,7 @@ class AskedByTests(ResolverFixture):
         self.assertIn("is in the plan", legacy)
         self.assertIsNone(verify.integrity(self.legacy(), "src/a.py"))
 
+    @pytest.mark.spec("Plan layouts")
     def test_S1_no_module_asks_a_file_name_for_the_layout(self):
         source = Path(yaml_plan.__file__).parent
         files = [source / name for name in ("plan.py", "verify.py", "workbench.py")]

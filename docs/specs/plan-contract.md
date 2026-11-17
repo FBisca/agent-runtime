@@ -1,129 +1,297 @@
 # Plan contract
 
-The living contract for `plan/1` YAML plans: `plan check`, `plan approve`, the ticket gate, acceptance, status and archive. A plan declares scenarios and tickets; the implementation provides its evidence (R9). Each requirement below is one scenario of a YAML plan, carrying its provenance as `(from <slug>/S<n>)`; the Coverage table lists the test nodes that prove it.
+A plan is a `plan/2` YAML contract: the requirement changes it makes to one spec, with scenarios under each, and the tickets whose tests prove them. This capability covers checking, approving and re-approving a plan, gating its tickets, its lifecycle and ledger, archiving its change set into its spec, and holding every spec requirement to a test.
 
 ## Requirements
 
-- **R1** WHEN `plan check <plan.yaml>` reads a plan with an unknown or duplicate key, a missing required field, a duplicate ID, a reference to an undeclared scenario or ticket, a dependency cycle, or a scenario carrying an `evidence:` block, THEN it exits 2 and names each defect with its YAML path and the fix (for `evidence:`, "scenario evidence is gone; the ticket's tests are its evidence — delete the block"); a valid plan, scenarios and tickets only, exits 0 (from yaml-eec/S1)
-- **R2** WHEN `plan approve` runs on a valid plan, and afterwards plan.yaml (outside `approval`) changes, THEN approve runs nothing, writes `approval: {by, at, base, digest}` (digest over repo identity, base and the plan alone) and snapshots the plan under the state dir; after the change `plan check` and `run` refuse, naming the changed file and `plan approve`; no worker is spawned and no scratch worktree is made (from yaml-eec/S2)
-- **R3** WHEN `plan approve` is invoked by an agent the runtime's dispatch store knows as a spawned worker, THEN it refuses, naming the reason and that approval is the Lead's; nothing is written (from yaml-eec/S3)
-- **R4** WHEN an approved YAML plan is launched, THEN its agent tickets dispatch with the class, effort, model and blocking order a Markdown plan with the same rows gets today (from yaml-eec/S4)
-- **R5** WHEN `plans list --json` runs with an explicit path, in a repo whose plans sit in one directory (`docs/plans/` or hidden `.plans/`), in a repo with plan files in two directories, and in a repo with none, THEN it lists the explicit plan; that directory's plans; refuses naming both directories and the explicit-path way out, unless the repo's `.orchestrate/config.yaml` names one of them as `plans.dir`, which is then the one listed; an empty list. No directory or config file is created (from yaml-eec/S5)
-- **R6** WHEN a plan.yaml outside the repository is passed explicitly with `--repo` to `plan check`, `plan approve` and `run`, THEN all three work, and nothing is written next to the plan except the approval block (from yaml-eec/S6)
-- **R7** WHEN a YAML plan runs through dispatch, a pause, a `decide` answer and a merge, THEN plan.yaml stays byte-identical; `status <plan> --json` reports run_dir, the plan state and its history, and each ticket's state, reason and PR, before and during the run (from yaml-eec/S7)
-- **R8** WHEN two repositories each run a plan with the same slug, and a ledger under the old `<state>/<slug>.json` key exists, THEN each gets its own ledger under `<state>/<repo-key>/<slug>`; the old ledger is imported once into the repository that owns it (from yaml-eec/S8)
-- **R9** WHEN a ticket report (contract 3) leaves a satisfied scenario unmapped in `covers`, or maps it to a test node that does not exist or did not change in the ticket, THEN verify fails the gate with a fix round naming the scenario, the node and the reason: an implementation must provide its evidence, so every scenario a ticket satisfies needs a covering test the ticket changed, nothing in the plan exempts one, and CI green on the same head proves the tests pass (from yaml-eec/S9)
-- **R61** WHEN a ticket report (contract 3) carries no `red` excerpt for a satisfied scenario, or one that names none of that scenario's `covers` nodes, THEN verify fails the gate with a fix round naming the scenario: each covering test was seen failing before the fix, and the report keeps that failing output (`red {S<n>: excerpt}`); the reviewer judges whether each excerpt is a genuine assertion failure of the behaviour, not an import error or a test that cannot fail (from tests-are-plan-evidence/S2)
-- **R10** WHEN a ticket's diff touches a file outside its paths, or its plan (a folder plan's folder, a legacy plan's file), THEN verify fails the gate naming the file and the rule (scope or integrity) (from yaml-eec/S10)
-- **R11** WHEN a Markdown plan in flight is gated, THEN verify's legacy path gives the verdicts converge gives today; the plan can reach COMPLETE (outcome unverified), never ACCEPTED (from yaml-eec/S11)
-- **R17** WHEN every agent ticket of a YAML plan is COMPLETE (a person-owned ticket may still be open), THEN the plan is ACCEPTED: each ticket reached COMPLETE only through its gate and its pull request merged with CI green, and CI runs again on every merge, so nothing is re-run; the archive starts only once every ticket, a person's included, is COMPLETE, and the run ends rather than wait on the person, whom the Lead's `complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...` records (from yaml-eec/S17)
-- **R23** WHEN a one-ticket YAML plan is approved, launched and its work reaches the default branch, THEN status history is APPROVED → RUNNING → ACCEPTED → ARCHIVED and plan.yaml is unchanged since approval (from yaml-eec/S23)
-- **R24** WHEN a small real YAML plan in a scratch repository is planned with start-planning, approved, orchestrated with real agents, verified and archived, THEN `status --json` shows it ARCHIVED and `plan check` still accepts its approval digest (from yaml-eec/S24)
-- **R25** WHEN an ACCEPTED plan archives, THEN the driver archives it with no agent: in the archive worktree it deletes a folder plan's folder, or copies a legacy plan's plan.yaml and narrative byte-identical, appends the spec section, commits on `feat/<slug>-archive`, pushes and runs `gh pr create`, and the printed url is the archive unit's PR; the plan is ARCHIVED when that PR merges (from yaml-eec/S25, deterministic-archive/S1)
-- **R26** WHEN the orchestrate shim is asked for `plan check`, `plan approve`, `plans list` or `status`, THEN it hands them to the member unchanged, and the agent-skills tree carries no converge skill (from yaml-eec/S26)
-- **R28** WHEN a Markdown plan is passed to `run` after the legacy path is removed, THEN it is refused naming the YAML format and `plan check`; the converge adapter and the plan-cell writer no longer exist (from yaml-eec/S28)
-- **R29** WHEN the driver writes the archive's spec section, THEN the plan's `spec` keeps its text and gains `## Requirements: <slug>` (one `- **R<n>** WHEN <when>, THEN <then> (from <slug>/<id>)` per scenario the spec does not hold, numbered from the highest `R<n>` in that file plus one; omitted when it holds every scenario) and `## Coverage: <slug>` (`| Requirement | Scenario | Test nodes |`, one row per scenario: the tickets' `covers` and the nodes a person recorded, joined by `<br>`); a held scenario keeps its number and a missing spec file is created holding the section alone; the section is derived from the spec it is written over, so a rebuild replaces this plan's `Coverage` table instead of appending a second one and folds a new requirement into this plan's `Requirements` section instead of opening a second one; text the write would leave badly formed — a conflict marker, a requirement numbered twice, a second `Requirements` or `Coverage` section for one slug, a Coverage row for a requirement the file does not hold — is refused before the commit and the push, naming the spec, the lines and `retry`, and a defect the base already carried is logged as `spec-defects` rather than blamed on this archive; a scenario with no node asks the Lead (`retry`, `skip`) and opens no PR; a conflict on the archive PR asks the Lead the same way and spawns no worker (from yaml-eec/S29, deterministic-archive/S2–S5)
-- **R31** WHEN `plan schema` runs, THEN it prints the plan/1 JSON Schema with `additionalProperties: false` at the top level and exits 0 (from yaml-eec-gaps/S2)
-- **R33** WHEN a person ticket that read "needs you" is set COMPLETE in the ledger and the driver runs again, THEN the driver rewrites attention.md from the ledger on every tick: the completed ticket's line is gone, a ticket still waiting is listed once, and a run with nothing waiting has the header only (from yaml-eec-gaps/S4)
-- **R34** WHEN the agent-orchestrator package is imported or searched for `wait_checks`, THEN `agent_orchestrator.wait_checks` does not exist and nothing under packages/ names it (from yaml-eec-gaps/S5)
+### Requirement: Plan format
+`plan check` SHALL accept a plan only in the `plan/2` shape (`requirements: {added, modified, removed}` with plan-local scenario ids, and tickets) and SHALL refuse any other shape naming each defect and its fix.
 
-## Coverage
+#### Scenario: a defective plan is named defect by defect
+- WHEN `plan check <plan.yaml>` reads a plan with an unknown or duplicate key, a missing required field, a duplicate id, a reference to an undeclared scenario or ticket, a dependency cycle, or a scenario carrying an `evidence:` block
+- THEN it exits 2 naming each defect with its YAML path and the fix; a valid plan exits 0, and `plan schema` prints the closed `plan/2` JSON Schema (`additionalProperties: false` at the top level)
 
-| Requirement | Scenario | Test nodes |
-| --- | --- | --- |
-| R1 | S1 | `packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S1_valid_reference_and_schema`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S1_names_all_schema_and_graph_defects`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S1_duplicate_key_is_named`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S1_strict_nested_mappings_and_literal_paths`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S1_a_scenario_evidence_block_is_refused_naming_the_way_out` |
-| R2 | S2 | `packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_digest_snapshot_comments_and_idempotence`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_changes_missing_snapshot_and_unapproved_run_refuse`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_approve_base_and_repo_identity_are_bound`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_missing_snapshot_is_repaired_by_reapproval`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_same_contract_under_another_filename_can_be_approved`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_flow_mapping_and_explicit_document_end_remain_valid`<br>`packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_approve_runs_nothing_and_spawns_no_worktree` |
-| R3 | S3 | `packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S3_runtime_worker_is_refused_before_any_write` |
-| R4 | S4 | `packages/agent-orchestrator/tests/test_plan_dispatch.py::PlanDispatchTests::test_S4_names_routes_and_blocking_order_follow_the_rows_and_the_plan_stays_immutable` |
-| R5 | S5 | `packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_one_directory_lists_its_plans_and_the_explicit_plan`<br>`packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_hidden_directory_is_discovered_without_an_explicit_path`<br>`packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_two_directories_refuse_naming_both_and_the_explicit_path_way_out`<br>`packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_two_directories_with_an_explicit_path_list_that_directory`<br>`packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_two_directories_with_a_repo_config_naming_one_list_that_directory`<br>`packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_two_directories_with_a_repo_config_naming_neither_still_refuse`<br>`packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_without_repo_the_current_directory_is_the_repository`<br>`packages/agent-orchestrator/tests/test_discovery.py::DiscoveryTests::test_S5_no_plans_is_an_empty_list_and_creates_nothing` |
-| R6 | S6 | `packages/agent-orchestrator/tests/test_discovery.py::ExternalPlanTests::test_S6_check_and_approve_work_outside_the_repository`<br>`packages/agent-orchestrator/tests/test_discovery.py::ExternalPlanTests::test_S6_run_reads_the_approved_plan_outside_the_repository` |
-| R7 | S7 | `packages/agent-orchestrator/tests/test_status_json.py::StatusJsonTests::test_S7_status_json_reads_the_ledger_and_plan_yaml_never_changes`<br>`packages/agent-orchestrator/tests/test_status_json.py::StatusJsonTests::test_S7_a_ticket_the_driver_spawned_is_in_progress_in_the_ledger_not_the_plan` |
-| R8 | S8 | `packages/agent-orchestrator/tests/test_state_key.py::StateKeyTests::test_S8_two_repositories_with_one_slug_each_get_their_own_ledger`<br>`packages/agent-orchestrator/tests/test_state_key.py::StateKeyTests::test_S8_the_old_ledger_is_imported_once_into_the_repository_that_owns_it`<br>`packages/agent-orchestrator/tests/test_state_key.py::StateKeyTests::test_S8_a_lead_command_leaves_the_old_ledger_where_a_live_driver_reads_it`<br>`packages/agent-orchestrator/tests/test_state_key.py::StateKeyTests::test_S8_the_import_refuses_while_a_driver_holds_the_old_ledger` |
-| R9 | S9 | `packages/agent-orchestrator/tests/test_contracts.py::ContractTests::test_S9_report_contract_3_carries_covers_mapping_scenarios_to_test_nodes`<br>`packages/agent-orchestrator/tests/test_contracts.py::ContractTests::test_S9_report_contract_3_without_covers_is_refused_naming_the_field`<br>`packages/agent-orchestrator/tests/test_contracts.py::ContractTests::test_S9_covers_belongs_to_contract_3_only`<br>`packages/agent-orchestrator/tests/test_contracts.py::ContractTests::test_S9_a_malformed_covers_names_the_scenario_it_breaks`<br>`packages/agent-orchestrator/tests/test_contracts.py::ContractTests::test_S9_a_verify_finding_is_a_gate_item_of_source_verify`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_a_satisfied_scenario_mapped_to_changed_nodes_passes`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_a_node_in_a_file_that_does_not_exist_names_scenario_node_and_reason`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_a_node_missing_from_an_existing_file_is_refused`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_a_node_that_did_not_change_in_the_ticket_is_refused`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_an_untouched_test_beside_a_changed_one_in_the_same_file_did_not_change`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_a_class_method_node_and_a_committed_change_count`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_a_satisfied_scenario_left_unmapped_is_refused_and_named`<br>`packages/agent-orchestrator/tests/test_verify.py::CoversTests::test_S9_a_report_without_covers_names_every_satisfied_scenario_left_unmapped`<br>`packages/agent-orchestrator/tests/test_verify_covers.py::ImplementationProvidesItsEvidence::test_a_satisfied_scenario_without_a_changed_covering_node_fails_naming_it`<br>`packages/agent-orchestrator/tests/test_verify_covers.py::ImplementationProvidesItsEvidence::test_the_same_report_with_a_changed_covering_node_passes` |
-| R61 | S2 | `packages/agent-orchestrator/tests/test_verify_red.py::RedFirstProof::test_a_satisfied_scenario_without_a_red_excerpt_fails_naming_it`<br>`packages/agent-orchestrator/tests/test_verify_red.py::RedFirstProof::test_a_red_excerpt_that_names_another_node_fails_naming_the_scenario_and_its_nodes`<br>`packages/agent-orchestrator/tests/test_verify_red.py::RedFirstProof::test_a_red_excerpt_that_names_the_covering_node_passes`<br>`packages/agent-orchestrator/tests/test_contracts.py::ContractTests::test_S9_report_contract_3_carries_red_per_scenario`<br>`packages/agent-orchestrator/tests/test_review_brief.py::ReviewBriefTests::test_the_brief_asks_the_reviewer_to_judge_each_red_excerpt` |
-| R10 | S10 | `packages/agent-orchestrator/tests/test_verify.py::ScopeAndIntegrityTests::test_S10_a_file_outside_the_ticket_paths_fails_naming_file_and_scope`<br>`packages/agent-orchestrator/tests/test_verify.py::ScopeAndIntegrityTests::test_S10_a_file_inside_the_ticket_paths_passes_committed_or_not`<br>`packages/agent-orchestrator/tests/test_verify.py::ScopeAndIntegrityTests::test_S10_a_path_prefix_is_a_directory_not_a_string_prefix`<br>`packages/agent-orchestrator/tests/test_verify.py::ScopeAndIntegrityTests::test_S10_touching_the_plan_is_an_integrity_failure_even_inside_the_paths`<br>`packages/agent-orchestrator/tests/test_verify.py::ScopeAndIntegrityTests::test_S10_every_failing_rule_is_reported_in_one_gate` |
-| R11 | S11 | `packages/agent-orchestrator/tests/test_gates.py::SilentReviewerTests::test_S11_a_reviewer_the_runtime_reports_unreported_or_error_is_handled_at_once` |
-| R17 | S17 | `packages/agent-orchestrator/tests/test_acceptance.py::AcceptedTests::test_S17_every_agent_ticket_complete_accepts_the_plan_and_the_archive_starts` |
-| R23 | S23 | `packages/agent-orchestrator/tests/test_archive.py::PromotionTests::test_S23_a_plan_goes_approved_to_archived`<br>`packages/agent-orchestrator/tests/test_acceptance.py::AcceptedTests::test_S17_every_agent_ticket_complete_accepts_the_plan_and_the_archive_starts`<br>`packages/agent-orchestrator/tests/test_status_json.py::StatusJsonTests::test_S7_status_json_reads_the_ledger_and_plan_yaml_never_changes` |
-| R24 | S24 | `packages/agent-orchestrator/tests/test_archive.py::PromotionTests::test_S24_an_approved_plan_driven_to_the_end_is_archived_with_a_valid_digest` |
-| R25 | S25 | `packages/agent-orchestrator/tests/test_archive.py::PromotionTests::test_S25_the_plan_is_archived_when_the_archive_pr_merges`<br>`packages/agent-orchestrator/tests/test_archive.py::PromotionTests::test_S25_the_driver_copies_the_plan_file_onto_the_archive_branch` |
-| R26 | S26 | none in this repository (orchestrate shim / start-planning, agent-skills) |
-| R28 | S28 | `packages/agent-orchestrator/tests/test_markdown_removed.py::MarkdownRemovedTests::test_S28_a_markdown_plan_passed_to_run_is_refused_naming_yaml_and_plan_check`<br>`packages/agent-orchestrator/tests/test_markdown_removed.py::MarkdownRemovedTests::test_S28_the_converge_adapter_and_the_plan_cell_writer_no_longer_exist` |
-| R29 | S29 | `packages/agent-orchestrator/tests/test_archive_driver.py::SpecSectionUnit`<br>`packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive`<br>`packages/agent-orchestrator/tests/test_archive_yaml.py::YamlArchiveDestinationTests::test_S29_plan_outside_repo_lands_inside_the_checkout` |
-| R31 | S2 | `packages/agent-orchestrator/tests/test_plan.py::PlanTests::test_S2_plan_schema_is_a_closed_plan_v1_schema` |
-| R33 | S4 | `packages/agent-orchestrator/tests/test_decider.py::PersonOwnedTests::test_S4_attention_md_is_rebuilt_from_the_ledger_on_every_tick`<br>`packages/agent-orchestrator/tests/test_yaml_eec_gaps.py::AttentionRefresh::test_control_a_waiting_person_ticket_is_listed_once`<br>`packages/agent-orchestrator/tests/test_yaml_eec_gaps.py::AttentionRefresh::test_a_person_ticket_set_complete_leaves_the_attention_file`<br>`packages/agent-orchestrator/tests/test_yaml_eec_gaps.py::AttentionRefresh::test_a_person_ticket_set_complete_during_a_run_leaves_the_file_in_that_run` |
-| R34 | S5 | `packages/agent-orchestrator/tests/test_markdown_removed.py::WaitChecksRemovedTests::test_S5_the_wait_checks_module_does_not_exist_and_nothing_under_packages_names_it` |
+#### Scenario: a plan/1 plan names the conversion
+- WHEN `plan check` reads a plan whose schema is `plan/1`, or that carries no schema
+- THEN it refuses the plan whole, naming `plan/2` and the conversion: set `schema: plan/2` and move the top-level scenarios under the requirements they prove
 
-## Requirements: deterministic-archive
+#### Scenario: a Markdown plan is refused by run
+- WHEN a Markdown plan is passed to `run`
+- THEN it is refused naming the YAML format and `plan check`
 
-- **R36** WHEN a route config or a `--route` override names the `archive` step, THEN the driver refuses before any spawn, naming the step and the fix (the archive has no agent: remove the `archive` route); a route naming the removed `gaps` step is refused the same way, naming the fix (remove the `gaps` step); the `implementer` and `reviewer` step routes work as today (from deterministic-archive/S7)
+### Requirement: Requirement changes fit the spec
+`plan check` SHALL refuse a change set the plan's `spec` cannot take, naming the title, the spec file and the fix.
 
-## Coverage: deterministic-archive
+#### Scenario: an added title the spec holds
+- WHEN a plan adds a requirement whose title already heads a `### Requirement:` block in its spec
+- THEN `plan check` refuses it naming the title, the spec file and the fix (move it to `modified`, or rename it)
 
-| Requirement | Scenario | Test nodes |
-| --- | --- | --- |
-| R25 | S1 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S1_the_archive_is_committed_pushed_and_opened_by_the_driver_with_no_trailer`<br>`packages/agent-orchestrator/tests/test_deterministic_archive.py` |
-| R29 | S2 | `packages/agent-orchestrator/tests/test_archive_driver.py::SpecSectionUnit::test_S2_a_scenario_the_spec_lacks_is_a_requirement_and_a_coverage_row` |
-| R29 | S4 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S4_a_missing_node_opens_no_pr_and_asks_the_lead` |
-| R29 | S5 | `packages/agent-orchestrator/tests/test_archive_driver.py::DriverArchive::test_S5_a_failing_archive_gate_asks_the_lead_with_retry_and_skip_and_spawns_no_worker`<br>`packages/agent-orchestrator/tests/test_spec_sections.py::WithoutCoverage`<br>`packages/agent-orchestrator/tests/test_spec_sections.py::TheWrite`<br>`packages/agent-orchestrator/tests/test_spec_sections.py::TheRepositorysSpecs` |
-| R36 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::ArchiveRouteRefusal::test_S7_a_route_config_naming_the_archive_step_is_refused_before_any_spawn` |
+#### Scenario: a modified or removed title the spec lacks
+- WHEN a plan modifies or removes a requirement whose title heads no block in its spec
+- THEN `plan check` refuses it naming the title, the spec file and the fix (use the exact title from the spec, or add it)
 
-## Requirements: plan-layout
+#### Scenario: a change set that fits
+- WHEN every added title is new to the spec and every modified or removed title is in it
+- THEN `plan check` exits 0
 
-- **R37** WHEN `<repo>/.orchestrate/config.yaml` is read by any command (plans list, plan check, approve, run, status), THEN its nodes `plans.dir` and `archive.mode` (promote | discard) are applied; a relative path is under the repo root, `~` and absolute paths are allowed; an unknown key or a bad mode is refused naming its dotted path and the fix; a missing file means docs/plans and promote; nothing else is read (from plan-layout/S1)
-- **R38** WHEN `plans list --json` runs in a repo whose config names a plans dir, inside or outside the repository, tracked or not, THEN it lists each `<dir>/<folder>/plan.yaml` from the filesystem with its slug, beside the legacy plans it lists today; an unknown config key fails the command naming it; no directory or file is created (from plan-layout/S2)
-- **R39** WHEN `plan check` reads a plan.yaml in its own folder, THEN top-level `archive: promote | discard` is accepted; a legacy plan that names `archive` is refused naming the key and the way out (from plan-layout/S3)
-- **R40** WHEN `plan check` reads a folder plan that promotes and names no `spec`, THEN it refuses naming `spec` and the fix (set it, or `archive: discard`); the repo config decides promote when the plan does not say; a discard plan needs no `spec` (from plan-layout/S4)
-- **R41** WHEN a folder plan is approved and afterwards its plan.yaml changes, THEN approve digests plan.yaml alone and snapshots it under the state dir, and `plan check` and `run` refuse the change naming the file and `plan approve`; any other file in the folder is not part of the contract (from plan-layout/S5)
-- **R43** WHEN a ticket of a folder plan touches any file of its plan folder, THEN verify fails the gate naming the file and the integrity rule (from plan-layout/S7)
-- **R44** WHEN a promote plan is accepted and its archive runs, THEN the driver deletes the plan folder in the archive tree and writes the spec section there (from plan-layout/S8)
-- **R45** WHEN a discard plan is accepted, THEN no archive worker or PR runs; the driver deletes the plan folder and marks the plan ARCHIVED in the ledger; a plan folder tracked in the repository is instead deleted by a one-commit PR that changes nothing else (from plan-layout/S9)
-- **R46** WHEN a promote folder plan is approved, run and archived end to end, THEN history is APPROVED → RUNNING → ACCEPTED → ARCHIVED and the archive tree holds no plan folder (from plan-layout/S10)
-- **R47** WHEN a discard folder plan kept outside the repository, with no spec, is approved, run and verified, THEN the ledger reads ARCHIVED, no archive worker was spawned, the plan folder is gone, and origin's tree outside the ticket's paths is unchanged (from plan-layout/S11)
-- **R48** WHEN a legacy plan (`X.plan.yaml` beside `X.plan.md`) is checked, approved, run, verified or archived, THEN it behaves as a folder plan does, with or without a repo config beside it, and is listed beside folder plans; an approval digest written before this plan, for a plan with no files beside it, still verifies (from plan-layout/S12)
-- **R49** WHEN `uv run pytest` runs in agent-runtime with a test at `packages/agent-orchestrator/acceptance/<domain>/test_x.py` that imports `fixtures`, THEN it is collected and imports `fixtures` from the package's tests/; the repo's `.orchestrate/config.yaml` names docs/plans and promote (from plan-layout/S13)
-- **R50** WHEN start-planning writes a plan in a repo with this engine, THEN it writes `<plans.dir>/<date>-<slug>/` with plan.yaml and its brief, declaring scenarios and tickets only: no evidence block and no acceptance files (from plan-layout/S14)
+### Requirement: Plan approval
+`plan approve` SHALL bind the plan alone to its repository and base, run nothing, and make every later command refuse a plan whose bytes differ from what was approved.
 
-## Coverage: plan-layout
+#### Scenario: approve writes the approval and its snapshot
+- WHEN `plan approve` runs on a valid plan
+- THEN it writes `approval: {by, at, base, digest}` (the digest over the repository's identity, the base and the plan alone, the `approval` block excluded) and snapshots the plan under the state dir; it spawns no worker and makes no scratch worktree
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R37 | S1 | `packages/agent-orchestrator/tests/test_config.py::ConfigTests::test_S1_missing_file_means_the_defaults`<br>`packages/agent-orchestrator/tests/test_config.py::ConfigTests::test_S1_unknown_key_is_refused_naming_its_dotted_path_and_the_fix`<br>`packages/agent-orchestrator/tests/test_discovery.py::ConfigReadByEveryCommandTests::test_S1_each_plan_command_refuses_a_bad_config_naming_its_dotted_path` |
-| R38 | S2 | `packages/agent-orchestrator/tests/test_discovery.py::ConfiguredDiscoveryTests::test_S2_a_plans_dir_outside_the_repository_lists_its_folders`<br>`packages/agent-orchestrator/tests/test_discovery.py::ConfiguredDiscoveryTests::test_S2_an_unknown_config_key_fails_the_command_naming_it`<br>`packages/agent-orchestrator/tests/test_discovery.py::ConfiguredDiscoveryTests::test_S2_a_plans_dir_inside_the_repository_untracked_lists_its_folders`<br>`packages/agent-orchestrator/tests/test_plan_layout.py` |
-| R39 | S3 | `packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S3_a_folder_plan_takes_the_archive_key`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S3_archive_is_a_mode`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S3_the_folder_key_is_refused_in_a_legacy_plan` |
-| R40 | S4 | `packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S4_the_repo_config_decides_promote_when_the_plan_does_not_say`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S4_a_promote_plan_needs_a_spec`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S4_a_discard_plan_needs_no_spec` |
-| R41 | S5 | `packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S5_approve_digests_the_plan_alone`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S5_a_changed_plan_is_named_and_can_be_approved_again`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S5_the_plan_schema_describes_the_folder_keys` |
-| R43 | S7 | `packages/agent-orchestrator/tests/test_verify.py::FolderPlanIntegrityTests::test_S7_touching_a_file_of_the_plan_folder_is_an_integrity_failure_naming_it` |
-| R44 | S8 | `packages/agent-orchestrator/tests/test_archive_modes.py::PromoteArchiveTests::test_S8_the_driver_deletes_the_plan_folder_in_the_archive_tree_and_writes_the_spec` |
-| R45 | S9 | `packages/agent-orchestrator/tests/test_archive_modes.py::DiscardArchiveTests::test_S9_a_discard_plan_outside_the_repository_is_deleted_and_archived_with_no_pr`<br>`packages/agent-orchestrator/tests/test_archive_modes.py::DiscardArchiveTests::test_S9_a_discard_plan_tracked_in_the_repository_is_deleted_by_a_delete_only_pr` |
-| R46 | S10 | `packages/agent-orchestrator/tests/test_archive_modes.py::PromoteArchiveTests::test_S10_a_promoted_folder_plan_runs_to_archived`<br>`packages/agent-orchestrator/tests/test_plan_layout.py` |
-| R47 | S11 | `packages/agent-orchestrator/tests/test_archive_modes.py::DiscardArchiveTests::test_S11_a_discard_plan_outside_the_repository_ends_archived_leaving_origin_untouched`<br>`packages/agent-orchestrator/tests/test_plan_layout.py` |
-| R48 | S12 | `packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S12_a_legacy_plan_digests_as_before_with_or_without_a_repo_config`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S12_a_legacy_plan_still_needs_its_spec`<br>`packages/agent-orchestrator/tests/test_plan_layout.py` |
-| R49 | S13 | `tests/test_acceptance_collection.py::test_S13_root_config_collects_the_orchestrator_acceptance_dir`<br>`tests/test_acceptance_collection.py::test_S13_root_config_puts_the_orchestrator_tests_on_the_import_path`<br>`tests/test_acceptance_collection.py::test_S13_repo_config_names_plans_and_promote`<br>`tests/test_acceptance_collection.py::test_S13_promoted_acceptance_tests_are_collected_in_any_package` |
-| R50 | S14 | `agent-skills/skills/start-planning/tests/test_portability.py::PlanContract::test_S14_the_plan_is_one_folder_named_by_the_repo_config`<br>`agent-skills/skills/start-planning/tests/test_portability.py::EngineContract::test_the_documented_plan_carries_the_engine_contract` |
+#### Scenario: an edit after approval is refused
+- WHEN the plan's YAML changes after approval, outside `approval`
+- THEN `plan check` and `run` refuse it, naming the changed file and `plan approve`
 
-## Requirements: engine-gaps
+#### Scenario: files beside the plan are outside the contract
+- WHEN a file in the plan's folder other than plan.yaml changes
+- THEN the approval holds: only plan.yaml is digested
 
-- **R51** WHEN any command reads, snapshots, guards or copies a plan's files, THEN one resolver built from the plan path and the repository answers for both layouts (the kind, the folder, the contract files, a path's place relative to the repository, whether a path belongs to the plan, whether the folder may be deleted); verify's integrity rule, the snapshot and the archive copies all ask it, and no other code derives the layout from the plan's file name (from engine-gaps/S1)
-- **R52** WHEN a legacy plan or a folder plan is checked, approved, amended, run, verified or archived after the resolver lands, THEN it behaves as before, the discard guard (S3, S4) being the one change, through suites no ticket of this plan edits: yaml-eec, plan layout, YAML archive, amend, workbench and plan (from engine-gaps/S2)
-- **R53** WHEN `plan check` or `plan approve` reads a folder plan that discards, THEN it refuses, naming the folder, `plans.dir` and the fix, unless the folder's resolved parent is the resolved `plans.dir`; a folder nested deeper or reached through a symlink is refused; a folder directly under a `plans.dir` outside the repository passes (from engine-gaps/S3)
-- **R54** WHEN the driver is about to delete a plan folder (a discard, or the plan folder in a promote's archive tree), THEN it deletes only a folder whose resolved parent is the resolved `plans.dir`, checked again at the deletion itself; otherwise, even when the config changed mid-run, it deletes nothing, the plan is not ARCHIVED, and the Lead is told the folder and `plans.dir` (a request when the archive refuses) (from engine-gaps/S4)
-- **R56** WHEN `complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...` runs, THEN a person-owned ticket's status becomes `COMPLETE <date> · <note>` and its cover nodes are recorded in the ledger, under the ledger lock so a live driver keeps them; it is refused, naming why, for a caller the runtime does not verify as the Lead (the check `plan approve` makes), an agent ticket, an unknown ticket, or a `--cover` for a scenario the ticket does not satisfy (from engine-gaps/S6)
-- **R57** WHEN a promoting plan's agent tickets are COMPLETE while a person ticket is open, THEN the plan is ACCEPTED, but the archive neither starts nor asks for a test node until every ticket is COMPLETE, and the run ends rather than wait on the person; after `complete`, the next run archives, the person ticket's cover nodes count as test nodes, and its scenario's Coverage row lists them as given, a node in another repository included (from engine-gaps/S7)
-- **R58** WHEN the driver cannot apply the Lead's decision (the hand-over fails, e.g. the pane is blocked on a login), THEN the unit gets a new request naming the failure and the way out, instead of sitting stuck for the rest of the run; a `complete` from the unit's worker that lands while that request is open is held, and the next decision acts on it without handing the unit over again (from engine-gaps/S8)
-- **R59** WHEN the Lead answers a request raised while the reviewer owed its review, THEN the answer resumes the reviewer, which stays on its review, not the implementer; a reviewer whose pane is gone is replaced by a fresh reviewer whose brief carries the answer (from engine-gaps/S9)
-- **R60** WHEN the orchestrate skill tells the Lead how to close a person-owned ticket, THEN it names `complete <plan> <T#> --note ... --cover S<n>=<node>` and no longer says to edit the ledger by hand (from engine-gaps/S10)
+### Requirement: Only the Lead approves
+`plan approve` SHALL refuse a caller the runtime's dispatch store knows as a spawned worker, naming the reason and that approval is the Lead's, and write nothing.
 
-## Coverage: engine-gaps
+#### Scenario: a worker runs plan approve
+- WHEN a spawned worker runs `plan approve`, on an unapproved plan or on one a driver is running
+- THEN it is refused naming the reason and the Lead, and nothing is written
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R51 | S1 | `packages/agent-orchestrator/tests/test_plan_layout_resolver.py::ResolverTests::test_S1_a_folder_plan_owns_every_file_in_its_folder_and_nothing_beside_it`<br>`packages/agent-orchestrator/tests/test_plan_layout_resolver.py::AskedByTests::test_S1_verifys_integrity_rule_asks_the_resolver`<br>`packages/agent-orchestrator/tests/test_plan_layout_resolver.py::AskedByTests::test_S1_no_module_asks_a_file_name_for_the_layout`<br>`packages/agent-orchestrator/tests/test_plan_layout_resolver.py::NoRepositoryTests::test_S1_a_question_about_the_repository_without_one_is_refused_naming_the_way_out` |
-| R52 | S2 | `packages/agent-orchestrator/tests/test_yaml_eec.py`<br>`packages/agent-orchestrator/tests/test_plan_layout.py`<br>`packages/agent-orchestrator/tests/test_archive_yaml.py`<br>`packages/agent-orchestrator/tests/test_plan_amend.py`<br>`packages/agent-orchestrator/tests/test_workbench.py`<br>`packages/agent-orchestrator/tests/test_plan.py` |
-| R53 | S3 | `packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S3_a_discard_folder_outside_plans_dir_is_refused_by_check_and_approve`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S3_a_discard_folder_nested_below_plans_dir_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S3_a_discard_folder_reached_through_a_symlink_is_refused`<br>`packages/agent-orchestrator/tests/test_plan_folder.py::FolderPlanTests::test_S3_a_discard_folder_directly_under_a_plans_dir_outside_the_repository_passes`<br>`packages/agent-orchestrator/tests/test_discard_guard.py` |
-| R54 | S4 | `packages/agent-orchestrator/tests/test_archive_modes.py::PlansDirDeletionTests::test_S4_discarding_a_folder_outside_plans_dir_deletes_nothing_and_names_both`<br>`packages/agent-orchestrator/tests/test_archive_modes.py::PlansDirDeletionTests::test_S4_the_plan_folder_of_a_promote_archive_tree_is_deleted_only_directly_under_plans_dir`<br>`packages/agent-orchestrator/tests/test_archive_modes.py::PlansDirDeletionTests::test_S4_a_symlink_into_plans_dir_is_not_deleted`<br>`packages/agent-orchestrator/tests/test_archive_modes.py::PlansDirDeletionTests::test_S4_a_discard_run_whose_plans_dir_moved_mid_run_is_not_archived_and_keeps_its_folder`<br>`packages/agent-orchestrator/tests/test_archive_modes.py::PlansDirDeletionTests::test_S4_a_promote_archive_whose_plans_dir_moved_mid_run_asks_the_lead_and_deletes_nothing`<br>`packages/agent-orchestrator/tests/test_discard_guard.py` |
-| R56 | S6 | `packages/agent-orchestrator/tests/test_complete.py::PersonTicketComplete::test_S6_complete_records_the_ticket_done_with_its_note_and_its_cover_nodes`<br>`packages/agent-orchestrator/tests/test_complete.py::PersonTicketComplete::test_S6_a_spawned_worker_is_refused_naming_why`<br>`packages/agent-orchestrator/tests/test_complete.py::PersonTicketComplete::test_S6_an_agent_ticket_is_refused_naming_why`<br>`packages/agent-orchestrator/tests/test_complete.py::PersonTicketComplete::test_S6_an_unknown_ticket_is_refused_naming_why`<br>`packages/agent-orchestrator/tests/test_complete.py::PersonTicketComplete::test_S6_a_cover_for_a_scenario_the_ticket_does_not_satisfy_is_refused`<br>`packages/agent-orchestrator/tests/test_person_tickets.py` |
-| R57 | S7 | `packages/agent-orchestrator/tests/test_archive_driver.py::PersonTicketArchive::test_S7_the_archive_neither_starts_nor_asks_for_a_node_while_a_person_ticket_is_open`<br>`packages/agent-orchestrator/tests/test_archive_driver.py::PersonTicketArchive::test_S7_after_complete_the_next_run_archives_with_the_cover_node_in_the_coverage_row`<br>`packages/agent-orchestrator/tests/test_person_tickets.py` |
-| R58 | S8 | `packages/agent-orchestrator/tests/test_wake.py::FailedHandOverTests::test_S8_a_decision_that_cannot_be_handed_over_raises_a_new_request_naming_why`<br>`packages/agent-orchestrator/tests/test_wake.py::FailedHandOverTests::test_S8_a_complete_that_lands_while_that_request_is_open_is_acted_on_without_a_hand_over`<br>`packages/agent-orchestrator/tests/test_decision_delivery.py` |
-| R59 | S9 | `packages/agent-orchestrator/tests/test_silent_idle.py::ReviewerAnswer::test_S9_an_answer_to_an_idle_reviewer_resumes_the_reviewer_not_the_implementer`<br>`packages/agent-orchestrator/tests/test_silent_idle.py::ReviewerAnswer::test_S9_a_reviewer_whose_pane_is_gone_is_replaced_by_one_whose_brief_carries_the_answer`<br>`packages/agent-orchestrator/tests/test_silent_idle.py::ReviewerAnswer::test_S9_a_refused_reviewer_resume_asks_again_and_the_next_answer_still_reaches_the_reviewer`<br>`packages/agent-orchestrator/tests/test_decision_delivery.py` |
-| R60 | S10 | `agent-skills/skills/orchestrate/tests/test_delegation.py::DocumentedSeamTests::test_S10_a_person_ticket_is_closed_with_complete_and_its_cover_nodes` |
+### Requirement: Re-approval under a live driver
+`plan approve` on an approved plan SHALL re-approve it at the approval's own base while a driver runs, and the drive SHALL adopt the new digest without restarting.
+
+#### Scenario: the drive drains on the edit and continues on the new digest
+- WHEN, while a driver runs, the Lead edits the approved plan (a running ticket's `paths` and a new ticket) and runs `plan approve <plan> --reason <why>`
+- THEN the re-approval keeps the current approval's `base`, never `origin/main`, runs nothing and replaces the `approval` block keeping the author's comments; the same drive drains on the edit, wakes the Lead naming `plan approve`, records an `amended` event with the previous and new digest, and dispatches the new ticket only after it adopts the new digest
+
+#### Scenario: a COMPLETE ticket is frozen
+- WHEN the edit changes or drops a ticket the ledger marks COMPLETE, or changes the `when` or `then` of a scenario a COMPLETE ticket satisfies
+- THEN the re-approval is refused naming each such ticket or scenario and the way out (add a new ticket), and nothing is written
+
+#### Scenario: one re-approval at a time
+- WHEN a re-approval runs while the driver holds the plan's run lock
+- THEN it goes through on a lock of its own, so a second concurrent re-approval is refused naming the holder; it writes the approval snapshot before it replaces the plan file, so a driver reading in between sees either the previous approved plan or the new one
+
+### Requirement: Drain on an unapproved edit
+A live driver that reads a plan differing from its approved snapshot, or one that does not load, SHALL keep running on the last approved snapshot and start no worker attempt until the plan is re-approved or restored.
+
+#### Scenario: the drive drains
+- WHEN the live driver reads a plan whose YAML differs from its approved snapshot or does not load
+- THEN it starts no worker attempt (first dispatch, fix round, redo, re-dispatch) while running attempts, reviews, CI watching and the COMPLETE-on-merge bookkeeping go on, and records one `drain` event and one `drain` wake naming the cause (with the load error, if any) and `plan approve`; an edit to the brief alone does not drain
+
+#### Scenario: the drain ends
+- WHEN a draining driver next reads the plan and it carries a valid approval matching its bytes, or its bytes are the approved ones again
+- THEN the drain ends: an `amended` event and gating against the new contract, or a `drain` event with state `ended`; a drain has no timeout
+
+### Requirement: A re-approval reaches running workers
+When the drive adopts a re-approval that changes the `paths`, `satisfies` or `delivers` of a ticket with an open attempt, it SHALL hand that attempt's worker the new contract and leave every unchanged ticket alone.
+
+#### Scenario: a changed ticket's worker gets its next packet
+- WHEN the adopted re-approval changes a ticket with an open attempt (working or parked)
+- THEN the driver writes the attempt's next packet `task.v<n>.md`, sets the ledger's ownership reservation to the new paths, and resumes the same worker with a message naming that packet and saying its contract changed; a ticket the re-approval did not change is left alone
+
+### Requirement: Agent tickets hold a test path
+`plan check` and `plan approve` SHALL refuse a plan in which an agent-owned ticket satisfies a scenario and none of its `paths` is a directory or a test file.
+
+#### Scenario: a ticket with no test path
+- WHEN an agent-owned ticket satisfies a scenario and none of its `paths` is a directory or a test file
+- THEN the plan is refused naming the ticket, the scenarios it satisfies and the way out (add a test file, or a directory that holds its tests, to its `paths`), and no approval is written; a person-owned ticket is never linted
+
+#### Scenario: what a test file is
+- WHEN the lint decides whether a path is a test file
+- THEN a path is a test file when its file name matches `test_*`, `*_test.*`, `*.test.*` or `*.spec.*`, or one of its directories is `tests`; `.orchestrate/config.yaml` may replace the patterns with `tests.patterns` (a list of file-name globs), and a non-list or empty value is refused naming its dotted path
+
+#### Scenario: the driver's load does not lint
+- WHEN the driver loads an approved plan the lint would refuse
+- THEN the run proceeds: the lint runs in `plan check` and `plan approve` only
+
+### Requirement: Scenario evidence
+Verify SHALL pass a ticket report only when every scenario the ticket satisfies is mapped in `covers` to a test node the ticket changed and that was seen failing before the fix.
+
+#### Scenario: an unmapped or unchanged covering node
+- WHEN a ticket report (contract 3) leaves a satisfied scenario unmapped in `covers`, or maps it to a test node that does not exist or did not change in the ticket
+- THEN verify fails the gate with a fix round naming the scenario, the node and the reason; nothing in the plan exempts a scenario, and CI green on the same head proves the tests pass
+
+#### Scenario: a missing red excerpt
+- WHEN a report carries no `red` excerpt for a satisfied scenario, or one that names none of that scenario's `covers` nodes
+- THEN verify fails the gate with a fix round naming the scenario; the reviewer judges whether each excerpt is a genuine assertion failure of the behaviour, not an import error or a test that cannot fail
+
+#### Scenario: paths that can hold no test
+- WHEN the covers gate fails a report because the ticket's `paths` hold no test file or directory
+- THEN the Lead's request says the ticket's paths can hold no test and tells it to edit the plan and re-approve it with `plan approve`; the lint and the gate decide it with one shared function
+
+### Requirement: Ticket scope and plan integrity
+Verify SHALL fail a ticket whose diff touches a file outside its `paths` or any file of its plan.
+
+#### Scenario: a file outside the ticket's paths
+- WHEN a ticket's diff touches a file outside its `paths`
+- THEN verify fails the gate naming the file and the scope rule; a path prefix is a directory, not a string prefix
+
+#### Scenario: a file of the plan
+- WHEN a ticket's diff touches the plan file or any file of its plan folder
+- THEN verify fails the gate naming the file and the integrity rule, even inside the ticket's paths
+
+### Requirement: Plan discovery
+Every plan command SHALL find plans and read the repository's `.orchestrate/config.yaml` the same way, creating nothing.
+
+#### Scenario: plans list
+- WHEN `plans list --json` runs with an explicit path, in a repo whose plans sit in one directory (`docs/plans/`, hidden `.plans/`, or the config's `plans.dir`, inside or outside the repository), in a repo with plan files in two directories, and in a repo with none
+- THEN it lists the explicit plan; that directory's plans with their slugs; refuses naming both directories and the explicit-path way out unless the config names one of them; an empty list; no directory or file is created
+
+#### Scenario: the repo config
+- WHEN any plan command (plans list, plan check, plan approve, run, status) reads `<repo>/.orchestrate/config.yaml`
+- THEN it applies `plans.dir` and `archive.mode` (promote | discard), a relative path being under the repo root and `~` and absolute paths allowed; an unknown key or a bad mode fails the command naming its dotted path and the fix; a missing file means docs/plans and promote
+
+#### Scenario: a plan outside the repository
+- WHEN a plan.yaml outside the repository is passed explicitly with `--repo` to `plan check`, `plan approve` and `run`
+- THEN all three work, and nothing is written next to the plan except the approval block
+
+### Requirement: Plan layouts
+Every command SHALL read a plan's files through one resolver, built from the plan path and the repository, that answers for both layouts: a folder plan (`<folder>/plan.yaml`) and a sibling plan (`X.plan.yaml` beside `X.plan.md`).
+
+#### Scenario: one resolver answers for the layout
+- WHEN any command reads, snapshots, guards or copies a plan's files
+- THEN it asks the resolver (the kind, the folder, the contract files, a path's place relative to the repository, whether a path belongs to the plan, whether the folder may be deleted), and no other code derives the layout from the plan's file name
+
+#### Scenario: a sibling plan
+- WHEN a sibling plan is checked, approved, run, verified or archived, with or without a repo config
+- THEN it behaves as a folder plan does and is listed beside folder plans, and an approval digest of a plan with no files beside it verifies
+
+### Requirement: Archive mode
+A folder plan SHALL declare how it archives (`archive: promote | discard`, defaulting to the repo config's `archive.mode`), a promoting plan SHALL name its `spec`, and a discarding plan SHALL sit directly under `plans.dir`.
+
+#### Scenario: the archive key
+- WHEN `plan check` reads a folder plan naming `archive: promote | discard`, or a sibling plan naming `archive`
+- THEN the folder plan is accepted and the sibling plan is refused naming the key and the way out
+
+#### Scenario: a promoting plan needs a spec
+- WHEN `plan check` reads a folder plan that promotes, by its own key or the repo config, and names no `spec`
+- THEN it refuses naming `spec` and the fix (set it, or `archive: discard`); a discard plan needs no `spec`
+
+#### Scenario: a discard folder outside plans.dir
+- WHEN `plan check` or `plan approve` reads a folder plan that discards and whose folder's resolved parent is not the resolved `plans.dir` (nested deeper, or reached through a symlink)
+- THEN it refuses naming the folder, `plans.dir` and the fix; a folder directly under a `plans.dir` outside the repository passes
+
+### Requirement: Archive applies the change set
+When a promoting plan is ACCEPTED, the driver SHALL archive it with no agent by applying the plan's requirement changes to its spec and opening the archive pull request.
+
+#### Scenario: the change set lands in the spec
+- WHEN the driver writes the archive
+- THEN in the archive worktree it appends each added requirement as a `### Requirement:` block with its scenarios, replaces each modified block whole (from its heading to the next heading), deletes each removed block, and deletes the plan's folder (a sibling plan's files are copied byte-identical instead); a missing spec file is created holding the added blocks alone
+
+#### Scenario: the archive pull request
+- WHEN the archive tree is written
+- THEN the driver commits on `feat/<slug>-archive` with the plan's goal and each removed requirement's `why` in the commit message, pushes, runs `gh pr create`, and the plan is ARCHIVED when that pull request merges
+
+#### Scenario: a change set the spec cannot take
+- WHEN the spec at the base cannot take the change set (an added title it holds, a modified or removed title it lacks), or the archive pull request conflicts
+- THEN the driver asks the Lead (`retry`, `skip`) naming the spec and the titles, before any commit or push, and spawns no worker
+
+### Requirement: Discard archive
+When a discarding plan is ACCEPTED, the driver SHALL delete its plan folder and mark it ARCHIVED with no archive worker, deleting only a folder directly under `plans.dir`.
+
+#### Scenario: a discard plan outside the repository
+- WHEN a discard plan kept outside the repository, with no spec, is approved, run and verified
+- THEN no archive worker or pull request runs, the plan folder is gone, the ledger reads ARCHIVED, and origin's tree outside the ticket's paths is unchanged
+
+#### Scenario: a discard plan tracked in the repository
+- WHEN a discard plan's folder is tracked in the repository
+- THEN it is deleted by a one-commit pull request that changes nothing else
+
+#### Scenario: the deletion guard
+- WHEN the driver is about to delete a plan folder (a discard, or the plan folder in a promote's archive tree) whose resolved parent is not the resolved `plans.dir`, checked again at the deletion itself, even when the config changed mid-run
+- THEN it deletes nothing, the plan is not ARCHIVED, and the Lead is told the folder and `plans.dir`
+
+### Requirement: Archive has no agent route
+The driver SHALL refuse, before any spawn, a route config or `--route` override that names the `archive` or `gaps` step.
+
+#### Scenario: a route naming the archive
+- WHEN a route config or a `--route` override names the `archive` step, or the `gaps` step
+- THEN the driver refuses before any spawn, naming the step and the fix (remove that route); the `implementer` and `reviewer` routes work
+
+### Requirement: Plan lifecycle
+A plan SHALL move APPROVED → RUNNING → ACCEPTED → ARCHIVED, ACCEPTED once every agent ticket is COMPLETE, with plan.yaml unchanged since approval.
+
+#### Scenario: every agent ticket COMPLETE
+- WHEN every agent ticket of a plan is COMPLETE
+- THEN the plan is ACCEPTED: each ticket reached COMPLETE only through its gate and its pull request merged with CI green, so nothing is re-run
+
+#### Scenario: a person ticket is open
+- WHEN the agent tickets are COMPLETE while a person ticket is open
+- THEN the plan is ACCEPTED, the archive does not start until every ticket is COMPLETE, and the run ends rather than wait on the person; after `complete`, the next run archives
+
+#### Scenario: a plan driven to the end
+- WHEN a plan (one ticket, or a small real plan driven by real agents in a scratch repository) is approved, launched, its work reaches the default branch and it archives
+- THEN `status` history is APPROVED → RUNNING → ACCEPTED → ARCHIVED, plan.yaml is unchanged since approval, and `plan check` accepts its approval digest
+
+### Requirement: Person tickets
+The Lead SHALL close a person-owned ticket with `complete <plan> <T#> --note TEXT [--cover S<n>=<node>]...`, and the driver SHALL keep `attention.md` in step with the ledger.
+
+#### Scenario: complete records the ticket
+- WHEN `complete` runs for a person-owned ticket
+- THEN its status becomes `COMPLETE <date> · <note>` and its cover nodes are recorded in the ledger, under the ledger lock so a live driver keeps them; it is refused, naming why, for a caller the runtime does not verify as the Lead, an agent ticket, an unknown ticket, or a `--cover` for a scenario the ticket does not satisfy
+
+#### Scenario: attention.md follows the ledger
+- WHEN a person ticket is set COMPLETE and the driver runs again
+- THEN the driver rewrites `attention.md` from the ledger on every tick: the completed ticket's line is gone, a ticket waiting is listed once, and a run with nothing waiting has the header only
+
+### Requirement: Ledger and status
+Each plan SHALL have one ledger per repository, and `status <plan> --json` SHALL report the run from it while plan.yaml stays byte-identical.
+
+#### Scenario: status reads the ledger
+- WHEN a plan runs through dispatch, a pause, a `decide` answer and a merge
+- THEN plan.yaml stays byte-identical, and `status <plan> --json` reports the run dir, the plan state and its history, and each ticket's state, reason and PR, before and during the run
+
+#### Scenario: one ledger per repository
+- WHEN two repositories each run a plan with the same slug, and a ledger under the unkeyed `<state>/<slug>.json` path exists
+- THEN each gets its own ledger under `<state>/<repo-key>/<slug>`, and the unkeyed ledger is imported once into the repository that owns it, never while a driver holds it
+
+### Requirement: Ticket dispatch
+An approved plan's agent tickets SHALL dispatch with the class, effort and model their rows set, in their blocking order.
+
+#### Scenario: rows decide routes and order
+- WHEN an approved plan is launched
+- THEN each agent ticket dispatches on the route its row names, in blocking order, and the plan stays byte-identical
+
+### Requirement: Lead decisions
+A request SHALL offer the Lead a typed menu, and `decide` SHALL take the Lead's answer as flags or as one JSON object, validated and written the same way.
+
+#### Scenario: a request's menu
+- WHEN the driver writes a request
+- THEN it is contract 3: each menu option is `{action, summary, inputs}`, `inputs` mapping each input name to `{type, required}` (`reason` always, `answer` for `answer`); a contract 2 request with a string menu is read and decided too
+
+#### Scenario: decide --json
+- WHEN an agent Lead runs `decide <plan> <unit> --json <file|->` with a decision object
+- THEN the decision is validated and written exactly as the flag form writes it and stdout is one JSON object naming the action; a refusal is one JSON object `{error, reason, way_out}` on stderr with exit 2 and nothing written
+
+### Requirement: A decision reaches its worker
+The driver SHALL hand the Lead's decision to the worker it concerns, and SHALL ask again when it cannot.
+
+#### Scenario: a hand-over that fails
+- WHEN the driver cannot apply the Lead's decision (the hand-over fails, e.g. the pane is blocked on a login)
+- THEN the unit gets a new request naming the failure and the way out; a `complete` from the unit's worker that lands while that request is open is held, and the next decision acts on it without handing the unit over again
+
+#### Scenario: an answer to the reviewer
+- WHEN the Lead answers a request raised while the reviewer owed its review
+- THEN the answer resumes the reviewer on its review, not the implementer; a reviewer whose pane is gone is replaced by a fresh reviewer whose brief carries the answer
+
+### Requirement: A new attempt keeps the higher class
+A new attempt of a unit SHALL run on the higher of its last attempt's class and the class the routes compute now.
+
+#### Scenario: a re-dispatch, a reserved attempt or a reopened unit
+- WHEN the driver starts a new attempt of a unit that had one (an orphan re-dispatch, a reserved attempt, or a reopened parked unit)
+- THEN the attempt's class is the higher of the last attempt's class and the one the routes compute now, with that class's model and effort
+
+### Requirement: Spec coverage
+`scripts/spec_coverage.py` SHALL hold every `### Requirement:` title in `docs/specs/*.md` to at least one tagged test, and every test tag to an existing title.
+
+#### Scenario: a title with no tagged test
+- WHEN a spec holds a requirement title that no test file tags (`@pytest.mark.spec("<title>")`, `describe("spec: <title>")` or a `spec: <title>` comment)
+- THEN the script exits 1 naming the title and the way out (tag a test with `spec("<title>")`)
+
+#### Scenario: a tag naming no title
+- WHEN a test file tags a title no spec holds
+- THEN the script exits 1 naming the tag and the way out (fix the tag to an existing title, or add the requirement)
+
+#### Scenario: titles and tags match
+- WHEN every title has a tag and every tag names a title
+- THEN the script exits 0; a spec with no `### Requirement:` heading asks for nothing

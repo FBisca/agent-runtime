@@ -57,7 +57,7 @@ def state_event(minutes, unit, task=None):
 
 
 def graph(*edges):
-    """A plan/1 contract whose tickets T1..Tn carry the given blocked_by lists, in plan order."""
+    """A plan/2 contract whose tickets T1..Tn carry the given blocked_by lists, in plan order."""
     data = contract()
     data["slug"] = "bench"
     base = data["tickets"][0]

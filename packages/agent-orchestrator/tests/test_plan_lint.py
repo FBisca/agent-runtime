@@ -8,7 +8,7 @@ import pytest
 import yaml
 from fixtures import RunFixture, load_script, plan_data
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.spec("Agent tickets hold a test path")]
 
 CONFIG_ONLY = [".orchestrate/config.yaml", "pyproject.toml", "uv.lock"]
 

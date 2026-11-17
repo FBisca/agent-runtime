@@ -24,7 +24,7 @@ import pytest
 from fixtures import assignment, report_wait, wait_result
 from test_gates import GateFixture
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.spec("A decision reaches its worker")]
 
 WORKER = "demo-t1"
 REVIEWER = "demo-t1-review"

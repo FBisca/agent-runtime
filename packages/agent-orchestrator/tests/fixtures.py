@@ -168,15 +168,61 @@ def red_of(covers):
 
 
 def plan_data(rows=("T1", "T2", "T3", "T4", "T5")):
-    """The fixture plan as a plan/1 mapping: the rows' tickets and three scenarios."""
+    """The fixture plan as a plan/2 mapping: the rows' tickets and one added requirement of three scenarios."""
     return {
-        "schema": "plan/1",
+        "schema": "plan/2",
         "slug": "demo",
         "goal": "deliver",
         "spec": "docs/specs/demo.md",
-        "scenarios": [dict(id=sid, when="a", then="b") for sid in SCENARIOS],
+        "requirements": {"added": [requirement("Demo", *SCENARIOS)]},
         "tickets": [dict(id=name, **ROWS[name]) for name in rows],
     }
+
+
+def requirement(title, *ids):
+    """An added requirement whose scenarios are `ids`, each WHEN a THEN b."""
+    return {
+        "title": title,
+        "shall": "The demo SHALL deliver.",
+        "scenarios": [dict(id=sid, when="a", then="b") for sid in ids],
+    }
+
+
+def added(scenarios, title="Demo"):
+    """`requirements` adding `scenarios`, three to a requirement: Demo, Demo 2, ..."""
+    return {
+        "added": [
+            {
+                "title": title if i == 0 else "%s %d" % (title, i // 3 + 1),
+                "shall": "The demo SHALL deliver.",
+                "scenarios": list(scenarios[i : i + 3]),
+            }
+            for i in range(0, len(scenarios), 3)
+        ]
+    }
+
+
+def scenarios_of(data):
+    """The scenario mappings of a plan/2 mapping, for a test that edits one in place."""
+    return [s for r in data["requirements"]["added"] for s in r["scenarios"]]
+
+
+def add_scenario(data, row):
+    """`data` with one more added requirement holding the scenario `row`."""
+    data["requirements"]["added"].append(
+        {
+            "title": "Also %s" % row["id"],
+            "shall": "The demo SHALL also deliver.",
+            "scenarios": [row],
+        }
+    )
+
+
+def keep_scenarios(data, wanted):
+    """`data` with only the scenarios in `wanted`, and no requirement left empty."""
+    for r in data["requirements"]["added"]:
+        r["scenarios"] = [s for s in r["scenarios"] if s["id"] in wanted]
+    data["requirements"]["added"] = [r for r in data["requirements"]["added"] if r["scenarios"]]
 
 
 TEMPLATE = None
@@ -643,7 +689,7 @@ class RunFixture(_Case):  # noqa: PLR0904
     def approved_yaml_plan(
         self, rows=("T1",), repo=None, name="demo.plan.yaml", mutate=None, state_dir=None
     ):
-        """The fixture rows as an approved plan/1 YAML file in `repo`; its path. `mutate` edits the mapping first."""
+        """The fixture rows as an approved plan/2 YAML file in `repo`; its path. `mutate` edits the mapping first."""
         repo = repo or self.repo
         path = repo / "docs" / "plans" / name
         path.parent.mkdir(parents=True, exist_ok=True)

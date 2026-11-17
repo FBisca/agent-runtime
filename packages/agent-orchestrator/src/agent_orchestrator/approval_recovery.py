@@ -128,9 +128,9 @@ def recover_approval(path, record, *, repo=None, state_dir=None):
 def ledger_approved(model, repo, state_dir):
     """`model` with the approval its ledger keeps, or None when nothing holds a record of that approval.
 
-    A hand edit can drop the `approval` span while the plan stays the one a drive approved: `plan amend` amends it
-    at that approval's own base and publishes the spans back, so the amendment that puts the span back is not
-    refused as an unapproved plan."""
+    A hand edit can drop the `approval` span while the plan stays the one a drive approved: a re-approval under the
+    live driver approves it at that approval's own base and publishes the span back, so it is not refused as an
+    unapproved plan."""
     approval = approval_block(recorded_approval(repo, model.slug, state_dir))
     if approval is None:
         return None

@@ -459,7 +459,7 @@ def plan(args):
         raise WorkbenchError(
             "legacy_plan",
             "%s is a Markdown plan: it has no ticket graph" % path,
-            "rewrite it as plan/1 YAML and check it with agent-orchestrator plan check",
+            "rewrite it as plan/2 YAML and check it with agent-orchestrator plan check",
             path=str(path),
         )
     repo = repository_of(args, path)

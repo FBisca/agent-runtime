@@ -5,17 +5,7 @@ The contract it pins (plan Decisions D1-D6):
 
   - no `demo-archive` agent is spawned; the driver commits on `feat/demo-archive`, pushes it to origin and runs
     `gh pr create`, whose stdout is the PR url; the archive unit then merges and the plan is ARCHIVED
-  - the spec on that branch is the base spec, unchanged, followed by one appended section:
-
-        ## Requirements: <slug>                (omitted when every scenario is already in the spec)
-
-        - **R<n>** WHEN <when>, THEN <then> (from <slug>/<id>)
-
-        ## Coverage: <slug>
-
-        | Requirement | Scenario | Test nodes |
-        |---|---|---|
-        | R<n> | <id> | `<covers node>`<br>`<covers node>` |
+  - the spec on that branch is the base spec, unchanged, followed by the plan's added requirement block
 
 Each class has a `control` test that holds whatever the change: it proves the fixture is real.
 """
@@ -25,22 +15,13 @@ import unittest
 
 import pytest
 import yaml
+from fixtures import scenarios_of
 from test_archive import ARCHIVE, ArchiveFixture
 from test_archive_yaml import commit_spec
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.spec("Archive applies the change set")]
 
-SECTION = (
-    "## Requirements: demo\n"
-    "\n"
-    "- **R{n}** WHEN a, THEN b (from demo/S1)\n"
-    "\n"
-    "## Coverage: demo\n"
-    "\n"
-    "| Requirement | Scenario | Test nodes |\n"
-    "|---|---|---|\n"
-    "| R{n} | S1 | `src/a/test_a.py::test_a` |\n"
-)
+BLOCK = "### Requirement: Demo\nThe demo SHALL deliver.\n\n#### Scenario: a\n- WHEN a\n- THEN b\n"
 
 
 class DriverArchiveFixture(ArchiveFixture):
@@ -63,8 +44,8 @@ class DriverArchiveFixture(ArchiveFixture):
 
 class NoAgentArchive(DriverArchiveFixture, unittest.TestCase):
     def test_control_the_plan_has_one_scenario(self):
-        scenarios = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual([s["id"] for s in scenarios], ["S1"])
+        data = yaml.safe_load(self.plan.read_text(encoding="utf-8"))
+        self.assertEqual([s["id"] for s in scenarios_of(data)], ["S1"])
 
     def test_the_driver_opens_the_archive_pr_itself_and_the_plan_is_archived(self):
         self.run_to_archive()
@@ -90,23 +71,20 @@ class SpecSection(DriverArchiveFixture, unittest.TestCase):
         commit_spec(self, "# Demo\n")
         self.assertEqual(self.git(self.origin, "show", "main:docs/specs/demo.md"), "# Demo")
 
-    def test_the_section_is_appended_after_the_spec_unchanged_numbered_from_its_highest_requirement(
-        self,
-    ):
-        base = "# Demo\n\n- **R7** WHEN x, THEN y (from other/S1)\n- **R3** WHEN z, THEN w (from other/S2)\n"
+    @pytest.mark.spec("Archive applies the change set")
+    def test_the_added_block_is_appended_after_the_spec_unchanged(self):
+        base = "# Demo\n\n## Requirements\n\n### Requirement: Other\nIt SHALL hold.\n"
         commit_spec(self, base)
         self.run_to_archive()
-        self.assertEqual(self.on_branch("docs/specs/demo.md"), base + "\n" + SECTION.format(n=8))
+        self.assertEqual(self.on_branch("docs/specs/demo.md"), base + "\n" + BLOCK)
 
-    def test_a_missing_spec_is_created_holding_the_section_alone(self):
+    @pytest.mark.spec("Archive applies the change set")
+    def test_a_missing_spec_is_created_holding_the_block_alone(self):
         self.run_to_archive()
-        self.assertEqual(self.on_branch("docs/specs/demo.md"), SECTION.format(n=1))
+        self.assertEqual(self.on_branch("docs/specs/demo.md"), BLOCK)
 
-    def test_a_scenario_already_in_the_spec_is_not_appended_and_keeps_its_number_in_coverage(self):
-        base = "# Demo\n\n- **R9** WHEN a THEN b. (from demo/S1)\n"
-        commit_spec(self, base)
+    @pytest.mark.spec("Archive applies the change set")
+    def test_the_archive_commit_carries_the_plan_goal(self):
         self.run_to_archive()
-        coverage = SECTION.format(n=9).split("## Coverage: demo")[1]
-        self.assertEqual(
-            self.on_branch("docs/specs/demo.md"), base + "\n## Coverage: demo" + coverage
-        )
+        message = self.git(self.origin, "log", "-1", "--format=%B", "feat/demo-archive")
+        self.assertIn("deliver", message)

@@ -1,6 +1,6 @@
 """verify: the one gate. A ticket's report is checked against built-in invariants the plan never declares.
 
-A plan (`plan/1`) declares scenarios and tickets; the implementation provides its evidence. Three invariants gate a
+A plan (`plan/2`) declares requirement changes with their scenarios, and tickets; the implementation provides its evidence. Three invariants gate a
 ticket, each a rule a worker cannot argue with:
 
 scope      every file the ticket changed is inside the ticket's paths

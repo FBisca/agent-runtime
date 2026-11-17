@@ -89,20 +89,24 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
             contracts.validate_report(report(pr="https://example.invalid/pr/1"))["head"], "abc1234"
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_report_contract_3_carries_covers_mapping_scenarios_to_test_nodes(self):
         covers = {"S1": ["tests/test_a.py::test_one", "tests/test_a.py::TestA::test_two"]}
         validated = contracts.validate_report(report(contract=3, covers=covers))
         self.assertEqual(validated["covers"], covers)
         self.assertEqual(contracts.Report.model_validate(validated).covers, covers)
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_report_contract_3_without_covers_is_refused_naming_the_field(self):
         self.rejects(contracts.validate_report, report(contract=3), "covers")
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_covers_belongs_to_contract_3_only(self):
         self.rejects(
             contracts.validate_report, report(contract=2, covers={"S1": ["a::b"]}), "contract 3"
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_malformed_covers_names_the_scenario_it_breaks(self):
         for covers, needle in (
             ({"one": ["a.py::t"]}, "one"),
@@ -112,6 +116,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         ):
             self.rejects(contracts.validate_report, report(contract=3, covers=covers), needle)
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_report_contract_3_carries_red_per_scenario(self):
         covers = {"S1": ["tests/test_a.py::test_one"]}
         red = {"S1": "FAILED tests/test_a.py::test_one - AssertionError: 1 != 2"}
@@ -126,6 +131,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         )
         self.rejects(contracts.validate_report, report(contract=3, covers=covers, red=["x"]), "red")
 
+    @pytest.mark.spec("Scenario evidence")
     def test_S9_a_verify_finding_is_a_gate_item_of_source_verify(self):
         item = {
             "kind": "blocking",
@@ -403,11 +409,12 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.rejects(contracts.validate_request, dict(request, evidence="a"), "evidence")
         self.rejects(contracts.validate_request, dict(request, reason=""), "reason")
 
-    def test_S16_a_new_request_is_contract_3_with_typed_menu_options_and_amend(self):
+    @pytest.mark.spec("Lead decisions")
+    def test_a_new_request_is_contract_3_with_typed_menu_options(self):
         request = contracts.make_request("t1", "t1", "blocked", "stuck", ["/run/t1/task.md"])
         self.assertEqual(request["contract"], 3)
         menu = {option["action"]: option for option in request["menu"]}
-        self.assertIn("amend", menu)
+        self.assertEqual(list(menu), list(contracts.ACTIONS))
         for option in menu.values():
             self.assertEqual(sorted(option), ["action", "inputs", "summary"])
             self.assertTrue(option["summary"].strip())
@@ -430,6 +437,7 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         self.assertEqual((request["contract"], request["menu"]), (2, ["retry", "skip"]))
         self.assertEqual(contracts.validate_request(request), request)
 
+    @pytest.mark.spec("Lead decisions")
     def test_S16_a_contract_2_request_with_a_string_menu_is_still_read(self):
         old = {
             "contract": 2,
@@ -464,14 +472,19 @@ class ContractTests(unittest.TestCase):  # noqa: PLR0904
         ):
             self.rejects(contracts.validate_request, dict(request, menu=[broken]), "menu")
 
-    def test_S16_a_decision_may_be_contract_2_or_3_and_amend_is_an_action(self):
+    def test_a_decision_may_be_contract_1_2_or_3_and_amend_is_no_action(self):
         for version in (1, 2, 3):
-            decision = {"contract": version, "action": "amend", "reason": "T1 needs a test path"}
-            self.assertEqual(contracts.validate_decision(decision)["action"], "amend")
+            decision = {"contract": version, "action": "skip", "reason": "T1 is not needed"}
+            self.assertEqual(contracts.validate_decision(decision)["action"], "skip")
         self.rejects(
             contracts.validate_decision,
-            {"contract": 3, "action": "amend", "reason": "x", "answer": "y"},
+            {"contract": 3, "action": "skip", "reason": "x", "answer": "y"},
             "answer",
+        )
+        self.rejects(
+            contracts.validate_decision,
+            {"contract": 3, "action": "amend", "reason": "the plan's verb is plan approve"},
+            "action",
         )
 
 

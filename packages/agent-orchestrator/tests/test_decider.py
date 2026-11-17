@@ -433,6 +433,7 @@ class PersonOwnedTests(DeciderFixture, unittest.TestCase):
         self.assertEqual(self.plan_status("T4"), "COMPLETE 2026-11-07")
         self.assertEqual(self.attention_md().count("sign-off"), 0)
 
+    @pytest.mark.spec("Person tickets")
     def test_S4_attention_md_is_rebuilt_from_the_ledger_on_every_tick(self):
         """yaml-eec-gaps/S4"""
         self.run_driver()

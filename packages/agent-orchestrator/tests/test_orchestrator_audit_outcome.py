@@ -20,7 +20,7 @@ from unittest import mock
 import pytest
 import yaml
 from agent_orchestrator import contracts
-from fixtures import DRIVER, TESTS, RunFixture, wait_result
+from fixtures import DRIVER, TESTS, RunFixture, added, wait_result
 from test_acceptance import AcceptanceFixture
 from test_gates import GateFixture
 
@@ -425,11 +425,11 @@ class ApproveGateOutcome(RunFixture, unittest.TestCase):
         super().setUp()
         self.plan = self.repo / "docs" / "plans" / "demo.plan.yaml"
         data = {
-            "schema": "plan/1",
+            "schema": "plan/2",
             "slug": "demo",
             "goal": "deliver",
             "spec": "docs/specs/demo.md",
-            "scenarios": [{"id": "S1", "when": "a", "then": "b"}],
+            "requirements": added([{"id": "S1", "when": "a", "then": "b"}]),
             "tickets": [
                 {
                     "id": "T1",

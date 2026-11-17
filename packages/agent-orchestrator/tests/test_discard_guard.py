@@ -20,7 +20,11 @@ import yaml
 from fixtures import load_script
 from test_archive_modes import FOLDER, FolderArchiveFixture, discard_plan
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.spec("Archive mode"),
+    pytest.mark.spec("Discard archive"),
+]
 
 PARTS = ("plan.yaml", "plan.md")
 

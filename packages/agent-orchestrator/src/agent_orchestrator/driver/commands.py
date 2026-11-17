@@ -486,8 +486,6 @@ def drive_locked(driver):
         "slug": driver.slug,
         "lead": driver.lead,
         "spawned": driver.spawned,
-        # The units that ended the run parked: the exit says they are parked rather than reporting nothing left.
-        "parked": driver.parked,
         "errors": driver.errors,
     }
 
@@ -534,40 +532,27 @@ def _plans_command(args):
 
 
 def _plan_command(args):
-    """`plan schema|check|approve|amend`: the plan grammar, its validation, its approval and its amendment."""
+    """`plan schema|check|approve`: the plan grammar, its validation and its approval."""
     if args.plan_command == "schema":
         return yaml_plan.Plan.model_json_schema(by_alias=True)
-    if args.plan_command in ("approve", "amend"):
-        return _approved_or_amended(args)
+    if args.plan_command == "approve":
+        return _approved(args)
     model = load_approved(args.plan, repo=args.repo, state_dir=args.state_dir)
     return {"valid": True, "slug": model.slug}
 
 
-def _approved_or_amended(args):
-    """`plan approve` and `plan amend`, refused to a spawned worker: the plan belongs to the Lead."""
+def _approved(args):
+    """`plan approve`, refused to a spawned worker: the plan belongs to the Lead."""
     caller = _engine().resolve_runtime()
     if isinstance(caller, dict) and caller.get("role") == "worker":
         raise PlanError(
-            "%s: caller is a spawned worker, parent %s — %s belongs to the Lead "
-            "(the person in their own session); ask the Lead to run plan %s"
-            % (
-                "approval" if args.plan_command == "approve" else "amend",
-                caller.get("parent", "unknown"),
-                args.plan_command,
-                args.plan_command,
-            )
-        )
-    if args.plan_command == "amend":
-        return yaml_plan.amend(
-            args.plan,
-            reason=args.reason,
-            repo=args.repo,
-            state_dir=args.state_dir,
-            runtime_id=os.environ.get("HERDR_PANE_ID") or os.environ.get("HC_TERMINAL_ID"),
+            "approval: caller is a spawned worker, parent %s — approve belongs to the Lead "
+            "(the person in their own session); ask the Lead to run plan approve"
+            % caller.get("parent", "unknown")
         )
     return {
         "approval": yaml_plan.approve(
-            args.plan, repo=args.repo, state_dir=args.state_dir, base=args.base
+            args.plan, repo=args.repo, state_dir=args.state_dir, base=args.base, reason=args.reason
         )
     }
 

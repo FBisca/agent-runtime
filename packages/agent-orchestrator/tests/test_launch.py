@@ -7,7 +7,7 @@ import unittest
 
 import pytest
 import yaml
-from fixtures import DRIVER, RunFixture, plan_data
+from fixtures import DRIVER, RunFixture, added, plan_data
 
 pytestmark = pytest.mark.integration
 
@@ -154,11 +154,11 @@ class LaunchTests(RunFixture, unittest.TestCase):
         self.plan.write_text(
             yaml.safe_dump(
                 {
-                    "schema": "plan/1",
+                    "schema": "plan/2",
                     "slug": "demo",
                     "goal": "deliver",
                     "spec": "docs/specs/demo.md",
-                    "scenarios": [{"id": "S1", "when": "a", "then": "b"}],
+                    "requirements": added([{"id": "S1", "when": "a", "then": "b"}]),
                     "tickets": [
                         {
                             "id": "T1",

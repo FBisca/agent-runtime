@@ -1,15 +1,15 @@
-"""The plan/1 contract and its local approval snapshots.
+"""The plan/2 contract and its local approval snapshots.
 
 Digest inputs use eight-byte big-endian length prefixes. The plan input is
 safe_dump(sort_keys=True) after dropping approval: comments, key order and YAML
 presentation are preserved on disk but do not affect the contract digest.
 
 This module holds the rules the contract itself makes - the semantic validator, the legacy and folder
-rules, the approval and its amendment - and every other collaborator lives in the module beside it:
-the YAML document in `plan_document.py`, where a plan's files live in `plan_layout.py`, the refusals
+rules, the approval and a re-approval under a live driver - and every other collaborator lives in the module beside it:
+the YAML document in `plan_document.py`, the requirement blocks of a spec in `spec_blocks.py`, where a plan's files live in `plan_layout.py`, the refusals
 over a plan's paths in `plan_checks.py`, what an approval covers in `plan_approval.py`, the state and
-its locks in `plan_locks.py`, and plan discovery in `plan_discovery.py`. A plan declares scenarios and
-tickets; the implementation provides its evidence, which `verify` holds it to. The names those modules publish are
+its locks in `plan_locks.py`, and plan discovery in `plan_discovery.py`. A plan declares the requirements
+it changes in its spec, their scenarios and its tickets; the implementation provides its evidence, which `verify` holds it to. The names those modules publish are
 re-exported here, so a caller, a test and the CLI keep asking `plan.<name>`.
 """
 
@@ -64,7 +64,6 @@ from .plan_discovery import plan_entries as plan_entries
 from .plan_discovery import repo_config as repo_config
 from .plan_discovery import repository_root as repository_root
 from .plan_discovery import slug_of as slug_of
-from .plan_document import Amendment as Amendment
 from .plan_document import Approval as Approval
 from .plan_document import Mapping as Mapping
 from .plan_document import Plan as Plan
@@ -78,6 +77,8 @@ from .plan_document import TicketId as TicketId
 from .plan_document import UniqueLoader as UniqueLoader
 from .plan_document import literal_path as literal_path
 from .plan_document import read_yaml as read_yaml
+from .plan_document import scenario_entries as scenario_entries
+from .plan_document import scenario_rows as scenario_rows
 from .plan_document import yaml_path as yaml_path
 from .plan_layout import FOLDER_PLAN as FOLDER_PLAN
 from .plan_layout import PlanLayout as PlanLayout
@@ -85,25 +86,33 @@ from .plan_layout import git as git
 from .plan_layout import identity as identity
 from .plan_layout import not_under_plans_dir as not_under_plans_dir
 from .plan_layout import repository as repository
-from .plan_locks import amend_lock as amend_lock
+from .plan_locks import LockHeld as LockHeld
 from .plan_locks import ledger_path as ledger_path
 from .plan_locks import plan_lock as plan_lock
+from .plan_locks import reapprove_lock as reapprove_lock
 from .plan_locks import run_lock as run_lock
+from .spec_blocks import change_problems as change_problems
 
 ARCHIVE_MODES = ("promote", "discard")
 
 
 def lint_problems(model, repo, path):
-    """Problems `plan check`, `plan approve` and `plan amend` refuse; the driver's load never runs this, so a plan
-    approved before a rule existed keeps running."""
+    """Problems `plan check` and `plan approve` refuse; the driver's load never runs this, so a plan approved before
+    a rule existed keeps running, and the spec its archive changes may move under a live run."""
     patterns = repo_config(repo).test_patterns
-    return discard_problems(model, path, repo) + [
-        f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
-        "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
-        "tests, to its paths"
-        for i, ticket in enumerate(model.tickets)
-        if ticket.owner.strip().lower() == "agent" and holds_no_test(ticket.paths, patterns)
-    ]
+    spec = Path(repo) / model.spec if model.spec else None
+    changes = change_problems(model.requirements, spec, model.spec) if spec else []
+    return (
+        discard_problems(model, path, repo)
+        + changes
+        + [
+            f"tickets[{i}] {ticket.id}: satisfies {', '.join(ticket.satisfies)} but its paths hold no test file "
+            "or directory, so the covers gate could never pass — add a test file, or a directory that holds its "
+            "tests, to its paths"
+            for i, ticket in enumerate(model.tickets)
+            if ticket.owner.strip().lower() == "agent" and holds_no_test(ticket.paths, patterns)
+        ]
+    )
 
 
 def semantic_problems(data, path, repo):  # noqa: PLR0912, PLR0915
@@ -116,19 +125,20 @@ def semantic_problems(data, path, repo):  # noqa: PLR0912, PLR0915
         problems.append(f"{loc}: {why} — {fix}")
 
     folder = PlanLayout(path).is_folder
-    scenarios = data.get("scenarios")
     tickets = data.get("tickets")
-    scenarios = scenarios if isinstance(scenarios, list) else []
     tickets = tickets if isinstance(tickets, list) else []
     ids = {}
-    for collection, rows in (("scenarios", scenarios), ("tickets", tickets)):
+    for collection, rows in (
+        ("scenarios", scenario_entries(data)),
+        ("tickets", [(f"tickets[{i}]", t) for i, t in enumerate(tickets)]),
+    ):
         seen = set()
-        for i, row in enumerate(rows):
+        for loc, row in rows:
             if not isinstance(row, dict) or not isinstance(row.get("id"), str):
                 continue
             sid = row["id"]
             if sid in seen:
-                defect(f"{collection}[{i}].id", f"duplicate id {sid}", "use a unique id")
+                defect(f"{loc}.id", f"duplicate id {sid}", "use a unique id")
             seen.add(sid)
         ids[collection] = seen
     edges = {}
@@ -198,13 +208,6 @@ def semantic_problems(data, path, repo):  # noqa: PLR0912, PLR0915
     for sid in edges:
         if sid not in state:
             visit(sid, [sid])
-    for i, scenario in enumerate(scenarios):
-        if isinstance(scenario, dict) and "evidence" in scenario:
-            defect(
-                f"scenarios[{i}].evidence",
-                "scenario evidence is gone; the ticket's tests are its evidence",
-                "delete the block",
-            )
     if folder:
         problems += folder_problems(data, path, repo)
     else:
@@ -237,9 +240,16 @@ def folder_problems(data, path, repo):
     return []
 
 
-def is_evidence_key(loc):
-    """Whether a validation location is a scenario's `evidence` key."""
-    return len(loc) == 3 and loc[0] == "scenarios" and loc[2] == "evidence"
+def schema_problems(data):
+    """A plan that is not plan/2 is refused whole, naming the way to convert it: its field errors would only
+    restate the change of shape."""
+    if not isinstance(data, dict) or data.get("schema") == "plan/2":
+        return []
+    return [
+        "schema: %s is not plan/2 — set schema: plan/2 and replace top-level scenarios with requirements: "
+        "{added: [{title, shall, scenarios}], modified: [...], removed: [{title, why}]}, each scenario under "
+        "the requirement it proves" % (data.get("schema") or "a plan with no schema")
+    ]
 
 
 def load(
@@ -250,19 +260,19 @@ def load(
     lint = verify and not require_approval if lint is None else lint
     path = Path(path).resolve()
     data, problems = read_yaml(path)
+    if found := schema_problems(data):
+        raise PlanError("; ".join(problems + found))
     model = None
     try:
         model = Plan.model_validate(data)
     except ValidationError as error:
         for item in error.errors(include_input=False, include_url=False):
-            if item["type"] == "extra_forbidden" and is_evidence_key(item["loc"]):
-                continue  # semantic_problems refuses it with its own reason and way out
             fix = (
                 "remove the unknown key"
                 if item["type"] == "extra_forbidden"
                 else "supply the required field"
                 if item["type"] == "missing"
-                else "use the declared plan/1 type or value"
+                else "use the declared plan/2 type or value"
             )
             problems.append(f"{yaml_path(item['loc'])}: {item['msg']} — {fix}")
     repo = repository(path, repo)
@@ -285,32 +295,48 @@ def load(
     return model
 
 
-def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main"):
+def approve(path, *, repo=None, state_dir=DEFAULT_STATE, base="origin/main", reason=None):
     """Approve a plan: write its snapshot and its approval block. Nothing runs: the tickets' tests are its evidence.
 
-    Everything runs under the plan's run lock, so a live driver is never moved or raced; a held lock refuses before
-    anything is written."""
+    With no driver on the plan it runs under the run lock and binds `base`. Under a live driver it re-approves the
+    approved plan at the base its approval already has, so the drive drains and adopts the new contract."""
     refusal = runtime_client.approval_refusal()
     if refusal:
         raise PlanError("approval: %s — the plan was not approved" % refusal)
     path = Path(path).resolve()
     repo = repository(path, repo)
     model = load(path, repo=repo, verify=False, lint=True)
-    with run_lock(repo, model.slug):
-        return approve_locked(path, repo, model, state_dir, base)
+    try:
+        with run_lock(repo, model.slug):
+            return approve_locked(path, repo, model, state_dir, base, reason)
+    except LockHeld as held:
+        if model.approval is None:
+            # A hand edit that dropped the `approval` span leaves a plan the ledger still holds the approval of.
+            model = recovery.ledger_approved(model, repo, state_dir)
+        if model is None:
+            raise held from None
+    with reapprove_lock(repo, model.slug):
+        return reapprove_locked(path, repo, model, state_dir, reason)
 
 
-def approve_locked(path, repo, model, state_dir, base):
-    data, _ = read_yaml(path)
-    plan_bytes = canonical(data)
-    base_sha = git(repo, "rev-parse", "--verify", base + "^{commit}")
-    sha = digest(identity(repo), base_sha, plan_bytes)
+def approval_block(repo, base_sha, sha, reason):
     approval = {
         "by": git_email(repo),
         "at": datetime.now(timezone.utc).isoformat(),
         "base": base_sha,
         "digest": sha,
     }
+    if reason and reason.strip():
+        approval["reason"] = " ".join(reason.split())
+    return approval
+
+
+def approve_locked(path, repo, model, state_dir, base, reason=None):
+    data, _ = read_yaml(path)
+    plan_bytes = canonical(data)
+    base_sha = git(repo, "rev-parse", "--verify", base + "^{commit}")
+    sha = digest(identity(repo), base_sha, plan_bytes)
+    approval = approval_block(repo, base_sha, sha, reason)
     # Only the top-level approval span is replaced; the author's comments survive.
     publish(
         path,
@@ -322,35 +348,11 @@ def approve_locked(path, repo, model, state_dir, base):
     return approval
 
 
-def amend(path, *, reason, repo=None, state_dir=DEFAULT_STATE, runtime_id=None):
-    """Re-approve an approved plan after an edit, at the base its approval already has.
-
-    The amendment holds its own lock, never the run lock, so a live driver is not stopped; a ticket the ledger marks
-    COMPLETE is frozen, and nothing is written when the amendment is refused."""
-    refusal = runtime_client.approval_refusal(verb="amend")
-    if refusal:
-        raise PlanError("amend: %s — the plan was not amended" % refusal)
-    path = Path(path).resolve()
-    repo = repository(path, repo)
-    model = load(path, repo=repo, verify=False, lint=False)
-    if model.approval is None:
-        # A hand edit that dropped the `approval` span leaves a plan the ledger still holds the approval of.
-        model = recovery.ledger_approved(model, repo, state_dir)
-    if model is None:
-        raise PlanError(
-            f"approval: {path} is unapproved, so there is nothing to amend — run agent-orchestrator plan approve {path}"
-        )
-    if not reason.strip():
-        raise PlanError("amend: --reason is empty — say why the plan changes")
-    if found := lint_problems(model, repo, path):
-        raise PlanError("; ".join(found))
-    with amend_lock(repo, model.slug):
-        return amend_locked(path, repo, model, state_dir, reason, runtime_id)
-
-
-def amend_locked(path, repo, model, state_dir, reason, runtime_id):
+def reapprove_locked(path, repo, model, state_dir, reason):
+    """The re-approval of a plan a live driver holds: at its approval's own base, with a ticket the ledger marks
+    COMPLETE frozen, and nothing written when it is refused."""
     previous = model.approval
-    way_out = f"run agent-orchestrator plan approve {path}"
+    way_out = f"stop the driver, then run agent-orchestrator plan approve {path}"
     snap = recovery.snapshot_path(previous, state_dir)
     if not snap.is_file():
         raise PlanError(f"approval: snapshot of the approved plan missing at {snap} — {way_out}")
@@ -368,7 +370,7 @@ def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     problems = frozen_problems(old, data, completed(repo, model.slug, state_dir))
     if problems:
         raise PlanError(
-            "amend: "
+            "approve: "
             + "; ".join(problems)
             + " — a finished ticket is frozen: restore it and add a new ticket for the change"
         )
@@ -377,23 +379,10 @@ def amend_locked(path, repo, model, state_dir, reason, runtime_id):
     sha = digest(identity(repo), base_sha, plan_bytes)
     if sha == previous.digest and "approval" in (data or {}):
         raise PlanError(
-            f"amend: {path} holds the approved contract, nothing to amend — edit the plan, then run plan amend again"
+            f"approve: {path} holds the approved contract, nothing to re-approve — edit the plan, then run "
+            "plan approve again"
         )
-    email, at = git_email(repo), datetime.now(timezone.utc).isoformat()
-    approval = {"by": email, "at": at, "base": base_sha, "digest": sha}
-    was = {t["id"]: t for t in old.get("tickets", [])}
-    entry = {
-        "prev_digest": previous.digest,
-        "digest": sha,
-        "at": at,
-        "by": f"{email} ({runtime_id})" if runtime_id else email,
-        "reason": reason.strip(),
-        "tickets": [t["id"] for t in data.get("tickets", []) if was.get(t["id"]) != t],
-    }
-    text = replaced_text(
-        path.read_bytes().decode("utf-8"),
-        "amendments",
-        list(data.get("amendments") or []) + [entry],
-    )
-    publish(path, replaced_text(text, "approval", approval), plan_bytes, sha, state_dir)
-    return {"approval": approval, "amendment": entry}
+    approval = approval_block(repo, base_sha, sha, reason)
+    text = approved_text(path.read_bytes().decode("utf-8"), approval)
+    publish(path, text, plan_bytes, sha, state_dir)
+    return approval

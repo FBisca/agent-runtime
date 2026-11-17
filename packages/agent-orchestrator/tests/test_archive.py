@@ -84,17 +84,16 @@ class ArchiveMergeStateTests(ArchiveFixture, unittest.TestCase):
         self.gh_process = conflicting
 
     def test_S12_a_conflicting_archive_pr_is_rebuilt_from_the_current_base_first(self):
-        """orchestrator-engine/R49: a conflict is a base that moved. The branch is built again from it, the spec
-        section re-derived there, and nobody is asked; past the rebuilds the Lead is, as before."""
+        """orchestrator-engine/R49: a conflict is a base that moved. The branch is built again from it, the change
+        set applied there again, and nobody is asked; past the rebuilds the Lead is, as before."""
         self.conflict_once()
         self.waits(self.ticket_merged() + [{}])
         self.run_driver()
         self.assertEqual(len(self.run_events("archive-built")), 2)
         self.assertFalse((self.run_dir / "archive" / "request.json").exists())
-        # The rebuild replaced the section instead of appending a second copy of it.
+        # The rebuild applied the change set to the base once, not a second time over its own first build.
         spec = self.git(self.origin, "show", "feat/demo-archive:docs/specs/demo.md")
-        self.assertEqual(spec.count("## Coverage: demo"), 1)
-        self.assertEqual(spec.count("## Requirements: demo"), 1)
+        self.assertEqual(spec.count("### Requirement: Demo"), 1)
         self.assertEqual(self.task("archive")["status"], "COMPLETE")
 
     def test_S5_a_conflicting_archive_pr_past_the_rebuilds_asks_the_lead_and_spawns_no_worker(self):
@@ -168,6 +167,7 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
 
         self.from_snapshot(self.snapshot_key("archive_run"), build)
 
+    @pytest.mark.spec("Plan lifecycle")
     def test_S24_an_approved_plan_driven_to_the_end_is_archived_with_a_valid_digest(self):
         self.archive_run()
         argv = ["--repo", str(self.repo), "--state-dir", str(self.state_dir)]
@@ -177,17 +177,20 @@ class PromotionTests(ArchiveFixture, unittest.TestCase):
         check = self.cli("plan", "check", str(self.plan), *argv)
         self.assertEqual(check.returncode, 0, check.stderr + check.stdout)
 
+    @pytest.mark.spec("Archive applies the change set")
     def test_S25_the_driver_copies_the_plan_file_onto_the_archive_branch(self):
         self.archive_run()
         # the worktree is gone after the merge: the pushed branch is what holds the copied plan
         copied = self.git(self.origin, "show", "feat/demo-archive:docs/plans/demo.plan.yaml")
         self.assertEqual(copied + "\n", self.plan.read_text(encoding="utf-8"))
 
+    @pytest.mark.spec("Archive applies the change set")
     def test_S25_the_plan_is_archived_when_the_archive_pr_merges(self):
         self.archive_run()
         history = [h["state"] for h in self.ledger()["plan"]["history"]]
         self.assertEqual(history[-2:], ["ACCEPTED", "ARCHIVED"])
 
+    @pytest.mark.spec("Plan lifecycle")
     def test_S23_a_plan_goes_approved_to_archived(self):
         self.archive_run()
         self.assertEqual(

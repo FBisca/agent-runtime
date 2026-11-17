@@ -10,6 +10,7 @@ pytestmark = pytest.mark.integration
 
 
 class PlanDispatchTests(GateFixture, unittest.TestCase):
+    @pytest.mark.spec("Ticket dispatch")
     def test_S4_names_routes_and_blocking_order_follow_the_rows_and_the_plan_stays_immutable(self):
         def capped(data):
             for ticket in data["tickets"]:

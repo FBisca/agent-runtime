@@ -132,13 +132,9 @@ def record_park(data, park):
     return data["park"]
 
 
-def end_park(data, kind=None):
-    """The park is over: forget it, and return the record that was forgotten (or None). With `kind`, only a park of
-    that kind ends: a plan the drive cannot use and units that wait for an amendment are not the same park."""
-    park = data.get("park")
-    if not park or (kind is not None and park.get("kind") != kind):
-        return None
-    return data.pop("park")
+def end_park(data):
+    """The park is over: forget it, and return the record that was forgotten (or None)."""
+    return data.pop("park", None) or None
 
 
 def stamp(data):

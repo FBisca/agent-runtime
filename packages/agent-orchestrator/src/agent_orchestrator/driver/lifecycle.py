@@ -1,27 +1,25 @@
-"""The run itself: the round it takes, the amendment it adopts, and what it cost.
+"""The run itself: the round it takes, the re-approval it adopts, and what it cost.
 
 A drive reads the plan, takes one round per gate, and reconciles what the record holds against what
 the runtime lists: a task whose agent is gone is restarted, a ticket with nothing dispatched is
 dispatched, and a plan edited under a live run drains rather than stopping. This module keeps that
-round and the amendment a lead's edit is adopted with, so a run's own movement reads in one place.
+round and the re-approval a lead's edit is adopted with, so a run's own movement reads in one place.
 
 It lives beside `__init__.py` rather than in it because no module of the package may pass a thousand
 lines and no class twenty-five public methods.
 """
 
-import copy
 import json
 import math
 import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from .. import approval_recovery, events, evidence, narrate, routes
 from .. import ledger as ledgers
-from ..invariants import AMENDING, PARKED, next_path
+from ..invariants import PARKED
 from ..invariants import checked_write as ledger
 from ..plan import PlanError
 from ..report_rules import require
@@ -107,7 +105,7 @@ sum_usage = events.sum_usage
 
 
 class Lifecycle:
-    """The run's own movement, mixed into the Driver: the round, the amendment, the reconciliation.
+    """The run's own movement, mixed into the Driver: the round, the re-approval, the reconciliation.
 
     A member moves the run one step and asks the driver it belongs to for the plan, the record, the
     workers and the runtime.
@@ -125,7 +123,6 @@ class Lifecycle:
     step_routes: Any
     run_dir: Any
     lead: Any
-    released: Any
     stranded: Any
 
     def start(self):
@@ -158,8 +155,6 @@ class Lifecycle:
         narrate.NARRATOR.roots = [self.run_dir]  # the pane names a run file by its place in the run
         route_record, legacy = self._start_record(pinned)
         self._start_announce(plan, route_record, legacy)
-        # A unit parked for an amendment by a run that ended: the plan may have been amended since.
-        self.release_amendment({}, plan)
         # A park a dead drive left behind is not this run's: the plan it could not use is one this run holds.
         self.end_park()
 
@@ -266,7 +261,7 @@ class Lifecycle:
         resumed = self.resume_worker(
             task_id,
             packet,
-            "Your contract changed: the plan was amended. Read %s and follow it: it replaces your "
+            "Your contract changed: the plan was re-approved. Read %s and follow it: it replaces your "
             "earlier task packet; keep the work already in this checkout." % packet_md,
         )
         self.log(
@@ -287,122 +282,17 @@ class Lifecycle:
         return resumed
 
     def _amended_note(self, changes):
-        """What a re-packeted attempt is told changed: the fields the amendment moved, old value to new."""
+        """What a re-packeted attempt is told changed: the fields the re-approval moved, old value to new."""
         return "\n".join(
             [
                 "## Your contract changed",
                 "",
-                "The plan was amended (%s). This packet replaces your earlier ones: keep the work already in "
+                "The plan was re-approved (%s). This packet replaces your earlier ones: keep the work already in "
                 "this checkout and finish against the contract above. What changed:"
                 % self.approved_digest()[:12],
                 *changes,
                 "",
             ]
-        )
-
-    def hand_amendment(self, task_id, task, row, plan):
-        """Tell a parked unit's worker the amendment was adopted: its next packet when its ticket's contract differs
-        from the packet it holds, else a message that the contract is unchanged. True when a live worker was told."""
-        packet, unit = task["packet"], task["packet"]["unit"]
-        scenarios = [plan["scenarios"][sid] for sid in satisfied(row, plan["scenarios"])[0]]
-        fields = self.contract_fields(row, scenarios)
-        if any(packet.get(key) != fields[key] for key in ("objective", "owns", "acceptance")):
-            old = SimpleNamespace(
-                paths=packet["owns"],
-                satisfies=[line.split(":")[0] for line in packet["acceptance"]],
-                delivers=packet["objective"],
-            )
-            new = SimpleNamespace(
-                paths=fields["owns"],
-                satisfies=[line.split(":")[0] for line in fields["acceptance"]],
-                delivers=fields["objective"],
-            )
-            return self.next_packet(task_id, task, row, plan, old, new)
-        report = next_path(self.run_dir / task_id, "report", ".json")[0]
-        return self.resume_worker(
-            task_id,
-            packet,
-            "The plan was amended and the amendment was adopted (%s); your contract is unchanged. Read %s and "
-            "carry on with this task, in this checkout. Report with task_id `%s` to %s (files are write-once; an "
-            "earlier report stays where it is)."
-            % (self.approved_digest()[:12], self.run_dir / unit / "task.md", task_id, report),
-        )
-
-    def release_amendment(self, handed, plan):
-        """The run holds an approval other than the one a unit parked `awaiting-amendment` under (an amendment was
-        adopted, or the run was restarted on an amended plan): the unit goes on. A unit whose ticket the amendment
-        changed was handed its new packet (`handed`: task id -> whether its worker was told, None when that failed, by
-        `resume_changed`); any other unit is compared with its ticket here, since a restarted run holds no earlier
-        plan to compare. A unit whose contract is unchanged is resumed with a message that the amendment was adopted. A
-        worker that cannot be told is not released: the Lead is woken, and the unit stays parked."""
-        digest = self.approval.digest if self.approval else None
-        with self.book() as data:
-            parked = [
-                (task_id, copy.deepcopy(task))
-                for task_id, task in data["tasks"].items()
-                if task.get("gate") == AMENDING
-                and task["status"] not in ("COMPLETE", "RELEASED")
-                and task.get("amend_from") != digest
-            ]
-        rows = {t["#"].lower(): t for t in plan["tickets"]}
-        for task_id, task in parked:
-            self._release_parked(task_id, task, rows, handed, plan)
-
-    def _release_parked(self, task_id, task, rows, handed, plan):
-        """One parked unit released by the amendment: told its new packet, or told the adoption, or kept parked."""
-        unit, packet = task["packet"]["unit"], task["packet"]
-        if task_id in handed:
-            alive = handed[task_id]
-            if alive is None:
-                return
-        else:
-            try:
-                if unit not in rows:
-                    raise ValueError("its ticket is no longer in the plan")
-                alive = self.hand_amendment(task_id, task, rows[unit], plan)
-            except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                self.log("error", unit=unit, task=task_id, gate="amend", error=str(error)[:500])
-                self.wake(
-                    "amend-failed",
-                    unit,
-                    "amend-failed %s: its worker could not be told the amendment was adopted: %s -> look at "
-                    "its terminal" % (unit, cell(error, 300)),
-                    key="%s:%s" % (task_id, self.approved_digest()),
-                )
-                return
-        with self.book() as data:
-            data["tasks"][task_id].update(
-                # the worker reports again under the same task id; a pane that is gone gets a new one
-                gate=None if alive else "redo-pending",
-                status="ACTIVE",
-                held=[],
-                answered_at=now(),
-                updated_at=now(),
-                **(
-                    {}
-                    if alive
-                    else {
-                        "redo": {
-                            "fresh": False,
-                            "up": False,
-                            "answer": None,
-                            "reason": "the amendment was adopted",
-                        }
-                    }
-                ),
-            )
-        self._released_notice(task_id, unit, packet, alive)
-
-    def _released_notice(self, task_id, unit, packet, alive):
-        """The ticket's status, the log line and the pane's words for a unit the amendment released."""
-        self.write_status(unit.upper(), "IN PROGRESS")
-        self.log("amend-released", unit=unit, task=task_id, resumed=alive)
-        self.released += 1  # R51: the round that released a unit made work
-        narrate.say(
-            "info",
-            "build",
-            "%s: the amendment was adopted, the unit goes on" % packet["worker"],
-            task=task_id,
         )
 
     def record_usage(self, assignments):

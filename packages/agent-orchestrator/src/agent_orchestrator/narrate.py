@@ -231,29 +231,17 @@ def say(kind, step, text, task=None):
 
 def park_head(park):
     """What is parked, in the words attention.md and the pane use."""
-    if park.get("kind") == "units":
-        units = park.get("units") or []
-        return "the run ended with %d unit%s parked, waiting for the plan to be amended" % (
-            len(units),
-            "" if len(units) == 1 else "s",
-        )
     return "the drive cannot use its plan (%s)" % park.get("cause")
 
 
 def park_way_out(park, plan, snapshot):
-    """The way out a park names, in words a person can run: the amendment for parked units, and for a plan it cannot
-    use, the approved bytes put back or the plan approved at the base its approval was taken from (`plan approve` at
-    the branch tip is vacuous once that work is in the tree). Finishing the edit and amending it stays the way out for
-    an edit that was intended."""
-    if park.get("kind") == "units":
-        return (
-            "run `agent-orchestrator plan amend %s --reason <why>`: the amendment releases the parked units on the "
-            "drive's next read" % plan
-        )
+    """The way out a park names, in words a person can run: the approved bytes put back, or the edit finished and
+    re-approved at the approval's own base (an approval at the branch tip is vacuous once the run's work is in the
+    tree). Under the live driver the re-approval keeps that base anyway; once the driver is gone `--base` binds it."""
     return (
-        "put the approved bytes back from `%s`, or run `agent-orchestrator plan approve --base %s %s` at the "
-        "approval's own base; an intended edit is finished and adopted with `agent-orchestrator plan amend %s "
-        "--reason <why>`" % (snapshot, park.get("base"), plan, plan)
+        "put the approved bytes back from `%s`, or finish the edit and re-approve it at the approval's own base: "
+        "`agent-orchestrator plan approve --base %s %s --reason <why>`"
+        % (snapshot, park.get("base"), plan)
     )
 
 

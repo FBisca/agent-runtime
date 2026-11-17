@@ -1,23 +1,28 @@
-schema: plan/1
+schema: plan/2
 archive: discard
 slug: 03-agent-review-protocol-reliability
-goal: A caller can observe review progress and safely archive complete or interrupted review results without changing
-  the live orchestrator.
-scenarios:
-- id: S1
-  when: a caller starts a review through the CLI or optional JSON-RPC 2.0 stdio mode
-  then: both interfaces provide consistent outcomes, with milestone notifications in RPC mode
-- id: S2
-  when: a review is interrupted or partially completes
-  then: minimal lifecycle state and completed screening judgments survive, and the final JSON report is written
-    atomically when available
-- id: S3
-  when: an execution completes with blocking findings
-  then: the CLI exit code indicates execution health, while the structured verdict remains `blocked`
+goal: A caller can observe review progress and safely archive complete or interrupted review results without changing the
+  live orchestrator.
+requirements:
+  added:
+  - title: Review progress and resumable results
+    shall: A review SHALL report its progress the same way through the CLI and JSON-RPC, keep what it completed when interrupted,
+      and separate execution health from its verdict.
+    scenarios:
+    - id: S1
+      when: a caller starts a review through the CLI or optional JSON-RPC 2.0 stdio mode
+      then: both interfaces provide consistent outcomes, with milestone notifications in RPC mode
+    - id: S2
+      when: a review is interrupted or partially completes
+      then: minimal lifecycle state and completed screening judgments survive, and the final JSON report is written atomically
+        when available
+    - id: S3
+      when: an execution completes with blocking findings
+      then: the CLI exit code indicates execution health, while the structured verdict remains `blocked`
 tickets:
 - id: T1
-  delivers: Add optional JSON-RPC 2.0 stdio milestone notifications and CLI/RPC consistent execution/verdict semantics,
-    plus caller-selected output directory and minimal atomic persistence
+  delivers: Add optional JSON-RPC 2.0 stdio milestone notifications and CLI/RPC consistent execution/verdict semantics, plus
+    caller-selected output directory and minimal atomic persistence
   satisfies:
   - S1
   - S2

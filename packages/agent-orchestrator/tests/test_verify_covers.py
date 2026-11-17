@@ -24,6 +24,7 @@ def gate(covers):
 
 
 class ImplementationProvidesItsEvidence(unittest.TestCase):
+    @pytest.mark.spec("Scenario evidence")
     def test_a_satisfied_scenario_without_a_changed_covering_node_fails_naming_it(self):
         self.assertEqual(
             gate({}),
@@ -35,6 +36,7 @@ class ImplementationProvidesItsEvidence(unittest.TestCase):
             ],
         )
 
+    @pytest.mark.spec("Scenario evidence")
     def test_the_same_report_with_a_changed_covering_node_passes(self):
         with mock.patch.object(verify, "node_problem", return_value=None) as problem:
             self.assertEqual(gate({"S1": [NODE]}), [])

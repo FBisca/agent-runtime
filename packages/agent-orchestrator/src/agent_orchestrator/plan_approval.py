@@ -1,9 +1,9 @@
 """What an approval of a plan covers, and the snapshot a driver reads it back from.
 
 The digest inputs use eight-byte big-endian length prefixes: the repository's identity, the base, and
-the canonical plan bytes - `safe_dump` sorted, with the approval and its amendments dropped. The plan
-alone is the contract: no file beside it is digested. The snapshot holds those same bytes, so a driver,
-an amendment and `verify` can compare the plan in the tree against the contract that was approved.
+the canonical plan bytes - `safe_dump` sorted, with the approval dropped. The plan alone is the
+contract: no file beside it is digested. The snapshot holds those same bytes, so a driver, a re-approval
+and `verify` can compare the plan in the tree against the contract that was approved.
 """
 
 import hashlib
@@ -16,13 +16,14 @@ from pathlib import Path
 import yaml
 
 from . import ledger as ledgers
+from .plan_document import scenario_rows
 from .plan_locks import ledger_path
 
 DEFAULT_STATE = "~/.local/state/orchestrate"
 
 
-# What a person or `plan amend` writes about the contract, not the contract: neither enters the digest.
-UNDIGESTED = ("approval", "amendments")
+# What `plan approve` writes about the contract, not the contract: it does not enter the digest.
+UNDIGESTED = ("approval",)
 
 
 def canonical(data):
@@ -126,9 +127,7 @@ def frozen_problems(old, new, done):
     """What an edit may not do to the tickets in `done`: change or drop them, or change the `when` or `then` of a
     scenario they satisfy."""
     before, after = ({t["id"]: t for t in d.get("tickets", [])} for d in (old, new))
-    scenarios = (
-        {s["id"]: s for s in d.get("scenarios", []) if isinstance(s, dict)} for d in (old, new)
-    )
+    scenarios = ({s.get("id"): s for s in scenario_rows(d)} for d in (old, new))
     old_scenarios, new_scenarios = scenarios
     problems = []
     for ticket in sorted(done & before.keys()):

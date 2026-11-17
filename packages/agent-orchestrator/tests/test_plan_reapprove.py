@@ -1,4 +1,5 @@
-"""`plan amend`: re-approval of an approved plan at its approval's own base, under a lock of its own."""
+"""`plan approve` under a live driver: the re-approval of an approved plan at its approval's own base, under a lock of
+its own, with every ticket the ledger marks COMPLETE frozen."""
 
 import fcntl
 import io
@@ -13,20 +14,30 @@ import pytest
 import yaml
 from fixtures import RunFixture, load_script
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.spec("Re-approval under a live driver")]
+
+DRIVER = "orchestrate-demo, pid 4242 since 2026-11-09T10:00:00Z"
 
 
 def contract():
     """Two tickets and two scenarios: T1 satisfies S1, T2 satisfies S2."""
     return {
-        "schema": "plan/1",
+        "schema": "plan/2",
         "slug": "demo",
         "goal": "deliver",
         "spec": "docs/specs/demo.md",
-        "scenarios": [
-            {"id": "S1", "when": "a", "then": "b"},
-            {"id": "S2", "when": "c", "then": "d"},
-        ],
+        "requirements": {
+            "added": [
+                {
+                    "title": "Demo",
+                    "shall": "The demo SHALL deliver.",
+                    "scenarios": [
+                        {"id": "S1", "when": "a", "then": "b"},
+                        {"id": "S2", "when": "c", "then": "d"},
+                    ],
+                }
+            ]
+        },
         "tickets": [
             {
                 "id": "T1",
@@ -48,7 +59,21 @@ def contract():
     }
 
 
-class AmendFixture(RunFixture, unittest.TestCase):
+def scenarios(data):
+    return data["requirements"]["added"][0]["scenarios"]
+
+
+T3 = {
+    "id": "T3",
+    "delivers": "third",
+    "satisfies": ["S2"],
+    "paths": ["src/c/"],
+    "size": "small",
+    "difficulty": "simple",
+}
+
+
+class ReapproveFixture(RunFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
         shutil.rmtree(self.state_dir)  # the fixture's own approval is not this test's
@@ -103,8 +128,17 @@ class AmendFixture(RunFixture, unittest.TestCase):
         self.assertEqual(code, 0, message)
         return self.read()["approval"]
 
-    def amend(self, reason="the plan moved"):
-        return self.command("amend", "--reason", reason)
+    def reapprove(self, reason="the plan moved"):
+        """`plan approve --reason` while a driver holds the plan's run lock."""
+        if not getattr(self, "driving", False):
+            self.hold("demo.lock", DRIVER)
+            self.driving = True
+        return self.command("approve", "--reason", reason)
+
+    def edit_t2(self):
+        data = self.read()
+        data["tickets"][1]["delivers"] = "second, changed"
+        self.write(data)
 
     def complete(self, *tickets):
         """The ledger marks `tickets` COMPLETE, as a driver does when their pull requests merge."""
@@ -119,12 +153,9 @@ class AmendFixture(RunFixture, unittest.TestCase):
         data["ticket_status"] = {t: "COMPLETE" for t in tickets}
         ledger.write_text(json.dumps(data))
 
-    def lock_path(self, name):
-        common = self.git(self.repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
-        return os.path.join(common, "agent-orchestrator", name)
-
     def hold(self, name, holder):
-        path = self.lock_path(name)
+        common = self.git(self.repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        path = os.path.join(common, "agent-orchestrator", name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         stream = open(path, "w", encoding="utf-8")
         self.addCleanup(stream.close)
@@ -133,181 +164,108 @@ class AmendFixture(RunFixture, unittest.TestCase):
         stream.flush()
 
 
-class AmendRefusalTests(AmendFixture):
-    def test_S6_an_unapproved_plan_is_refused_naming_plan_approve_and_nothing_is_written(self):
+class ReapproveRefusalTests(ReapproveFixture):
+    def test_an_unapproved_plan_under_a_live_driver_is_refused_naming_plan_approve(self):
         before = self.plan.read_bytes()
-        code, message = self.amend()
+        code, message = self.reapprove()
         self.assertEqual(code, 2, message)
         self.assertIn("plan approve", message)
+        self.assertIn("pid 4242", message)
         self.assertEqual(self.plan.read_bytes(), before)
         self.assertFalse(self.state_dir.exists())
 
-    def test_S6_a_worker_caller_is_refused_naming_the_lead_and_nothing_is_written(self):
+    def test_a_worker_caller_is_refused_naming_the_lead_and_nothing_is_written(self):
         self.approve()
-        data = self.read()
-        data["tickets"][1]["delivers"] = "second, changed"
-        self.write(dict(data))
+        self.edit_t2()
         before, snapshots = self.plan.read_bytes(), sorted(os.listdir(self.state_dir / "approvals"))
         with mock.patch.object(
             load_script(), "resolve_runtime", return_value={"role": "worker", "parent": "lead-0"}
         ):
-            code, message = self.amend()
+            code, message = self.reapprove()
         self.assertEqual(code, 2, message)
         self.assertIn("Lead", message)
         self.assertIn("lead-0", message)
         self.assertEqual(self.plan.read_bytes(), before)
         self.assertEqual(sorted(os.listdir(self.state_dir / "approvals")), snapshots)
 
-    def test_S7_an_edit_to_or_a_drop_of_a_complete_ticket_is_refused_naming_it(self):
+    def test_an_edit_to_or_a_drop_of_a_complete_ticket_is_refused_naming_it(self):
         self.approve()
         self.complete("T1")
         changed = self.read()
         changed["tickets"][0]["paths"] = ["src/a/", "src/more/"]
         dropped = self.read()
         dropped["tickets"] = dropped["tickets"][1:]
-        dropped["scenarios"] = dropped["scenarios"][1:]
+        scenarios(dropped)[:] = scenarios(dropped)[1:]
         for case, edit in (("changed", changed), ("dropped", dropped)):
             with self.subTest(case):
                 self.write(edit)
                 before = self.plan.read_bytes()
-                code, message = self.amend()
+                code, message = self.reapprove()
                 self.assertEqual(code, 2, message)
                 self.assertIn("T1", message)
                 self.assertIn("COMPLETE", message)
                 self.assertIn("add a new ticket", message)
                 self.assertEqual(self.plan.read_bytes(), before)
 
-    def test_S7_a_change_to_a_complete_tickets_scenario_is_refused(self):
+    def test_a_change_to_a_complete_tickets_scenario_is_refused(self):
         self.approve()
         self.complete("T1")
         edit = self.read()
-        edit["scenarios"][0]["then"] = "b, differently"
+        scenarios(edit)[0]["then"] = "b, differently"
         self.write(edit)
-        code, message = self.amend()
+        code, message = self.reapprove()
         self.assertEqual(code, 2, message)
         self.assertIn("S1", message)
         self.assertIn("T1", message)
         self.assertIn("add a new ticket", message)
-        edit["scenarios"][0]["then"] = "b"
+        scenarios(edit)[0]["then"] = "b"
         # a change to a ticket the ledger does not mark COMPLETE rides along
         edit["tickets"][1]["delivers"] = "second, changed"
         self.write(edit)
-        code, message = self.amend()
+        code, message = self.reapprove()
         self.assertEqual(code, 0, message)
 
+    def test_a_reapproval_that_changes_nothing_is_refused(self):
+        self.approve()
+        before = self.plan.read_bytes()
+        code, message = self.reapprove()
+        self.assertEqual(code, 2, message)
+        self.assertIn("nothing to re-approve", message)
+        self.assertEqual(self.plan.read_bytes(), before)
 
-class AmendTests(AmendFixture):
-    def test_S8_the_amendment_keeps_the_approvals_base_never_origin_main(self):
+    def test_a_second_concurrent_reapproval_is_refused_naming_the_holder(self):
+        self.approve()
+        self.edit_t2()
+        self.hold("demo.approve.lock", "plan approve, pid 4343 since 2026-11-09T10:00:00Z")
+        before = self.plan.read_bytes()
+        code, message = self.reapprove()
+        self.assertEqual(code, 2, message)
+        self.assertIn("pid 4343", message)
+        self.assertEqual(self.plan.read_bytes(), before)
+
+
+class ReapproveTests(ReapproveFixture):
+    def test_the_reapproval_keeps_the_approvals_base_never_origin_main(self):
         first = self.approve()
         moved = self.push(
             "status.txt", "dead\n"
         )  # a ticket merged: origin/main moved past the base
         edit = self.read()
-        edit["tickets"].append(
-            {
-                "id": "T3",
-                "delivers": "third",
-                "satisfies": ["S2"],
-                "paths": ["src/c/"],
-                "size": "small",
-                "difficulty": "simple",
-            }
-        )
+        edit["tickets"].append(dict(T3))
         self.write(edit)
         self.assertNotEqual(moved, first["base"])
-        code, message = self.amend()
+        code, message = self.reapprove("add T3")
         self.assertEqual(code, 0, message)
         approval = self.read()["approval"]
         self.assertEqual(approval["base"], first["base"])
         self.assertNotEqual(approval["digest"], first["digest"])
-        (entry,) = self.read()["amendments"]
-        self.assertEqual(entry["prev_digest"], first["digest"])
-        self.assertEqual(entry["digest"], approval["digest"])
-        self.assertEqual(self.command("check")[0], 0)
-
-    def test_S10_one_entry_is_appended_and_the_approval_replaced_with_comments_kept(self):
-        # a runner has no git identity: the test sets the one `by` must name
-        self.git(self.repo, "config", "user.email", "amender@example.invalid")
-        first = self.approve()
-        data = self.read()
-        data["tickets"][1]["delivers"] = "second, changed"
-        data["tickets"].append(
-            {
-                "id": "T3",
-                "delivers": "third",
-                "satisfies": ["S2"],
-                "paths": ["src/c/"],
-                "size": "small",
-                "difficulty": "simple",
-            }
-        )
-        self.write_commented(data)
-        code, message = self.amend("reason one")
-        self.assertEqual(code, 0, message)
-        after = self.read()
+        self.assertEqual(approval["reason"], "add T3")
         self.assertIn("# retained comment", self.plan.read_text())
-        self.assertIn("# why T2 exists", self.plan.read_text())
-        (entry,) = after["amendments"]
-        self.assertEqual(sorted(entry), ["at", "by", "digest", "prev_digest", "reason", "tickets"])
-        self.assertEqual(entry["prev_digest"], first["digest"])
-        self.assertEqual(entry["digest"], after["approval"]["digest"])
-        self.assertEqual(entry["reason"], "reason one")
-        self.assertEqual(entry["tickets"], ["T2", "T3"])
-        email = "amender@example.invalid"
-        self.assertEqual(entry["by"], email + " (lead-test)")
-        self.assertEqual(after["approval"]["by"], email)
-        # neither block enters the digest: the amended plan verifies against its snapshot
         self.assertEqual(self.command("check")[0], 0)
-        # a second amendment appends, and names the first
-        again = self.read()
-        again["tickets"][0]["delivers"] = "first, changed"
-        self.write_commented(again)
-        code, message = self.amend("reason two")
-        self.assertEqual(code, 0, message)
-        entries = self.read()["amendments"]
-        self.assertEqual([e["reason"] for e in entries], ["reason one", "reason two"])
-        self.assertEqual(entries[1]["prev_digest"], entries[0]["digest"])
-        self.assertEqual(entries[1]["tickets"], ["T1"])
-        self.assertIn("# why T2 exists", self.plan.read_text())
 
-    def write_commented(self, data):
-        body = "# retained comment\n" + yaml.safe_dump(data, sort_keys=False)
-        self.plan.write_text(body.replace("- id: T2", "# why T2 exists\n- id: T2", 1))
-
-    def test_S10_an_amendment_that_changes_nothing_is_refused(self):
-        self.approve()
-        before = self.plan.read_bytes()
-        code, message = self.amend()
-        self.assertEqual(code, 2, message)
-        self.assertIn("nothing", message)
-        self.assertEqual(self.plan.read_bytes(), before)
-
-    def test_S11_a_driver_holding_the_run_lock_does_not_stop_an_amendment(self):
-        self.approve()
-        self.hold("demo.lock", "pid 4242 since 2026-11-09T10:00:00Z")
-        edit = self.read()
-        edit["tickets"][1]["delivers"] = "second, changed"
-        self.write(edit)
-        code, message = self.amend()
-        self.assertEqual(code, 0, message)
-
-    def test_S11_a_second_amend_is_refused_naming_the_holder(self):
-        self.approve()
-        edit = self.read()
-        edit["tickets"][1]["delivers"] = "second, changed"
-        self.write(edit)
-        self.hold("demo.amend.lock", "plan amend, pid 4343 since 2026-11-09T10:00:00Z")
-        before = self.plan.read_bytes()
-        code, message = self.amend()
-        self.assertEqual(code, 2, message)
-        self.assertIn("pid 4343", message)
-        self.assertEqual(self.plan.read_bytes(), before)
-
-    def test_S11_the_snapshot_is_written_before_the_plan_file_is_replaced(self):
+    def test_the_snapshot_is_written_before_the_plan_file_is_replaced(self):
         first = self.approve()
-        edit = self.read()
-        edit["tickets"][1]["delivers"] = "second, changed"
-        self.write(edit)
+        self.edit_t2()
         seen = []
         real = os.replace
 
@@ -317,7 +275,7 @@ class AmendTests(AmendFixture):
             return real(source, target, *args, **kwargs)
 
         with mock.patch("os.replace", replace):
-            code, message = self.amend()
+            code, message = self.reapprove()
         self.assertEqual(code, 0, message)
         (listing,) = seen
         approval = self.read()["approval"]
@@ -325,9 +283,9 @@ class AmendTests(AmendFixture):
         self.assertIn(first["digest"], listing)  # and the old one: a reader in between loads either
 
 
-class LostSpanTests(AmendFixture):
-    """`plan amend` on a plan whose `approval` span was lost while a drive held it: the ledger keeps the approval, so
-    the amendment runs at the approval's own base and publishes the spans back (parked-drive-release/S5)."""
+class LostSpanTests(ReapproveFixture):
+    """A re-approval of a plan whose `approval` span was lost while a drive held it: the ledger keeps the approval, so
+    the re-approval runs at the approval's own base and publishes the span back."""
 
     def drive_held(self, approval):
         """The ledger of a drive that held the plan: the approval it gated on, as the driver records it."""
@@ -353,52 +311,36 @@ class LostSpanTests(AmendFixture):
             change(data)
         self.write(data)
 
-    def test_S5_an_amendment_succeeds_on_a_plan_whose_approval_span_was_lost(self):
+    def widen_t2(self, data):
+        data["tickets"][1]["delivers"] = "second, changed"
+
+    def test_a_reapproval_succeeds_on_a_plan_whose_approval_span_was_lost(self):
         first = self.approve()
         self.drive_held(first)
-
-        def widen_t2(data):
-            data["tickets"][1]["delivers"] = "second, changed"
-
-        self.lost(widen_t2)
-        code, message = self.amend()
+        self.lost(self.widen_t2)
+        code, message = self.reapprove()
         self.assertEqual(code, 0, message)
         after = self.read()
-        self.assertEqual(
-            after["approval"]["base"], first["base"], "the amendment ran at another base"
-        )
+        self.assertEqual(after["approval"]["base"], first["base"], "re-approved at another base")
         self.assertNotEqual(after["approval"]["digest"], first["digest"])
-        (entry,) = after["amendments"]
-        self.assertEqual(entry["prev_digest"], first["digest"])
-        self.assertEqual(entry["digest"], after["approval"]["digest"])
-        self.assertEqual(entry["tickets"], ["T2"])
         self.assertEqual(self.command("check")[0], 0)
 
-    def test_S5_the_amendment_publishes_the_spans_back_when_the_span_is_all_that_was_lost(self):
+    def test_the_reapproval_publishes_the_span_back_when_the_span_is_all_that_was_lost(self):
         first = self.approve()
         self.drive_held(first)
         self.lost()
-        code, message = self.amend("the approval span was lost")
+        code, message = self.reapprove("the approval span was lost")
         self.assertEqual(code, 0, message)
         after = self.read()
         self.assertEqual(after["approval"]["base"], first["base"])
-        self.assertEqual(
-            after["approval"]["digest"], first["digest"], "the contract did not change"
-        )
-        (entry,) = after["amendments"]
-        self.assertEqual(entry["prev_digest"], first["digest"])
-        self.assertEqual(entry["tickets"], [])
+        self.assertEqual(after["approval"]["digest"], first["digest"], "the contract changed")
         self.assertEqual(self.command("check")[0], 0)
 
-    def test_S5_control_a_lost_span_no_ledger_holds_is_refused_naming_plan_approve(self):
+    def test_control_a_lost_span_no_ledger_holds_is_refused_naming_plan_approve(self):
         self.approve()
-
-        def widen_t2(data):
-            data["tickets"][1]["delivers"] = "second, changed"
-
-        self.lost(widen_t2)
+        self.lost(self.widen_t2)
         before = self.plan.read_bytes()
-        code, message = self.amend()
+        code, message = self.reapprove()
         self.assertEqual(code, 2, message)
         self.assertIn("plan approve", message)
         self.assertEqual(self.plan.read_bytes(), before)

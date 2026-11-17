@@ -109,7 +109,7 @@ class RecordTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "plan.yaml").write_text("schema: plan/1\n", encoding="utf-8")
+            (root / "plan.yaml").write_text("schema: plan/2\n", encoding="utf-8")
             run = root / "run"
             run.mkdir()
             ledger_path = root / "demo.json"

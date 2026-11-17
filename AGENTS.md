@@ -4,13 +4,14 @@ Instructions for agents working in this repo (Claude Code, Codex, Pi alike).
 
 ## The spec is the ledger
 
-`docs/specs/agent-runtime.md` and `docs/specs/harness-adapters.md` are the living contracts: numbered
-WHEN/THEN requirements, each traced to a scenario and a test. `docs/plans/` holds the plans that
-produced them.
+A spec in `docs/specs/` is the current state of one capability: `### Requirement: <Title>` blocks, each
+one sentence with SHALL and its WHEN/THEN scenarios. A plan in `docs/plans/` names the requirements it
+adds, modifies or removes, with the scenarios under each; its archive applies that change set to the spec.
 
-- Every behaviour change starts as a scenario in a plan, is written red first, and lands with its
-  requirement.
-- A plan's tickets carry their status in the plan file. Mark them as they land.
+- Every behaviour change starts as a scenario in a plan and is written red first.
+- Every test that proves a requirement carries `@pytest.mark.spec("<Title>")` (Vitest:
+  `describe("spec: <Title>")`; elsewhere a `// spec: <Title>` comment). `scripts/spec_coverage.py` holds
+  every title to a tag and every tag to a title.
 - Fix the class, not the instance: when you fix a defect, search every other place with the same
   pattern.
 
@@ -37,7 +38,7 @@ manager, test runner, linter, shell wrapper) reach a worker through that reposit
 instructions; this repo's are in `.orchestrate/config.yaml` and the sections below.
 
 Name the file, not how to find it; refuse a pointer that resolves to nothing or several files.
-The living spec's R173 and `packages/agent-orchestrator/tests/test_driver_pointers.py` hold this rule.
+`packages/agent-orchestrator/tests/test_driver_pointers.py` holds this rule.
 
 ## Testing
 
@@ -79,7 +80,8 @@ integration test, whatever it is called.
 
 - The PreToolUse hooks are defence in depth; the CLI and the server are the authority. Never make the
   hook the only thing that refuses something. The one exception: a native in-process subagent cannot be
-  told from its Lead outside the host hook, so R74 and R89 stay hook-only. No other refusal is an
+  told from its Lead outside the host hook, so the hook alone denies such a subagent a runtime tool
+  call that names an assignment, and one whose input is not a JSON object. No other refusal is an
   exception.
 - A refusal names the reason and the way out. "This is not allowed" is not a refusal.
 - Never log a secret, a token or a full environment; the tests check for leaks.

@@ -10,7 +10,7 @@ from unittest import mock
 import pytest
 import yaml
 from agent_orchestrator import runtime_client
-from fixtures import load_script, wait_result
+from fixtures import add_scenario, load_script, wait_result
 from test_archive_modes import FolderArchiveFixture, promote_plan
 
 pytestmark = pytest.mark.integration
@@ -29,8 +29,8 @@ if os.path.exists(request) and not os.path.exists(decision):
 
 def plan_with_a_person_ticket():
     data = promote_plan()
-    data["scenarios"].append(
-        dict(id="S2", when="the person runs the runbook step", then="it is recorded")
+    add_scenario(
+        data, dict(id="S2", when="the person runs the runbook step", then="it is recorded")
     )
     data["tickets"].append(
         dict(
@@ -114,6 +114,7 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
         approval = yaml.safe_load(self.plan.read_text(encoding="utf-8"))["approval"]
         self.assertIn("digest", approval)
 
+    @pytest.mark.spec("Person tickets")
     def test_S6_complete_records_the_ticket_done_with_its_note_and_its_cover_nodes(self):
         self.first_drive()
         code, said = self.complete("T2", "S2=" + NODE)
@@ -128,6 +129,7 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
         self.assertEqual(code, 0, said)
         self.assertTrue(self.ticket_status("T2").startswith("COMPLETE "))
 
+    @pytest.mark.spec("Person tickets")
     def test_S6_a_spawned_worker_is_refused_naming_why(self):
         self.first_drive()
         code, said = self.complete("T2", "S2=" + NODE, role="worker")
@@ -142,18 +144,21 @@ class PersonTicketComplete(PersonFixture, unittest.TestCase):
         self.assertRegex(said, r"does not verify the caller as the Lead")
         self.assertFalse(self.ticket_status("T2").startswith("COMPLETE"))
 
+    @pytest.mark.spec("Person tickets")
     def test_S6_an_agent_ticket_is_refused_naming_why(self):
         self.first_drive()
         code, said = self.complete("T1")
         self.assertNotEqual(code, 0, said)
         self.assertRegex(said, r"T1.*agent")
 
+    @pytest.mark.spec("Person tickets")
     def test_S6_an_unknown_ticket_is_refused_naming_why(self):
         self.first_drive()
         code, said = self.complete("T9")
         self.assertNotEqual(code, 0, said)
         self.assertRegex(said, r"no ticket T9")
 
+    @pytest.mark.spec("Person tickets")
     def test_S6_a_cover_for_a_scenario_the_ticket_does_not_satisfy_is_refused(self):
         self.first_drive()
         code, said = self.complete("T2", "S1=" + NODE)

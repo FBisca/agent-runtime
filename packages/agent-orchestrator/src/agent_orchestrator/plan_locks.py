@@ -1,4 +1,4 @@
-"""The plan's state paths and the locks that keep an approval, an amendment and a driver apart.
+"""The plan's state paths and the locks that keep an approval, a re-approval and a driver apart.
 
 Each lock is one non-blocking flock under `<git common dir>/agent-orchestrator/`, and the file names
 its holder, so a refusal can name the process the caller is waiting for. The ledger lives under the
@@ -13,6 +13,10 @@ from pathlib import Path
 
 from .plan_document import PlanError
 from .plan_layout import git
+
+
+class LockHeld(PlanError):
+    """The lock is held by another process; the message names it."""
 
 
 def ledger_path(repo, slug, state_dir):
@@ -43,7 +47,7 @@ def plan_lock(repo, filename, who, refusal):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise PlanError(refusal(lock.read().strip() or "another process")) from None
+            raise LockHeld(refusal(lock.read().strip() or "another process")) from None
         lock.seek(0)
         lock.truncate()
         lock.write(
@@ -68,15 +72,15 @@ def run_lock(repo, slug):
     )
 
 
-def amend_lock(repo, slug):
-    """The lock of one `plan amend` at a time. It is not the run lock: a live driver holds that for its whole run
-    and an amendment must go through it, so two amendments exclude each other here and a driver never needs it."""
+def reapprove_lock(repo, slug):
+    """The lock of one re-approval under a live driver at a time. It is not the run lock: the driver holds that for
+    its whole run and a re-approval must go through it, so two re-approvals exclude each other here."""
     return plan_lock(
         repo,
-        slug + ".amend.lock",
-        "plan amend",
+        slug + ".approve.lock",
+        "plan approve",
         lambda holder: (
-            "plan %s is being amended by %s; wait for that plan amend to finish, then run it again"
+            "plan %s is being re-approved by %s; wait for that plan approve to finish, then run it again"
             % (slug, holder)
         ),
     )

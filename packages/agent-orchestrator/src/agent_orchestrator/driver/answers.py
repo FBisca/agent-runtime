@@ -61,9 +61,6 @@ ARCHIVE_MENU = ("retry", "skip")  # the archive has no worker to fix, answer or 
 ARCHIVE_REBUILDS = 2
 
 
-NO_TEST_MENU = ("amend",) + tuple(action for action in contracts.ACTIONS if action != "amend")
-
-
 def readable_request(path):
     """The request on disk, or None when it is missing or does not validate: the driver owns the file, so either way
     it writes the file again rather than leave the unit waiting on a decision no `decide` can record."""
@@ -359,10 +356,6 @@ class Answers:
             "path": str(path),
             "kind": kind,
             "from_gate": asks.get("from_gate") or task.get("gate"),
-            # The approval the request was raised under. A park names this one, not whatever the drive holds when the
-            # Lead decides `amend`: an amendment the drive adopts between the two must still release the unit, and a
-            # park of the held approval can never be released.
-            "digest": self.approval.digest if self.approval else None,
         }
         if asks.get("answerer"):
             asked["answerer"] = asks["answerer"]

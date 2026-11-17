@@ -173,6 +173,9 @@ class HookExceptionDocsTests(unittest.TestCase):
         for doc in (root / "AGENTS.md", root / "docs" / "specs" / "agent-runtime.md"):
             text = " ".join(doc.read_text().split())
             self.assertIn("native in-process subagent cannot be told from its Lead", text, doc.name)
-            self.assertIn("R74", text, doc.name)
-            self.assertIn("R89", text, doc.name)
+            if doc.name == "AGENTS.md":
+                self.assertIn("the hook alone denies", text, doc.name)
+            else:
+                self.assertIn("R74", text, doc.name)
+                self.assertIn("R89", text, doc.name)
             self.assertIn("no other refusal is an exception", text.lower(), doc.name)

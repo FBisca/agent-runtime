@@ -36,7 +36,7 @@ class PlanLayout:
 
     @classmethod
     def is_plan_file(cls, path):
-        """Whether `path` is named like a plan/1 YAML plan: `plan.yaml` or `<stem>.plan.yaml`."""
+        """Whether `path` is named like a plan/2 YAML plan: `plan.yaml` or `<stem>.plan.yaml`."""
         name = Path(path).name
         return name == FOLDER_PLAN or name.endswith(cls.YAML)
 

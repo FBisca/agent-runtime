@@ -56,9 +56,7 @@ the suite before a reviewer notices it in a diff.
 ## Requirements: test-cost
 
 - **R208** WHEN `uv run pytest -n auto` runs the whole suite on an idle machine with Defender's real-time scanner off, THEN it passes in at least 30% less wall time than on main before T0, and in 5 minutes or less; `uv run pytest` (the fast suite) finishes in under 3 seconds (from test-cost/S1)
-- **R209** WHEN a living spec in `docs/specs/` cites a test by name, as a test function, a test class or a `path::` node id, THEN that test exists, in the file the citation names when it names one; a cited test file exists; a deleted, merged or renamed test has its spec rows updated in the same change, naming the test that keeps the guarantee (from test-cost/S2)
 - **R210** WHEN the tests marked `unit` run, THEN no test starts a process (git included) or opens a network socket (from test-cost/S3)
-- **R211** WHEN a test module sits under the suite's `testpaths`, THEN it sets `pytestmark` to `pytest.mark.unit` or `pytest.mark.integration` (from test-cost/S4)
 - **R212** WHEN `uv run pytest` is given only options, including an option's value such as `-p no:cacheprovider`, THEN it selects the same tests as `uv run pytest`; naming a path or a node id still runs exactly what was named (from test-cost/S5)
 - **R213** WHEN a ticket deletes, merges or moves a test, THEN its PR lists each such test with the test that keeps its guarantee (or the new level it moved to), and the seconds of each module it touched before and after, measured back to back on the same machine (from test-cost/S6)
 - **R214** WHEN a ticket replaces a test's real wait, THEN the test waits on an injected clock or a barrier, and asserts a signal the code produced; a real wait remains only where the assertion is about elapsed time (from test-cost/S7)
@@ -75,9 +73,7 @@ the suite before a reviewer notices it in a diff.
 | Requirement | Scenario | Test nodes |
 |---|---|---|
 | R208 | S1 | human: Felippe times `uv run pytest -n auto` and `uv run pytest` on the same machine, idle, scanner off, once on main before T0 and once after the last ticket merges, and confirms the whole suite is at least 30% faster and at most 5 minutes, the fast suite under 3 seconds, and the drop in collected tests equals the deletions the PRs list, with no test newly skipped or marked `live` |
-| R209 | S2 | `tests/test_spec_citations.py` |
 | R210 | S3 | `tests/test_fast_suite.py` |
-| R211 | S4 | `tests/test_spec_citations.py` |
 | R212 | S5 | `tests/test_fast_suite.py` |
 | R213 | S6 | human: the PR body lists each deleted, merged or moved test with its keeper (or new level), one row per test, and the module seconds before and after; checked before merge, with no test written to stand in for it |
 | R214 | S7 | `tests/installer/test_shared_release.py::NoClockTests::test_S7_the_fakes_signal_the_installer_and_return_without_a_sleep`<br>`tests/test_dispatch_clocked_wait.py::ClockedWaitTests::test_S7_a_wait_with_nothing_to_report_answers_timeout_when_the_injected_clock_reaches_it`<br>`packages/agent-orchestrator/tests/test_wake.py::AwaitTests::test_S2_await_waits_for_a_wake_that_arrives_later`<br>`packages/agent-orchestrator/tests/test_wake.py::AwaitTests::test_S2_an_unfinished_run_with_nothing_to_print_does_not_say_finished` |

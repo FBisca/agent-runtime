@@ -41,6 +41,8 @@ jobs:
       - run: uv sync --frozen --all-packages
       # The whole suite, in parallel: the fast suite (`uv run pytest`) is the unit tests alone.
       - run: uv run pytest -n 4
+      # Every spec requirement has a tagged test, and every tag names a requirement.
+      - run: python3 scripts/spec_coverage.py
       # The one lint gate: style and the PLR09 size limits (pyproject.toml). An existing offender
       # carries its own `# noqa` at its def or class line, so no number is stored here.
       - name: ruff check

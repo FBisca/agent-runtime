@@ -77,7 +77,7 @@ DECISION = """{"contract": 2, "action": "skip", "reason": "not this release"}"""
 def driver_over(root, ledger_path):
     """The Driver a run holds over one ledger file: a plan, a run directory and the ledger, nothing else."""
     plan = root / "plan.yaml"
-    plan.write_text("schema: plan/1\n", encoding="utf-8")
+    plan.write_text("schema: plan/2\n", encoding="utf-8")
     run = root / "run"
     run.mkdir(exist_ok=True)
     driver = load_script().Driver(SimpleNamespace(plan=str(plan), repo=str(root)))

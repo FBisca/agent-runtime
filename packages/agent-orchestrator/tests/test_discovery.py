@@ -49,6 +49,7 @@ class DiscoveryFixture(RunFixture, unittest.TestCase):
 
 
 class DiscoveryTests(DiscoveryFixture):
+    @pytest.mark.spec("Plan discovery")
     def test_S5_one_directory_lists_its_plans_and_the_explicit_plan(self):
         docs = self.track("docs/plans/2026-01-01-a.plan.yaml")
         self.track("docs/plans/2026-01-02-b.plan.md")
@@ -61,6 +62,7 @@ class DiscoveryTests(DiscoveryFixture):
             ],
         )
 
+    @pytest.mark.spec("Plan discovery")
     def test_S5_hidden_directory_is_discovered_without_an_explicit_path(self):
         self.track(".plans/2026-01-01-a.plan.yaml")
         self.assertEqual(
@@ -68,6 +70,7 @@ class DiscoveryTests(DiscoveryFixture):
             [str((self.repo / ".plans/2026-01-01-a.plan.yaml").resolve())],
         )
 
+    @pytest.mark.spec("Plan discovery")
     def test_S5_two_directories_refuse_naming_both_and_the_explicit_path_way_out(self):
         self.track("docs/plans/2026-01-01-a.plan.yaml")
         self.track(".plans/2026-01-02-b.plan.yaml")
@@ -78,17 +81,20 @@ class DiscoveryTests(DiscoveryFixture):
         self.assertIn("plans list --json <plan", err)
         self.assertEqual(out, "")
 
+    @pytest.mark.spec("Plan discovery")
     def test_S5_two_directories_with_an_explicit_path_list_that_directory(self):
         docs = self.track("docs/plans/2026-01-01-a.plan.yaml")
         self.track(".plans/2026-01-02-b.plan.yaml")
         self.assertEqual(self.listing(str(docs)), [str(docs.resolve())])
 
+    @pytest.mark.spec("Plan discovery")
     def test_S5_two_directories_with_a_repo_config_naming_one_list_that_directory(self):
         docs = self.track("docs/plans/2026-01-01-a.plan.yaml")
         self.track("tests/data/reference.plan.yaml")
         self.track(".orchestrate/config.yaml", "plans:\n  dir: docs/plans\n")
         self.assertEqual(self.listing(), [str(docs.resolve())])
 
+    @pytest.mark.spec("Plan discovery")
     def test_S5_two_directories_with_a_repo_config_naming_neither_still_refuse(self):
         self.track("docs/plans/2026-01-01-a.plan.yaml")
         self.track(".plans/2026-01-02-b.plan.yaml")
@@ -99,6 +105,7 @@ class DiscoveryTests(DiscoveryFixture):
         self.assertIn(".plans", err)
         self.assertEqual(out, "")
 
+    @pytest.mark.spec("Plan discovery")
     def test_S5_without_repo_the_current_directory_is_the_repository(self):
         plan = self.track("docs/plans/2026-01-01-a.plan.yaml")
         cwd = os.getcwd()
@@ -108,6 +115,7 @@ class DiscoveryTests(DiscoveryFixture):
         self.assertEqual(code, 0, err)
         self.assertEqual([entry["path"] for entry in json.loads(out)], [str(plan.resolve())])
 
+    @pytest.mark.spec("Plan discovery")
     def test_S5_no_plans_is_an_empty_list_and_creates_nothing(self):
         self.track("README.md", "x\n")
         self.assertEqual(self.listing(), [])
@@ -135,6 +143,7 @@ class ConfiguredDiscoveryTests(DiscoveryFixture):
         self.assertEqual(code, 0, err)
         return json.loads(out)
 
+    @pytest.mark.spec("Plan discovery")
     def test_S2_a_plans_dir_inside_the_repository_untracked_lists_its_folders(self):
         self.config("plans:\n  dir: work\n")
         plan = self.folder(self.repo / "work", "2026-01-01-a", slug="a")
@@ -144,6 +153,7 @@ class ConfiguredDiscoveryTests(DiscoveryFixture):
         self.assertEqual(found[str(plan.resolve())]["format"], "yaml")
         self.assertIn(str(legacy.resolve()), found)
 
+    @pytest.mark.spec("Plan discovery")
     def test_S2_a_plans_dir_outside_the_repository_lists_its_folders(self):
         outside = self.root / "elsewhere"
         self.config(f"plans:\n  dir: {outside}\n")
@@ -160,6 +170,7 @@ class ConfiguredDiscoveryTests(DiscoveryFixture):
             },
         )
 
+    @pytest.mark.spec("Plan discovery")
     def test_S2_an_unknown_config_key_fails_the_command_naming_it(self):
         self.config("plans:\n  dir: work\n  colour: red\n")
         code, out, err = self.run_cli("plans", "list", "--json", "--repo", str(self.repo))
@@ -185,6 +196,7 @@ class ConfigReadByEveryCommandTests(DiscoveryFixture):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
+    @pytest.mark.spec("Plan discovery")
     def test_S1_each_plan_command_refuses_a_bad_config_naming_its_dotted_path(self):
         plan = self.repo / "x.plan.yaml"
         plan.write_text("slug: x\n", encoding="utf-8")  # never parsed: the config refuses first
@@ -229,6 +241,7 @@ class ExternalPlanTests(DiscoveryFixture):
         )
         self.state = self.root / "state"
 
+    @pytest.mark.spec("Plan discovery")
     def test_S6_check_and_approve_work_outside_the_repository(self):
         before = sorted(p.name for p in self.outside.parent.iterdir())
         code, _, err = self.run_cli(
@@ -268,6 +281,7 @@ class ExternalPlanTests(DiscoveryFixture):
         )
         self.assertEqual(code, 0, err)
 
+    @pytest.mark.spec("Plan discovery")
     def test_S6_run_reads_the_approved_plan_outside_the_repository(self):
         code, _, err = self.run_cli(
             "plan",

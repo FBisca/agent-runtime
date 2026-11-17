@@ -27,17 +27,15 @@ REPO = Path(__file__).resolve().parents[4]
 MEMBER = REPO / "packages" / "agent-orchestrator" / "src" / "agent_orchestrator"
 LANE = MEMBER / "driver" / "archive.py"
 
-# The park: what the ledger keeps, what the drain and the Ask read, the exit that names the units and
-# the two assignments a parked unit holds in the runtime.
+# The park: what the ledger keeps, what the drain and the Ask read, and the assignments a parked unit
+# holds in the runtime.
 PARK = (
     "held_approval",
     "park_here",
     "end_park",
     "park_due",
     "ask_parked",
-    "park_at_exit",
     "parked_assignments",
-    "park_for_amendment",
 )
 
 # The archive: what a plan's last ticket builds, and what the gate steps, the pull request lane and the
@@ -47,7 +45,6 @@ ARCHIVED = (
     "discard_plan",
     "remove_plan_folder",
     "build_archive",
-    "archive_missing",
     "undraft_archive",
     "retry_archive",
     "yaml_copies",
@@ -59,7 +56,6 @@ INTERNAL = (
     "park_snapshot",
     "park_record",
     "book_park",
-    "parked_units",
     "archive_mode",
     "plan_folder_rel",
     "folder_tracked",
@@ -82,8 +78,8 @@ OWNED = ("PARK_ASK_FIRST", "PARK_ASK_EVERY", "YAML_ARCHIVE_ACCEPTANCE", "DRIVER_
 # The crash report: the function the run's guard calls and the line it wakes the Lead with.
 REPORTS = ("report_crash", "crash_line")
 
-# The ledger one engine wrote, at the gate where it waits for the Lead to amend the plan: the version,
-# the kind marker, one attempt, and the keys a run keeps beside its tasks. Literal on purpose — this is
+# The ledger one engine wrote while its drive was parked on an edited plan: the version, the kind marker,
+# one attempt, the park, and the keys a run keeps beside its tasks. Literal on purpose — this is
 # the file left on disk, and the engine after the split reads what an older one wrote, not what today's
 # writer would.
 BEFORE_THE_SPLIT = """{
@@ -94,12 +90,13 @@ BEFORE_THE_SPLIT = """{
       "packet": {"task_id": "t1", "worker": "demo-t1", "unit": "t1", "backend": "claude"},
       "status": "ACTIVE",
       "runtime_id": "rt-1",
-      "gate": "awaiting-amendment",
-      "amend": {"reason": "the release is not this one", "since": "2026-11-15T09:10:00+00:00"},
+      "gate": null,
       "started_at": "2026-11-15T09:00:00+00:00"
     }
   },
-  "ticket_status": {"T1": "IN PROGRESS · awaiting amendment: the release is not this one"},
+  "park": {"kind": "plan", "cause": "edited", "error": "the plan changed", "digest": "d1", "base": "b1",
+           "since": "2026-11-15T09:10:00+00:00", "units": []},
+  "ticket_status": {"T1": "IN PROGRESS"},
   "rounds": {"t1": 2}
 }"""
 
@@ -107,7 +104,7 @@ BEFORE_THE_SPLIT = """{
 def driver_over(root, ledger_path):
     """The Driver a run holds over one ledger file: a plan, a run directory and the ledger, nothing else."""
     plan = root / "plan.yaml"
-    plan.write_text("schema: plan/1\n", encoding="utf-8")
+    plan.write_text("schema: plan/2\n", encoding="utf-8")
     run = root / "run"
     run.mkdir()
     driver = load_script().Driver(SimpleNamespace(plan=str(plan), repo=str(root)))
@@ -129,14 +126,9 @@ class PreSplitLedgerTests(unittest.TestCase):
             driver = driver_over(root, path)
             self.assertIsInstance(driver.archive, archive.Archive, "the Driver holds the lane")
 
-            # The park the run ends in, booked by the collaborator on the file an older engine wrote, and
-            # then taken away when the Lead answers: a read and two writes through the Book, not a
+            # The park an older engine wrote, ended by the collaborator: a write through the Book, not a
             # migration.
-            self.assertEqual(driver.park_at_exit(), ["t1"], "the exit names the unit it parked")
-            parked = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(parked["park"]["units"], ["t1"])
-            self.assertEqual(parked["park"]["cause"], "awaiting-amendment")
-            self.assertEqual((driver.end_park("units") or {}).get("units"), ["t1"])
+            self.assertEqual((driver.end_park() or {}).get("cause"), "edited")
 
             after = json.loads(path.read_text(encoding="utf-8"))
 
@@ -147,14 +139,10 @@ class PreSplitLedgerTests(unittest.TestCase):
             "the kind marker the older engine wrote is kept",
         )
         self.assertEqual(list(after["tasks"]), ["t1"], "the attempt the older engine wrote is kept")
-        self.assertEqual(after["tasks"]["t1"]["gate"], "awaiting-amendment")
         self.assertEqual(after["tasks"]["t1"]["packet"]["worker"], "demo-t1")
         self.assertNotIn("park", after, "the park the Lead answered is over")
         # Nothing a run keeps beside its tasks is dropped on the way through: no migration ran.
-        self.assertEqual(
-            after["ticket_status"],
-            {"T1": "IN PROGRESS · awaiting amendment: the release is not this one"},
-        )
+        self.assertEqual(after["ticket_status"], {"T1": "IN PROGRESS"})
         self.assertEqual(after["rounds"], {"t1": 2})
 
 
@@ -215,12 +203,10 @@ class ArchiveHomeTests(unittest.TestCase):
                     "%s answers for itself instead of the collaborator" % name,
                 )
                 self.assertLessEqual(len(body), 5, "%s carries more than the delegation" % name)
-        # The delegation is what runs: the park's exit asked once, and the kind handed on as it was given.
-        with mock.patch.object(engine.Archive, "park_at_exit", return_value=["t1"]):
-            self.assertEqual(driver.park_at_exit(), ["t1"])
-        with mock.patch.object(engine.Archive, "end_park", return_value={"kind": "units"}) as end:
-            self.assertEqual(driver.end_park("units"), {"kind": "units"})
-        end.assert_called_once_with("units")
+        # The delegation is what runs: the park's end asked once.
+        with mock.patch.object(engine.Archive, "end_park", return_value={"kind": "plan"}) as end:
+            self.assertEqual(driver.end_park(), {"kind": "plan"})
+        end.assert_called_once_with()
 
 
 if __name__ == "__main__":

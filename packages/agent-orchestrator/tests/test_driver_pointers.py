@@ -39,7 +39,7 @@ def test_S8_spec_names_the_pointer_rule_and_its_guard():
 
 def test_S9_repository_instructions_name_the_rule(tmp_path):
     instructions = (ROOT / "AGENTS.md").read_text()
-    paragraph = next(p for p in instructions.split("\n\n") if "R173" in p)
+    paragraph = next(p for p in instructions.split("\n\n") if "test_driver_pointers.py" in p)
     for phrase in ("name the file", "find it", "nothing", "several", "test_driver_pointers.py"):
         assert phrase in paragraph.lower()
     from types import SimpleNamespace
@@ -57,7 +57,7 @@ def test_S9_repository_instructions_name_the_rule(tmp_path):
     packet = {"checkout": str(tmp_path), "unit": "t1", "task_id": "t1"}
     brief = review_brief(driver, packet, tmp_path / "review.json")
     assert str(rules) in brief
-    assert "R173" in rules.read_text()
+    assert "test_driver_pointers.py" in rules.read_text()
 
 
 def test_S7_unresolvable_pointers_are_refused(tmp_path, monkeypatch):
@@ -356,7 +356,6 @@ def archive_output(tmp_path):
         log=lambda *a, **k: None,
     )
     archive = Archive(driver)
-    archive.archive_missing = lambda: []
     archive._archive_mode = lambda: "promote"
     archive._archive_branch = lambda task_id: "commit"
     archive._archive_owns = lambda: ["spec"]

@@ -17,7 +17,6 @@ from test_gates import BLOCKING, QUESTION, GateFixture
 pytestmark = pytest.mark.integration
 
 SHARED = "review-file-shared"
-PARK = "park-without-key"
 GATE = "unknown-gate"
 
 
@@ -73,7 +72,7 @@ class LedgerInvariantTests(unittest.TestCase):
             self.assertEqual(data["tasks"]["t1"]["gate"], "reviewer")
 
     def test_S2_ledger_check_names_the_state_that_stalled_the_run(self):
-        """R: the same three illegal states, on a captured ledger, each by name with the task that holds it and the
+        """R: the same illegal states, on a captured ledger, each by name with the task that holds it and the
         way out."""
         states = {
             SHARED: (
@@ -83,7 +82,6 @@ class LedgerInvariantTests(unittest.TestCase):
                 ),
                 "t1r1",  # the attempt that took the file second
             ),
-            PARK: (ledger(t1=task(gate="awaiting-amendment")), "t1"),
             GATE: (ledger(t1=task(gate="reviewer")), "t1"),
         }
         for invariant, (data, named) in states.items():
@@ -97,12 +95,12 @@ class LedgerInvariantTests(unittest.TestCase):
 
     def test_S2_control_a_coherent_ledger_passes(self):
         """A ledger the driver itself writes passes: one review file per open attempt (a superseded attempt keeps its
-        own), a park with its release key, every gate one the driver knows."""
+        own), a parked unit, every gate one the driver knows."""
         data = ledger(
             t1=task(status="PARTIAL", gate="reviewing", review={"path": "/run/t1/review.json"}),
             t1r1=task(status="RELEASED", gate="superseded", review={"path": "/run/t1/review.json"}),
             t2=task(status="COMPLETE", gate="done"),
-            t3=task(gate="awaiting-amendment", amend_from="a-digest"),
+            t3=task(status="BLOCKED", gate="blocked"),
         )
         invariants.check(data)
         code, out, err = self.check(data)
