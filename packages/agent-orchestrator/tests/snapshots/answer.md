@@ -6,7 +6,7 @@ What happened: the worker asked which flag to use
 The Lead's instruction: continue
 The Lead's answer: use the second flag
 This is the same attempt, not a new one: keep using task_id `t1` in your report.
-Original task: <ROOT>/run/t1/task.md. Same checkout and branch: <ROOT>/work on feat/demo-t1. Work only here; start from: src/a/: 2 files in <ROOT>/work/src/a, write <ROOT>/work/docs/note.md (edit any other file the change needs, except one another unfinished ticket lists in its paths).
+Original task: <ROOT>/run/t1/task.md. Same checkout and branch: <ROOT>/work on feat/demo-t1. Work only here; start from: src/a/: 2 files in <ROOT>/work/src/a, write <ROOT>/work/docs/note.md (edit any other file the change needs, even one another ticket lists in its paths: keep that change, the driver tells the Lead).
 Checkout contents: 2 files in <ROOT>/work
 Scope contents: src/a/: 2 files in <ROOT>/work/src/a
 Commit and push to the same branch. Run before you hand in: uv run pytest -m unit.

@@ -21,7 +21,9 @@ ended with no verdict: `unit`, `task`, `reason`),
 `ci` (a pull request's checks were polled: `unit`, `task`, `gate`, `state` green|pending|none|failed, `pr`),
 `draft` (a pull request was put back to a draft: `unit`, `task`, `pr`, `outcome`),
 `update-branch` (a pull request behind its base was updated, or it conflicted: `unit`, `task`, `pr`, `outcome`),
-`merged-early` (a pull request was merged while its unit was still working: `unit`, `task`, `pr`, `findings`) and
+`merged-early` (a pull request was merged while its unit was still working: `unit`, `task`, `pr`, `findings`),
+`overlap` (a unit changed a file another unfinished ticket lists in its paths; never a block: `unit`, `task`, `file`,
+`ticket`, `text`) and
 `idle` (a unit that showed nothing new at an idle tick: `unit`, `task`, `waiting` agent|ci, `ticks`),
 `drain` (the plan was edited since its approval, or no longer loads, and the run starts no new worker: `state`
 draining|ended, `cause` edited|unloadable, `error`, `digest` of the approval the run holds; `ended` when the file is

@@ -47,7 +47,7 @@ CONTRACT = """# Contract for every task in this run
 - Red-first: write the test for each scenario and see it fail before the code exists; its failing output goes in the report's `red`. Tag each test with its spec requirement.
 - TDD: before your first edit read the `tdd` skill's `SKILL.md` and its `rules.md`; your task names the path. Codex has no skill loader, so these rules are the whole skill here: one behaviour per test at the cheapest level that shows it; build expensive setup once per class and let readers share it; wait on an event or an injected clock, never a sleep; admit a test only when it protects a requirement or a credible failure, is not already covered at the same boundary, and would fail on a regression someone could ship. Name the seams and the admission answers in report.md.
 - Fix the class, not the instance: when you fix a defect, search for every other place with the same pattern.
-- Start from the Paths your task lists; edit any other file the change needs, except one another unfinished ticket lists. Never touch other worktrees or the main checkout.
+- Start from the Paths your task lists; edit any other file the change needs, even one another ticket lists: keep that change, the driver tells the Lead. Never touch other worktrees or the main checkout.
 - Commit with Conventional Commits and push the branch. Describe behaviour, not plan ticket numbers.
 """
 

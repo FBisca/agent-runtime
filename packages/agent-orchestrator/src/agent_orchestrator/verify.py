@@ -3,7 +3,6 @@
 A plan (`plan/2`) declares requirement changes with their scenarios, and tickets; the implementation provides its evidence. Three invariants gate a
 ticket, each a rule a worker cannot argue with:
 
-scope      no file the ticket changed is one another unfinished ticket lists in its paths
 integrity  no ticket touches its plan: a folder plan's folder, or a legacy plan's file and narrative
 covers     every scenario the ticket satisfies maps, in the report's `covers`, to a test node `path::name` that
            counts: its file exists, the ticket changed that file and the scenario's `red` excerpt contains `name`;
@@ -13,6 +12,10 @@ red        every scenario the ticket satisfies carries, in the report's `red`, t
 
 Findings are `{"check", "excerpt"}`; the driver turns them into the fix round's items. A plan is accepted once every
 agent ticket is COMPLETE: merged with its gate passed and CI green on its head.
+
+A file the ticket changed that another unfinished ticket lists in its paths is an overlap, never a finding: the worker
+keeps the change and the driver tells the Lead, who may order the tickets or expect a merge conflict. A block would
+send the worker to revert a change it needs, and when the other ticket waits on this one it can never land first.
 """
 
 import re
@@ -146,40 +149,52 @@ def red_first(ticket, report):
     ]
 
 
-def invariants(model, ticket_id, report, *, repo, base, layout, done=()):
-    """The findings of a YAML plan ticket's gate: scope, integrity, covers and red. Empty means the gate passes.
-
-    `done` holds the ids of the tickets the ledger marks COMPLETE. A ticket's `paths` are its starting map and the
-    conflict map between parallel tickets: a file outside them is the ticket's to edit unless another unfinished
-    ticket lists it."""
+def overlaps(model, ticket_id, files, done=()):
+    """The files the ticket changed outside its paths that another unfinished ticket lists: `{"file", "ticket",
+    "excerpt"}`, one per file, for the Lead. `done` holds the ids of the tickets the ledger marks COMPLETE."""
     ticket = next((t for t in model.tickets if t.id == ticket_id), None)
     if ticket is None:
         raise VerifyError("the plan has no ticket %s" % ticket_id)
-    files = changed(repo, base)
-    findings = []
+    found = []
     for name in sorted(files):
-        why = integrity(layout, name)
-        if why:
-            findings.append({"check": "integrity", "excerpt": "%s %s" % (name, why)})
-        elif not inside(name, ticket.paths):
-            owner = next(
-                (
-                    t
-                    for t in model.tickets
-                    if t.id != ticket_id and t.id not in done and inside(name, t.paths)
-                ),
-                None,
+        if inside(name, ticket.paths):
+            continue
+        owner = next(
+            (
+                t
+                for t in model.tickets
+                if t.id != ticket_id and t.id not in done and inside(name, t.paths)
+            ),
+            None,
+        )
+        if owner:
+            found.append(
+                {
+                    "file": name,
+                    "ticket": owner.id,
+                    "excerpt": "%s changed %s, which %s also lists in its paths and has not finished: order"
+                    " the tickets if %s must build on this change, or expect a merge conflict when both land"
+                    % (ticket_id, name, owner.id, owner.id),
+                }
             )
-            if owner:
-                findings.append(
-                    {
-                        "check": "scope",
-                        "excerpt": "%s is listed in the paths of %s, which is not finished; revert it here and"
-                        " report BLOCKED naming %s if this ticket needs that change (the Lead orders the"
-                        " tickets), or edit it once %s is COMPLETE"
-                        % (name, owner.id, owner.id, owner.id),
-                    }
-                )
+    return found
+
+
+def invariants(model, ticket_id, report, *, repo, base, layout, files=None):
+    """The findings of a YAML plan ticket's gate: integrity, covers and red. Empty means the gate passes.
+
+    A ticket's `paths` are its starting map, never a fence: a file outside them is the ticket's to edit, and one
+    another unfinished ticket lists is an overlap for the Lead (`overlaps`), not a finding. `files` are the ticket's
+    changed files when the caller already read them."""
+    ticket = next((t for t in model.tickets if t.id == ticket_id), None)
+    if ticket is None:
+        raise VerifyError("the plan has no ticket %s" % ticket_id)
+    files = changed(repo, base) if files is None else files
+    findings = [
+        {"check": "integrity", "excerpt": "%s %s" % (name, why)}
+        for name in sorted(files)
+        if (why := integrity(layout, name))
+    ]
     return findings + covers(ticket, report, repo, base, files) + red_first(ticket, report)
 
 

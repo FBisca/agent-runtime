@@ -165,10 +165,10 @@ class GateFixture(RunFixture):
             step["write"].append([str(self.worktree / name_), text])
         return step
 
-    def use_yaml_plan(self, paths=("src/a/",), lint=True, unproven=False):
+    def use_yaml_plan(self, paths=("src/a/",), lint=True, unproven=False, others=()):
         """Replace the plan with an approved one-ticket plan. With `lint=False` the plan is approved as one approved
         before the lint existed. With `unproven` the ticket also satisfies S2, which the default covers leave
-        unmapped."""
+        unmapped. `others` are further tickets, each satisfying S2."""
         data = {
             "schema": "plan/2",
             "slug": "demo",
@@ -176,7 +176,7 @@ class GateFixture(RunFixture):
             "spec": "docs/specs/demo.md",
             "requirements": added(
                 [dict(id="S1", when="a", then="b")]
-                + ([dict(id="S2", when="c", then="d")] if unproven else [])
+                + ([dict(id="S2", when="c", then="d")] if unproven or others else [])
             ),
             "tickets": [
                 dict(
@@ -187,7 +187,14 @@ class GateFixture(RunFixture):
                     size="small",
                     difficulty="simple",
                     max_fix_rounds=3,
-                )
+                ),
+                *(
+                    dict(
+                        dict(delivers="more", satisfies=["S2"], size="small", difficulty="simple"),
+                        **other,
+                    )
+                    for other in others
+                ),
             ],
         }
         if self.HOLD:
@@ -562,6 +569,28 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         self.waits([self.worker_done(tests=True), self.reviewer_done()])
         self.run_driver()
         self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
+
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_a_file_a_downstream_ticket_lists_goes_to_review_and_warns_the_lead_once(self):
+        """The worker keeps the change: the fix round names only the missing covers, the next report goes to
+        review, and the Lead reads the overlap once in the run's events however many rounds see it."""
+        self.use_yaml_plan(others=[dict(id="T2", paths=["src/b/"], blocked_by=["T1"])])
+        self.extra_files = {"src/b/schema.json": "{}\n"}
+        self.waits(
+            [
+                self.worker_done(tests=True, report=self.report("t1", covers={})),
+                self.worker_done("t1r1", tests=True),
+                self.reviewer_done(),
+            ]
+        )
+        self.run_driver()
+        self.assertEqual([c for c, _ in self.found()], ["covers"])
+        self.assertEqual(self.spawned()[:2], ["demo-t1", "demo-t1-review"])
+        (event,) = self.run_events("overlap")
+        self.assertEqual(
+            (event["unit"], event["file"], event["ticket"]), ("t1", "src/b/schema.json", "T2")
+        )
+        self.assertIn("merge conflict", event["text"])
 
     def test_S10_touching_the_plan_is_an_integrity_failure_not_a_scope_one(self):
         self.extra_files = {"docs/plans/demo.plan.yaml": "schema: plan/2\n"}
