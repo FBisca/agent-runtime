@@ -86,7 +86,7 @@ class VerifyFixture(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-qm", message)
 
-    def gate(self, covers, red=None, others=(), done=(), **ticket):
+    def gate(self, covers, red=None, others=(), **ticket):
         report = {
             "contract": 3,
             "task_id": "t1",
@@ -100,7 +100,6 @@ class VerifyFixture(unittest.TestCase):
             repo=self.repo,
             base="main",
             layout=yaml_plan.PlanLayout(self.repo / PLAN_REL, self.repo),
-            done=done,
         )
 
     def found(self, findings):
@@ -231,29 +230,46 @@ class ScopeAndIntegrityTests(VerifyFixture):
         self.write("src/c/other.py", "x = 1\n")
         self.assertEqual(self.gate(self.covers, others=self.second()), [])
 
-    @pytest.mark.spec("Ticket scope and plan integrity")
-    def test_S10_a_file_an_unfinished_ticket_owns_fails_naming_that_ticket_and_the_way_out(self):
-        self.write("src/b/other.py", "x = 1\n")
-        found = self.found(self.gate(self.covers, others=self.second()))
-        self.assertEqual([c for c, _ in found], ["scope"])
-        self.assertIn("src/b/other.py", found[0][1])
-        self.assertIn("T2", found[0][1])
-        self.assertIn("revert", found[0][1])
+    def overlaps(self, others=(), done=()):
+        return verify.overlaps(model(others), "T1", verify.changed(self.repo, "main"), done=done)
 
     @pytest.mark.spec("Ticket scope and plan integrity")
-    def test_S10_a_file_a_finished_ticket_owned_passes(self):
+    def test_S10_a_file_an_unfinished_ticket_owns_passes_the_gate(self):
+        """A file another ticket lists is never the worker's to revert: the gate passes."""
         self.write("src/b/other.py", "x = 1\n")
-        self.assertEqual(self.gate(self.covers, others=self.second(), done=("T2",)), [])
+        self.assertEqual(self.gate(self.covers, others=self.second()), [])
 
     @pytest.mark.spec("Ticket scope and plan integrity")
-    def test_S10_a_file_inside_the_ticket_paths_passes_even_when_another_ticket_lists_it(self):
+    def test_S10_a_file_an_unfinished_ticket_owns_is_a_warning_naming_file_ticket_and_what_to_expect(
+        self,
+    ):
+        self.write("src/b/other.py", "x = 1\n")
+        (warning,) = self.overlaps(others=self.second())
+        self.assertEqual((warning["file"], warning["ticket"]), ("src/b/other.py", "T2"))
+        self.assertIn("src/b/other.py", warning["excerpt"])
+        self.assertIn("T2", warning["excerpt"])
+        self.assertIn("order", warning["excerpt"])
+        self.assertIn("merge conflict", warning["excerpt"])
+        self.assertNotIn("revert", warning["excerpt"])
+
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_a_downstream_ticket_that_lists_the_file_is_a_warning_too(self):
+        """A ticket that waits on this one can never run first: a block would deadlock the plan."""
+        self.write("src/b/other.py", "x = 1\n")
+        (warning,) = self.overlaps(others=self.second(blocked_by=["T1"]))
+        self.assertEqual(warning["ticket"], "T2")
+
+    @pytest.mark.spec("Ticket scope and plan integrity")
+    def test_S10_no_warning_for_a_finished_owner_or_a_file_inside_the_ticket_paths(self):
+        self.write("src/b/other.py", "x = 1\n")
         self.write("src/a/x.py", "x = 1\n")
-        self.assertEqual(self.gate(self.covers, others=self.second(paths=("src/a/",))), [])
+        self.assertEqual(self.overlaps(others=self.second(), done=("T2",)), [])
+        self.assertEqual(self.overlaps(others=self.second(paths=("src/a/",))), [])
 
     @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_a_path_prefix_is_a_directory_not_a_string_prefix(self):
         self.write("src/bb/x.py", "x = 1\n")
-        self.assertEqual(self.gate(self.covers, others=self.second()), [])
+        self.assertEqual(self.overlaps(others=self.second()), [])
 
     @pytest.mark.spec("Ticket scope and plan integrity")
     def test_S10_touching_the_plan_is_an_integrity_failure_even_inside_the_paths(self):
@@ -276,7 +292,7 @@ class ScopeAndIntegrityTests(VerifyFixture):
         found = self.gate({"S1": ["tests/test_a.py::test_new"]}, others=self.second())
         self.assertEqual(
             sorted(c for c, _ in self.found(found)),
-            ["covers", "integrity", "scope"],
+            ["covers", "integrity"],
         )
 
 

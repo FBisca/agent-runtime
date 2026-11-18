@@ -7,7 +7,7 @@ This is a rebase round: the pull request of T1 conflicts with its base. Rebase t
 - conflict merge: CONFLICT in src/a/one.py (exit 1 of `ruff check`; full log /logs/ci.log)
 
 Original task: <ROOT>/run/t1/task.md. Use task_id `t1r1` in your report.
-Same checkout and branch: <ROOT>/work on feat/demo-t1. Work only here; start from: src/a/: 2 files in <ROOT>/work/src/a, write <ROOT>/work/docs/note.md (edit any other file the change needs, except one another unfinished ticket lists in its paths).
+Same checkout and branch: <ROOT>/work on feat/demo-t1. Work only here; start from: src/a/: 2 files in <ROOT>/work/src/a, write <ROOT>/work/docs/note.md (edit any other file the change needs, even one another ticket lists in its paths: keep that change, the driver tells the Lead).
 Checkout contents: 2 files in <ROOT>/work
 Scope contents: src/a/: 2 files in <ROOT>/work/src/a
 Commit and push to the same branch; open no new pull request. Run before you hand in: uv run pytest -m unit.

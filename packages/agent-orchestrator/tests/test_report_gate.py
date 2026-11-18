@@ -121,8 +121,10 @@ def test_the_plan_close_lists_the_notes_the_run_recorded(tmp_path):
     log = tmp_path / "events.jsonl"
     events.append(log, "report", unit="t1", report={"notes": ["the cache is\nnever cleared"]})
     events.append(log, "report", unit="t2", report={"notes": []})
+    events.append(log, "overlap", unit="t2", file="a.json", ticket="T3", text="a.json is listed")
     text = Archive._run_notes(SimpleNamespace(run_dir=tmp_path))  # ty: ignore[invalid-argument-type]
     assert "- t1: the cache is never cleared" in text
+    assert "- t2: a.json is listed" in text
     assert (
         Archive._run_notes(SimpleNamespace(run_dir=tmp_path / "none"))  # ty: ignore[invalid-argument-type]
         == ""

@@ -13,7 +13,7 @@ lines and no class twenty-five public methods.
 import shlex
 from typing import Any
 
-from .. import narrate, verify
+from .. import events, narrate, verify
 from ..invariants import next_path
 from ..timeutil import iso as now
 from .answers import ARCHIVE_REBUILDS
@@ -49,12 +49,14 @@ class Findings:
         return self.verify_ticket(task_id, packet, report)
 
     def verify_ticket(self, task_id, packet, report):
-        """verify's invariants on a YAML plan's ticket: scope, integrity and covers."""
+        """verify's invariants on a YAML plan's ticket: integrity, covers and red; its overlaps go to the Lead."""
         ticket = packet["unit"].upper()
         with self.book() as data:
             statuses = data.get("ticket_status") or {}
             done = {k for k, v in statuses.items() if str(v).strip().upper().startswith("COMPLETE")}
         try:
+            files = verify.changed(packet["checkout"], self.args.base)
+            overlaps = verify.overlaps(self.model, ticket, files, done=done)
             findings = verify.invariants(
                 self.model,
                 ticket,
@@ -62,10 +64,11 @@ class Findings:
                 repo=packet["checkout"],
                 base=self.args.base,
                 layout=self.layout,
-                done=done,
+                files=files,
             )
         except verify.VerifyError as error:
             return "error", [str(error)[:500]]
+        self.warn_overlaps(packet["unit"], task_id, overlaps)
         if not findings:
             return "PASS", []
         log = next_path(self.run_dir / task_id, "verify", ".log")[0]
@@ -78,6 +81,28 @@ class Findings:
             shlex.quote(self.args.base),
         )
         return "FAIL", verify.items(findings, command, log)
+
+    def warn_overlaps(self, unit, task_id, overlaps):
+        """Tell the Lead, never the worker, of a file the unit changed that another unfinished ticket lists: one
+        `overlap` event and one pane line per file and ticket, however many rounds see it again. The plan close
+        lists them with the run's notes."""
+        seen = {
+            (e.get("unit"), e.get("file"), e.get("ticket"))
+            for e in events.read(self.run_dir / "events.jsonl")
+            if e["kind"] == "overlap"
+        }
+        for overlap in overlaps:
+            if (unit, overlap["file"], overlap["ticket"]) in seen:
+                continue
+            self.log(
+                "overlap",
+                unit=unit,
+                task=task_id,
+                file=overlap["file"],
+                ticket=overlap["ticket"],
+                text=overlap["excerpt"],
+            )
+            narrate.say("warn", "verify", overlap["excerpt"], task=task_id)
 
     def fail_gate(self, task_id, report, source, items, **fix_details):
         """A gate failed: raise review_rounds, then a fix round, or the escalation hook on the 3rd failure.

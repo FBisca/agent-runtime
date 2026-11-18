@@ -481,7 +481,8 @@ class Archive:
 
     def _run_notes(self):
         """What the run recorded without blocking, for the plan's close: the notes workers handed in with a COMPLETE
-        report (a flaky check they re-ran among them), read from the run's events."""
+        report (a flaky check they re-ran among them) and the files a ticket changed that another one listed, read
+        from the run's events."""
         lines = []
         for event in events.read(self.run_dir / "events.jsonl"):
             if event["kind"] == "report":
@@ -489,6 +490,10 @@ class Archive:
                     "- %s: %s" % (event.get("unit"), " ".join(str(note).split()))
                     for note in event["report"].get("notes") or []
                 ]
+            elif event["kind"] == "overlap":
+                lines.append(
+                    "- %s: %s" % (event.get("unit"), " ".join(str(event.get("text")).split()))
+                )
         return "\n\n## Recorded during the run\n\n" + "\n".join(lines) + "\n" if lines else ""
 
     def _archive_body(self):

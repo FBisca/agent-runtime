@@ -120,15 +120,15 @@ Verify SHALL pass a ticket report only when every scenario the ticket satisfies 
 - THEN the Lead's request says the ticket's paths can hold no test and tells it to edit the plan and re-approve it with `plan approve`; the lint and the gate decide it with one shared function
 
 ### Requirement: Ticket scope and plan integrity
-Verify SHALL fail a ticket whose diff touches a file that another unfinished ticket lists in its `paths`, or any file of its plan; a ticket's `paths` are its starting map and the conflict map between tickets, never a fence.
+Verify SHALL fail a ticket whose diff touches any file of its plan, and SHALL pass one whose diff touches a file another unfinished ticket lists in its `paths`, telling the Lead and never the worker; a ticket's `paths` are its starting map and the conflict map between tickets, never a fence.
 
 #### Scenario: a file no ticket owns
 - WHEN a ticket's diff touches a file outside its `paths` that no other unfinished ticket lists
 - THEN verify passes the scope rule: a worker edits any file the change needs
 
 #### Scenario: a file another unfinished ticket owns
-- WHEN a ticket's diff touches a file outside its `paths` that another ticket, not COMPLETE in the ledger, lists in its `paths`
-- THEN verify fails the gate naming the file, that ticket and the way out (revert it, and report BLOCKED naming that ticket if the change is needed); a path prefix is a directory, not a string prefix, and a file inside the ticket's own `paths` is never refused
+- WHEN a ticket's diff touches a file outside its `paths` that another ticket, not COMPLETE in the ledger, lists in its `paths`, whether that ticket runs beside it or waits on it
+- THEN verify passes the scope rule and the worker keeps the change with no fix round for it; the driver writes one `overlap` event to `events.jsonl` and one `warn` line to its pane per file and ticket, naming the file, that ticket and that the Lead may order the tickets or expect a merge conflict, and the plan close lists it with the run's notes; a path prefix is a directory, not a string prefix, and a file inside the ticket's own `paths` warns nothing
 
 #### Scenario: a file of the plan
 - WHEN a ticket's diff touches the plan file or any file of its plan folder
