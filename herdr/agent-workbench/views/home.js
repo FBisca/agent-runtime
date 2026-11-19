@@ -140,8 +140,8 @@ function focusSection(f, t) {
 export function homeScreen(home, olderOpen, layout, handlers, t) {
   const needCount = home.needs.reduce((total, n) => total + n.items.length, 0);
   return v_flex().id("home").gap(6).p(12)
-    .when(Boolean(home.focus), (el) => el.child(focusSection(home.focus, t)))
     .when(Boolean(home.cards), (el) => el.child(cards(home.cards, layout, handlers.onCard, t)))
+    .when(Boolean(home.focus), (el) => el.child(focusSection(home.focus, t)))
     .when(needCount > 0, (el) => el.child(heading("Needs me", t, badge(`${needCount} waiting`, "blocked", t)))
       .child(needsRows(home.needs, handlers.onPlan, t)))
     .child(heading("Plans", t, pill(`${home.active.length} active`, t)))

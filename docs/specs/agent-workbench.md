@@ -180,11 +180,11 @@ The mod SHALL refresh with at most one fetch in flight, drop stale answers and w
 - THEN the mod fetches with a fixed argv (no shell, the plan path one argument) in the space folder, at most one fetch in flight, drops any answer older than the latest request, and runs only `workbench plans`, `workbench plan`, `workbench totals` and, on home, `rastro focus --json`
 
 ### Requirement: Mod focus section
-The mod SHALL show on home the focus report `rastro focus --json` prints for the shown space, and SHALL render it without recomputing its ranking: one recommended focus and up to three needs-you rows, each with its citation and observed time, the queue as a count with no content, every typed gap with its last good read, and the as-of stamp.
+The mod SHALL show on home, below the week's cards, the focus report `rastro focus --json` prints for the shown space, and SHALL render it without recomputing its ranking: one recommended focus and up to three needs-you rows, each with its citation and observed time, the queue as a count with no content, every typed gap with its last good read, and the as-of stamp.
 
 #### Scenario: the focus report on home
 - WHEN home shows and `rastro focus --json` answers in the space folder
-- THEN the FOCUS section names the recommended focus with its reason and citation, each needs-you row with its glyph, sub-line and due tag, the queue count, each gap with its typed reason, and the as-of time; an empty report reads as its notice; a refusal reads as one dim line with rastro's way out; a space where rastro does not start shows no section
+- THEN the FOCUS section, below the week's cards, names the recommended focus with its reason and citation, each needs-you row with its glyph, sub-line and due tag, the queue count, each gap with its typed reason, and the as-of time; an empty report reads as its notice; a refusal reads as one dim line with rastro's way out; a space where rastro does not start shows no section
 
 ### Requirement: Mod tests run under node
 The repository suite SHALL run the mod's pure modules under `node --test` and fail when a scenario's node tests did not run.
