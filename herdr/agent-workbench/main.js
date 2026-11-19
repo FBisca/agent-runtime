@@ -215,12 +215,13 @@ export default class AgentWorkbench extends View {
         onCard: (id, cx) => this.go({ type: "card", id }, cx),
         onPlan: (path, cx) => this.go({ type: "plan", path }, cx),
         onOlder: (cx) => { this.olderOpen = !this.olderOpen; cx.notify(); },
+        onTab: (tab, cx) => this.go({ type: "tab", tab }, cx),
         onOpen,
         onLink: openPr,
       };
       // Home has the header too: the project, Expand and refresh, as a plan and a dashboard do.
       root.child(header(null));
-      return show(homeScreen(home, this.olderOpen, layout, handlers, t));
+      return show(homeScreen(home, this.olderOpen, layout, handlers, t, this.nav.tab));
     }
     const plan = state.plan;
     const head = plan?.status === "ok" ? planHeader(plan.value, layout) : { title: picked.slug, slug: picked.slug, state: picked.look };

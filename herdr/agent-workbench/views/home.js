@@ -93,18 +93,31 @@ function planCard(row, handlers, t) {
         : div().id(`pr-${row.slug}-${i}`).px(6).py(1).text_size(11).text_color(t.dim).child(`${m.ticket} ${m.linkText}`))))));
 }
 
-/** `home` is the model's `homeView`; `handlers` are `{onCard, onPlan, onOlder, onOpen, onLink}`. */
-export function homeScreen(home, olderOpen, layout, handlers, t) {
+/** `home` is the model's `homeView`; `handlers` are `{onCard, onPlan, onOlder, onOpen, onLink, onTab}`; `tab` is the
+ *  chosen home tab under the week's cards: Focus (the report) or Plans (Needs me and the plans). */
+const homeTab = (id, label, active, onTab, t) => div().id(`home-tab-${id}`).px(8).py(2).rounded(6).text_size(12)
+  .font_semibold().cursor_pointer().bg(active ? t.selected : t.surface).text_color(active ? t.foreground : t.muted)
+  .border_1().border_color(t.border)
+  .hover((s) => s.bg(t.hover)).on_click((_e, cx) => onTab(id, cx)).child(label);
+
+export function homeScreen(home, olderOpen, layout, handlers, t, tab = "focus") {
   const needCount = home.needs.reduce((total, n) => total + n.items.length, 0);
+  const plans = tab === "plans";
   return v_flex().id("home").gap(6).p(12)
     .when(Boolean(home.cards), (el) => el.child(cards(home.cards, layout, handlers.onCard, t)))
-    .when(Boolean(home.focus), (el) => el.child(focusSection(home.focus, t)))
-    .when(needCount > 0, (el) => el.child(heading("Needs me", t, badge(`${needCount} waiting`, "blocked", t)))
-      .child(needsRows(home.needs, handlers.onPlan, t)))
-    .child(heading("Plans", t, pill(`${home.active.length} active`, t)))
-    .child(v_flex().id("plans").gap(8).children(home.active.map((row) => planCard(row, handlers, t))))
-    .when(home.older.count > 0, (el) => el
-      .child(div().id("older").px(4).py(6).rounded(6).cursor_pointer().text_size(11).text_color(t.dim)
-        .hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => handlers.onOlder(cx)).child(olderLabel(home.older.count, olderOpen)))
-      .when(olderOpen, (e) => e.child(v_flex().id("older-plans").gap(8).children(home.older.rows.map((row) => planCard(row, handlers, t))))));
+    .child(h_flex().id("home-tabs").gap(4).px(4).pt(6)
+      .child(homeTab("plans", "Plans", plans, handlers.onTab, t))
+      .child(homeTab("focus", "Focus", !plans, handlers.onTab, t)))
+    .when(!plans, (el) => el
+      .when(Boolean(home.focus), (e) => e.child(focusSection(home.focus, t)))
+      .when(!home.focus && home.focusStatus === "loading", (e) => e.child(div().id("focus-loading").px(4).py(6).text_size(12).text_color(t.dim).child("Looking for focus…"))))
+    .when(plans, (el) => el
+      .when(needCount > 0, (e) => e.child(heading("Needs me", t, badge(`${needCount} waiting`, "blocked", t)))
+        .child(needsRows(home.needs, handlers.onPlan, t)))
+      .child(heading("Plans", t, pill(`${home.active.length} active`, t)))
+      .child(v_flex().id("plans").gap(8).children(home.active.map((row) => planCard(row, handlers, t))))
+      .when(home.older.count > 0, (e) => e
+        .child(div().id("older").px(4).py(6).rounded(6).cursor_pointer().text_size(11).text_color(t.dim)
+          .hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => handlers.onOlder(cx)).child(olderLabel(home.older.count, olderOpen)))
+        .when(olderOpen, (o) => o.child(v_flex().id("older-plans").gap(8).children(home.older.rows.map((row) => planCard(row, handlers, t)))))));
 }

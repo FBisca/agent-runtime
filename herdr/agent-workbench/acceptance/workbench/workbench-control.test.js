@@ -104,13 +104,13 @@ test("S7 a card the window did not measure says unknown, and no totals answer me
 test("S8 the mod opens on home, a plan or a card opens over it, and back returns home", async () => {
   const { initialNav, navigate } = await model();
   const home = initialNav();
-  assert.deepEqual(home, { screen: "home" });
+  assert.deepEqual(home, { screen: "home", tab: "focus" });
   const plan = navigate(home, { type: "plan", path: "/r/docs/plans/alpha/plan.yaml" });
-  assert.deepEqual(plan, { screen: "plan", path: "/r/docs/plans/alpha/plan.yaml" });
-  assert.deepEqual(navigate(plan, { type: "back" }), { screen: "home" });
+  assert.deepEqual(plan, { screen: "plan", path: "/r/docs/plans/alpha/plan.yaml", tab: "focus" });
+  assert.deepEqual(navigate(plan, { type: "back" }), { screen: "home", tab: "focus" });
   const card = navigate(home, { type: "card", id: "ticket_time" });
-  assert.deepEqual(card, { screen: "dashboard", card: "ticket_time" });
-  assert.deepEqual(navigate(card, { type: "back" }), { screen: "home" });
+  assert.deepEqual(card, { screen: "dashboard", card: "ticket_time", tab: "focus" });
+  assert.deepEqual(navigate(card, { type: "back" }), { screen: "home", tab: "focus" });
 });
 
 test("S9 the plan header is the plan's name with its whole goal and a way back, without the repository", async () => {

@@ -784,6 +784,7 @@ export function homeView(plans, totals, live = null, now = Date.now(), focus = n
       : focusView(focus.value.result, now);
   return {
     focus: focusModel,
+    focusStatus: focus?.status ?? "loading",
     cards: cards && cards.map((c) => ({ ...c, picture: pictureOf(c.id, totals) })),
     needs: needsRows(sections.needsMe),
     active: sections.active.map(plan),
@@ -1229,26 +1230,30 @@ export function dashboardView(card, totals, layout, filter = null) {
 // ---- navigation ---------------------------------------------------------------------------------------------
 
 /** Where the mod opens: on home. There is no plan picker. */
-export const initialNav = () => ({ screen: "home" });
+export const initialNav = () => ({ screen: "home", tab: "focus" });
 
 const sameFilter = (a, b) => {
   const keys = Object.keys(a);
   return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
 };
 
-/** A plan or a card opens over home; back from either returns to it. A click filter lives on the open dashboard: the
- *  same filter again clears it, another replaces it, and a card opened afresh has none. An action the mod does not know
- *  changes nothing. */
+/** A plan or a card opens over home; back from either returns to it, keeping the chosen home tab. A click filter lives
+ *  on the open dashboard: the same filter again clears it, another replaces it, and a card opened afresh has none. The
+ *  home tab selector switches Plans and Focus under the week's cards. An action the mod does not know changes nothing. */
 export function navigate(nav, action) {
   switch (action?.type) {
-    case "plan": return { screen: "plan", path: action.path };
-    case "card": return { screen: "dashboard", card: action.id };
+    case "plan": return { ...nav, screen: "plan", path: action.path };
+    case "card": return { ...nav, screen: "dashboard", card: action.id };
+    case "tab": {
+      if (nav.screen !== "home" || (action.tab !== "plans" && action.tab !== "focus")) return nav;
+      return { ...nav, tab: action.tab };
+    }
     case "filter": {
       if (nav.screen !== "dashboard" || !action.filter) return nav;
       const same = nav.filter && sameFilter(nav.filter, action.filter);
       return { ...nav, filter: same ? null : { ...action.filter } };
     }
-    case "back": return initialNav();
+    case "back": return { ...initialNav(), tab: nav.tab ?? "focus" };
     default: return nav;
   }
 }
