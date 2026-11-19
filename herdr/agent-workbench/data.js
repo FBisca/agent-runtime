@@ -1,12 +1,14 @@
-// The mod's only contact with the orchestrator: it runs the read-only `agent-orchestrator workbench` commands and
-// keeps the answers. Nothing here imports Herdr (`exec` is handed in), so `node --test` drives it with a fake.
+// The mod's only contact with the orchestrator and rastro: it runs the read-only `agent-orchestrator workbench` commands
+// and, on home, `rastro focus --json`, and keeps the answers. Nothing here imports Herdr (`exec` is handed in), so
+// `node --test` drives it with a fake.
 //
 // What it guarantees: a fixed argv per command (never a shell, the plan path is one argument), the space's folder as
 // the working directory, at most one fetch in flight, and an answer older than the latest request is dropped. It
-// writes nothing: the only verbs it knows are `workbench plans`, `workbench plan` and `workbench totals`.
-import { readPlans, readPlan, readTotals } from "./model.js";
+// writes nothing: the only verbs it knows are `workbench plans`, `workbench plan`, `workbench totals` and `focus`.
+import { readPlans, readPlan, readTotals, readFocus } from "./model.js";
 
 export const COMMAND = "agent-orchestrator";
+export const FOCUS_COMMAND = "rastro";
 // The watcher is the fast path; the timer is the net for a change it did not see (a remote space, a watch that ended).
 export const FALLBACK_MS = 30000;
 // Longer than a plan takes to load (it runs git), shorter than the fallback: a hung command shows as a timeout.
@@ -17,21 +19,24 @@ export const FLUSH_MS = 2000;
 export const plansArgv = () => ["workbench", "plans", "--json"];
 export const planArgv = (path) => ["workbench", "plan", path, "--json"];
 export const totalsArgv = () => ["workbench", "totals", "--json"];
+export const focusArgv = () => ["focus", "--json"];
 
 export function createData({ exec }) {
   let scope = null;
   let epoch = 0; // bumped by anything that makes a running fetch's answer the wrong one to show
   let selected = null; // the plan path the person opened; null while home or a dashboard shows
+  let screen = "home"; // home alone shows the focus report; a dashboard shows the week's totals without it
   let plans = { status: "loading" };
   let totals = { status: "loading" };
+  let focus = { status: "loading" };
   let answers = new Map(); // plan path -> {status, value | error}: one plan's error never hides another plan
   let running = null;
   let queued = false;
   let dirty = false;
 
-  async function call(argv) {
+  async function call(argv, command = COMMAND) {
     try {
-      return await exec(COMMAND, argv, { cwd: scope.folder || undefined, on: scope.machine ?? null, timeout: TIMEOUT_MS });
+      return await exec(command, argv, { cwd: scope.folder || undefined, on: scope.machine ?? null, timeout: TIMEOUT_MS });
     } catch (error) {
       return { thrown: String(error?.message ?? error) };
     }
@@ -53,13 +58,23 @@ export function createData({ exec }) {
         if (mine !== epoch) continue;
         answers.set(path, loaded.ok ? { status: "ok", value: loaded.value } : { status: "error", error: loaded.error });
         notify();
-      } else if (listed.value.plans.length) {
+      } else {
+        // Home shows the focus report first: it is the glance the section exists for. A failure shows one dim line and
+        // never hides the plans or the totals.
+        if (screen === "home" && listed.value.plans.length) {
+          const report = readFocus(await call(focusArgv(), FOCUS_COMMAND));
+          if (mine !== epoch) continue;
+          focus = report.ok ? { status: "ok", value: report.value } : { status: "error", error: report.error };
+          notify();
+        }
         // Only home and a dashboard show the week's totals, so they are fetched only then; a failure shows no cards and
         // never hides the plans.
-        const week = readTotals(await call(totalsArgv()));
-        if (mine !== epoch) continue;
-        totals = week.ok ? { status: "ok", value: week.value } : { status: "error", error: week.error };
-        notify();
+        if (listed.value.plans.length) {
+          const week = readTotals(await call(totalsArgv()));
+          if (mine !== epoch) continue;
+          totals = week.ok ? { status: "ok", value: week.value } : { status: "error", error: week.error };
+          notify();
+        }
       }
     } while (queued);
   }
@@ -71,19 +86,26 @@ export function createData({ exec }) {
       scope = { folder: next.folder, machine: next.machine ?? null };
       epoch += 1;
       selected = null;
+      screen = "home";
       plans = { status: "loading" };
       totals = { status: "loading" };
+      focus = { status: "loading" };
       answers = new Map();
       return true;
     },
 
     /** The person opened a plan, or went home or to a card's dashboard (`nav` is the model's): whatever is in flight for
-     *  the previous screen is old now. Leaving home drops its totals, so they are fetched again on the way back. */
+     *  the previous screen is old now. Leaving home drops its totals and its focus report, so they are fetched again on
+     *  the way back. */
     show(nav) {
       const path = nav.screen === "plan" ? nav.path : null;
-      if (selected === path) return;
+      if (selected === path && screen === nav.screen) return;
       selected = path;
-      if (path) totals = { status: "loading" };
+      screen = nav.screen;
+      if (path) {
+        totals = { status: "loading" };
+        focus = { status: "loading" };
+      }
       epoch += 1;
       queued = true;
     },
@@ -115,7 +137,7 @@ export function createData({ exec }) {
     state() {
       const shown = plans.status === "ok" && selected ? answers.get(selected) ?? { status: "loading" } : null;
       const loaded = [...answers.values()].filter((a) => a.status === "ok").map((a) => a.value);
-      return { scope, plans, totals, selected, plan: shown, loaded };
+      return { scope, plans, totals, focus, selected, plan: shown, loaded };
     },
   };
 }

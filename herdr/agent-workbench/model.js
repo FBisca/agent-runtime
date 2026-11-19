@@ -23,10 +23,10 @@ const firstLine = (text) => (String(text ?? "").split("\n").map((l) => l.trim())
 /** What a run of the workbench command amounts to. `result` is exec's `{code, stdout, stderr}`, or `{thrown}` with the
  *  message of the rejection (it could not start, timed out, the machine was unreachable). `shaped` says whether
  *  the JSON is the answer of this command. */
-function read(result, shaped) {
+function read(result, shaped, ways = WAY_OUT) {
   if (result.thrown !== undefined) {
     const kind = /time(d)?[ -]?out/i.test(result.thrown) ? "timeout" : "not_started";
-    return failure(kind, firstLine(result.thrown) || kind);
+    return failure(kind, firstLine(result.thrown) || kind, ways[kind]);
   }
   let value;
   try {
@@ -36,15 +36,15 @@ function read(result, shaped) {
   }
   if (value && typeof value === "object" && value.error && typeof value.error === "object") {
     const { kind, message, way_out: wayOut } = value.error;
-    return failure(kind || "failed", String(message ?? kind ?? "the command refused"), wayOut);
+    return failure(kind || "failed", String(message ?? kind ?? "the command refused"), wayOut || ways[kind || "failed"]);
   }
   if (value === undefined) {
-    if (result.code !== 0) return failure("failed", firstLine(result.stderr) || "exit status " + result.code);
-    return failure("no_json", "the command printed no JSON");
+    if (result.code !== 0) return failure("failed", firstLine(result.stderr) || "exit status " + result.code, ways.failed);
+    return failure("no_json", "the command printed no JSON", ways.no_json);
   }
-  if (result.code !== 0) return failure("failed", firstLine(result.stderr) || "exit status " + result.code);
+  if (result.code !== 0) return failure("failed", firstLine(result.stderr) || "exit status " + result.code, ways.failed);
   if (!value || typeof value !== "object" || !shaped(value)) {
-    return failure("no_json", "the JSON is not a workbench answer");
+    return failure("no_json", "the JSON is not a workbench answer", ways.no_json);
   }
   return { ok: true, value };
 }
@@ -52,6 +52,19 @@ function read(result, shaped) {
 export const readPlans = (result) => read(result, (v) => Array.isArray(v.plans));
 export const readPlan = (result) => read(result, (v) => Array.isArray(v.tickets));
 export const readTotals = (result) => read(result, (v) => Boolean(v.cards) && typeof v.cards === "object");
+
+// The focus read is rastro's, not the orchestrator's: its failures name rastro in the way out.
+const FOCUS_WAY_OUT = {
+  failed: "Run the command in this folder to see the error: rastro focus --json",
+  timeout: "The command took too long. Run it in this folder to see why, then refresh with ↻",
+  not_started: "rastro did not start: install it and make sure it is on the PATH Herdr runs with",
+  no_json: "The command printed something that is not a focus answer: update rastro, then refresh with ↻",
+};
+
+export const readFocus = (result) => read(result, (v) => v.operation === "focus" && Boolean(v.result)
+  && typeof v.result === "object" && Array.isArray(v.result.needs_you) && Array.isArray(v.result.gaps)
+  && typeof v.result.queue_count === "number" && typeof v.result.as_of === "string"
+  && "focus" in v.result && "notice" in v.result, FOCUS_WAY_OUT);
 
 const TITLE = {
   no_plans: "No plans",
@@ -722,7 +735,7 @@ function recencyOf(iso, now) {
 /** What the mod opens on. `plans` and `totals` are the commands' answers (`totals` null when there is none: no cards),
  *  `live` is `liveTerminals(...)` and `now` the clock (ms) a plan's recency reads against. Workers are joined to Herdr's
  *  terminals only at their exact address; a plan lists its live ones and counts the others. */
-export function homeView(plans, totals, live = null, now = Date.now()) {
+export function homeView(plans, totals, live = null, now = Date.now(), focus = null) {
   const sections = planSections(plans);
   const byPlan = new Map((Array.isArray(plans?.plans) ? plans.plans : []).map((p) => [p.slug, p]));
   const awaitingMerge = [];
@@ -744,7 +757,14 @@ export function homeView(plans, totals, live = null, now = Date.now()) {
     };
   };
   const cards = cardsOf(totals);
+  // The focus report is rastro's answer for the shown space: an answer reads as the section, a refusal as one dim line,
+  // and a space where rastro does not start shows no section at all (no rastro, no focus, no noise).
+  const focusModel = !focus || focus.status === "loading" ? null
+    : focus.status === "error"
+      ? (focus.error.kind === "not_started" ? null : { error: { message: focus.error.message, wayOut: focus.error.wayOut } })
+      : focusView(focus.value.result, now);
   return {
+    focus: focusModel,
     cards: cards && cards.map((c) => ({ ...c, picture: pictureOf(c.id, totals) })),
     needs: needsRows(sections.needsMe),
     active: sections.active.map(plan),
@@ -755,6 +775,88 @@ export function homeView(plans, totals, live = null, now = Date.now()) {
 
 /** How many cards fit a row: two when narrow, so a card keeps room for its number. */
 export const cardsPerRow = (layout) => (layout === "narrow" ? 2 : 5);
+
+// ---- the focus report (`rastro focus --json`) ------------------------------------------------------------------------
+// The ranking, the citations and the gaps are rastro's; the model only decides how they read. Times are UTC, like every
+// time the commands return.
+
+const hhmm = (iso) => {
+  const at = Date.parse(iso ?? "");
+  if (!Number.isFinite(at)) return null;
+  const d = new Date(at);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+};
+
+const FOCUS_LOOK = {
+  overdue: { tone: "late", glyph: "!", sub: "overdue" },
+  due_today: { tone: "late", glyph: "!", sub: "due today" },
+  waiting_on_owner: { tone: "wait", glyph: "✋", sub: "you promised" },
+  in_progress: { tone: "move", glyph: "▸", sub: "in progress" },
+};
+const lookOf = (reason) => FOCUS_LOOK[reason] ?? { tone: null, glyph: "•", sub: String(reason) };
+const overdueDays = (due, now) => Math.max(1, Math.floor((now - Date.parse(due)) / 86400000));
+
+const tagOf = (item, now) => {
+  if (item.reason === "overdue") return `overdue ${overdueDays(item.due, now)}d`;
+  if (item.reason === "due_today") return "due today";
+  if (item.reason === "waiting_on_owner") {
+    const at = Date.parse(item.due ?? "");
+    return Number.isFinite(at) ? `due ${WEEKDAYS[new Date(at).getUTCDay()]}` : "waiting";
+  }
+  if (item.reason === "in_progress") return "moving";
+  return String(item.reason);
+};
+
+const whyOf = (item, now) => {
+  if (item.reason === "overdue") return `overdue ${overdueDays(item.due, now)}d`;
+  if (item.reason === "due_today") return "due today";
+  if (item.reason === "waiting_on_owner") return "waiting on you";
+  if (item.reason === "in_progress") return "in progress";
+  return String(item.reason);
+};
+
+// A citation reads `linear:H-8102 · observed 07:35`; a location already named by its source is not named twice.
+const citeOf = (citation) => {
+  const where = String(citation.location ?? "");
+  const named = where.startsWith(citation.name) ? where : `${citation.name}:${where}`;
+  const at = hhmm(citation.observed_at);
+  return at ? `${named} · observed ${at}` : named;
+};
+
+const GAP_WORD = { sync_failed: "sync failed", extraction_failed: "extraction failed" };
+
+/** The focus report as home draws it: the hero, the needs-you rows, the queue count, the gaps and the as-of stamp. */
+export function focusView(report, now) {
+  const items = [report.focus, ...(Array.isArray(report.needs_you) ? report.needs_you : [])].filter(Boolean);
+  const overdue = items.filter((i) => i.reason === "overdue").length;
+  const asOf = hhmm(report.as_of);
+  return {
+    asOf: asOf ? `as of ${asOf}` : null,
+    overdue: overdue ? `${overdue} overdue` : null,
+    hero: report.focus ? {
+      title: report.focus.title,
+      id: report.focus.citation?.source === "linear" ? report.focus.id : null,
+      why: whyOf(report.focus, now),
+      tone: lookOf(report.focus.reason).tone,
+      cite: citeOf(report.focus.citation),
+    } : null,
+    rows: (Array.isArray(report.needs_you) ? report.needs_you : []).map((item) => ({
+      tone: lookOf(item.reason).tone,
+      glyph: lookOf(item.reason).glyph,
+      title: item.title,
+      id: item.citation?.source === "linear" ? item.id : null,
+      sub: lookOf(item.reason).sub,
+      tag: tagOf(item, now),
+    })),
+    queue: report.queue_count > 0 ? `${report.queue_count} waiting in the queue — say "work the queue"` : null,
+    gaps: (Array.isArray(report.gaps) ? report.gaps : []).map((gap) => {
+      const word = GAP_WORD[gap.reason?.kind] ?? gap.reason?.kind ?? "unknown";
+      const at = hhmm(gap.as_of);
+      return { text: `⚠ ${gap.name} couldn't look (${word})${at ? ` · last good ${at}` : ""}` };
+    }),
+    notice: report.notice ?? null,
+  };
+}
 
 /** Plans are one to a row at every width: a plan card has more to say than a card's number. */
 export const plansPerRow = () => 1;
