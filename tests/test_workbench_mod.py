@@ -285,6 +285,11 @@ def test_S35_home_shows_the_focus_report_with_its_citations_queue_count_gaps_and
     scenario("S35", 9)
 
 
+@pytest.mark.spec("Mod focus section")
+def test_S36_a_focus_only_tab_reads_rastro_alone_and_shows_its_failures():
+    scenario("S36", 3)
+
+
 @pytest.mark.spec("Panel size")
 def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight_one_fills_the_area():
     layout = json.loads((MOD.parent / "layouts" / "workbench.json").read_text())

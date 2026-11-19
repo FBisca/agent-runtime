@@ -377,3 +377,47 @@ test("S15 an open plan and a dashboard fetch no focus: it belongs to home alone"
   await settleAll(h, data.refresh());
   assert.ok(h.calls.every((c) => c.command === COMMAND), "rastro runs on home only");
 });
+
+// spec: Mod focus section
+test("S36 a focus-only instance reads rastro focus alone: no plans, no totals", async () => {
+  const h = harness();
+  const data = createData({ exec: h.exec, focusOnly: true });
+  data.setScope(SCOPE);
+  const done = data.refresh();
+  await tick();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].command, FOCUS_COMMAND);
+  assert.deepEqual(h.calls[0].args, ["focus", "--json"]);
+  assert.deepEqual(h.calls[0].options, { cwd: SCOPE.folder, on: null, timeout: TIMEOUT_MS });
+  h.calls[0].resolve(ok(FOCUS));
+  await done;
+  assert.equal(data.state().focus.status, "ok");
+  assert.equal(data.state().focus.value.result.focus.id, "H-8102");
+  assert.equal(data.state().plans.status, "loading", "the orchestrator is never called");
+  assert.equal(h.calls.length, 1);
+});
+
+test("S36 a focus-only instance drops an answer older than a space change", async () => {
+  const h = harness();
+  const data = createData({ exec: h.exec, focusOnly: true });
+  data.setScope({ folder: "/a", machine: null });
+  const run = data.refresh();
+  await tick();
+  data.setScope({ folder: "/b", machine: null });
+  h.calls[0].resolve(ok(FOCUS));
+  await run;
+  assert.equal(data.state().focus.status, "loading", "the focus of /a is not shown for /b");
+  assert.equal(h.calls.length, 1, "nothing is fetched until the next refresh");
+});
+
+test("S36 a focus-only refusal keeps rastro's way out", async () => {
+  const h = harness();
+  const data = createData({ exec: h.exec, focusOnly: true });
+  data.setScope(SCOPE);
+  const run = data.refresh();
+  await tick();
+  h.calls[0].resolve(refusal("failed", "no store in this folder", "run rastro init"));
+  await run;
+  assert.equal(data.state().focus.status, "error");
+  assert.equal(data.state().focus.error.wayOut, "run rastro init");
+});

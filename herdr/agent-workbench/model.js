@@ -94,6 +94,25 @@ export function notice(error, scope) {
   };
 }
 
+// The Focus tab's whole subject is the focus report, so its failures are shown as a notice, never hidden.
+const FOCUS_TITLE = {
+  failed: "Focus is unavailable",
+  timeout: "Focus timed out",
+  not_started: "rastro did not start",
+  no_json: "No focus answer",
+};
+
+export function focusNotice(error, scope) {
+  return {
+    scope: { kind: "project", name: scope.project },
+    kind: error.kind,
+    title: FOCUS_TITLE[error.kind] ?? "Focus is unavailable",
+    message: error.message,
+    wayOut: error.wayOut,
+    tone: error.kind === "not_started" ? "muted" : "blocked",
+  };
+}
+
 // ---- states -------------------------------------------------------------------------------------------------
 
 const norm = (state) => String(state ?? "").toUpperCase().replace(/[-_\s]+/g, " ").trim();

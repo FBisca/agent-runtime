@@ -11,7 +11,7 @@ export function headerView(head, ctx) {
     .child(h_flex().gap(8).items_center()
       .when(open, (el) => el.child(control("back", "←", (_e, cx) => onBack(cx), t))
         .child(div().flex_1().min_w(0).text_size(15).font_semibold().truncate().child(head.title)))
-      .when(!open, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(narrow ? "home" : `${project} · last 7 days`)))
+      .when(!open, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(narrow ? "home" : (ctx.homeLabel ?? `${project} · last 7 days`))))
       .when(open && Boolean(head.state), (el) => el.child(badge(head.state.word, head.state.tone, t)))
       .when(Boolean(expand), (el) => el.child(control("expand", expand.expanded ? "Collapse" : "Expand",
         (_e, cx) => expand.onClick(cx), t, expand.expanded)))
