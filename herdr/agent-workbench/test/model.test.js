@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   readPlans, readPlan, planRows, ticketLayers, inspector, relatives, planHeader,
-  layoutFor, screenFor, compactRow, notice, pickTicket, NARROW_BELOW, planSections,
+  layoutFor, screenFor, compactRow, notice, pickTicket, NARROW_BELOW, planSections, spaceScope,
 } from "../model.js";
 import { PLANS, PLAN, WORKBENCH_PATH, SECOND_PATH, ok, refusal } from "./fixtures.js";
 
@@ -178,4 +178,55 @@ test("S30 no older plans means no older line, and an answer without needs_me or 
   const bare = planSections({ plans: PLANS.plans.map(({ group, ...p }) => p) });
   assert.equal(bare.active.length, 4, "no group is told: nothing is hidden behind a collapsed line");
   assert.equal(bare.olderLine(false), null);
+});
+
+// ---- space scope: the workbench queries the repo the space shows, not its start folder ----
+
+const ws = (over = {}) => ({
+  id: "w1", index: 1, name: "rastro-ai", named: false,
+  folder: "/Users/fbisca/developer/investing-portfolio", machine: null, branch: "main",
+  active: true, status: null,
+  tabs: [{ id: "w1:t1", index: 1, active: true, panes: 1 }, { id: "w1:t2", index: 2, active: false, panes: 1 }],
+  ...over,
+});
+const pn = (over = {}) => ({
+  pane: "w1:p1", terminal: "t1", tab: "w1:t1", title: "zsh",
+  cwd: "/Users/fbisca/developer/rastro-ai", branch: "main", status: null, app: null,
+  program: {}, focused: true, zoomed: false, movable: true, ...over,
+});
+
+test("S31 scope follows the first terminal's live cwd, not the space's static start folder", () => {
+  // The reported bug: the space is named for rastro-ai (its first terminal cd'd there) but its start
+  // folder is investing-portfolio, so the workbench queried the wrong repo and showed no_plans.
+  const scope = spaceScope(ws(), [pn()]);
+  assert.equal(scope.folder, "/Users/fbisca/developer/rastro-ai");
+  assert.equal(scope.machine, null);
+});
+
+test("S31 scope falls back to the start folder when no terminal pane reports a cwd", () => {
+  assert.equal(spaceScope(ws(), []).folder, "/Users/fbisca/developer/investing-portfolio");
+  assert.equal(spaceScope(ws(), [pn({ cwd: null })]).folder, "/Users/fbisca/developer/investing-portfolio");
+});
+
+test("S31 scope skips mod panes and other spaces' panes for the first terminal", () => {
+  const panes = [
+    pn({ pane: "w1:p0", terminal: null, mod: "agent-workbench", cwd: null }), // a mod pane is not a terminal
+    pn({ pane: "w9:p1", tab: "w9:t1", cwd: "/elsewhere" }),                    // another space
+    pn({ pane: "w1:p1", terminal: "t1", cwd: "/Users/fbisca/developer/rastro-ai" }),
+  ];
+  assert.equal(spaceScope(ws(), panes).folder, "/Users/fbisca/developer/rastro-ai");
+});
+
+test("S31 scope uses the first tab's terminal even when a later tab is focused", () => {
+  const panes = [
+    pn({ pane: "w1:p2", tab: "w1:t2", terminal: "t2", cwd: "/later", focused: true }),
+    pn({ pane: "w1:p1", tab: "w1:t1", terminal: "t1", cwd: "/first", focused: false }),
+  ];
+  assert.equal(spaceScope(ws(), panes).folder, "/first");
+});
+
+test("S31 a remote space keeps its start folder and machine; no space yields null", () => {
+  const remote = ws({ machine: "box", folder: "/remote/repo" });
+  assert.deepEqual(spaceScope(remote, [pn()]), { folder: "/remote/repo", machine: "box" });
+  assert.equal(spaceScope(null, [pn()]), null);
 });

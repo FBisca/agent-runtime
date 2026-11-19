@@ -4,12 +4,12 @@
 // writes nothing. Layout is the model's (model.js); the views only draw what it hands them.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared } from "herdr";
+import { spaces, exec, watchFolder, home, theme, terminals, run, layout as herdrLayout, props, shared, setShared, panes } from "herdr";
 import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
   layoutFor, screenFor, planRows, homeView, dashboardView, initialNav, navigate, pickTicket, relatives, inspector, planHeader,
   planCards, planTimeline, cardLayers, planColumns, INSPECTOR_PX,
-  notice, liveTerminals, panelToggle, panelsWith, panelExpand, prLink, PANEL_PX,
+  notice, liveTerminals, panelToggle, panelsWith, panelExpand, prLink, PANEL_PX, spaceScope,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { homeScreen } from "./views/home.js";
@@ -65,18 +65,20 @@ export default class AgentWorkbench extends View {
     });
   }
 
-  // Follows the shown space; a different space is a different folder, so nothing held for the last one is shown.
+  // Follows the shown space; a different space or first-terminal repo is a different folder, so nothing held for the
+  // last one is shown. The folder is the first terminal's live cwd (spaceScope), not the space's static start folder.
   syncSpace() {
     const space = activeSpace();
-    const key = space ? `${space.id}\u0000${space.folder}\u0000${space.machine ?? ""}` : null;
+    const scope = spaceScope(space, space ? panes() : []);
+    const key = scope ? `${space.id}\u0000${scope.folder}\u0000${scope.machine ?? ""}` : null;
     if (key === this.spaceKey) return false;
     this.spaceKey = key;
     this.ticket = null;
     this.drilled = false;
     this.nav = initialNav();
     this.project = space?.name ?? null;
-    this.machine = space?.machine ?? null;
-    if (space) this.data.setScope({ folder: space.folder, machine: space.machine });
+    this.machine = scope?.machine ?? null;
+    if (scope) this.data.setScope(scope);
     return true;
   }
 
