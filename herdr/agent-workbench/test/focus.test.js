@@ -118,3 +118,12 @@ test("S37 home carries the focus status so the Focus tab can say it is looking",
   assert.equal(homeView(plans, null, null, FOCUS_NOW, { status: "loading" }).focusStatus, "loading");
   assert.equal(homeView(plans, null, null, FOCUS_NOW, { status: "ok", value: FOCUS }).focusStatus, "ok");
 });
+
+test("S35 an opaque id is not a name: a UUID location cites the source and the observed time only", () => {
+  const uuid = "linear:issue/06c0c90b-56aa-475e-a4e6-9cc7f0156e6b";
+  const item = { ...FOCUS.result.focus, id: uuid, citation: { ...FOCUS.result.focus.citation, location: uuid } };
+  const view = focusView({ ...FOCUS.result, focus: item }, FOCUS_NOW);
+  assert.equal(view.hero.cite, "linear · observed 07:35");
+  const readable = focusView(FOCUS.result, FOCUS_NOW);
+  assert.equal(readable.hero.cite, "linear:H-8102 · observed 07:35", "a locator a person can read stays");
+});

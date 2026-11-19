@@ -19,14 +19,13 @@ export function focusSection(f, t) {
       .child(`Focus: ${f.error.message}`);
   }
   const color = (tone) => (tone ? t[FOCUS_TONE[tone]] : t.dim);
+  // Hierarchy: the title owns its line; the reason carries the tone; the citation stays dim and small.
   const hero = f.hero && v_flex().id("focus-hero").gap(2).p(12).rounded(10).bg(t.surface).border_1().border_color(t.border)
     .child(h_flex().gap(10)
-      .child(div().w(3).h(48).flex_none().rounded(2).bg(color(f.hero.tone)))
-      .child(v_flex().flex_1().min_w(0).gap(2)
+      .child(div().w(3).h(56).flex_none().rounded(2).bg(color(f.hero.tone)))
+      .child(v_flex().flex_1().min_w(0).gap(3)
         .child(div().text_size(10).font_semibold().text_color(t.dim).child("PUT YOUR FOCUS HERE"))
-        .child(h_flex().gap(6).items_center().text_size(16).font_semibold()
-          .child(div().truncate().text_color(t.foreground).child(f.hero.title))
-          .when(Boolean(f.hero.id), (el) => el.child(div().flex_none().text_size(12).font_normal().text_color(t.dim).child(`· ${f.hero.id}`))))
+        .child(div().text_size(15).font_semibold().whitespace_normal().text_color(t.foreground).child(f.hero.title))
         .child(div().text_size(12).text_color(color(f.hero.tone)).child(f.hero.why))
         .child(div().text_size(11).text_color(t.dim).truncate().child(f.hero.cite))));
   const rows = f.rows.map((row, i) => h_flex().id(`focus-row-${i}`).gap(10).items_center().pr(10).rounded(8)
@@ -34,12 +33,11 @@ export function focusSection(f, t) {
     .child(div().w(3).h(44).flex_none().bg(color(row.tone)))
     .child(div().w(24).h(24).flex_none().rounded_full().bg(t.raised).text_color(color(row.tone)).text_size(12).font_semibold()
       .flex().items_center().justify_center().child(row.glyph))
-    .child(v_flex().flex_1().min_w(0).py(6).gap(1)
-      .child(h_flex().gap(6).items_center().text_size(12)
-        .child(div().font_semibold().truncate().text_color(t.foreground).child(row.title))
-        .when(Boolean(row.id), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`· ${row.id}`))))
-      .child(div().text_size(11).text_color(t.dim).truncate().child(row.sub)))
-    .child(div().flex_none().text_size(11).text_color(color(row.tone)).child(row.tag)));
+    .child(v_flex().flex_1().min_w(0).py(6).gap(2)
+      .child(div().text_size(13).font_semibold().truncate().text_color(t.foreground).child(row.title))
+      .child(h_flex().gap(6).items_center()
+        .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).truncate().child(row.sub))
+        .child(div().flex_none().text_size(11).font_semibold().text_color(color(row.tone)).child(row.tag)))));
   const chips = h_flex().gap(6).items_center()
     .when(Boolean(f.overdue), (el) => el.child(badge(f.overdue, "blocked", t)))
     .when(Boolean(f.asOf), (el) => el.child(pill(f.asOf, t)));

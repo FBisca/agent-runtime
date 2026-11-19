@@ -836,9 +836,12 @@ const whyOf = (item, now) => {
 };
 
 // A citation reads `linear:H-8102 · observed 07:35`; a location already named by its source is not named twice.
+// An opaque id (a UUID) is not a name: the citation then reads the source and the observed time only.
+const OPAQUE_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const citeOf = (citation) => {
   const where = String(citation.location ?? "");
-  const named = where.startsWith(citation.name) ? where : `${citation.name}:${where}`;
+  const named = !where || OPAQUE_ID.test(where) ? citation.name
+    : where.startsWith(citation.name) ? where : `${citation.name}:${where}`;
   const at = hhmm(citation.observed_at);
   return at ? `${named} · observed ${at}` : named;
 };
