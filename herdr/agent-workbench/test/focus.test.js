@@ -3,7 +3,7 @@
 // citations and the gaps are rastro's; the model only decides how the answer reads on home.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFocus, focusView, homeView } from "../model.js";
+import { readFocus, focusView, homeView, initialNav, navigate } from "../model.js";
 import { FOCUS, FOCUS_EMPTY, FOCUS_NOW, ok, refusal } from "./fixtures.js";
 
 test("S35 a focus answer is the schema-versioned envelope of the focus operation", () => {
@@ -92,4 +92,29 @@ test("S35 home carries the focus model: an answer, a failure's one line, and not
   assert.deepEqual(homeView(plans, null, null, FOCUS_NOW, failed).focus, {
     error: { message: "no store in this folder", wayOut: "run rastro init" },
   });
+});
+
+// spec: Mod focus section
+test("S37 home opens on the Focus tab, and the selector switches to Plans and back", () => {
+  const nav = initialNav();
+  assert.equal(nav.screen, "home");
+  assert.equal(nav.tab, "focus");
+  const plans = navigate(nav, { type: "tab", tab: "plans" });
+  assert.deepEqual(plans, { screen: "home", tab: "plans" });
+  assert.deepEqual(navigate(plans, { type: "tab", tab: "focus" }), { screen: "home", tab: "focus" });
+  assert.equal(navigate(nav, { type: "tab", tab: "someday" }), nav, "a tab the mod does not know changes nothing");
+  assert.equal(navigate({ screen: "plan", path: "/p" }, { type: "tab", tab: "plans" }).screen, "plan");
+});
+
+test("S37 opening a plan and returning keeps the chosen tab", () => {
+  const plans = navigate(initialNav(), { type: "tab", tab: "plans" });
+  const open = navigate(plans, { type: "plan", path: "/p" });
+  assert.equal(open.screen, "plan");
+  assert.deepEqual(navigate(open, { type: "back" }), { screen: "home", tab: "plans" });
+});
+
+test("S37 home carries the focus status so the Focus tab can say it is looking", () => {
+  const plans = { plans: [] };
+  assert.equal(homeView(plans, null, null, FOCUS_NOW, { status: "loading" }).focusStatus, "loading");
+  assert.equal(homeView(plans, null, null, FOCUS_NOW, { status: "ok", value: FOCUS }).focusStatus, "ok");
 });

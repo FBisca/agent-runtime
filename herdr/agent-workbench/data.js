@@ -21,7 +21,7 @@ export const planArgv = (path) => ["workbench", "plan", path, "--json"];
 export const totalsArgv = () => ["workbench", "totals", "--json"];
 export const focusArgv = () => ["focus", "--json"];
 
-export function createData({ exec }) {
+export function createData({ exec, focusOnly = false }) {
   let scope = null;
   let epoch = 0; // bumped by anything that makes a running fetch's answer the wrong one to show
   let selected = null; // the plan path the person opened; null while home or a dashboard shows
@@ -47,6 +47,14 @@ export function createData({ exec }) {
       queued = false;
       if (!scope) return;
       const mine = epoch;
+      if (focusOnly) {
+        // The Focus tab reads rastro alone: no orchestrator, so it works in a space with no plans.
+        const report = readFocus(await call(focusArgv(), FOCUS_COMMAND));
+        if (mine !== epoch) continue;
+        focus = report.ok ? { status: "ok", value: report.value } : { status: "error", error: report.error };
+        notify();
+        continue;
+      }
       const listed = readPlans(await call(plansArgv()));
       if (mine !== epoch) continue; // asked for something else meanwhile: this answer is old
       plans = listed.ok ? { status: "ok", value: listed.value } : { status: "error", error: listed.error };

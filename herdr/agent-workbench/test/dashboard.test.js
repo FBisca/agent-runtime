@@ -194,14 +194,14 @@ test("S9 dashboard dims what a filter leaves out", () => {
 test("S9 dashboard's click filter lives in the navigation: the same click clears it and back clears it", () => {
   const day = { kind: "day", day: "2026-11-12" };
   let nav = navigate(initialNav(), { type: "card", id: "merged" });
-  assert.deepEqual(nav, { screen: "dashboard", card: "merged" });
+  assert.deepEqual(nav, { screen: "dashboard", card: "merged", tab: "focus" });
   nav = navigate(nav, { type: "filter", filter: day });
-  assert.deepEqual(nav, { screen: "dashboard", card: "merged", filter: day });
+  assert.deepEqual(nav, { screen: "dashboard", card: "merged", filter: day, tab: "focus" });
   assert.equal(navigate(nav, { type: "filter", filter: { ...day } }).filter, null, "the same filter again clears it");
   const other = { kind: "day", day: "2026-11-13" };
   assert.deepEqual(navigate(nav, { type: "filter", filter: other }).filter, other, "another filter replaces it");
   assert.deepEqual(navigate(nav, { type: "back" }), initialNav());
-  assert.deepEqual(navigate(navigate(nav, { type: "back" }), { type: "card", id: "merged" }), { screen: "dashboard", card: "merged" });
+  assert.deepEqual(navigate(navigate(nav, { type: "back" }), { type: "card", id: "merged" }), { screen: "dashboard", card: "merged", tab: "focus" });
   assert.deepEqual(navigate(initialNav(), { type: "filter", filter: day }), initialNav(), "home has nothing to filter");
   const plan = navigate(initialNav(), { type: "plan", path: "/p" });
   assert.deepEqual(navigate(plan, { type: "filter", filter: day }), plan);

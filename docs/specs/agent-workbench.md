@@ -184,7 +184,15 @@ The mod SHALL show on home, below the week's cards, the focus report `rastro foc
 
 #### Scenario: the focus report on home
 - WHEN home shows and `rastro focus --json` answers in the space folder
-- THEN the FOCUS section, below the week's cards, names the recommended focus with its reason and citation, each needs-you row with its glyph, sub-line and due tag, the queue count, each gap with its typed reason, and the as-of time; an empty report reads as its notice; a refusal reads as one dim line with rastro's way out; a space where rastro does not start shows no section
+- THEN the FOCUS section, on the Focus tab below the week's cards, names the recommended focus with its reason and citation, each needs-you row with its glyph, sub-line and due tag, the queue count, each gap with its typed reason, and the as-of time; an empty report reads as its notice; a refusal reads as one dim line with rastro's way out; a space where rastro does not start shows no section
+
+#### Scenario: Plans and Focus tabs under the cards
+- WHEN home shows
+- THEN below the week's cards a Plans/Focus selector switches the content under it: Focus, the default, draws the focus report; Plans draws Needs me and the plans; opening a plan or a card and returning keeps the chosen tab
+
+#### Scenario: a focus-only tab
+- WHEN the mod runs with props `{ focus: true }` (the Focus tab beside the Plans tab)
+- THEN it reads only `rastro focus --json` in the space folder, never the orchestrator, and draws the report full width under a header naming the space and now; a refusal or a missing rastro is shown as a notice with its way out, not hidden
 
 ### Requirement: Mod tests run under node
 The repository suite SHALL run the mod's pure modules under `node --test` and fail when a scenario's node tests did not run.

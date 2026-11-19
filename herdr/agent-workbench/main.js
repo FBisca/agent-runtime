@@ -9,10 +9,11 @@ import { createData, watchLoop, FALLBACK_MS, FLUSH_MS } from "./data.js";
 import {
   layoutFor, screenFor, planRows, homeView, dashboardView, initialNav, navigate, pickTicket, relatives, inspector, planHeader,
   planCards, planTimeline, cardLayers, planColumns, INSPECTOR_PX,
-  notice, liveTerminals, panelToggle, panelsWith, panelExpand, prLink, PANEL_PX, spaceScope,
+  notice, liveTerminals, panelToggle, panelsWith, panelExpand, prLink, PANEL_PX, spaceScope, focusView, focusNotice,
 } from "./model.js";
 import { headerView } from "./views/header.js";
 import { homeScreen } from "./views/home.js";
+import { focusScreen } from "./views/focus.js";
 import { dashboardScreen } from "./views/dashboard.js";
 import { planBody } from "./views/plan.js";
 import { inspectorView } from "./views/inspector.js";
@@ -37,6 +38,17 @@ export default class AgentWorkbench extends View {
     // The tab bar's button is this mod too (props `{ toggle: true }`): it fetches nothing and watches nothing.
     this.toggle = Boolean((initial ?? props())?.toggle);
     if (this.toggle) return;
+    // The Focus tab (props `{ focus: true }`) reads rastro alone: no plans, no ledger to watch, the fallback timer only.
+    this.focusOnly = Boolean((initial ?? props())?.focus);
+    if (this.focusOnly) {
+      this.data = createData({ exec, focusOnly: true });
+      this.size = null;
+      this.spaceKey = null;
+      this.syncSpace();
+      this.fetch(cx);
+      cx.timer.every(FALLBACK_MS, (cx) => this.fetch(cx));
+      return;
+    }
     this.data = createData({ exec });
     this.size = null;
     this.drilled = false; // narrow only: the inspector replaces the list
@@ -90,6 +102,27 @@ export default class AgentWorkbench extends View {
     return toggleView(toggle, { t: theme(), onToggle });
   }
 
+  // The Focus tab: the report full width, its failures shown as notices with the way out, never hidden.
+  renderFocus(cx) {
+    if (this.syncSpace()) this.fetch(cx);
+    const t = theme();
+    const project = this.project ?? "no space";
+    const root = v_flex().id("agent-workbench-focus").size_full().min_h(0).overflow_hidden().bg(t.background)
+      .text_color(t.foreground).text_size(13)
+      .on_size_change((size, cx) => { this.size = size; cx.notify(); });
+    const state = this.data.state();
+    const header = headerView(null, {
+      t, project, narrow: layoutFor(this.size?.width) === "narrow",
+      loading: state.focus.status === "loading", onBack: null,
+      onRefresh: (cx) => this.fetch(cx), expand: null, homeLabel: `${project} · now`,
+    });
+    if (!this.spaceKey) return root.child(header).child(loadingView("No space is shown.", t));
+    const body = (el) => root.child(header).child(v_flex().id("body").flex_1().min_h(0).overflow_y_scrollbar().child(el));
+    if (state.focus.status === "loading") return body(loadingView("Looking for focus…", t));
+    if (state.focus.status === "error") return body(noticeView(focusNotice(state.focus.error, { project }), t));
+    return body(focusScreen(focusView(state.focus.value.result, Date.now()), t));
+  }
+
   // Opens a plan or a card, or goes back home. What was fetched for the screen left is old, so the data follows the nav.
   go(action, cx) {
     this.nav = navigate(this.nav, action);
@@ -114,6 +147,7 @@ export default class AgentWorkbench extends View {
 
   render(cx) {
     if (this.toggle) return this.renderToggle();
+    if (this.focusOnly) return this.renderFocus(cx);
     if (this.syncSpace()) this.fetch(cx);
     const t = theme();
     const layout = layoutFor(this.size?.width);
@@ -181,12 +215,13 @@ export default class AgentWorkbench extends View {
         onCard: (id, cx) => this.go({ type: "card", id }, cx),
         onPlan: (path, cx) => this.go({ type: "plan", path }, cx),
         onOlder: (cx) => { this.olderOpen = !this.olderOpen; cx.notify(); },
+        onTab: (tab, cx) => this.go({ type: "tab", tab }, cx),
         onOpen,
         onLink: openPr,
       };
       // Home has the header too: the project, Expand and refresh, as a plan and a dashboard do.
       root.child(header(null));
-      return show(homeScreen(home, this.olderOpen, layout, handlers, t));
+      return show(homeScreen(home, this.olderOpen, layout, handlers, t, this.nav.tab));
     }
     const plan = state.plan;
     const head = plan?.status === "ok" ? planHeader(plan.value, layout) : { title: picked.slug, slug: picked.slug, state: picked.look };
