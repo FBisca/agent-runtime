@@ -274,6 +274,35 @@ export function attemptTerminal(address, live) {
   return { state: "not live", word: "not live", why: "no live terminal has this address", open: null };
 }
 
+// ---- space scope: where the workbench runs its commands ---------------------------------------------------------
+
+/** The folder the workbench queries for a space: the live cwd of its first terminal, not the space's static start
+ *  folder. Herdr names an unnamed space for where its first terminal is now (SpaceInfo.name), so a terminal that cd'd
+ *  into another repo makes the start folder wrong: the workbench would label one repo and query another (the rastro-ai
+ *  label over investing-portfolio's empty plans). `panes` is Herdr's local panes(); a remote space's terminals are not
+ *  in it, so a remote space keeps its start folder. Null space yields null. */
+export function spaceScope(space, panes) {
+  if (!space) return null;
+  const machine = space.machine ?? null;
+  const folder = (machine === null ? firstTerminalFolder(space, panes) : null) ?? space.folder;
+  return { folder, machine };
+}
+
+/** The first terminal's live cwd: the first terminal pane of the space's first tab. A mod pane (terminal null) is not
+ *  a terminal; a pane whose tab is not this space's belongs to another space. Null when no terminal pane reports a cwd. */
+function firstTerminalFolder(space, panes) {
+  if (!Array.isArray(panes) || !Array.isArray(space.tabs)) return null;
+  const rank = new Map(space.tabs.map((t) => [t.id, t.index ?? 0]));
+  let best = null;
+  for (const p of panes) {
+    if (!p || p.terminal == null || typeof p.cwd !== "string" || !p.cwd) continue;
+    const r = rank.get(p.tab);
+    if (r === undefined) continue;
+    if (best === null || r < best.rank) best = { rank: r, cwd: p.cwd };
+  }
+  return best ? best.cwd : null;
+}
+
 /** An agent as a row names it: the ledger's name and role, and where its terminal stands. The terminal is joined by the
  *  address the ledger recorded and nothing else, never by a name (a terminal with the same name elsewhere is another
  *  agent). `status` is Herdr's, only for a live one; Open only for a live one. */
