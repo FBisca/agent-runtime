@@ -266,3 +266,38 @@ export const RICH_PLAN = {
     },
   },
 };
+
+// Answers as `rastro focus --json` prints them (the schema-versioned envelope of the focus read).
+export const FOCUS_NOW = Date.parse("2026-11-18T08:00:00+00:00");
+const FOCUS_OBSERVED = "2026-11-18T07:35:00+00:00";
+export const FOCUS = {
+  schema_version: 2,
+  operation: "focus",
+  result: {
+    as_of: FOCUS_OBSERVED,
+    focus: {
+      id: "H-8102", title: "Ship rate-limiter config", reason: "overdue",
+      due: "2026-11-17T09:00:00+00:00", urgency: "high",
+      citation: { source: "linear", name: "linear", location: "H-8102", url: "https://linear.app/issue/H-8102", observed_at: FOCUS_OBSERVED },
+    },
+    needs_you: [
+      {
+        id: "weekly-1#turn-1", title: "RBAC design doc for Ana", reason: "waiting_on_owner",
+        due: "2026-11-20T09:00:00+00:00", urgency: "none",
+        citation: { source: "meeting", name: "weekly-1", location: "weekly-1#turn-1", url: null, observed_at: FOCUS_OBSERVED },
+      },
+      {
+        id: "H-8095", title: "RBAC extraction", reason: "in_progress", due: null, urgency: "medium",
+        citation: { source: "linear", name: "linear", location: "H-8095", url: null, observed_at: FOCUS_OBSERVED },
+      },
+    ],
+    queue_count: 2,
+    gaps: [{ source: "linear", name: "linear", reason: { kind: "sync_failed" }, as_of: FOCUS_OBSERVED }],
+    notice: null,
+  },
+};
+export const FOCUS_EMPTY = {
+  schema_version: 2,
+  operation: "focus",
+  result: { as_of: FOCUS_OBSERVED, focus: null, needs_you: [], queue_count: 0, gaps: [], notice: "Nothing needs you." },
+};

@@ -147,7 +147,7 @@ export default class AgentWorkbench extends View {
     const machine = this.machine;
     const live = liveTerminals(terminals(), machine);
     const onOpen = (open, cx) => { run(open.command, open.args); cx.notify(); };
-    const home = homeView(state.plans.value, state.totals.status === "ok" ? state.totals.value : null, live, Date.now());
+    const home = homeView(state.plans.value, state.totals.status === "ok" ? state.totals.value : null, live, Date.now(), state.focus);
 
     if (this.nav.screen === "dashboard") {
       const view = dashboardView(this.nav.card, state.totals.status === "ok" ? state.totals.value : null, layout, this.nav.filter ?? null);

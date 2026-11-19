@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createData, watchLoop, COMMAND, FALLBACK_MS, TIMEOUT_MS } from "../data.js";
-import { PLANS, PLAN, TOTALS, WORKBENCH_PATH, SECOND_PATH, BROKEN_PATH, ok, refusal } from "./fixtures.js";
+import { createData, watchLoop, COMMAND, FOCUS_COMMAND, FALLBACK_MS, TIMEOUT_MS } from "../data.js";
+import { PLANS, PLAN, TOTALS, FOCUS, WORKBENCH_PATH, SECOND_PATH, BROKEN_PATH, ok, refusal } from "./fixtures.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -72,12 +72,12 @@ async function settleAll(h, run) {
     for (const call of h.calls) {
       if (call.settled) continue;
       call.settled = true;
-      call.resolve(ok(call.args[1] === "plans" ? PLANS : call.args[1] === "totals" ? TOTALS : PLAN));
+      call.resolve(ok(call.args[1] === "plans" ? PLANS : call.args[1] === "totals" ? TOTALS : call.args[1] === "focus" ? FOCUS : PLAN));
     }
   }
 }
 
-test("S15 only the read-only workbench verbs ever run, so a refresh writes nothing", async () => {
+test("S15 only the read-only verbs ever run, so a refresh writes nothing", async () => {
   const h = harness();
   const data = createData({ exec: h.exec });
   data.setScope(SCOPE);
@@ -86,8 +86,13 @@ test("S15 only the read-only workbench verbs ever run, so a refresh writes nothi
   await settleAll(h, data.refresh());
   assert.ok(h.calls.length >= 4);
   for (const call of h.calls) {
-    assert.equal(call.args[0], "workbench");
-    assert.ok(["plans", "plan", "totals"].includes(call.args[1]));
+    if (call.command === FOCUS_COMMAND) {
+      assert.deepEqual(call.args, ["focus", "--json"]);
+    } else {
+      assert.equal(call.command, COMMAND);
+      assert.equal(call.args[0], "workbench");
+      assert.ok(["plans", "plan", "totals"].includes(call.args[1]));
+    }
   }
 });
 
@@ -126,8 +131,11 @@ test("S15 an answer older than the latest request is dropped: a space change dur
   assert.equal(h.calls[1].options.cwd, "/b");
   h.calls[1].resolve(ok({ ...PLANS, plans: [PLANS.plans[2]] }));
   await tick();
-  assert.deepEqual(h.calls[2].args, ["workbench", "totals", "--json"]);
-  h.calls[2].resolve(ok(TOTALS));
+  assert.deepEqual(h.calls[2].args, ["focus", "--json"]);
+  h.calls[2].resolve(ok(FOCUS));
+  await tick();
+  assert.deepEqual(h.calls[3].args, ["workbench", "totals", "--json"]);
+  h.calls[3].resolve(ok(TOTALS));
   await run;
   assert.deepEqual(data.state().plans.value.plans.map((p) => p.slug), ["second"]);
 });
@@ -248,24 +256,31 @@ test("S15 the plans whose answers are held are handed over to the view", async (
   assert.deepEqual(data.state().loaded, [], "another folder holds none of them");
 });
 
-test("S8 home fetches the plans and the week's totals, and no plan: the cards come from one fixed totals call", async () => {
+test("S8 home fetches the plans, the focus report and the week's totals, and no plan", async () => {
   const h = harness();
   const data = createData({ exec: h.exec });
   data.setScope({ folder: "/work/agent-runtime", machine: "box" });
   assert.equal(data.state().totals.status, "loading");
+  assert.equal(data.state().focus.status, "loading");
   const done = data.refresh();
   await tick();
   assert.deepEqual(h.calls[0].args, ["workbench", "plans", "--json"]);
   h.calls[0].resolve(ok(PLANS));
   await tick();
   assert.equal(h.calls.length, 2);
-  assert.deepEqual(h.calls[1].args, ["workbench", "totals", "--json"]);
+  assert.equal(h.calls[1].command, FOCUS_COMMAND);
+  assert.deepEqual(h.calls[1].args, ["focus", "--json"]);
   assert.deepEqual(h.calls[1].options, { cwd: "/work/agent-runtime", on: "box", timeout: TIMEOUT_MS });
-  h.calls[1].resolve(ok(TOTALS));
+  h.calls[1].resolve(ok(FOCUS));
+  await tick();
+  assert.deepEqual(h.calls[2].args, ["workbench", "totals", "--json"]);
+  assert.deepEqual(h.calls[2].options, { cwd: "/work/agent-runtime", on: "box", timeout: TIMEOUT_MS });
+  h.calls[2].resolve(ok(TOTALS));
   await done;
+  assert.equal(data.state().focus.value.result.focus.id, "H-8102");
   assert.equal(data.state().totals.value.cards.merged, 3);
   assert.equal(data.state().plan, null, "no plan is open on home");
-  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls.length, 3);
 });
 
 test("S8 an open plan fetches the plan and not the totals, and a card's dashboard fetches the totals again", async () => {
@@ -283,7 +298,7 @@ test("S8 an open plan fetches the plan and not the totals, and a card's dashboar
   assert.equal(data.state().selected, null);
 });
 
-test("S7 a failing totals fetch shows no cards and leaves the plans list and the plan usable", async () => {
+test("S7 a failing totals fetch shows no cards and leaves the plans list, the focus report and the plan usable", async () => {
   const h = harness();
   const data = createData({ exec: h.exec });
   data.setScope(SCOPE);
@@ -291,9 +306,12 @@ test("S7 a failing totals fetch shows no cards and leaves the plans list and the
   await tick();
   h.calls[0].resolve(ok(PLANS));
   await tick();
-  h.calls[1].resolve(refusal("failed", "totals is not a verb", "update agent-orchestrator"));
+  h.calls[1].resolve(ok(FOCUS));
+  await tick();
+  h.calls[2].resolve(refusal("failed", "totals is not a verb", "update agent-orchestrator"));
   await run;
   assert.equal(data.state().plans.status, "ok");
+  assert.equal(data.state().focus.status, "ok");
   assert.equal(data.state().totals.status, "error");
   assert.equal(data.state().totals.value, undefined);
 });
@@ -308,8 +326,54 @@ test("S7 a totals answer that arrives after the person left home is dropped", as
   await tick();
   data.show(open(WORKBENCH_PATH));
   data.refresh();
-  h.calls[1].resolve(ok(TOTALS));
+  h.calls[1].resolve(ok(FOCUS));
   await tick();
   assert.equal(data.state().totals.status, "loading", "the slow totals of home are not shown");
+  assert.equal(data.state().focus.status, "loading", "the focus report of home is not shown on a plan");
   await settleAll(h, run);
+});
+
+// spec: Mod refresh
+test("S15 a focus answer older than the latest request is dropped", async () => {
+  const h = harness();
+  const data = createData({ exec: h.exec });
+  data.setScope(SCOPE);
+  const run = data.refresh();
+  await tick();
+  h.calls[0].resolve(ok(PLANS));
+  await tick();
+  assert.equal(h.calls[1].command, FOCUS_COMMAND);
+  data.setScope({ folder: "/elsewhere", machine: null });
+  h.calls[1].resolve(ok(FOCUS));
+  await run;
+  assert.equal(data.state().focus.status, "loading", "the focus of the old folder is not shown for the new one");
+});
+
+test("S15 a failing focus fetch leaves the plans and the totals usable", async () => {
+  const h = harness();
+  const data = createData({ exec: h.exec });
+  data.setScope(SCOPE);
+  const run = data.refresh();
+  await tick();
+  h.calls[0].resolve(ok(PLANS));
+  await tick();
+  h.calls[1].resolve(refusal("failed", "no store in this folder", "run rastro init"));
+  await tick();
+  h.calls[2].resolve(ok(TOTALS));
+  await run;
+  assert.equal(data.state().focus.status, "error");
+  assert.equal(data.state().focus.error.kind, "failed");
+  assert.equal(data.state().plans.status, "ok");
+  assert.equal(data.state().totals.status, "ok");
+});
+
+test("S15 an open plan and a dashboard fetch no focus: it belongs to home alone", async () => {
+  const h = harness();
+  const data = createData({ exec: h.exec });
+  data.setScope(SCOPE);
+  data.show(open(WORKBENCH_PATH));
+  await settleAll(h, data.refresh());
+  data.show({ screen: "dashboard", card: "merged" });
+  await settleAll(h, data.refresh());
+  assert.ok(h.calls.every((c) => c.command === COMMAND), "rastro runs on home only");
 });

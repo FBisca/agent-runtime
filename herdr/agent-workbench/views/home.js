@@ -92,10 +92,55 @@ function planCard(row, handlers, t) {
         : div().id(`pr-${row.slug}-${i}`).px(6).py(1).text_size(11).text_color(t.dim).child(`${m.ticket} ${m.linkText}`))))));
 }
 
+// The FOCUS section: rastro's report for the shown space, in the workbench's card language (the agreed prototype).
+// A refusal is one dim line; a space without rastro draws nothing (the model hands null).
+const FOCUS_TONE = { late: "blocked", wait: "working", move: "done" };
+
+function focusSection(f, t) {
+  if (f.error) {
+    return div().id("focus-error").px(4).py(6).text_size(11).text_color(t.dim).truncate()
+      .child(`Focus: ${f.error.message}`);
+  }
+  const color = (tone) => (tone ? t[FOCUS_TONE[tone]] : t.dim);
+  const hero = f.hero && v_flex().id("focus-hero").gap(2).p(12).rounded(10).bg(t.surface).border_1().border_color(t.border)
+    .child(h_flex().gap(10)
+      .child(div().w(3).h(48).flex_none().rounded(2).bg(color(f.hero.tone)))
+      .child(v_flex().flex_1().min_w(0).gap(2)
+        .child(div().text_size(10).font_semibold().text_color(t.dim).child("PUT YOUR FOCUS HERE"))
+        .child(h_flex().gap(6).items_center().text_size(16).font_semibold()
+          .child(div().truncate().text_color(t.foreground).child(f.hero.title))
+          .when(Boolean(f.hero.id), (el) => el.child(div().flex_none().text_size(12).font_normal().text_color(t.dim).child(`· ${f.hero.id}`))))
+        .child(div().text_size(12).text_color(color(f.hero.tone)).child(f.hero.why))
+        .child(div().text_size(11).text_color(t.dim).truncate().child(f.hero.cite))));
+  const rows = f.rows.map((row, i) => h_flex().id(`focus-row-${i}`).gap(10).items_center().pr(10).rounded(8)
+    .bg(t.surface).border_1().border_color(t.border).overflow_hidden()
+    .child(div().w(3).h(44).flex_none().bg(color(row.tone)))
+    .child(div().w(24).h(24).flex_none().rounded_full().bg(t.raised).text_color(color(row.tone)).text_size(12).font_semibold()
+      .flex().items_center().justify_center().child(row.glyph))
+    .child(v_flex().flex_1().min_w(0).py(6).gap(1)
+      .child(h_flex().gap(6).items_center().text_size(12)
+        .child(div().font_semibold().truncate().text_color(t.foreground).child(row.title))
+        .when(Boolean(row.id), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`· ${row.id}`))))
+      .child(div().text_size(11).text_color(t.dim).truncate().child(row.sub)))
+    .child(div().flex_none().text_size(11).text_color(color(row.tone)).child(row.tag)));
+  const chips = h_flex().gap(6).items_center()
+    .when(Boolean(f.overdue), (el) => el.child(badge(f.overdue, "blocked", t)))
+    .when(Boolean(f.asOf), (el) => el.child(pill(f.asOf, t)));
+  return v_flex().id("focus").gap(6)
+    .child(heading("Focus", t, chips))
+    .when(Boolean(hero), (el) => el.child(hero))
+    .children(rows)
+    .when(!f.hero && f.rows.length === 0, (el) => el.child(div().id("focus-notice").px(4).py(6).text_size(12).text_color(t.dim).child(f.notice ?? "")))
+    .when(Boolean(f.queue) || f.gaps.length > 0, (el) => el.child(h_flex().gap(8).items_center().flex_wrap().px(4).pt(2)
+      .when(Boolean(f.queue), (e) => e.child(div().id("focus-queue").px(6).py(1).rounded(8).text_size(11).bg(t.raised).text_color(t.muted).child(f.queue)))
+      .children(f.gaps.map((gap, i) => div().id(`focus-gap-${i}`).text_size(11).text_color(t.working).child(gap.text)))));
+}
+
 /** `home` is the model's `homeView`; `handlers` are `{onCard, onPlan, onOlder, onOpen, onLink}`. */
 export function homeScreen(home, olderOpen, layout, handlers, t) {
   const needCount = home.needs.reduce((total, n) => total + n.items.length, 0);
   return v_flex().id("home").gap(6).p(12)
+    .when(Boolean(home.focus), (el) => el.child(focusSection(home.focus, t)))
     .when(Boolean(home.cards), (el) => el.child(cards(home.cards, layout, handlers.onCard, t)))
     .when(needCount > 0, (el) => el.child(heading("Needs me", t, badge(`${needCount} waiting`, "blocked", t)))
       .child(needsRows(home.needs, handlers.onPlan, t)))

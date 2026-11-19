@@ -1,6 +1,6 @@
 # Agent workbench
 
-The workbench is a person's view of the orchestrator from one Herdr pane: the plans, each plan's ticket graph, attempts, evidence and live workers, and the week's totals. It has two halves. The read commands (`agent-orchestrator plans list`, `workbench plans`, `workbench plan`, `workbench totals`, all `--json`) read the orchestrator's own plan loader and ledger, write nothing and guess no join. The Herdr mod in `herdr/agent-workbench/` draws their answers; its logic is in pure modules (`model.js`, `data.js` and the views) that the repository suite runs under `node --test`. The only commands the mod gives Herdr beyond the two read verbs are Open and the panel button's layout commands; they change no file and no ledger. The installer side of the mod is in [installer-contract.md](installer-contract.md).
+The workbench is a person's view of the orchestrator from one Herdr pane: the plans, each plan's ticket graph, attempts, evidence and live workers, and the week's totals. It has two halves. The read commands (`agent-orchestrator plans list`, `workbench plans`, `workbench plan`, `workbench totals`, all `--json`) read the orchestrator's own plan loader and ledger, write nothing and guess no join; on home the mod also reads `rastro focus --json`, rastro's report of what needs the owner in the shown space. The Herdr mod in `herdr/agent-workbench/` draws their answers; its logic is in pure modules (`model.js`, `data.js` and the views) that the repository suite runs under `node --test`. The only commands the mod gives Herdr beyond the read verbs are Open and the panel button's layout commands; they change no file and no ledger. The installer side of the mod is in [installer-contract.md](installer-contract.md).
 
 ## Requirements
 
@@ -177,7 +177,14 @@ The mod SHALL refresh with at most one fetch in flight, drop stale answers and w
 
 #### Scenario: changes and the fallback timer
 - WHEN the selected plan's ledger or run directory changes (the watcher marks the view dirty and a 2-second flush turns any number of changes into one fetch) or the 30-second fallback timer fires
-- THEN the mod fetches with a fixed argv (no shell, the plan path one argument) in the space folder, at most one fetch in flight, drops any answer older than the latest request, and runs only `workbench plans`, `workbench plan` and `workbench totals`
+- THEN the mod fetches with a fixed argv (no shell, the plan path one argument) in the space folder, at most one fetch in flight, drops any answer older than the latest request, and runs only `workbench plans`, `workbench plan`, `workbench totals` and, on home, `rastro focus --json`
+
+### Requirement: Mod focus section
+The mod SHALL show on home the focus report `rastro focus --json` prints for the shown space, and SHALL render it without recomputing its ranking: one recommended focus and up to three needs-you rows, each with its citation and observed time, the queue as a count with no content, every typed gap with its last good read, and the as-of stamp.
+
+#### Scenario: the focus report on home
+- WHEN home shows and `rastro focus --json` answers in the space folder
+- THEN the FOCUS section names the recommended focus with its reason and citation, each needs-you row with its glyph, sub-line and due tag, the queue count, each gap with its typed reason, and the as-of time; an empty report reads as its notice; a refusal reads as one dim line with rastro's way out; a space where rastro does not start shows no section
 
 ### Requirement: Mod tests run under node
 The repository suite SHALL run the mod's pure modules under `node --test` and fail when a scenario's node tests did not run.

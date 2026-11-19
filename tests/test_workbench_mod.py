@@ -280,6 +280,11 @@ def test_S30_the_mod_opens_on_needs_me_the_active_plans_and_a_collapsed_older_li
     scenario("S30", 3)
 
 
+@pytest.mark.spec("Mod focus section")
+def test_S35_home_shows_the_focus_report_with_its_citations_queue_count_gaps_and_as_of():
+    scenario("S35", 9)
+
+
 @pytest.mark.spec("Panel size")
 def test_S34_the_shipped_workbench_panel_keeps_520_and_280_with_no_max_so_weight_one_fills_the_area():
     layout = json.loads((MOD.parent / "layouts" / "workbench.json").read_text())
