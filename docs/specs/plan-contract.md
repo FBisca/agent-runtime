@@ -138,8 +138,8 @@ Verify SHALL fail a ticket whose diff touches any file of its plan, and SHALL pa
 Every plan command SHALL find plans and read the repository's `.orchestrate/config.yaml` the same way, creating nothing.
 
 #### Scenario: plans list
-- WHEN `plans list --json` runs with an explicit path, in a repo whose plans sit in one directory (`docs/plans/`, hidden `.plans/`, or the config's `plans.dir`, inside or outside the repository), in a repo with plan files in two directories, and in a repo with none
-- THEN it lists the explicit plan; that directory's plans with their slugs; refuses naming both directories and the explicit-path way out unless the config names one of them; an empty list; no directory or file is created
+- WHEN `plans list --json` runs with an explicit path, in a repo whose plans sit in one directory (`docs/plans/`, hidden `.plans/`, or the config's `plans.dir`, inside or outside the repository), in a repo with plan files in two directories, in a repo with a plan file outside all three (a test fixture), and in a repo with none
+- THEN it lists the explicit plan; that directory's plans with their slugs; refuses naming both directories and the explicit-path way out unless the config names one of them; not the plan file outside them; an empty list; no directory or file is created
 
 #### Scenario: the repo config
 - WHEN any plan command (plans list, plan check, plan approve, run, status) reads `<repo>/.orchestrate/config.yaml`

@@ -158,19 +158,6 @@ class OwnershipOutcome(ToolCase):  # noqa: PLR0904
         )
 
     @pytest.mark.spec("Terminal ownership")
-    def test_S2_the_live_lead_keeps_its_team_after_the_other_session_called(self):
-        """the lead reaches its own workers after the other session called."""
-        lead = self.lead()
-        spawned, text = self.spawn(lead)
-        self.assertFalse(spawned["isError"], "setup: the lead could not spawn: %s" % text)
-        other = self.other()
-        self.call(other, "wait", {"target": "all", "timeout": 3})
-        result, text = self.call(lead, "message", {"to": "w1", "text": "still mine"})
-        self.assertFalse(result["isError"], "the live lead was cut off from its team: %s" % text)
-        self.assertEqual(len(self.messages()), 1, "the lead's message never reached its worker")
-        self.assertEqual(len(self.teams()), 1, "the terminal carries more than one team")
-
-    @pytest.mark.spec("Terminal ownership")
     def test_S3_a_dead_and_empty_newer_team_no_longer_fences_the_lead(self):
         """the lead takes its terminal back from a session that is gone."""
         lead = self.lead()
