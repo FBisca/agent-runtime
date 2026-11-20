@@ -1,0 +1,251 @@
+{
+  "id": "2026-11-19-mcp-writes",
+  "question": "Same plan, same repo, same day: what do tickets cost and how long do they take, driven by the orchestrator vs run manually as implementer + independent-review subagents in one Lead session?",
+  "measured": "2026-11-19",
+  "context": "A private production TypeScript monorepo. One approved plan, one day, one owner: the Lead session ran the plan's first two tickets through the orchestrator, then three follow-up tickets manually as implementer + independent-review subagents. Ticket labels O1/O2 (orchestrated) and M1-M3 (manual) are opaque; the private mapping lives outside this repository.",
+  "rates": {
+    "note": "USD per M input tokens, derived from Claude Code's own cost-state snapshots (costUSD vs token counts) with standard multipliers: output 5x, cache read 0.1x, cache write 1.25x. cost(model) = (in + 5*out + 0.1*cr + 1.25*cw) * rate / 1e6. Accuracy +-5%.",
+    "claude-opus-5-5": 4.978,
+    "claude-sonnet-5-5": 1.73,
+    "claude-haiku-5-5": 0.1,
+    "derivation": [
+      {
+        "model": "claude-haiku-5-5",
+        "source": "lead cost-state snapshot",
+        "in": 1241,
+        "out": 26,
+        "cr": 0,
+        "cw": 0,
+        "cost_usd": 0.0001371,
+        "solved_rate": 0.1
+      },
+      {
+        "model": "claude-opus-5-5",
+        "source": "lead cost-state snapshot",
+        "in": 616,
+        "out": 1529,
+        "cr": 469473,
+        "cw": 83201,
+        "cost_usd": 0.7925466,
+        "solved_rate": 4.978
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "source": "orchestrated worker O1 session",
+        "in": 1702,
+        "out": 54426,
+        "cr": 11905149,
+        "cw": 190686,
+        "cost_usd": 2.5009229,
+        "solved_rate": 1.708
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "source": "orchestrated worker O2 session",
+        "in": 2698,
+        "out": 46947,
+        "cr": 9105575,
+        "cw": 156735,
+        "cost_usd": 2.0123635,
+        "solved_rate": 1.753
+      }
+    ]
+  },
+  "data": {
+    "frozen": [
+      "data/lead-usage.jsonl.gz",
+      "data/subagents-usage.jsonl.gz",
+      "data/orchestrated-inputs.json"
+    ],
+    "local_sources": "~/.local/state/orchestrate/method-cost-sources.json",
+    "local_sources_note": "private, measuring machine; only --freeze needs it"
+  },
+  "orchestrated": {
+    "lead_window": {
+      "lo": "2026-11-19T09:31",
+      "hi": "2026-11-19T12:33"
+    },
+    "tickets": [
+      {
+        "label": "O1",
+        "additions": 654,
+        "deletions": 7,
+        "commits": 3,
+        "pr_created": "2026-11-19T09:50:56Z",
+        "merged": "2026-11-19T10:44:36Z",
+        "spawn": "2026-11-19T09:32:10Z",
+        "blocking_findings": 8,
+        "escalations": 0,
+        "human_rescues": 0,
+        "interventions": 0
+      },
+      {
+        "label": "O2",
+        "additions": 522,
+        "deletions": 76,
+        "commits": 3,
+        "pr_created": "2026-11-19T11:00:23Z",
+        "merged": "2026-11-19T12:15:40Z",
+        "spawn": "2026-11-19T10:45:27Z",
+        "blocking_findings": 8,
+        "escalations": 0,
+        "human_rescues": 0,
+        "interventions": 0
+      }
+    ],
+    "run_start": "2026-11-19T09:32:10Z",
+    "run_finish": "2026-11-19T12:16:01Z"
+  },
+  "manual": {
+    "as_of": "2026-11-19T21:01:00Z",
+    "tickets": [
+      {
+        "label": "M1",
+        "additions": 638,
+        "deletions": 4,
+        "commits": 5,
+        "pr_created": "2026-11-19T15:15:38Z",
+        "merged": null,
+        "impl": {
+          "label": "M1 implement",
+          "model": "claude-sonnet-5-5",
+          "spawn": "2026-11-19T15:02",
+          "end": "2026-11-19T15:59"
+        },
+        "review": {
+          "label": "M1 review",
+          "model": "claude-opus-5-5",
+          "spawn": "2026-11-19T15:59",
+          "end": "2026-11-19T16:04",
+          "verdict": "request changes"
+        },
+        "lead_window": {
+          "lo": "2026-11-19T15:02",
+          "hi": "2026-11-19T16:10"
+        }
+      },
+      {
+        "label": "M2",
+        "additions": 597,
+        "deletions": 76,
+        "commits": 2,
+        "pr_created": "2026-11-19T16:51:52Z",
+        "merged": "2026-11-19T17:16:55Z",
+        "impl": {
+          "label": "M2 implement",
+          "model": "claude-opus-5-5",
+          "spawn": "2026-11-19T16:10",
+          "end": "2026-11-19T17:16"
+        },
+        "review": {
+          "label": "M2 review",
+          "model": "claude-opus-5-5",
+          "spawn": "2026-11-19T16:52",
+          "end": "2026-11-19T16:59",
+          "verdict": "approve"
+        },
+        "lead_window": {
+          "lo": "2026-11-19T16:10",
+          "hi": "2026-11-19T17:17"
+        }
+      },
+      {
+        "label": "M3",
+        "additions": 1409,
+        "deletions": 289,
+        "commits": 2,
+        "pr_created": "2026-11-19T17:47:17Z",
+        "merged": "2026-11-19T19:56:51Z",
+        "impl": {
+          "label": "M3 implement",
+          "model": "claude-opus-5-5",
+          "spawn": "2026-11-19T17:17",
+          "end": "2026-11-19T18:22"
+        },
+        "review": {
+          "label": "M3 review",
+          "model": "claude-opus-5-5",
+          "spawn": "2026-11-19T17:47",
+          "end": "2026-11-19T18:25",
+          "verdict": "approve; fix commit resolves F1-F7, second approve 18:25"
+        },
+        "lead_window": {
+          "lo": "2026-11-19T17:17",
+          "hi": "2026-11-19T19:57"
+        }
+      }
+    ],
+    "rework": {
+      "ticket": "M1",
+      "cause": "the other two manual PRs merged under it; branch stale against main",
+      "unfinished_at_cutoff": true,
+      "impl": {
+        "label": "M1 rework",
+        "model": "claude-opus-5-5",
+        "spawn": "2026-11-19T19:57",
+        "end": "2026-11-19T21:00"
+      },
+      "review": {
+        "label": "M1 re-review",
+        "model": "claude-opus-5-5",
+        "spawn": "2026-11-19T20:17",
+        "end": "2026-11-19T21:00",
+        "verdict": "request changes (small); re-review still running at cutoff"
+      },
+      "lead_window": {
+        "lo": "2026-11-19T19:57",
+        "hi": "2026-11-19T23:59"
+      }
+    },
+    "excluded": "Adjacent-repo work in the same Lead session ($65.9, 120 min) is not part of the comparison."
+  },
+  "shared_planning": {
+    "note": "Both methodologies executed tickets from this one approved plan; amortize over all five tickets.",
+    "planning_main_usd": 19.42,
+    "planning_subagents_usd": 0.73,
+    "gather": {
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 1.13,
+      "tool_calls": 44,
+      "wall_min": 4
+    }
+  },
+  "results": {
+    "orchestrated": {
+      "tickets": 2,
+      "merged": 2,
+      "cost_usd": 9.65,
+      "workers_usd": 6.1,
+      "reviewers_usd": 1.57,
+      "lead_usd": 1.98,
+      "wall_min": 164,
+      "additions": 1176,
+      "deletions": 83,
+      "cost_per_ticket": 4.83,
+      "cost_per_added_line": 0.0082
+    },
+    "manual": {
+      "tickets": 3,
+      "merged": 2,
+      "cost_usd": 96.22,
+      "wall_elapsed_min": 358,
+      "wall_active_min": 259,
+      "additions": 2644,
+      "deletions": 369,
+      "cost_per_ticket": 32.07,
+      "cost_per_added_line": 0.0364,
+      "review_total_usd": 20.46,
+      "rework_usd": 25.22
+    },
+    "ratio_cost_per_ticket": 6.6,
+    "ratio_cost_per_added_line": 4.4
+  },
+  "caveats": [
+    "n=2 vs n=3; ticket mix differs (M3 is the largest diff). Per-added-line normalization is approximate.",
+    "Rates derived from Claude Code cost-state snapshots, not a price list; +-5%.",
+    "Reviewer totals are the last usage snapshot per assignment and may undercount the final poll interval.",
+    "Manual Lead windows include PR/Linear/coordination chores the driver automates; that asymmetry is the methodology's point, not a measurement error.",
+    "M1 was still open and its rework + re-review still running at the 21:01Z cutoff; the manual cost is a lower bound and its merge wall is not counted.",
+    "Raw logs live on the measuring machine (state_dir + claude_projects); the record is portable, reproduction is not."
+  ]
+}

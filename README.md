@@ -26,6 +26,7 @@ Works with any coding agent that speaks MCP; tested with Claude Code, Codex and 
 - **Durable.** Assignments, reports, messages and tasks live in a local SQLite store. Retries are safe, and a `/clear` or a server restart loses nothing.
 - **Guarded.** Hooks and the server decide who may spawn, message or stop, and each worker launches with only its own provider's credentials.
 - **No dependencies.** The runtime is Python standard library only.
+- **Measured.** Same plan, same repo, same day: orchestrator-driven tickets cost ~6× less than manual implementer + review subagents ($4.83 vs $32.07 per ticket), with zero owner interventions ([benchmark](evals/method-cost/README.md)).
 
 ## How it works
 

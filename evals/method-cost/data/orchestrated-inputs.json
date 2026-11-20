@@ -1,0 +1,111 @@
+{
+ "run_start": "2026-11-19T09:32:10Z",
+ "run_finish": "2026-11-19T12:16:01Z",
+ "worker_attempts": [
+  {
+   "task": "t1",
+   "provider": "sonnet",
+   "elapsed_s": 2944.204,
+   "in": 228,
+   "out": 63098,
+   "cr": 12412769,
+   "cw": 261504
+  },
+  {
+   "task": "t1r1",
+   "provider": "sonnet",
+   "elapsed_s": 157.488,
+   "in": 16,
+   "out": 2537,
+   "cr": 1289270,
+   "cw": 6361
+  },
+  {
+   "task": "t1r2",
+   "provider": "sonnet",
+   "elapsed_s": 1254.811,
+   "in": 10,
+   "out": 1001,
+   "cr": 699591,
+   "cw": 7676
+  },
+  {
+   "task": "t2",
+   "provider": "sonnet",
+   "elapsed_s": 1504.848,
+   "in": 138,
+   "out": 41891,
+   "cr": 5608194,
+   "cw": 190984
+  },
+  {
+   "task": "t2r1",
+   "provider": "sonnet",
+   "elapsed_s": 286.042,
+   "in": 16,
+   "out": 3416,
+   "cr": 936420,
+   "cw": 6793
+  },
+  {
+   "task": "t2r2",
+   "provider": "sonnet",
+   "elapsed_s": 1216.713,
+   "in": 12,
+   "out": 807,
+   "cr": 524091,
+   "cw": 5141
+  },
+  {
+   "task": "t2r3",
+   "provider": "sonnet",
+   "elapsed_s": 2422.882,
+   "in": 28,
+   "out": 3734,
+   "cr": 1812611,
+   "cw": 14251
+  }
+ ],
+ "reviewer_snapshots": [
+  {
+   "unit": "t1",
+   "model": "claude-sonnet-5-5",
+   "in": 78,
+   "out": 16637,
+   "cr": 3874038,
+   "cw": 96881
+  },
+  {
+   "unit": "t1",
+   "model": "claude-sonnet-5-5",
+   "in": 2,
+   "out": 285,
+   "cr": 126936,
+   "cw": 4425
+  },
+  {
+   "unit": "t2",
+   "model": "claude-sonnet-5-5",
+   "in": 34,
+   "out": 8747,
+   "cr": 1356289,
+   "cw": 69267
+  },
+  {
+   "unit": "t2",
+   "model": "claude-sonnet-5-5",
+   "in": 4,
+   "out": 276,
+   "cr": 101250,
+   "cw": 2510
+  },
+  {
+   "unit": "t2",
+   "model": "claude-sonnet-5-5",
+   "in": 4,
+   "out": 269,
+   "cr": 108402,
+   "cw": 2629
+  }
+ ]
+}
