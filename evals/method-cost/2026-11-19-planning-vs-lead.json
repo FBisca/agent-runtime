@@ -11,8 +11,8 @@
   },
   "data": {
     "frozen": [
-      "data/runs-claude-usage.jsonl",
-      "data/runs-pi-usage.jsonl",
+      "data/runs-claude-usage.jsonl.gz",
+      "data/runs-pi-usage.jsonl.gz",
       "data/runs-totals.json"
     ],
     "local_sources": "~/.local/state/orchestrate/method-cost-sources.json",

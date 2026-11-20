@@ -53,8 +53,8 @@
   },
   "data": {
     "frozen": [
-      "data/lead-usage.jsonl",
-      "data/subagents-usage.jsonl",
+      "data/lead-usage.jsonl.gz",
+      "data/subagents-usage.jsonl.gz",
       "data/orchestrated-inputs.json"
     ],
     "local_sources": "~/.local/state/orchestrate/method-cost-sources.json",
@@ -227,15 +227,15 @@
     "manual": {
       "tickets": 3,
       "merged": 2,
-      "cost_usd": 96.37,
+      "cost_usd": 96.22,
       "wall_elapsed_min": 358,
       "wall_active_min": 259,
       "additions": 2644,
       "deletions": 369,
-      "cost_per_ticket": 32.12,
+      "cost_per_ticket": 32.07,
       "cost_per_added_line": 0.0364,
       "review_total_usd": 20.46,
-      "rework_usd": 25.37
+      "rework_usd": 25.22
     },
     "ratio_cost_per_ticket": 6.6,
     "ratio_cost_per_added_line": 4.4

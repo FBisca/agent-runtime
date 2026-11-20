@@ -17,8 +17,8 @@ same person. Tickets are opaque labels: O1/O2 orchestrated, M1–M3 manual.
 |---|---|---|
 | Tickets | 2 | 3 |
 | Merged at cutoff | 2/2 | 2/3 — M1 open, rework still running |
-| Cost | **$9.65** | **$96.37** (lower bound) |
-| Per ticket | $4.83 | $32.12 |
+| Cost | **$9.65** | **$96.22** (lower bound) |
+| Per ticket | $4.83 | $32.07 |
 | Per added line | $0.0082 | $0.0364 |
 | Wall | 164 min, both merged | 358 min elapsed, 259 active |
 | Review cost | $1.57 total | $20.46 total |
@@ -34,7 +34,7 @@ same person. Tickets are opaque labels: O1/O2 orchestrated, M1–M3 manual.
 2. **Lead tax.** Manual coordination (PRs, issue tracker, choreography) cost $2–2.8 of opus
    main-thread per ticket; the driver does that plumbing, and the whole orchestrated run's Lead
    cost $1.98.
-3. **Stale-main rework.** M2/M3 merged under M1; the rework cost $25.37 and was still not clean at
+3. **Stale-main rework.** M2/M3 merged under M1; the rework cost $25.22 and was still not clean at
    the cutoff. The orchestrator's update-branch and scope rules exist for this.
 4. **Review depth was comparable** — both methodologies caught real bugs (wrong `required` flags
    on five resources; seven findings resolved in a fix round; 8+8 blocking findings). The manual
@@ -82,8 +82,10 @@ Claude and Pi side by side. Execution = workers + reviewers (sonnet).
 - **Wall:** orchestrated = run start to finish (includes CI and merge); manual = spawn to the
   later of implementer/review end per ticket, summed; merge waits noted, not hidden.
 - **Freeze:** the Lead session was still live at measurement time, so the raw usage lines are
-  frozen in `data/`, cut at `manual.as_of`. Later activity in that session cannot move the
-  figures, and they reproduce on any machine.
+  frozen in `data/` as gzipped jsonl, cut at `manual.as_of` (minute granularity). Message ids are
+  sha256-truncated and timestamps minute-precision: enough for dedup and windows, no correlatable
+  handles. Later activity in that session cannot move the figures, and they reproduce on any
+  machine.
 
 ## Reproduce
 
@@ -96,7 +98,7 @@ python3 evals/method-cost/extract.py --freeze   # rebuild data/ from live logs (
 The check exits non-zero on any figure that drifts beyond ±$0.06 / ±2 min. `--freeze` needs the
 private sources file named in the record (`data.local_sources`): repo keys, session ids and the
 label mapping, which never enter this repository. The frozen data and the record carry no repo
-names, PR numbers, issue ids or paths.
+names, PR numbers, issue ids or paths; message ids are hashed.
 
 ## Caveats
 

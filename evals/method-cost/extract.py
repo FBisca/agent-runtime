@@ -19,6 +19,8 @@ recorded cost (token-plan models bill 0 marginal). Lines are deduped by message 
 """
 
 import argparse
+import gzip
+import hashlib
 import json
 import sys
 from collections import defaultdict
@@ -28,6 +30,18 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KEYS = ("in", "out", "cr", "cw")
 MODELS = {"sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5", "haiku": "claude-haiku-5-5"}
+
+
+def read_lines(path):
+    path = Path(path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as f:
+        yield from f
+
+
+def norm(at, mid):
+    """Minute-precision timestamp and hashed message id: enough for windows and dedup, no handles."""
+    return at[:16], hashlib.sha256(str(mid).encode()).hexdigest()[:16]
 
 
 def blank():
@@ -53,7 +67,7 @@ def totals(lines, lo=None, hi=None):
     seen = set()
     tot = defaultdict(blank)
     for at, model, mid, usage in lines:
-        if (lo is not None or hi is not None) and not ((lo or "") <= at < (hi or "9999")):
+        if (lo is not None or hi is not None) and not ((lo or "")[:16] <= at < (hi or "9999")[:16]):
             continue
         if mid in seen:
             continue
@@ -73,10 +87,10 @@ def load_data(rec):
     names = rec["data"]["frozen"]
     lead = [
         tuple(json.loads(line)[k] for k in ("at", "model", "id", "usage"))
-        for line in open(HERE / names[0])
+        for line in read_lines(HERE / names[0])
     ]
     subs = defaultdict(list)
-    for line in open(HERE / names[1]):
+    for line in read_lines(HERE / names[1]):
         r = json.loads(line)
         subs[r["label"]].append((r["at"], r["model"], r["id"], r["usage"]))
     orch = json.load(open(HERE / names[2]))
@@ -129,7 +143,7 @@ def pi_totals(lines, lo=None, hi=None):
     tot = defaultdict(blank)
     cost_usd = 0.0
     for at, model, mid, usage, c in lines:
-        if (lo is not None or hi is not None) and not ((lo or "") <= at < (hi or "9999")):
+        if (lo is not None or hi is not None) and not ((lo or "")[:16] <= at < (hi or "9999")[:16]):
             continue
         if mid in seen:
             continue
@@ -150,13 +164,14 @@ def freeze(rec):
         / src["lead_project"]
         / (src["lead_session"] + ".jsonl")
     )
-    with open(data / "lead-usage.jsonl", "w") as out:
+    with gzip.open(data / "lead-usage.jsonl.gz", "wt") as out:
         for at, model, mid, usage in usage_lines(lead_path):
-            if at < as_of:
+            if at[:16] < as_of[:16]:
+                at, mid = norm(at, mid)
                 out.write(json.dumps({"at": at, "model": model, "id": mid, "usage": usage}) + "\n")
     base = lead_path.parent / src["lead_session"] / "subagents"
     n = 0
-    with open(data / "subagents-usage.jsonl", "w") as out:
+    with gzip.open(data / "subagents-usage.jsonl.gz", "wt") as out:
         for meta_path in sorted(base.glob("*.meta.json")):
             meta = json.load(open(meta_path))
             label = labels.get(meta.get("description"))
@@ -164,7 +179,8 @@ def freeze(rec):
                 continue
             jf = meta_path.with_name(meta_path.name.replace(".meta.json", ".jsonl"))
             for at, model, mid, usage in usage_lines(jf):
-                if at < as_of:
+                if at[:16] < as_of[:16]:
+                    at, mid = norm(at, mid)
                     out.write(
                         json.dumps(
                             {"label": label, "at": at, "model": model, "id": mid, "usage": usage}
@@ -254,10 +270,11 @@ def freeze_runs(rec, local):
     r = local["runs"]
     data = HERE / "data"
     cbase = Path(local["sources"]["claude_projects"]).expanduser() / r["claude_project"]
-    with open(data / "runs-claude-usage.jsonl", "w") as out:
+    with gzip.open(data / "runs-claude-usage.jsonl.gz", "wt") as out:
         for sid, label in r["claude_sessions"].items():
             for f in cbase.glob(sid + "*.jsonl"):
                 for at, model, mid, usage in usage_lines(f):
+                    at, mid = norm(at, mid)
                     out.write(
                         json.dumps(
                             {"session": label, "at": at, "model": model, "id": mid, "usage": usage}
@@ -265,10 +282,11 @@ def freeze_runs(rec, local):
                         + "\n"
                     )
     pbase = Path(r["pi_dir"]).expanduser()
-    with open(data / "runs-pi-usage.jsonl", "w") as out:
+    with gzip.open(data / "runs-pi-usage.jsonl.gz", "wt") as out:
         for prefix, label in r["pi_sessions"].items():
             for f in pbase.glob(prefix + "*.jsonl"):
                 for at, model, mid, usage, c in pi_usage_lines(f):
+                    at, mid = norm(at, mid)
                     out.write(
                         json.dumps(
                             {
@@ -367,11 +385,11 @@ def manual(rec, rates, lead, subs):
 
 def runs_results(rec, rates):
     claude = defaultdict(list)
-    for line in open(HERE / rec["data"]["frozen"][0]):
+    for line in read_lines(HERE / rec["data"]["frozen"][0]):
         r = json.loads(line)
         claude[r["session"]].append((r["at"], r["model"], r["id"], r["usage"]))
     pi = defaultdict(list)
-    for line in open(HERE / rec["data"]["frozen"][1]):
+    for line in read_lines(HERE / rec["data"]["frozen"][1]):
         r = json.loads(line)
         pi[r["session"]].append((r["at"], r["model"], r["id"], r["usage"], r["cost_usd"]))
     runs = json.load(open(HERE / rec["data"]["frozen"][2]))
