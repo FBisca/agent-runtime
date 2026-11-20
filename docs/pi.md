@@ -49,7 +49,8 @@ for it - and reaches only the workers of its own team. Register the server in Pi
       "args": ["/absolute/path/to/agent-runtime/server/mcp_server.py"],
       "env": { "AGENT_RUNTIME_DISPATCH": "1" },
       "exposure": "deferred",
-      "toolExposure": { "report": "direct" }
+      "toolExposure": { "report": "direct" },
+      "description": "Start, wait for and stop worker agents (Claude, Codex, Pi): spawn, wait, status, stop, report"
     }
   }
 }
@@ -58,7 +59,7 @@ for it - and reaches only the workers of its own team. Register the server in Pi
 `exposure: deferred` leaves the tools out of the model's context until `tool_search` loads them, which
 is how Pi tells its model to find MCP tools. `direct` would declare them all, and `tool_search` skips a
 declared tool, so a lead that searched for `spawn` was told none exists and fell back to the shell.
-`report` stays declared: a worker's brief names it, and a worker must never have to find it first. The
+`report` stays declared: a worker's brief names it, and a worker must never have to find it first. `description` is the one line Pi lists for a deferred server in its system prompt, so a request to start a worker leads the model to search this server. The
 server needs the durable dispatch store, so `AGENT_RUNTIME_DISPATCH=1` is
 required, and the lead needs an `hc` terminal to start workers from.
 

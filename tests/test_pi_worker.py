@@ -119,6 +119,9 @@ class PiSpawnTests(ToolCase):
         # declared, because a worker that never loads it never reports.
         self.assertEqual(server["exposure"], "deferred")
         self.assertEqual(server["toolExposure"], {"report": "direct"})
+        # The one line Pi lists for a deferred server: it says what the tools are for.
+        for tool in ("spawn", "wait", "stop"):
+            self.assertIn(tool, server["description"])
         self.assertTrue(server["args"][0].endswith("server/mcp_server.py"))
         self.assertTrue(Path(server["args"][0]).is_absolute())
         self.assertTrue(Path(server["args"][0]).is_file())

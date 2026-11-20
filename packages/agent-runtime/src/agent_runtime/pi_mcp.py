@@ -25,6 +25,11 @@ DISPATCH = {"AGENT_RUNTIME_DISPATCH": "1"}
 # the worker's brief names it, and a worker that never loads it finishes and never reports.
 EXPOSURE = "deferred"
 TOOL_EXPOSURE = {"report": "direct"}
+# Pi lists a deferred server in its system prompt with one line, this one; without it the line is the
+# bare name, and nothing tells the model that a request to start a worker is answered here.
+DESCRIPTION = (
+    "Start, wait for and stop worker agents (Claude, Codex, Pi): spawn, wait, status, stop, report"
+)
 
 
 class PiMcpError(Exception):
@@ -67,6 +72,7 @@ def entry():
         "env": dict(DISPATCH),
         "exposure": EXPOSURE,
         "toolExposure": dict(TOOL_EXPOSURE),
+        "description": DESCRIPTION,
         "timeout": TIMEOUT,
     }
 

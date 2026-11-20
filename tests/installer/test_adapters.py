@@ -283,7 +283,7 @@ class ExistingConfigurationTests(AdapterCase):
         block, _ = json.JSONDecoder().raw_decode(result.stdout[start:])
         printed = block["mcpServers"]["agent-runtime"]
         written = pi_mcp.entry()
-        for key in ("exposure", "toolExposure"):
+        for key in ("exposure", "toolExposure", "description"):
             self.assertEqual(printed.get(key), written[key], key)
 
     @pytest.mark.spec("Existing configuration kept")
