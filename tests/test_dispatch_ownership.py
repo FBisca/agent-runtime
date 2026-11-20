@@ -188,6 +188,17 @@ class TerminalRefusalTests(ToolCase):
             self.store.team(self.scope, self.terminal, "4242:unrelated")
         self.assertEqual(len(self.teams()), 1, "the refused session registered a team")
 
+    @pytest.mark.spec("Terminal ownership")
+    def test_S1_an_owner_the_process_table_cannot_read_keeps_the_terminal(self):
+        """a `ps` that times out on a loaded machine is not proof the owner died."""
+        owner = "4242:a stamp the process table could not confirm"
+        unread = Store(self.env, alive=lambda _pid: (True, None))
+        team = unread.team(self.scope, self.terminal, owner)
+        self.hold_work(team)
+        with self.assertRaises(TerminalRefused):
+            unread.team(self.scope, self.terminal, "4243:unrelated")
+        self.assertEqual(len(self.teams()), 1, "the refused session registered a team")
+
     def test_S1_an_unrelated_session_takes_a_terminal_whose_owner_is_idle(self):
         """stale-team-generation/D7: an idle terminal is free for the next session."""
         owner = self.live_generation()

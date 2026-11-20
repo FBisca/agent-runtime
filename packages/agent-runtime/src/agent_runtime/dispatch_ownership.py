@@ -56,16 +56,18 @@ GENERATION_PID = re.compile(r"^(\d+):(.+)$")
 
 
 def generation_alive(generation, stamp=None):
-    """True when the generation's process is provably alive: that pid still carries that start stamp.
+    """True unless the process table proves the generation's process gone: no such pid, or the pid
+    carries another start stamp.
 
     A generation with no pid is never provably alive (nor provably dead): only what its team holds
-    can judge it. The process evidence is injected, so the store keeps no subprocess code and a test
-    can stand for the process table."""
+    can judge it. A process table that could not be read (the stamp is None: `ps` timed out on a
+    loaded machine) is not proof of death, so the owner keeps its terminal. The process evidence is
+    injected, so the store keeps no subprocess code and a test can stand for the process table."""
     match = GENERATION_PID.match(generation) if isinstance(generation, str) else None
     if not match:
         return False
     exists, start = (stamp or process_start_stamp)(int(match.group(1)))
-    return exists and start == match.group(2)
+    return exists and (start is None or start == match.group(2))
 
 
 def alive_verdicts(generations, stamp=None):
