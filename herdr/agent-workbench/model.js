@@ -28,14 +28,19 @@ function read(result, shaped, ways = WAY_OUT) {
     const kind = /time(d)?[ -]?out/i.test(result.thrown) ? "timeout" : "not_started";
     return failure(kind, firstLine(result.thrown) || kind, ways[kind]);
   }
-  let value;
-  try {
-    value = JSON.parse(String(result.stdout ?? "").trim());
-  } catch {
-    value = undefined;
-  }
-  if (value && typeof value === "object" && value.error && typeof value.error === "object") {
-    const { kind, message, way_out: wayOut } = value.error;
+  const parse = (text) => {
+    try {
+      return JSON.parse(String(text ?? "").trim());
+    } catch {
+      return undefined;
+    }
+  };
+  const isRefusal = (v) => Boolean(v && typeof v === "object" && v.error && typeof v.error === "object");
+  const value = parse(result.stdout);
+  // The orchestrator prints a refusal as one JSON object on stderr with stdout empty; read it from either stream.
+  const refused = isRefusal(value) ? value : result.code !== 0 ? parse(result.stderr) : undefined;
+  if (isRefusal(refused)) {
+    const { kind, message, way_out: wayOut } = refused.error;
     return failure(kind || "failed", String(message ?? kind ?? "the command refused"), wayOut || ways[kind || "failed"]);
   }
   if (value === undefined) {

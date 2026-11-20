@@ -82,10 +82,11 @@ export const TOTALS = {
 };
 
 export const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
+// A refusal as the orchestrator prints it (agent-workbench spec): one JSON object on stderr, stdout empty, exit 2.
 export const refusal = (kind, message, wayOut) => ({
   code: 2,
-  stdout: JSON.stringify({ schema_version: 1, error: { kind, message, way_out: wayOut } }),
-  stderr: "workbench: " + message + "\n",
+  stdout: "",
+  stderr: JSON.stringify({ schema_version: 1, error: { kind, message, way_out: wayOut } }) + "\n",
 });
 
 // What `workbench plan --json` adds for a driven plan (`metrics`), as the orchestrator computes it. T3 never ran.

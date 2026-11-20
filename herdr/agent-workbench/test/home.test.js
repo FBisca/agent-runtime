@@ -128,7 +128,7 @@ test("S7 without Herdr's terminals every worker is unknown, never not live, and 
 test("S7 the totals answer is read as the plans answer is: a refusal or a stray JSON is an error, never cards", () => {
   assert.equal(readTotals({ code: 0, stdout: JSON.stringify(TOTALS), stderr: "" }).ok, true);
   assert.equal(readTotals({ code: 0, stdout: JSON.stringify({ plans: [] }), stderr: "" }).ok, false);
-  const refused = readTotals({ code: 2, stdout: JSON.stringify({ error: { kind: "no_plans", message: "none" } }), stderr: "" });
+  const refused = readTotals({ code: 2, stdout: "", stderr: JSON.stringify({ error: { kind: "no_plans", message: "none" } }) });
   assert.equal(refused.ok, false);
   assert.equal(refused.error.kind, "no_plans");
 });
