@@ -478,6 +478,10 @@ The newest live-or-occupied team row SHALL own an hc terminal, and a session tha
 - WHEN the newest row's process still runs, or is gone but holds any of those
 - THEN that row keeps the terminal and the live lead is fenced with "stale team generation" naming the owning generation and the way out
 
+#### Scenario: an unreadable process table
+- WHEN the process table cannot be read for a row's process (`ps` fails or times out)
+- THEN that process counts as running: the row keeps the terminal and a second session is refused
+
 ### Requirement: Hooks read terminal ownership
 The lead-liveness hooks SHALL apply the same ownership rule as the server.
 
