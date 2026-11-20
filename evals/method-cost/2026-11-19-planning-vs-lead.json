@@ -1,0 +1,213 @@
+{
+  "id": "2026-11-19-planning-vs-lead",
+  "question": "In the plan-then-orchestrate workflow (fresh session to plan, fresh session to Lead the driver), where does the money go: the planning session, the workers+reviewers, or the Lead session?",
+  "measured": "2026-11-19",
+  "context": "A private Rust repo, plans P1-P3 executed 2026-11-18/19 plus P4 planned only. The owner plans in a fresh session and orchestrates in a fresh session, on Claude or Pi. Labels are opaque; the private mapping lives outside this repository. Sibling record: 2026-11-19-mcp-writes.json (rates derivation, orchestrated-vs-manual).",
+  "rates": {
+    "note": "Same rates and derivation as 2026-11-19-mcp-writes.json. Pi sessions use their recorded cost; token-plan models bill 0 marginal.",
+    "claude-opus-5-5": 4.978,
+    "claude-sonnet-5-5": 1.73,
+    "claude-haiku-5-5": 0.1
+  },
+  "data": {
+    "frozen": [
+      "data/runs-claude-usage.jsonl",
+      "data/runs-pi-usage.jsonl",
+      "data/runs-totals.json"
+    ],
+    "local_sources": "~/.local/state/orchestrate/method-cost-sources.json",
+    "local_sources_note": "private, measuring machine; only --freeze needs it"
+  },
+  "sessions": [
+    {
+      "label": "C-P1",
+      "harness": "claude",
+      "role": "planning P1",
+      "window": {
+        "lo": "2026-11-19T07:59",
+        "hi": "2026-11-19T09:40"
+      }
+    },
+    {
+      "label": "C-P1",
+      "harness": "claude",
+      "role": "lead P1",
+      "window": {
+        "lo": "2026-11-19T12:20",
+        "hi": "2026-11-19T19:00"
+      }
+    },
+    {
+      "label": "C-P1",
+      "harness": "claude",
+      "role": "planning P4",
+      "window": {
+        "lo": "2026-11-19T19:00",
+        "hi": "2026-11-19T20:00"
+      }
+    },
+    {
+      "label": "C-P2",
+      "harness": "claude",
+      "role": "lead P2 + amend",
+      "window": {
+        "lo": "2026-11-18T11:55",
+        "hi": "2026-11-19T07:58"
+      }
+    },
+    {
+      "label": "C-P0",
+      "harness": "claude",
+      "role": "lead old loop",
+      "window": {
+        "lo": "2026-11-17T19:13",
+        "hi": "2026-11-18T17:07"
+      }
+    },
+    {
+      "label": "C-G2",
+      "harness": "claude",
+      "role": "gather P2",
+      "window": {
+        "lo": "2026-11-18T07:44",
+        "hi": "2026-11-18T07:49"
+      }
+    },
+    {
+      "label": "C-try",
+      "harness": "claude",
+      "role": "sonnet planning attempt (no plan file produced)",
+      "window": {
+        "lo": "2026-11-19T08:01",
+        "hi": "2026-11-19T08:08"
+      }
+    },
+    {
+      "label": "Pi-P1a",
+      "harness": "pi",
+      "role": "pre-plan P1"
+    },
+    {
+      "label": "Pi-P1b",
+      "harness": "pi",
+      "role": "pre-plan P1 (second attempt)"
+    },
+    {
+      "label": "Pi-L3",
+      "harness": "pi",
+      "role": "lead P3"
+    },
+    {
+      "label": "Pi-P4",
+      "harness": "pi",
+      "role": "planning P4 (metered glm)"
+    },
+    {
+      "label": "Pi-L0",
+      "harness": "pi",
+      "role": "lead old loop (deepseek-flash)"
+    }
+  ],
+  "results": {
+    "sessions": [
+      {
+        "label": "C-P1",
+        "role": "planning P1",
+        "cost_usd": 7.51
+      },
+      {
+        "label": "C-P1",
+        "role": "lead P1",
+        "cost_usd": 15.02
+      },
+      {
+        "label": "C-P1",
+        "role": "planning P4",
+        "cost_usd": 2.6
+      },
+      {
+        "label": "C-P2",
+        "role": "lead P2 + amend",
+        "cost_usd": 12.81
+      },
+      {
+        "label": "C-P0",
+        "role": "lead old loop",
+        "cost_usd": 34.33
+      },
+      {
+        "label": "C-G2",
+        "role": "gather P2",
+        "cost_usd": 0.79
+      },
+      {
+        "label": "C-try",
+        "role": "sonnet planning attempt (no plan file produced)",
+        "cost_usd": 1.0
+      },
+      {
+        "label": "Pi-P1a",
+        "role": "pre-plan P1",
+        "cost_usd": 0.0
+      },
+      {
+        "label": "Pi-P1b",
+        "role": "pre-plan P1 (second attempt)",
+        "cost_usd": 0.0
+      },
+      {
+        "label": "Pi-L3",
+        "role": "lead P3",
+        "cost_usd": 0.0
+      },
+      {
+        "label": "Pi-P4",
+        "role": "planning P4 (metered glm)",
+        "cost_usd": 0.55
+      },
+      {
+        "label": "Pi-L0",
+        "role": "lead old loop (deepseek-flash)",
+        "cost_usd": 0.78
+      }
+    ],
+    "plans": {
+      "P1": {
+        "planning_usd": 7.51,
+        "preplan_usd": 0.0,
+        "execution_usd": 28.36,
+        "lead_usd": 15.02
+      },
+      "P2": {
+        "planning_usd": 0.79,
+        "execution_usd": 31.09,
+        "lead_usd": 12.81
+      },
+      "P3": {
+        "execution_usd": 6.65,
+        "lead_usd": 0.0,
+        "lead_at_opus_rates_usd": 25.97
+      },
+      "P4": {
+        "planning_opus_usd": 2.6,
+        "planning_pi_usd": 0.55
+      }
+    },
+    "old_loop": {
+      "lead_opus_usd": 34.33,
+      "lead_pi_usd": 0.78
+    },
+    "sonnet_planning_attempt_usd": 1.0,
+    "planning_share_of_execution": {
+      "P1": 0.265,
+      "P2": 0.025
+    }
+  },
+  "caveats": [
+    "C-P1 is one opus session that planned P1, Led P1 and planned P4; windows split it by activity timestamps. Its lead window includes owner chat and manual merges, so it overstates pure Lead work.",
+    "P3's planning session is unattributed (the plan was written the day before); P2's planning counts only its gather. Planning shares are therefore lower bounds.",
+    "Pi token-plan costs are $0 marginal; P3's lead counterfactual prices the same tokens at opus rates.",
+    "The old-loop Lead (C-P0) spans three plans overnight; it is not per-plan.",
+    "The sonnet planning attempt produced no plan file; its cost is counted but attributed to no plan."
+  ]
+}
