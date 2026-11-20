@@ -19,6 +19,12 @@ from pathlib import Path
 SERVER = "agent-runtime"  # the name Pi's tools are namespaced with
 TIMEOUT = 600  # the tool timeout the installer gives the server elsewhere
 DISPATCH = {"AGENT_RUNTIME_DISPATCH": "1"}
+# Pi tells its model to find MCP tools with tool_search, and tool_search skips a tool already declared:
+# with every tool declared, a lead that searched for `spawn` was told no such tool exists. Deferred
+# tools are found and loaded by that search and cost no context until then. `report` stays declared:
+# the worker's brief names it, and a worker that never loads it finishes and never reports.
+EXPOSURE = "deferred"
+TOOL_EXPOSURE = {"report": "direct"}
 
 
 class PiMcpError(Exception):
@@ -52,13 +58,15 @@ def server_command():
 
 
 def entry():
-    """The server entry a Pi worker needs: this runtime's server, with dispatch on and direct exposure."""
+    """The server entry a Pi session needs: this runtime's server, with dispatch on, its tools found by
+    tool_search and `report` declared."""
     command, args = server_command()
     return {
         "command": command,
         "args": args,
         "env": dict(DISPATCH),
-        "exposure": "direct",
+        "exposure": EXPOSURE,
+        "toolExposure": dict(TOOL_EXPOSURE),
         "timeout": TIMEOUT,
     }
 

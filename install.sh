@@ -709,7 +709,8 @@ print_pi_wiring() {
       "command": "python3",
       "args": ["$server"],
       "env": { "AGENT_RUNTIME_DISPATCH": "1" },
-      "exposure": "direct"
+      "exposure": "deferred",
+      "toolExposure": { "report": "direct" }
     }
   }
 }

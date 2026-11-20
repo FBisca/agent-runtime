@@ -388,7 +388,7 @@ A `pi` worker SHALL run trust-prompt free with the role and the runtime's MCP se
 
 #### Scenario: MCP registration
 - WHEN a `pi` worker is spawned
-- THEN Pi's user-level `mcp.json` (`$PI_CODING_AGENT_DIR/mcp.json`, else `~/.pi/agent/mcp.json`) carries the `agent-runtime` server with this runtime's absolute server path, `AGENT_RUNTIME_DISPATCH=1` and `exposure: direct`, every other server in the file survives, and an unreadable or unwritable configuration is an error naming it before `hc run`
+- THEN Pi's user-level `mcp.json` (`$PI_CODING_AGENT_DIR/mcp.json`, else `~/.pi/agent/mcp.json`) carries the `agent-runtime` server with this runtime's absolute server path, `AGENT_RUNTIME_DISPATCH=1`, `exposure: deferred` and `toolExposure: {report: direct}` (the block the installer prints exposes the same), every other server in the file survives, and an unreadable or unwritable configuration is an error naming it before `hc run`
 
 ### Requirement: Call command
 `agent-runtime call <tool> --lead L --json '<args>'` SHALL run a dispatch tool from an hc terminal and print its JSON result.
@@ -398,7 +398,7 @@ A `pi` worker SHALL run trust-prompt free with the role and the runtime's MCP se
 - THEN it prints the tool's JSON result and exits 0, and a tool error is printed as JSON with exit 1; when the caller is not an hc terminal it exits 2 with the `require_hc` message, and invalid `--json` or an unknown tool exits 2 with usage, starting nothing
 
 #### Scenario: shared lead
-- WHEN two separate `call` processes pass the same `--lead`
+- WHEN two separate `call` processes in the same hc terminal pass the same `--lead`
 - THEN `wait` in the second sees and receives reports for assignments spawned by the first
 
 ### Requirement: Call guard

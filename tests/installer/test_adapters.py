@@ -6,6 +6,7 @@ credential is never opened, and a secret never reaches the output. Every test dr
 script against a real home directory with fake tools, so the file is an integration test.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from pathlib import Path
 import pytest
 import test_install as shared
 import test_release as release
+from agent_runtime import pi_mcp
 
 pytestmark = pytest.mark.integration
 
@@ -270,6 +272,19 @@ class ExistingConfigurationTests(AdapterCase):
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertIn(complete, again.stdout)
         self.assertEqual(codex.read_text(encoding="utf-8"), complete)
+
+    @pytest.mark.spec("Pi workers")
+    def test_the_printed_pi_block_exposes_the_tools_as_the_runtime_writes_them(self):
+        """Pi workers: the block an operator copies exposes the tools the way a spawn writes them, so
+        the two never disagree on which tools Pi declares and which it leaves for tool_search."""
+        result = self.run_installer("--components", "runtime,pi")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        start = result.stdout.index('{\n  "mcpServers"')
+        block, _ = json.JSONDecoder().raw_decode(result.stdout[start:])
+        printed = block["mcpServers"]["agent-runtime"]
+        written = pi_mcp.entry()
+        for key in ("exposure", "toolExposure"):
+            self.assertEqual(printed.get(key), written[key], key)
 
     @pytest.mark.spec("Existing configuration kept")
     def test_s4_an_entry_that_points_somewhere_else_is_a_conflict_and_is_not_rewritten(self):

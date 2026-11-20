@@ -115,7 +115,10 @@ class PiSpawnTests(ToolCase):
         data = json.loads(self.mcp_file().read_text(encoding="utf-8"))
         server = data["mcpServers"]["agent-runtime"]
         self.assertEqual(server["env"], {"AGENT_RUNTIME_DISPATCH": "1"})
-        self.assertEqual(server["exposure"], "direct")
+        # Deferred, so Pi's tool_search finds them (it skips tools already declared); report stays
+        # declared, because a worker that never loads it never reports.
+        self.assertEqual(server["exposure"], "deferred")
+        self.assertEqual(server["toolExposure"], {"report": "direct"})
         self.assertTrue(server["args"][0].endswith("server/mcp_server.py"))
         self.assertTrue(Path(server["args"][0]).is_absolute())
         self.assertTrue(Path(server["args"][0]).is_file())

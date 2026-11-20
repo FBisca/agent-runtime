@@ -48,14 +48,18 @@ for it - and reaches only the workers of its own team. Register the server in Pi
       "command": "python3",
       "args": ["/absolute/path/to/agent-runtime/server/mcp_server.py"],
       "env": { "AGENT_RUNTIME_DISPATCH": "1" },
-      "exposure": "direct"
+      "exposure": "deferred",
+      "toolExposure": { "report": "direct" }
     }
   }
 }
 ```
 
-`exposure: direct` declares the tools to the model (the default, `codemode`, keeps them reachable only
-from codemode scripts). The server needs the durable dispatch store, so `AGENT_RUNTIME_DISPATCH=1` is
+`exposure: deferred` leaves the tools out of the model's context until `tool_search` loads them, which
+is how Pi tells its model to find MCP tools. `direct` would declare them all, and `tool_search` skips a
+declared tool, so a lead that searched for `spawn` was told none exists and fell back to the shell.
+`report` stays declared: a worker's brief names it, and a worker must never have to find it first. The
+server needs the durable dispatch store, so `AGENT_RUNTIME_DISPATCH=1` is
 required, and the lead needs an `hc` terminal to start workers from.
 
 ## Pi rhythm: the extension
@@ -186,7 +190,7 @@ A working setup looks like this:
 
 | What | Where | Value |
 |---|---|---|
-| The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 <checkout>/server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: direct`, a 600 s timeout. The runtime writes this entry itself before it starts a Pi worker, so the path always points at the running runtime; the other servers in that file are left alone |
+| The worker's tools | `~/.pi/agent/mcp.json` | the `agent-runtime` entry: `python3 <checkout>/server/mcp_server.py`, `AGENT_RUNTIME_DISPATCH=1`, `exposure: deferred` with `report` direct, a 600 s timeout. The runtime writes this entry itself before it starts a Pi worker, so the path always points at the running runtime; the other servers in that file are left alone |
 | The host policy | `~/.config/agent-runtime/hosts.json` | the `pi` host: `mutations` on, `backends` `["pi", "claude-minimax", "codex", "claude"]`, `paths` covering the checkouts under the developer's home |
 | The rhythm | `~/.pi/agent/settings.json` | an `extensions` entry naming this checkout's `extensions/agent-runtime`, which is what keeps a lead's turn open, pushes a wake and refuses a long sleep (the installer prints it; it never writes the file) |
 
