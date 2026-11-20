@@ -1,8 +1,8 @@
 """Which plans a repository holds, for the Lead, the skills and the panel.
 
 A plan in its own folder is listed from the plans dir the config names; a legacy plan from the one
-directory the repository's tracked plan files sit in. Several directories refuse, naming each and the
-explicit-path way out; none is an empty listing.
+plans directory (docs/plans, .plans or the config's plans dir) its tracked plan files sit in. Several
+directories refuse, naming each and the explicit-path way out; none is an empty listing.
 """
 
 import subprocess
@@ -11,6 +11,9 @@ from pathlib import Path
 from . import config
 from .plan_document import PlanError, read_yaml
 from .plan_layout import FOLDER_PLAN, PlanLayout, git
+
+# Where a repository keeps plan files besides the config's plans dir.
+LEGACY_HOMES = ("docs/plans", ".plans")
 
 
 class DiscoveryError(PlanError):
@@ -103,9 +106,17 @@ def discover(repo=None, explicit=None):
         plans_dir = repo_config(root).plans_dir
         configured = folder_plans(plans_dir)
         tracked = git(root, "ls-files").splitlines()
-        dirs = sorted({str(Path(f).parent) for f in tracked if PlanLayout.is_listed(f)})
-        # A repo that writes its config has named its plans dir, so plan files elsewhere (test
-        # fixtures) cannot make the listing ambiguous. The built-in default names nothing.
+        # A plan file lives in a plans directory: one elsewhere (a test fixture) is not a plan.
+        homes = {(root / home).resolve() for home in LEGACY_HOMES} | {plans_dir.resolve()}
+        dirs = sorted(
+            {
+                str(Path(f).parent)
+                for f in tracked
+                if PlanLayout.is_listed(f) and (root / f).parent.resolve() in homes
+            }
+        )
+        # A repo that writes its config has named its plans dir, so the other home cannot make the
+        # listing ambiguous. The built-in default names nothing.
         if len(dirs) > 1 and (root / config.CONFIG_PATH).is_file():
             chosen = [d for d in dirs if (root / d).resolve() == plans_dir.resolve()]
             dirs = chosen or dirs

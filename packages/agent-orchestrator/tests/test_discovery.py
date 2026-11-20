@@ -106,6 +106,14 @@ class DiscoveryTests(DiscoveryFixture):
         self.assertEqual(out, "")
 
     @pytest.mark.spec("Plan discovery")
+    def test_S5_a_plan_file_outside_every_plans_directory_is_not_listed(self):
+        folder = self.track("docs/plans/2026-01-01-a/plan.yaml")
+        self.track("tests/data/reference.plan.yaml")
+        self.assertEqual(self.listing(), [str(folder.resolve())])
+        self.track(".orchestrate/config.yaml", "plans:\n  dir: docs/plans\n")
+        self.assertEqual(self.listing(), [str(folder.resolve())])
+
+    @pytest.mark.spec("Plan discovery")
     def test_S5_without_repo_the_current_directory_is_the_repository(self):
         plan = self.track("docs/plans/2026-01-01-a.plan.yaml")
         cwd = os.getcwd()
