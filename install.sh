@@ -710,7 +710,8 @@ print_pi_wiring() {
       "args": ["$server"],
       "env": { "AGENT_RUNTIME_DISPATCH": "1" },
       "exposure": "deferred",
-      "toolExposure": { "report": "direct" }
+      "toolExposure": { "report": "direct" },
+      "description": "Start, wait for and stop worker agents (Claude, Codex, Pi): spawn, wait, status, stop, report"
     }
   }
 }
