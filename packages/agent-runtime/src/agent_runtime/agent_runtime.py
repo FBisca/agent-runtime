@@ -957,7 +957,8 @@ def build_parser():
     p.add_argument("tool", help="an MCP tool name (the usage error lists them)")
     p.add_argument(
         "--lead",
-        help="lead identity (A-Z a-z 0-9 . _ : -, up to 128); processes passing the same ID share one team",
+        help="lead identity (A-Z a-z 0-9 . _ : -, up to 128); processes in the same hc terminal passing "
+        "the same ID share one team, a call from another terminal gets another team",
     )
     p.add_argument("--json", default="{}", help="the tool arguments as one JSON object")
     p.set_defaults(func=cmd_call)
