@@ -4,7 +4,7 @@ Contract: $contract
 
 Report with task_id `$task_id`: the driver refuses a report whose task_id is not this one.
 
-Plan: $plan (read its Decisions and Seams).
+Plan: $plan ($plan_note).
 Checkout: $checkout on branch feat/$worker (new, from $base). Work only here.
 Checkout contents: $checkout_contents
 Scope contents: $scope_contents

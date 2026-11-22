@@ -481,6 +481,33 @@ class RecoveryTests(GateFixture, unittest.TestCase):  # noqa: PLR0904
         self.assertEqual(self.task()["status"], "ACTIVE")
         self.assertEqual(len(self.run_events("start")), 1)
 
+    def declare_setup(self, command):
+        config = self.repo / ".orchestrate" / "config.yaml"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text(yaml.safe_dump({"worktree": {"setup": command}}), encoding="utf-8")
+
+    @pytest.mark.spec("Ticket dispatch")
+    def test_a_declared_worktree_setup_runs_once_in_the_new_worktree_with_the_main_root(self):
+        self.declare_setup('echo "$ORCHESTRATE_MAIN_ROOT" > .setup-ran; pwd -P >> .setup-ran')
+        self.waits([self.worker_done()])
+        self.run_driver()
+        tree = self.root / "repo.worktrees" / "demo-t1"
+        ran = (tree / ".setup-ran").read_text().split()
+        self.assertEqual(ran, [str(self.repo), str(tree.resolve())])
+        self.assertEqual(self.spawned(), ["demo-t1"])
+
+    @pytest.mark.spec("Ticket dispatch")
+    def test_a_failing_worktree_setup_fails_the_dispatch_and_leaves_no_broken_tree(self):
+        self.declare_setup("echo env files are missing >&2; exit 3")
+        self.waits([wait_result()])
+        self.run_driver(expect=1)
+        self.assertEqual(self.spawned(), [], "no worker may start on a tree the setup left broken")
+        (wake,) = self.wakes_of("not-dispatched")
+        self.assertIn("worktree setup", wake["text"])
+        self.assertIn("env files are missing", wake["text"])
+        self.assertIn("worktree setup", self.ticket_status("T1"))
+        self.assertFalse((self.root / "repo.worktrees" / "demo-t1").exists())
+
     @pytest.mark.spec("Not-dispatched tickets")
     def test_S5_without_the_lead_s_todo_the_same_run_does_not_try_again(self):
         self.refuse(["demo-t1"])

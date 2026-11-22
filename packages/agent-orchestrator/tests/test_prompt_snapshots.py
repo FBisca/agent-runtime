@@ -127,6 +127,32 @@ def test_task_without_checks_with_a_full_suite_and_no_tdd_skill(tmp_path, monkey
     assert_snapshot("task-no-checks", text, tmp_path)
 
 
+def folder_plan(world, brief=True):
+    folder = world.root / "plan-folder"
+    folder.mkdir()
+    (folder / "plan.yaml").write_text("schema: plan/2")
+    if brief:
+        (folder / "brief.md").write_text("brief")
+    world.driver.plan_path = folder / "plan.yaml"
+
+
+@pytest.mark.spec("Ticket dispatch")
+def test_task_names_the_brief_of_a_folder_plan(world, tmp_path):
+    folder_plan(world)
+    ticket = {"#": "T1", "What it delivers": "a retry loop that ends"}
+    packet = world.packet(["uv run ruff check"])
+    text = world.driver.task_text(None, ticket, packet, ["- **S1** WHEN x THEN y"], world.run_dir)
+    assert_snapshot("task-folder-plan", text, tmp_path)
+
+
+@pytest.mark.spec("Ticket dispatch")
+def test_task_of_a_folder_plan_without_a_brief_names_no_brief(world):
+    folder_plan(world, brief=False)
+    ticket = {"#": "T1", "What it delivers": "a retry loop that ends"}
+    text = world.driver.task_text(None, ticket, world.packet(), ["- **S1** x"], world.run_dir)
+    assert "brief.md" not in text and "Decisions and Seams" not in text
+
+
 def test_task_amended_note(world, tmp_path):
     note = world.driver._amended_note(["- Paths: src/a/ -> src/b/", "- Size: small -> big"])
     assert_snapshot("amended-note", note, tmp_path)
@@ -151,6 +177,13 @@ def reviewer_world(tmp_path, monkeypatch, rules, rulebook=False):
 def test_review_first(tmp_path, monkeypatch):
     world = reviewer_world(tmp_path, monkeypatch, rules=False)
     assert_snapshot("review", review_brief(world.driver, world.packet()), tmp_path)
+
+
+@pytest.mark.spec("Ticket dispatch")
+def test_review_names_the_brief_of_a_folder_plan(tmp_path, monkeypatch):
+    world = reviewer_world(tmp_path, monkeypatch, rules=False)
+    folder_plan(world)
+    assert_snapshot("review-folder-plan", review_brief(world.driver, world.packet()), tmp_path)
 
 
 def test_review_with_a_rulebook_and_rules_files(tmp_path, monkeypatch):
@@ -229,3 +262,11 @@ def test_fix_of_a_conflict_is_the_rebase_brief(world, tmp_path):
     text = world.driver.fix_text(task, "t1r1", new_dir, findings)
     assert text == world.driver.rebase_text(task, "t1r1", new_dir, findings)
     assert_snapshot("rebase", text, tmp_path)
+
+
+@pytest.mark.spec("The report contract matches Report")
+def test_the_contract_says_how_to_ask_the_lead_and_what_red_is():
+    from agent_orchestrator.driver.ticket_dispatch import CONTRACT
+
+    assert "plain message" in CONTRACT and "BLOCKED report with `blocker`" in CONTRACT
+    assert "minimal compiling skeleton" in CONTRACT and "assertion failure" in CONTRACT

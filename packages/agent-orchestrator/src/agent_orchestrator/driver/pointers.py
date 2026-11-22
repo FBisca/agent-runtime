@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from .. import config
+from ..plan_layout import PlanLayout
 from .prompts import block, render
 
 
@@ -81,6 +82,7 @@ def rulebook(repo, checkout):
     return reference(checkout, name, "read") if name else None
 
 
+BRIEF = "brief.md"  # a folder plan's narrative, beside plan.yaml
 TDD_SKILL_ENV = "AGENT_RUNTIME_TDD_SKILL"
 
 
@@ -115,6 +117,29 @@ def tdd_instruction():
     return "Read the `tdd` skill first: %s; read its rules at %s." % (skill, rules)
 
 
+def plan_note(plan_path, reading):
+    """What a brief says of the plan it names. A folder plan keeps its decision log, interfaces and code touched in
+    `brief.md` beside `plan.yaml`, so the brief is named by its resolved path (a brief that is not there is not
+    named); a legacy plan's own Markdown holds the Decisions and Seams sections. `reading` is the worker's
+    imperative form ("read ...") against the reviewer's description."""
+    layout = PlanLayout(plan_path)
+    path = layout.path
+    if not layout.is_folder:
+        return ("read " if reading else "") + "its Decisions and Seams"
+    brief = path.with_name(BRIEF)
+    if not brief.is_file():
+        return "plan.yaml is the contract"
+    where = reference(path.parent, BRIEF, "read")
+    if reading:
+        return (
+            "plan.yaml is the contract; read %s for the decision log, interfaces and code touched"
+            % where
+        )
+    return (
+        "plan.yaml is the contract; %s holds the decision log, interfaces and code touched" % where
+    )
+
+
 def task_text(self, _plan, ticket, packet, scenarios, task_dir):
     from . import CHECK_INSTRUCTIONS
 
@@ -126,6 +151,7 @@ def task_text(self, _plan, ticket, packet, scenarios, task_dir):
         delivers=ticket["What it delivers"],
         task_id=task_id,
         plan=self.plan_path,
+        plan_note=plan_note(self.plan_path, True),
         checkout=checkout,
         worker=packet["worker"],
         base=self.args.base,

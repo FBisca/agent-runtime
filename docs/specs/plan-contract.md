@@ -145,6 +145,10 @@ Every plan command SHALL find plans and read the repository's `.orchestrate/conf
 - WHEN any plan command (plans list, plan check, plan approve, run, status) reads `<repo>/.orchestrate/config.yaml`
 - THEN it applies `plans.dir` and `archive.mode` (promote | discard), a relative path being under the repo root and `~` and absolute paths allowed; an unknown key or a bad mode fails the command naming its dotted path and the fix; a missing file means docs/plans and promote
 
+#### Scenario: worktree setup
+- WHEN the config holds `worktree.setup`, a non-empty command string
+- THEN it is read as the command the driver runs once in each worktree it creates; a non-string or empty value, or an unknown key under `worktree`, fails the command naming its dotted path and the fix; absent means no setup
+
 #### Scenario: a plan outside the repository
 - WHEN a plan.yaml outside the repository is passed explicitly with `--repo` to `plan check`, `plan approve` and `run`
 - THEN all three work, and nothing is written next to the plan except the approval block
@@ -255,6 +259,14 @@ An approved plan's agent tickets SHALL dispatch with the class, effort and model
 #### Scenario: rows decide routes and order
 - WHEN an approved plan is launched
 - THEN each agent ticket dispatches on the route its row names, in blocking order, and the plan stays byte-identical
+
+#### Scenario: the worktree is set up
+- WHEN a ticket's worktree is created and the config names `worktree.setup`
+- THEN the driver runs that command once through the shell with the worktree as its working directory and `ORCHESTRATE_MAIN_ROOT` set to the main checkout, before any worker starts, for at most 300 seconds; a non-zero exit or a timeout removes the worktree again (and the branch the dispatch made), starts no worker, and fails the dispatch as not-dispatched with the command's output in the ticket's status and wake
+
+#### Scenario: the packet names the brief
+- WHEN a ticket's task or review brief points at the plan
+- THEN for a folder plan it names plan.yaml as the contract and the `brief.md` beside it (when it exists) for the decision log, interfaces and code touched; a legacy plan keeps its Decisions and Seams sections
 
 ### Requirement: Lead decisions
 A request SHALL offer the Lead a typed menu, and `decide` SHALL take the Lead's answer as flags or as one JSON object, validated and written the same way.

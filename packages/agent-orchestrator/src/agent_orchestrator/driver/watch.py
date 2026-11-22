@@ -24,6 +24,8 @@ from .records import is_agent, ready
 from .report import cell
 from .verdict import ATTENTION, VERDICTS, attention
 
+MESSAGE_TEXT_LIMIT = 500  # how much of a worker's plain message the Lead reads in a reason
+
 ACCEPTED_STATES = ("ACCEPTED",)
 
 PAYLOAD_WARNINGS = 2  # how often a hand-in is refused to its sender before the Lead is asked
@@ -202,9 +204,10 @@ class Attention:  # noqa: PLR0904
         self.record_usage(result.get("assignments") or [])
         for message in result.get("messages") or []:
             kind, assignment_id = message.get("kind"), message.get("assignment_id")
-            if not assignment_id or kind not in ("complete", "blocked", "decision", "failed"):
-                continue
             text = message.get("text") or ""
+            if not assignment_id or kind not in ("complete", "blocked", "decision", "failed"):
+                self.on_plain_message(assignment_id, kind, text)
+                continue
             if kind != "complete":
                 self.on_agent_attention(assignment_id, "exited" if kind == "failed" else kind, text)
                 continue
@@ -218,6 +221,25 @@ class Attention:  # noqa: PLR0904
             if verdict:  # so is a verdict
                 self.take_verdict(verdict, text)
         self.check_ended(result.get("assignments") or [])
+
+    def on_plain_message(self, assignment_id, kind, text):
+        """A message that is not a report: a worker's question to the Lead. From an agent of an open step it is a
+        `decision` request, so the Lead's answer reaches the same live worker; from any other sender it is logged
+        and warned, never dropped."""
+        if assignment_id and self.attention_hit(assignment_id):
+            return self.on_agent_attention(assignment_id, "decision", text[:MESSAGE_TEXT_LIMIT])
+        self.log(
+            "message-unmatched",
+            assignment_id=assignment_id,
+            message_kind=kind,
+            text=text[:MESSAGE_TEXT_LIMIT],
+        )
+        narrate.say(
+            "warn",
+            None,
+            "a %s message from assignment %s matches no open step; ignored: %s"
+            % (kind or "plain", assignment_id or "(none)", text[:200]),
+        )
 
     def step_outcome(self, task, assignment_id, text):
         """What one complete does to one task: ("handin", id), ("verdict", id), ("closing", id), ("held", (id, text)),
