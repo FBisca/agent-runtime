@@ -9,7 +9,8 @@ ledger status changed), `route` (the route a worker was dispatched on: `unit`, `
 `effort`, `effort_source`, `source`), `intent` and `agent` (an agent is about to be started / is bound), `stop`, `finding`,
 `round` (a failed gate), `escalation` (a unit raised a request for the Lead), `attention` (a unit paused), `decision`, `usage`,
 `idle` (a loop iteration that made no progress), `error`, `wake` (a line for the Lead was written to `wakes.jsonl`),
-`held`, `held-acted` and `held-dropped` (a worker message that arrived while its unit had an open request), `finish`
+`held`, `held-acted` and `held-dropped` (a worker message that arrived while its unit had an open request),
+`message-unmatched` (a message that is not a report came from an assignment no open step holds: `assignment_id`, `message_kind`, `text`), `finish`
 (the run ended; `orchestrate.py await` reads it), `contract-error` (a handoff file broke its contract: `where`, `error`),
 `report` (a worker's hand-in was accepted: `unit`, `task`, the full `report`), `report-refused` (a hand-in was refused back to its sender:
 `unit`, `task`, `reason`, `payload`), `clarification` (an agent listed a question in `clarifications[]`: `finding`, `asked_by`, `note`, `source`),

@@ -16,6 +16,7 @@ NODES = {
     "archive": ("mode",),
     "checks": ("fast", "affected", "full"),
     "tests": ("patterns",),
+    "worktree": ("setup",),
 }
 SCALARS = ("rulebook",)  # a key whose value is one repo-relative path
 # file-name globs that mark a test file; a directory named `tests` marks one whatever these say
@@ -46,6 +47,9 @@ class RepoConfig:
     checks: Checks | None = None
     test_patterns: tuple = DEFAULT_TEST_PATTERNS
     rulebook: str | None = None
+    worktree_setup: str | None = (
+        None  # a command run once in each new worktree, with ORCHESTRATE_MAIN_ROOT set
+    )
 
 
 def _path(root, value, dotted):
@@ -98,6 +102,17 @@ def _checks(body):
     )
 
 
+def _worktree_setup(body):
+    """`worktree.setup`: one non-empty command string, run in a new worktree through the shell."""
+    value = body.get("setup")
+    if value is not None and not (isinstance(value, str) and value.strip()):
+        raise ConfigError(
+            f"{CONFIG_PATH}: worktree.setup must be a non-empty command string — "
+            "write setup: ./scripts/link-env.sh"
+        )
+    return value
+
+
 def _test_patterns(body):
     value = body.get("patterns", list(DEFAULT_TEST_PATTERNS))
     if (
@@ -125,7 +140,7 @@ def load(root):
         data = {} if data is None else data
     if not isinstance(data, dict):
         raise ConfigError(
-            f"{CONFIG_PATH}: must be a mapping of nodes — use plans, archive, checks, tests, rulebook"
+            f"{CONFIG_PATH}: must be a mapping of nodes — use plans, archive, checks, tests, worktree, rulebook"
         )
     for node, body in data.items():
         if node in SCALARS:
@@ -156,4 +171,5 @@ def load(root):
         raise ConfigError(
             f"{CONFIG_PATH}: rulebook must be a non-empty path — write rulebook: docs/rulebook.md"
         )
-    return RepoConfig(plans, mode, checks, patterns, rulebook)
+    setup = _worktree_setup(data.get("worktree", {}))
+    return RepoConfig(plans, mode, checks, patterns, rulebook, setup)

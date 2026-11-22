@@ -11,7 +11,7 @@ lines, and because the one reading of "which report is this" has one home.
 import json
 from pathlib import Path
 
-from .pointers import collection, rulebook
+from .pointers import collection, plan_note, rulebook
 from .prompts import block, render
 from .records import reported_attempt, unit_attempts
 
@@ -39,6 +39,7 @@ def review_brief(driver, packet):
         checkout=checkout,
         checkout_contents=collection(checkout),
         plan=driver.plan_path,
+        plan_note=plan_note(driver.plan_path, False),
         base=driver.args.base,
         head=driver.book.task(packet["task_id"])["report"]["head"],
         rulebook=block("review-rulebook", rulebook=book) if book else "",
