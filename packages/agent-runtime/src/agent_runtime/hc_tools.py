@@ -290,6 +290,7 @@ def spawn(arguments, env, ctx):  # noqa: PLR0912, PLR0915
         )
         suffix += " Include assignment_id on your first runtime call to prove your session; later non-report calls may omit it."
         program[-1] += suffix
+    program = profiles.login_shell(env, program)
     # Capture the checkout and time before startup can create a log or change the commit.
     base = usage.base_commit(cwd, env) if store else None
     spawned_ms = usage.now_ms() if store else None

@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 
 BUILTINS = ("claude", "codex", "pi")
@@ -160,6 +161,17 @@ def scrub_prefix(env, cli=None):
     if cli == "pi":
         keys -= set(PI_PROVIDER_VARIABLES)
     return ["env"] + [arg for key in sorted(keys) for arg in ("-u", key)]
+
+
+def login_shell(env, argv):
+    """Run `argv` under the user's login shell, so the worker's environment is the one their startup files
+    build at spawn time: Herdr starts a pane without a shell and it would inherit the long-running Herdr
+    server's environment instead. The scrub and the profile launcher are part of `argv`, so they run after
+    the startup files and a startup file cannot bring a scrubbed key back. No `SHELL`: `argv` as it is."""
+    shell = env.get("SHELL")
+    if not shell:
+        return argv
+    return [shell, "-lc", " ".join(shlex.quote(part) for part in argv)]
 
 
 def launch(argv, env):

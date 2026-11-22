@@ -321,6 +321,17 @@ A lead with unfinished assignments SHALL be told to wait on every spawn, resume 
 - WHEN `spawn(kind=worker)` starts a worker
 - THEN the argv carries no one-shot flag (`--print`, `-p` for Claude, `exec` for Codex) so the pane can be resumed, and a claude or codex worker's `hc run` argv carries `--no-notify` before the program
 
+### Requirement: Worker login shell
+A spawned worker SHALL start under the user's login shell, so its environment comes from their shell startup files at spawn time and not from the long-running Herdr server that starts the pane.
+
+#### Scenario: the login shell wraps the launch
+- WHEN `spawn(kind=worker)` runs with `SHELL` set, for a built-in family or a profile
+- THEN the program handed to Herdr is `$SHELL -lc '<command>'`, the command being the `env -u NAME...` scrub (or the profile launcher) and the CLI argv, each part shell-quoted so a prompt with quotes, spaces, `$`, backticks or newlines reaches the CLI unchanged; the scrub and the launcher run after the startup files, so a startup file cannot bring a scrubbed key back
+
+#### Scenario: no login shell
+- WHEN `SHELL` is unset or empty
+- THEN the command is passed to Herdr directly, as before
+
 ### Requirement: Spawn model
 `spawn` SHALL pass a valid `model` to the CLI and refuse an invalid one before launching.
 
