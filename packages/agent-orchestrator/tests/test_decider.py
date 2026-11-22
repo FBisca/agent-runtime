@@ -149,6 +149,28 @@ class DeciderTests(DeciderFixture, unittest.TestCase):
                 self.assertEqual(len(self.wakes()), 1)
                 self.assertIn("cannot reach the database", self.wake_lines()[0])
 
+    @pytest.mark.spec("A worker's message reaches the Lead")
+    def test_a_plain_worker_message_is_a_request_the_lead_sees(self):
+        """A message of any other kind is a question: it opens the unit's request and wakes the Lead."""
+        self.waits(
+            [self.blocked("message", "I need .env files; policy denies me"), self.decided("skip")]
+        )
+        self.run_driver()
+        self.assertEqual(len(self.wakes()), 1)
+        self.assertIn("demo-t1", self.wake_lines()[0])
+        self.assertIn("I need .env files", self.wake_lines()[0])
+        request = json.loads((self.run_dir / "t1" / "request.json").read_text())
+        self.assertIn("I need .env files", request["reason"])
+
+    @pytest.mark.spec("A worker's message reaches the Lead")
+    def test_a_message_from_an_unknown_assignment_is_warned_not_dropped(self):
+        stray = report_wait("demo-ghost", "message", "hello?", id="a-ghost")
+        self.waits([stray, self.blocked(), self.decided("skip")])
+        self.run_driver()
+        lines = (self.run_dir / "events.jsonl").read_text().splitlines()
+        warned = [e for e in map(json.loads, lines) if e.get("kind") == "message-unmatched"]
+        self.assertEqual(len(warned), 1)
+
     @pytest.mark.spec("A worker that ends without a report is resumed once")
     def test_S11_a_failed_worker_is_one_request_by_state_and_message(self):
         """code-driven-orchestrator/S11"""

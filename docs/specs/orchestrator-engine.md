@@ -136,6 +136,10 @@ The contract the run writes SHALL describe a report that `Report` accepts, and e
 - WHEN a unit's brief is written
 - THEN it names the `task_id` its report must carry
 
+#### Scenario: asking the Lead and red evidence
+- WHEN the contract is written
+- THEN it says how to ask the Lead a question (a plain message; the question does not stop the work a worker can do meanwhile; a hard stop is a BLOCKED report with `blocker`), and that red is an assertion failure of the named test, reached by first writing the minimal compiling skeleton so a test file that cannot import or compile is not offered as red
+
 ### Requirement: Whole-tree git calls get a large timeout
 The driver SHALL size the timeout of a git call that walks or writes the whole tree for a large repository.
 
@@ -179,6 +183,17 @@ A second driver SHALL NOT run a plan another live driver runs in the same reposi
 #### Scenario: a PARTIAL checkpoint without a checkout
 - WHEN a PARTIAL checkpoint runs and `packet.checkout` does not exist
 - THEN `checkpoint()` raises
+
+### Requirement: A worker's message reaches the Lead
+The drive SHALL put a message from an agent that is not a report (`complete`, `blocked`, `decision`, `failed`) in front of the Lead, and SHALL never drop one silently.
+
+#### Scenario: a plain message from a worker
+- WHEN a message of any other kind arrives from the assignment of an open step
+- THEN it is handled as that agent's `decision`: one request carrying the unit's name and the text (cut to 500 characters), the ticket's `needs you` status, `attention.md`, one wake and the terminal notice, and the Lead's `decide ... answer` reaches the same live worker
+
+#### Scenario: a message from no open step
+- WHEN such a message names an assignment no open step holds, or none
+- THEN a `message-unmatched` event and a warning record it, and nothing else changes
 
 ### Requirement: A report is handed in through the runtime
 A worker SHALL hand in its report as the text of its agent-runtime `report` call, and the driver SHALL validate it the moment it arrives; there is no report file.

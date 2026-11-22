@@ -7,7 +7,7 @@ Inputs, each read by you:
 - The change: `git -C $checkout diff $base...$head`
 - The implementer's report, accepted by the driver:
 $reported
-- Plan: $plan (its Decisions and Seams)
+- Plan: $plan ($plan_note)
 - Checkout contents: $checkout_contents
 $rulebook
 - Repo rules: $rules

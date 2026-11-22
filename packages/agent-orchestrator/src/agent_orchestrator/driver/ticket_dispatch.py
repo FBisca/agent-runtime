@@ -4,6 +4,7 @@ It lives beside `__init__.py` rather than in it because no module of the package
 lines and no class twenty-five public methods.
 """
 
+import os
 import re
 import shlex
 import subprocess
@@ -28,6 +29,8 @@ def _engine():
     return sys.modules[__name__.rpartition(".")[0]]
 
 
+SETUP_TIMEOUT = 300  # seconds a repo's `worktree.setup` may take
+
 MATRIX = {
     ("small", "simple"): ("small", "low"),
     ("small", "complex"): ("medium", "medium"),
@@ -44,7 +47,8 @@ CONTRACT = """# Contract for every task in this run
 - A YAML plan's ticket reports `"contract":3` and adds `"covers":{"S<n>":["path::test_name"]}`: every scenario the ticket satisfies, mapped to the test nodes that prove it. The report also adds `"red":{"S<n>":"<excerpt>"}`: for each of those scenarios, the failing output of its covering test from before the fix, as the runner printed it. Copy each test name from that output. verify counts a node when its file exists, this ticket changed that file and the scenario's red excerpt contains the test's name.
 - Before you hand in, run the repository's fast and affected checks your task names; CI runs the rest.
 - Prose, if any, goes in report.md beside your task.md.
-- Red-first: write the test for each scenario and see it fail before the code exists; its failing output goes in the report's `red`. Tag each test with its spec requirement.
+- Red-first: write the test for each scenario and see it fail before the code exists; its failing output goes in the report's `red`. Red is an assertion failure of the named test: a file that fails to import or compile prints no test names and is not red, so first write the minimal compiling skeleton (signatures returning empty or neutral values) and let each test fail by name. Tag each test with its spec requirement.
+- To ask the Lead a question, send a plain message to it with agent-runtime `message` (`to` lead, your assignment id); the driver puts it in front of the Lead and the answer comes back to you. A question does not stop the work you can do meanwhile. When you cannot go on at all, hand in a BLOCKED report with `blocker`.
 - TDD: before your first edit read the `tdd` skill's `SKILL.md` and its `rules.md`; your task names the path. Codex has no skill loader, so these rules are the whole skill here: one behaviour per test at the cheapest level that shows it; build expensive setup once per class and let readers share it; wait on an event or an injected clock, never a sleep; admit a test only when it protects a requirement or a credible failure, is not already covered at the same boundary, and would fail on a regression someone could ship. Name the seams and the admission answers in report.md.
 - Fix the class, not the instance: when you fix a defect, search for every other place with the same pattern.
 - Start from the Paths your task lists; edit any other file the change needs, even one another ticket lists: keep that change, the driver tells the Lead. Never touch other worktrees or the main checkout.
@@ -224,7 +228,41 @@ class Dispatch:
                 ],
                 timeout=TREE_TIMEOUT,
             )
+            self.hydrate(path, branch, created=not exists)
         return path
+
+    def hydrate(self, path, branch, created):
+        """Run the repo's `worktree.setup` once in the worktree just added, so a build's gitignored files are there
+        before a worker starts. A setup that fails, or outlasts SETUP_TIMEOUT, removes the worktree again (and the
+        branch this call made) and fails the dispatch with what the command printed: a retry hydrates afresh, and no
+        worker starts on a half-built tree."""
+        setup = repo_config.load(self.repo).worktree_setup
+        if not setup:
+            return
+        try:
+            result = subprocess.run(
+                setup,
+                shell=True,
+                cwd=path,
+                env={**os.environ, "ORCHESTRATE_MAIN_ROOT": str(self.repo)},
+                capture_output=True,
+                text=True,
+                timeout=SETUP_TIMEOUT,
+            )
+            failure = (
+                None
+                if result.returncode == 0
+                else "exited %d: %s" % (result.returncode, (result.stderr or result.stdout).strip())
+            )
+        except subprocess.TimeoutExpired:
+            failure = "timed out after %d seconds" % SETUP_TIMEOUT
+        if failure is None:
+            return
+        git = ["git", "-C", str(self.repo)]
+        subprocess.run([*git, "worktree", "remove", "--force", str(path)], capture_output=True)
+        if created:
+            subprocess.run([*git, "branch", "-D", branch], capture_output=True)
+        raise ValueError("worktree setup (%s) %s" % (setup, failure[:500]))
 
     def contract_fields(self, ticket, scenarios):
         """The packet fields a ticket's contract fixes: what it delivers, the paths it owns, the scenarios it

@@ -7,6 +7,7 @@ import unittest
 
 import pytest
 import yaml
+from agent_orchestrator.runtime_client import HOST_MARKERS
 from fixtures import DRIVER, RunFixture, added, plan_data
 
 pytestmark = pytest.mark.integration
@@ -177,6 +178,20 @@ class LaunchTests(RunFixture, unittest.TestCase):
             encoding="utf-8",
         )
         if approve:
+            # Approval is the Lead's, and these tests are about launch: approve as a person's plain terminal whose
+            # runtime verifies it as the Lead, whatever agent host runs the suite.
+            runtime = self.home / "agent-runtime"
+            runtime.write_text(
+                "#!/bin/sh\n"
+                'echo \'{"role": "lead", "caller": {"kind": "lead", "verified": true}}\'\n',
+                encoding="utf-8",
+            )
+            runtime.chmod(0o755)
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in HOST_MARKERS and k != "AGENT_RUNTIME_HOME"
+            }
             result = subprocess.run(
                 [
                     *DRIVER,
@@ -190,7 +205,7 @@ class LaunchTests(RunFixture, unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
-                env=dict(os.environ, PATH=str(self.home) + os.pathsep + os.environ["PATH"]),
+                env=dict(env, PATH=str(self.home) + os.pathsep + os.environ["PATH"]),
                 timeout=60,
             )
             self.assertEqual(result.returncode, 0, result.stderr)

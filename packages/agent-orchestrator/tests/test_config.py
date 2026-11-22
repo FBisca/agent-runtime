@@ -177,3 +177,34 @@ class TestPatternTests(unittest.TestCase):
                 with self.assertRaises(config.ConfigError) as caught:
                     config.load(self.root)
                 self.assertIn("tests.patterns", str(caught.exception))
+
+
+class WorktreeSetupConfigTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+
+    def write(self, text):
+        path = self.root / ".orchestrate" / "config.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    @pytest.mark.spec("Plan discovery")
+    def test_worktree_setup_is_read_and_defaults_to_none(self):
+        self.assertIsNone(config.load(self.root).worktree_setup)
+        self.write("worktree:\n  setup: ./link-env.sh\n")
+        self.assertEqual(config.load(self.root).worktree_setup, "./link-env.sh")
+
+    @pytest.mark.spec("Plan discovery")
+    def test_worktree_setup_refusals_name_the_dotted_path(self):
+        for text, dotted in (
+            ("worktree:\n  setup: 3\n", "worktree.setup"),
+            ("worktree:\n  setup: ' '\n", "worktree.setup"),
+            ("worktree:\n  run: x\n", "worktree.run"),
+            ("worktree: x\n", "worktree"),
+        ):
+            self.write(text)
+            with self.assertRaises(config.ConfigError) as caught:
+                config.load(self.root)
+            self.assertIn(dotted, str(caught.exception))
