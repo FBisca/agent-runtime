@@ -92,6 +92,26 @@ def holds_no_test(ticket, repo):
     return yaml_plan.holds_no_test(ticket.paths, yaml_plan.repo_config(repo).test_patterns)
 
 
+def with_evidence(report, earlier):
+    """`report` with the ticket's evidence carried into it: the evidence belongs to the ticket, not to one round.
+
+    `earlier` are the reports the ticket's earlier rounds handed in, oldest first. Their `covers` and `red` are
+    merged scenario by scenario, a later round replacing an earlier one, and the round's own mapping replaces them
+    all. A round that restates nothing (a rebase, or a fix that changed no test) is judged on what was handed in
+    before; every carried node is still checked against the round's head. The report itself is not changed."""
+    covers, red = {}, {}
+    for previous in [*earlier, report]:
+        if previous.get("contract") != 3:
+            continue
+        for scenario, nodes in (previous.get("covers") or {}).items():
+            covers[scenario] = nodes
+            red.pop(scenario, None)
+        red.update(previous.get("red") or {})
+    if not covers:
+        return report
+    return {**report, "contract": 3, "covers": covers, "red": red}
+
+
 def covers(ticket, report, repo, base, files):
     """An implementation must provide its evidence: each scenario the ticket satisfies needs a covering test node
     that counts; one is enough, the others may be helpers. Nothing in the plan exempts a scenario."""
