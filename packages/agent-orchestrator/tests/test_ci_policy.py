@@ -108,24 +108,39 @@ class CiPolicyTests(PrFixture, unittest.TestCase):
 
 
 class ConflictWaitTests(unittest.TestCase):
-    def lane(self, files, units):
+    def lane(self, files, units, conflicting=()):
+        """A lane over open pull requests `pr-<unit>` changing `files`; those in `conflicting` conflict with their
+        base. The plan lists the units' tickets in the order given."""
         calls = []
 
         def gh(argv, **_):
             calls.append(argv)
+            if argv[-1] == "mergeable":
+                state = "CONFLICTING" if argv[2] in conflicting else "MERGEABLE"
+                return 0, json.dumps({"mergeable": state}), ""
             return 0, json.dumps({"files": [{"path": p} for p in files[argv[2]]]}), ""
 
         driver = SimpleNamespace(
             gh=gh,
-            unit_of=lambda task_id: "t1",
+            unit_of=lambda task_id: task_id,
             units=lambda: {u: {"packet": {"task_id": u}} for u in units},
             pr_of=lambda task_id: "pr-" + task_id,
+            model=SimpleNamespace(tickets=[SimpleNamespace(id=u.upper()) for u in units]),
         )
         lane = Pull(driver)
         # Set by name: the lane resolves these through its driver, which a type checker cannot see.
-        for name in ("gh", "unit_of", "units", "pr_of"):
+        for name in ("gh", "unit_of", "units", "pr_of", "model"):
             setattr(lane, name, getattr(driver, name))
         return lane
+
+    @pytest.mark.spec("A conflicting pull request is rebased")
+    def test_two_conflicting_tickets_over_one_file_never_wait_on_each_other(self):
+        """Both pull requests conflict with their base and change the same file: the ticket earlier in the plan
+        rebases now and the later one waits for it, so neither waits forever."""
+        files = {"pr-t2": ["viewer.dart"], "pr-t4": ["viewer.dart"]}
+        lane = self.lane(files, ["t2", "t4"], conflicting=("pr-t2", "pr-t4"))
+        self.assertIsNone(lane._conflicting_ticket("t2", "pr-t2"))
+        self.assertEqual(lane._conflicting_ticket("t4", "pr-t4"), "t2")
 
     @pytest.mark.spec("A conflicting pull request is rebased")
     def test_a_conflict_over_files_another_open_ticket_changes_names_that_ticket(self):

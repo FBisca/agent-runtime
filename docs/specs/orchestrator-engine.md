@@ -366,11 +366,15 @@ The driver SHALL wait on a failing check whose workflow run is still in progress
 - THEN the CI state stays pending and the unit is not asked; once the failing step's log is readable the gate fails and the request quotes that log, never the placeholder
 
 ### Requirement: A conflicting pull request is rebased
-A unit whose pull request conflicts SHALL go back to draft and be rebased by a fresh worker, and no ready or update call SHALL run on it meanwhile; when another open ticket changes the same files, the rebase waits for that ticket to merge.
+A unit whose pull request conflicts SHALL go back to draft and be rebased by a fresh worker, and no ready or update call SHALL run on it meanwhile; when another open ticket changes the same files, the rebase waits for that ticket to merge, unless that ticket's pull request conflicts too and comes later in the plan.
 
 #### Scenario: a conflict while waiting for the merge
 - WHEN a unit at `awaiting-merge` has a pull request that turns `DIRTY` or `CONFLICTING`
 - THEN the PR goes back to draft and a conflict fix round gives a fresh worker a rebase brief quoting the merge state; the rebase goes through a delta re-review and CI, and `gh pr ready` runs again before the unit waits again
+
+#### Scenario: two conflicting tickets over one file
+- WHEN two open tickets' pull requests both conflict with their base and change the same file
+- THEN the ticket earlier in the plan's ticket order is rebased now and the later one waits for it to merge; neither waits on the other forever
 
 #### Scenario: a conflict at ready-for-ci
 - WHEN a unit at `ready-for-ci` has a `DIRTY` or `CONFLICTING` pull request
