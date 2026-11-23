@@ -111,6 +111,10 @@ Verify SHALL pass a ticket report only when every scenario the ticket satisfies 
 - WHEN a ticket report (contract 3) leaves a satisfied scenario unmapped in `covers`, or maps it only to test nodes whose file does not exist, did not change in the ticket, or whose name the scenario's `red` excerpt does not contain
 - THEN verify fails the gate with a fix round naming the scenario, the node and the reason; one counting node is enough and the worker copies the name from the runner's failing output; nothing in the plan exempts a scenario, and CI green on the same head proves the tests pass
 
+#### Scenario: a later round carries the ticket's evidence
+- WHEN a fix or rebase round's report maps no scenario, or maps only some, in `covers` and `red`, including a report that is not contract 3
+- THEN verify judges the ticket's evidence: the `covers` and `red` its earlier rounds handed in, merged scenario by scenario with the later round winning and the round's own mapping replacing them; every carried node is checked against the round's head like a new one, and a round that maps a scenario anew is judged on that mapping
+
 #### Scenario: a missing red excerpt
 - WHEN a report carries no `red` excerpt for a satisfied scenario
 - THEN verify fails the gate with a fix round naming the scenario; the reviewer judges whether each excerpt is a genuine assertion failure of the behaviour, not an import error or a test that cannot fail

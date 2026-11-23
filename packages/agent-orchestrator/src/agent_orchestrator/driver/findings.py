@@ -54,13 +54,18 @@ class Findings:
         with self.book() as data:
             statuses = data.get("ticket_status") or {}
             done = {k for k, v in statuses.items() if str(v).strip().upper().startswith("COMPLETE")}
+            earlier = [
+                t["report"]
+                for tid, t in data["tasks"].items()
+                if tid != task_id and t["packet"].get("unit") == packet["unit"] and t.get("report")
+            ]
         try:
             files = verify.changed(packet["checkout"], self.args.base)
             overlaps = verify.overlaps(self.model, ticket, files, done=done)
             findings = verify.invariants(
                 self.model,
                 ticket,
-                report,
+                verify.with_evidence(report, earlier),
                 repo=packet["checkout"],
                 base=self.args.base,
                 layout=self.layout,

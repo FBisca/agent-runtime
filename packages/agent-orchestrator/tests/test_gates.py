@@ -554,6 +554,64 @@ class VerifyGateTests(GateFixture, unittest.TestCase):
         )
         self.assertNotIn("demo-t1-review", self.spawned())
 
+    def round_report(self, task_id, **over):
+        """A later round's report that restates none of the ticket's evidence: contract 1, no covers, no red."""
+        report = json.loads(self.report(task_id, contract=1, **over))
+        report.pop("covers", None)
+        report.pop("red", None)
+        return json.dumps(report)
+
+    @pytest.mark.spec("Scenario evidence")
+    def test_a_later_round_that_restates_no_evidence_carries_the_tickets_covers_and_red(self):
+        """The evidence is the ticket's, not the round's: a fix round that changed no test hands in a plain report,
+        and verify judges the covers and red an earlier round handed in against the round's head."""
+        review = self.review(major=[MAJOR])
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(review),
+                self.worker_done("t1r1", report=self.round_report("t1r1")),
+                self.rereview(),
+            ]
+        )
+        self.run_driver()
+        self.assertFalse((self.run_dir / "t1r2").exists())
+        self.assertEqual(self.task("t1r1")["gate"], "done")
+
+    def rereview(self):
+        """The same reviewer, resumed for the delta re-review; it passes."""
+        again = report_wait("demo-t1-review", "complete", id=resume_id("demo-t1-review"))
+        again["write"] = [[str(self.run_dir / "t1" / "review.2.json"), self.review()]]
+        return again
+
+    @pytest.mark.spec("Scenario evidence")
+    def test_a_scenario_a_later_round_maps_replaces_the_inherited_node_and_is_checked(self):
+        review = self.review(major=[MAJOR])
+        mapped = self.report(
+            "t1r1",
+            covers={"S1": ["src/a/test_gone.py::test_nope"]},
+            red={"S1": "FAILED test_nope"},
+        )
+        self.waits(
+            [
+                self.worker_done(tests=True),
+                self.reviewer_done(review),
+                self.worker_done("t1r1", report=mapped),
+            ]
+        )
+        self.run_driver()
+        findings = json.loads((self.run_dir / "t1r2" / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            [(i["check"], i["excerpt"]) for i in findings["items"]],
+            [
+                (
+                    "covers",
+                    "S1: test node src/a/test_gone.py::test_nope does not exist"
+                    " (no file src/a/test_gone.py)",
+                )
+            ],
+        )
+
     def test_S9_a_report_that_is_not_contract_3_is_refused_by_name(self):
         report = json.loads(self.report("t1", contract=2))
         del report["covers"], report["red"]
