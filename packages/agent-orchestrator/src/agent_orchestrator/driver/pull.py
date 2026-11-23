@@ -426,16 +426,36 @@ class Pull:  # noqa: PLR0904
 
     def _conflicting_ticket(self, task_id, url):
         """The unit of another open ticket whose pull request changes a file this one changes, or None: that ticket
-        merges first, and the rebase follows it."""
+        merges first, and the rebase follows it. When that pull request conflicts too, it waits as well, and two
+        tickets waiting on each other never move: the ticket earlier in the plan rebases now and the later one
+        waits for it."""
         mine = self._pr_files(url)
         if not mine:
             return None
         own = self.unit_of(task_id)
+        rank = self._plan_rank()
         for unit, task in self.units().items():
             other = self.pr_of(task["packet"]["task_id"]) if unit != own else None
-            if other and other != url and mine & (self._pr_files(other) or set()):
-                return unit
+            if not other or other == url or not mine & (self._pr_files(other) or set()):
+                continue
+            if rank(unit) > rank(own) and self._pr_conflicts(other):
+                continue
+            return unit
         return None
+
+    def _plan_rank(self):
+        """A unit's place in the plan's ticket order, the unit id breaking ties: a strict order between any two."""
+        model = getattr(self, "model", None)
+        order = {t.id.lower(): n for n, t in enumerate(model.tickets)} if model else {}
+        return lambda unit: (order.get(unit, len(order)), unit)
+
+    def _pr_conflicts(self, url):
+        """True when `gh` says the pull request conflicts with its base."""
+        code, out, _ = self.gh(["pr", "view", url, "--json", "mergeable"])
+        try:
+            return code == 0 and json.loads(out).get("mergeable") == "CONFLICTING"
+        except (ValueError, AttributeError):
+            return False
 
     def ci_items(self, task_id, url, rows):
         """The failing CI checks as evidence items: the job, the run id and the last lines of each failed step (`gh run
