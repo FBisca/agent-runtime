@@ -95,6 +95,11 @@ def gh_process(argv, timeout=None, cwd=None):
     return subprocess.run(["gh", *argv], capture_output=True, text=True, timeout=timeout, cwd=cwd)
 
 
+def ci_process(argv, **options):
+    """One local CI run, started and not waited for. The tests answer it in process: the seam is the process."""
+    return subprocess.Popen(argv, **options)
+
+
 def runtime_call(lead, tool, arguments, timeout=120):
     """One dispatch tool call, through the runtime's public CLI.
 

@@ -24,6 +24,7 @@ from .. import contracts, narrate, timeutil
 from ..ci_log import FAILED_BUCKETS, PENDING_BUCKETS, logs_readable, placeholder, read_log
 from ..invariants import PARKED, next_path
 from .book import ARCHIVE, checkpoint
+from .local_ci import LocalCi
 from .records import merge_state, open_attempt, reported_attempt, unit_attempt
 from .report import item_text
 from .runtime import head_of
@@ -119,6 +120,17 @@ class Pull:  # noqa: PLR0904
         except OSError as error:
             return 1, "", str(error)
         return result.returncode, result.stdout, result.stderr
+
+    @property
+    def local(self):
+        """The local CI lane when the run says `--local-ci`, else None. It holds the runs this driver started, so
+        one is made on the first ask and kept."""
+        if not getattr(self.driver.args, "local_ci", False):
+            return None
+        held = self.driver.__dict__.get("_local_ci")
+        if held is None:
+            held = self.driver.__dict__["_local_ci"] = LocalCi(self.driver, CI_STEP_LINES)
+        return held
 
     def closed_prs(self, unit):
         """The pull requests this unit's gate has already seen closed: recorded when it happened, never guessed."""
@@ -292,7 +304,14 @@ class Pull:  # noqa: PLR0904
     def poll_checks(self, task_id, url, head=None):
         """The pull request's checks, once per round, and the head they were read on. The state is kept on the task;
         nothing waits for it."""
-        state, rows = self.pr_checks(url)
+        local = self.local
+        if (
+            local
+        ):  # GitHub is never asked for a ticket's checks: the run on this machine is the verdict
+            head = head or self.pr_view(url).get("headRefOid")
+            state, rows = local.checks(task_id, url, head)
+        else:
+            state, rows = self.pr_checks(url)
         task = self.task(task_id)
         if (
             task.get("ci_state") != state
@@ -463,6 +482,9 @@ class Pull:  # noqa: PLR0904
         failing = [row for row in rows if str(row.get("bucket") or "").lower() in FAILED_BUCKETS]
         items = []
         for number, row in enumerate(failing, 1):
+            if self.local and self.local.is_local(row):
+                items.append(self.local.item(number, row))
+                continue
             name = row.get("name") or "ci"
             text = str(row.get("description") or "").strip()
             excerpt = text
@@ -527,6 +549,15 @@ class Pull:  # noqa: PLR0904
         rows = task.get("ci_rows") or []
         failing = [r for r in rows if str(r.get("bucket") or "").lower() in FAILED_BUCKETS]
         names = sorted({r.get("name") or "ci" for r in failing})
+        if self.local and self.local.base_verdict() == "pending":
+            narrate.say(
+                "wait",
+                "ci",
+                "local CI failed; running it on %s to see whether it fails there too"
+                % self.args.base,
+                task=task_id,
+            )
+            return False
         on_main = sorted(set(names) & self.main_failures())
         if on_main:
             return self._main_red(task_id, on_main)
@@ -538,7 +569,10 @@ class Pull:  # noqa: PLR0904
 
     def main_failures(self):
         """The checks failing in the base branch's latest completed run, asked once per run: a check that fails there
-        is not the ticket's to fix. Empty when `gh` cannot say."""
+        is not the ticket's to fix. Empty when `gh` cannot say. A local run never reads GitHub's runs, which are stale
+        or refused: the base branch's own local run answers."""
+        if self.local:
+            return {"local-ci"} if self.local.base_verdict() == "failed" else set()
         if self.driver.main_failed is None:
             branch = self.args.base.partition("/")[2]
             names = set()

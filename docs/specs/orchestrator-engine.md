@@ -333,6 +333,77 @@ A CI failure that does not also fail on the base branch SHALL go back to the uni
 - WHEN the same gate has failed three times
 - THEN the Lead is asked
 
+### Requirement: Local CI judges a head on this machine
+A run started with `--local-ci` SHALL judge a ticket's CI by running the repository's full check once per pull request head on this machine, and never ask GitHub for the ticket's checks.
+
+#### Scenario: a run per head
+- WHEN `poll_checks` reads a ticket whose pull request head has no local run
+- THEN the driver starts one without waiting for it, in a detached worktree at that head under the run directory (the head fetched from origin when the repository lacks it), runs `worktree.setup` there when the config names one, then runs `checks.full.run`, else the `--gate` commands joined with `&&`, with its output in a log file in the task's run directory and its exit code in a file the run writes, and it asks `gh pr checks` for nothing
+
+#### Scenario: the states
+- WHEN a head's local run is queued or running, exits 0, or exits non-zero
+- THEN its state is `pending`, `green` or `failed`, with one row named `local-ci` carrying `bucket` (`pending`, `pass` or `fail`), `description` (the log's last lines when it failed), `log_path` and `command`, so the gates, the fix round and readiness read it as they read `gh pr checks`
+
+#### Scenario: once per head
+- WHEN the head's run has ended, or the driver restarts while it runs or after it ended
+- THEN the driver reads the exit code file back and starts no second run for that head
+
+#### Scenario: the worktree goes, the log stays
+- WHEN a local run ends
+- THEN its detached worktree is removed and its log is kept
+
+#### Scenario: no command
+- WHEN `--local-ci` is given and the config has no `checks.full.run` and the run names no `--gate`
+- THEN the run is refused before any worker, naming `checks.full.run` and `--gate` as the fix
+
+#### Scenario: no flag
+- WHEN the run has no `--local-ci`
+- THEN the driver reads `gh pr checks` and `gh run` as before and starts no local process
+
+### Requirement: Local CI runs are bounded and replaced
+The driver SHALL run at most `--local-ci-jobs` local runs at once (default 1), queue the rest as `pending`, and kill a task's older head's run when a newer head is read.
+
+#### Scenario: the cap
+- WHEN more heads need a run than `--local-ci-jobs` allows
+- THEN the extra heads are `pending` with no process, and one starts as soon as a running one ends
+
+#### Scenario: a newer head
+- WHEN a task's pull request head changes while the older head's run is going
+- THEN the older run's process group is killed, its worktree removed, and the newer head gets its own run
+
+### Requirement: A local CI failure is evidence for the fix round
+A failed local run SHALL reach the worker as a CI finding carrying the local command and log.
+
+#### Scenario: the finding
+- WHEN a unit's local run failed and the base branch passes the same check
+- THEN the fix round's finding has check `local-ci`, an excerpt of the log's last `CI_STEP_LINES` lines, the local command as `command` and the local log as `log_path`, and no `gh run view` command
+
+### Requirement: Local CI asks the base branch once
+A local failure SHALL be compared with the same local check run on the base branch, and GitHub's runs SHALL not be read to do so.
+
+#### Scenario: the base is asked
+- WHEN a ticket's local run fails and the base branch has no verdict yet
+- THEN the driver starts the same local run on the current commit of `--base`, `ci_failed` returns False while it runs, and the driver reads no `gh run list` or `gh run view`
+
+#### Scenario: the base fails too
+- WHEN the base branch's local run fails
+- THEN the unit's `main is red` request names check `local-ci` and no fix round is raised
+
+#### Scenario: the base passes
+- WHEN the base branch's local run passes
+- THEN the failure is a normal fix round
+
+### Requirement: Local CI posts a commit status
+The driver SHOULD post each head's local state as a GitHub commit status with context `local-ci`, and a failure to post SHALL never change the verdict.
+
+#### Scenario: the status
+- WHEN a head's local state is first read, and when it changes
+- THEN the driver calls `gh api repos/<owner>/<repo>/statuses/<head>` with state `pending`, `success` or `failure`, context `local-ci` and a short description
+
+#### Scenario: gh refuses
+- WHEN posting the status fails
+- THEN the failure is logged and the head's state and the unit's gate are the same as when it succeeds
+
 ### Requirement: Failures are counted per gate
 The driver SHALL ask the Lead for a unit once one gate (one source: verify, review, ci, conflict) has failed more often than the unit's fix-round cap, counting each gate's failures apart from the others.
 

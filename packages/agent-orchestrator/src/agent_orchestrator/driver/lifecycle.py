@@ -24,6 +24,7 @@ from ..invariants import checked_write as ledger
 from ..plan import PlanError
 from ..report_rules import require
 from ..timeutil import iso as now
+from . import local_ci
 from .answers import IntentUnsettled, Unreadable
 from .book import release, worker_name
 from .prompts import render
@@ -134,6 +135,7 @@ class Lifecycle:
                 "or keep the routes in %s/routes.json (routes-codex.json for --cli codex, routes-pi.json "
                 "for --cli pi)" % routes.USER_POLICY
             )
+        local_ci.require_command(self.args, self.repo)
         plan = self.last_plan = self.read_plan()
         self.slug = plan["slug"]
         self.brain_cli = getattr(self.args, "brain_cli", None)
