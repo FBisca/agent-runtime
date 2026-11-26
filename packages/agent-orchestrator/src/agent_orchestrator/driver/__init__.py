@@ -132,6 +132,15 @@ __all__ = [
     "failure_line",
     "foreign_attempt",
     "forwarded",
+    "ci_process",
+    "LocalCi",
+    "ROW",
+    "SCRIPT",
+    "STATUS_STATE",
+    "STATUS_TEXT",
+    "command_of",
+    "require_command",
+    "tail_lines",
     "gh_process",
     "head_of",
     "invariants",
@@ -362,6 +371,14 @@ from .handoff import read_verdict as read_verdict
 from .lifecycle import Lifecycle as Lifecycle
 from .lifecycle import metrics as metrics
 from .lifecycle import sum_usage as sum_usage
+from .local_ci import ROW as ROW
+from .local_ci import SCRIPT as SCRIPT
+from .local_ci import STATUS_STATE as STATUS_STATE
+from .local_ci import STATUS_TEXT as STATUS_TEXT
+from .local_ci import LocalCi as LocalCi
+from .local_ci import command_of as command_of
+from .local_ci import require_command as require_command
+from .local_ci import tail_lines as tail_lines
 from .pointers import BRIEF as BRIEF
 from .pointers import TDD_SKILL_ENV as TDD_SKILL_ENV
 from .pointers import TDD_SKILL_PLACES as TDD_SKILL_PLACES
@@ -422,6 +439,7 @@ from .review import review_brief as review_brief
 from .routing import Routes as Routes
 from .runtime import TREE_TIMEOUT as TREE_TIMEOUT
 from .runtime import checkout_snapshot as checkout_snapshot
+from .runtime import ci_process as ci_process
 from .runtime import gh_process as gh_process
 from .runtime import head_of as head_of
 from .runtime import merged_snapshot as merged_snapshot

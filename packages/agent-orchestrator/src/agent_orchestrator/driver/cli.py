@@ -215,10 +215,34 @@ def _add_run_workers(sub):
     sub.add_argument("--repo", help="Repository root; default the plan file's repository")
 
 
+def _positive(text):
+    """An argparse type: a whole number of one or more."""
+    try:
+        number = int(text)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError("%r is not a whole number of 1 or more" % text)
+    return number
+
+
 def _add_run_gates(sub):
     """What every worker must pass, and where the run keeps its state."""
     sub.add_argument(
         "--gate", action="append", default=[], help="CI command a worker must pass (repeatable)"
+    )
+    sub.add_argument(
+        "--local-ci",
+        action="store_true",
+        help="Judge CI by running the repository's full check on this machine for each pull request head "
+        "(checks.full.run in .orchestrate/config.yaml, else the --gate commands) instead of asking GitHub",
+    )
+    sub.add_argument(
+        "--local-ci-jobs",
+        type=_positive,
+        default=1,
+        metavar="N",
+        help="How many local CI runs go at once; the rest queue (default 1)",
     )
     sub.add_argument(
         "--state-dir",
