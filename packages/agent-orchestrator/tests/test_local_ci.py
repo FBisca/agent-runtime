@@ -390,3 +390,32 @@ class RealRunTests(unittest.TestCase):
             self.assertIn("checked", log)
             self.assertFalse((directory / "tree").exists(), "the worktree is removed")
             self.assertEqual((directory / "exit").read_text(encoding="utf-8").strip(), "0")
+
+
+class OptionTests(unittest.TestCase):
+    @pytest.mark.spec("Local CI judges a head on this machine")
+    def test_run_takes_the_local_ci_options_and_metrics_does_not(self):
+        from agent_orchestrator.driver import cli
+
+        parser = cli.build_parser()
+        args, extra = parser.parse_known_args(
+            ["run", "plan.md", "--local-ci", "--local-ci-jobs", "2"]
+        )
+        self.assertEqual(
+            (args.command, args.local_ci, args.local_ci_jobs, extra), ("run", True, 2, [])
+        )
+        args, _ = parser.parse_known_args(["run", "plan.md"])
+        self.assertEqual((args.local_ci, args.local_ci_jobs), (False, 1))
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+            parser.parse_args(["metrics", "--local-ci"])
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+            parser.parse_args(["run", "plan.md", "--local-ci-jobs", "0"])
+
+    @pytest.mark.spec("Local CI judges a head on this machine")
+    def test_launch_forwards_the_flag_to_run(self):
+        from agent_orchestrator.driver import cli
+
+        args, extra = cli.build_parser().parse_known_args(["launch", "plan.md", "--local-ci"])
+        self.assertEqual((args.command, extra), ("launch", ["--local-ci"]))
+        run, rest = cli.build_parser().parse_known_args(["run", "plan.md", *extra])
+        self.assertTrue(run.local_ci)
