@@ -189,12 +189,17 @@ class Refused(PlanError):
 class JsonRefusal(PlanError):
     """A refusal an agent Lead reads: one JSON object `{error, reason, way_out}` on stderr, exit 2."""
 
-    def __init__(self, refused):
+    def __init__(
+        self,
+        refused,
+        error="decision refused",
+        way_out="fix the reason above and run decide again",
+    ):
         super().__init__(str(refused))
         self.output = {
-            "error": "decision refused",
+            "error": error,
             "reason": refused.reason,
-            "way_out": refused.way_out or "fix the reason above and run decide again",
+            "way_out": refused.way_out or way_out,
         }
 
 

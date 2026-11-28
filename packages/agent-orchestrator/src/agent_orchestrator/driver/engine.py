@@ -325,6 +325,7 @@ class Driver(
     def _loop_round(self):
         """One round: the plan read, its gates advanced and its tickets dispatched. (acted, dispatched)."""
         self.read_plan()  # Integrity precedes gates, which can also spawn workers.
+        self.adopt_reroute()  # every agent this round spawns runs on the routes the ledger holds now
         acted = self.advance()
         plan, valid = self.current_plan()
         if not valid:
@@ -354,6 +355,7 @@ class Driver(
         result = runtime_call(self.lead, "wait", wait, timeout=self.args.wait_seconds + 60)
         self.receipt = result.get("receipt")
         self.read_plan()  # an edit made while the run waited is seen before anything acts on the answer
+        self.adopt_reroute()  # and a reroute made while it waited, before the answer spawns anyone
         if self.park_due():
             self.ask_parked()
         self.receive(result)

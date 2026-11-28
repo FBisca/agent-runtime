@@ -29,7 +29,9 @@ ended with no verdict: `unit`, `task`, `reason`),
 `drain` (the plan was edited since its approval, or no longer loads, and the run starts no new worker: `state`
 draining|ended, `cause` edited|unloadable, `error`, `digest` of the approval the run holds; `ended` when the file is
 back to its approved bytes),
-`amended` (the run adopted a re-approval of its plan: `prev_digest`, `digest`, and the approval's `reason`) and
+`amended` (the run adopted a re-approval of its plan: `prev_digest`, `digest`, and the approval's `reason`),
+`reroute` (the Lead's `reroute` changed one class or step route: `class` or `step`, `old`, `new`, `reason`,
+`revision`), `reroute-adopted` (the live driver took the rerouted record up: `revision`, `changes`) and
 `repacket` (an open attempt whose ticket the re-approval changed was given its next packet: `unit`, `task`, `packet`
 `task.v<n>.md`, `resumed`, `digest`)."""
 

@@ -452,6 +452,10 @@ class Spawning:
             before = data["tasks"][task_id]["status"]
             if before != "RELEASED":
                 _engine().release(data, task_id, "superseded by " + new_id)
+            held = (data["tasks"].get(new_id) or {}).get("packet") or {}
+            if held.get("route_revision", 0) != successor.get("route_revision", 0):
+                # A restart finds the successor a fresh spawn already put on the current routes.
+                successor.update(self.current_route(successor))
             reserved = _engine().claim(data, successor)["action"] == "reserved"
             bound = data["tasks"][new_id]["runtime_id"]
         if not bound:
@@ -543,7 +547,9 @@ class Spawning:
         return resumed.get("address") or runtime_id, assignment_id
 
     def _replace_worker(self, name, unit, spawn, successor, alive):
-        """Stop the pane being replaced, then start a fresh worker on the successor's attempt."""
+        """Stop the pane being replaced, then start a fresh worker on the successor's attempt: on the routes the run
+        holds now, when a reroute came after the attempt was routed."""
+        self._reroute_successor(spawn, successor)
         if alive:
             try:
                 self.stop_agent(name, unit, "replaced")
@@ -565,6 +571,17 @@ class Spawning:
             task=successor["task_id"],
         )
         return address, assignment_id
+
+    def _reroute_successor(self, spawn, successor):
+        """A successor routed before the last reroute takes the run's current route, in its spawn and its packet."""
+        fields = self.current_route(successor)
+        if not fields:
+            return
+        successor.update(fields)
+        spawn.update(cli=fields["backend"], model=fields["model"], effort=fields["effort"])
+        with self.book() as data:
+            data["tasks"][successor["task_id"]]["packet"].update(fields)
+        self._log_route(successor)
 
 
 class SpawnSurface:

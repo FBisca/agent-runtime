@@ -365,6 +365,37 @@ def add_decide_command(commands):
     )
 
 
+def add_reroute_command(commands):
+    """`reroute`: change a run's routes while it runs, for the agents it spawns after that."""
+    sub = commands.add_parser(
+        "reroute",
+        help="Change a run's class or step routes, live or stopped: the agents it spawns after that run on them, "
+        "an agent already running keeps its route, and a restart resumes on them",
+    )
+    sub.add_argument("plan")
+    sub.add_argument(
+        "--route",
+        action="append",
+        default=[],
+        metavar="CLASS=BACKEND/MODEL[@EFFORT]",
+        help="The new route of one model class: 'large=codex/gpt-l@xhigh' (repeatable)",
+    )
+    sub.add_argument(
+        "--step",
+        action="append",
+        default=[],
+        metavar="STEP=BACKEND/MODEL[@EFFORT]",
+        help="The new route of one step, implementer or reviewer: 'reviewer=codex/gpt-l@xhigh' (repeatable)",
+    )
+    sub.add_argument("--reason", help="Why the routes change; kept in the run's events.jsonl")
+    sub.add_argument("--repo", help="Repository root; default the plan file's repository")
+    sub.add_argument(
+        "--state-dir",
+        default="~/.local/state/orchestrate",
+        help="Holds <slug>.json and the <slug>/ run directory; a YAML plan's are under <repo-key>/",
+    )
+
+
 def add_status_command(commands):
     """`status`: a plan's state and history, and each ticket's state, from its ledger."""
     sub = commands.add_parser(
@@ -413,6 +444,7 @@ BUILDERS = (
     add_run_command,
     add_await_command,
     add_decide_command,
+    add_reroute_command,
     add_status_command,
     add_complete_command,
     add_launch_command,

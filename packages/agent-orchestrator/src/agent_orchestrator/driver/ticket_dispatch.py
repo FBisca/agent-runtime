@@ -98,6 +98,7 @@ class Dispatch:
             "class": klass,
             "effort": effort,
             "model": model,
+            **self.route_stamp(),
         }
         with self.book() as data:
             claim(data, packet)
@@ -131,10 +132,7 @@ class Dispatch:
         if last and ROUTE["class"].index(last["class"]) > ROUTE["class"].index(klass):
             # A retry the driver raised keeps its class: a re-dispatch never drops below the last attempt.
             klass, matrix_effort = last["class"], last.get("effort") or matrix_effort
-        route = self.routes[klass]
-        backend = self.step_backend("implementer", route.backend)
-        model = self.step_model("implementer", route.model)
-        effort = self.step_effort("implementer", route.effort or matrix_effort)
+        backend, model, effort = self.implementer_route(klass, matrix_effort)
         return klass, effort, model, backend
 
     def _log_route(self, packet):

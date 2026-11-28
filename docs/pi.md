@@ -176,7 +176,9 @@ or whose selected file is invalid, stops before any worker is spawned and names 
 
 A run that restarts keeps the routes its ledger recorded, whatever these files now say. An explicit argument that
 differs from the record stops it before any worker is spawned or resumed, and a ledger with no complete route
-record needs `--routes-file`, which records the complete routes before the run resumes. `--brain-cli` puts the
+record needs `--routes-file`, which records the complete routes before the run resumes. To change a started run's
+routes, live or stopped, run `agent-orchestrator reroute <plan> --route|--step NAME=BACKEND/MODEL[@EFFORT] --reason
+TEXT`: the agents it spawns after that run on them, and a restart resumes on them. `--brain-cli` puts the
 review gates on another backend: give each gate a `--step` route, or a medium route on that backend, or the run
 stops before it spawns a worker.
 

@@ -13,7 +13,8 @@ A new run finds its config in this order: the file it names (`--routes-file`), t
 for Claude, `routes-codex.json` for Codex, `routes-pi.json` for Pi). The first file found is the only one read: an
 invalid one fails the run, it never falls through to the next. A command line may override one class or step
 outright (`--route small=codex/gpt-s@high`); the override is validated like a config route and wins over every
-file. A run that resumes keeps the routes its ledger recorded instead (see `read_record`).
+file. A run that resumes keeps the routes its ledger recorded instead (see `read_record`), and `reroute` is the one
+way to change that record while the run runs: each reroute moves the record's `revision` on (see `changes`).
 """
 
 import json
@@ -442,6 +443,9 @@ class Recorded:
     cli: str
     brain_cli: str | None
     brain_known: bool  # the record names the brain backend (older records do not)
+    revision: int = (
+        0  # how many reroutes the record has taken; a record no reroute touched has none
+    )
 
 
 def read_record(record):
@@ -486,9 +490,33 @@ def read_record(record):
             cli=cli,
             brain_cli=brain if brain in BACKENDS else None,
             brain_known="brain_cli" in record,
+            revision=revision_of(record),
         ),
         None,
     )
+
+
+def revision_of(record):
+    """The reroute revision a route record carries: 0 for a record no reroute touched, or one that is not a record."""
+    value = record.get("revision") if isinstance(record, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def changes(before_classes, before_steps, after_classes, after_steps):
+    """What a reroute changed, one entry per class or step: `{"class"|"step": name, "old", "new"}`, the routes as
+    an operator writes them (`old` is None for a step the record had no route for)."""
+    out = []
+    for key, before, after in (
+        ("class", before_classes, after_classes),
+        ("step", before_steps, after_steps),
+    ):
+        for name in sorted(after):
+            if before.get(name) != after[name]:
+                old = before.get(name)
+                out.append(
+                    {key: name, "old": describe(old) if old else None, "new": describe(after[name])}
+                )
+    return out
 
 
 def describe(route):

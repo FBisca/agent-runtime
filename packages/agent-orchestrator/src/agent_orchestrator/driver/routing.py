@@ -2,15 +2,17 @@
 
 A run's route config (a JSON profile: `--routes-file`) says which backend, model and effort each class and
 each gate step runs on, and the driver reads it rather than any model table. A run that resumes keeps the
-routes its ledger recorded.
+routes its ledger recorded. `reroute` rewrites that record while the run runs: the driver adopts it at its next
+round (`adopt_reroute`), and a packet routed before it is routed again when a fresh agent is spawned for it
+(`current_route`).
 """
 
 from typing import Any
 
 from .. import ledger as ledgers
-from .. import routes
+from .. import narrate, routes
 from ..plan import PlanError
-from .records import ROUTE
+from .records import ROUTE, routed
 
 
 class Routes:
@@ -27,6 +29,9 @@ class Routes:
     step_routes: Any
     added_steps: Any
     route_source: Any
+    route_revision = (
+        0  # the reroute revision of the routes this run holds; a run never rerouted holds 0
+    )
 
     def gate_cli(self):
         """The backend the review gates spawn on: the brain backend when one was named, the worker backend
@@ -79,12 +84,14 @@ class Routes:
         if found:
             raise PlanError(
                 "cannot resume %s: the arguments conflict with the routes its ledger recorded (%s). Drop "
-                "the conflicting argument to keep the recorded routes; the ledger is unchanged"
-                % (self.slug, "; ".join(found))
+                "the conflicting argument to keep the recorded routes, or change them with `agent-orchestrator "
+                "reroute %s --route|--step NAME=BACKEND/MODEL[@EFFORT] --reason TEXT`; the ledger is unchanged"
+                % (self.slug, "; ".join(found), self.plan_path)
             )
         args.cli = args.cli or pinned.cli
         self.brain_cli = self.brain_cli or pinned.brain_cli
         self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps) | added
+        self.route_revision = pinned.revision
         self.added_steps = added
         self.routes_file, self.route_source = pinned.path, pinned.source
         self._brain_gates_refused()
@@ -210,13 +217,78 @@ class Routes:
             return step
         return "medium" if getattr(self, "brain_cli", None) else klass
 
+    def implementer_route(self, klass, effort):
+        """(backend, model, effort) an implementer of `klass` spawns on now: the implementer step's route, else the
+        class route; `effort` answers when neither names one."""
+        route = self.routes[klass]
+        return (
+            self.step_backend("implementer", route.backend),
+            self.step_model("implementer", route.model),
+            self.step_effort("implementer", route.effort or effort),
+        )
+
+    def route_stamp(self):
+        """The packet field that says which reroute revision routed it: none for a run never rerouted."""
+        return {"route_revision": self.route_revision} if self.route_revision else {}
+
+    def current_route(self, packet):
+        """The packet fields that put a packet routed before the last reroute on the routes the run holds now, or
+        nothing when it is current. A fresh agent is spawned from them; a running one keeps the route it has."""
+        if not routed(packet) or packet.get("route_revision", 0) == self.route_revision:
+            return {}
+        backend, model, effort = self.implementer_route(packet["class"], packet["effort"])
+        return {"backend": backend, "model": model, "effort": effort, **self.route_stamp()}
+
     def class_up(self, packet):
-        """The packet fields that move a retry one model class up; at the top class the effort goes up a notch."""
+        """The packet fields that move a retry one model class up, on the routes the run holds now; at the top class
+        the effort goes up a notch."""
         classes, efforts = ROUTE["class"], ROUTE["effort"]
+        current = self.current_route(packet)
+        packet = dict(packet, **current)
         at = classes.index(packet["class"])
         if at + 1 < len(classes):
-            return {"class": classes[at + 1], "model": self.routes[classes[at + 1]].model}
-        return {"effort": efforts[min(efforts.index(packet["effort"]) + 1, len(efforts) - 1)]}
+            klass = classes[at + 1]
+            backend, model, _ = self.implementer_route(klass, packet["effort"])
+            return dict(current, **{"class": klass, "backend": backend, "model": model})
+        return dict(
+            current, effort=efforts[min(efforts.index(packet["effort"]) + 1, len(efforts) - 1)]
+        )
+
+    def adopt_reroute(self):
+        """A reroute the ledger recorded since this run read its routes: every agent spawned from now on runs on
+        it, and an agent already running keeps its route. 1 when one was adopted, else 0."""
+        record = (ledgers.snapshot(self.ledger_path) or {}).get("routes")
+        revision = routes.revision_of(record)
+        if revision == self.route_revision:
+            return 0
+        pinned, why = routes.read_record(record)
+        self.route_revision = revision  # an unreadable record is said once, not every round
+        if pinned is None:
+            self.log("error", gate="reroute", error=why)
+            narrate.say(
+                "warn", None, "cannot read the rerouted routes (%s); keeping the ones in use" % why
+            )
+            return 0
+        changed = routes.changes(self.routes, self.step_routes, pinned.classes, pinned.steps)
+        self.routes, self.step_routes = dict(pinned.classes), dict(pinned.steps)
+        self.log("reroute-adopted", revision=revision, changes=changed)
+        if not changed:
+            return 1
+        narrate.say(
+            "info",
+            None,
+            "rerouted %s; agents already running keep theirs"
+            % "; ".join(
+                "the %s to %s (was %s)"
+                % (
+                    change.get("step") or "%s class" % change["class"],
+                    change["new"],
+                    change["old"] or "the default",
+                )
+                for change in changed
+            ),
+        )
+        return 1
 
 
 def _overrides(args):

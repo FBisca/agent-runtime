@@ -43,3 +43,10 @@ Write the models of your old table into a route file, one route per class, namin
 for. A run that already started keeps the routes its ledger recorded, whatever the files now say; an explicit
 argument that differs from the record stops the run, and a ledger with no complete record needs `--routes-file`,
 which records the complete routes before the run resumes.
+
+## Rerouting a run
+
+`agent-orchestrator reroute <plan> --step reviewer=codex/gpt-l@xhigh --reason TEXT` (or `--route CLASS=...`) is the
+one way to change a started run's routes. It rewrites the ledger's record and logs the change; a live driver adopts
+it at its next round for every agent it spawns after that, an agent already running keeps its route, and a restart
+resumes on the rerouted record.

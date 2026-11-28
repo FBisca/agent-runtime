@@ -2,7 +2,7 @@
 
 `driver/cli.py` builds the parser; these are what its subcommands call. `status` reads the plan and the
 ledger, `run` starts and locks a drive, `await` waits on a drive's mark, `complete` records a person's
-ticket, and `launch` hands a plan to a drive in a fresh process. Each
+ticket, `reroute` (in `rerouting.py`) changes a run's routes, and `launch` hands a plan to a drive in a fresh process. Each
 one takes the parsed arguments and answers the exit code, so the parser stays a description of what a
 caller may type.
 
@@ -34,6 +34,7 @@ from .engine import Driver
 from .lifecycle import metrics
 from .records import context_verdict, split_row
 from .report import render_status
+from .rerouting import reroute
 from .state import (
     Refused,
     await_lock_path,
@@ -102,6 +103,7 @@ def read_repo_config(args):
         "run",
         "complete",
         "launch",
+        "reroute",
     ):
         return None
     where = Path(args.repo).resolve() if args.repo else Path(plan).resolve().parent
@@ -634,5 +636,5 @@ _READS = {
     "status": _status_command,
     "complete": complete_person_ticket,
 }
-_RUNS = {"run": drive, "await": await_wake, "decide": decide}
+_RUNS = {"run": drive, "await": await_wake, "decide": decide, "reroute": reroute}
 _INSPECTS = {"context": _context_command, "evidence": rebuild_evidence, "workbench": workbench.run}

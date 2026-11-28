@@ -119,11 +119,30 @@ An existing run SHALL resume with the routes, `--cli` and `--brain-cli` its ledg
 
 #### Scenario: a conflicting argument
 - WHEN a resumed run is given a `--route`, `--step`, `--routes-file` or `--cli` that differs from the record
-- THEN it fails before any worker is spawned or resumed, naming the argument and the recorded value, and the ledger is unchanged; an argument that matches the record is accepted and an omitted one is no conflict
+- THEN it fails before any worker is spawned or resumed, naming the argument, the recorded value and `agent-orchestrator reroute` as the way to change the routes, and the ledger is unchanged; an argument that matches the record is accepted and an omitted one is no conflict
+
+#### Scenario: a resume after a reroute
+- WHEN a run whose routes `reroute` changed is restarted
+- THEN it resumes on the rerouted record, and a `--route` or `--step` that matches the rerouted record is accepted
 
 #### Scenario: a missing or incomplete record
 - WHEN the ledger holds no complete route record
 - THEN the run needs an explicit `--routes-file`, which records the complete resolved routes before the run resumes; a restart never reads a route file the ledger did not record
+
+### Requirement: A run is rerouted while it runs
+`agent-orchestrator reroute <plan> (--route CLASS=BACKEND/MODEL[@EFFORT] | --step STEP=BACKEND/MODEL[@EFFORT])... --reason TEXT` SHALL be the one way to change a started run's routes, and the driver SHALL run every agent it spawns after the change on the new routes while an agent already running keeps its route.
+
+#### Scenario: the record is rewritten
+- WHEN the Lead reroutes a class or a step of a started run, with or without a live driver
+- THEN the ledger's route record holds the new route under the ledger's lock, its `revision` moves on, the rest of the record is unchanged, `events.jsonl` holds one `reroute` event per changed class or step with the old route, the new route and the reason, and the command prints the change as JSON
+
+#### Scenario: a refused reroute
+- WHEN a reroute names a class, backend, model, effort or step the driver cannot run, names no route or no reason, names a plan with no run, or would leave a brain run's reviewer with no route on the brain backend
+- THEN it exits 2 with one JSON object `{error, reason, way_out}` on stderr, and the ledger and `events.jsonl` are unchanged
+
+#### Scenario: a live driver adopts it
+- WHEN a driver is live while its run is rerouted
+- THEN at its next round it says so in one line and logs `reroute-adopted`, and every agent it spawns after that (a new worker, a reviewer, a fresh worker on a unit and a retry one class up) runs on the new routes, while an agent already running is neither stopped nor resumed for it
 
 ### Requirement: The report contract matches Report
 The contract the run writes SHALL describe a report that `Report` accepts, and each unit brief SHALL name the task id the report carries.
