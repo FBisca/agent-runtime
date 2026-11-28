@@ -85,6 +85,7 @@ __all__ = [
     "add_metrics_command",
     "add_plan_commands",
     "add_plans_commands",
+    "add_reroute_command",
     "add_run_command",
     "add_status_command",
     "add_task_commands",
@@ -208,6 +209,7 @@ __all__ = [
     "resolve_runtime",
     "review_brief",
     "rereview_text",
+    "reroute",
     "rulebook",
     "routed",
     "routes",
@@ -339,6 +341,7 @@ from .cli import add_ledger_command as add_ledger_command
 from .cli import add_metrics_command as add_metrics_command
 from .cli import add_plan_commands as add_plan_commands
 from .cli import add_plans_commands as add_plans_commands
+from .cli import add_reroute_command as add_reroute_command
 from .cli import add_run_command as add_run_command
 from .cli import add_status_command as add_status_command
 from .cli import add_task_commands as add_task_commands
@@ -433,6 +436,7 @@ from .report import metrics_table as metrics_table
 from .report import render_status as render_status
 from .report import short as short
 from .report import show as show
+from .rerouting import reroute as reroute
 from .review import attempt_trail as attempt_trail
 from .review import rereview_text as rereview_text
 from .review import review_brief as review_brief
